@@ -2,47 +2,89 @@
 //!
 //! Single source of truth for colors + text styles used by both the TUI
 //! (ratatui) and plain stdout printing (colored).
+//!
+//! Brand anchors (community approximation of Meta blue):
+//!   #0082FB  Meta Azure  ·  #0064E0  Meta Science Blue
 
 use colored::Colorize;
 use ratatui::style::{Color, Modifier, Style};
+use std::time::Duration;
 
 // ── Palette ────────────────────────────────────────────────────────────────
-/// Meta brand blue.
-pub const META_BLUE: Color = Color::Rgb(6, 104, 225);
-/// Brighter interactive blue.
-pub const META_BLUE_BRIGHT: Color = Color::Rgb(0, 130, 251);
-/// Light accent blue (gradient tail).
-pub const META_BLUE_SKY: Color = Color::Rgb(69, 168, 255);
+/// Meta Azure Radiance (#0082FB) — primary interactive / focus.
+pub const META_BLUE: Color = Color::Rgb(0, 130, 251);
+/// Alias for call sites that used the bright name.
+pub const META_BLUE_BRIGHT: Color = META_BLUE;
+/// Meta Science Blue (#0064E0) — secondary / pressed.
+#[allow(dead_code)]
+pub const META_BLUE_DEEP: Color = Color::Rgb(0, 100, 224);
+/// Soft sky accent for gradients & secondary labels.
+pub const META_BLUE_SKY: Color = Color::Rgb(90, 175, 255);
+/// Near-black canvas (terminal fill).
+pub const BG: Color = Color::Rgb(11, 14, 18);
+/// Raised surface (input well, modals).
+pub const SURFACE: Color = Color::Rgb(18, 22, 28);
+/// Elevated surface (palette, hover).
+pub const SURFACE_2: Color = Color::Rgb(26, 31, 40);
 /// Near-white foreground.
-pub const FG: Color = Color::Rgb(228, 232, 238);
+pub const FG: Color = Color::Rgb(232, 235, 240);
 /// Dimmed foreground.
-pub const MUTED: Color = Color::Rgb(140, 148, 158);
+pub const MUTED: Color = Color::Rgb(138, 146, 158);
 /// Extra-dim (hints, separators).
-pub const FAINT: Color = Color::Rgb(92, 99, 110);
+pub const FAINT: Color = Color::Rgb(86, 94, 106);
+/// Hairline / border idle.
+pub const BORDER: Color = Color::Rgb(42, 48, 58);
 /// Code / block background.
-pub const CODE_BG: Color = Color::Rgb(24, 27, 33);
+pub const CODE_BG: Color = Color::Rgb(16, 20, 26);
 /// Inline code foreground.
 pub const CODE_FG: Color = Color::Rgb(148, 199, 255);
 pub const SUCCESS: Color = Color::Rgb(52, 199, 123);
-pub const WARN: Color = Color::Rgb(255, 180, 0);
-pub const ERROR: Color = Color::Rgb(240, 92, 92);
-/// User message accent.
+pub const WARN: Color = Color::Rgb(255, 186, 73);
+pub const ERROR: Color = Color::Rgb(255, 99, 99);
+/// User message accent (crisp white).
 pub const USER: Color = Color::Rgb(255, 255, 255);
 
 /// Banner gradient (top → bottom rows of the logotype).
 pub const GRADIENT: [(u8, u8, u8); 6] = [
-    (69, 168, 255),
-    (38, 148, 253),
+    (90, 175, 255),
+    (40, 150, 253),
     (0, 130, 251),
-    (6, 116, 238),
-    (6, 104, 225),
-    (10, 92, 200),
+    (0, 115, 240),
+    (0, 100, 224),
+    (0, 85, 200),
 ];
+
+// ── Motion ─────────────────────────────────────────────────────────────────
+/// Braille spinner — smooth, dense, Meta-blue tinted in UI.
+pub const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+/// Soft pulse dots for quieter states (thinking complete, etc.).
+pub const PULSE: &[&str] = &["·", "•", "●", "•"];
+/// Frame interval for spinner (ms).
+pub const SPINNER_MS: u128 = 70;
+/// Cursor / stream caret blink half-period (ms).
+pub const BLINK_MS: u128 = 530;
+
+/// Spinner glyph for elapsed time.
+pub fn spinner_frame(elapsed: Duration) -> &'static str {
+    let i = (elapsed.as_millis() / SPINNER_MS) as usize % SPINNER.len();
+    SPINNER[i]
+}
+
+/// Soft pulse glyph.
+pub fn pulse_frame(elapsed: Duration) -> &'static str {
+    let i = (elapsed.as_millis() / 280) as usize % PULSE.len();
+    PULSE[i]
+}
+
+/// True during the "on" half of a blink cycle.
+pub fn blink_on(elapsed: Duration) -> bool {
+    (elapsed.as_millis() / BLINK_MS) % 2 == 0
+}
 
 // ── ratatui styles ─────────────────────────────────────────────────────────
 pub fn style_title() -> Style {
     Style::default()
-        .fg(META_BLUE_BRIGHT)
+        .fg(META_BLUE)
         .add_modifier(Modifier::BOLD)
 }
 
@@ -63,7 +105,7 @@ pub fn style_assistant() -> Style {
 }
 
 pub fn style_tool() -> Style {
-    Style::default().fg(META_BLUE_BRIGHT)
+    Style::default().fg(META_BLUE)
 }
 
 pub fn style_success() -> Style {
@@ -79,7 +121,27 @@ pub fn style_error() -> Style {
 }
 
 pub fn style_thinking() -> Style {
-    Style::default().fg(FAINT).add_modifier(Modifier::ITALIC)
+    Style::default().fg(MUTED).add_modifier(Modifier::ITALIC)
+}
+
+pub fn style_canvas() -> Style {
+    Style::default().bg(BG).fg(FG)
+}
+
+pub fn style_surface() -> Style {
+    Style::default().bg(SURFACE).fg(FG)
+}
+
+/// Input caret / stream caret: reverse Meta blue block.
+pub fn style_cursor_on() -> Style {
+    Style::default()
+        .fg(BG)
+        .bg(META_BLUE)
+        .add_modifier(Modifier::BOLD)
+}
+
+pub fn style_cursor_off() -> Style {
+    Style::default().fg(META_BLUE)
 }
 
 // ── stdout helpers (headless / subcommands) ────────────────────────────────
@@ -101,9 +163,9 @@ pub fn banner() {
     println!(
         "  {}  {}  {}   {}",
         "Spark".truecolor(0, 130, 251).bold(),
-        "·".truecolor(140, 148, 158),
+        "·".truecolor(138, 146, 158),
         "Meta Model API".truecolor(180, 190, 200),
-        format!("v{}", env!("CARGO_PKG_VERSION")).truecolor(92, 99, 110)
+        format!("v{}", env!("CARGO_PKG_VERSION")).truecolor(86, 94, 106)
     );
     println!(
         "  {}\n",
@@ -120,14 +182,14 @@ pub fn print_ok(msg: &str) {
 }
 
 pub fn print_err(msg: &str) {
-    eprintln!("{} {}", "✗".truecolor(240, 92, 92), msg);
+    eprintln!("{} {}", "✗".truecolor(255, 99, 99), msg);
 }
 
 pub fn print_tool(name: &str, detail: &str) {
     println!(
         "{} {} {}",
-        "⏺".truecolor(0, 130, 251),
+        "●".truecolor(0, 130, 251),
         name.truecolor(0, 130, 251).bold(),
-        detail.truecolor(140, 148, 158)
+        detail.truecolor(138, 146, 158)
     );
 }

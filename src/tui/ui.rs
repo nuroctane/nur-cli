@@ -1,4 +1,4 @@
-//! Rendering for the Meta CLI TUI.
+//! Rendering for the Meta CLI TUI — Meta-blue surfaces, motion, cursors.
 
 use super::app::{fmt_num, App, Cell};
 use super::{markdown, wrap};
@@ -10,10 +10,14 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
-const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
+    // Solid Meta-dark canvas so empty regions never flash terminal default.
+    f.render_widget(
+        Block::default().style(theme::style_canvas()),
+        area,
+    );
+
     let input_lines = app.input.line_count().min(6) as u16;
     let busy_h = if app.busy { 1 } else { 0 };
 
@@ -65,7 +69,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
         .take(viewport as usize)
         .collect();
 
-    let para = Paragraph::new(visible);
+    let para = Paragraph::new(visible).style(theme::style_canvas());
     let inner = Rect {
         x: area.x + 1,
         y: area.y,
@@ -76,7 +80,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
 
     // Scroll indicator when not following the bottom.
     if app.scroll_from_bottom > 0 {
-        let tag = format!(" ↓ {} more ", app.scroll_from_bottom);
+        let tag = format!(" ↓ {} ", app.scroll_from_bottom);
         let w = tag.width() as u16;
         let r = Rect {
             x: area.right().saturating_sub(w + 2),
@@ -87,7 +91,10 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
         f.render_widget(
             Paragraph::new(Span::styled(
                 tag,
-                Style::default().fg(Color::Black).bg(theme::META_BLUE_BRIGHT),
+                Style::default()
+                    .fg(theme::BG)
+                    .bg(theme::META_BLUE)
+                    .add_modifier(Modifier::BOLD),
             )),
             r,
         );
@@ -95,6 +102,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn cell_lines(app: &App, cell: &Cell, out: &mut Vec<Line<'static>>) {
+    let tick = app.spinner_epoch.elapsed();
     match cell {
         Cell::Banner => banner_lines(app, out),
         Cell::User(text) => {
@@ -104,7 +112,9 @@ fn cell_lines(app: &App, cell: &Cell, out: &mut Vec<Line<'static>>) {
                 out.push(Line::from(vec![
                     Span::styled(
                         prefix.to_string(),
-                        Style::default().fg(theme::META_BLUE_BRIGHT).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(theme::META_BLUE)
+                            .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(l.to_string(), theme::style_user()),
                 ]));
@@ -113,9 +123,25 @@ fn cell_lines(app: &App, cell: &Cell, out: &mut Vec<Line<'static>>) {
         Cell::Assistant { text, streaming } => {
             out.push(Line::default());
             let md = markdown::render_markdown(text, theme::style_assistant());
+            if md.is_empty() && *streaming {
+                // Waiting for first token — quiet Meta pulse.
+                out.push(Line::from(vec![
+                    Span::styled(
+                        "● ".to_string(),
+                        Style::default().fg(theme::META_BLUE),
+                    ),
+                    Span::styled(
+                        theme::pulse_frame(tick).to_string(),
+                        Style::default().fg(theme::META_BLUE_SKY),
+                    ),
+                ]));
+            }
             for (i, mut l) in md.into_iter().enumerate() {
                 let prefix = if i == 0 {
-                    Span::styled("⏺ ".to_string(), Style::default().fg(theme::META_BLUE_BRIGHT))
+                    Span::styled(
+                        "● ".to_string(),
+                        Style::default().fg(theme::META_BLUE),
+                    )
                 } else {
                     Span::raw("  ".to_string())
                 };
@@ -123,11 +149,16 @@ fn cell_lines(app: &App, cell: &Cell, out: &mut Vec<Line<'static>>) {
                 out.push(l);
             }
             if *streaming {
+                // Blinking Meta block caret at end of stream.
                 if let Some(last) = out.last_mut() {
-                    last.spans.push(Span::styled(
-                        "▌".to_string(),
-                        Style::default().fg(theme::META_BLUE_BRIGHT),
-                    ));
+                    if theme::blink_on(tick) {
+                        last.spans.push(Span::styled("█".to_string(), theme::style_cursor_on()));
+                    } else {
+                        last.spans.push(Span::styled(
+                            "▏".to_string(),
+                            theme::style_cursor_off(),
+                        ));
+                    }
                 }
             }
         }
@@ -136,15 +167,35 @@ fn cell_lines(app: &App, cell: &Cell, out: &mut Vec<Line<'static>>) {
             let display: String = if *active {
                 text.clone()
             } else {
-                // Collapse finished thinking to its last line.
                 text.lines().last().unwrap_or("").to_string()
             };
-            for (i, l) in display.lines().enumerate() {
-                let prefix = if i == 0 { "✻ " } else { "  " };
+            let head = if *active {
+                theme::spinner_frame(tick)
+            } else {
+                "·"
+            };
+            let head_style = if *active {
+                Style::default().fg(theme::META_BLUE_SKY)
+            } else {
+                theme::style_faint()
+            };
+            if display.is_empty() && *active {
                 out.push(Line::from(vec![
-                    Span::styled(prefix.to_string(), theme::style_faint()),
-                    Span::styled(l.to_string(), theme::style_thinking()),
+                    Span::styled(format!("{head} "), head_style),
+                    Span::styled("thinking".to_string(), theme::style_thinking()),
                 ]));
+            } else {
+                for (i, l) in display.lines().enumerate() {
+                    let prefix = if i == 0 {
+                        format!("{head} ")
+                    } else {
+                        "  ".into()
+                    };
+                    out.push(Line::from(vec![
+                        Span::styled(prefix, head_style),
+                        Span::styled(l.to_string(), theme::style_thinking()),
+                    ]));
+                }
             }
         }
         Cell::Tool {
@@ -154,29 +205,48 @@ fn cell_lines(app: &App, cell: &Cell, out: &mut Vec<Line<'static>>) {
             ok,
         } => {
             out.push(Line::default());
-            let bullet_style = match ok {
-                Some(true) => theme::style_success(),
-                Some(false) => theme::style_error(),
-                None => Style::default().fg(theme::META_BLUE_BRIGHT),
-            };
-            out.push(Line::from(vec![
-                Span::styled("⏺ ".to_string(), bullet_style),
-                Span::styled(
-                    name.clone(),
-                    Style::default().fg(theme::FG).add_modifier(Modifier::BOLD),
+            let (bullet, bullet_style) = match ok {
+                Some(true) => ("✓ ", theme::style_success()),
+                Some(false) => ("✗ ", theme::style_error()),
+                None => (
+                    // Live tool call — braille spinner in Meta blue.
+                    "",
+                    Style::default().fg(theme::META_BLUE),
                 ),
-                Span::styled(format!("({})", summarize_args(name, args)), theme::style_status()),
-            ]));
+            };
+            let mut head_spans = Vec::new();
+            if ok.is_none() {
+                head_spans.push(Span::styled(
+                    format!("{} ", theme::spinner_frame(tick)),
+                    Style::default().fg(theme::META_BLUE),
+                ));
+            } else {
+                head_spans.push(Span::styled(bullet.to_string(), bullet_style));
+            }
+            head_spans.push(Span::styled(
+                name.clone(),
+                Style::default()
+                    .fg(theme::FG)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            head_spans.push(Span::styled(
+                format!("  {}", summarize_args(name, args)),
+                theme::style_faint(),
+            ));
+            out.push(Line::from(head_spans));
             match result {
                 None => out.push(Line::from(vec![
                     Span::raw("  ".to_string()),
-                    Span::styled("⎿ running…".to_string(), theme::style_faint()),
+                    Span::styled(
+                        format!("{} running", theme::pulse_frame(tick)),
+                        Style::default().fg(theme::META_BLUE_SKY),
+                    ),
                 ])),
                 Some(r) => {
                     let all: Vec<&str> = r.lines().filter(|l| !l.trim().is_empty()).collect();
                     let shown = 3usize;
                     for (i, l) in all.iter().take(shown).enumerate() {
-                        let prefix = if i == 0 { "⎿ " } else { "  " };
+                        let prefix = if i == 0 { "└ " } else { "  " };
                         out.push(Line::from(vec![
                             Span::raw("  ".to_string()),
                             Span::styled(prefix.to_string(), theme::style_faint()),
@@ -231,90 +301,130 @@ fn banner_lines(app: &App, out: &mut Vec<Line<'static>>) {
     for (i, row) in logo.iter().enumerate() {
         let (r, g, b) = theme::GRADIENT[i.min(theme::GRADIENT.len() - 1)];
         out.push(Line::from(Span::styled(
-            row.to_string(),
+            format!("  {row}"),
             Style::default().fg(Color::Rgb(r, g, b)),
         )));
     }
     out.push(Line::from(vec![
+        Span::raw("  ".to_string()),
         Span::styled("Spark".to_string(), theme::style_title()),
-        Span::styled(" · Meta Model API · ".to_string(), theme::style_status()),
+        Span::styled("  ·  ".to_string(), theme::style_faint()),
+        Span::styled("Meta Model API".to_string(), theme::style_status()),
+        Span::styled("  ·  ".to_string(), theme::style_faint()),
         Span::styled(
             format!("v{}", env!("CARGO_PKG_VERSION")),
             theme::style_faint(),
         ),
     ]));
-    out.push(Line::from(Span::styled(
-        "unofficial coding agent — not affiliated with Meta".to_string(),
-        theme::style_faint(),
-    )));
+    out.push(Line::from(vec![
+        Span::raw("  ".to_string()),
+        Span::styled(
+            "unofficial  ·  not affiliated with Meta".to_string(),
+            theme::style_faint(),
+        ),
+    ]));
     out.push(Line::default());
     out.push(Line::from(vec![
-        Span::styled("  model ".to_string(), theme::style_faint()),
-        Span::styled(app.cfg.model.clone(), theme::style_status()),
-        Span::styled("   cwd ".to_string(), theme::style_faint()),
+        Span::raw("  ".to_string()),
+        Span::styled("model  ".to_string(), theme::style_faint()),
+        Span::styled(app.cfg.model.clone(), Style::default().fg(theme::META_BLUE_SKY)),
+        Span::styled("    cwd  ".to_string(), theme::style_faint()),
         Span::styled(app.cwd.display().to_string(), theme::style_status()),
     ]));
-    out.push(Line::from(Span::styled(
-        "  /help for commands · Enter to send · \\+Enter for newline · Esc interrupts".to_string(),
-        theme::style_faint(),
-    )));
+    out.push(Line::from(vec![
+        Span::raw("  ".to_string()),
+        Span::styled(
+            "/help  ·  Enter send  ·  \\+Enter newline  ·  Esc interrupt".to_string(),
+            theme::style_faint(),
+        ),
+    ]));
+    out.push(Line::default());
 }
 
 // ── busy line ──────────────────────────────────────────────────────────────
 fn draw_busy_line(f: &mut Frame, app: &App, area: Rect) {
-    let frame_i = (app.spinner_epoch.elapsed().as_millis() / 80) as usize % SPINNER.len();
+    let tick = app.spinner_epoch.elapsed();
+    let spin = theme::spinner_frame(tick);
     let secs = app.turn_started.elapsed().as_secs();
     let mut spans = vec![
         Span::raw(" ".to_string()),
         Span::styled(
-            SPINNER[frame_i].to_string(),
-            Style::default().fg(theme::META_BLUE_BRIGHT),
+            spin.to_string(),
+            Style::default()
+                .fg(theme::META_BLUE)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            format!(" {}… ", capitalize(&app.status)),
+            format!("  {}  ", capitalize(&app.status)),
             Style::default().fg(theme::META_BLUE_SKY),
         ),
         Span::styled(
-            format!("({secs}s · esc to interrupt)"),
+            format!("{secs}s",),
             theme::style_faint(),
         ),
+        Span::styled("  ·  esc interrupt".to_string(), theme::style_faint()),
     ];
     if !app.queue.is_empty() {
         spans.push(Span::styled(
             format!("  ·  {} queued", app.queue.len()),
-            theme::style_warn(),
+            Style::default().fg(theme::WARN),
         ));
     }
-    f.render_widget(Paragraph::new(Line::from(spans)), area);
+    f.render_widget(
+        Paragraph::new(Line::from(spans)).style(theme::style_canvas()),
+        area,
+    );
 }
 
 // ── input ──────────────────────────────────────────────────────────────────
 fn draw_input(f: &mut Frame, app: &App, area: Rect) {
-    let border_color = if app.busy {
-        theme::FAINT
-    } else {
+    let focused = !app.busy && app.approval.is_none();
+    let border_color = if app.approval.is_some() {
+        theme::BORDER
+    } else if app.busy {
+        theme::BORDER
+    } else if focused {
         theme::META_BLUE
+    } else {
+        theme::BORDER
     };
+
+    let title = if app.busy {
+        Span::styled(" muse · queued ", theme::style_faint())
+    } else {
+        Span::styled(
+            " muse ",
+            Style::default()
+                .fg(theme::META_BLUE)
+                .add_modifier(Modifier::BOLD),
+        )
+    };
+
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(border_color));
+        .border_style(Style::default().fg(border_color))
+        .style(theme::style_surface())
+        .title(title);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
     let text = app.input.text();
     let mut lines: Vec<Line> = Vec::new();
     if text.is_empty() {
+        let hint = if app.busy {
+            "type a follow-up — Enter queues it"
+        } else {
+            "plan, build, debug  ·  / for commands"
+        };
         lines.push(Line::from(vec![
-            Span::styled("❯ ".to_string(), Style::default().fg(theme::META_BLUE_BRIGHT)),
             Span::styled(
-                if app.busy {
-                    "queue a follow-up… (Enter to send)".to_string()
-                } else {
-                    "plan, build, debug — /help for commands".to_string()
-                },
-                theme::style_faint(),
+                "❯ ".to_string(),
+                Style::default()
+                    .fg(theme::META_BLUE)
+                    .add_modifier(Modifier::BOLD),
             ),
+            Span::styled(hint.to_string(), theme::style_faint()),
         ]));
     } else {
         for (i, l) in text.split('\n').enumerate() {
@@ -322,20 +432,59 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
             lines.push(Line::from(vec![
                 Span::styled(
                     prefix.to_string(),
-                    Style::default().fg(theme::META_BLUE_BRIGHT),
+                    Style::default()
+                        .fg(theme::META_BLUE)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(l.to_string(), Style::default().fg(theme::FG)),
             ]));
         }
     }
 
-    // Vertical scroll so the cursor line stays visible.
     let (cur_line, cur_col) = app.input.cursor_line_col();
     let h = inner.height as usize;
     let top = cur_line.saturating_sub(h.saturating_sub(1));
-    let visible: Vec<Line> = lines.into_iter().skip(top).take(h).collect();
-    f.render_widget(Paragraph::new(visible), inner);
 
+    // Paint Meta block cursor into the line (blink).
+    if app.approval.is_none() && theme::blink_on(app.spinner_epoch.elapsed()) {
+        let vis_idx = cur_line.saturating_sub(top);
+        if let Some(line) = lines.get_mut(vis_idx) {
+            // Under placeholder (empty text) cursor sits after ❯
+            if text.is_empty() {
+                // Replace hint with cursor + faint remainder.
+                *line = Line::from(vec![
+                    Span::styled(
+                        "❯ ".to_string(),
+                        Style::default()
+                            .fg(theme::META_BLUE)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(" ".to_string(), theme::style_cursor_on()),
+                    Span::styled(
+                        if app.busy {
+                            " type a follow-up…"
+                        } else {
+                            " plan, build, debug  ·  / for commands"
+                        }
+                        .to_string(),
+                        theme::style_faint(),
+                    ),
+                ]);
+            } else {
+                // Insert reverse block at cursor column within the text span.
+                inject_block_cursor(line, cur_col);
+            }
+        }
+    }
+
+    let visible: Vec<Line> = lines.into_iter().skip(top).take(h).collect();
+    f.render_widget(
+        Paragraph::new(visible).style(theme::style_surface()),
+        inner,
+    );
+
+    // Keep hardware cursor hidden; we draw our own Meta caret.
+    // (Hidden at app start.) Position still set for terminals that show it.
     if app.approval.is_none() {
         let cx = inner.x + 2 + cur_col as u16;
         let cy = inner.y + (cur_line - top) as u16;
@@ -345,7 +494,42 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-// ── statusline (usage bottom-left) ─────────────────────────────────────────
+/// Inject a reverse-video Meta block at `col` within the text portion of a line
+/// that is `[prefix "❯ ", text...]`.
+fn inject_block_cursor(line: &mut Line<'static>, col: usize) {
+    // Flatten text after first span (prefix).
+    if line.spans.is_empty() {
+        return;
+    }
+    let prefix = line.spans[0].clone();
+    let mut text = String::new();
+    for s in line.spans.iter().skip(1) {
+        text.push_str(&s.content);
+    }
+    let mut chars: Vec<char> = text.chars().collect();
+    let col = col.min(chars.len());
+    let before: String = chars.drain(..col).collect();
+    let under = chars.first().copied().unwrap_or(' ');
+    let after: String = if chars.is_empty() {
+        String::new()
+    } else {
+        chars[1..].iter().collect()
+    };
+
+    let mut spans = vec![prefix];
+    if !before.is_empty() {
+        spans.push(Span::styled(before, Style::default().fg(theme::FG)));
+    }
+    spans.push(Span::styled(under.to_string(), theme::style_cursor_on()));
+    if !after.is_empty() {
+        spans.push(Span::styled(after, Style::default().fg(theme::FG)));
+    } else if under == ' ' {
+        // trailing cursor already painted as space block
+    }
+    line.spans = spans;
+}
+
+// ── statusline ─────────────────────────────────────────────────────────────
 fn draw_statusline(f: &mut Frame, app: &App, area: Rect) {
     let u = &app.u_session;
     let ctx_used = app.u_last.input_tokens + app.u_last.output_tokens;
@@ -362,10 +546,14 @@ fn draw_statusline(f: &mut Frame, app: &App, area: Rect) {
         theme::style_status()
     };
 
+    let tick = app.spinner_epoch.elapsed();
     let state_dot = if app.busy {
-        Span::styled("⏺ ".to_string(), Style::default().fg(theme::META_BLUE_BRIGHT))
+        Span::styled(
+            format!("{} ", theme::spinner_frame(tick)),
+            Style::default().fg(theme::META_BLUE),
+        )
     } else {
-        Span::styled("⏺ ".to_string(), theme::style_success())
+        Span::styled("● ".to_string(), theme::style_success())
     };
 
     let left = vec![
@@ -375,12 +563,12 @@ fn draw_statusline(f: &mut Frame, app: &App, area: Rect) {
             format!("{} tok", fmt_num(u.total_tokens)),
             theme::style_status(),
         ),
-        Span::styled(" · ".to_string(), theme::style_faint()),
+        Span::styled("  ·  ".to_string(), theme::style_faint()),
         Span::styled(
             format!("${:.4}", u.estimated_cost_usd()),
             theme::style_status(),
         ),
-        Span::styled(" · ".to_string(), theme::style_faint()),
+        Span::styled("  ·  ".to_string(), theme::style_faint()),
         Span::styled(format!("ctx {ctx_pct:.0}%"), ctx_style),
     ];
 
@@ -401,15 +589,20 @@ fn draw_statusline(f: &mut Frame, app: &App, area: Rect) {
     let mut spans = left;
     spans.push(Span::raw(" ".repeat(pad)));
     spans.push(Span::styled(right_text, theme::style_faint()));
-    f.render_widget(Paragraph::new(Line::from(spans)), area);
+    f.render_widget(
+        Paragraph::new(Line::from(spans)).style(
+            Style::default().bg(theme::SURFACE).fg(theme::MUTED),
+        ),
+        area,
+    );
 }
 
 fn default_right(app: &App) -> String {
     format!(
-        "{} · {} · {} ",
+        "{}  ·  {}  ·  {} ",
         app.cfg.model,
         &app.session_id[..8.min(app.session_id.len())],
-        if app.busy { &app.status } else { "idle" }
+        if app.busy { &app.status } else { "ready" }
     )
 }
 
@@ -420,7 +613,7 @@ fn draw_palette(f: &mut Frame, app: &App, input_area: Rect) {
         return;
     }
     let h = (matches.len() as u16).min(8) + 2;
-    let w = 56.min(f.area().width.saturating_sub(4));
+    let w = 58.min(f.area().width.saturating_sub(4));
     let y = input_area.y.saturating_sub(h);
     let rect = Rect {
         x: input_area.x + 1,
@@ -433,7 +626,11 @@ fn draw_palette(f: &mut Frame, app: &App, input_area: Rect) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(theme::META_BLUE))
-        .title(Span::styled(" commands ", theme::style_faint()));
+        .style(Style::default().bg(theme::SURFACE_2))
+        .title(Span::styled(
+            " commands ",
+            Style::default().fg(theme::META_BLUE_SKY),
+        ));
     let inner = block.inner(rect);
     f.render_widget(block, rect);
 
@@ -446,26 +643,32 @@ fn draw_palette(f: &mut Frame, app: &App, input_area: Rect) {
             if i == sel {
                 Line::from(vec![
                     Span::styled(
-                        format!(" {name:<10}"),
+                        format!(" {name:<12}"),
                         Style::default()
-                            .fg(Color::White)
+                            .fg(theme::BG)
                             .bg(theme::META_BLUE)
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
-                        format!(" {desc}"),
-                        Style::default().fg(Color::White).bg(theme::META_BLUE),
+                        format!(" {desc} "),
+                        Style::default().fg(theme::BG).bg(theme::META_BLUE),
                     ),
                 ])
             } else {
                 Line::from(vec![
-                    Span::styled(format!(" {name:<10}"), theme::style_tool()),
+                    Span::styled(
+                        format!(" {name:<12}"),
+                        Style::default().fg(theme::META_BLUE_SKY),
+                    ),
                     Span::styled(format!(" {desc}"), theme::style_faint()),
                 ])
             }
         })
         .collect();
-    f.render_widget(Paragraph::new(lines), inner);
+    f.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2)),
+        inner,
+    );
 }
 
 // ── approval modal ─────────────────────────────────────────────────────────
@@ -473,7 +676,7 @@ fn draw_approval(f: &mut Frame, app: &App, area: Rect) {
     let Some(a) = &app.approval else { return };
     let pretty = pretty_args(&a.args);
     let arg_lines: Vec<&str> = pretty.lines().take(10).collect();
-    let h = (arg_lines.len() as u16 + 5).min(area.height.saturating_sub(2));
+    let h = (arg_lines.len() as u16 + 6).min(area.height.saturating_sub(2));
     let w = 72.min(area.width.saturating_sub(4));
     let rect = Rect {
         x: (area.width.saturating_sub(w)) / 2,
@@ -485,10 +688,13 @@ fn draw_approval(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme::WARN))
+        .border_style(Style::default().fg(theme::META_BLUE))
+        .style(Style::default().bg(theme::SURFACE_2))
         .title(Span::styled(
-            format!(" approve tool · {} ", a.name),
-            Style::default().fg(theme::WARN).add_modifier(Modifier::BOLD),
+            format!("  approve · {}  ", a.name),
+            Style::default()
+                .fg(theme::META_BLUE)
+                .add_modifier(Modifier::BOLD),
         ));
     let inner = block.inner(rect);
     f.render_widget(block, rect);
@@ -503,15 +709,38 @@ fn draw_approval(f: &mut Frame, app: &App, area: Rect) {
     }
     lines.push(Line::default());
     lines.push(Line::from(vec![
-        Span::styled("  [y]".to_string(), theme::style_success()),
-        Span::styled(" allow once   ".to_string(), theme::style_status()),
-        Span::styled("[a]".to_string(), theme::style_tool()),
-        Span::styled(" always allow ".to_string(), theme::style_status()),
-        Span::styled(format!("{}   ", a.name), theme::style_faint()),
-        Span::styled("[n]".to_string(), theme::style_error()),
+        Span::styled(
+            "  y ".to_string(),
+            Style::default()
+                .fg(theme::BG)
+                .bg(theme::SUCCESS)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" once   ".to_string(), theme::style_status()),
+        Span::styled(
+            " a ".to_string(),
+            Style::default()
+                .fg(theme::BG)
+                .bg(theme::META_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" always {}   ", a.name),
+            theme::style_status(),
+        ),
+        Span::styled(
+            " n ".to_string(),
+            Style::default()
+                .fg(theme::BG)
+                .bg(theme::ERROR)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" deny".to_string(), theme::style_status()),
     ]));
-    f.render_widget(Paragraph::new(lines), inner);
+    f.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2)),
+        inner,
+    );
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -527,7 +756,6 @@ fn summarize_args(tool: &str, args: &str) -> String {
         if let Some(s) = v.get(key).and_then(|x| x.as_str()) {
             return truncate(s, 80);
         }
-        // Fall back to first string field.
         if let Some(obj) = v.as_object() {
             for (_, val) in obj {
                 if let Some(s) = val.as_str() {
@@ -562,3 +790,4 @@ fn capitalize(s: &str) -> String {
         None => String::new(),
     }
 }
+

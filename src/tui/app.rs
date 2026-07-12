@@ -7,6 +7,7 @@ use crate::config::Config;
 use crate::error::Result;
 use crate::tui::input::InputState;
 use crate::usage::{TokenUsage, UsageTracker};
+use crossterm::cursor::{Hide, Show};
 use crossterm::event::{
     self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind, KeyModifiers,
 };
@@ -107,6 +108,7 @@ struct TermGuard;
 
 impl Drop for TermGuard {
     fn drop(&mut self) {
+        let _ = stdout().execute(Show);
         let _ = disable_raw_mode();
         let _ = stdout().execute(DisableBracketedPaste);
         let _ = stdout().execute(LeaveAlternateScreen);
@@ -125,6 +127,8 @@ pub async fn run_tui(
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
     stdout().execute(EnableBracketedPaste)?;
+    // Hardware cursor hidden — we paint a Meta blue block caret ourselves.
+    stdout().execute(Hide)?;
     let _guard = TermGuard;
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
@@ -183,7 +187,8 @@ pub async fn run_tui(
             break;
         }
 
-        if event::poll(Duration::from_millis(33))? {
+        // ~30fps so Meta spinners / caret blink stay smooth without burning CPU.
+        if event::poll(Duration::from_millis(32))? {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => app.on_key(key),
                 Event::Paste(s) => {

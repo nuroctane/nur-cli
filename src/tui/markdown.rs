@@ -62,7 +62,10 @@ pub fn render_markdown(text: &str, base: Style) -> Vec<Line<'static>> {
 
         // Blockquote.
         if let Some(rest) = trimmed.strip_prefix("> ") {
-            let mut spans = vec![Span::styled("▌ ".to_string(), theme::style_faint())];
+            let mut spans = vec![Span::styled(
+                "▌ ".to_string(),
+                Style::default().fg(theme::META_BLUE),
+            )];
             spans.extend(inline(rest, theme::style_thinking()));
             out.push(Line::from(spans));
             continue;
@@ -76,7 +79,7 @@ pub fn render_markdown(text: &str, base: Style) -> Vec<Line<'static>> {
             let indent = raw.len() - trimmed.len();
             let mut spans = vec![
                 Span::raw(" ".repeat(indent)),
-                Span::styled("• ".to_string(), Style::default().fg(theme::META_BLUE_BRIGHT)),
+                Span::styled("• ".to_string(), Style::default().fg(theme::META_BLUE)),
             ];
             spans.extend(inline(rest, base));
             out.push(Line::from(spans));
