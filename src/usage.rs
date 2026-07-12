@@ -111,6 +111,11 @@ impl UsageTracker {
         t
     }
 
+    pub fn set_model(&mut self, model: String) {
+        self.model = model;
+        let _ = self.write_status();
+    }
+
     pub fn set_state(&mut self, state: impl Into<String>) {
         self.state = state.into();
         let _ = self.write_status();

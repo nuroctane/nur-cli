@@ -11,14 +11,17 @@ mod tui;
 mod usage;
 
 use agent::session::{print_sessions, Session};
-use agent::AgentRunner;
+use agent::{AgentEvent, AgentRunner, ApprovalDecision};
 use api::MetaClient;
 use auth::{auth_status, login_interactive, logout, resolve_api_key, save_api_key};
 use clap::Parser;
 use cli::{AuthCmd, Cli, Commands};
 use config::{load_config, Config};
 use error::Result;
+use std::collections::HashSet;
+use std::io::Write as _;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use usage::{print_usage_summary, UsageTracker};
 
 #[tokio::main]
@@ -150,21 +153,7 @@ async fn real_main() -> Result<()> {
                 "muse · {}",
                 &session.id[..8.min(session.id.len())]
             ));
-            theme::banner();
-            theme::print_info(&format!(
-                "session {} · model {} · usage → {}",
-                &session.id[..8.min(session.id.len())],
-                cfg.model,
-                config::status_path().display()
-            ));
-            let runner = AgentRunner {
-                client,
-                config: cfg,
-                cwd,
-                auto_approve: cli.yes,
-                verbose: false,
-            };
-            tui::run_tui(runner, session, usage, cli.prompt.clone()).await?;
+            tui::run_tui(client, cfg, cwd, cli.yes, session, usage, cli.prompt.clone()).await?;
         }
         Some(Commands::Auth { .. })
         | Some(Commands::Usage)
@@ -175,50 +164,141 @@ async fn real_main() -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_headless(
     client: MetaClient,
     cfg: Config,
     cwd: PathBuf,
-    mut session: Session,
-    mut usage: UsageTracker,
+    session: Session,
+    usage: UsageTracker,
     prompt: &str,
     auto_approve: bool,
     verbose: bool,
 ) -> Result<()> {
-    let runner = AgentRunner {
+    let runner = Arc::new(AgentRunner {
         client,
         config: cfg,
         cwd,
         auto_approve,
         verbose,
-    };
+        approved_tools: Arc::new(Mutex::new(HashSet::new())),
+    });
 
-    let text = runner
-        .run_turn(&mut session, prompt, &mut usage, |ev| {
-            if verbose {
-                match ev.kind {
-                    agent::AgentEventKind::ToolStart => theme::print_tool("→", &ev.text),
-                    agent::AgentEventKind::ToolEnd => theme::print_info(&ev.text),
-                    agent::AgentEventKind::Status => theme::print_info(&ev.text),
-                    agent::AgentEventKind::Error => theme::print_err(&ev.text),
-                    agent::AgentEventKind::Assistant => {}
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let cancel = tokio_util::sync::CancellationToken::new();
+    agent::spawn_turn(
+        runner,
+        session,
+        usage,
+        prompt.to_string(),
+        tx,
+        cancel.clone(),
+    );
+
+    let mut streamed = false;
+    let mut midline = false;
+    let mut final_result: std::result::Result<String, String> = Ok(String::new());
+    let mut final_usage: Option<Box<UsageTracker>> = None;
+
+    while let Some(ev) = rx.recv().await {
+        // Streamed deltas leave the cursor mid-line; break before other output.
+        if midline && !matches!(ev, AgentEvent::TextDelta(_)) {
+            println!();
+            midline = false;
+        }
+        match ev {
+            AgentEvent::TextDelta(d) => {
+                streamed = true;
+                midline = !d.ends_with('\n');
+                print!("{d}");
+                let _ = std::io::stdout().flush();
+            }
+            AgentEvent::AssistantMessage(m) => {
+                if verbose {
+                    println!("{m}");
                 }
             }
-        })
-        .await?;
+            AgentEvent::ReasoningDelta(_) => {}
+            AgentEvent::Status(s) => {
+                if verbose {
+                    theme::print_info(&s);
+                }
+            }
+            AgentEvent::ToolStart { name, args, .. } => {
+                if verbose {
+                    theme::print_tool(&name, &truncate_line(&args, 120));
+                }
+            }
+            AgentEvent::ToolEnd {
+                name, result, ok, ..
+            } => {
+                if verbose {
+                    let tag = if ok { "done" } else { "failed" };
+                    theme::print_info(&format!("{name} {tag}: {}", truncate_line(&result, 160)));
+                }
+            }
+            AgentEvent::ApprovalRequest {
+                name,
+                args,
+                respond,
+            } => {
+                // Interactive terminal prompt (headless without -y).
+                let decision = tokio::task::spawn_blocking(move || {
+                    eprintln!();
+                    theme::print_tool(&name, &truncate_line(&args, 200));
+                    eprint!("  approve? [y]es / [a]lways / [N]o: ");
+                    let mut line = String::new();
+                    let _ = std::io::stdin().read_line(&mut line);
+                    match line.trim().to_lowercase().as_str() {
+                        "y" | "yes" => ApprovalDecision::Approve,
+                        "a" | "always" => ApprovalDecision::ApproveAlways,
+                        _ => ApprovalDecision::Deny,
+                    }
+                })
+                .await
+                .unwrap_or(ApprovalDecision::Deny);
+                let _ = respond.send(decision);
+            }
+            AgentEvent::Usage { .. } => {}
+            AgentEvent::Done { usage, result, .. } => {
+                final_usage = Some(usage);
+                final_result = result;
+                break;
+            }
+        }
+    }
 
-    println!("{text}");
+    match final_result {
+        Ok(text) => {
+            if !streamed && !text.is_empty() {
+                println!("{text}");
+            }
+        }
+        Err(e) => return Err(error::MuseError::Other(e)),
+    }
 
-    let u = usage.session_usage();
-    if verbose {
-        eprintln!(
-            "\n--- usage: in={} out={} total={} ~${:.6} ---",
-            u.input_tokens,
-            u.output_tokens,
-            u.total_tokens,
-            u.estimated_cost_usd()
-        );
-        eprintln!("status: {}", config::status_path().display());
+    if let Some(usage) = final_usage {
+        let u = usage.session_usage();
+        if verbose {
+            eprintln!(
+                "\n--- usage: in={} out={} total={} ~${:.6} ---",
+                u.input_tokens,
+                u.output_tokens,
+                u.total_tokens,
+                u.estimated_cost_usd()
+            );
+            eprintln!("status: {}", config::status_path().display());
+        }
     }
     Ok(())
+}
+
+fn truncate_line(s: &str, max: usize) -> String {
+    let s = s.replace('\n', " ");
+    if s.chars().count() <= max {
+        s
+    } else {
+        let t: String = s.chars().take(max).collect();
+        format!("{t}…")
+    }
 }

@@ -26,6 +26,9 @@ pub enum MuseError {
     #[error("max turns reached ({0})")]
     MaxTurns(u32),
 
+    #[error("interrupted")]
+    Interrupted,
+
     #[error("{0}")]
     Other(String),
 }

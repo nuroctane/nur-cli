@@ -8,15 +8,34 @@ The installed command is **`muse`** (Muse Spark agent).
 
 ```
 muse                      # interactive TUI (Meta blue theme)
-muse "fix the bug"       # start with a prompt
+muse "fix the bug"        # start with a prompt
 muse -c                   # continue last session in this directory
 muse -r <session-id>      # resume a session
-muse run "…" -y           # headless agent turn
+muse run "…" -y           # headless agent turn (streams output)
 muse sessions             # list sessions
 muse usage                # token / cost snapshot for ADEs
 muse auth login
 muse install-hook         # install Orca ADE hook
 ```
+
+## TUI
+
+- **Live streaming** — assistant text and reasoning summaries render token-by-token
+- **Tool approvals** — mutating tools (`bash`, `write_file`, `edit_file`) pop a modal:
+  `y` allow once · `a` always allow this session · `n` deny. Read-only tools run freely.
+  `-y` / `--yes` auto-approves everything (headless loops).
+- **Slash commands** with autocomplete palette (type `/`):
+  `/help` `/clear` `/new` `/compact` `/usage` `/cost` `/model` `/effort`
+  `/sessions` `/resume` `/init` `/config` `/exit`
+- **Statusline** — live usage bottom-left (`tokens · $cost · ctx %`), model/session/state bottom-right
+- **Markdown rendering** — headings, bullets, fenced code, inline bold/italic/code
+- **Input** — multi-line (`\`+Enter or Ctrl+J), ↑/↓ history (persisted), readline keys
+  (Ctrl+A/E/U/W, Ctrl+←/→), bracketed paste
+- **Esc interrupts** a running turn; prompts typed while busy are queued
+- Ctrl+C twice quits · PgUp/PgDn scroll · Ctrl+L clear
+
+`/init` asks the agent to generate a `MUSE.md`. Project instructions are loaded automatically
+from `MUSE.md`, `AGENTS.md`, or `CLAUDE.md` (first found) in the workspace root.
 
 ## Install
 
@@ -36,12 +55,6 @@ cargo install --path .
 ```
 
 Requires [Rust](https://rustup.rs) / cargo.
-
-Clone into Laboratory (Windows):
-
-```text
-C:\Users\david\Scripts\clone meta-cli main to Laboratory local.cmd
-```
 
 ## Auth
 
@@ -84,6 +97,7 @@ orca terminal create --worktree active --command "muse" --title "Meta CLI" --jso
 ```
 
 Poll `%USERPROFILE%\.muse\status.json` for live Meta token usage tied to the user's key.
+The same numbers are shown live in the TUI statusline (bottom-left).
 
 ## Config
 
@@ -94,13 +108,16 @@ model = "muse-spark-1.1"
 base_url = "https://api.meta.ai/v1"
 reasoning_effort = "high"
 max_turns = 40
+stream = true
+context_window = 1000000   # for the ctx% meter
 ```
 
 ## Tools
 
 `read_file` · `write_file` · `edit_file` · `bash` · `grep` · `glob`
 
-Headless: pass `-y` / `--yes` to auto-approve tools.
+Read-only tools are auto-approved; mutating tools require approval in the TUI
+(or `-y` / `--yes` for unattended runs).
 
 ## Model API
 
@@ -108,6 +125,7 @@ Headless: pass `-y` / `--yes` to auto-approve tools.
 
 - `store: false`
 - `include: ["reasoning.encrypted_content"]`
+- SSE streaming (`stream: true`) with graceful fallback to plain JSON
 - default model `muse-spark-1.1`
 
 Docs: https://dev.meta.ai/docs/getting-started/overview

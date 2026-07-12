@@ -24,6 +24,9 @@ pub struct Config {
     pub max_turns: u32,
     #[serde(default = "default_true")]
     pub stream: bool,
+    /// Model context window (tokens) — used for the ctx% meter in the TUI.
+    #[serde(default = "default_context_window")]
+    pub context_window: u64,
 }
 
 fn default_model() -> String {
@@ -38,6 +41,9 @@ fn default_reasoning() -> String {
 fn default_max_turns() -> u32 {
     40
 }
+fn default_context_window() -> u64 {
+    1_000_000
+}
 fn default_true() -> bool {
     true
 }
@@ -50,6 +56,7 @@ impl Default for Config {
             reasoning_effort: default_reasoning(),
             max_turns: default_max_turns(),
             stream: true,
+            context_window: default_context_window(),
         }
     }
 }

@@ -1,5 +1,6 @@
 use super::types::{ApiResponse, ResponseRequest};
 use crate::error::{MuseError, Result};
+use futures_util::StreamExt;
 use reqwest::Client;
 
 #[derive(Clone)]
@@ -7,6 +8,18 @@ pub struct MetaClient {
     http: Client,
     base_url: String,
     api_key: String,
+}
+
+/// Incremental events surfaced while a response streams in.
+#[derive(Debug)]
+#[allow(dead_code)] // Completed's payload is consumed by some callers only
+pub enum StreamEvent {
+    /// Assistant output text delta.
+    TextDelta(String),
+    /// Reasoning summary text delta (model "thinking" summary).
+    ReasoningDelta(String),
+    /// Terminal event carrying the full final response object.
+    Completed(ApiResponse),
 }
 
 impl MetaClient {
@@ -44,22 +57,176 @@ impl MetaClient {
             });
         }
 
-        let parsed: ApiResponse = serde_json::from_str(&body).map_err(|e| {
-            MuseError::Other(format!("failed to parse API response: {e}; body={body}"))
-        })?;
+        parse_response_body(&body, status.as_u16())
+    }
 
-        if let Some(err) = &parsed.error {
+    /// Stream a response via SSE. `on_event` receives deltas as they arrive;
+    /// the final `ApiResponse` is returned. Falls back to non-streaming
+    /// parsing if the server replies with plain JSON.
+    pub async fn create_response_stream(
+        &self,
+        req: &ResponseRequest,
+        mut on_event: impl FnMut(StreamEvent),
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<ApiResponse> {
+        let url = format!("{}/responses", self.base_url);
+        let res = self
+            .http
+            .post(&url)
+            .bearer_auth(&self.api_key)
+            .header("Content-Type", "application/json")
+            .header("Accept", "text/event-stream")
+            .json(req)
+            .send()
+            .await?;
+
+        let status = res.status();
+        let content_type = res
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+
+        if !status.is_success() {
+            let body = res.text().await?;
+            let msg = parse_error_message(&body).unwrap_or(body.clone());
             return Err(MuseError::Api {
                 status: status.as_u16(),
-                message: err
-                    .message
-                    .clone()
-                    .unwrap_or_else(|| "unknown API error".into()),
+                message: msg,
             });
         }
 
-        Ok(parsed)
+        // Server ignored stream=true → plain JSON body.
+        if !content_type.contains("text/event-stream") {
+            let body = res.text().await?;
+            return parse_response_body(&body, status.as_u16());
+        }
+
+        let mut stream = res.bytes_stream();
+        let mut buf = String::new();
+        let mut final_response: Option<ApiResponse> = None;
+
+        loop {
+            let chunk = tokio::select! {
+                _ = cancel.cancelled() => return Err(MuseError::Interrupted),
+                c = stream.next() => c,
+            };
+            let Some(chunk) = chunk else { break };
+            let chunk = chunk?;
+            buf.push_str(&String::from_utf8_lossy(&chunk));
+
+            // SSE events are separated by a blank line.
+            while let Some(pos) = find_event_boundary(&buf) {
+                let raw = buf[..pos].to_string();
+                buf.drain(..pos + boundary_len(&buf, pos));
+                if let Some(data) = extract_sse_data(&raw) {
+                    if data.trim() == "[DONE]" {
+                        continue;
+                    }
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
+                        handle_sse_json(&v, &mut on_event, &mut final_response)?;
+                    }
+                }
+            }
+        }
+
+        final_response.ok_or_else(|| {
+            MuseError::Other("stream ended without a completed response".into())
+        })
     }
+}
+
+fn find_event_boundary(buf: &str) -> Option<usize> {
+    let a = buf.find("\n\n");
+    let b = buf.find("\r\n\r\n");
+    match (a, b) {
+        (Some(x), Some(y)) => Some(x.min(y)),
+        (x, y) => x.or(y),
+    }
+}
+
+fn boundary_len(buf: &str, pos: usize) -> usize {
+    if buf[pos..].starts_with("\r\n\r\n") {
+        4
+    } else {
+        2
+    }
+}
+
+/// Join all `data:` lines of one SSE event.
+fn extract_sse_data(raw: &str) -> Option<String> {
+    let mut out = String::new();
+    for line in raw.lines() {
+        if let Some(rest) = line.strip_prefix("data:") {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(rest.trim_start());
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+fn handle_sse_json(
+    v: &serde_json::Value,
+    on_event: &mut impl FnMut(StreamEvent),
+    final_response: &mut Option<ApiResponse>,
+) -> Result<()> {
+    let type_ = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+    if type_.ends_with("output_text.delta") {
+        if let Some(d) = v.get("delta").and_then(|d| d.as_str()) {
+            on_event(StreamEvent::TextDelta(d.to_string()));
+        }
+    } else if type_.contains("reasoning") && type_.ends_with(".delta") {
+        if let Some(d) = v.get("delta").and_then(|d| d.as_str()) {
+            on_event(StreamEvent::ReasoningDelta(d.to_string()));
+        }
+    } else if type_ == "response.completed"
+        || type_ == "response.done"
+        || type_ == "response.incomplete"
+    {
+        if let Some(resp) = v.get("response") {
+            let parsed: ApiResponse = serde_json::from_value(resp.clone())?;
+            on_event(StreamEvent::Completed(parsed.clone()));
+            *final_response = Some(parsed);
+        }
+    } else if type_ == "response.failed" || type_ == "error" {
+        let msg = v
+            .pointer("/response/error/message")
+            .or_else(|| v.pointer("/error/message"))
+            .or_else(|| v.get("message"))
+            .and_then(|m| m.as_str())
+            .unwrap_or("stream error")
+            .to_string();
+        return Err(MuseError::Api {
+            status: 0,
+            message: msg,
+        });
+    }
+    Ok(())
+}
+
+fn parse_response_body(body: &str, status: u16) -> Result<ApiResponse> {
+    let parsed: ApiResponse = serde_json::from_str(body).map_err(|e| {
+        MuseError::Other(format!("failed to parse API response: {e}; body={body}"))
+    })?;
+
+    if let Some(err) = &parsed.error {
+        return Err(MuseError::Api {
+            status,
+            message: err
+                .message
+                .clone()
+                .unwrap_or_else(|| "unknown API error".into()),
+        });
+    }
+
+    Ok(parsed)
 }
 
 fn parse_error_message(body: &str) -> Option<String> {
