@@ -37,8 +37,9 @@ impl Tool for SkillTool {
             "list" => {
                 if skills.is_empty() {
                     return Ok(
-                        "no skills installed — add <name>/SKILL.md under ~/.muse/skills/ \
-                         or <workspace>/.muse/skills/"
+                        "no skills installed — add <name>/SKILL.md under ~/.muse/skills/, \
+                         ~/.agents/skills/, or the workspace .muse/.agents skills dirs. \
+                         Graphify: uv tool install graphifyy && graphify install --platform agents"
                             .into(),
                     );
                 }
@@ -59,11 +60,25 @@ impl Tool for SkillTool {
                             "skill '{name}' not found — action=list to see installed skills"
                         ))
                     })?;
+                // Re-read the file so large packs (e.g. graphify) aren't truncated
+                // the way the system-prompt catalog is.
+                let body = std::fs::read_to_string(&skill.path)
+                    .map(|t| {
+                        // Strip YAML frontmatter if present.
+                        if t.starts_with("---") {
+                            if let Some(end) = t[3..].find("---") {
+                                return t[end + 6..].trim().to_string();
+                            }
+                        }
+                        t
+                    })
+                    .unwrap_or_else(|_| skill.body.clone());
+                let body: String = body.chars().take(80_000).collect();
                 Ok(format!(
                     "# Skill: {} ({})\n\n{}",
                     skill.name,
                     skill.path.display(),
-                    skill.body
+                    body
                 ))
             }
             other => Err(MuseError::Tool(format!(

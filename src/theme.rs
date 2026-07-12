@@ -54,6 +54,109 @@ pub const GRADIENT: [(u8, u8, u8); 6] = [
     (0, 85, 200),
 ];
 
+// ── Standardized hue ramp ──────────────────────────────────────────────────
+// Every accent below sits at a similar lightness/saturation so the UI reads as
+// one system: a blue spine with hues fanning out around it. Assignment is by
+// *meaning*, never ad hoc — see `tool_color` and `Tone`.
+
+/// Blue ramp, light → deep. The spine of the UI.
+pub const BLUE_100: Color = Color::Rgb(168, 212, 255);
+pub const BLUE_200: Color = Color::Rgb(120, 190, 255);
+pub const BLUE_300: Color = Color::Rgb(90, 175, 255); // == META_BLUE_SKY
+pub const BLUE_400: Color = Color::Rgb(0, 130, 251); // == META_BLUE
+pub const BLUE_500: Color = Color::Rgb(0, 100, 224);
+#[allow(dead_code)]
+pub const BLUE_600: Color = Color::Rgb(0, 82, 190);
+
+/// Accents, ordered around the wheel from the blue spine.
+pub const INDIGO: Color = Color::Rgb(139, 152, 255); // structure: skills, todos
+pub const VIOLET: Color = Color::Rgb(178, 148, 255); // thought & authored change
+pub const PINK: Color = Color::Rgb(240, 133, 197); // delegation (subagents)
+pub const AMBER: Color = Color::Rgb(255, 186, 73); // execution (shell) == WARN
+pub const ORANGE: Color = Color::Rgb(255, 150, 89); // durable state (memory)
+pub const TEAL: Color = Color::Rgb(64, 214, 196); // the network
+pub const CYAN: Color = Color::Rgb(80, 196, 255); // version control
+// Green lives in SUCCESS — status, not a family hue.
+
+/// Colour a tool by *family*, so a glance tells you what kind of thing ran:
+/// read (sky) · write (violet) · shell (amber) · net (teal) · git (cyan) ·
+/// delegate (pink) · knowledge (indigo/orange).
+pub fn tool_color(name: &str) -> Color {
+    match name {
+        "read_file" | "list_dir" | "grep" | "glob" => BLUE_300,
+        "write_file" | "edit_file" | "multi_edit" | "apply_patch" => VIOLET,
+        "bash" => AMBER,
+        "web_fetch" | "web_search" => TEAL,
+        "git_status" | "git_diff" => CYAN,
+        "agent" => PINK,
+        "memory" => ORANGE,
+        "skill" | "todo_write" | "graphify" => INDIGO,
+        "submit_plan" => VIOLET,
+        _ => BLUE_200,
+    }
+}
+
+/// A one-word family label used in the tool card gutter.
+pub fn tool_family(name: &str) -> &'static str {
+    match name {
+        "read_file" | "list_dir" | "grep" | "glob" => "read",
+        "write_file" | "edit_file" | "multi_edit" | "apply_patch" => "edit",
+        "bash" => "shell",
+        "web_fetch" | "web_search" => "web",
+        "git_status" | "git_diff" => "git",
+        "agent" => "agent",
+        "memory" => "memory",
+        "skill" => "skill",
+        "todo_write" => "todo",
+        "graphify" => "graph",
+        "submit_plan" => "plan",
+        _ => "tool",
+    }
+}
+
+/// Semantic classes for system notices, so mode changes, plans, todos, usage
+/// and session events are each visually distinct instead of all "blue info".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tone {
+    Neutral,
+    Mode,
+    Plan,
+    Todos,
+    Usage,
+    Session,
+    Skill,
+    Memory,
+}
+
+impl Tone {
+    pub fn color(self) -> Color {
+        match self {
+            Tone::Neutral => BLUE_400,
+            Tone::Mode => INDIGO,
+            Tone::Plan => VIOLET,
+            Tone::Todos => CYAN,
+            Tone::Usage => TEAL,
+            Tone::Session => BLUE_200,
+            Tone::Skill => INDIGO,
+            Tone::Memory => ORANGE,
+        }
+    }
+
+    /// Leading glyph — shape carries meaning even without color.
+    pub fn glyph(self) -> &'static str {
+        match self {
+            Tone::Neutral => "●",
+            Tone::Mode => "◈",
+            Tone::Plan => "✦",
+            Tone::Todos => "☰",
+            Tone::Usage => "∑",
+            Tone::Session => "⟲",
+            Tone::Skill => "◆",
+            Tone::Memory => "❖",
+        }
+    }
+}
+
 // ── Motion ─────────────────────────────────────────────────────────────────
 /// Braille spinner — smooth, dense, Meta-blue tinted in UI.
 pub const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -118,6 +221,12 @@ pub fn style_warn() -> Style {
 
 pub fn style_error() -> Style {
     Style::default().fg(ERROR)
+}
+
+/// Reasoning / "thinking" text — violet, so model thought is never confused
+/// with tool output or the assistant's actual answer.
+pub fn style_thinking_violet() -> Style {
+    Style::default().fg(VIOLET).add_modifier(Modifier::ITALIC)
 }
 
 pub fn style_thinking() -> Style {

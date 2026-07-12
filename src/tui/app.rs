@@ -5,6 +5,7 @@ use crate::agent::{
     self, AgentEvent, AgentRunner, ApprovalDecision, PermissionMode, Session, SharedMode,
     SharedTodos,
 };
+use crate::theme::Tone;
 use crate::tools::ToolHost;
 use crate::api::MetaClient;
 use crate::config::Config;
@@ -42,6 +43,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/todos", "show session task list"),
     ("/memory", "show ~/.muse/memory.md excerpt"),
     ("/skills", "list installed skills"),
+    ("/graphify", "knowledge graph: status | query | path | explain | extract"),
     ("/usage", "token usage + cost for this session"),
     ("/cost", "alias for /usage"),
     ("/model", "show or switch model"),
@@ -49,6 +51,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/sessions", "list recent sessions"),
     ("/resume", "pick a past session to return to  (Ctrl+R)"),
     ("/init", "generate a MUSE.md project guide"),
+    ("/mouse", "wheel scrolling ⇄ text selection"),
     ("/config", "show config + data paths"),
     ("/exit", "quit"),
 ];
@@ -64,7 +67,9 @@ pub enum Cell {
         result: Option<String>,
         ok: Option<bool>,
     },
-    Info(String),
+    /// System notice. `tone` picks the colour + glyph so a mode switch, a plan,
+    /// a todo update and a usage dump don't all read as the same blue blob.
+    Info { text: String, tone: Tone },
     Error(String),
 }
 
@@ -74,7 +79,9 @@ enum TurnMode {
     Compact,
 }
 
-/// What ↑/↓ do in the current UI state. Never `History` — see `arrow_action`.
+/// What ↑/↓ do in the current UI state. Never history — history lives on
+/// Ctrl+P / Ctrl+N, because a past prompt jumping into the input box unbidden
+/// is exactly the behavior we removed.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum ArrowAction {
     /// Move the selection in the slash-command palette.
@@ -83,6 +90,21 @@ pub enum ArrowAction {
     Caret,
     /// Scroll the transcript.
     Scroll,
+}
+
+/// The whole arrow-key policy, as a pure function — single source of truth for
+/// both `App::arrow_action` and its tests.
+///
+/// Reading the chat is the common case, so arrows scroll. They only move the
+/// caret when you are genuinely mid-draft on a multi-line prompt.
+pub fn decide_arrow_action(input_empty: bool, on_edge: bool, palette_open: bool) -> ArrowAction {
+    if palette_open {
+        ArrowAction::Palette
+    } else if input_empty || on_edge {
+        ArrowAction::Scroll
+    } else {
+        ArrowAction::Caret
+    }
 }
 
 pub struct ApprovalState {
@@ -191,8 +213,12 @@ pub async fn run_tui(
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
     stdout().execute(EnableBracketedPaste)?;
-    // Wheel scrolls the transcript. Terminals keep Shift+drag for text selection.
-    stdout().execute(EnableMouseCapture)?;
+    // Mouse capture is opt-in: while it's on the terminal routes clicks to us
+    // and you lose native click-drag text selection. Default off so selecting
+    // and copying works; `/mouse` turns wheel-scroll on (Shift+drag to select).
+    if cfg.mouse {
+        stdout().execute(EnableMouseCapture)?;
+    }
     // Hardware cursor hidden — we paint a Meta blue block caret ourselves.
     stdout().execute(Hide)?;
     let _guard = TermGuard;
@@ -337,30 +363,13 @@ impl App {
     }
 
     // ── arrow-key policy ───────────────────────────────────────────────
-    /// What ↑/↓ should do right now.
-    ///
-    /// Reading the chat is the common case, so arrows scroll the transcript.
-    /// They only move the caret when you are genuinely editing a multi-line
-    /// draft, and they never recall history — that lives on Ctrl+P / Ctrl+N,
-    /// because having a past prompt jump into the input box unbidden is
-    /// exactly the behavior we're avoiding.
     fn arrow_action(&self, up: bool) -> ArrowAction {
-        if self.palette_visible() {
-            return ArrowAction::Palette;
-        }
-        if self.input.is_empty() {
-            return ArrowAction::Scroll;
-        }
-        let at_edge = if up {
+        let on_edge = if up {
             self.input.on_first_line()
         } else {
             self.input.on_last_line()
         };
-        if at_edge {
-            ArrowAction::Scroll
-        } else {
-            ArrowAction::Caret
-        }
+        decide_arrow_action(self.input.is_empty(), on_edge, self.palette_visible())
     }
 
     // ── transcript scrolling ───────────────────────────────────────────
@@ -739,16 +748,19 @@ impl App {
                 }
             }
         }
-        self.push_info(format!(
-            "mode · {} — {}{}",
-            mode.badge(),
-            mode.description(),
-            if self.busy {
-                "  ·  applies to next tool now"
-            } else {
-                ""
-            }
-        ));
+        self.push_note(
+            Tone::Mode,
+            format!(
+                "mode · {} — {}{}",
+                mode.badge(),
+                mode.description(),
+                if self.busy {
+                    "  ·  applies to next tool now"
+                } else {
+                    ""
+                }
+            ),
+        );
     }
 
     fn cycle_permission_mode(&mut self) {
@@ -903,12 +915,13 @@ impl App {
                 self.u_last = last;
             }
             AgentEvent::TodosChanged(text) => {
-                self.push_info(format!("todos\n{text}"));
+                self.push_note(Tone::Todos, format!("todos\n{text}"));
             }
             AgentEvent::PlanSubmitted(text) => {
-                self.push_info(format!(
-                    "plan saved — Shift+Tab to manual/auto, then implement\n{text}"
-                ));
+                self.push_note(
+                    Tone::Plan,
+                    format!("plan saved — Shift+Tab to manual/auto, then implement\n{text}"),
+                );
             }
             AgentEvent::Done {
                 session,
@@ -936,7 +949,7 @@ impl App {
                             .iter()
                             .rev()
                             .take(3)
-                            .any(|c| matches!(c, Cell::Info(s) if s.contains("cancelled")))
+                            .any(|c| matches!(c, Cell::Info { text, .. } if text.contains("cancelled")))
                         {
                             self.push_info("cancelled".into());
                         }
@@ -1010,10 +1023,12 @@ impl App {
                     .lock()
                     .map(|g| g.render())
                     .unwrap_or_else(|_| "(lock error)".into());
-                self.push_info(format!("todos\n{t}"));
+                self.push_note(Tone::Todos, format!("todos\n{t}"));
             }
             "/memory" => {
-                self.push_info(format!(
+                self.push_note(
+                    Tone::Memory,
+                    format!(
                     "memory\n{}",
                     agent::memory::read_memory()
                         .chars()
@@ -1023,13 +1038,16 @@ impl App {
                         .chars()
                         .rev()
                         .collect::<String>()
-                ));
+                    ),
+                );
             }
             "/skills" => {
                 let skills = agent::skills::load_skills(&self.cwd);
                 if skills.is_empty() {
-                    self.push_info(
+                    self.push_note(
+                        Tone::Skill,
                         "no skills found — add ~/.muse/skills/<name>/SKILL.md\n\
+                         or ~/.agents/skills/<name>/SKILL.md  (graphify install --platform agents)\n\
                          the agent can also load them itself via the `skill` tool"
                             .into(),
                     );
@@ -1038,7 +1056,7 @@ impl App {
                     for sk in skills {
                         s.push_str(&format!("  · {} — {}\n", sk.name, sk.description));
                     }
-                    self.push_info(s);
+                    self.push_note(Tone::Skill, s);
                 }
             }
             "/usage" | "/cost" => self.cmd_usage(),
@@ -1060,18 +1078,123 @@ impl App {
                      agent sessions can use as project instructions. Keep it under 120 lines.",
                 );
             }
+            "/mouse" => self.cmd_mouse(),
+            "/graphify" => self.cmd_graphify(&arg),
             other => self.push_error(format!("unknown command: {other} — try /help")),
+        }
+    }
+
+    /// Run graphify CLI actions from the TUI without going through the model.
+    fn cmd_graphify(&mut self, arg: &str) {
+        let arg = arg.trim();
+        if arg.is_empty() || arg == "status" || arg == "help" || arg == "-h" || arg == "--help" {
+            // Always show status; if empty also print usage.
+            let host = ToolHost::default();
+            let ctx = crate::tools::ToolContext {
+                cwd: self.cwd.clone(),
+                cancel: CancellationToken::new(),
+            };
+            match host.dispatch("graphify", r#"{"action":"status"}"#, &ctx) {
+                Ok(s) => {
+                    let mut msg = s;
+                    if arg.is_empty() || arg == "help" || arg == "-h" || arg == "--help" {
+                        msg.push_str(
+                            "\n\nusage\n  \
+                             /graphify                         status (CLI + graph present?)\n  \
+                             /graphify query <question>        BFS over graph.json\n  \
+                             /graphify path <A> <B>            shortest path\n  \
+                             /graphify explain <node>          node + neighbors\n  \
+                             /graphify report                  GRAPH_REPORT.md excerpt\n  \
+                             /graphify extract [path]          build local code AST graph\n  \
+                             /graphify update [path]           re-extract changed code\n\n\
+                             install:  uv tool install graphifyy\n\
+                                       graphify install --platform agents\n\
+                             skill:    skill(action=read, name=graphify)  or  /skills",
+                        );
+                    }
+                    self.push_note(Tone::Skill, msg);
+                }
+                Err(e) => self.push_error(e.to_string()),
+            }
+            return;
+        }
+
+        let mut parts = arg.splitn(2, char::is_whitespace);
+        let action = parts.next().unwrap_or("").trim();
+        let rest = parts.next().unwrap_or("").trim();
+
+        let json = match action {
+            "query" | "q" => {
+                if rest.is_empty() {
+                    self.push_error("usage: /graphify query <question>".into());
+                    return;
+                }
+                serde_json::json!({"action": "query", "question": rest}).to_string()
+            }
+            "path" => {
+                let mut ab = rest.split_whitespace();
+                let from = ab.next().unwrap_or("");
+                let to = ab.next().unwrap_or("");
+                if from.is_empty() || to.is_empty() {
+                    self.push_error("usage: /graphify path <A> <B>".into());
+                    return;
+                }
+                serde_json::json!({"action": "path", "from": from, "to": to}).to_string()
+            }
+            "explain" => {
+                if rest.is_empty() {
+                    self.push_error("usage: /graphify explain <node>".into());
+                    return;
+                }
+                serde_json::json!({"action": "explain", "node": rest}).to_string()
+            }
+            "affected" => {
+                if rest.is_empty() {
+                    self.push_error("usage: /graphify affected <node>".into());
+                    return;
+                }
+                serde_json::json!({"action": "affected", "node": rest}).to_string()
+            }
+            "report" => r#"{"action":"report"}"#.to_string(),
+            "extract" | "build" => {
+                let path = if rest.is_empty() { "." } else { rest };
+                serde_json::json!({"action": "extract", "path": path}).to_string()
+            }
+            "update" => {
+                let path = if rest.is_empty() { "." } else { rest };
+                serde_json::json!({"action": "update", "path": path}).to_string()
+            }
+            "status" => r#"{"action":"status"}"#.to_string(),
+            other => {
+                // Treat free text as a query (fast path when graph exists).
+                serde_json::json!({"action": "query", "question": format!("{other} {rest}").trim()})
+                    .to_string()
+            }
+        };
+
+        self.push_note(Tone::Skill, format!("graphify · {action}…"));
+        let host = ToolHost::default();
+        let ctx = crate::tools::ToolContext {
+            cwd: self.cwd.clone(),
+            cancel: CancellationToken::new(),
+        };
+        match host.dispatch("graphify", &json, &ctx) {
+            Ok(s) => self.push_note(Tone::Skill, s),
+            Err(e) => self.push_error(e.to_string()),
         }
     }
 
     fn cmd_mode(&mut self, arg: &str) {
         if arg.is_empty() {
             let m = self.permission_mode.get();
-            self.push_info(format!(
-                "mode · {} — {}\n  Shift+Tab cycles  manual → plan → auto\n  /mode manual|plan|auto",
-                m.badge(),
-                m.description()
-            ));
+            self.push_note(
+                Tone::Mode,
+                format!(
+                    "mode · {} — {}\n  Shift+Tab cycles  manual → plan → auto\n  /mode manual|plan|auto",
+                    m.badge(),
+                    m.description()
+                ),
+            );
             return;
         }
         match PermissionMode::parse(arg) {
@@ -1091,8 +1214,9 @@ impl App {
         s.push_str(&format!(
             "\npermission mode now: {} — {}\n\
              keys\n  \
-             ↑/↓ or wheel   scroll the chat   (PgUp/PgDn page · Home top · End latest)\n  \
+             ↑/↓            scroll the chat   (PgUp/PgDn page · Home top · End latest)\n  \
              Ctrl+P/Ctrl+N  prompt history    (also Alt+↑/↓)\n  \
+             /mouse         wheel scrolling ⇄ text selection (selection is on by default)\n  \
              Enter          send              (\\+Enter or Ctrl+J for a newline)\n  \
              Shift+Tab      cycle modes  ·  Ctrl+R resume a session\n  \
              Esc            cancel turn   ·  Ctrl+C twice quit  ·  Ctrl+L clear\n  \
@@ -1163,9 +1287,41 @@ impl App {
         });
     }
 
+    /// Toggle mouse capture live: wheel-scroll vs. native text selection.
+    fn cmd_mouse(&mut self) {
+        self.cfg.mouse = !self.cfg.mouse;
+        let ok = if self.cfg.mouse {
+            stdout().execute(EnableMouseCapture).is_ok()
+        } else {
+            stdout().execute(DisableMouseCapture).is_ok()
+        };
+        if !ok {
+            self.push_error("terminal refused the mouse mode change".into());
+            return;
+        }
+        let _ = crate::config::save_config(&self.cfg);
+        if self.cfg.mouse {
+            self.push_note(
+                Tone::Mode,
+                "mouse ON — wheel scrolls the transcript\n  \
+                 text selection now needs Shift+drag  ·  /mouse to turn back off"
+                    .into(),
+            );
+        } else {
+            self.push_note(
+                Tone::Mode,
+                "mouse OFF — click-drag selects and copies text normally\n  \
+                 scroll with ↑/↓ · PgUp/PgDn · Home/End  ·  /mouse for wheel scrolling"
+                    .into(),
+            );
+        }
+    }
+
     fn cmd_usage(&mut self) {
         let u = &self.u_session;
-        self.push_info(format!(
+        self.push_note(
+            Tone::Usage,
+            format!(
             "session usage\n  input    {} tok ({} cached)\n  output   {} tok ({} reasoning)\n  \
              total    {} tok\n  est cost ${:.4}\n  status   {}",
             fmt_num(u.input_tokens),
@@ -1316,8 +1472,10 @@ impl App {
         if msgs.is_empty() {
             return;
         }
-        self.cells
-            .push(Cell::Info(format!("─ history ({} messages) ─", session.messages.len())));
+        self.cells.push(Cell::Info {
+            text: format!("history · {} messages", session.messages.len()),
+            tone: Tone::Session,
+        });
         for (role, content) in msgs.into_iter().rev() {
             match role.as_str() {
                 "user" => self.cells.push(Cell::User(content)),
@@ -1330,7 +1488,15 @@ impl App {
     }
 
     fn push_info(&mut self, s: String) {
-        self.cells.push(Cell::Info(s));
+        self.cells.push(Cell::Info {
+            text: s,
+            tone: Tone::Neutral,
+        });
+    }
+
+    /// Notice with a semantic colour/glyph (mode, plan, todos, usage, …).
+    fn push_note(&mut self, tone: Tone, s: String) {
+        self.cells.push(Cell::Info { text: s, tone });
     }
 
     fn push_error(&mut self, s: String) {
@@ -1343,26 +1509,15 @@ mod tests {
     use super::*;
     use crate::tui::input::InputState;
 
-    /// Mirrors `App::arrow_action` against a bare InputState (App needs a live
-    /// client to construct). Keep the two in step — the assertions below are the
-    /// contract: arrows read the chat, they never recall history.
+    /// Calls the same `decide_arrow_action` the App does — no mirrored logic,
+    /// so the tests cannot drift from the behavior they claim to pin.
     fn arrow_action(input: &InputState, palette: bool, up: bool) -> ArrowAction {
-        if palette {
-            return ArrowAction::Palette;
-        }
-        if input.is_empty() {
-            return ArrowAction::Scroll;
-        }
-        let at_edge = if up {
+        let on_edge = if up {
             input.on_first_line()
         } else {
             input.on_last_line()
         };
-        if at_edge {
-            ArrowAction::Scroll
-        } else {
-            ArrowAction::Caret
-        }
+        decide_arrow_action(input.is_empty(), on_edge, palette)
     }
 
     #[test]

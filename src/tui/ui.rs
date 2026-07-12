@@ -191,11 +191,33 @@ fn draw_session_picker(f: &mut Frame, app: &App, area: Rect) {
 // ── transcript ─────────────────────────────────────────────────────────────
 fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     let inner_w = area.width.saturating_sub(2).max(10);
-    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    // Wrap cell-by-cell so every wrapped line keeps a back-pointer to the user
+    // prompt that owns it — that's what lets the prompt stick to the top while
+    // you scroll through the work it produced.
+    let mut wrapped: Vec<Line<'static>> = Vec::new();
+    let mut owner: Vec<Option<usize>> = Vec::new(); // index into `prompts`
+    let mut is_prompt_head: Vec<bool> = Vec::new();
+    let mut prompts: Vec<String> = Vec::new();
+    let mut current: Option<usize> = None;
+
     for cell in &app.cells {
-        cell_lines(app, cell, &mut lines);
+        if let Cell::User(text) = cell {
+            prompts.push(text.clone());
+            current = Some(prompts.len() - 1);
+        }
+        let mut cell_out: Vec<Line<'static>> = Vec::new();
+        cell_lines(app, cell, &mut cell_out);
+        let w = wrap::wrap_lines(&cell_out, inner_w);
+        for (i, line) in w.into_iter().enumerate() {
+            wrapped.push(line);
+            owner.push(current);
+            // A User cell renders a blank spacer line then the prompt; either
+            // being on screen means the prompt itself is visible.
+            is_prompt_head.push(matches!(cell, Cell::User(_)) && i <= 1);
+        }
     }
-    let wrapped = wrap::wrap_lines(&lines, inner_w);
+
     let total = wrapped.len() as u16;
     let viewport = area.height;
 
@@ -209,20 +231,45 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     }
     let top = max_scroll.saturating_sub(app.scroll_from_bottom);
 
+    // Sticky header: if the prompt that owns the top of the viewport has itself
+    // scrolled out of sight, pin it so you always know what you're looking at.
+    let vis_lo = top as usize;
+    let vis_hi = (vis_lo + viewport as usize).min(wrapped.len());
+    let sticky: Option<String> = sticky_owner(&owner, &is_prompt_head, vis_lo, vis_hi)
+        .map(|oi| prompts[oi].clone());
+
+    let body_y = area.y + if sticky.is_some() { 1 } else { 0 };
+    let body_h = viewport.saturating_sub(if sticky.is_some() { 1 } else { 0 });
+
     let visible: Vec<Line> = wrapped
         .into_iter()
         .skip(top as usize)
-        .take(viewport as usize)
+        // The header eats one row, so drop one line of body to compensate.
+        .skip(if sticky.is_some() { 1 } else { 0 })
+        .take(body_h as usize)
         .collect();
 
     let para = Paragraph::new(visible).style(theme::style_canvas());
     let inner = Rect {
         x: area.x + 1,
-        y: area.y,
+        y: body_y,
         width: inner_w,
-        height: area.height,
+        height: body_h,
     };
     f.render_widget(para, inner);
+
+    if let Some(prompt) = sticky {
+        draw_sticky_prompt(
+            f,
+            &prompt,
+            Rect {
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: 1,
+            },
+        );
+    }
 
     // Scroll indicator when not following the bottom.
     if app.scroll_from_bottom > 0 {
@@ -245,6 +292,51 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
             r,
         );
     }
+}
+
+/// Which prompt (if any) should be pinned above the viewport.
+///
+/// The prompt owning the topmost visible line — but only when that prompt's own
+/// lines have scrolled off. If you can already see the prompt, pinning a copy of
+/// it would just be noise.
+fn sticky_owner(
+    owner: &[Option<usize>],
+    is_prompt_head: &[bool],
+    vis_lo: usize,
+    vis_hi: usize,
+) -> Option<usize> {
+    let oi = (*owner.get(vis_lo)?)?;
+    let visible_on_screen = (vis_lo..vis_hi).any(|i| is_prompt_head[i] && owner[i] == Some(oi));
+    if visible_on_screen {
+        None
+    } else {
+        Some(oi)
+    }
+}
+
+/// The prompt currently being read/processed, pinned above the transcript.
+fn draw_sticky_prompt(f: &mut Frame, prompt: &str, area: Rect) {
+    f.render_widget(Clear, area);
+    let text = prompt.replace('\n', " ");
+    let avail = (area.width as usize).saturating_sub(6);
+    let bg = Style::default().bg(theme::SURFACE);
+    let spans = vec![
+        Span::styled(
+            " ❯ ".to_string(),
+            Style::default()
+                .fg(theme::META_BLUE)
+                .bg(theme::SURFACE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            truncate(&text, avail),
+            Style::default()
+                .fg(theme::BLUE_100)
+                .bg(theme::SURFACE)
+                .add_modifier(Modifier::ITALIC),
+        ),
+    ];
+    f.render_widget(Paragraph::new(Line::from(spans)).style(bg), area);
 }
 
 fn cell_lines(app: &App, cell: &Cell, out: &mut Vec<Line<'static>>) {
@@ -321,14 +413,14 @@ fn cell_lines(app: &App, cell: &Cell, out: &mut Vec<Line<'static>>) {
                 "·"
             };
             let head_style = if *active {
-                Style::default().fg(theme::META_BLUE_SKY)
+                Style::default().fg(theme::VIOLET)
             } else {
                 theme::style_faint()
             };
             if display.is_empty() && *active {
                 out.push(Line::from(vec![
                     Span::styled(format!("{head} "), head_style),
-                    Span::styled("thinking".to_string(), theme::style_thinking()),
+                    Span::styled("thinking".to_string(), theme::style_thinking_violet()),
                 ]));
             } else {
                 for (i, l) in display.lines().enumerate() {
@@ -339,7 +431,7 @@ fn cell_lines(app: &App, cell: &Cell, out: &mut Vec<Line<'static>>) {
                     };
                     out.push(Line::from(vec![
                         Span::styled(prefix, head_style),
-                        Span::styled(l.to_string(), theme::style_thinking()),
+                        Span::styled(l.to_string(), theme::style_thinking_violet()),
                     ]));
                 }
             }
@@ -351,33 +443,29 @@ fn cell_lines(app: &App, cell: &Cell, out: &mut Vec<Line<'static>>) {
             ok,
         } => {
             out.push(Line::default());
-            let (bullet, bullet_style) = match ok {
-                Some(true) => ("✓ ", theme::style_success()),
-                Some(false) => ("✗ ", theme::style_error()),
-                None => (
-                    // Live tool call — braille spinner in Meta blue.
-                    "",
-                    Style::default().fg(theme::META_BLUE),
-                ),
-            };
+            // Colour by tool family (read/edit/shell/web/git/agent/…) so a glance
+            // tells you what kind of thing ran; the status glyph carries success.
+            let hue = theme::tool_color(name);
             let mut head_spans = Vec::new();
-            if ok.is_none() {
-                head_spans.push(Span::styled(
+            match ok {
+                None => head_spans.push(Span::styled(
                     format!("{} ", theme::spinner_frame(tick)),
-                    Style::default().fg(theme::META_BLUE),
-                ));
-            } else {
-                head_spans.push(Span::styled(bullet.to_string(), bullet_style));
+                    Style::default().fg(hue),
+                )),
+                Some(true) => head_spans.push(Span::styled("✓ ".to_string(), theme::style_success())),
+                Some(false) => head_spans.push(Span::styled("✗ ".to_string(), theme::style_error())),
             }
             head_spans.push(Span::styled(
                 name.clone(),
-                Style::default()
-                    .fg(theme::FG)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(hue).add_modifier(Modifier::BOLD),
             ));
             head_spans.push(Span::styled(
                 format!("  {}", summarize_args(name, args)),
                 theme::style_faint(),
+            ));
+            head_spans.push(Span::styled(
+                format!("  ·  {}", theme::tool_family(name)),
+                Style::default().fg(theme::FAINT),
             ));
             out.push(Line::from(head_spans));
             match result {
@@ -411,13 +499,22 @@ fn cell_lines(app: &App, cell: &Cell, out: &mut Vec<Line<'static>>) {
                 }
             }
         }
-        Cell::Info(text) => {
+        Cell::Info { text, tone } => {
             out.push(Line::default());
+            let hue = tone.color();
             for (i, l) in text.lines().enumerate() {
-                let prefix = if i == 0 { "● " } else { "  " };
+                let (prefix, style) = if i == 0 {
+                    // First line carries the tone: glyph + colour + emphasis.
+                    (
+                        format!("{} ", tone.glyph()),
+                        Style::default().fg(hue).add_modifier(Modifier::BOLD),
+                    )
+                } else {
+                    ("  ".to_string(), theme::style_status())
+                };
                 out.push(Line::from(vec![
-                    Span::styled(prefix.to_string(), Style::default().fg(theme::META_BLUE)),
-                    Span::styled(l.to_string(), theme::style_status()),
+                    Span::styled(prefix, Style::default().fg(hue)),
+                    Span::styled(l.to_string(), style),
                 ]));
             }
         }
@@ -480,7 +577,7 @@ fn banner_lines(app: &App, out: &mut Vec<Line<'static>>) {
     out.push(Line::from(vec![
         Span::raw("  ".to_string()),
         Span::styled(
-            "/help  ·  ↑↓ scroll chat  ·  Ctrl+P history  ·  Shift+Tab modes  ·  Esc cancel"
+            "/help  ·  ↑↓ scroll  ·  Ctrl+P history  ·  Shift+Tab modes  ·  Esc cancel"
                 .to_string(),
             theme::style_faint(),
         ),
@@ -715,62 +812,80 @@ fn draw_statusline(f: &mut Frame, app: &App, area: Rect) {
         Span::styled("● ".to_string(), theme::style_success())
     };
 
+    // Each metric gets its own hue from the standard ramp so the statusline is
+    // scannable at a glance instead of one grey run-on.
+    let sep = || Span::styled("  ·  ".to_string(), Style::default().fg(theme::BLUE_500));
     let left = vec![
         Span::raw(" ".to_string()),
         state_dot,
         Span::styled(
             format!("{} tok", fmt_num(u.total_tokens)),
-            theme::style_status(),
+            Style::default().fg(theme::BLUE_200),
         ),
-        Span::styled("  ·  ".to_string(), theme::style_faint()),
+        sep(),
         Span::styled(
             format!("${:.4}", u.estimated_cost_usd()),
-            theme::style_status(),
+            Style::default().fg(theme::TEAL),
         ),
-        Span::styled("  ·  ".to_string(), theme::style_faint()),
+        sep(),
         Span::styled(format!("ctx {ctx_pct:.0}%"), ctx_style),
     ];
 
-    let right_text = if let Some(t) = app.quit_armed {
-        if t.elapsed().as_secs() < 2 {
-            "ctrl+c again to quit ".to_string()
-        } else {
-            default_right(app)
-        }
+    let quitting = app
+        .quit_armed
+        .map(|t| t.elapsed().as_secs() < 2)
+        .unwrap_or(false);
+
+    let right: Vec<Span> = if quitting {
+        vec![Span::styled(
+            "ctrl+c again to quit ".to_string(),
+            Style::default()
+                .fg(theme::WARN)
+                .add_modifier(Modifier::BOLD),
+        )]
     } else {
-        default_right(app)
+        let mode = app.permission_mode.get();
+        let state = if app.cancelling {
+            ("cancelling", theme::WARN)
+        } else if app.busy {
+            (app.status.as_str(), theme::BLUE_300)
+        } else {
+            ("ready", theme::SUCCESS)
+        };
+        vec![
+            Span::styled(app.cfg.model.clone(), Style::default().fg(theme::BLUE_300)),
+            sep(),
+            // Mode is the thing you most need to be sure of before a tool runs.
+            Span::styled(
+                mode.label().to_string(),
+                Style::default()
+                    .fg(theme::INDIGO)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            sep(),
+            Span::styled(
+                app.session_id[..8.min(app.session_id.len())].to_string(),
+                Style::default().fg(theme::FAINT),
+            ),
+            sep(),
+            Span::styled(state.0.to_string(), Style::default().fg(state.1)),
+            Span::raw(" ".to_string()),
+        ]
     };
 
     let left_w: usize = left.iter().map(|s| s.content.width()).sum();
-    let right_w = right_text.width();
+    let right_w: usize = right.iter().map(|s| s.content.width()).sum();
     let pad = (area.width as usize).saturating_sub(left_w + right_w);
 
     let mut spans = left;
     spans.push(Span::raw(" ".repeat(pad)));
-    spans.push(Span::styled(right_text, theme::style_faint()));
+    spans.extend(right);
     f.render_widget(
         Paragraph::new(Line::from(spans)).style(
             Style::default().bg(theme::SURFACE).fg(theme::MUTED),
         ),
         area,
     );
-}
-
-fn default_right(app: &App) -> String {
-    let mode = app.permission_mode.get().label();
-    format!(
-        "{}  ·  {}  ·  {}  ·  {} ",
-        app.cfg.model,
-        mode,
-        &app.session_id[..8.min(app.session_id.len())],
-        if app.cancelling {
-            "cancelling"
-        } else if app.busy {
-            app.status.as_str()
-        } else {
-            "ready"
-        }
-    )
 }
 
 // ── palette ────────────────────────────────────────────────────────────────
@@ -978,6 +1093,63 @@ fn capitalize(s: &str) -> String {
     match c.next() {
         Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
         None => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Transcript shape: [banner, PROMPT_A, work…, PROMPT_B, work…]
+    //   idx: 0 banner | 1,2 prompt A head | 3,4,5 A's work | 6,7 prompt B head | 8,9 B's work
+    fn fixture() -> (Vec<Option<usize>>, Vec<bool>) {
+        let owner = vec![
+            None,
+            Some(0),
+            Some(0),
+            Some(0),
+            Some(0),
+            Some(0),
+            Some(1),
+            Some(1),
+            Some(1),
+            Some(1),
+        ];
+        let head = vec![
+            false, true, true, false, false, false, true, true, false, false,
+        ];
+        (owner, head)
+    }
+
+    #[test]
+    fn pins_the_prompt_once_it_scrolls_off() {
+        let (owner, head) = fixture();
+        // Viewport shows only A's work (3..6) — A's prompt is above, so pin it.
+        assert_eq!(sticky_owner(&owner, &head, 3, 6), Some(0));
+        // Viewport shows only B's work — pin B.
+        assert_eq!(sticky_owner(&owner, &head, 8, 10), Some(1));
+    }
+
+    #[test]
+    fn no_header_when_the_prompt_is_already_on_screen() {
+        let (owner, head) = fixture();
+        // Viewport starts at A's prompt: you can see it, so don't duplicate it.
+        assert_eq!(sticky_owner(&owner, &head, 1, 6), None);
+        assert_eq!(sticky_owner(&owner, &head, 6, 10), None);
+    }
+
+    #[test]
+    fn no_header_above_the_first_prompt() {
+        let (owner, head) = fixture();
+        // Banner region belongs to no prompt.
+        assert_eq!(sticky_owner(&owner, &head, 0, 4), None);
+    }
+
+    #[test]
+    fn header_follows_the_top_line_not_the_newest_prompt() {
+        let (owner, head) = fixture();
+        // Scrolled back into A's work while B exists below: header must say A.
+        assert_eq!(sticky_owner(&owner, &head, 4, 9), Some(0));
     }
 }
 

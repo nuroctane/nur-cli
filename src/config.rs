@@ -27,6 +27,13 @@ pub struct Config {
     /// Model context window (tokens) — used for the ctx% meter in the TUI.
     #[serde(default = "default_context_window")]
     pub context_window: u64,
+    /// Capture the mouse so the wheel scrolls the transcript.
+    ///
+    /// Off by default: a terminal can either hand mouse events to the app or
+    /// let you select text with it, never both. Off keeps click-drag selection
+    /// and copy working. Toggle live with `/mouse` (Shift+drag selects while on).
+    #[serde(default)]
+    pub mouse: bool,
 }
 
 fn default_model() -> String {
@@ -57,6 +64,7 @@ impl Default for Config {
             max_turns: default_max_turns(),
             stream: true,
             context_window: default_context_window(),
+            mouse: false,
         }
     }
 }

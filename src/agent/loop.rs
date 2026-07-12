@@ -70,6 +70,7 @@ pub const READ_ONLY_TOOLS: &[&str] = &[
     "skill",
     "todo_write",
     "submit_plan",
+    // graphify is special-cased in is_read_only_call (query/path free; extract not).
 ];
 
 pub struct AgentRunner {
@@ -602,6 +603,26 @@ mod tests {
         // …and memory never rides a parallel batch (it can mutate).
         assert!(!is_parallel_safe("memory", r#"{"action":"read"}"#));
     }
+
+    #[test]
+    fn graphify_query_is_free_but_extract_needs_approval() {
+        assert!(is_read_only_call(
+            "graphify",
+            r#"{"action":"query","question":"auth flow"}"#
+        ));
+        assert!(is_read_only_call("graphify", r#"{"action":"status"}"#));
+        assert!(is_read_only_call(
+            "graphify",
+            r#"{"action":"path","from":"A","to":"B"}"#
+        ));
+        assert!(!is_read_only_call("graphify", r#"{"action":"extract"}"#));
+        assert!(!is_read_only_call("graphify", r#"{"action":"update"}"#));
+        assert!(is_parallel_safe(
+            "graphify",
+            r#"{"action":"query","question":"x"}"#
+        ));
+        assert!(!is_parallel_safe("graphify", r#"{"action":"extract"}"#));
+    }
 }
 
 pub(crate) const INTERRUPT_OUTPUT: &str = "[interrupted by user]";
@@ -639,6 +660,9 @@ fn is_read_only_call(name: &str, args: &str) -> bool {
             .and_then(|v| v.get("action")?.as_str().map(|s| s == "read"))
             .unwrap_or(false);
     }
+    if name == "graphify" {
+        return crate::tools::graphify::is_read_only_action(args);
+    }
     if name == "agent" {
         return false;
     }
@@ -661,6 +685,7 @@ fn is_parallel_safe(name: &str, args: &str) -> bool {
             | "git_status"
             | "git_diff"
             | "skill"
+            | "graphify"
     )
 }
 

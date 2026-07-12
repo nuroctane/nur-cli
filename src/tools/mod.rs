@@ -4,6 +4,7 @@ mod edit_file;
 mod git_diff;
 mod git_status;
 mod glob;
+pub mod graphify;
 mod grep;
 mod list_dir;
 mod memory_tool;
@@ -75,6 +76,7 @@ impl ToolHost {
             Box::new(web_search::WebSearch),
             Box::new(git_status::GitStatus),
             Box::new(git_diff::GitDiff),
+            Box::new(graphify::Graphify),
             Box::new(skill_tool::SkillTool),
             Box::new(memory_tool::MemoryTool),
             Box::new(todo_write::TodoWrite {

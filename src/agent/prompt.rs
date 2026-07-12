@@ -53,8 +53,10 @@ impl PromptContext {
             PermissionMode::Plan => r#"
 # Permission mode: PLAN
 Research/design only. Tools: read_file, list_dir, grep, glob, web_fetch, web_search,
-git_status, git_diff, skill, memory(read), todo_write, submit_plan.
-No write_file/edit_file/multi_edit/apply_patch/bash/agent. Deliver plans via submit_plan.
+git_status, git_diff, skill, memory(read), todo_write, submit_plan,
+graphify(query|path|explain|status|report|affected).
+No write_file/edit_file/multi_edit/apply_patch/bash/agent/graphify(extract|update).
+Deliver plans via submit_plan.
 "#,
             PermissionMode::Manual => r#"
 # Permission mode: MANUAL
@@ -81,7 +83,8 @@ OS: {} · shell: {}
 {mode_block}
 # Tools
 read_file, list_dir, write_file, edit_file, multi_edit, apply_patch, bash, grep, glob,
-web_fetch, web_search, git_status, git_diff, skill, memory, todo_write, submit_plan, agent
+web_fetch, web_search, git_status, git_diff, graphify, skill, memory, todo_write,
+submit_plan, agent
 
 ## Tool policy
 - grep/glob: ripgrep-backed; pass narrow paths — never scan drive roots
@@ -90,6 +93,10 @@ web_fetch, web_search, git_status, git_diff, skill, memory, todo_write, submit_p
 - bash: real shell when available (Git Bash/pwsh); output header labels the backend
 - git_status/git_diff (diff|staged|log|show): approval-free repo inspection — prefer over bash git
 - web_search → find docs/errors; web_fetch → read a result url
+- graphify: knowledge graph over the workspace (graphify-out/). Prefer graphify query/path/explain
+  over broad grep when graphify-out/graph.json exists. action=extract builds a local code AST graph
+  (no API key). Install CLI: `uv tool install graphifyy` then `graphify install --platform agents`.
+  Full pipeline skill: skill(action=read, name=graphify).
 - skill: action=list shows installed skill packs; action=read loads full instructions —
   check before starting a task a skill covers
 - agent: spawn explore (read-only) or general subagent for parallel research

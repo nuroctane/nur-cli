@@ -10,8 +10,9 @@ pub struct Skill {
     pub path: PathBuf,
 }
 
-/// Discover skills from:
+/// Discover skills from (first match wins per name):
 /// - `~/.muse/skills/*/SKILL.md`
+/// - `~/.agents/skills/*/SKILL.md`  (Agent Skills / graphify install --platform agents)
 /// - `<cwd>/.muse/skills/*/SKILL.md`
 /// - `<cwd>/.agents/skills/*/SKILL.md`
 pub fn load_skills(cwd: &Path) -> Vec<Skill> {
@@ -19,6 +20,7 @@ pub fn load_skills(cwd: &Path) -> Vec<Skill> {
     let mut dirs = Vec::new();
     if let Some(home) = dirs::home_dir() {
         dirs.push(home.join(".muse").join("skills"));
+        dirs.push(home.join(".agents").join("skills"));
     }
     dirs.push(cwd.join(".muse").join("skills"));
     dirs.push(cwd.join(".agents").join("skills"));

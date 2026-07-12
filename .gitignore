@@ -4,6 +4,9 @@
 *.pdb
 .DS_Store
 
+# Graphify knowledge graph (regenerate: graphify extract . --code-only)
+graphify-out/
+
 # Secrets & local agent state (NEVER commit)
 .env
 .env.*

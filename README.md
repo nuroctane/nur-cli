@@ -102,8 +102,49 @@ Mode is stored in a shared atomic: toggling applies **immediately**, including m
 - Esc **cancels** the turn: stream/thinking freeze; status shows *cancelling…* until work stops  
 - Markdown · multi-line input · usage + **mode** on the statusline  
 - Project instructions from `MUSE.md`, `AGENTS.md`, or `CLAUDE.md`  
+- **Sticky prompt header** — scroll back and the prompt that produced what you're
+  looking at pins to the top, so you never lose the thread  
+- **Session picker** — `/resume` or `Ctrl+R`: arrow through past sessions (with their
+  opening prompt as a preview), `Tab` toggles this-workspace / all-workspaces  
 
-### Safety & tools (v0.4.1)
+### Keys
+
+| Key | Action |
+|-----|--------|
+| `↑` `↓` | scroll the chat (caret movement only inside a multi-line draft) |
+| `PgUp` `PgDn` · `Home` `End` | page · jump to top / latest |
+| `Ctrl+P` `Ctrl+N` (or `Alt+↑/↓`) | prompt history |
+| `Enter` · `\`+`Enter` / `Ctrl+J` | send · newline |
+| `Shift+Tab` | cycle permission mode |
+| `Ctrl+R` | resume a session |
+| `Esc` · `Ctrl+C` ×2 · `Ctrl+L` | cancel turn · quit · clear |
+| `y` / `a` / `n` | approve once / always / deny |
+
+**Mouse:** off by default so click-drag **text selection and copy work normally**.
+`/mouse` turns on wheel-scrolling (a terminal can route the mouse to the app *or*
+let you select text, never both — with it on, use `Shift+drag` to select).
+
+### Colour system
+
+Colour carries meaning; it isn't decoration. A blue spine with hues fanning out,
+all at matched lightness:
+
+| Family | Hue | Tools |
+|--------|-----|-------|
+| read | sky blue | `read_file` `list_dir` `grep` `glob` |
+| edit | violet | `write_file` `edit_file` `multi_edit` `apply_patch` |
+| shell | amber | `bash` |
+| web | teal | `web_fetch` `web_search` |
+| git | cyan | `git_status` `git_diff` |
+| delegate | pink | `agent` |
+| knowledge | indigo / orange | `skill` `todo_write` `graphify` · `memory` |
+
+Model *thinking* is violet-italic, so it never reads as an answer. System notices
+carry their own glyph + hue (`◈` mode · `✦` plan · `☰` todos · `∑` usage · `⟲` session),
+and the statusline segments (tokens · cost · ctx% · model · mode · state) each get a
+distinct colour so it's scannable at a glance.
+
+### Safety & tools (v0.4.3)
 
 - **Workspace sandbox** — paths cannot escape session cwd (junction/symlink-aware); refuse filesystem-root workspaces  
 - **Shell** — prefers Git Bash → pwsh → PowerShell → cmd (labeled in tool output; set `MUSE_SHELL`); Esc/timeout kills the whole process tree  
@@ -112,8 +153,28 @@ Mode is stored in a shared atomic: toggling applies **immediately**, including m
 - **web_fetch** — public HTTP(S) only: every redirect hop DNS-validated + IP-pinned, size-capped  
 - **web_search** — DuckDuckGo, no API key  
 - **git_status / git_diff** — approval-free repo inspection (diff|staged|log|show)  
-- **skills** — SKILL.md packs in `~/.muse/skills/` or `<repo>/.muse/skills/`; agent loads them via the `skill` tool  
+- **skills** — SKILL.md packs in `~/.muse/skills/`, `~/.agents/skills/`, or project `.muse` / `.agents` skills dirs; agent loads them via the `skill` tool  
+- **graphify** — [Graphify](https://github.com/Graphify-Labs/graphify) knowledge graph over the workspace (`graphify-out/`). Query/path/explain are approval-free; extract/update write the graph and need approval in manual mode. Slash: `/graphify`  
 - **subagents** — scoped usage tracking, tokens rolled up into the parent session
+
+### Graphify (knowledge graph)
+
+Turn the workspace into a queryable code graph instead of grepping blindly.
+
+```powershell
+# one-time (PyPI package is graphifyy — double-y; command is still `graphify`)
+uv tool install graphifyy
+graphify install --platform agents   # → ~/.agents/skills/graphify/ (meta discovers this)
+
+# inside meta
+/graphify                            # CLI + graph status
+/graphify extract .                  # local AST extract → graphify-out/{graph.json,GRAPH_REPORT.md,graph.html}
+/graphify query "how does auth work?"
+/graphify path UserService DatabasePool
+/graphify explain RateLimiter
+```
+
+The agent also has a `graphify` tool and will prefer it when `graphify-out/graph.json` exists. Full multi-step pipeline (docs/PDF semantic pass, wiki, hooks): `skill(action=read, name=graphify)` or see the [upstream README](https://github.com/Graphify-Labs/graphify).
 
 ---
 
