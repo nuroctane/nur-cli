@@ -52,7 +52,23 @@ pub fn write_ade_manifest(session_id: &str, model: &str, cwd: &str, usage: &Toke
 }
 
 /// Best-effort notify Orca agent hook (if running inside Orca terminal).
+///
+/// Fire-and-forget: the hook shells out to `cmd`/`curl` and waits on it, which
+/// would otherwise block the async runtime (up to `--max-time`) on every API
+/// response. Runs on a detached thread so the agent loop and TUI never stall.
 pub fn notify_orca_hook(payload_json: &str) {
+    // Only when Orca injects hook env — cheap check before spawning a thread.
+    if std::env::var("ORCA_AGENT_HOOK_PORT")
+        .map(|p| p.is_empty())
+        .unwrap_or(true)
+    {
+        return;
+    }
+    let payload = payload_json.to_string();
+    std::thread::spawn(move || notify_orca_hook_blocking(&payload));
+}
+
+fn notify_orca_hook_blocking(payload_json: &str) {
     // Only when Orca injects hook env
     let port = match std::env::var("ORCA_AGENT_HOOK_PORT") {
         Ok(p) if !p.is_empty() => p,

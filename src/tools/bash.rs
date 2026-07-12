@@ -1,16 +1,10 @@
 use super::sandbox;
-use super::shell::{detect_shell, run_in_shell, ShellBackend};
+use super::shell::{run_in_shell, shell_backend};
 use super::{arg_str, arg_u64, Tool, ToolContext};
 use crate::error::{MuseError, Result};
 use serde_json::Value;
-use std::sync::OnceLock;
 
 pub struct Bash;
-
-fn backend() -> &'static ShellBackend {
-    static B: OnceLock<ShellBackend> = OnceLock::new();
-    B.get_or_init(detect_shell)
-}
 
 impl Tool for Bash {
     fn name(&self) -> &str {
@@ -64,7 +58,6 @@ impl Tool for Bash {
             )));
         }
 
-        let b = backend();
-        run_in_shell(b, &command, &ctx.cwd, timeout_ms, &ctx.cancel)
+        run_in_shell(shell_backend(), &command, &ctx.cwd, timeout_ms, &ctx.cancel)
     }
 }

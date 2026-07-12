@@ -104,7 +104,8 @@ impl MetaClient {
         }
 
         let mut stream = res.bytes_stream();
-        let mut buf = String::new();
+        // Byte-level framing: chunks can split a multi-byte character.
+        let mut parser = super::sse::SseParser::new();
         let mut final_response: Option<ApiResponse> = None;
 
         loop {
@@ -114,19 +115,13 @@ impl MetaClient {
             };
             let Some(chunk) = chunk else { break };
             let chunk = chunk?;
-            buf.push_str(&String::from_utf8_lossy(&chunk));
 
-            // SSE events are separated by a blank line.
-            while let Some(pos) = find_event_boundary(&buf) {
-                let raw = buf[..pos].to_string();
-                buf.drain(..pos + boundary_len(&buf, pos));
-                if let Some(data) = extract_sse_data(&raw) {
-                    if data.trim() == "[DONE]" {
-                        continue;
-                    }
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
-                        handle_sse_json(&v, &mut on_event, &mut final_response)?;
-                    }
+            for data in parser.push(&chunk) {
+                if data.trim() == "[DONE]" {
+                    continue;
+                }
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
+                    handle_sse_json(&v, &mut on_event, &mut final_response)?;
                 }
             }
         }
@@ -134,41 +129,6 @@ impl MetaClient {
         final_response.ok_or_else(|| {
             MuseError::Other("stream ended without a completed response".into())
         })
-    }
-}
-
-fn find_event_boundary(buf: &str) -> Option<usize> {
-    let a = buf.find("\n\n");
-    let b = buf.find("\r\n\r\n");
-    match (a, b) {
-        (Some(x), Some(y)) => Some(x.min(y)),
-        (x, y) => x.or(y),
-    }
-}
-
-fn boundary_len(buf: &str, pos: usize) -> usize {
-    if buf[pos..].starts_with("\r\n\r\n") {
-        4
-    } else {
-        2
-    }
-}
-
-/// Join all `data:` lines of one SSE event.
-fn extract_sse_data(raw: &str) -> Option<String> {
-    let mut out = String::new();
-    for line in raw.lines() {
-        if let Some(rest) = line.strip_prefix("data:") {
-            if !out.is_empty() {
-                out.push('\n');
-            }
-            out.push_str(rest.trim_start());
-        }
-    }
-    if out.is_empty() {
-        None
-    } else {
-        Some(out)
     }
 }
 

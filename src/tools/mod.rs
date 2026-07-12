@@ -27,7 +27,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 pub use sandbox::{is_dangerous_workspace, resolve_safe_workspace};
-pub use shell::detect_shell;
+pub use shell::shell_backend;
 pub use submit_plan::{SharedPlan, SubmitPlan};
 
 pub struct ToolContext {

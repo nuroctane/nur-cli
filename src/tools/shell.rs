@@ -34,7 +34,14 @@ pub enum ShellKind {
     Cmd,
 }
 
-/// Detect the best available shell once per process.
+/// Process-wide cached shell backend. `detect_shell` probes the filesystem and
+/// scans PATH, so callers on hot paths (system prompt, every bash call) use this.
+pub fn shell_backend() -> &'static ShellBackend {
+    static B: std::sync::OnceLock<ShellBackend> = std::sync::OnceLock::new();
+    B.get_or_init(detect_shell)
+}
+
+/// Detect the best available shell (prefer `shell_backend()` — this probes disk).
 pub fn detect_shell() -> ShellBackend {
     // 1) Explicit override
     if let Ok(p) = std::env::var("MUSE_SHELL") {

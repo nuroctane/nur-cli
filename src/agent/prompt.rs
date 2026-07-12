@@ -1,8 +1,8 @@
-use super::skills::{load_skills, skills_prompt_section};
 use super::memory::memory_prompt_excerpt;
 use super::mode::PermissionMode;
-use crate::tools::detect_shell;
-use std::path::Path;
+use super::skills::{load_skills, skills_prompt_section};
+use crate::tools::shell_backend;
+use std::path::{Path, PathBuf};
 
 pub const PROJECT_INSTRUCTION_FILES: &[&str] = &["MUSE.md", "AGENTS.md", "CLAUDE.md"];
 
@@ -22,38 +22,58 @@ pub fn find_project_instructions(cwd: &Path) -> Option<(String, String)> {
     None
 }
 
-pub fn system_instructions(
-    cwd: &Path,
-    mode: PermissionMode,
+/// The parts of the system prompt that come off disk (project instructions,
+/// memory, skills, shell probe). Built **once per user turn** — rebuilding it
+/// per model request re-read every SKILL.md and MUSE.md on every API call.
+pub struct PromptContext {
+    cwd: PathBuf,
     is_subagent: bool,
-    todos_render: &str,
-) -> String {
-    let shell = detect_shell();
-    let mode_block = match mode {
-        PermissionMode::Plan => r#"
+    shell_label: String,
+    project: Option<(String, String)>,
+    memory: String,
+    skills: String,
+}
+
+impl PromptContext {
+    pub fn build(cwd: &Path, is_subagent: bool) -> Self {
+        Self {
+            cwd: cwd.to_path_buf(),
+            is_subagent,
+            shell_label: shell_backend().label.clone(),
+            project: find_project_instructions(cwd),
+            memory: memory_prompt_excerpt(3000),
+            skills: skills_prompt_section(&load_skills(cwd)),
+        }
+    }
+
+    /// Render with the live bits: permission mode and the todo list, both of
+    /// which can change between requests within a turn.
+    pub fn render(&self, mode: PermissionMode, todos_render: &str) -> String {
+        let mode_block = match mode {
+            PermissionMode::Plan => r#"
 # Permission mode: PLAN
 Research/design only. Tools: read_file, list_dir, grep, glob, web_fetch, web_search,
 git_status, git_diff, skill, memory(read), todo_write, submit_plan.
 No write_file/edit_file/multi_edit/apply_patch/bash/agent. Deliver plans via submit_plan.
 "#,
-        PermissionMode::Manual => r#"
+            PermissionMode::Manual => r#"
 # Permission mode: MANUAL
 Mutating tools need user approval. Prefer apply_patch/multi_edit for structured edits.
 "#,
-        PermissionMode::Auto => r#"
+            PermissionMode::Auto => r#"
 # Permission mode: AUTO
 Tools auto-approved. Prefer minimal safe diffs; avoid destructive shell.
 "#,
-    };
+        };
 
-    let role = if is_subagent {
-        "You are a focused SUBAGENT. Complete the delegated task and return a concise report. Do not ask the user questions."
-    } else {
-        "You are Muse — a Claude-class coding agent for Meta CLI (unofficial), powered by Muse Spark on Meta Model API."
-    };
+        let role = if self.is_subagent {
+            "You are a focused SUBAGENT. Complete the delegated task and return a concise report. Do not ask the user questions."
+        } else {
+            "You are Muse — a Claude-class coding agent for Meta CLI (unofficial), powered by Muse Spark on Meta Model API."
+        };
 
-    let mut s = format!(
-        r#"{role}
+        let mut s = format!(
+            r#"{role}
 
 Workspace: {}
 OS: {} · shell: {}
@@ -88,23 +108,32 @@ web_fetch, web_search, git_status, git_diff, skill, memory, todo_write, submit_p
 Direct technical markdown. Fence code with languages.
 Unofficial community software — not Meta Platforms, Inc.
 "#,
-        cwd.display(),
-        std::env::consts::OS,
-        shell.label,
-    );
+            self.cwd.display(),
+            std::env::consts::OS,
+            self.shell_label,
+        );
 
-    if !todos_render.is_empty() && todos_render != "(no todos)" {
-        s.push_str(&format!("\n# Current todos\n{todos_render}\n"));
+        if !todos_render.is_empty() && todos_render != "(no todos)" {
+            s.push_str(&format!("\n# Current todos\n{todos_render}\n"));
+        }
+
+        if let Some((name, text)) = &self.project {
+            s.push_str(&format!("\n# Project instructions ({name})\n{text}\n"));
+        }
+
+        s.push_str(&self.memory);
+        s.push_str(&self.skills);
+        s
     }
+}
 
-    if let Some((name, text)) = find_project_instructions(cwd) {
-        s.push_str(&format!("\n# Project instructions ({name})\n{text}\n"));
-    }
-
-    s.push_str(&memory_prompt_excerpt(3000));
-
-    let skills = load_skills(cwd);
-    s.push_str(&skills_prompt_section(&skills));
-
-    s
+/// One-shot convenience (used outside the turn loop).
+#[allow(dead_code)]
+pub fn system_instructions(
+    cwd: &Path,
+    mode: PermissionMode,
+    is_subagent: bool,
+    todos_render: &str,
+) -> String {
+    PromptContext::build(cwd, is_subagent).render(mode, todos_render)
 }

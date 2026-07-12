@@ -171,12 +171,21 @@ impl Session {
     }
 }
 
+/// Key for the per-directory session map. Case-folded on Windows (where paths
+/// are case-insensitive); left exact elsewhere — lowercasing on Linux would
+/// alias `/home/User/Proj` and `/home/user/proj` into the same session.
 fn normalize_cwd(cwd: &str) -> String {
-    Path::new(cwd)
+    let p = Path::new(cwd)
         .canonicalize()
-        .unwrap_or_else(|_| PathBuf::from(cwd))
-        .to_string_lossy()
-        .to_lowercase()
+        .unwrap_or_else(|_| PathBuf::from(cwd));
+    let s = p.to_string_lossy();
+    // Strip Windows verbatim prefix so keys written before/after canonicalize match.
+    let s = s.strip_prefix(r"\\?\").unwrap_or(&s).to_string();
+    if cfg!(windows) {
+        s.to_lowercase()
+    } else {
+        s
+    }
 }
 
 fn find_by_prefix(prefix: &str) -> Result<Option<Session>> {

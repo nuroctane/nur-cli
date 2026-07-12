@@ -38,12 +38,154 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_input(f, app, chunks[2]);
     draw_statusline(f, app, chunks[3]);
 
-    if app.palette_matches().len() > 0 && app.approval.is_none() {
+    if !app.palette_matches().is_empty() && app.approval.is_none() && app.picker.is_none() {
         draw_palette(f, app, chunks[2]);
     }
     if app.approval.is_some() {
         draw_approval(f, app, area);
     }
+    if app.picker.is_some() {
+        draw_session_picker(f, app, area);
+    }
+}
+
+// ── session picker ─────────────────────────────────────────────────────────
+fn draw_session_picker(f: &mut Frame, app: &App, area: Rect) {
+    let Some(p) = &app.picker else { return };
+    let rows = p.visible();
+
+    let w = 84.min(area.width.saturating_sub(4));
+    let h = 22.min(area.height.saturating_sub(2));
+    let rect = Rect {
+        x: (area.width.saturating_sub(w)) / 2,
+        y: (area.height.saturating_sub(h)) / 2,
+        width: w,
+        height: h,
+    };
+    f.render_widget(Clear, rect);
+
+    let scope = if p.this_cwd_only {
+        "this workspace"
+    } else {
+        "all workspaces"
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme::META_BLUE))
+        .style(Style::default().bg(theme::SURFACE_2))
+        .title(Span::styled(
+            format!("  resume session · {} ({})  ", rows.len(), scope),
+            Style::default()
+                .fg(theme::META_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ));
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+
+    if rows.is_empty() {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "  no sessions in this workspace — Tab to show all".to_string(),
+                theme::style_faint(),
+            )))
+            .style(Style::default().bg(theme::SURFACE_2)),
+            inner,
+        );
+        return;
+    }
+
+    // Two lines per row + a footer line.
+    let body_h = inner.height.saturating_sub(1) as usize;
+    let per_row = 2usize;
+    let vis_rows = (body_h / per_row).max(1);
+    let sel = p.idx.min(rows.len() - 1);
+    let start = sel.saturating_sub(vis_rows.saturating_sub(1));
+
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, r) in rows.iter().enumerate().skip(start).take(vis_rows) {
+        let selected = i == sel;
+        let (fg, bg) = if selected {
+            (theme::BG, theme::META_BLUE)
+        } else {
+            (theme::FG, theme::SURFACE_2)
+        };
+        let marker = if selected { "❯ " } else { "  " };
+        let short = &r.id[..8.min(r.id.len())];
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{marker}{short}  "),
+                Style::default()
+                    .fg(fg)
+                    .bg(bg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("{}  ·  {} msgs  ·  {} tok", r.when, r.messages, fmt_num(r.tokens)),
+                Style::default().fg(if selected { theme::BG } else { theme::MUTED }).bg(bg),
+            ),
+            Span::styled(
+                if r.here { "  · here".to_string() } else { String::new() },
+                Style::default()
+                    .fg(if selected { theme::BG } else { theme::SUCCESS })
+                    .bg(bg),
+            ),
+        ]));
+        // Second line: first user prompt — plus the workspace when browsing all.
+        let avail = (inner.width as usize).saturating_sub(6);
+        let detail = if p.this_cwd_only {
+            r.preview.clone()
+        } else {
+            format!("{}  —  {}", short_path(&r.cwd), r.preview)
+        };
+        lines.push(Line::from(vec![
+            Span::styled("    ".to_string(), Style::default().bg(bg)),
+            Span::styled(
+                truncate(&detail, avail),
+                Style::default()
+                    .fg(if selected { theme::BG } else { theme::FAINT })
+                    .bg(bg),
+            ),
+        ]));
+    }
+
+    f.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2)),
+        Rect {
+            height: inner.height.saturating_sub(1),
+            ..inner
+        },
+    );
+
+    // Footer hints.
+    let footer = Rect {
+        x: inner.x,
+        y: inner.bottom().saturating_sub(1),
+        width: inner.width,
+        height: 1,
+    };
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(" ↑↓ ".to_string(), theme::style_tool()),
+            Span::styled("move   ".to_string(), theme::style_faint()),
+            Span::styled("enter ".to_string(), theme::style_tool()),
+            Span::styled("resume   ".to_string(), theme::style_faint()),
+            Span::styled("tab ".to_string(), theme::style_tool()),
+            Span::styled(
+                if p.this_cwd_only {
+                    "show all workspaces   "
+                } else {
+                    "only this workspace   "
+                }
+                .to_string(),
+                theme::style_faint(),
+            ),
+            Span::styled("esc ".to_string(), theme::style_tool()),
+            Span::styled("cancel".to_string(), theme::style_faint()),
+        ]))
+        .style(Style::default().bg(theme::SURFACE_2)),
+        footer,
+    );
 }
 
 // ── transcript ─────────────────────────────────────────────────────────────
@@ -491,8 +633,9 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
     let usable = (inner.width as usize).saturating_sub(3); // "❯ " + 1 margin
     let x_off = cur_disp_w.saturating_sub(usable) as u16;
 
-    // Paint Meta block cursor into the line (blink).
-    if app.approval.is_none() && theme::blink_on(app.spinner_epoch.elapsed()) {
+    // Paint Meta block cursor into the line (blink) — not while a modal owns keys.
+    if app.approval.is_none() && app.picker.is_none() && theme::blink_on(app.spinner_epoch.elapsed())
+    {
         let vis_idx = cur_line.saturating_sub(top);
         if let Some(line) = lines.get_mut(vis_idx) {
             // Under placeholder (empty text) cursor sits after ❯
@@ -533,7 +676,7 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
 
     // Keep hardware cursor hidden; we draw our own Meta caret.
     // (Hidden at app start.) Position still set for terminals that show it.
-    if app.approval.is_none() {
+    if app.approval.is_none() && app.picker.is_none() {
         let cx = inner.x + 2 + (cur_disp_w as u16).saturating_sub(x_off);
         let cy = inner.y + (cur_line - top) as u16;
         if cx < inner.right() && cy < inner.bottom() {
@@ -833,6 +976,19 @@ fn summarize_args(tool: &str, args: &str) -> String {
         }
     }
     truncate(args, 80)
+}
+
+/// Last two path components — enough to recognize a repo without eating the row.
+fn short_path(p: &str) -> String {
+    let parts: Vec<&str> = p
+        .split(['\\', '/'])
+        .filter(|s| !s.is_empty())
+        .collect();
+    match parts.len() {
+        0 => p.to_string(),
+        1 => parts[0].to_string(),
+        n => format!("{}\\{}", parts[n - 2], parts[n - 1]),
+    }
 }
 
 fn pretty_args(args: &str) -> String {

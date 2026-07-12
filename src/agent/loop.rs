@@ -1,5 +1,5 @@
 use super::mode::{PermissionMode, SharedMode};
-use super::prompt::system_instructions;
+use super::prompt::PromptContext;
 use super::session::Session;
 use super::subagent;
 use crate::api::types::{
@@ -123,6 +123,9 @@ impl AgentRunner {
         session.input_items.push(user_text_item(user_text));
 
         let tools = self.tools.tool_defs();
+        // Disk-backed prompt parts (skills, MUSE.md, memory, shell) — read once
+        // per user turn, not once per model request.
+        let prompt_ctx = PromptContext::build(&self.cwd, self.is_subagent);
         let mut turns = 0u32;
         let mut tool_seq: u64 = 0;
         // Prevent compact→still-hot→compact infinite loop within one user turn.
@@ -157,12 +160,8 @@ impl AgentRunner {
             }
 
             let mode_now = self.permission_mode.get();
-            let instructions = system_instructions(
-                &self.cwd,
-                mode_now,
-                self.is_subagent,
-                &self.tools.todos_snapshot().render(),
-            );
+            let instructions =
+                prompt_ctx.render(mode_now, &self.tools.todos_snapshot().render());
 
             usage.set_state(format!("thinking (turn {turns})"));
             let _ = tx.send(AgentEvent::Status(format!(
@@ -243,13 +242,7 @@ impl AgentRunner {
             let mut idx = 0usize;
             while idx < calls.len() {
                 if cancel.is_cancelled() {
-                    // Pair every remaining function_call with an interrupt output.
-                    for c in &calls[idx..] {
-                        session.input_items.push(function_call_output_item(
-                            &c.call_id,
-                            "[interrupted by user]",
-                        ));
-                    }
+                    pair_interrupted(&mut session.input_items, &calls);
                     let _ = session.save();
                     return Err(MuseError::Interrupted);
                 }
@@ -299,27 +292,14 @@ impl AgentRunner {
                     }
 
                     // Collect in submission order (handles order matches meta)
-                    let batch_ids: Vec<String> =
-                        batch.iter().map(|c| c.call_id.clone()).collect();
-                    for (bi, (handle, (id, call_id, name))) in
-                        handles.into_iter().zip(meta.into_iter()).enumerate()
+                    for (handle, (id, call_id, name)) in
+                        handles.into_iter().zip(meta.into_iter())
                     {
                         let (_, _, res) = tokio::select! {
                             _ = cancel.cancelled() => {
-                                // Pair this + every remaining call (rest of the batch and
-                                // post-batch) so no function_call is left without an output.
-                                for cid in &batch_ids[bi..] {
-                                    session.input_items.push(function_call_output_item(
-                                        cid,
-                                        "[interrupted by user]",
-                                    ));
-                                }
-                                for c in &calls[batch_end..] {
-                                    session.input_items.push(function_call_output_item(
-                                        &c.call_id,
-                                        "[interrupted by user]",
-                                    ));
-                                }
+                                // Fills this call, the rest of the batch, and every
+                                // post-batch call — whatever has not answered yet.
+                                pair_interrupted(&mut session.input_items, &calls);
                                 // Note: other in-flight blocking tasks keep running until drop
                                 let _ = session.save();
                                 return Err(MuseError::Interrupted);
@@ -409,13 +389,7 @@ impl AgentRunner {
                                 (s, true)
                             }
                             Err(MuseError::Interrupted) => {
-                                // Pair this + all remaining calls before unwinding.
-                                for c in &calls[idx..] {
-                                    session.input_items.push(function_call_output_item(
-                                        &c.call_id,
-                                        "[interrupted by user]",
-                                    ));
-                                }
+                                pair_interrupted(&mut session.input_items, &calls);
                                 let _ = session.save();
                                 return Err(MuseError::Interrupted);
                             }
@@ -443,17 +417,7 @@ impl AgentRunner {
                     });
                     tokio::select! {
                         _ = cancel.cancelled() => {
-                            session.input_items.push(function_call_output_item(
-                                &call.call_id,
-                                "[interrupted by user]",
-                            ));
-                            // remaining calls
-                            for c in &calls[idx + 1..] {
-                                session.input_items.push(function_call_output_item(
-                                    &c.call_id,
-                                    "[interrupted by user]",
-                                ));
-                            }
+                            pair_interrupted(&mut session.input_items, &calls);
                             let _ = session.save();
                             return Err(MuseError::Interrupted);
                         }
@@ -535,6 +499,137 @@ impl AgentRunner {
             }
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn call(id: &str, name: &str) -> FunctionCallRef {
+        FunctionCallRef {
+            call_id: id.into(),
+            name: name.into(),
+            arguments: "{}".into(),
+        }
+    }
+
+    /// Every function_call must end up with exactly one output — the Responses
+    /// API 400s otherwise. This is the invariant the cancel paths must hold.
+    fn assert_fully_paired(items: &[Value], calls: &[FunctionCallRef]) {
+        for c in calls {
+            let n = items
+                .iter()
+                .filter(|v| {
+                    v.get("type").and_then(|t| t.as_str()) == Some("function_call_output")
+                        && v.get("call_id").and_then(|i| i.as_str()) == Some(c.call_id.as_str())
+                })
+                .count();
+            assert_eq!(n, 1, "call {} has {n} outputs, expected exactly 1", c.call_id);
+        }
+    }
+
+    #[test]
+    fn cancel_before_any_tool_pairs_every_call() {
+        let calls = vec![call("a", "read_file"), call("b", "bash"), call("c", "grep")];
+        let mut items: Vec<Value> = Vec::new();
+        assert_eq!(pair_interrupted(&mut items, &calls), 3);
+        assert_fully_paired(&items, &calls);
+    }
+
+    #[test]
+    fn cancel_mid_parallel_batch_pairs_only_the_unanswered() {
+        // Batch of 3 reads; the first two answered before the user hit Esc.
+        let calls = vec![
+            call("a", "read_file"),
+            call("b", "grep"),
+            call("c", "glob"),
+            call("d", "bash"), // post-batch, never started
+        ];
+        let mut items = vec![
+            function_call_output_item("a", "contents"),
+            function_call_output_item("b", "matches"),
+        ];
+        assert_eq!(pair_interrupted(&mut items, &calls), 2); // only c and d
+        assert_fully_paired(&items, &calls);
+        // Answered calls keep their real results — not overwritten by the interrupt.
+        let a = items
+            .iter()
+            .find(|v| v.get("call_id").and_then(|i| i.as_str()) == Some("a"))
+            .unwrap();
+        assert_eq!(a.get("output").and_then(|o| o.as_str()), Some("contents"));
+    }
+
+    #[test]
+    fn pairing_is_idempotent() {
+        let calls = vec![call("a", "bash")];
+        let mut items: Vec<Value> = Vec::new();
+        pair_interrupted(&mut items, &calls);
+        assert_eq!(pair_interrupted(&mut items, &calls), 0, "must not duplicate");
+        assert_fully_paired(&items, &calls);
+    }
+
+    /// Parallel batches skip the approval gate, so anything parallel-safe MUST
+    /// be read-only — otherwise a write could run without asking.
+    #[test]
+    fn parallel_safe_implies_approval_free() {
+        for name in [
+            "read_file", "list_dir", "grep", "glob", "web_fetch", "web_search", "git_status",
+            "git_diff", "skill", "write_file", "edit_file", "multi_edit", "apply_patch", "bash",
+            "agent", "memory", "todo_write", "submit_plan",
+        ] {
+            if is_parallel_safe(name, "{}") {
+                assert!(
+                    is_read_only_call(name, "{}"),
+                    "{name} is parallel-safe but not read-only — it would bypass approval"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mutating_tools_are_never_parallel_safe() {
+        for name in ["write_file", "edit_file", "multi_edit", "apply_patch", "bash", "agent"] {
+            assert!(!is_parallel_safe(name, "{}"), "{name} must run sequentially");
+            assert!(!is_read_only_call(name, "{}"), "{name} must need approval");
+        }
+    }
+
+    #[test]
+    fn memory_read_is_free_but_append_needs_approval() {
+        assert!(is_read_only_call("memory", r#"{"action":"read"}"#));
+        assert!(!is_read_only_call("memory", r#"{"action":"append","text":"x"}"#));
+        assert!(!is_read_only_call("memory", "{}"), "unspecified action must not be free");
+        // …and memory never rides a parallel batch (it can mutate).
+        assert!(!is_parallel_safe("memory", r#"{"action":"read"}"#));
+    }
+}
+
+pub(crate) const INTERRUPT_OUTPUT: &str = "[interrupted by user]";
+
+/// Pair every function_call in `calls` that has no `function_call_output` yet
+/// with an interrupt output.
+///
+/// Invariant: the Responses API rejects a request in which a `function_call`
+/// has no matching `function_call_output`, so a cancel must never leave a gap —
+/// including mid-parallel-batch, where some calls have already answered.
+/// Idempotent and order-independent: safe to call at any cancel site with the
+/// full call list. Returns how many were filled.
+pub(crate) fn pair_interrupted(items: &mut Vec<Value>, calls: &[FunctionCallRef]) -> usize {
+    let answered: std::collections::HashSet<&str> = items
+        .iter()
+        .filter(|v| v.get("type").and_then(|t| t.as_str()) == Some("function_call_output"))
+        .filter_map(|v| v.get("call_id").and_then(|c| c.as_str()))
+        .collect();
+    let missing: Vec<String> = calls
+        .iter()
+        .filter(|c| !answered.contains(c.call_id.as_str()))
+        .map(|c| c.call_id.clone())
+        .collect();
+    let n = missing.len();
+    for call_id in missing {
+        items.push(function_call_output_item(&call_id, INTERRUPT_OUTPUT));
+    }
+    n
 }
 
 fn is_read_only_call(name: &str, args: &str) -> bool {

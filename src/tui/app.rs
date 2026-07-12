@@ -46,7 +46,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/model", "show or switch model"),
     ("/effort", "reasoning effort: minimal|low|medium|high|xhigh"),
     ("/sessions", "list recent sessions"),
-    ("/resume", "resume a session by id prefix"),
+    ("/resume", "pick a past session to return to  (Ctrl+R)"),
     ("/init", "generate a MUSE.md project guide"),
     ("/config", "show config + data paths"),
     ("/exit", "quit"),
@@ -77,6 +77,35 @@ pub struct ApprovalState {
     pub name: String,
     pub args: String,
     pub respond: Option<oneshot::Sender<ApprovalDecision>>,
+}
+
+/// One row of the session picker.
+pub struct SessionRow {
+    pub id: String,
+    pub when: String,
+    pub messages: usize,
+    pub tokens: u64,
+    pub cwd: String,
+    pub preview: String,
+    /// Session belongs to the current workspace.
+    pub here: bool,
+}
+
+/// Interactive `/resume` picker: arrow through recent sessions, Enter loads.
+pub struct SessionPicker {
+    pub rows: Vec<SessionRow>,
+    pub idx: usize,
+    /// Only show sessions from this workspace.
+    pub this_cwd_only: bool,
+}
+
+impl SessionPicker {
+    pub fn visible(&self) -> Vec<&SessionRow> {
+        self.rows
+            .iter()
+            .filter(|r| !self.this_cwd_only || r.here)
+            .collect()
+    }
 }
 
 pub struct App {
@@ -111,6 +140,7 @@ pub struct App {
     pub u_last: TokenUsage,
 
     pub approval: Option<ApprovalState>,
+    pub picker: Option<SessionPicker>,
     pub palette_idx: usize,
     pub quit_armed: Option<Instant>,
 
@@ -179,6 +209,7 @@ pub async fn run_tui(
         u_session,
         u_last: TokenUsage::default(),
         approval: None,
+        picker: None,
         palette_idx: 0,
         quit_armed: None,
         tx,
@@ -259,6 +290,11 @@ impl App {
         // Approval modal swallows all keys.
         if self.approval.is_some() {
             self.on_approval_key(key.code);
+            return;
+        }
+        // Session picker swallows all keys while open.
+        if self.picker.is_some() {
+            self.on_picker_key(key.code);
             return;
         }
 
@@ -381,6 +417,7 @@ impl App {
                 self.cells.retain(|c| matches!(c, Cell::Banner));
                 self.scroll_from_bottom = 0;
             }
+            KeyCode::Char('r') if ctrl => self.open_session_picker(),
             KeyCode::Char('a') if ctrl => self.input.move_line_home(),
             KeyCode::Char('e') if ctrl => self.input.move_line_end(),
             KeyCode::Char('u') if ctrl => self.input.delete_to_line_start(),
@@ -389,6 +426,94 @@ impl App {
             KeyCode::Char(c) if !ctrl && !alt => {
                 self.input.insert_char(c);
                 self.palette_idx = 0;
+            }
+            _ => {}
+        }
+    }
+
+    // ── session picker ─────────────────────────────────────────────────
+    fn open_session_picker(&mut self) {
+        if self.busy {
+            self.push_error("wait for the current turn to finish".into());
+            return;
+        }
+        let sessions = match crate::agent::session::list_sessions() {
+            Ok(s) => s,
+            Err(e) => {
+                self.push_error(format!("could not list sessions: {e}"));
+                return;
+            }
+        };
+        let here_key = self.cwd.display().to_string().to_lowercase();
+        let rows: Vec<SessionRow> = sessions
+            .iter()
+            .filter(|s| s.id != self.session_id) // current session isn't a resume target
+            // Every launch mints a session; empty ones are noise, not history.
+            .filter(|s| !s.messages.is_empty())
+            .take(50)
+            .map(|s| SessionRow {
+                id: s.id.clone(),
+                when: s.updated_at.format("%m-%d %H:%M").to_string(),
+                messages: s.messages.len(),
+                tokens: s.usage.total_tokens,
+                cwd: s.cwd.clone(),
+                preview: s
+                    .messages
+                    .iter()
+                    .find(|m| m.role == "user")
+                    .map(|m| m.content.replace('\n', " ").chars().take(90).collect())
+                    .unwrap_or_else(|| "(no prompt)".into()),
+                here: s.cwd.to_lowercase() == here_key,
+            })
+            .collect();
+
+        if rows.is_empty() {
+            self.push_info("no other sessions to resume".into());
+            return;
+        }
+        // Default to this-workspace-only if any session is from here.
+        let any_here = rows.iter().any(|r| r.here);
+        self.picker = Some(SessionPicker {
+            rows,
+            idx: 0,
+            this_cwd_only: any_here,
+        });
+    }
+
+    fn on_picker_key(&mut self, code: KeyCode) {
+        let Some(p) = &mut self.picker else { return };
+        let count = p.visible().len();
+        match code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.picker = None;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                p.idx = p.idx.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if count > 0 && p.idx + 1 < count {
+                    p.idx += 1;
+                }
+            }
+            KeyCode::PageUp => p.idx = p.idx.saturating_sub(5),
+            KeyCode::PageDown => {
+                if count > 0 {
+                    p.idx = (p.idx + 5).min(count - 1);
+                }
+            }
+            KeyCode::Home => p.idx = 0,
+            KeyCode::End => p.idx = count.saturating_sub(1),
+            // Toggle "this workspace only" / all workspaces.
+            KeyCode::Tab | KeyCode::Char('a') => {
+                p.this_cwd_only = !p.this_cwd_only;
+                p.idx = 0;
+            }
+            KeyCode::Enter => {
+                let id = p.visible().get(p.idx).map(|r| r.id.clone());
+                self.picker = None;
+                if let Some(id) = id {
+                    self.cmd_resume(&id);
+                }
             }
             _ => {}
         }
@@ -798,7 +923,13 @@ impl App {
             "/model" => self.cmd_model(&arg),
             "/effort" => self.cmd_effort(&arg),
             "/sessions" => self.cmd_sessions(),
-            "/resume" => self.cmd_resume(&arg),
+            "/resume" => {
+                if arg.is_empty() {
+                    self.open_session_picker();
+                } else {
+                    self.cmd_resume(&arg);
+                }
+            }
             "/config" => self.cmd_config(),
             "/init" => {
                 self.submit_text(
@@ -838,7 +969,7 @@ impl App {
         s.push_str(&format!(
             "\npermission mode now: {} — {}\n\
              keys\n  Enter send · \\+Enter or Ctrl+J newline · ↑/↓ history\n  \
-             Shift+Tab cycle modes · Esc cancel turn · Ctrl+C twice quit\n  \
+             Shift+Tab cycle modes · Ctrl+R resume a session · Esc cancel turn · Ctrl+C twice quit\n  \
              tool approvals (manual): y once · a always · n deny",
             m.badge(),
             m.description()
@@ -995,6 +1126,12 @@ impl App {
                 if let Some(s) = &self.session {
                     let _ = s.save();
                 }
+                // Tools stay sandboxed to the *current* workspace, so a session
+                // resumed from elsewhere is re-homed here — say so plainly.
+                let from_elsewhere = {
+                    let here = self.cwd.display().to_string();
+                    (!loaded.cwd.eq_ignore_ascii_case(&here)).then(|| loaded.cwd.clone())
+                };
                 loaded.cwd = self.cwd.display().to_string();
                 self.session_id = loaded.id.clone();
                 let mut tracker = UsageTracker::new(
@@ -1007,11 +1144,15 @@ impl App {
                 self.session = Some(Box::new(loaded));
                 self.usage = Some(Box::new(tracker));
                 self.cells.retain(|c| matches!(c, Cell::Banner));
-                self.push_info(format!(
-                    "resumed session {}",
-                    &self.session_id[..8.min(self.session_id.len())]
-                ));
-                self.replay_session_tail(8);
+                let short = &self.session_id[..8.min(self.session_id.len())];
+                match from_elsewhere {
+                    Some(old) => self.push_info(format!(
+                        "resumed session {short}\n  was: {old}\n  now: {}  (tools stay sandboxed here)",
+                        self.cwd.display()
+                    )),
+                    None => self.push_info(format!("resumed session {short}")),
+                }
+                self.replay_session_tail(20);
             }
             Err(e) => self.push_error(format!("resume failed: {e}")),
         }
