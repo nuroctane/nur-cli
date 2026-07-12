@@ -58,13 +58,10 @@ pub struct Config {
     /// Model context window (tokens) — used for the ctx% meter in the TUI.
     #[serde(default = "default_context_window")]
     pub context_window: u64,
-    /// When true, the TUI captures the mouse (wheel scroll, scrollbar drag,
-    /// click-to-peek, click-to-caret). When false (default), the host terminal
-    /// keeps native drag-select + copy — this is what most users want.
-    ///
-    /// A terminal cannot do both at once. Toggle live with `/mouse`; value is
-    /// persisted to `~/.muse/config.toml`.
-    #[serde(default)]
+    /// Legacy field (kept for config compatibility). Mouse capture is always
+    /// enabled at runtime so scrollbar drag never depends on a mode. Text
+    /// selection uses **Shift+drag** in the host terminal.
+    #[serde(default = "default_true")]
     pub mouse: bool,
 }
 
@@ -96,7 +93,7 @@ impl Default for Config {
             max_turns: default_max_turns(),
             stream: true,
             context_window: default_context_window(),
-            mouse: false,
+            mouse: true,
         }
     }
 }

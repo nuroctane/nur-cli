@@ -54,7 +54,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/sessions", "list recent sessions"),
     ("/resume", "pick a past session to return to  (Ctrl+R)"),
     ("/init", "generate a MUSE.md project guide"),
-    ("/mouse", "app mouse (wheel/peek) ⇄ native text selection  [default: selection]"),
+    ("/mouse", "reminder: scrollbar always on · Shift+drag selects text"),
     ("/config", "show config + data paths"),
     ("/exit", "quit"),
 ];
@@ -397,31 +397,27 @@ impl Drop for TermGuard {
     }
 }
 
-/// Enable app mouse capture (wheel, scrollbar, click-to-peek, caret).
-/// This **disables** native terminal text selection while active.
+/// Always-on app mouse: wheel, scrollbar drag, click-to-peek, click-to-caret.
+///
+/// Host terminals cannot give an app the mouse *and* plain drag-select at the
+/// same time. Scrollbar must always work, so capture stays on. **Shift+drag**
+/// is the standard escape hatch for native text selection (Windows Terminal,
+/// Orca, iTerm, most others pass Shift+mouse to the host).
 fn enable_app_mouse() {
     let _ = stdout().execute(EnableMouseCapture);
-    // All-motion (1003) for free hover when the host supports it.
+    // 1000/1002 = buttons+drag (scrollbar); 1003 = free hover when supported;
+    // 1006 = SGR coords for wide terminals.
     let mut out = stdout();
     let _ = write!(out, "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h");
     let _ = out.flush();
 }
 
-/// Disable app mouse capture so the user can drag-select and copy text again.
+/// Tear down mouse modes on exit (never leave the host terminal "stuck").
 fn disable_app_mouse() {
     let mut out = stdout();
     let _ = write!(out, "\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?1006l");
     let _ = out.flush();
     let _ = stdout().execute(DisableMouseCapture);
-}
-
-/// Apply `cfg.mouse` to the live terminal. Default is **off** so selection works.
-fn apply_mouse_mode(enabled: bool) {
-    if enabled {
-        enable_app_mouse();
-    } else {
-        disable_app_mouse();
-    }
 }
 
 pub async fn run_tui(
@@ -437,11 +433,9 @@ pub async fn run_tui(
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
     stdout().execute(EnableBracketedPaste)?;
-    // Mouse capture is OFF by default so drag-select + copy work in the host
-    // terminal (Orca, Windows Terminal, etc.). `/mouse` turns on app mouse
-    // (wheel scroll, scrollbar drag, click-to-peek, click-to-caret). A terminal
-    // cannot do both at once — that is a host limitation, not a bug.
-    apply_mouse_mode(cfg.mouse);
+    // Mouse capture is ALWAYS on so scrollbar drag / wheel / click-peek never
+    // depend on a mode toggle. Select text with Shift+drag (host terminal).
+    enable_app_mouse();
     // Hardware cursor hidden — we paint a Meta blue block caret ourselves.
     stdout().execute(Hide)?;
     let _guard = TermGuard;
@@ -507,18 +501,10 @@ pub async fn run_tui(
     app.push_info(format!(
         "mode · {mode_label}  ·  Shift+Tab cycles  manual → plan → auto  ·  /mode"
     ));
-    // Be explicit: selection works until the user opts into app mouse.
-    if app.cfg.mouse {
-        app.push_note(
-            Tone::Mode,
-            "mouse on · wheel/scrollbar/click-peek active  ·  /mouse to restore text selection".into(),
-        );
-    } else {
-        app.push_note(
-            Tone::Mode,
-            "text selection on · drag to select & copy  ·  /mouse for wheel · scrollbar · click-peek".into(),
-        );
-    }
+    app.push_note(
+        Tone::Mode,
+        "scrollbar · wheel · click-peek always on  ·  Shift+drag to select text  ·  /help".into(),
+    );
     if !ecosystem_summary.is_empty() {
         app.push_note(Tone::Skill, ecosystem_summary);
     }
@@ -1941,11 +1927,12 @@ impl App {
              model: {}  ·  /model <id> to switch\n\
              keys\n  \
              ↑/↓ · wheel · drag scrollbar   scroll the chat\n  \
-             /mouse         toggle app mouse ⇄ text selection  (default: selection ON)\n  \
-             e / p (empty)  expand card · pin-peek latest thought/tool/turn\n  \
-             esc            close peek (then cancel / clear)\n  \
-             with /mouse on: click card to peek · ▸ expands · drag scrollbar · click caret\n  \
-             Ctrl+A / Ctrl+C / Ctrl+V / Ctrl+X   select-all · copy · paste · cut\n  \
+             drag scrollbar / wheel         always on — jump or scroll the transcript\n  \
+             Shift+drag                     select text in the host terminal (copy as usual)\n  \
+             click card · ▸ chevron         pin peek · expand in place\n  \
+             e / p (empty input)            expand · pin-peek latest thought/tool/turn\n  \
+             esc                            close peek (then cancel / clear)\n  \
+             Ctrl+A / Ctrl+C / Ctrl+V / Ctrl+X   select-all · copy · paste · cut (input)\n  \
              Ctrl+P/Ctrl+N  prompt history    (also Alt+↑/↓)\n  \
              Enter          send              (\\+Enter or Ctrl+J for a newline)\n  \
              Shift+Tab      cycle modes  ·  Ctrl+R resume a session\n  \
@@ -2018,38 +2005,21 @@ impl App {
         });
     }
 
-    /// Toggle app mouse capture ⇄ native terminal text selection.
-    ///
-    /// **Default is off** (selection works). When on: wheel, scrollbar drag,
-    /// click-to-peek, click-to-caret. Persists to `~/.muse/config.toml`.
+    /// Mouse is always captured (scrollbar must never depend on a mode).
+    /// This command only re-asserts capture + explains Shift+drag selection.
     fn cmd_mouse(&mut self) {
-        self.cfg.mouse = !self.cfg.mouse;
-        apply_mouse_mode(self.cfg.mouse);
-        // Clear hover/peek state when releasing the mouse so a stale box
-        // doesn't stick around without pointer events.
-        if !self.cfg.mouse {
-            self.hover_cell = None;
-            // Keep peek_pinned — user can still close with Esc / open with `p`.
-        }
+        // Never turn capture off — users require scrollbar drag always.
+        self.cfg.mouse = true;
+        enable_app_mouse();
         let _ = crate::config::save_config(&self.cfg);
-        if self.cfg.mouse {
-            self.push_note(
-                Tone::Mode,
-                "mouse on · wheel scrolls · drag scrollbar · click card to peek · click input caret\n  \
-                 note: host text selection is off while mouse is on  ·  /mouse again to select text\n  \
-                 saved to ~/.muse/config.toml"
-                    .into(),
-            );
-        } else {
-            self.push_note(
-                Tone::Mode,
-                "mouse off · drag-select text in the terminal and copy normally\n  \
-                 scroll with ↑/↓ · PgUp/PgDn · Home/End  ·  peek with p · expand with e\n  \
-                 /mouse again for wheel · scrollbar · click-peek\n  \
-                 saved to ~/.muse/config.toml"
-                    .into(),
-            );
-        }
+        self.push_note(
+            Tone::Mode,
+            "mouse always on for scrollbar · wheel · click-peek · caret\n  \
+             select text:  hold Shift and drag  (host terminal selection)\n  \
+             then copy with the host shortcut (Ctrl+Shift+C / right-click Copy)\n  \
+             keyboard scroll still works: ↑/↓ · PgUp/PgDn · Home/End"
+                .into(),
+        );
     }
 
     fn cmd_usage(&mut self) {
