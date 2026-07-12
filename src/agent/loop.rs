@@ -56,13 +56,14 @@ pub enum ApprovalDecision {
     Deny,
 }
 
+/// Tools that never mutate the workspace (approval-free in manual; allowed in plan).
+/// Note: `memory` is special-cased — only action=read is free; append is mutating.
 pub const READ_ONLY_TOOLS: &[&str] = &[
     "read_file",
     "grep",
     "glob",
     "web_fetch",
     "git_status",
-    "memory",
     "todo_write",
     "submit_plan",
 ];
@@ -73,6 +74,7 @@ pub const MUTATING_TOOLS: &[&str] = &[
     "multi_edit",
     "apply_patch",
     "bash",
+    "memory", // append path; read is handled as read-only via args
 ];
 
 pub struct AgentRunner {
@@ -128,6 +130,8 @@ impl AgentRunner {
         let tools = self.tools.tool_defs();
         let mut turns = 0u32;
         let mut tool_seq: u64 = 0;
+        // Prevent compact→still-hot→compact infinite loop within one user turn.
+        let mut did_auto_compact = false;
 
         loop {
             if cancel.is_cancelled() {
@@ -138,14 +142,22 @@ impl AgentRunner {
                 return Err(MuseError::MaxTurns(self.config.max_turns));
             }
 
-            // Auto-compact when context is hot (Claude-style).
-            if should_auto_compact(usage, &self.config) {
+            // Auto-compact at most once per user turn (Claude-style pressure relief).
+            if !did_auto_compact && should_auto_compact(usage, &self.config) {
                 let _ = tx.send(AgentEvent::Status("auto-compacting context…".into()));
-                if let Ok(summary) = compact_session(self, session, usage).await {
-                    let _ = tx.send(AgentEvent::Status(
-                        "context compacted — continuing".into(),
-                    ));
-                    let _ = summary;
+                match compact_session(self, session, usage).await {
+                    Ok(_) => {
+                        did_auto_compact = true;
+                        let _ = tx.send(AgentEvent::Status(
+                            "context compacted — continuing".into(),
+                        ));
+                    }
+                    Err(e) => {
+                        did_auto_compact = true; // don't spin on repeated failures
+                        let _ = tx.send(AgentEvent::Status(format!(
+                            "auto-compact skipped: {e}"
+                        )));
+                    }
                 }
             }
 
@@ -231,76 +243,101 @@ impl AgentRunner {
                 return Ok(text);
             }
 
-            // Partition: run read-only tools in parallel; mutating / agent sequential.
-            let (readonly, sequential): (Vec<_>, Vec<_>) = calls
-                .into_iter()
-                .partition(|c| is_parallel_safe(&c.name) && c.name != "agent");
-
-            // --- parallel readonly batch ---
-            if !readonly.is_empty() {
-                let mut handles = Vec::new();
-                for call in &readonly {
-                    if cancel.is_cancelled() {
-                        return Err(MuseError::Interrupted);
-                    }
-                    tool_seq += 1;
-                    let id = tool_seq;
-                    let _ = tx.send(AgentEvent::ToolStart {
-                        id,
-                        name: call.name.clone(),
-                        args: call.arguments.clone(),
-                    });
-                    // Readonly always approved
-                    let host = ToolHost {
-                        todos: self.tools.todos.clone(),
-                        plan: self.tools.plan.clone(),
-                    };
-                    let cwd = self.cwd.clone();
-                    let name = call.name.clone();
-                    let args = call.arguments.clone();
-                    let call_id = call.call_id.clone();
-                    handles.push(tokio::task::spawn_blocking(move || {
-                        let ctx = ToolContext {
-                            cwd,
-                            auto_approve: true,
-                        };
-                        let res = host.dispatch(&name, &args, &ctx);
-                        (id, call_id, name, res)
-                    }));
-                }
-
-                for h in handles {
-                    let (id, call_id, name, res) = tokio::select! {
-                        _ = cancel.cancelled() => return Err(MuseError::Interrupted),
-                        r = h => r.map_err(|e| MuseError::Other(e.to_string()))?,
-                    };
-                    let (body, ok) = match res {
-                        Ok(s) => (s, true),
-                        Err(e) => (format!("error: {e}"), false),
-                    };
-                    emit_side_effects(tx, &name, &body);
-                    let _ = tx.send(AgentEvent::ToolEnd {
-                        id,
-                        name,
-                        result: body.clone(),
-                        ok,
-                    });
-                    session
-                        .input_items
-                        .push(function_call_output_item(&call_id, &body));
-                }
-            }
-
-            // --- sequential mutating / agent ---
-            for call in sequential {
+            // Execute tools **in original model order** (required for call_id pairing).
+            // Contiguous parallel-safe reads may run concurrently, results emitted in order.
+            let mut idx = 0usize;
+            while idx < calls.len() {
                 if cancel.is_cancelled() {
-                    session.input_items.push(function_call_output_item(
-                        &call.call_id,
-                        "[interrupted by user]",
-                    ));
+                    // Pair every remaining function_call with an interrupt output.
+                    for c in &calls[idx..] {
+                        session.input_items.push(function_call_output_item(
+                            &c.call_id,
+                            "[interrupted by user]",
+                        ));
+                    }
+                    let _ = session.save();
                     return Err(MuseError::Interrupted);
                 }
 
+                // Contiguous parallel-safe batch
+                if is_parallel_safe(&calls[idx].name, &calls[idx].arguments) {
+                    let mut batch_end = idx + 1;
+                    while batch_end < calls.len()
+                        && is_parallel_safe(&calls[batch_end].name, &calls[batch_end].arguments)
+                    {
+                        batch_end += 1;
+                    }
+                    let batch = &calls[idx..batch_end];
+                    let mut handles = Vec::new();
+                    let mut meta: Vec<(u64, String, String)> = Vec::new(); // id, call_id, name
+
+                    for call in batch {
+                        // Parallel-safe tools are always free — no approval (keeps output order simple).
+                        tool_seq += 1;
+                        let id = tool_seq;
+                        let _ = tx.send(AgentEvent::ToolStart {
+                            id,
+                            name: call.name.clone(),
+                            args: call.arguments.clone(),
+                        });
+                        let host = ToolHost {
+                            todos: self.tools.todos.clone(),
+                            plan: self.tools.plan.clone(),
+                        };
+                        let cwd = self.cwd.clone();
+                        let name = call.name.clone();
+                        let args = call.arguments.clone();
+                        let call_id = call.call_id.clone();
+                        meta.push((id, call_id.clone(), name.clone()));
+                        handles.push(tokio::task::spawn_blocking(move || {
+                            let res = host.dispatch(
+                                &name,
+                                &args,
+                                &ToolContext {
+                                    cwd,
+                                    auto_approve: true,
+                                },
+                            );
+                            (call_id, name, res)
+                        }));
+                    }
+
+                    // Collect in submission order (handles order matches meta)
+                    for (handle, (id, call_id, name)) in handles.into_iter().zip(meta.into_iter()) {
+                        let (_, _, res) = tokio::select! {
+                            _ = cancel.cancelled() => {
+                                // Fill remaining + this as interrupted
+                                session.input_items.push(function_call_output_item(
+                                    &call_id,
+                                    "[interrupted by user]",
+                                ));
+                                // Note: other in-flight blocking tasks keep running until drop
+                                let _ = session.save();
+                                return Err(MuseError::Interrupted);
+                            }
+                            r = handle => r.map_err(|e| MuseError::Other(e.to_string()))?,
+                        };
+                        let (body, ok) = match res {
+                            Ok(s) => (s, true),
+                            Err(e) => (format!("error: {e}"), false),
+                        };
+                        emit_side_effects(tx, &name, &body);
+                        let _ = tx.send(AgentEvent::ToolEnd {
+                            id,
+                            name,
+                            result: body.clone(),
+                            ok,
+                        });
+                        session
+                            .input_items
+                            .push(function_call_output_item(&call_id, &body));
+                    }
+                    idx = batch_end;
+                    continue;
+                }
+
+                // Single sequential tool (mutating / agent / memory append)
+                let call = &calls[idx];
                 tool_seq += 1;
                 let id = tool_seq;
                 let _ = tx.send(AgentEvent::ToolStart {
@@ -312,13 +349,12 @@ impl AgentRunner {
                 let mode_at_gate = self.permission_mode.get();
                 let approved = self.check_approval(&call.name, &call.arguments, tx).await;
                 if !approved {
-                    let (msg, result_label) = if mode_at_gate.is_read_only_enforced()
-                        && (MUTATING_TOOLS.contains(&call.name.as_str()) || call.name == "agent")
-                    {
+                    let plan_block = mode_at_gate.is_read_only_enforced()
+                        && !is_read_only_call(&call.name, &call.arguments);
+                    let (msg, result_label) = if plan_block {
                         (
                             format!(
-                                "blocked: plan mode. Only read-only tools allowed. \
-                                 Switch to manual/auto (Shift+Tab) for {}.",
+                                "blocked: plan mode. Switch to manual/auto (Shift+Tab) for {}.",
                                 call.name
                             ),
                             "blocked · plan mode".into(),
@@ -338,6 +374,7 @@ impl AgentRunner {
                     session
                         .input_items
                         .push(function_call_output_item(&call.call_id, &msg));
+                    idx += 1;
                     continue;
                 }
 
@@ -350,9 +387,15 @@ impl AgentRunner {
                             false,
                         )
                     } else {
-                        match run_agent_tool(self, &call, cancel, tx).await {
+                        match run_agent_tool(self, call, cancel, tx).await {
                             Ok(s) => (s, true),
-                            Err(MuseError::Interrupted) => return Err(MuseError::Interrupted),
+                            Err(MuseError::Interrupted) => {
+                                session.input_items.push(function_call_output_item(
+                                    &call.call_id,
+                                    "[interrupted by user]",
+                                ));
+                                return Err(MuseError::Interrupted);
+                            }
                             Err(e) => (format!("error: {e}"), false),
                         }
                     }
@@ -380,6 +423,14 @@ impl AgentRunner {
                                 &call.call_id,
                                 "[interrupted by user]",
                             ));
+                            // remaining calls
+                            for c in &calls[idx + 1..] {
+                                session.input_items.push(function_call_output_item(
+                                    &c.call_id,
+                                    "[interrupted by user]",
+                                ));
+                            }
+                            let _ = session.save();
                             return Err(MuseError::Interrupted);
                         }
                         r = exec => match r {
@@ -400,6 +451,7 @@ impl AgentRunner {
                 session
                     .input_items
                     .push(function_call_output_item(&call.call_id, &body));
+                idx += 1;
             }
 
             let _ = session.save();
@@ -413,7 +465,7 @@ impl AgentRunner {
         tx: &mpsc::UnboundedSender<AgentEvent>,
     ) -> bool {
         let mode = self.permission_mode.get();
-        let read_only = READ_ONLY_TOOLS.contains(&name) || name == "submit_plan";
+        let read_only = is_read_only_call(name, args);
 
         match mode {
             PermissionMode::Auto => true,
@@ -429,7 +481,6 @@ impl AgentRunner {
                 if read_only {
                     return true;
                 }
-                // explore-style agent is ok after approval; general agent too
                 if let Ok(set) = self.approved_tools.lock() {
                     if set.contains(name) {
                         return true;
@@ -462,18 +513,39 @@ impl AgentRunner {
     }
 }
 
-fn is_parallel_safe(name: &str) -> bool {
+fn is_read_only_call(name: &str, args: &str) -> bool {
+    if name == "memory" {
+        return serde_json::from_str::<Value>(args)
+            .ok()
+            .and_then(|v| v.get("action")?.as_str().map(|s| s == "read"))
+            .unwrap_or(false);
+    }
+    if name == "agent" {
+        return false;
+    }
+    READ_ONLY_TOOLS.contains(&name)
+}
+
+fn is_parallel_safe(name: &str, args: &str) -> bool {
+    // Never parallelize agent or anything that needs approval / mutates.
+    if !is_read_only_call(name, args) {
+        return false;
+    }
     matches!(
         name,
-        "read_file" | "grep" | "glob" | "web_fetch" | "git_status" | "memory"
+        "read_file" | "grep" | "glob" | "web_fetch" | "git_status"
     )
 }
 
 fn should_auto_compact(usage: &UsageTracker, cfg: &Config) -> bool {
     let last = usage.last_usage();
-    let used = last.input_tokens.max(last.total_tokens);
+    // Prefer input tokens (what pressures the next request window).
+    let used = if last.input_tokens > 0 {
+        last.input_tokens
+    } else {
+        last.total_tokens
+    };
     let window = cfg.context_window.max(1);
-    // When a single request's input exceeds ~55% of the context window, compact.
     used > (window as f64 * 0.55) as u64 && used > 40_000
 }
 

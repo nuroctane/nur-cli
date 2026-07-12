@@ -37,38 +37,107 @@ fn is_filesystem_root(path: &Path) -> bool {
 }
 
 /// Resolve `path` against `cwd` and ensure the result stays under `cwd`.
+///
+/// - Lexical `..` collapse before the check
+/// - Windows paths compared case-insensitively
+/// - If the path exists, canonicalize to block symlink escapes outside cwd
 pub fn resolve_in_workspace(cwd: &Path, path: &str) -> Result<PathBuf> {
-    let cwd = cwd
+    let cwd_canon = cwd
         .canonicalize()
-        .unwrap_or_else(|_| cwd.to_path_buf());
+        .unwrap_or_else(|_| normalize_path(cwd));
     let joined = if Path::new(path).is_absolute() {
         PathBuf::from(path)
     } else {
-        cwd.join(path)
+        cwd_canon.join(path)
     };
 
-    // Normalize .. without requiring the path to exist.
-    let normalized = normalize_path(&joined);
-    let cwd_norm = normalize_path(&cwd);
+    // Lexical normalize first (handles .. without requiring existence).
+    let lexical = normalize_path(&joined);
+    let cwd_norm = normalize_path(&cwd_canon);
 
-    if !path_is_within(&normalized, &cwd_norm) {
-        return Err(MuseError::Tool(format!(
-            "path escapes workspace sandbox\n  path: {}\n  workspace: {}\n\
-             Refuse: tools only operate under the session cwd.",
-            normalized.display(),
-            cwd_norm.display()
-        )));
+    if !path_is_within(&lexical, &cwd_norm) {
+        return Err(escape_err(&lexical, &cwd_norm));
     }
-    Ok(normalized)
+
+    // If it exists, re-check via canonicalize (symlink / junction escape).
+    if lexical.exists() {
+        let real = lexical
+            .canonicalize()
+            .map_err(|e| MuseError::Tool(format!("resolve {}: {e}", lexical.display())))?;
+        if !path_is_within(&real, &cwd_canon) && !path_is_within(&real, &cwd_norm) {
+            return Err(escape_err(&real, &cwd_norm));
+        }
+        return Ok(real);
+    }
+
+    Ok(lexical)
+}
+
+fn escape_err(path: &Path, root: &Path) -> MuseError {
+    MuseError::Tool(format!(
+        "path escapes workspace sandbox\n  path: {}\n  workspace: {}\n\
+         Refuse: tools only operate under the session cwd.",
+        path.display(),
+        root.display()
+    ))
 }
 
 fn path_is_within(path: &Path, root: &Path) -> bool {
-    let p = path.components().collect::<Vec<_>>();
-    let r = root.components().collect::<Vec<_>>();
+    let p: Vec<String> = path
+        .components()
+        .map(|c| component_key(&c))
+        .collect();
+    let r: Vec<String> = root
+        .components()
+        .map(|c| component_key(&c))
+        .collect();
     if p.len() < r.len() {
         return false;
     }
     p.iter().zip(r.iter()).all(|(a, b)| a == b)
+}
+
+fn component_key(c: &Component<'_>) -> String {
+    let s = c.as_os_str().to_string_lossy().into_owned();
+    #[cfg(windows)]
+    {
+        // Compare case-insensitively on Windows.
+        return s.to_ascii_lowercase();
+    }
+    #[cfg(not(windows))]
+    {
+        s
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn rejects_parent_escape() {
+        let root = std::env::temp_dir().join("meta-sandbox-test-root");
+        let _ = fs::create_dir_all(&root);
+        let root = root.canonicalize().unwrap();
+        let err = resolve_in_workspace(&root, "../outside.txt");
+        assert!(err.is_err(), "expected escape to fail");
+    }
+
+    #[test]
+    fn allows_nested() {
+        let root = std::env::temp_dir().join("meta-sandbox-test-root2");
+        let _ = fs::create_dir_all(root.join("a"));
+        let root = root.canonicalize().unwrap();
+        let p = resolve_in_workspace(&root, "a/b.txt").unwrap();
+        assert!(p.starts_with(&root) || path_is_within(&p, &root));
+    }
+
+    #[test]
+    fn detects_drive_root() {
+        assert!(is_dangerous_workspace(Path::new(r"C:\")));
+        assert!(is_dangerous_workspace(Path::new("/")));
+    }
 }
 
 /// Lexical normalization (does not touch the filesystem).
