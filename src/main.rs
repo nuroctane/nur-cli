@@ -102,28 +102,24 @@ async fn real_main() -> Result<()> {
         cfg.max_turns = t;
     }
 
-    let mut cwd = cli
+    let explicit_cwd = cli.cwd.is_some();
+    let requested = cli
         .cwd
         .as_ref()
         .map(PathBuf::from)
         .unwrap_or(std::env::current_dir()?);
 
-    // If launched from drive root, prefer nearest git work tree (addresses C:\ sandbox risk).
-    let adjusted = tools::prefer_git_root(&cwd);
-    if adjusted != cwd {
+    // Safe workspace: auto-fallback when user starts at C:\ / / (common on Windows).
+    let (cwd, why) = tools::resolve_safe_workspace(&requested, explicit_cwd)?;
+    if let Some(reason) = why {
         theme::print_info(&format!(
-            "workspace adjusted to git root: {}",
-            adjusted.display()
-        ));
-        cwd = adjusted;
-    }
-    if tools::is_dangerous_workspace(&cwd) {
-        return Err(error::MuseError::Other(format!(
-            "refusing to run with workspace at filesystem root ({})\n\
-             Start meta from a project directory, or pass --cwd path\\to\\repo",
+            "workspace: {}  ·  {reason}",
             cwd.display()
-        )));
+        ));
+        theme::print_info("tip: cd into your repo, or set user env META_CWD for a default");
     }
+    // Enter the workspace so relative paths / shell feel natural.
+    let _ = std::env::set_current_dir(&cwd);
     let cwd_str = cwd.display().to_string();
 
     let client = MetaClient::new(&cfg.base_url, &api_key)?;

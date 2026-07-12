@@ -22,7 +22,9 @@ use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-pub use sandbox::{is_dangerous_workspace, prefer_git_root, sandbox_warning};
+pub use sandbox::{
+    is_dangerous_workspace, prefer_git_root, resolve_safe_workspace, sandbox_warning,
+};
 pub use shell::detect_shell;
 pub use submit_plan::{SharedPlan, SubmitPlan};
 
