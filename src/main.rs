@@ -195,12 +195,12 @@ async fn real_main() -> Result<()> {
     ade::write_ade_manifest(&session.id, &cfg.model, &cwd_str, usage.session_usage());
     let _ = session.save();
 
-    // Provision graphify / plur / ruflo on every session start (cached 24h).
-    // First install can take a few minutes; subsequent opens are a marker hit.
-    let eco = ecosystem::ensure_ecosystem(false);
-    if !eco.graphify.available || !eco.plur.available || !eco.ruflo.available {
-        theme::print_info(&eco.summary_line());
-    }
+    // Never block launch on ecosystem install (npm/uv/skill packs can take minutes).
+    // Snapshot whatever is already provisioned; repair in a background thread.
+    let eco_summary = ecosystem::launch_snapshot();
+    std::thread::spawn(|| {
+        let _ = ecosystem::ensure_ecosystem(false);
+    });
 
     let start_mode = if cli.yes {
         PermissionMode::Auto
@@ -242,7 +242,7 @@ async fn real_main() -> Result<()> {
                 session,
                 usage,
                 cli.prompt.clone(),
-                eco.summary_line(),
+                eco_summary,
             )
             .await?;
         }

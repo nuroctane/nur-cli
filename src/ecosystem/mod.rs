@@ -511,13 +511,24 @@ pub fn plur_inject(task: &str) -> Option<String> {
 }
 
 /// Brief status snippet for the TUI banner / /ecosystem command.
+/// Reads the on-disk marker only — never blocks on network installs.
 pub fn quick_status() -> String {
     if let Ok(text) = fs::read_to_string(marker_path()) {
         if let Ok(st) = serde_json::from_str::<EcosystemStatus>(&text) {
             return st.report();
         }
     }
-    ensure_ecosystem(false).report()
+    "Meta ecosystem not provisioned yet — background ensure is running, or run:\n  meta ecosystem ensure\n".into()
+}
+
+/// One-line snapshot for TUI open. Instant; no npm/uv.
+pub fn launch_snapshot() -> String {
+    if let Ok(text) = fs::read_to_string(marker_path()) {
+        if let Ok(st) = serde_json::from_str::<EcosystemStatus>(&text) {
+            return st.summary_line();
+        }
+    }
+    "ecosystem · provisioning in background…".into()
 }
 
 /// Sleep helper used when we want a soft bound (unused externally).
