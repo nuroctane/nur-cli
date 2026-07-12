@@ -65,6 +65,6 @@ impl Tool for Bash {
         }
 
         let b = backend();
-        run_in_shell(b, &command, &ctx.cwd, timeout_ms)
+        run_in_shell(b, &command, &ctx.cwd, timeout_ms, &ctx.cancel)
     }
 }

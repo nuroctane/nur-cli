@@ -7,7 +7,7 @@ use crate::api::MetaClient;
 use crate::config::Config;
 use crate::error::{MuseError, Result};
 use crate::tools::ToolHost;
-use crate::usage::UsageTracker;
+use crate::usage::{TokenUsage, UsageTracker};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -22,7 +22,7 @@ pub async fn run_subagent(
     prompt: &str,
     subagent_type: &str,
     cancel: &CancellationToken,
-) -> Result<String> {
+) -> Result<(String, TokenUsage)> {
     let explore = matches!(
         subagent_type.to_ascii_lowercase().as_str(),
         "explore" | "research" | "readonly"
@@ -55,7 +55,8 @@ pub async fn run_subagent(
     });
 
     let session = Session::new(&cfg.model, &cwd.display().to_string());
-    let usage = UsageTracker::new(session.id.clone(), cfg.model.clone(), cwd);
+    // Scoped: don't clobber the global status.json / Orca display.
+    let usage = UsageTracker::scoped(session.id.clone(), cfg.model.clone(), cwd);
 
     let (tx, mut rx) = mpsc::unbounded_channel::<AgentEvent>();
     let cancel = cancel.clone();
@@ -79,17 +80,22 @@ pub async fn run_subagent(
             AgentEvent::Done {
                 result,
                 interrupted,
+                usage,
                 ..
             } => {
                 let _ = handle.await;
+                let spent = usage.session_usage().clone();
                 if interrupted {
                     return Err(MuseError::Interrupted);
                 }
                 return match result {
-                    Ok(s) => Ok(if s.trim().is_empty() { last_text } else { s }),
+                    Ok(s) => Ok((
+                        if s.trim().is_empty() { last_text } else { s },
+                        spent,
+                    )),
                     Err(e) => {
                         if !last_text.trim().is_empty() {
-                            Ok(format!("{last_text}\n\n(subagent ended: {e})"))
+                            Ok((format!("{last_text}\n\n(subagent ended: {e})"), spent))
                         } else {
                             Err(MuseError::Other(e))
                         }
@@ -103,6 +109,6 @@ pub async fn run_subagent(
     if last_text.is_empty() {
         Err(MuseError::Other("subagent produced no output".into()))
     } else {
-        Ok(last_text)
+        Ok((last_text, TokenUsage::default()))
     }
 }

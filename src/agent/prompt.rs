@@ -32,7 +32,8 @@ pub fn system_instructions(
     let mode_block = match mode {
         PermissionMode::Plan => r#"
 # Permission mode: PLAN
-Research/design only. Tools: read_file, grep, glob, web_fetch, git_status, memory(read), todo_write, submit_plan.
+Research/design only. Tools: read_file, list_dir, grep, glob, web_fetch, web_search,
+git_status, git_diff, skill, memory(read), todo_write, submit_plan.
 No write_file/edit_file/multi_edit/apply_patch/bash/agent. Deliver plans via submit_plan.
 "#,
         PermissionMode::Manual => r#"
@@ -59,13 +60,18 @@ OS: {} · shell: {}
 
 {mode_block}
 # Tools
-read_file, write_file, edit_file, multi_edit, apply_patch, bash, grep, glob, web_fetch,
-git_status, memory, todo_write, submit_plan, agent
+read_file, list_dir, write_file, edit_file, multi_edit, apply_patch, bash, grep, glob,
+web_fetch, web_search, git_status, git_diff, skill, memory, todo_write, submit_plan, agent
 
 ## Tool policy
 - grep/glob: ripgrep-backed; pass narrow paths — never scan drive roots
+- list_dir for directory shape; read_file for contents — cheaper than shell ls/cat
 - Paths are sandboxed to the workspace
 - bash: real shell when available (Git Bash/pwsh); output header labels the backend
+- git_status/git_diff (diff|staged|log|show): approval-free repo inspection — prefer over bash git
+- web_search → find docs/errors; web_fetch → read a result url
+- skill: action=list shows installed skill packs; action=read loads full instructions —
+  check before starting a task a skill covers
 - agent: spawn explore (read-only) or general subagent for parallel research
 - todo_write: maintain a live task list for multi-step work (always keep one in_progress)
 - submit_plan: formal plan artifact in plan mode

@@ -146,15 +146,9 @@ fn apply_unified_diff(original: &str, patch: &str) -> Result<String> {
             // Verify old lines match (fuzzy: allow if file empty and old is empty)
             if !old_lines_in_hunk.is_empty() {
                 if start + old_lines_in_hunk.len() > lines.len() && !(lines.is_empty() && old_start <= 1) {
-                    // try search for unique match of first few context lines
-                    if let Some(found) = find_slice(&lines, &old_lines_in_hunk) {
-                        apply_at(&mut lines, found, old_lines_in_hunk.len(), &new_lines_in_hunk);
-                    } else {
-                        return Err(MuseError::Tool(format!(
-                            "hunk context mismatch at line {} — file may have changed; re-read and retry",
-                            old_start
-                        )));
-                    }
+                    // Fall back to a search — but only accept a UNIQUE match.
+                    let found = find_slice_unique(&lines, &old_lines_in_hunk, old_start)?;
+                    apply_at(&mut lines, found, old_lines_in_hunk.len(), &new_lines_in_hunk);
                 } else if lines.is_empty() && old_lines_in_hunk.iter().all(|l| l.is_empty()) {
                     lines = new_lines_in_hunk;
                 } else {
@@ -164,13 +158,8 @@ fn apply_unified_diff(original: &str, patch: &str) -> Result<String> {
                         .zip(old_lines_in_hunk.iter())
                         .all(|(a, b)| a.as_str() == *b);
                     if !matches {
-                        if let Some(found) = find_slice(&lines, &old_lines_in_hunk) {
-                            apply_at(&mut lines, found, old_lines_in_hunk.len(), &new_lines_in_hunk);
-                        } else {
-                            return Err(MuseError::Tool(format!(
-                                "hunk context mismatch at line {old_start}"
-                            )));
-                        }
+                        let found = find_slice_unique(&lines, &old_lines_in_hunk, old_start)?;
+                        apply_at(&mut lines, found, old_lines_in_hunk.len(), &new_lines_in_hunk);
                     } else {
                         apply_at(&mut lines, start, old_lines_in_hunk.len(), &new_lines_in_hunk);
                     }
@@ -226,15 +215,28 @@ fn parse_hunk_header(line: &str) -> Result<(usize, usize)> {
     Ok((start, count))
 }
 
-fn find_slice(lines: &[String], needle: &[&str]) -> Option<usize> {
+/// Search for the hunk's old lines; refuse ambiguous (multi-site) matches so a
+/// fuzzy relocation can never edit the wrong copy of repeated code.
+fn find_slice_unique(lines: &[String], needle: &[&str], hunk_line: usize) -> Result<usize> {
     if needle.is_empty() {
-        return Some(0);
+        return Ok(0);
     }
-    lines.windows(needle.len()).position(|w| {
-        w.iter()
-            .zip(needle.iter())
-            .all(|(a, b)| a.as_str() == *b)
-    })
+    let hits: Vec<usize> = lines
+        .windows(needle.len())
+        .enumerate()
+        .filter(|(_, w)| w.iter().zip(needle.iter()).all(|(a, b)| a.as_str() == *b))
+        .map(|(i, _)| i)
+        .collect();
+    match hits.len() {
+        1 => Ok(hits[0]),
+        0 => Err(MuseError::Tool(format!(
+            "hunk context mismatch at line {hunk_line} — file may have changed; re-read and retry"
+        ))),
+        n => Err(MuseError::Tool(format!(
+            "hunk context at line {hunk_line} is ambiguous ({n} matches) — \
+             include more surrounding context lines in the diff"
+        ))),
+    }
 }
 
 fn apply_at(lines: &mut Vec<String>, start: usize, old_len: usize, new_lines: &[String]) {

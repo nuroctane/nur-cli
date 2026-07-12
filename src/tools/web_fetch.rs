@@ -38,17 +38,21 @@ impl Tool for WebFetch {
         let max = arg_u64(args, "max_bytes").unwrap_or(200_000) as usize;
         let max = max.min(500_000);
 
-        let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .user_agent(format!("meta-cli/{}", env!("CARGO_PKG_VERSION")))
-            // Redirects are followed manually below so each hop is re-checked.
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|e| MuseError::Tool(e.to_string()))?;
-
         let mut current = url.clone();
         for _hop in 0..=MAX_REDIRECTS {
-            let parsed = validate_public_url(&current)?;
+            let (parsed, pin) = validate_public_url(&current)?;
+
+            // Pin the validated IP so DNS rebinding between the check and the
+            // connect cannot redirect the request to a private address.
+            let mut builder = reqwest::blocking::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .user_agent(format!("meta-cli/{}", env!("CARGO_PKG_VERSION")))
+                // Redirects are followed manually below so each hop is re-checked.
+                .redirect(reqwest::redirect::Policy::none());
+            if let Some((host, addr)) = &pin {
+                builder = builder.resolve(host, *addr);
+            }
+            let client = builder.build().map_err(|e| MuseError::Tool(e.to_string()))?;
 
             let resp = client
                 .get(parsed)
@@ -102,16 +106,21 @@ impl Tool for WebFetch {
 }
 
 /// Parse the URL, resolve its host, and require every address to be public.
-fn validate_public_url(url: &str) -> Result<reqwest::Url> {
+/// For hostname URLs, also returns `(host, addr)` to pin for the connection.
+fn validate_public_url(
+    url: &str,
+) -> Result<(reqwest::Url, Option<(String, std::net::SocketAddr)>)> {
     let parsed =
         reqwest::Url::parse(url).map_err(|e| MuseError::Tool(format!("bad url: {e}")))?;
     match parsed.scheme() {
         "http" | "https" => {}
         s => return Err(MuseError::Tool(format!("refused scheme: {s}"))),
     }
-    let host = parsed
+    let host: String = parsed
         .host_str()
-        .ok_or_else(|| MuseError::Tool("url has no host".into()))?;
+        .ok_or_else(|| MuseError::Tool("url has no host".into()))?
+        .to_string();
+    let host = host.as_str();
 
     // Cloud metadata hostnames.
     let hl = host.to_ascii_lowercase();
@@ -124,30 +133,34 @@ fn validate_public_url(url: &str) -> Result<reqwest::Url> {
         return Err(MuseError::Tool(format!("refused local/metadata host: {host}")));
     }
 
-    // Literal IP → check directly; hostname → resolve and check every record
-    // (best effort against DNS rebinding: reqwest re-resolves, but a rebinding
-    // window this short requires an attacker-controlled resolver + timing).
-    let addrs: Vec<IpAddr> = if let Ok(ip) = hl.trim_matches(['[', ']']).parse::<IpAddr>() {
-        vec![ip]
-    } else {
-        let port = parsed.port_or_known_default().unwrap_or(443);
-        (host, port)
-            .to_socket_addrs()
-            .map_err(|e| MuseError::Tool(format!("dns resolve {host}: {e}")))?
-            .map(|sa| sa.ip())
-            .collect()
-    };
-    if addrs.is_empty() {
-        return Err(MuseError::Tool(format!("dns: no addresses for {host}")));
-    }
-    for ip in &addrs {
-        if !ip_is_public(*ip) {
+    // Literal IP → check directly (no pin needed); hostname → resolve, check
+    // every record, and pin the first validated address for the connection.
+    if let Ok(ip) = hl.trim_matches(['[', ']']).parse::<IpAddr>() {
+        if !ip_is_public(ip) {
             return Err(MuseError::Tool(format!(
                 "refused non-public address: {host} → {ip}"
             )));
         }
+        return Ok((parsed, None));
     }
-    Ok(parsed)
+
+    let port = parsed.port_or_known_default().unwrap_or(443);
+    let sockaddrs: Vec<std::net::SocketAddr> = (host, port)
+        .to_socket_addrs()
+        .map_err(|e| MuseError::Tool(format!("dns resolve {host}: {e}")))?
+        .collect();
+    if sockaddrs.is_empty() {
+        return Err(MuseError::Tool(format!("dns: no addresses for {host}")));
+    }
+    for sa in &sockaddrs {
+        if !ip_is_public(sa.ip()) {
+            return Err(MuseError::Tool(format!(
+                "refused non-public address: {host} → {}",
+                sa.ip()
+            )));
+        }
+    }
+    Ok((parsed, Some((host.to_string(), sockaddrs[0]))))
 }
 
 fn ip_is_public(ip: IpAddr) -> bool {

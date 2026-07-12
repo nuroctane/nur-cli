@@ -60,10 +60,14 @@ pub enum ApprovalDecision {
 /// Note: `memory` is special-cased — only action=read is free; append is mutating.
 pub const READ_ONLY_TOOLS: &[&str] = &[
     "read_file",
+    "list_dir",
     "grep",
     "glob",
     "web_fetch",
+    "web_search",
     "git_status",
+    "git_diff",
+    "skill",
     "todo_write",
     "submit_plan",
 ];
@@ -279,6 +283,7 @@ impl AgentRunner {
                         let name = call.name.clone();
                         let args = call.arguments.clone();
                         let call_id = call.call_id.clone();
+                        let cancel_t = cancel.clone();
                         meta.push((id, call_id.clone(), name.clone()));
                         handles.push(tokio::task::spawn_blocking(move || {
                             let res = host.dispatch(
@@ -286,6 +291,7 @@ impl AgentRunner {
                                 &args,
                                 &ToolContext {
                                     cwd,
+                                    cancel: cancel_t,
                                 },
                             );
                             (call_id, name, res)
@@ -391,7 +397,17 @@ impl AgentRunner {
                         )
                     } else {
                         match run_agent_tool(self, call, cancel, tx).await {
-                            Ok(s) => (s, true),
+                            Ok((s, spent)) => {
+                                // Roll subagent tokens into the parent session so
+                                // totals + the Orca status stay honest.
+                                usage.add_external(&spent);
+                                session.usage.add(&spent);
+                                let _ = tx.send(AgentEvent::Usage {
+                                    session: usage.session_usage().clone(),
+                                    last: spent,
+                                });
+                                (s, true)
+                            }
                             Err(MuseError::Interrupted) => {
                                 // Pair this + all remaining calls before unwinding.
                                 for c in &calls[idx..] {
@@ -414,12 +430,14 @@ impl AgentRunner {
                     let cwd = self.cwd.clone();
                     let name = call.name.clone();
                     let args = call.arguments.clone();
+                    let cancel_t = cancel.clone();
                     let exec = tokio::task::spawn_blocking(move || {
                         host.dispatch(
                             &name,
                             &args,
                             &ToolContext {
                                 cwd,
+                                cancel: cancel_t,
                             },
                         )
                     });
@@ -539,7 +557,15 @@ fn is_parallel_safe(name: &str, args: &str) -> bool {
     }
     matches!(
         name,
-        "read_file" | "grep" | "glob" | "web_fetch" | "git_status"
+        "read_file"
+            | "list_dir"
+            | "grep"
+            | "glob"
+            | "web_fetch"
+            | "web_search"
+            | "git_status"
+            | "git_diff"
+            | "skill"
     )
 }
 
@@ -569,7 +595,7 @@ async fn run_agent_tool(
     call: &FunctionCallRef,
     cancel: &CancellationToken,
     tx: &mpsc::UnboundedSender<AgentEvent>,
-) -> Result<String> {
+) -> Result<(String, TokenUsage)> {
     let v: Value = serde_json::from_str(&call.arguments).unwrap_or(serde_json::json!({}));
     let prompt = v
         .get("prompt")

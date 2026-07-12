@@ -151,11 +151,28 @@ fn which_exists(name: &str) -> bool {
     Path::new(name).is_file() || which(name).is_some()
 }
 
+/// Kill a process and its whole tree (grandchildren included).
+fn kill_tree(child: &mut std::process::Child) {
+    #[cfg(windows)]
+    {
+        // taskkill /T takes the entire tree down; child.kill() alone leaves
+        // grandchildren (e.g. cmd → node) running.
+        let _ = Command::new("taskkill")
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 pub fn run_in_shell(
     backend: &ShellBackend,
     command: &str,
     cwd: &Path,
     timeout_ms: u64,
+    cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<String> {
     let kind = backend.kind;
     let label = backend.label.clone();
@@ -187,27 +204,33 @@ pub fn run_in_shell(
     let out_h = thread::spawn(move || read_all(out_pipe));
     let err_h = thread::spawn(move || read_all(err_pipe));
 
-    // Poll for exit; on deadline, kill the process so cancels/timeouts don't
-    // leave orphaned shells running.
+    // Poll for exit; on deadline or user cancel, kill the whole process tree
+    // so Esc/timeouts never leave orphaned shells running.
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {
+                if cancel.is_cancelled() {
+                    kill_tree(&mut child);
+                    let _ = out_h.join();
+                    let _ = err_h.join();
+                    return Err(MuseError::Tool(
+                        "command cancelled by user (process tree killed)".into(),
+                    ));
+                }
                 if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    // Reap reader threads before erroring.
+                    kill_tree(&mut child);
                     let _ = out_h.join();
                     let _ = err_h.join();
                     return Err(MuseError::Tool(format!(
-                        "command timed out after {timeout_ms}ms (process killed)"
+                        "command timed out after {timeout_ms}ms (process tree killed)"
                     )));
                 }
                 thread::sleep(Duration::from_millis(30));
             }
             Err(e) => {
-                let _ = child.kill();
+                kill_tree(&mut child);
                 return Err(MuseError::Tool(format!("command wait failed: {e}")));
             }
         }

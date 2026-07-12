@@ -1,18 +1,22 @@
 mod apply_patch;
 mod bash;
 mod edit_file;
+mod git_diff;
 mod git_status;
 mod glob;
 mod grep;
+mod list_dir;
 mod memory_tool;
 mod multi_edit;
 mod read_file;
 mod sandbox;
 mod search_util;
 mod shell;
+mod skill_tool;
 mod submit_plan;
 mod todo_write;
 mod web_fetch;
+mod web_search;
 mod write_file;
 
 use crate::agent::todos::{shared_empty, SharedTodos, TodoList};
@@ -28,6 +32,9 @@ pub use submit_plan::{SharedPlan, SubmitPlan};
 
 pub struct ToolContext {
     pub cwd: PathBuf,
+    /// Cooperative cancellation — long-running tools (shell) poll this and
+    /// kill their child processes when the user hits Esc.
+    pub cancel: tokio_util::sync::CancellationToken,
 }
 
 pub trait Tool: Send + Sync {
@@ -56,6 +63,7 @@ impl ToolHost {
     fn boxed_tools(&self) -> Vec<Box<dyn Tool>> {
         vec![
             Box::new(read_file::ReadFile),
+            Box::new(list_dir::ListDir),
             Box::new(write_file::WriteFile),
             Box::new(edit_file::EditFile),
             Box::new(multi_edit::MultiEdit),
@@ -64,7 +72,10 @@ impl ToolHost {
             Box::new(grep::Grep),
             Box::new(glob::GlobTool),
             Box::new(web_fetch::WebFetch),
+            Box::new(web_search::WebSearch),
             Box::new(git_status::GitStatus),
+            Box::new(git_diff::GitDiff),
+            Box::new(skill_tool::SkillTool),
             Box::new(memory_tool::MemoryTool),
             Box::new(todo_write::TodoWrite {
                 todos: self.todos.clone(),

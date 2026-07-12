@@ -506,32 +506,8 @@ impl App {
 
     fn cycle_permission_mode(&mut self) {
         let next = self.permission_mode.cycle();
-        // cycle() already set it; re-run side effects without double-store
-        self.permission_mode.set(next); // idempotent
-        if next.auto_approves() {
-            if let Some(mut a) = self.approval.take() {
-                if let Some(respond) = a.respond.take() {
-                    let _ = respond.send(ApprovalDecision::Approve);
-                }
-            }
-        }
-        if next.is_read_only_enforced() {
-            if let Some(mut a) = self.approval.take() {
-                if let Some(respond) = a.respond.take() {
-                    let _ = respond.send(ApprovalDecision::Deny);
-                }
-            }
-        }
-        self.push_info(format!(
-            "mode · {} — {}{}",
-            next.badge(),
-            next.description(),
-            if self.busy {
-                "  ·  applies to next tool now"
-            } else {
-                ""
-            }
-        ));
+        // cycle() already stored it; run shared side effects (approval resolution + info).
+        self.set_permission_mode(next);
     }
 
     fn interrupt(&mut self) {
@@ -806,10 +782,12 @@ impl App {
                 let skills = agent::skills::load_skills(&self.cwd);
                 if skills.is_empty() {
                     self.push_info(
-                        "no skills found — add ~/.muse/skills/<name>/SKILL.md".into(),
+                        "no skills found — add ~/.muse/skills/<name>/SKILL.md\n\
+                         the agent can also load them itself via the `skill` tool"
+                            .into(),
                     );
                 } else {
-                    let mut s = String::from("skills\n");
+                    let mut s = String::from("skills (agent loads via `skill` tool)\n");
                     for sk in skills {
                         s.push_str(&format!("  · {} — {}\n", sk.name, sk.description));
                     }

@@ -103,13 +103,17 @@ Mode is stored in a shared atomic: toggling applies **immediately**, including m
 - Markdown · multi-line input · usage + **mode** on the statusline  
 - Project instructions from `MUSE.md`, `AGENTS.md`, or `CLAUDE.md`  
 
-### Safety & tools (v0.3.1)
+### Safety & tools (v0.4.1)
 
-- **Workspace sandbox** — paths cannot escape session cwd; refuse filesystem-root workspaces  
-- **Shell** — prefers Git Bash → pwsh → PowerShell → cmd (labeled in tool output; set `MUSE_SHELL`)  
+- **Workspace sandbox** — paths cannot escape session cwd (junction/symlink-aware); refuse filesystem-root workspaces  
+- **Shell** — prefers Git Bash → pwsh → PowerShell → cmd (labeled in tool output; set `MUSE_SHELL`); Esc/timeout kills the whole process tree  
 - **grep/glob** — ripgrep when installed; hard-excludes `node_modules`/`target`/… + time budget  
-- **apply_patch** — unified-diff multi-hunk edits  
-- **web_fetch** — public HTTP(S) only (size-capped)
+- **apply_patch** — unified-diff multi-hunk edits; ambiguous context refused  
+- **web_fetch** — public HTTP(S) only: every redirect hop DNS-validated + IP-pinned, size-capped  
+- **web_search** — DuckDuckGo, no API key  
+- **git_status / git_diff** — approval-free repo inspection (diff|staged|log|show)  
+- **skills** — SKILL.md packs in `~/.muse/skills/` or `<repo>/.muse/skills/`; agent loads them via the `skill` tool  
+- **subagents** — scoped usage tracking, tokens rolled up into the parent session
 
 ---
 
@@ -145,7 +149,9 @@ context_window = 1000000
 
 ## Tools
 
-`read_file` · `write_file` · `edit_file` · `bash` · `grep` · `glob`
+`read_file` · `list_dir` · `write_file` · `edit_file` · `multi_edit` · `apply_patch` · `bash` ·
+`grep` · `glob` · `web_fetch` · `web_search` · `git_status` · `git_diff` · `skill` · `memory` ·
+`todo_write` · `submit_plan` · `agent`
 
 ## Model API
 

@@ -92,11 +92,24 @@ pub struct UsageTracker {
     session: TokenUsage,
     last: TokenUsage,
     state: String,
+    /// When false (subagents), skip the global status.json / ade.json / hook —
+    /// only the session-scoped status file is written. Keeps the Orca display
+    /// pinned to the top-level session.
+    global: bool,
     lock: Mutex<()>,
 }
 
 impl UsageTracker {
     pub fn new(session_id: String, model: String, cwd: PathBuf) -> Self {
+        Self::with_scope(session_id, model, cwd, true)
+    }
+
+    /// Session-scoped tracker for subagents: no global status/ADE writes.
+    pub fn scoped(session_id: String, model: String, cwd: PathBuf) -> Self {
+        Self::with_scope(session_id, model, cwd, false)
+    }
+
+    fn with_scope(session_id: String, model: String, cwd: PathBuf, global: bool) -> Self {
         let t = Self {
             session_id,
             model,
@@ -105,10 +118,18 @@ impl UsageTracker {
             session: TokenUsage::default(),
             last: TokenUsage::default(),
             state: "idle".into(),
+            global,
             lock: Mutex::new(()),
         };
         let _ = t.write_status();
         t
+    }
+
+    /// Fold in tokens spent elsewhere (e.g. a finished subagent) so session
+    /// totals and the ADE status stay honest.
+    pub fn add_external(&mut self, usage: &TokenUsage) {
+        self.session.add(usage);
+        let _ = self.write_status();
     }
 
     pub fn set_model(&mut self, model: String) {
@@ -141,6 +162,9 @@ impl UsageTracker {
         self.session.add(&usage);
         let _ = self.append_log(&usage, response_id);
         let _ = self.write_status();
+        if !self.global {
+            return;
+        }
         // ADE-friendly env (current process only — parent may not see, but children hooks can)
         std::env::set_var("MUSE_USAGE_INPUT_TOKENS", self.session.input_tokens.to_string());
         std::env::set_var(
@@ -198,9 +222,10 @@ impl UsageTracker {
             status_path: status_path().display().to_string(),
             usage_log_path: usage_log_path().display().to_string(),
         };
-        let text = serde_json::to_string_pretty(&snap)?;
-        fs::write(status_path(), text)?;
-        // Also write session-scoped status for multi-agent ADE layouts
+        if self.global {
+            fs::write(status_path(), serde_json::to_string_pretty(&snap)?)?;
+        }
+        // Session-scoped status for multi-agent ADE layouts
         let sess_status = crate::config::sessions_dir()
             .join(format!("{}.status.json", self.session_id));
         let _ = fs::write(sess_status, serde_json::to_string_pretty(&snap)?);

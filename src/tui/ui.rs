@@ -416,7 +416,12 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
     };
 
     let title = if app.busy {
-        Span::styled(" meta · queued ", theme::style_faint())
+        let t = if app.queue.is_empty() {
+            " meta · working ".to_string()
+        } else {
+            format!(" meta · working · {} queued ", app.queue.len())
+        };
+        Span::styled(t, theme::style_faint())
     } else {
         Span::styled(
             " meta ",
@@ -471,6 +476,21 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
     let h = inner.height as usize;
     let top = cur_line.saturating_sub(h.saturating_sub(1));
 
+    // Display width (not char count) of everything left of the cursor, so the
+    // caret is right even with CJK/emoji, and long lines scroll horizontally.
+    let cur_disp_w: usize = text
+        .split('\n')
+        .nth(cur_line)
+        .map(|l| {
+            l.chars()
+                .take(cur_col)
+                .collect::<String>()
+                .width()
+        })
+        .unwrap_or(cur_col);
+    let usable = (inner.width as usize).saturating_sub(3); // "❯ " + 1 margin
+    let x_off = cur_disp_w.saturating_sub(usable) as u16;
+
     // Paint Meta block cursor into the line (blink).
     if app.approval.is_none() && theme::blink_on(app.spinner_epoch.elapsed()) {
         let vis_idx = cur_line.saturating_sub(top);
@@ -505,14 +525,16 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
 
     let visible: Vec<Line> = lines.into_iter().skip(top).take(h).collect();
     f.render_widget(
-        Paragraph::new(visible).style(theme::style_surface()),
+        Paragraph::new(visible)
+            .scroll((0, x_off))
+            .style(theme::style_surface()),
         inner,
     );
 
     // Keep hardware cursor hidden; we draw our own Meta caret.
     // (Hidden at app start.) Position still set for terminals that show it.
     if app.approval.is_none() {
-        let cx = inner.x + 2 + cur_col as u16;
+        let cx = inner.x + 2 + (cur_disp_w as u16).saturating_sub(x_off);
         let cy = inner.y + (cur_line - top) as u16;
         if cx < inner.right() && cy < inner.bottom() {
             f.set_cursor_position((cx, cy));
@@ -648,7 +670,7 @@ fn draw_palette(f: &mut Frame, app: &App, input_area: Rect) {
     if matches.is_empty() {
         return;
     }
-    let h = (matches.len() as u16).min(8) + 2;
+    let h = (matches.len() as u16).min(10) + 2;
     let w = 58.min(f.area().width.saturating_sub(4));
     let y = input_area.y.saturating_sub(h);
     let rect = Rect {
@@ -671,10 +693,14 @@ fn draw_palette(f: &mut Frame, app: &App, input_area: Rect) {
     f.render_widget(block, rect);
 
     let sel = app.palette_idx.min(matches.len() - 1);
+    // Scroll the window so the selection is always visible (>10 commands).
+    let vis = inner.height as usize;
+    let start = sel.saturating_sub(vis.saturating_sub(1));
     let lines: Vec<Line> = matches
         .iter()
-        .take(inner.height as usize)
         .enumerate()
+        .skip(start)
+        .take(vis)
         .map(|(i, (name, desc))| {
             if i == sel {
                 Line::from(vec![
@@ -784,9 +810,15 @@ fn summarize_args(tool: &str, args: &str) -> String {
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
         let key = match tool {
             "bash" => "command",
-            "read_file" | "write_file" | "edit_file" => "path",
-            "grep" => "pattern",
-            "glob" => "pattern",
+            "read_file" | "write_file" | "edit_file" | "multi_edit" | "apply_patch"
+            | "list_dir" => "path",
+            "grep" | "glob" => "pattern",
+            "web_fetch" => "url",
+            "web_search" => "query",
+            "git_diff" => "mode",
+            "agent" => "description",
+            "memory" => "action",
+            "skill" => "name",
             _ => "",
         };
         if let Some(s) = v.get(key).and_then(|x| x.as_str()) {
