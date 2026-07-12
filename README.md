@@ -4,7 +4,25 @@
 
 > Not affiliated with Meta Platforms, Inc. · Community project · [nuroctane/meta-cli](https://github.com/nuroctane/meta-cli)
 
-The command you run is **`meta`** (alias: `muse` for compatibility).
+```text
+meta          # Meta-blue interactive TUI
+muse          # alias (same binary)
+```
+
+**v0.5.3** — Claude-class agent harness + zero-setup ecosystem (Graphify · PLUR · Ruflo · Executor · skill packs) + a polished TUI (sticky PROMPT banner, click-to-caret, clipboard, draggable scrollbar).
+
+---
+
+## Why Meta CLI
+
+| | |
+|--|--|
+| **Real Muse Spark agent** | Full custom Rust harness — not a thin wrapper. Modes, tools, sandbox, streaming, cancel. |
+| **One-shot install** | One command builds, installs, and provisions the ecosystem. No multi-step “quick starts.” |
+| **Opens instantly** | Ecosystem repair runs in the **background** so the TUI never hangs on npm/uv. |
+| **Knowledge stack** | Code graph + shared engrams + vector memory + MCP gateway, all auto-wired. |
+| **Tasteful TUI** | Colour = meaning, sticky prompt banner, scrollbar you can drag, normal editor keys. |
+| **Secrets stay local** | API key only in `~/.muse/auth.json` — never in the repo. |
 
 ---
 
@@ -25,22 +43,23 @@ curl -fsSL https://raw.githubusercontent.com/nuroctane/meta-cli/main/install.sh 
 That single command will:
 
 1. Install Rust if needed  
-2. Clone this repo (or update it)  
+2. Clone or update this repo  
 3. `cargo build --release`  
-4. Put **`meta`** (and `muse` alias) on your PATH (`~/.local/bin`)  
-5. Install the Orca ADE hook when possible  
-6. If `MODEL_API_KEY` is already set, save auth under `~/.muse/` **on your machine only**
+4. Put **`meta`** (+ `muse` alias) on your PATH (`~/.local/bin`)  
+5. Provision the agent ecosystem (`meta ecosystem ensure`) when Node/uv are available  
+6. Install the Orca ADE hook when possible  
+7. If `MODEL_API_KEY` is set, save auth under `~/.muse/` **on your machine only**
 
 Then:
 
 ```powershell
-meta auth login    # paste your Meta Model API key (stored only in ~/.muse)
+meta auth login    # paste Meta Model API key → ~/.muse/auth.json only
 meta               # open the TUI
 ```
 
-Get a key: [dev.meta.ai](https://dev.meta.ai/) → API keys.
+Key: [dev.meta.ai](https://dev.meta.ai/) → API keys.
 
-### Already cloned?
+### Already cloned (Laboratory / local)
 
 ```powershell
 cd meta-cli
@@ -48,7 +67,7 @@ cd meta-cli
 # ./install.sh         # macOS / Linux
 ```
 
-### Windows: Laboratory clone script
+Windows Laboratory clone script (if you use it):
 
 ```text
 C:\Users\david\Scripts\clone meta-cli main to Laboratory local.cmd
@@ -56,89 +75,119 @@ C:\Users\david\Scripts\clone meta-cli main to Laboratory local.cmd
 
 Then `cd` into the folder and run `.\install.ps1`.
 
+### Prerequisites (optional but recommended)
+
+| Need | For |
+|------|-----|
+| **Node.js 20+** | PLUR, Ruflo, Executor, skills CLI, AKM |
+| **uv** (or Python 3.10+) | Graphify (`uv tool install graphifyy`) |
+| **ripgrep** | Fast `grep` / `glob` (falls back if missing) |
+
+Missing pieces are retried in the background on open, or via `meta ecosystem ensure --force`.
+
 ---
 
 ## Secrets (important)
 
 | On GitHub | On your PC only |
 |-----------|-----------------|
-| Source code, README, install scripts | `~/.muse/auth.json` (API key) |
-| No API keys, no `.env`, no sessions | `~/.muse/sessions/`, usage logs |
+| Source, README, install scripts | `~/.muse/auth.json` (API key) |
+| No keys, no `.env`, no sessions | `~/.muse/sessions/`, usage logs, ecosystem marker |
 
-`.gitignore` excludes `.env*`, `auth.json`, `.muse/`, and common key material.  
-See [SECURITY.md](./SECURITY.md).
-
-**Never commit your Meta API key. Never paste it into issues or PRs.**
+See [SECURITY.md](./SECURITY.md). **Never commit your Meta API key.**
 
 ---
 
 ## Quick use
 
-```
-meta                      # interactive Meta-blue TUI
-meta "fix the bug"       # start with a prompt
-meta -c                   # continue last session in this directory
-meta -r <session-id>      # resume a session
-meta --mode plan "…"      # plan mode (read-only tools)
-meta run "…" -y           # headless + auto-approve
+```text
+meta                         # interactive Meta-blue TUI
+meta "fix the bug"          # start with a prompt
+meta -c                      # continue last session in this directory
+meta -r <session-id>         # resume a session
+meta --mode plan "…"         # plan mode (read-only tools)
+meta run "…" -y              # headless + auto-approve
 meta sessions
-meta usage                # token / cost for ADEs
+meta usage                   # token / cost for ADEs
 meta auth status
+meta ecosystem status        # graphify · plur · ruflo · executor · packs
+meta ecosystem ensure --force
 ```
 
-### Permission modes (live — Shift+Tab)
+Launching from a drive root (`C:\`) auto-picks a safe workspace (git / last session / Laboratory) so tools never run on the entire disk.
+
+---
+
+## Permission modes (live — Shift+Tab)
 
 | Mode | Behavior |
 |------|----------|
-| **manual** | Reads free; writes/shell need approval (`y` / `a` / `n`) |
-| **plan** | Read-only (`read_file` / `grep` / `glob` / `web_fetch`) |
+| **manual** | Reads free; writes / shell need approval (`y` / `a` / `n`) |
+| **plan** | Research only — read tools + graphify query/path + plur recall + ruflo search |
 | **auto** | Auto-approve tools (`-y` / `--mode auto`) |
 
-Mode is stored in a shared atomic: toggling applies **immediately**, including mid-turn (next tool gate).
+Mode lives in a shared atomic: **Shift+Tab applies immediately**, including mid-turn (next tool gate). Statusline shows the live mode.
 
-### TUI highlights
+---
 
-- Live streaming · tool approvals · slash commands (`/help` `/mode` `/plan` `/auto`)  
-- Esc **cancels** the turn: stream/thinking freeze; status shows *cancelling…* until work stops  
-- Markdown · multi-line input · usage + **mode** on the statusline  
-- Project instructions from `MUSE.md`, `AGENTS.md`, or `CLAUDE.md`  
-- **Sticky prompt header** — scroll back and the prompt that produced what you're
-  looking at pins to the top, so you never lose the thread  
-- **Session picker** — `/resume` or `Ctrl+R`: arrow through past sessions (with their
-  opening prompt as a preview), `Tab` toggles this-workspace / all-workspaces  
+## TUI
+
+### Highlights
+
+- **Streaming** assistant text + violet-italic model thinking (never reads as the answer)
+- **Tool cards** colour-coded by family (read / edit / shell / web / git / agent / knowledge)
+- **Approvals** — `y` once · `a` always this session · `n` deny  
+- **Esc cancel** — freezes stream/thinking; status shows *cancelling…* until work stops  
+- **Markdown** rendering, multi-line input, usage + cost + **ctx%** on the statusline  
+- **Project instructions** from `MUSE.md`, `AGENTS.md`, or `CLAUDE.md`  
+- **Sticky PROMPT banner** — full-width Meta-blue 3-row bar while you scroll older turns  
+- **Draggable scrollbar** — right edge of the transcript; click or drag to scrub history  
+- **Session picker** — `/resume` or `Ctrl+R` (preview first prompt; `Tab` = this workspace / all)  
+- **Slash palette** — type `/` for commands with live filter  
+- **Auto-compact** when context pressure is high; `/compact` anytime  
 
 ### Keys
 
 | Key | Action |
 |-----|--------|
-| `↑` `↓` | scroll the chat (caret movement only inside a multi-line draft) |
-| `PgUp` `PgDn` · `Home` `End` | page · jump to top / latest |
-| `Ctrl+P` `Ctrl+N` (or `Alt+↑/↓`) | prompt history |
-| `Enter` · `\`+`Enter` / `Ctrl+J` | send · newline |
-| `Shift+Tab` | cycle permission mode |
-| `Ctrl+R` | resume a session |
-| `Esc` · `Ctrl+C` ×2 · `Ctrl+L` | cancel turn · quit · clear |
-| `y` / `a` / `n` | approve once / always / deny |
+| `↑` `↓` | Scroll the chat (caret only inside a multi-line draft) |
+| `PgUp` `PgDn` · `Home` `End` | Page · top · latest |
+| Wheel · drag scrollbar | Scroll transcript |
+| Click in input | **Place caret** where you click |
+| `Ctrl+A` / `Ctrl+C` / `Ctrl+V` / `Ctrl+X` | Select all · copy · paste · cut (system clipboard) |
+| `Ctrl+P` `Ctrl+N` (or `Alt+↑/↓`) | Prompt history |
+| `Enter` · `\+Enter` / `Ctrl+J` | Send · newline |
+| `Shift+Tab` | Cycle permission mode |
+| `Ctrl+R` | Resume a session |
+| `Esc` | Cancel turn |
+| `Ctrl+C` (no selection) ×2 | Quit |
+| `Ctrl+L` | Clear transcript view |
+| `y` / `a` / `n` | Approve once / always / deny |
 
-**Mouse & input (always on):**
+### Slash commands
 
-| Gesture / key | Action |
-|---------------|--------|
-| Click in input | Place caret where you click |
-| Wheel · drag right scrollbar | Scroll transcript |
-| `Ctrl+A` | Select all in the input |
-| `Ctrl+C` | Copy selection (or interrupt / double-tap quit if none) |
-| `Ctrl+V` | Paste clipboard into input |
-| `Ctrl+X` | Cut selection |
-| Sticky **PROMPT** banner | 3-row bar pins the owning prompt while you scroll |
-
-**Sticky prompt:** full-width Meta-blue banner across the top of the transcript so
-you always know which user turn produced the content you're reading.
+| Command | Purpose |
+|---------|---------|
+| `/help` | Keys + commands |
+| `/mode` `manual\|plan\|auto` | Permission mode (or Shift+Tab) |
+| `/plan` `/manual` `/auto` | Shortcuts |
+| `/todos` `/memory` `/skills` | Session todos · local memory · skill list |
+| `/graphify` … | Knowledge graph status / query / extract |
+| `/plur` … | Engram memory learn / recall / inject |
+| `/ruflo` … | Vector memory search / store / status |
+| `/ecosystem` | Full stack readiness |
+| `/compact` | Summarize conversation, free context |
+| `/usage` `/cost` | Tokens + est. USD |
+| `/model` `/effort` | Model / reasoning effort |
+| `/sessions` `/resume` | List / pick sessions |
+| `/init` | Generate a `MUSE.md` project guide |
+| `/config` | Paths + config dump |
+| `/mouse` | Mouse notes (capture always on for caret + scrollbar) |
+| `/clear` `/new` `/exit` | Clear view · new session · quit |
 
 ### Colour system
 
-Colour carries meaning; it isn't decoration. A blue spine with hues fanning out,
-all at matched lightness:
+Colour is information — a blue spine with hues at matched lightness:
 
 | Family | Hue | Tools |
 |--------|-----|-------|
@@ -148,86 +197,95 @@ all at matched lightness:
 | web | teal | `web_fetch` `web_search` |
 | git | cyan | `git_status` `git_diff` |
 | delegate | pink | `agent` |
-| knowledge | indigo / orange | `skill` `todo_write` `graphify` `plur` `ruflo` · `memory` |
+| knowledge | indigo / orange | `skill` `todo_write` `graphify` `plur` `ruflo` `executor` · `memory` |
 
-Model *thinking* is violet-italic, so it never reads as an answer. System notices
-carry their own glyph + hue (`◈` mode · `✦` plan · `☰` todos · `∑` usage · `⟲` session),
-and the statusline segments (tokens · cost · ctx% · model · mode · state) each get a
-distinct colour so it's scannable at a glance.
+System notices use their own glyph + tone: `◈` mode · `✦` plan · `☰` todos · `∑` usage · `⟲` session · `❖` memory.
 
-### Safety & tools (v0.5.0)
+Statusline segments are individually coloured: **tokens · cost · ctx% · model · mode · state**.
 
-- **Workspace sandbox** — paths cannot escape session cwd (junction/symlink-aware); refuse filesystem-root workspaces  
-- **Shell** — prefers Git Bash → pwsh → PowerShell → cmd (labeled in tool output; set `MUSE_SHELL`); Esc/timeout kills the whole process tree  
-- **grep/glob** — ripgrep when installed; hard-excludes `node_modules`/`target`/… + time budget  
-- **apply_patch** — unified-diff multi-hunk edits; ambiguous context refused  
-- **web_fetch** — public HTTP(S) only: every redirect hop DNS-validated + IP-pinned, size-capped  
-- **web_search** — DuckDuckGo, no API key  
-- **git_status / git_diff** — approval-free repo inspection (diff|staged|log|show)  
-- **skills** — SKILL.md packs in `~/.muse/skills/`, `~/.agents/skills/`, or project dirs; plur/ruflo/graphify skills pre-installed  
-- **graphify · plur · ruflo** — full ecosystem auto-provisioned on install and on every open (see below)  
-- **subagents** — scoped usage tracking, tokens rolled up into the parent session
+---
 
-### Agent ecosystem (zero extra setup)
+## Agent ecosystem (zero extra setup)
 
-One-shot install + every `meta` open auto-provisions the stack. No separate
-quick-starts for any of these projects.
+One-shot install + background ensure on every open. You do **not** need each project’s own quick-start.
 
-#### Runtime systems
+### Runtime systems
 
-| System | What it is | Store / endpoint | Tools |
-|--------|------------|------------------|-------|
-| **[Graphify](https://github.com/Graphify-Labs/graphify)** | Code knowledge graph | `graphify-out/` | `graphify` · `/graphify` |
-| **[PLUR](https://github.com/plur-ai/plur)** | Shared engram memory | `~/.plur/` | `plur` · `/plur` |
-| **[Ruflo](https://github.com/ruvnet/ruflo)** | Vector memory + swarm | `~/.muse/ruflo/` | `ruflo` · `/ruflo` |
-| **[Executor](https://executor.sh/docs)** | MCP gateway for APIs | `:4788/mcp` | `executor` |
-| **[skills](https://www.npmjs.com/package/skills)** CLI | Open skill installer | `~/.agents/skills/` | used by ensure |
+| System | What it is | Store / endpoint | In Meta |
+|--------|------------|------------------|---------|
+| **[Graphify](https://github.com/Graphify-Labs/graphify)** | Code knowledge graph (tree-sitter AST) | `graphify-out/` | tool `graphify` · `/graphify` |
+| **[PLUR](https://github.com/plur-ai/plur)** | Shared engram memory (preferences, corrections) | `~/.plur/` | tool `plur` · `/plur` · **auto-inject** each turn |
+| **[Ruflo](https://github.com/ruvnet/ruflo)** | Vector memory + swarm harness | `~/.muse/ruflo/` (global, no project pollution) | tool `ruflo` · `/ruflo` |
+| **[Executor](https://executor.sh/docs)** | MCP gateway for OpenAPI / GraphQL / MCP | local `:4788/mcp` | tool `executor` |
+| **[skills](https://www.npmjs.com/package/skills)** CLI | Open agent skills installer | `~/.agents/skills/` | used by `ecosystem ensure` |
 | **[akm-cli](https://www.npmjs.com/package/akm-cli)** | Agent knowledge package manager | multi-agent | skill `akm-manager` |
 
-#### Skill packs (installed into `~/.agents/skills` + catalog routers in `~/.muse/skills`)
+### Skill packs (catalog routers + full packs on disk)
 
 | Pack | Source | What you get |
 |------|--------|--------------|
-| Design engineering | [emilkowalski/skills](https://github.com/emilkowalski/skills) | Animation/UI taste (emil-design-eng, improve-animations, …) |
+| Design engineering | [emilkowalski/skills](https://github.com/emilkowalski/skills) | Motion/UI taste — easings, review tables, improve-animations |
 | Clone website | [JCodesMore/ai-website-cloner-template](https://github.com/JCodesMore/ai-website-cloner-template) | Pixel-perfect reverse-engineering pipeline |
-| Cybersecurity | [mukul975/Anthropic-Cybersecurity-Skills](https://github.com/mukul975/Anthropic-Cybersecurity-Skills) | 817 MITRE/NIST-mapped playbooks (load **one** by name) |
-| OpenCode catalog | [awesome-opencode](https://github.com/awesome-opencode/awesome-opencode) | Curated plugin index (patterns, not OpenCode plugins) |
-| Context pruning | [Opencode-DCP](https://github.com/Opencode-DCP/opencode-dynamic-context-pruning) | DCP patterns + Meta native `/compact` auto-compact |
+| Cybersecurity | [mukul975/Anthropic-Cybersecurity-Skills](https://github.com/mukul975/Anthropic-Cybersecurity-Skills) | 817 MITRE/NIST-mapped playbooks — load **one** by name |
+| OpenCode catalog | [awesome-opencode](https://github.com/awesome-opencode/awesome-opencode) | Curated plugin *patterns* (Meta is not OpenCode) |
+| Context pruning | [Opencode-DCP](https://github.com/Opencode-DCP/opencode-dynamic-context-pruning) | DCP ideas + Meta native `/compact` auto-compact |
 
 ```powershell
-meta ecosystem ensure --force
 meta ecosystem status
-# TUI: /ecosystem  /plur  /ruflo  /graphify  /skills
+meta ecosystem ensure --force   # repair / first-time full provision
 ```
 
-On open Meta: installs CLIs → writes catalog skills → pulls skill packs → seeds PLUR →
-inits Ruflo DB → starts Executor service when possible → **auto-injects PLUR**.
+In the TUI: `/ecosystem` · `/plur` · `/ruflo` · `/graphify` · `/skills`
 
-Requires **Node.js 20+** and **uv** (graphify). Missing pieces are retried next open.
+### What to use when
 
 | Need | Use |
 |------|-----|
-| Code structure | **graphify** |
-| Preferences / corrections | **plur** |
-| Pattern / embedding memory | **ruflo** |
-| External APIs / MCP tools | **executor** |
-| UI / motion polish | skill **design-eng** |
-| Clone a live site | skill **clone-website-meta** |
+| “What calls X?” / architecture | **graphify** (`query` / `path` / `explain`) |
+| Remember preferences & corrections | **plur** (auto-injected) |
+| Semantic pattern memory / swarm status | **ruflo** |
+| External SaaS / APIs over MCP | **executor** |
+| UI / motion polish | skill **design-eng** / emil packs |
+| Clone a live site into Next.js | skill **clone-website-meta** |
 | Security investigation | skill **cybersecurity** → specific playbook |
-| Long-session token pressure | `/compact` + **context-pruning** skill |
-| Local markdown notes | built-in `memory` |
+| Long-session context pressure | `/compact` + **context-pruning** |
+| Local markdown scratchpad | built-in `memory` (`~/.muse/memory.md`) |
+
+---
+
+## Safety & tools
+
+- **Workspace sandbox** — paths cannot escape session cwd (case + symlink/junction aware); refuse filesystem-root workspaces  
+- **Shell** — Git Bash → pwsh → PowerShell → cmd (labeled; `MUSE_SHELL` override); Esc/timeout kills the process tree  
+- **grep / glob** — ripgrep-first; hard-excludes `node_modules` / `target` / … + time budget  
+- **apply_patch** — unified-diff multi-hunk edits; ambiguous context refused  
+- **web_fetch** — public HTTP(S) only; every redirect hop DNS-validated + IP-pinned; size-capped  
+- **web_search** — DuckDuckGo, no API key  
+- **git_status / git_diff** — approval-free repo inspection  
+- **skills** — `~/.muse/skills/`, `~/.agents/skills/`, project skills; agent loads via `skill` tool  
+- **subagents** — `agent` explore/general; usage rolled into the parent session  
+- **Windows ecosystem spawn** — npm `.cmd` shims resolved correctly so ensure actually installs Executor / skills / etc.
+
+### Built-in tools
+
+```text
+read_file · list_dir · write_file · edit_file · multi_edit · apply_patch · bash
+grep · glob · web_fetch · web_search · git_status · git_diff
+graphify · plur · ruflo · executor · skill · memory · todo_write · submit_plan · agent
+```
 
 ---
 
 ## ADE / Orca
 
-Usage is written for host tools (never includes your API key):
+Usage for host tools (**never** includes your API key):
 
 | Path | Purpose |
 |------|---------|
 | `~/.muse/status.json` | Live tokens / est. USD / model / state |
 | `~/.muse/usage.jsonl` | Per-request log |
 | `~/.muse/ade.json` | Discovery manifest |
+| `~/.muse/ecosystem.json` | Ecosystem ensure marker (CLIs + packs) |
 
 ```powershell
 meta install-hook
@@ -247,18 +305,31 @@ reasoning_effort = "high"
 max_turns = 40
 stream = true
 context_window = 1000000
+# mouse = false   # preference flag; capture is always on for caret + scrollbar
 ```
 
-## Tools
+Env overrides (user-level is fine): `MODEL_API_KEY` / `MUSE_API_KEY` / `META_API_KEY`, `META_MODEL`, `META_CWD`, `MUSE_SHELL`.
 
-`read_file` · `list_dir` · `write_file` · `edit_file` · `multi_edit` · `apply_patch` · `bash` ·
-`grep` · `glob` · `web_fetch` · `web_search` · `git_status` · `git_diff` · `skill` · `memory` ·
-`todo_write` · `submit_plan` · `agent`
+---
 
 ## Model API
 
-Responses API (`POST /v1/responses`), `muse-spark-1.1`, streaming + reasoning continuity.  
+Responses API (`POST /v1/responses`), default **`muse-spark-1.1`**, streaming + reasoning continuity.  
 Docs: https://dev.meta.ai/docs/getting-started/overview
+
+---
+
+## Development
+
+```powershell
+cd meta-cli
+cargo test
+cargo build --release
+# install to ~/.local/bin
+.\install.ps1
+```
+
+---
 
 ## License
 
