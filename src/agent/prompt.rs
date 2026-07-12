@@ -72,9 +72,10 @@ Research/design only. Tools: read_file, list_dir, grep, glob, web_fetch, web_sea
 git_status, git_diff, skill, memory(read), todo_write, submit_plan,
 graphify(query|path|explain|status|report|affected),
 plur(status|recall|inject|list|timeline),
-ruflo(status|memory_search|memory_stats|memory_list|agent_list|swarm_status|hive_status|doctor).
+ruflo(status|memory_search|memory_stats|memory_list|agent_list|swarm_status|hive_status|doctor),
+executor(status|sources|search|help).
 No write_file/edit_file/multi_edit/apply_patch/bash/agent/graphify(extract|update)/
-plur(learn|capture|forget|ingest)/ruflo(memory_store|swarm_init).
+plur(learn|capture|forget|ingest)/ruflo(memory_store|swarm_init)/executor(call|install).
 Deliver plans via submit_plan.
 "#,
             PermissionMode::Manual => r#"
@@ -118,7 +119,13 @@ todo_write, submit_plan, agent
   sessions. Auto-injected at session start. Never store secrets.
 - ruflo: vector memory + swarm harness. Global DB at ~/.muse/ruflo/. Prefer plur for preferences,
   ruflo for pattern/embedding memory, graphify for code structure.
-- skill: action=list / action=read — plur, ruflo, graphify skills are pre-installed
+- executor: MCP gateway (executor.sh) for external OpenAPI/GraphQL/MCP integrations — not for
+  local repo edits. action=sources|search|call.
+- skill: action=list / action=read — packs pre-installed: design-eng (Emil), clone-website-meta,
+  cybersecurity (817 playbooks — load one by name, never all), context-pruning (DCP patterns),
+  opencode-awesome catalog, executor-gateway, akm-manager, plur, ruflo, graphify.
+- UI work → skill design-eng / emil-design-eng. Site clone → clone-website-meta. Security →
+  cybersecurity router then skill(read, name=<specific>). Long context → /compact + context-pruning.
 - agent: spawn explore (read-only) or general subagent for parallel research
 - todo_write: maintain a live task list for multi-step work (always keep one in_progress)
 - submit_plan: formal plan artifact in plan mode

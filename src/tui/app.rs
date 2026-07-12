@@ -15,7 +15,7 @@ use crate::usage::{TokenUsage, UsageTracker};
 use crossterm::cursor::{Hide, Show};
 use crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind,
+    Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -163,6 +163,17 @@ pub struct App {
     /// PageUp/Home can scroll in real pages instead of guessing.
     pub view_h: u16,
     pub view_total: u16,
+    /// Inner text area of the input box (updated every draw) for click-to-caret.
+    pub input_inner: ratatui::layout::Rect,
+    /// First visible input line (vertical scroll) + horizontal scroll offset.
+    pub input_scroll_top: usize,
+    pub input_x_off: u16,
+    /// Transcript body area (excluding sticky banner) for scrollbar hit-testing.
+    pub transcript_body: ratatui::layout::Rect,
+    /// Right-edge scrollbar track (1 column).
+    pub scrollbar_track: ratatui::layout::Rect,
+    /// True while the user is dragging the scrollbar thumb.
+    pub scrollbar_drag: bool,
 
     pub input: InputState,
     pub queue: VecDeque<String>,
@@ -217,12 +228,11 @@ pub async fn run_tui(
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
     stdout().execute(EnableBracketedPaste)?;
-    // Mouse capture is opt-in: while it's on the terminal routes clicks to us
-    // and you lose native click-drag text selection. Default off so selecting
-    // and copying works; `/mouse` turns wheel-scroll on (Shift+drag to select).
-    if cfg.mouse {
-        stdout().execute(EnableMouseCapture)?;
-    }
+    // Always capture the mouse so clicks place the caret in the input box and
+    // the wheel scrolls the transcript. Native click-drag selection in the
+    // terminal is replaced by in-app selection (Ctrl+A / Shift-style select) +
+    // Ctrl+C/V clipboard; Shift+drag still selects in many terminals.
+    stdout().execute(EnableMouseCapture)?;
     // Hardware cursor hidden — we paint a Meta blue block caret ourselves.
     stdout().execute(Hide)?;
     let _guard = TermGuard;
@@ -247,6 +257,12 @@ pub async fn run_tui(
         scroll_from_bottom: 0,
         view_h: 20,
         view_total: 0,
+        input_inner: ratatui::layout::Rect::default(),
+        input_scroll_top: 0,
+        input_x_off: 0,
+        transcript_body: ratatui::layout::Rect::default(),
+        scrollbar_track: ratatui::layout::Rect::default(),
+        scrollbar_drag: false,
         input: InputState::new(),
         queue: VecDeque::new(),
         busy: false,
@@ -316,19 +332,12 @@ pub async fn run_tui(
                     app.on_key(key);
                     dirty = true;
                 }
-                Event::Mouse(m) => match m.kind {
-                    MouseEventKind::ScrollUp => {
-                        app.scroll_up(3);
-                        dirty = true;
-                    }
-                    MouseEventKind::ScrollDown => {
-                        app.scroll_down(3);
-                        dirty = true;
-                    }
-                    _ => {}
-                },
+                Event::Mouse(m) => {
+                    app.on_mouse(m);
+                    dirty = true;
+                }
                 Event::Paste(s) => {
-                    if app.approval.is_none() {
+                    if app.approval.is_none() && app.picker.is_none() {
                         app.input.insert_str(&s);
                         dirty = true;
                     }
@@ -425,7 +434,16 @@ impl App {
         let alt = key.modifiers.contains(KeyModifiers::ALT);
 
         match key.code {
+            // Ctrl+C: copy selection if any; else interrupt busy turn; else
+            // clear input; else double-tap to quit (never steal OS copy when
+            // the user has selected text in the editor).
             KeyCode::Char('c') if ctrl => {
+                if self.input.has_selection() {
+                    if let Some(t) = self.input.selected_text() {
+                        clipboard_set(&t);
+                    }
+                    return;
+                }
                 if self.busy {
                     self.interrupt();
                 } else if !self.input.is_empty() {
@@ -443,6 +461,22 @@ impl App {
             }
             KeyCode::Char('d') if ctrl && self.input.is_empty() => {
                 self.should_quit = true;
+                return;
+            }
+            // Ctrl+V: paste system clipboard into the input (bracketed paste
+            // also works for terminal pastes).
+            KeyCode::Char('v') if ctrl => {
+                if let Some(t) = clipboard_get() {
+                    self.input.insert_str(&t);
+                }
+                return;
+            }
+            // Ctrl+X: cut selection to clipboard.
+            KeyCode::Char('x') if ctrl => {
+                if let Some(t) = self.input.selected_text() {
+                    clipboard_set(&t);
+                    self.input.delete_selection();
+                }
                 return;
             }
             // Claude Code pattern: Shift+Tab cycles permission modes immediately.
@@ -554,7 +588,8 @@ impl App {
                 self.scroll_from_bottom = 0;
             }
             KeyCode::Char('r') if ctrl => self.open_session_picker(),
-            KeyCode::Char('a') if ctrl => self.input.move_line_home(),
+            // Ctrl+A: select all in the input box (standard editor, not line-home).
+            KeyCode::Char('a') if ctrl => self.input.select_all(),
             KeyCode::Char('e') if ctrl => self.input.move_line_end(),
             KeyCode::Char('u') if ctrl => self.input.delete_to_line_start(),
             KeyCode::Char('w') if ctrl => self.input.delete_word_back(),
@@ -565,6 +600,101 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// Mouse: click places caret in the input; wheel scrolls the transcript;
+    /// drag the right-edge scrollbar thumb to scrub history.
+    fn on_mouse(&mut self, m: event::MouseEvent) {
+        if self.approval.is_some() || self.picker.is_some() {
+            self.scrollbar_drag = false;
+            return;
+        }
+        match m.kind {
+            MouseEventKind::ScrollUp => self.scroll_up(3),
+            MouseEventKind::ScrollDown => self.scroll_down(3),
+            MouseEventKind::Down(MouseButton::Left) => {
+                if self.hit_scrollbar(m.column, m.row) {
+                    self.scrollbar_drag = true;
+                    self.scroll_from_scrollbar_y(m.row);
+                } else {
+                    self.scrollbar_drag = false;
+                    self.click_input(m.column, m.row);
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if self.scrollbar_drag {
+                    self.scroll_from_scrollbar_y(m.row);
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.scrollbar_drag = false;
+            }
+            _ => {}
+        }
+    }
+
+    fn hit_scrollbar(&self, col: u16, row: u16) -> bool {
+        let t = self.scrollbar_track;
+        t.width > 0
+            && col >= t.x
+            && col < t.right()
+            && row >= t.y
+            && row < t.bottom()
+    }
+
+    /// Map a Y position on the scrollbar track to `scroll_from_bottom`.
+    ///
+    /// Track top = oldest (max scroll_from_bottom); track bottom = latest (0).
+    fn scroll_from_scrollbar_y(&mut self, row: u16) {
+        let t = self.scrollbar_track;
+        if t.height == 0 {
+            return;
+        }
+        let max = self.max_scroll();
+        if max == 0 {
+            self.scroll_from_bottom = 0;
+            return;
+        }
+        let y = row.saturating_sub(t.y).min(t.height.saturating_sub(1));
+        // Fraction from top of track (0 = top/oldest, 1 = bottom/newest).
+        let frac = y as f64 / t.height.saturating_sub(1).max(1) as f64;
+        // scroll_from_bottom is high when looking at old content (top).
+        self.scroll_from_bottom = ((1.0 - frac) * max as f64).round() as u16;
+        self.scroll_from_bottom = self.scroll_from_bottom.min(max);
+    }
+
+    /// Map a terminal (column, row) click onto the input buffer caret.
+    fn click_input(&mut self, col: u16, row: u16) {
+        let inner = self.input_inner;
+        if inner.width == 0 || inner.height == 0 {
+            return;
+        }
+        // Outside the input pane — ignore (transcript clicks don't move caret).
+        if col < inner.x || col >= inner.right() || row < inner.y || row >= inner.bottom() {
+            return;
+        }
+        // Content starts after the "❯ " / "  " prefix (2 cells).
+        let prefix_w: u16 = 2;
+        let local_x = col.saturating_sub(inner.x).saturating_sub(prefix_w) as usize
+            + self.input_x_off as usize;
+        let local_y = row.saturating_sub(inner.y) as usize + self.input_scroll_top;
+        // Convert display column → char column on that line (unicode-width).
+        let text = self.input.text();
+        let line_str = text.split('\n').nth(local_y).unwrap_or("");
+        let mut used = 0usize;
+        let mut char_col = 0usize;
+        for ch in line_str.chars() {
+            let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
+            if used + w > local_x {
+                break;
+            }
+            used += w;
+            char_col += 1;
+            if used >= local_x {
+                break;
+            }
+        }
+        self.input.click_at(local_y, char_col);
     }
 
     // ── session picker ─────────────────────────────────────────────────
@@ -1334,12 +1464,13 @@ impl App {
         s.push_str(&format!(
             "\npermission mode now: {} — {}\n\
              keys\n  \
-             ↑/↓            scroll the chat   (PgUp/PgDn page · Home top · End latest)\n  \
+             ↑/↓ · wheel · drag scrollbar   scroll the chat\n  \
+             click in input                 place caret where you click\n  \
+             Ctrl+A / Ctrl+C / Ctrl+V / Ctrl+X   select-all · copy · paste · cut\n  \
              Ctrl+P/Ctrl+N  prompt history    (also Alt+↑/↓)\n  \
-             /mouse         wheel scrolling ⇄ text selection (selection is on by default)\n  \
              Enter          send              (\\+Enter or Ctrl+J for a newline)\n  \
              Shift+Tab      cycle modes  ·  Ctrl+R resume a session\n  \
-             Esc            cancel turn   ·  Ctrl+C twice quit  ·  Ctrl+L clear\n  \
+             Esc            cancel turn   ·  Ctrl+C (no selection) twice quit  ·  Ctrl+L clear\n  \
              approvals (manual): y once · a always · n deny",
             m.badge(),
             m.description()
@@ -1407,34 +1538,23 @@ impl App {
         });
     }
 
-    /// Toggle mouse capture live: wheel-scroll vs. native text selection.
+    /// Toggle whether wheel-scroll is aggressive; mouse is always captured for
+    /// click-to-caret + scrollbar drag. Kept for config compatibility.
     fn cmd_mouse(&mut self) {
         self.cfg.mouse = !self.cfg.mouse;
-        let ok = if self.cfg.mouse {
-            stdout().execute(EnableMouseCapture).is_ok()
-        } else {
-            stdout().execute(DisableMouseCapture).is_ok()
-        };
-        if !ok {
-            self.push_error("terminal refused the mouse mode change".into());
-            return;
-        }
+        // Always re-assert capture — click/scrollbar depend on it.
+        let _ = stdout().execute(EnableMouseCapture);
         let _ = crate::config::save_config(&self.cfg);
-        if self.cfg.mouse {
-            self.push_note(
-                Tone::Mode,
-                "mouse ON — wheel scrolls the transcript\n  \
-                 text selection now needs Shift+drag  ·  /mouse to turn back off"
-                    .into(),
-            );
-        } else {
-            self.push_note(
-                Tone::Mode,
-                "mouse OFF — click-drag selects and copies text normally\n  \
-                 scroll with ↑/↓ · PgUp/PgDn · Home/End  ·  /mouse for wheel scrolling"
-                    .into(),
-            );
-        }
+        self.push_note(
+            Tone::Mode,
+            format!(
+                "mouse capture always on for caret + scrollbar\n  \
+                 click input to place caret  ·  drag right-edge thumb to scroll\n  \
+                 Ctrl+A select all · Ctrl+C copy · Ctrl+V paste · Ctrl+X cut\n  \
+                 wheel pref stored: {}",
+                if self.cfg.mouse { "primary" } else { "secondary" }
+            ),
+        );
     }
 
     fn cmd_usage(&mut self) {
@@ -1622,6 +1742,20 @@ impl App {
     fn push_error(&mut self, s: String) {
         self.cells.push(Cell::Error(s));
     }
+}
+
+// ── system clipboard (Ctrl+C / Ctrl+V / Ctrl+X) ───────────────────────────
+
+fn clipboard_set(text: &str) {
+    if let Ok(mut cb) = arboard::Clipboard::new() {
+        let _ = cb.set_text(text.to_string());
+    }
+}
+
+fn clipboard_get() -> Option<String> {
+    arboard::Clipboard::new()
+        .ok()
+        .and_then(|mut cb| cb.get_text().ok())
 }
 
 #[cfg(test)]

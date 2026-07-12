@@ -8,6 +8,10 @@ pub struct InputState {
     buffer: Vec<char>,
     /// Cursor as a char index into `buffer`.
     cursor: usize,
+    /// Selection anchor (other end of the selection). `None` = no selection.
+    /// The range is always between `selection_anchor` and `cursor` (inclusive of
+    /// the lower end, exclusive of the upper — standard half-open).
+    selection_anchor: Option<usize>,
     history: Vec<String>,
     hist_idx: Option<usize>,
     stash: String,
@@ -30,6 +34,7 @@ impl InputState {
         Self {
             buffer: Vec::new(),
             cursor: 0,
+            selection_anchor: None,
             history,
             hist_idx: None,
             stash: String::new(),
@@ -47,30 +52,90 @@ impl InputState {
     pub fn set_text(&mut self, s: &str) {
         self.buffer = s.chars().collect();
         self.cursor = self.buffer.len();
+        self.selection_anchor = None;
     }
 
     pub fn clear(&mut self) {
         self.buffer.clear();
         self.cursor = 0;
+        self.selection_anchor = None;
         self.hist_idx = None;
     }
 
+    /// Select the entire buffer (Ctrl+A).
+    pub fn select_all(&mut self) {
+        if self.buffer.is_empty() {
+            self.selection_anchor = None;
+            return;
+        }
+        self.selection_anchor = Some(0);
+        self.cursor = self.buffer.len();
+    }
+
+    /// Half-open selection range, if any.
+    pub fn selection_range(&self) -> Option<(usize, usize)> {
+        let a = self.selection_anchor?;
+        let (lo, hi) = if a <= self.cursor {
+            (a, self.cursor)
+        } else {
+            (self.cursor, a)
+        };
+        if lo == hi {
+            None
+        } else {
+            Some((lo, hi))
+        }
+    }
+
+    pub fn has_selection(&self) -> bool {
+        self.selection_range().is_some()
+    }
+
+    pub fn selected_text(&self) -> Option<String> {
+        let (lo, hi) = self.selection_range()?;
+        Some(self.buffer[lo..hi].iter().collect())
+    }
+
+    /// Delete the current selection; returns true if something was removed.
+    pub fn delete_selection(&mut self) -> bool {
+        let Some((lo, hi)) = self.selection_range() else {
+            return false;
+        };
+        self.buffer.drain(lo..hi);
+        self.cursor = lo;
+        self.selection_anchor = None;
+        true
+    }
+
+    #[allow(dead_code)]
+    pub fn clear_selection(&mut self) {
+        self.selection_anchor = None;
+    }
+
     pub fn insert_char(&mut self, c: char) {
+        self.delete_selection();
         self.buffer.insert(self.cursor, c);
         self.cursor += 1;
+        self.selection_anchor = None;
     }
 
     pub fn insert_str(&mut self, s: &str) {
+        self.delete_selection();
         for c in s.chars() {
             // Normalize CRLF pastes.
             if c == '\r' {
                 continue;
             }
-            self.insert_char(c);
+            self.buffer.insert(self.cursor, c);
+            self.cursor += 1;
         }
+        self.selection_anchor = None;
     }
 
     pub fn backspace(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
         if self.cursor > 0 {
             self.cursor -= 1;
             self.buffer.remove(self.cursor);
@@ -78,34 +143,48 @@ impl InputState {
     }
 
     pub fn delete(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
         if self.cursor < self.buffer.len() {
             self.buffer.remove(self.cursor);
         }
     }
 
     pub fn move_left(&mut self) {
+        self.selection_anchor = None;
         self.cursor = self.cursor.saturating_sub(1);
     }
 
     pub fn move_right(&mut self) {
+        self.selection_anchor = None;
         if self.cursor < self.buffer.len() {
             self.cursor += 1;
         }
     }
 
+    /// Place the caret from a mouse click at (line, column) in the editor.
+    pub fn click_at(&mut self, line: usize, col: usize) {
+        self.selection_anchor = None;
+        self.move_to_line_col(line, col);
+    }
+
     pub fn move_line_home(&mut self) {
+        self.selection_anchor = None;
         while self.cursor > 0 && self.buffer[self.cursor - 1] != '\n' {
             self.cursor -= 1;
         }
     }
 
     pub fn move_line_end(&mut self) {
+        self.selection_anchor = None;
         while self.cursor < self.buffer.len() && self.buffer[self.cursor] != '\n' {
             self.cursor += 1;
         }
     }
 
     pub fn word_left(&mut self) {
+        self.selection_anchor = None;
         while self.cursor > 0 && !self.buffer[self.cursor - 1].is_alphanumeric() {
             self.cursor -= 1;
         }
@@ -115,6 +194,7 @@ impl InputState {
     }
 
     pub fn word_right(&mut self) {
+        self.selection_anchor = None;
         let n = self.buffer.len();
         while self.cursor < n && !self.buffer[self.cursor].is_alphanumeric() {
             self.cursor += 1;
@@ -122,6 +202,14 @@ impl InputState {
         while self.cursor < n && self.buffer[self.cursor].is_alphanumeric() {
             self.cursor += 1;
         }
+    }
+
+    /// True if char index `i` lies inside the active selection.
+    #[allow(dead_code)]
+    pub fn is_selected(&self, i: usize) -> bool {
+        self.selection_range()
+            .map(|(lo, hi)| i >= lo && i < hi)
+            .unwrap_or(false)
     }
 
     pub fn delete_word_back(&mut self) {
@@ -167,6 +255,7 @@ impl InputState {
     }
 
     pub fn move_up_line(&mut self) {
+        self.selection_anchor = None;
         let (line, col) = self.cursor_line_col();
         if line == 0 {
             return;
@@ -175,6 +264,7 @@ impl InputState {
     }
 
     pub fn move_down_line(&mut self) {
+        self.selection_anchor = None;
         let (line, col) = self.cursor_line_col();
         if line + 1 >= self.line_count() {
             return;
@@ -182,7 +272,7 @@ impl InputState {
         self.move_to_line_col(line + 1, col);
     }
 
-    fn move_to_line_col(&mut self, target_line: usize, target_col: usize) {
+    pub fn move_to_line_col(&mut self, target_line: usize, target_col: usize) {
         let mut line = 0;
         let mut idx = 0;
         // Find start of target line.
@@ -252,6 +342,7 @@ impl InputState {
         Self {
             buffer: Vec::new(),
             cursor: 0,
+            selection_anchor: None,
             history: Vec::new(),
             hist_idx: None,
             stash: String::new(),
@@ -313,5 +404,19 @@ mod tests {
         assert_eq!(i.text(), "héllo 本");
         i.delete();
         assert_eq!(i.text(), "héllo ");
+    }
+
+    #[test]
+    fn select_all_and_click() {
+        let mut i = InputState::empty_for_test();
+        i.insert_str("hello\nworld");
+        i.select_all();
+        assert_eq!(i.selected_text().as_deref(), Some("hello\nworld"));
+        i.click_at(1, 2); // w|orld
+        assert!(!i.has_selection());
+        assert_eq!(i.cursor_line_col(), (1, 2));
+        i.select_all();
+        i.insert_str("x");
+        assert_eq!(i.text(), "x");
     }
 }

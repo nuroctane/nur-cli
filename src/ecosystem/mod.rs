@@ -1,11 +1,9 @@
-//! External agent-ecosystem integrations: Graphify, PLUR, Ruflo.
+//! External agent-ecosystem integrations provisioned by Meta's one-shot install.
 //!
-//! These ship with Meta CLI so a one-shot install leaves the agent fully
-//! instrumented — no separate "quick start" steps for the user.
-//!
-//! - **Graphify** — code knowledge graph (`graphify-out/`)
-//! - **PLUR** — local-first shared engram memory (`~/.plur/`)
-//! - **Ruflo** — swarm / vector-memory orchestration (`~/.muse/ruflo/`)
+//! Core runtime: Graphify · PLUR · Ruflo
+//! Skill packs: Emil design · clone-website · cybersecurity · OpenCode catalog
+//! Gateways: Executor MCP · skills CLI · AKM
+//! Patterns: DCP-style context pruning (native + docs)
 
 use crate::config::muse_home;
 use crate::error::{MuseError, Result};
@@ -15,11 +13,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+mod packs;
 mod skills;
 
 pub use skills::install_bundled_skills;
 
 const ECOSYSTEM_MARKER: &str = "ecosystem.json";
+/// Bump when new packs/tools are added so old markers re-run ensure.
+const ECOSYSTEM_SCHEMA: u32 = 2;
 /// Re-run ensure at most once per this many seconds unless forced.
 const ENSURE_TTL_SECS: u64 = 86_400;
 
@@ -34,10 +35,20 @@ pub struct ComponentStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct EcosystemStatus {
+    #[serde(default)]
+    pub schema: u32,
     pub graphify: ComponentStatus,
     pub plur: ComponentStatus,
     pub ruflo: ComponentStatus,
+    #[serde(default)]
+    pub skills_cli: ComponentStatus,
+    #[serde(default)]
+    pub akm: ComponentStatus,
+    #[serde(default)]
+    pub executor: ComponentStatus,
     pub skills_installed: Vec<String>,
+    #[serde(default)]
+    pub packs_installed: Vec<String>,
     pub ensured_at: u64,
     pub node_ok: bool,
     pub notes: Vec<String>,
@@ -45,21 +56,44 @@ pub struct EcosystemStatus {
 
 impl EcosystemStatus {
     pub fn summary_line(&self) -> String {
-        let g = if self.graphify.available { "graphify✓" } else { "graphify✗" };
-        let p = if self.plur.available { "plur✓" } else { "plur✗" };
-        let r = if self.ruflo.available { "ruflo✓" } else { "ruflo✗" };
-        format!("ecosystem · {g}  {p}  {r}")
+        let bit = |ok: bool, name: &str| {
+            if ok {
+                format!("{name}✓")
+            } else {
+                format!("{name}✗")
+            }
+        };
+        format!(
+            "ecosystem · {}  {}  {}  {}  {}  · packs {}",
+            bit(self.graphify.available, "graphify"),
+            bit(self.plur.available, "plur"),
+            bit(self.ruflo.available, "ruflo"),
+            bit(self.executor.available, "executor"),
+            bit(self.skills_cli.available, "skills"),
+            if self.packs_installed.is_empty() {
+                "…".into()
+            } else {
+                self.packs_installed.join(",")
+            }
+        )
     }
 
     pub fn report(&self) -> String {
         let mut s = String::from("Meta ecosystem (auto-provisioned)\n");
-        for c in [&self.graphify, &self.plur, &self.ruflo] {
+        let comps = [
+            &self.graphify,
+            &self.plur,
+            &self.ruflo,
+            &self.skills_cli,
+            &self.akm,
+            &self.executor,
+        ];
+        for c in comps {
+            if c.name.is_empty() {
+                continue;
+            }
             let mark = if c.available { "✓" } else { "✗" };
-            s.push_str(&format!(
-                "  {mark} {:10} {}\n",
-                c.name,
-                c.detail
-            ));
+            s.push_str(&format!("  {mark} {:10} {}\n", c.name, c.detail));
             if let Some(v) = &c.version {
                 s.push_str(&format!("              version {v}\n"));
             }
@@ -69,17 +103,32 @@ impl EcosystemStatus {
         }
         s.push_str(&format!(
             "  node: {}\n",
-            if self.node_ok { "ok" } else { "missing — install Node.js 20+ for plur/ruflo" }
+            if self.node_ok {
+                "ok"
+            } else {
+                "missing — install Node.js 20+"
+            }
         ));
         if !self.skills_installed.is_empty() {
             s.push_str(&format!(
-                "  skills: {}\n",
+                "  bundled skills: {}\n",
                 self.skills_installed.join(", ")
+            ));
+        }
+        if !self.packs_installed.is_empty() {
+            s.push_str(&format!(
+                "  skill packs: {}\n",
+                self.packs_installed.join(", ")
             ));
         }
         for n in &self.notes {
             s.push_str(&format!("  note: {n}\n"));
         }
+        s.push_str(
+            "\n  slash: /ecosystem /plur /ruflo /graphify /skills\n\
+             tools:  graphify plur ruflo executor skill\n\
+             packs:  design · clone-website · cybersecurity · opencode catalog · DCP patterns\n",
+        );
         s
     }
 }
@@ -96,7 +145,7 @@ pub fn marker_path() -> PathBuf {
     muse_home().join(ECOSYSTEM_MARKER)
 }
 
-/// Ensure Graphify + PLUR + Ruflo are installed and initialised.
+/// Ensure the full Meta ecosystem is installed and initialised.
 /// Safe to call on every launch — skips heavy work when the marker is fresh.
 pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
     if !force {
@@ -105,21 +154,31 @@ pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
         }
     }
 
-    let mut status = EcosystemStatus::default();
+    let mut status = EcosystemStatus {
+        schema: ECOSYSTEM_SCHEMA,
+        ..Default::default()
+    };
     status.ensured_at = now_secs();
     status.node_ok = which("node") || which("node.exe");
 
-    // Skills first (pure FS, no network).
+    // Bundled Meta skills (pure FS).
     match install_bundled_skills() {
         Ok(names) => status.skills_installed = names,
-        Err(e) => status.notes.push(format!("skills: {e}")),
+        Err(e) => status.notes.push(format!("bundled skills: {e}")),
     }
 
     status.graphify = ensure_graphify();
     status.plur = ensure_plur(status.node_ok);
     status.ruflo = ensure_ruflo(status.node_ok);
+    status.skills_cli = packs::ensure_skills_cli(status.node_ok);
+    status.akm = packs::ensure_akm(status.node_ok);
+    status.executor = packs::ensure_executor(status.node_ok);
 
-    // Seed a few default engrams so PLUR is useful out of the box.
+    // Third-party skill packs (network; markers skip re-download).
+    let (packs_ok, pack_notes) = packs::install_skill_packs(&status.skills_cli);
+    status.packs_installed = packs_ok;
+    status.notes.extend(pack_notes);
+
     if status.plur.available {
         seed_default_plur_engrams();
     }
@@ -132,8 +191,16 @@ fn load_marker_if_fresh() -> Option<EcosystemStatus> {
     let path = marker_path();
     let text = fs::read_to_string(path).ok()?;
     let st: EcosystemStatus = serde_json::from_str(&text).ok()?;
+    if st.schema < ECOSYSTEM_SCHEMA {
+        return None;
+    }
     let age = now_secs().saturating_sub(st.ensured_at);
-    if age < ENSURE_TTL_SECS && st.graphify.available && st.plur.available && st.ruflo.available {
+    if age < ENSURE_TTL_SECS
+        && st.graphify.available
+        && st.plur.available
+        && st.ruflo.available
+        && st.skills_cli.available
+    {
         Some(st)
     } else {
         None
@@ -409,11 +476,15 @@ pub fn run_capture(
     })
 }
 
-fn run_quiet(bin: &str, args: &[&str], cwd: Option<&Path>, timeout_ms: u64) -> bool {
+pub(crate) fn run_quiet(bin: &str, args: &[&str], cwd: Option<&Path>, timeout_ms: u64) -> bool {
     run_capture(bin, args, cwd, timeout_ms).is_ok()
 }
 
 fn cmd_version(bin: &str, args: &[&str]) -> Option<String> {
+    cmd_version_pub(bin, args)
+}
+
+pub(crate) fn cmd_version_pub(bin: &str, args: &[&str]) -> Option<String> {
     run_capture(bin, args, None, 15_000)
         .ok()
         .map(|s| s.lines().next().unwrap_or(&s).trim().to_string())

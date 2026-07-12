@@ -4,6 +4,8 @@ mod edit_file;
 mod git_diff;
 mod git_status;
 mod glob;
+pub mod executor_tool;
+pub use executor_tool::is_read_only_action as executor_is_read_only;
 pub mod graphify;
 mod grep;
 mod list_dir;
@@ -81,6 +83,7 @@ impl ToolHost {
             Box::new(graphify::Graphify),
             Box::new(plur::Plur),
             Box::new(ruflo::Ruflo),
+            Box::new(executor_tool::ExecutorTool),
             Box::new(skill_tool::SkillTool),
             Box::new(memory_tool::MemoryTool),
             Box::new(todo_write::TodoWrite {

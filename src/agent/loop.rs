@@ -688,6 +688,9 @@ fn is_read_only_call(name: &str, args: &str) -> bool {
     if name == "ruflo" {
         return crate::tools::ruflo::is_read_only_action(args);
     }
+    if name == "executor" {
+        return crate::tools::executor_is_read_only(args);
+    }
     if name == "agent" {
         return false;
     }

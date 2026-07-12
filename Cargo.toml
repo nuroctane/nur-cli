@@ -1,6 +1,6 @@
 [package]
 name = "meta-cli"
-version = "0.5.0"
+version = "0.5.2"
 edition = "2021"
 description = "Meta CLI (unofficial) - Muse Spark coding agent for Meta Model API"
 license = "MIT"
@@ -39,3 +39,4 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rpassword = "7"
 colored = "2"
+arboard = "3"

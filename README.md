@@ -120,9 +120,20 @@ Mode is stored in a shared atomic: toggling applies **immediately**, including m
 | `Esc` · `Ctrl+C` ×2 · `Ctrl+L` | cancel turn · quit · clear |
 | `y` / `a` / `n` | approve once / always / deny |
 
-**Mouse:** off by default so click-drag **text selection and copy work normally**.
-`/mouse` turns on wheel-scrolling (a terminal can route the mouse to the app *or*
-let you select text, never both — with it on, use `Shift+drag` to select).
+**Mouse & input (always on):**
+
+| Gesture / key | Action |
+|---------------|--------|
+| Click in input | Place caret where you click |
+| Wheel · drag right scrollbar | Scroll transcript |
+| `Ctrl+A` | Select all in the input |
+| `Ctrl+C` | Copy selection (or interrupt / double-tap quit if none) |
+| `Ctrl+V` | Paste clipboard into input |
+| `Ctrl+X` | Cut selection |
+| Sticky **PROMPT** banner | 3-row bar pins the owning prompt while you scroll |
+
+**Sticky prompt:** full-width Meta-blue banner across the top of the transcript so
+you always know which user turn produced the content you're reading.
 
 ### Colour system
 
@@ -159,49 +170,52 @@ distinct colour so it's scannable at a glance.
 
 ### Agent ecosystem (zero extra setup)
 
-One-shot install provisions three external systems and Meta re-ensures them on
-every open. You do **not** need to run their own quick-starts.
+One-shot install + every `meta` open auto-provisions the stack. No separate
+quick-starts for any of these projects.
 
-| System | What it is | Store | Tools / slash |
-|--------|------------|-------|---------------|
-| **[Graphify](https://github.com/Graphify-Labs/graphify)** | Code knowledge graph (tree-sitter AST) | `graphify-out/` | `graphify` · `/graphify` |
-| **[PLUR](https://github.com/plur-ai/plur)** | Shared engram memory (preferences, corrections) | `~/.plur/` | `plur` · `/plur` |
-| **[Ruflo](https://github.com/ruvnet/ruflo)** | Vector memory + swarm harness | `~/.muse/ruflo/` | `ruflo` · `/ruflo` |
+#### Runtime systems
+
+| System | What it is | Store / endpoint | Tools |
+|--------|------------|------------------|-------|
+| **[Graphify](https://github.com/Graphify-Labs/graphify)** | Code knowledge graph | `graphify-out/` | `graphify` · `/graphify` |
+| **[PLUR](https://github.com/plur-ai/plur)** | Shared engram memory | `~/.plur/` | `plur` · `/plur` |
+| **[Ruflo](https://github.com/ruvnet/ruflo)** | Vector memory + swarm | `~/.muse/ruflo/` | `ruflo` · `/ruflo` |
+| **[Executor](https://executor.sh/docs)** | MCP gateway for APIs | `:4788/mcp` | `executor` |
+| **[skills](https://www.npmjs.com/package/skills)** CLI | Open skill installer | `~/.agents/skills/` | used by ensure |
+| **[akm-cli](https://www.npmjs.com/package/akm-cli)** | Agent knowledge package manager | multi-agent | skill `akm-manager` |
+
+#### Skill packs (installed into `~/.agents/skills` + catalog routers in `~/.muse/skills`)
+
+| Pack | Source | What you get |
+|------|--------|--------------|
+| Design engineering | [emilkowalski/skills](https://github.com/emilkowalski/skills) | Animation/UI taste (emil-design-eng, improve-animations, …) |
+| Clone website | [JCodesMore/ai-website-cloner-template](https://github.com/JCodesMore/ai-website-cloner-template) | Pixel-perfect reverse-engineering pipeline |
+| Cybersecurity | [mukul975/Anthropic-Cybersecurity-Skills](https://github.com/mukul975/Anthropic-Cybersecurity-Skills) | 817 MITRE/NIST-mapped playbooks (load **one** by name) |
+| OpenCode catalog | [awesome-opencode](https://github.com/awesome-opencode/awesome-opencode) | Curated plugin index (patterns, not OpenCode plugins) |
+| Context pruning | [Opencode-DCP](https://github.com/Opencode-DCP/opencode-dynamic-context-pruning) | DCP patterns + Meta native `/compact` auto-compact |
 
 ```powershell
-# install.ps1 / install.sh already does this; also safe to re-run:
 meta ecosystem ensure --force
 meta ecosystem status
-
-# inside the TUI (optional — agent tools work without these)
-/ecosystem
-/plur learn always prefer apply_patch for multi-hunk edits
-/plur recall patch edits
-/ruflo store pattern/auth "JWT refresh in middleware"
-/ruflo search auth patterns
-/graphify extract .
-/graphify query "how does auth work?"
+# TUI: /ecosystem  /plur  /ruflo  /graphify  /skills
 ```
 
-On open, Meta:
+On open Meta: installs CLIs → writes catalog skills → pulls skill packs → seeds PLUR →
+inits Ruflo DB → starts Executor service when possible → **auto-injects PLUR**.
 
-1. Installs missing CLIs (`graphifyy` via uv, `@plur-ai/cli` + `ruflo` via npm)
-2. Writes skills to `~/.muse/skills/{plur,ruflo,graphify}/`
-3. Seeds a few default PLUR engrams if the store is empty
-4. Initialises Ruflo's global AgentDB under `~/.muse/ruflo/`
-5. **Auto-injects** relevant PLUR engrams into the system prompt every turn
-
-Requires **Node.js 20+** (plur/ruflo) and **uv** or Python (graphify). If Node/uv
-are missing at install time, Meta still builds; the next open retries provisioning.
-
-**How they complement each other**
+Requires **Node.js 20+** and **uv** (graphify). Missing pieces are retried next open.
 
 | Need | Use |
 |------|-----|
-| Code structure / “what calls X?” | **graphify** |
-| “Remember my preferences / corrections” | **plur** |
-| Semantic pattern memory / swarm status | **ruflo** |
-| Local markdown scratchpad | built-in `memory` (`~/.muse/memory.md`) |
+| Code structure | **graphify** |
+| Preferences / corrections | **plur** |
+| Pattern / embedding memory | **ruflo** |
+| External APIs / MCP tools | **executor** |
+| UI / motion polish | skill **design-eng** |
+| Clone a live site | skill **clone-website-meta** |
+| Security investigation | skill **cybersecurity** → specific playbook |
+| Long-session token pressure | `/compact` + **context-pruning** skill |
+| Local markdown notes | built-in `memory` |
 
 ---
 

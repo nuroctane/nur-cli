@@ -35,7 +35,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.busy {
         draw_busy_line(f, app, chunks[1]);
     }
-    draw_input(f, app, chunks[2]);
+    draw_input(f, app, chunks[2]); // publishes input_inner for click-to-caret
     draw_statusline(f, app, chunks[3]);
 
     if !app.palette_matches().is_empty() && app.approval.is_none() && app.picker.is_none() {
@@ -238,47 +238,64 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     let sticky: Option<String> = sticky_owner(&owner, &is_prompt_head, vis_lo, vis_hi)
         .map(|oi| prompts[oi].clone());
 
-    let body_y = area.y + if sticky.is_some() { 1 } else { 0 };
-    let body_h = viewport.saturating_sub(if sticky.is_some() { 1 } else { 0 });
+    // Full-width banner (3 rows) — much more visible than a single dim line.
+    const STICKY_H: u16 = 3;
+    let sticky_h = if sticky.is_some() { STICKY_H } else { 0 };
+    // Reserve 1 column on the right for the draggable scrollbar.
+    let sb_w: u16 = 1;
+    let body_y = area.y + sticky_h;
+    let body_h = viewport.saturating_sub(sticky_h);
+    let text_w = area.width.saturating_sub(2 + sb_w).max(10);
 
+    // Body may be shorter because of the banner; re-clamp visible window.
+    // Banner consumes viewport rows; body shows `body_h` lines starting at `top`.
     let visible: Vec<Line> = wrapped
         .into_iter()
         .skip(top as usize)
-        // The header eats one row, so drop one line of body to compensate.
-        .skip(if sticky.is_some() { 1 } else { 0 })
         .take(body_h as usize)
         .collect();
 
-    let para = Paragraph::new(visible).style(theme::style_canvas());
-    let inner = Rect {
+    // Re-wrap wasn't needed — sticky takes fixed rows off the body only.
+    let body_rect = Rect {
         x: area.x + 1,
         y: body_y,
-        width: inner_w,
+        width: text_w,
         height: body_h,
     };
-    f.render_widget(para, inner);
+    app.transcript_body = body_rect;
+    f.render_widget(Paragraph::new(visible).style(theme::style_canvas()), body_rect);
 
     if let Some(prompt) = sticky {
-        draw_sticky_prompt(
+        draw_sticky_banner(
             f,
             &prompt,
             Rect {
                 x: area.x,
                 y: area.y,
-                width: area.width,
-                height: 1,
+                width: area.width.saturating_sub(sb_w),
+                height: sticky_h,
             },
         );
     }
 
-    // Scroll indicator when not following the bottom.
-    if app.scroll_from_bottom > 0 {
-        let tag = format!(" ↓ {} lines · End to jump ", app.scroll_from_bottom);
+    // Draggable scrollbar on the right edge of the transcript.
+    let track = Rect {
+        x: area.right().saturating_sub(sb_w),
+        y: body_y,
+        width: sb_w,
+        height: body_h,
+    };
+    app.scrollbar_track = track;
+    draw_scrollbar(f, app, track, max_scroll, top, total, viewport);
+
+    // Floating "jump to latest" chip when scrolled back.
+    if app.scroll_from_bottom > 0 && body_h > 0 {
+        let tag = format!(" ↓ {} · End ", app.scroll_from_bottom);
         let w = tag.width() as u16;
         let r = Rect {
-            x: area.right().saturating_sub(w + 2),
+            x: area.right().saturating_sub(w + sb_w + 1),
             y: area.bottom().saturating_sub(1),
-            width: w.min(area.width),
+            width: w.min(area.width.saturating_sub(sb_w)),
             height: 1,
         };
         f.render_widget(
@@ -314,29 +331,154 @@ fn sticky_owner(
     }
 }
 
-/// The prompt currently being read/processed, pinned above the transcript.
-fn draw_sticky_prompt(f: &mut Frame, prompt: &str, area: Rect) {
+/// Full-width sticky prompt banner — 3 rows, high contrast, hard to miss.
+fn draw_sticky_banner(f: &mut Frame, prompt: &str, area: Rect) {
     f.render_widget(Clear, area);
-    let text = prompt.replace('\n', " ");
-    let avail = (area.width as usize).saturating_sub(6);
-    let bg = Style::default().bg(theme::SURFACE);
-    let spans = vec![
-        Span::styled(
-            " ❯ ".to_string(),
+    let bar = Style::default().bg(theme::META_BLUE);
+    let surface = Style::default().bg(theme::SURFACE);
+
+    // Row 0: solid Meta-blue title bar.
+    let title = Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: 1,
+    };
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                "  PROMPT  ".to_string(),
+                Style::default()
+                    .fg(theme::BG)
+                    .bg(theme::META_BLUE)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " · scroll follows this turn ".to_string(),
+                Style::default().fg(theme::BLUE_100).bg(theme::META_BLUE),
+            ),
+        ]))
+        .style(bar),
+        title,
+    );
+
+    // Rows 1..: prompt text, wrapped, on surface with left accent.
+    if area.height >= 2 {
+        let body = Rect {
+            x: area.x,
+            y: area.y + 1,
+            width: area.width,
+            height: area.height.saturating_sub(1),
+        };
+        let text = prompt.replace('\n', " ");
+        let avail = (area.width as usize).saturating_sub(4);
+        // Split across body rows.
+        let mut lines: Vec<Line> = Vec::new();
+        let chars: Vec<char> = text.chars().collect();
+        let mut i = 0;
+        let rows = body.height as usize;
+        for r in 0..rows {
+            if i >= chars.len() && r > 0 {
+                break;
+            }
+            let end = (i + avail).min(chars.len());
+            let chunk: String = chars[i..end].iter().collect();
+            i = end;
+            let prefix = if r == 0 { " ❯ " } else { "   " };
+            lines.push(Line::from(vec![
+                Span::styled(
+                    prefix.to_string(),
+                    Style::default()
+                        .fg(theme::META_BLUE)
+                        .bg(theme::SURFACE)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    chunk,
+                    Style::default()
+                        .fg(theme::FG)
+                        .bg(theme::SURFACE)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
+            if i >= chars.len() {
+                break;
+            }
+        }
+        // Left accent bar via a full-row style.
+        f.render_widget(Paragraph::new(lines).style(surface), body);
+        // Bottom edge underline.
+        if area.height >= 3 {
+            let edge = Rect {
+                x: area.x,
+                y: area.bottom().saturating_sub(1),
+                width: area.width,
+                height: 1,
+            };
+            // Overpaint last body row border-style already content; draw a
+            // thin rule using faint dashes under the last content if space.
+            let _ = edge;
+        }
+    }
+}
+
+/// Vertical scrollbar: track + thumb. Drag handled in `App::on_mouse`.
+fn draw_scrollbar(
+    f: &mut Frame,
+    app: &App,
+    track: Rect,
+    max_scroll: u16,
+    top: u16,
+    total: u16,
+    viewport: u16,
+) {
+    if track.height == 0 || track.width == 0 {
+        return;
+    }
+    // Always paint the track so users know it's there.
+    let track_style = Style::default().fg(theme::BLUE_500).bg(theme::SURFACE);
+    let empty: String = "│".to_string();
+    let mut lines: Vec<Line> = (0..track.height)
+        .map(|_| Line::from(Span::styled(empty.clone(), track_style)))
+        .collect();
+
+    if total > viewport && max_scroll > 0 {
+        // Thumb size proportional to visible fraction; min 1 cell.
+        let ratio = (viewport as f64 / total as f64).clamp(0.05, 1.0);
+        let thumb_h = ((track.height as f64) * ratio).round().max(1.0) as u16;
+        let thumb_h = thumb_h.min(track.height);
+        // Position: top of content → thumb at top.
+        let travel = track.height.saturating_sub(thumb_h);
+        let pos = if max_scroll == 0 {
+            0
+        } else {
+            ((top as f64 / max_scroll as f64) * travel as f64).round() as u16
+        };
+        let thumb_style = if app.scrollbar_drag {
             Style::default()
-                .fg(theme::META_BLUE)
-                .bg(theme::SURFACE)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            truncate(&text, avail),
+                .fg(theme::BG)
+                .bg(theme::META_BLUE_SKY)
+                .add_modifier(Modifier::BOLD)
+        } else {
             Style::default()
-                .fg(theme::BLUE_100)
-                .bg(theme::SURFACE)
-                .add_modifier(Modifier::ITALIC),
-        ),
-    ];
-    f.render_widget(Paragraph::new(Line::from(spans)).style(bg), area);
+                .fg(theme::BG)
+                .bg(theme::META_BLUE)
+                .add_modifier(Modifier::BOLD)
+        };
+        for row in pos..pos.saturating_add(thumb_h).min(track.height) {
+            lines[row as usize] = Line::from(Span::styled("█".to_string(), thumb_style));
+        }
+    } else {
+        // Nothing to scroll — faint full track.
+        for line in &mut lines {
+            *line = Line::from(Span::styled(
+                "│".to_string(),
+                Style::default().fg(theme::FAINT).bg(theme::BG),
+            ));
+        }
+    }
+
+    f.render_widget(Paragraph::new(lines), track);
 }
 
 fn cell_lines(app: &App, cell: &Cell, out: &mut Vec<Line<'static>>) {
@@ -647,7 +789,7 @@ fn draw_busy_line(f: &mut Frame, app: &App, area: Rect) {
 }
 
 // ── input ──────────────────────────────────────────────────────────────────
-fn draw_input(f: &mut Frame, app: &App, area: Rect) {
+fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = !app.busy && app.approval.is_none();
     let border_color = if app.approval.is_some() {
         theme::BORDER
@@ -684,18 +826,34 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // The caret is painted *over* a cell, never inserted — inserting a span on
-    // a blink phase shifts the whole line sideways twice a second, which reads
-    // as the input box "jumping". It is steady for the same reason.
     let text = app.input.text();
     let focused = app.approval.is_none() && app.picker.is_none();
+    let sel = app.input.selection_range();
     let mut lines: Vec<Line> = Vec::new();
+    let sel_style = Style::default()
+        .fg(theme::BG)
+        .bg(theme::META_BLUE_SKY)
+        .add_modifier(Modifier::BOLD);
+    let normal = Style::default().fg(theme::FG);
+
+    // Absolute char index at the start of each line.
+    let mut line_starts: Vec<usize> = vec![0];
+    {
+        let mut acc = 0usize;
+        for (i, ch) in text.chars().enumerate() {
+            if ch == '\n' {
+                line_starts.push(i + 1);
+            }
+            acc = i + 1;
+        }
+        let _ = acc;
+    }
 
     if text.is_empty() {
         let hint = if app.busy {
             "type a follow-up — Enter queues it"
         } else {
-            "plan, build, debug  ·  / for commands"
+            "plan, build, debug  ·  click to place caret  ·  Ctrl+A/C/V"
         };
         let mut spans = vec![Span::styled(
             "❯ ".to_string(),
@@ -703,7 +861,6 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
                 .fg(theme::META_BLUE)
                 .add_modifier(Modifier::BOLD),
         )];
-        // Caret occupies its own cell in both states, so the hint never moves.
         spans.push(Span::styled(
             " ".to_string(),
             if focused {
@@ -724,22 +881,53 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
                     .fg(theme::META_BLUE)
                     .add_modifier(Modifier::BOLD),
             )];
-            if focused && i == cur_line {
-                // Split the line at the caret and restyle exactly one cell.
-                let chars: Vec<char> = l.chars().collect();
-                let col = cur_col.min(chars.len());
-                let before: String = chars[..col].iter().collect();
-                let under: String = chars.get(col).copied().unwrap_or(' ').to_string();
-                let after: String = chars.iter().skip(col + 1).collect();
-                if !before.is_empty() {
-                    spans.push(Span::styled(before, Style::default().fg(theme::FG)));
+            let base = line_starts.get(i).copied().unwrap_or(0);
+            let chars: Vec<char> = l.chars().collect();
+            // Paint selection + caret per character.
+            let mut run = String::new();
+            let mut run_sel = false;
+            let flush = |run: &mut String, run_sel: bool, spans: &mut Vec<Span>| {
+                if run.is_empty() {
+                    return;
                 }
-                spans.push(Span::styled(under, theme::style_cursor_on()));
-                if !after.is_empty() {
-                    spans.push(Span::styled(after, Style::default().fg(theme::FG)));
+                let style = if run_sel { sel_style } else { normal };
+                spans.push(Span::styled(std::mem::take(run), style));
+            };
+            for (ci, ch) in chars.iter().enumerate() {
+                let abs = base + ci;
+                let is_sel = sel.map(|(lo, hi)| abs >= lo && abs < hi).unwrap_or(false);
+                let is_caret = focused && i == cur_line && ci == cur_col;
+                if is_caret {
+                    flush(&mut run, run_sel, &mut spans);
+                    run_sel = false;
+                    spans.push(Span::styled(
+                        ch.to_string(),
+                        if is_sel {
+                            Style::default()
+                                .fg(theme::BG)
+                                .bg(theme::META_BLUE)
+                                .add_modifier(Modifier::BOLD)
+                        } else {
+                            theme::style_cursor_on()
+                        },
+                    ));
+                } else if is_sel != run_sel && !run.is_empty() {
+                    flush(&mut run, run_sel, &mut spans);
+                    run_sel = is_sel;
+                    run.push(*ch);
+                } else {
+                    if run.is_empty() {
+                        run_sel = is_sel;
+                    }
+                    run.push(*ch);
                 }
+            }
+            // Caret past end of line.
+            if focused && i == cur_line && cur_col >= chars.len() {
+                flush(&mut run, run_sel, &mut spans);
+                spans.push(Span::styled(" ".to_string(), theme::style_cursor_on()));
             } else {
-                spans.push(Span::styled(l.to_string(), Style::default().fg(theme::FG)));
+                flush(&mut run, run_sel, &mut spans);
             }
             lines.push(Line::from(spans));
         }
@@ -749,19 +937,12 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
     let h = inner.height as usize;
     let top = cur_line.saturating_sub(h.saturating_sub(1));
 
-    // Display width (not char count) of everything left of the cursor, so the
-    // caret is right even with CJK/emoji, and long lines scroll horizontally.
     let cur_disp_w: usize = text
         .split('\n')
         .nth(cur_line)
-        .map(|l| {
-            l.chars()
-                .take(cur_col)
-                .collect::<String>()
-                .width()
-        })
+        .map(|l| l.chars().take(cur_col).collect::<String>().width())
         .unwrap_or(cur_col);
-    let usable = (inner.width as usize).saturating_sub(3); // "❯ " + 1 margin
+    let usable = (inner.width as usize).saturating_sub(3);
     let x_off = cur_disp_w.saturating_sub(usable) as u16;
 
     let visible: Vec<Line> = lines.into_iter().skip(top).take(h).collect();
@@ -772,8 +953,6 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
         inner,
     );
 
-    // Keep hardware cursor hidden; we draw our own Meta caret.
-    // (Hidden at app start.) Position still set for terminals that show it.
     if app.approval.is_none() && app.picker.is_none() {
         let cx = inner.x + 2 + (cur_disp_w as u16).saturating_sub(x_off);
         let cy = inner.y + (cur_line - top) as u16;
@@ -781,6 +960,11 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
             f.set_cursor_position((cx, cy));
         }
     }
+
+    // Geometry for click-to-caret / next mouse frame.
+    app.input_inner = inner;
+    app.input_scroll_top = top;
+    app.input_x_off = x_off;
 }
 
 // ── statusline ─────────────────────────────────────────────────────────────
