@@ -1,5 +1,6 @@
-# Install Muse CLI for the current user (Windows)
-# Usage: irm ... | iex   OR   powershell -File install.ps1
+# Install Meta CLI (unofficial) for the current user (Windows)
+# Builds the `muse` binary (Muse Spark agent)
+# Usage: powershell -File install.ps1
 
 $ErrorActionPreference = "Stop"
 $Repo = $PSScriptRoot
@@ -14,7 +15,7 @@ if (-not $cargo) {
 
 $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
 Set-Location $Repo
-Write-Host "Building muse (release)..." -ForegroundColor Cyan
+Write-Host "Building Meta CLI / muse (release)..." -ForegroundColor Cyan
 cargo build --release
 if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
 
@@ -33,7 +34,7 @@ if ($userPath -notlike "*$dest*") {
 & (Join-Path $dest "muse.exe") install-hook
 
 Write-Host ""
-Write-Host "Installed: $dest\muse.exe" -ForegroundColor Green
+Write-Host "Installed: $dest\muse.exe  (Meta CLI unofficial)" -ForegroundColor Green
 Write-Host "Auth: set MODEL_API_KEY or run  muse auth login" -ForegroundColor Green
 Write-Host "Orca: orca terminal create --command muse" -ForegroundColor Green
 Write-Host "Usage for ADEs: $env:USERPROFILE\.muse\status.json" -ForegroundColor Green

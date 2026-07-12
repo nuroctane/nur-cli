@@ -1,4 +1,4 @@
-//! Meta-inspired palette for Muse CLI (unofficial).
+//! Meta-inspired palette for Meta CLI (unofficial).
 
 use colored::Colorize;
 use ratatui::style::{Color, Modifier, Style};

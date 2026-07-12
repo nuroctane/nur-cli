@@ -4,8 +4,8 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "muse",
     version,
-    about = "Muse Spark coding agent — Meta Model API (unofficial)",
-    long_about = "Terminal coding agent for Muse Spark 1.1 via Meta Model API.\nNot affiliated with Meta Platforms, Inc."
+    about = "Meta CLI (unofficial) — Muse Spark agent for Meta Model API",
+    long_about = "Meta CLI is an unofficial community coding agent for Muse Spark 1.1 via Meta Model API.\nNot affiliated with Meta Platforms, Inc. Repo: github.com/nuroctane/meta-cli"
 )]
 pub struct Cli {
     /// Initial prompt for interactive session

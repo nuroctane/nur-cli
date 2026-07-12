@@ -1,8 +1,10 @@
-# Muse CLI
+# Meta CLI (unofficial)
 
 **Unofficial** terminal coding agent for [Muse Spark](https://ai.meta.com/blog/introducing-muse-spark-meta-model-api/) via [Meta Model API](https://dev.meta.ai/).
 
-Not affiliated with Meta Platforms, Inc.
+> Not affiliated with Meta Platforms, Inc. Community project under `nuroctane/meta-cli`.
+
+The installed command is **`muse`** (Muse Spark agent).
 
 ```
 muse                      # interactive TUI (Meta blue theme)
@@ -21,7 +23,7 @@ muse install-hook         # install Orca ADE hook
 ### Windows
 
 ```powershell
-cd path\to\muse-cli
+cd path\to\meta-cli
 .\install.ps1
 ```
 
@@ -35,6 +37,12 @@ cargo install --path .
 
 Requires [Rust](https://rustup.rs) / cargo.
 
+Clone into Laboratory (Windows):
+
+```text
+C:\Users\david\Scripts\clone meta-cli main to Laboratory local.cmd
+```
+
 ## Auth
 
 ```bash
@@ -47,7 +55,7 @@ Env overrides the file. Get a key at [dev.meta.ai](https://dev.meta.ai/).
 
 ## ADE / Orca usage (your Meta API key)
 
-Muse writes **machine-readable usage** so host tools can show tokens/cost for Meta/Muse traffic:
+Meta CLI writes **machine-readable usage** so host tools can show tokens/cost for Meta/Muse traffic:
 
 | Path | Purpose |
 |------|---------|
@@ -72,7 +80,7 @@ muse install-hook    # ~/.orca/agent-hooks/muse-hook.cmd
 
 ```powershell
 muse install-hook
-orca terminal create --worktree active --command "muse" --title "Muse Spark" --json
+orca terminal create --worktree active --command "muse" --title "Meta CLI" --json
 ```
 
 Poll `%USERPROFILE%\.muse\status.json` for live Meta token usage tied to the user's key.
@@ -106,4 +114,4 @@ Docs: https://dev.meta.ai/docs/getting-started/overview
 
 ## License
 
-MIT
+MIT — unofficial community software; not a Meta product.

@@ -1,13 +1,13 @@
 [package]
-name = "muse"
+name = "meta-cli"
 version = "0.2.0"
 edition = "2021"
-description = "Muse Spark coding agent CLI — Meta Model API (unofficial)"
+description = "Meta CLI (unofficial) — Muse Spark coding agent for Meta Model API"
 license = "MIT"
-authors = ["Muse CLI contributors"]
-repository = "https://github.com/example/muse-cli"
+authors = ["meta-cli contributors"]
+repository = "https://github.com/nuroctane/meta-cli"
 readme = "README.md"
-keywords = ["muse", "meta", "ai", "cli", "agent"]
+keywords = ["meta", "muse", "ai", "cli", "agent"]
 categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]

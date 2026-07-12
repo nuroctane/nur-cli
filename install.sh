@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Install Meta CLI (unofficial) — builds the `muse` binary
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
@@ -21,6 +22,6 @@ esac
 
 "$DEST/muse" --version
 "$DEST/muse" install-hook || true
-echo "Installed $DEST/muse"
+echo "Installed $DEST/muse (Meta CLI unofficial)"
 echo "Auth: export MODEL_API_KEY=...  or  muse auth login"
 echo "ADE status: ~/.muse/status.json"
