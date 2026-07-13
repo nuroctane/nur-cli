@@ -195,8 +195,9 @@ pub fn resolve_safe_workspace(
         return Err(MuseError::Other(format!(
             "refusing --cwd at filesystem root ({})\n\
              Pick a project folder, e.g.\n\
-               meta --cwd C:\\Users\\{}\\laboratory\\meta-cli\n\
-             or:  cd path\\to\\repo  then  meta",
+               meta --cwd C:\\Users\\{}\\Laboratory\\meta-cli\n\
+             or in the TUI:  /cd path\\to\\repo\n\
+             or set user env META_CWD to your usual project folder",
             requested.display(),
             std::env::var("USERNAME")
                 .or_else(|_| std::env::var("USER"))
@@ -271,9 +272,9 @@ pub fn resolve_safe_workspace(
 
     Err(MuseError::Other(format!(
         "refusing to run with workspace at filesystem root ({})\n\
-         cd into a project first, or:\n\
-           meta --cwd C:\\Users\\you\\path\\to\\repo\n\
-         Optional default: set user env META_CWD to your usual project folder.",
+         In the TUI:  /cd path\\to\\repo\n\
+         Or launch with:  meta --cwd C:\\Users\\you\\path\\to\\repo\n\
+         Or set user env META_CWD for a default project folder.",
         requested.display()
     )))
 }
