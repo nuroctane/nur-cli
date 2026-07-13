@@ -126,6 +126,15 @@ Search vector memory.
 
 Dispatch to external APIs.
 
+### `omp`
+
+Delegate a focused coding task to the [Oh My Pi](https://omp.sh) agent backend
+(headless one-shot `omp -p` run in the workspace — the IDE/ACP surface is not
+used). Strong at LSP-backed refactors, debugger-driven diagnosis (DAP), AST
+rewrites, and web research. `run` is write-class: it needs approval in manual
+mode and is blocked in plan mode; `status`/`version` are free. Provisioned by
+`meta ecosystem ensure` when Bun is installed.
+
 ### `skill`
 
 Load a skill into context.

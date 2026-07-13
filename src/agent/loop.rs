@@ -753,6 +753,19 @@ mod tests {
         ));
         assert!(!is_read_only_call("ruflo", r#"{"action":"swarm_init"}"#));
     }
+
+    #[test]
+    fn omp_run_is_write_class() {
+        // status/version probes are free; a run drives a full coding agent.
+        assert!(is_read_only_call("omp", r#"{"action":"status"}"#));
+        assert!(is_read_only_call("omp", r#"{"action":"version"}"#));
+        assert!(!is_read_only_call("omp", r#"{"action":"run","prompt":"x"}"#));
+        assert!(
+            !is_read_only_call("omp", "{}"),
+            "default action=run must not be free"
+        );
+        assert!(!is_parallel_safe("omp", r#"{"action":"status"}"#));
+    }
 }
 
 pub(crate) const INTERRUPT_OUTPUT: &str = "[interrupted by user]";
@@ -801,6 +814,10 @@ fn is_read_only_call(name: &str, args: &str) -> bool {
     }
     if name == "executor" {
         return crate::tools::executor_is_read_only(args);
+    }
+    // omp `run` hands the workspace to a full coding agent — write-class.
+    if name == "omp" {
+        return crate::tools::omp_is_read_only(args);
     }
     if name == "agent" {
         return false;

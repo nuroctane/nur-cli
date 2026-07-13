@@ -1,6 +1,6 @@
 [package]
 name = "meta-cli"
-version = "0.6.11"
+version = "0.7.0"
 edition = "2021"
 description = "Fully loaded unofficial Meta Model API coding agent — vision (look/extract_frames), streaming TUI, tools + sandbox, Graphify/PLUR/Ruflo/Executor + 800+ skills, subagents, atomic sessions, meta doctor"
 license = "GPL-3.0-or-later"
@@ -28,6 +28,10 @@ thiserror = "1"
 ratatui = "0.29"
 # Pinned to the last release on ratatui 0.29 (0.3.6+ moved to ratatui-core).
 tui-markdown = "=0.3.5"
+# Pinned to the last releases on ratatui 0.29 (newer versions moved to ratatui 0.30 / ratatui-core).
+tui-scrollview = "=0.5.1"
+ratatui-image = { version = "=8.0.1", default-features = false, features = ["crossterm"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 crossterm = "0.28"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }

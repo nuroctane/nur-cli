@@ -156,6 +156,50 @@ pub fn ensure_executor(node_ok: bool) -> ComponentStatus {
     c
 }
 
+/// Oh My Pi (omp.sh) — the coding-agent *backend* the `omp` tool delegates to
+/// (headless `omp -p` runs; we deliberately skip its IDE/ACP surface).
+/// Ships on npm as @oh-my-pi/pi-coding-agent but runs on Bun, so install via
+/// bun when present; otherwise report how to get it without failing ensure.
+pub fn ensure_omp() -> ComponentStatus {
+    let mut c = ComponentStatus {
+        name: "omp".into(),
+        ..Default::default()
+    };
+
+    if find_bin("omp").is_none() {
+        if let Some(bun) = find_bin("bun") {
+            match run_capture(
+                &bun,
+                &["install", "-g", "@oh-my-pi/pi-coding-agent"],
+                None,
+                300_000,
+            ) {
+                Ok(_) => {}
+                Err(e) => {
+                    c.detail = format!(
+                        "bun install failed: {}",
+                        e.chars().take(200).collect::<String>()
+                    );
+                }
+            }
+        } else {
+            c.detail =
+                "needs Bun (bun.sh) — or: irm https://omp.sh/install.ps1 | iex".into();
+            return c;
+        }
+    }
+
+    if let Some(bin) = find_bin("omp") {
+        c.available = true;
+        c.path = Some(bin.clone());
+        c.version = super::cmd_version_pub(&bin, &["--version"]);
+        c.detail = "coding-agent backend ready (omp.sh · `omp` tool)".into();
+    } else if c.detail.is_empty() {
+        c.detail = "not found after install — try: bun i -g @oh-my-pi/pi-coding-agent".into();
+    }
+    c
+}
+
 /// Install curated skill packs into ~/.agents/skills (Meta discovers this).
 pub fn install_skill_packs(skills_cli: &ComponentStatus) -> (Vec<String>, Vec<String>) {
     let mut ok = Vec::new();

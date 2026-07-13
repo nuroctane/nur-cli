@@ -1,9 +1,9 @@
 //! Rendering for the Meta CLI TUI — Meta-blue surfaces, motion, cursors.
 
 use super::app::{fmt_num, line_to_plain, App, Cell, TextRange};
-use super::{markdown, wrap};
+use super::{ansi, markdown, scrollbar::ScrollMetrics, wrap};
 use crate::theme;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Position, Rect, Size};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
@@ -553,7 +553,11 @@ fn picker_separator_line(width: usize, phase: usize, row_i: usize) -> Line<'stat
 
 // ── transcript ─────────────────────────────────────────────────────────────
 fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
-    let inner_w = area.width.saturating_sub(2).max(10);
+    // Wide scrollbar rail (2 cols) so drag is easy to grab.
+    let sb_w: u16 = 2;
+    // Wrap to the exact width lines render at (1 col left margin, 1 col gap,
+    // then the rail) — otherwise the last columns clip under the scrollbar.
+    let inner_w = area.width.saturating_sub(2 + sb_w).max(10);
     // Spinner frame bucket so animated cells re-wrap only when the glyph changes.
     let spin_i = (app.spinner_epoch.elapsed().as_millis() / theme::SPINNER_MS) as u64;
     let elapsed = app.spinner_epoch.elapsed();
@@ -643,9 +647,9 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
             plain_lines.push(line_to_plain(&line));
             wrapped.push(line);
             owner.push(current);
-            // A User cell renders a blank spacer line then the prompt; either
-            // being on screen means the prompt itself is visible.
-            is_prompt_head.push(matches!(cell, Cell::User(_)) && i <= 1);
+            // A User cell renders spacer → top border → padding → first text
+            // row; any of those on screen means the prompt itself is visible.
+            is_prompt_head.push(matches!(cell, Cell::User(_)) && i <= 3);
             hit_headers.push(if is_header { Some(cell_idx) } else { None });
             // Hover any non-blank line of a peekable card (incl. turn strip).
             line_cells.push(if peekable && !empty {
@@ -667,7 +671,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
 
     // Sticky banner takes rows off the body — max_scroll must use body height
     // or the thumb/drag math fights the sticky and feels janky.
-    const STICKY_H: u16 = 3;
+    const STICKY_H: u16 = 4;
     // Pre-pass sticky using full viewport estimate, then refine.
     let max_scroll_full = total.saturating_sub(viewport);
     let top_guess = max_scroll_full.saturating_sub(app.scroll_from_bottom.min(max_scroll_full));
@@ -680,8 +684,6 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     .is_some();
     let sticky_h = if sticky_guess { STICKY_H } else { 0 };
     let body_h = viewport.saturating_sub(sticky_h);
-    // Wide scrollbar rail (2 cols) so drag is easy to grab.
-    let sb_w: u16 = 2;
 
     // Publish metrics for PageUp/Home + scrollbar drag (body, not full viewport).
     app.view_h = body_h;
@@ -711,7 +713,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     let top = max_scroll.saturating_sub(app.scroll_from_bottom);
     app.transcript_top = top;
 
-    let text_w = area.width.saturating_sub(2 + sb_w).max(10);
+    let text_w = inner_w;
 
     let sel = app.selection;
     let visible: Vec<Line> = wrapped
@@ -761,7 +763,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
         height: body_h,
     };
     app.scrollbar_track = track;
-    draw_scrollbar(f, app, track, max_scroll, top, total, body_h);
+    draw_scrollbar(f, app, track, top, total, body_h);
 
     // Floating "↓ N · End" chip — click jumps to latest (hit-tested in App).
     if app.scroll_from_bottom > 0 && body_h > 0 {
@@ -809,7 +811,10 @@ fn sticky_owner(
     }
 }
 
-/// Full-width sticky prompt banner — 3 rows, high contrast, hard to miss.
+/// Full-width sticky prompt banner — title bar, padded prompt text with wide
+/// margins, and a bottom hairline so it reads as a card pinned over the
+/// transcript. The whole rect (including padding) is the right/double-click
+/// hitbox for the prompt's context menu.
 fn draw_sticky_banner(f: &mut Frame, prompt: &str, area: Rect) {
     f.render_widget(Clear, area);
     let bar = Style::default().bg(theme::META_BLUE);
@@ -832,7 +837,7 @@ fn draw_sticky_banner(f: &mut Frame, prompt: &str, area: Rect) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                " · scroll follows this turn ".to_string(),
+                " · scroll follows this turn · double/right-click for menu ".to_string(),
                 Style::default().fg(theme::BLUE_100).bg(theme::META_BLUE),
             ),
         ]))
@@ -840,17 +845,18 @@ fn draw_sticky_banner(f: &mut Frame, prompt: &str, area: Rect) {
         title,
     );
 
-    // Rows 1..: prompt text, wrapped, on surface with left accent.
+    // Middle rows: prompt text with wide side margins on the surface.
+    let hairline_h: u16 = if area.height >= 3 { 1 } else { 0 };
     if area.height >= 2 {
         let body = Rect {
             x: area.x,
             y: area.y + 1,
             width: area.width,
-            height: area.height.saturating_sub(1),
+            height: area.height.saturating_sub(1 + hairline_h),
         };
         let text = prompt.replace('\n', " ");
-        let avail = (area.width as usize).saturating_sub(4);
-        // Split across body rows.
+        // Wider margins all around: 5-col gutter each side.
+        let avail = (area.width as usize).saturating_sub(10).max(8);
         let mut lines: Vec<Line> = Vec::new();
         let chars: Vec<char> = text.chars().collect();
         let mut i = 0;
@@ -860,9 +866,13 @@ fn draw_sticky_banner(f: &mut Frame, prompt: &str, area: Rect) {
                 break;
             }
             let end = (i + avail).min(chars.len());
-            let chunk: String = chars[i..end].iter().collect();
+            let mut chunk: String = chars[i..end].iter().collect();
             i = end;
-            let prefix = if r == 0 { " ❯ " } else { "   " };
+            // More prompt than rows: elide the tail.
+            if r + 1 == rows && i < chars.len() {
+                chunk.push('…');
+            }
+            let prefix = if r == 0 { "  ❯  " } else { "     " };
             lines.push(Line::from(vec![
                 Span::styled(
                     prefix.to_string(),
@@ -883,80 +893,83 @@ fn draw_sticky_banner(f: &mut Frame, prompt: &str, area: Rect) {
                 break;
             }
         }
-        // Left accent bar via a full-row style.
         f.render_widget(Paragraph::new(lines).style(surface), body);
-        // Bottom edge underline.
-        if area.height >= 3 {
-            let edge = Rect {
-                x: area.x,
-                y: area.bottom().saturating_sub(1),
-                width: area.width,
-                height: 1,
-            };
-            // Overpaint last body row border-style already content; draw a
-            // thin rule using faint dashes under the last content if space.
-            let _ = edge;
-        }
+    }
+
+    // Bottom hairline: separates the pinned card from the scrolling body.
+    if hairline_h == 1 {
+        let edge = Rect {
+            x: area.x,
+            y: area.bottom().saturating_sub(1),
+            width: area.width,
+            height: 1,
+        };
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "▁".repeat(area.width as usize),
+                Style::default().fg(theme::BORDER).bg(theme::SURFACE),
+            ))),
+            edge,
+        );
     }
 }
 
-/// Vertical scrollbar: track + thumb. Drag handled in `App::on_mouse`.
-fn draw_scrollbar(
-    f: &mut Frame,
-    app: &App,
-    track: Rect,
-    max_scroll: u16,
-    top: u16,
-    total: u16,
-    viewport: u16,
-) {
+/// Vertical scrollbar with a fractional (1/8-cell) thumb, hover and drag
+/// states. Geometry comes from [`ScrollMetrics`] (tui-scrollbar-style subcell
+/// math) so the thumb glides instead of jumping whole rows; drag is handled in
+/// `App::on_mouse` with a grab offset so the thumb never leaps to the pointer.
+fn draw_scrollbar(f: &mut Frame, app: &App, track: Rect, top: u16, total: u16, viewport: u16) {
     if track.height == 0 || track.width == 0 {
         return;
     }
-    // Always paint the track so users know it's there.
-    let track_style = Style::default().fg(theme::BLUE_500).bg(theme::SURFACE);
-    let empty: String = "│".to_string();
-    let mut lines: Vec<Line> = (0..track.height)
-        .map(|_| Line::from(Span::styled(empty.clone(), track_style)))
-        .collect();
+    let m = ScrollMetrics::new(total as usize, viewport as usize, top as usize, track.height);
+    let scrollable = m.max_offset() > 0;
 
-    if total > viewport && max_scroll > 0 {
-        // Thumb size proportional to visible fraction; min 1 cell.
-        let ratio = (viewport as f64 / total as f64).clamp(0.05, 1.0);
-        let thumb_h = ((track.height as f64) * ratio).round().max(1.0) as u16;
-        let thumb_h = thumb_h.min(track.height);
-        // Position: top of content → thumb at top.
-        let travel = track.height.saturating_sub(thumb_h);
-        let pos = if max_scroll == 0 {
-            0
-        } else {
-            ((top as f64 / max_scroll as f64) * travel as f64).round() as u16
-        };
-        let thumb_style = if app.scrollbar_drag {
-            Style::default()
-                .fg(theme::BG)
-                .bg(theme::META_BLUE_SKY)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-                .fg(theme::BG)
-                .bg(theme::META_BLUE)
-                .add_modifier(Modifier::BOLD)
-        };
-        for row in pos..pos.saturating_add(thumb_h).min(track.height) {
-            lines[row as usize] = Line::from(Span::styled("█".to_string(), thumb_style));
-        }
+    // Thumb hue steps up as you interact: idle → hover → drag.
+    let thumb_fg = if app.scrollbar_drag {
+        theme::META_BLUE_SKY
+    } else if app.scrollbar_hover {
+        theme::BLUE_250
     } else {
-        // Nothing to scroll — faint full track.
-        for line in &mut lines {
-            *line = Line::from(Span::styled(
-                "│".to_string(),
-                Style::default().fg(theme::FAINT).bg(theme::BG),
-            ));
+        theme::META_BLUE
+    };
+    let track_fg = if !scrollable {
+        theme::dim(theme::BORDER, 0.4)
+    } else if app.scrollbar_hover || app.scrollbar_drag {
+        theme::BLUE_500
+    } else {
+        theme::BORDER
+    };
+
+    let buf = f.buffer_mut();
+    let lane_x = track.x + track.width.saturating_sub(1); // thumb lane (right col)
+    let edge_x = track.x; // hover-expansion lane (left col)
+    for row in 0..track.height {
+        let y = track.y + row;
+        match m.glyph(row as usize) {
+            Some(g) => {
+                buf[(lane_x, y)]
+                    .set_char(g)
+                    .set_style(Style::default().fg(thumb_fg).bg(theme::BG));
+                // Hover/drag: thumb grows to both columns — chunky, grabbable.
+                if (app.scrollbar_hover || app.scrollbar_drag) && track.width >= 2 {
+                    buf[(edge_x, y)]
+                        .set_char(g)
+                        .set_style(Style::default().fg(thumb_fg).bg(theme::BG));
+                }
+            }
+            None => {
+                buf[(lane_x, y)]
+                    .set_char('│')
+                    .set_style(Style::default().fg(track_fg).bg(theme::BG));
+                if track.width >= 2 {
+                    buf[(edge_x, y)]
+                        .set_char(' ')
+                        .set_style(Style::default().bg(theme::BG));
+                }
+            }
         }
     }
-
-    f.render_widget(Paragraph::new(lines), track);
 }
 
 fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut Vec<Line<'static>>) {
@@ -968,25 +981,12 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
         .map(|(_, t)| theme::settle_progress(t.elapsed(), theme::SETTLE_MS));
     match cell {
         Cell::Banner => banner_lines(app, out),
-        Cell::User(text) => {
-            out.push(Line::default());
-            for (i, l) in text.lines().enumerate() {
-                let prefix = if i == 0 { "❯ " } else { "  " };
-                out.push(Line::from(vec![
-                    Span::styled(
-                        prefix.to_string(),
-                        Style::default()
-                            .fg(theme::META_BLUE)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(l.to_string(), theme::style_user()),
-                ]));
-            }
-        }
+        Cell::User(text) => user_prompt_card(text, width, out),
         Cell::Assistant { text, streaming } => {
             out.push(Line::default());
             let md = markdown::render_markdown(text, theme::style_assistant());
-            if md.is_empty() && *streaming {
+            // render_markdown always yields ≥1 line, so gate on the source text.
+            if text.trim().is_empty() && *streaming {
                 // Waiting for first token — quiet Meta pulse.
                 out.push(Line::from(vec![
                     Span::styled(
@@ -1290,11 +1290,22 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                         } else {
                             for (i, l) in all.iter().enumerate() {
                                 let prefix = if i == 0 { "└ " } else { "  " };
-                                out.push(Line::from(vec![
+                                let mut spans = vec![
                                     Span::raw("  ".to_string()),
                                     Span::styled(prefix.to_string(), theme::style_faint()),
-                                    Span::styled(truncate(l, 200), theme::style_faint()),
-                                ]));
+                                ];
+                                // Shell output keeps its ANSI colours (cargo,
+                                // git, ls) — parsed to spans, escapes stripped.
+                                let clean = ansi::strip(l);
+                                if clean.chars().count() > 200 {
+                                    spans.push(Span::styled(
+                                        truncate(&clean, 200),
+                                        theme::style_faint(),
+                                    ));
+                                } else {
+                                    spans.extend(ansi::line_to_spans(l, theme::style_faint()));
+                                }
+                                out.push(Line::from(spans));
                             }
                         }
                     }
@@ -1376,6 +1387,69 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
     }
 }
 
+/// User prompt as a bordered card — a rounded Meta-blue frame with a padding
+/// row above/below and inner margins, so prompts read as distinct blocks in
+/// the transcript. Every border/padding row belongs to the prompt cell, which
+/// also makes the right-click / double-click context-menu hitbox much larger
+/// than the text alone.
+fn user_prompt_card(text: &str, width: usize, out: &mut Vec<Line<'static>>) {
+    let w = width.max(12);
+    let border = Style::default().fg(theme::META_BLUE);
+    let label = Style::default()
+        .fg(theme::META_BLUE_SKY)
+        .add_modifier(Modifier::BOLD);
+    // Inner text width: "│  " + text + "  │"
+    let text_w = w.saturating_sub(6).max(4);
+
+    out.push(Line::default());
+
+    // Top border with a " ❯ you " label woven in.
+    let title = " ❯ you ";
+    let dashes = w.saturating_sub(2 + 1 + title.chars().count());
+    out.push(Line::from(vec![
+        Span::styled("╭─".to_string(), border),
+        Span::styled(title.to_string(), label),
+        Span::styled(format!("{}╮", "─".repeat(dashes)), border),
+    ]));
+
+    // Padding row + wrapped text rows + padding row, all inside │ … │.
+    let blank_inner = |out: &mut Vec<Line<'static>>| {
+        out.push(Line::from(vec![
+            Span::styled("│".to_string(), border),
+            Span::raw(" ".repeat(w.saturating_sub(2))),
+            Span::styled("│".to_string(), border),
+        ]));
+    };
+    blank_inner(out);
+    for src in text.lines() {
+        let chars: Vec<char> = src.chars().collect();
+        let mut i = 0usize;
+        loop {
+            let end = (i + text_w).min(chars.len());
+            let chunk: String = chars[i..end].iter().collect();
+            let pad = text_w.saturating_sub(chunk.chars().count());
+            out.push(Line::from(vec![
+                Span::styled("│  ".to_string(), border),
+                Span::styled(chunk, theme::style_user()),
+                Span::raw(" ".repeat(pad)),
+                Span::styled("  │".to_string(), border),
+            ]));
+            i = end;
+            if i >= chars.len() {
+                break;
+            }
+        }
+        if chars.is_empty() {
+            blank_inner(out);
+        }
+    }
+    blank_inner(out);
+    out.push(Line::from(Span::styled(
+        format!("╰{}╯", "─".repeat(w.saturating_sub(2))),
+        border,
+    )));
+}
+
 /// Highlight drag-selected characters with a Meta-blue selection wash.
 fn apply_selection_style(line: Line<'static>, line_idx: usize, range: TextRange) -> Line<'static> {
     let (a, b) = range.normalized();
@@ -1436,18 +1510,70 @@ fn apply_selection_style(line: Line<'static>, line_idx: usize, range: TextRange)
 /// terminal emits all-motion mouse events (we enable CSI ?1003h for that).
 /// Draws the floating peek dialogue. Returns the box + clickable-✕ rects (for
 /// click-outside / ✕ dismissal), or None when nothing is shown.
-fn draw_hover_peek(f: &mut Frame, app: &App, area: Rect) -> Option<(Rect, Rect)> {
+fn draw_hover_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Rect)> {
     let idx = app.active_peek_cell()?;
-    let cell = app.cells.get(idx)?;
-    if !cell.is_peekable() {
-        return None;
+    // New target → start reading it from the top.
+    if app.peek_scroll_cell != Some(idx) {
+        app.peek_scroll_cell = Some(idx);
+        app.peek_scroll = 0;
     }
-    // If already expanded in-place, skip the floating box (content is visible).
-    if cell.is_collapsible() && cell.expanded() {
-        return None;
+
+    // Snapshot what we need so the cell borrow ends before we touch the
+    // (mutable) image cache below.
+    struct PeekData {
+        title: String,
+        body: String,
+        hue: Color,
+        diff: Option<Vec<String>>,
+        thinking: bool,
+        image: Option<String>,
     }
-    let title = cell.peek_title()?;
-    let body = cell.peek_body().unwrap_or_default();
+    let p = {
+        let cell = app.cells.get(idx)?;
+        if !cell.is_peekable() {
+            return None;
+        }
+        // If already expanded in-place, skip the floating box (content is visible).
+        if cell.is_collapsible() && cell.expanded() {
+            return None;
+        }
+        let hue = match cell {
+            Cell::Thinking { .. } => theme::VIOLET,
+            Cell::Tool { name, .. } => theme::tool_color(name),
+            Cell::TurnDone { interrupted, .. } => {
+                if *interrupted {
+                    theme::WARN
+                } else {
+                    theme::SUCCESS
+                }
+            }
+            _ => theme::META_BLUE,
+        };
+        let (diff, image) = if let Cell::Tool { name, args, .. } = cell {
+            let diff = if is_edit_tool(name) {
+                Some(approval_preview(name, args))
+            } else {
+                None
+            };
+            // Vision tools: peek shows the actual picture when possible.
+            let image = if name == "look" {
+                image_arg_path(args)
+            } else {
+                None
+            };
+            (diff, image)
+        } else {
+            (None, None)
+        };
+        PeekData {
+            title: cell.peek_title()?,
+            body: cell.peek_body().unwrap_or_default(),
+            hue,
+            diff,
+            thinking: matches!(cell, Cell::Thinking { .. }),
+            image,
+        }
+    };
     let pinned = app.peek_pinned == Some(idx);
 
     let max_w = (area.width.saturating_mul(7) / 10).clamp(40, 96);
@@ -1495,21 +1621,8 @@ fn draw_hover_peek(f: &mut Frame, app: &App, area: Rect) -> Option<(Rect, Rect)>
         rect,
     );
 
-    let border_hue = match cell {
-        Cell::Thinking { .. } => theme::VIOLET,
-        Cell::Tool { name, .. } => theme::tool_color(name),
-        Cell::TurnDone { interrupted, .. } => {
-            if *interrupted {
-                theme::WARN
-            } else {
-                theme::SUCCESS
-            }
-        }
-        _ => theme::META_BLUE,
-    };
-
     let footer = if pinned {
-        "  ✕ / click outside / esc — close  ·  e expand  "
+        "  wheel scroll  ·  ✕ / outside / esc close  ·  e expand  "
     } else {
         "  click card to pin  ·  esc close  ·  e expand  "
     };
@@ -1518,8 +1631,8 @@ fn draw_hover_peek(f: &mut Frame, app: &App, area: Rect) -> Option<(Rect, Rect)>
         f,
         rect,
         phase,
-        border_hue,
-        &format!(" {title} "),
+        p.hue,
+        &format!(" {} ", p.title),
         None,
         footer,
     );
@@ -1538,79 +1651,72 @@ fn draw_hover_peek(f: &mut Frame, app: &App, area: Rect) -> Option<(Rect, Rect)>
         );
     }
 
-    let mut lines: Vec<Line> = Vec::new();
-    let max_lines = inner.height as usize;
-    let max_cols = (inner.width as usize).saturating_sub(1).max(8);
-
-    // Edit tools: render the green/red diff in the peek too (parity with the card).
-    if let Cell::Tool { name, args, .. } = cell {
-        if is_edit_tool(name) {
-            let diff = approval_preview(name, args);
-            let w = inner.width as usize;
-            let cap = max_lines.saturating_sub(1).max(1);
-            for l in diff.iter().take(cap) {
-                lines.push(diff_line(l, 0, w));
-            }
-            if diff.len() > cap {
-                lines.push(Line::from(Span::styled(
-                    format!("… +{} more · e expands in place", diff.len() - cap),
-                    theme::style_faint(),
-                )));
-            }
-            f.render_widget(
-                Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2)),
+    // Vision peek: render the actual image via the terminal's graphics
+    // protocol (sixel / kitty / iTerm2, halfblocks fallback) — ratatui-image.
+    if let Some(path) = &p.image {
+        if let Some(proto) = app.image_protocol(path) {
+            f.render_stateful_widget(
+                ratatui_image::StatefulImage::default(),
                 inner,
+                proto,
             );
+            app.peek_rows = inner.height;
             return Some((rect, close));
         }
     }
 
-    for (i, raw) in body.lines().enumerate() {
-        if i >= max_lines.saturating_sub(1) {
-            lines.push(Line::from(Span::styled(
-                format!("… +more · click ▸ to expand"),
-                Style::default().fg(theme::FAINT),
-            )));
-            break;
+    // Content: green/red diff bands for edit tools, soft-wrapped (ANSI-clean)
+    // text for everything else. Capped generously; the body scrolls.
+    const PEEK_MAX_ROWS: usize = 400;
+    let mut lines: Vec<Line> = Vec::new();
+    let max_cols = (inner.width as usize).saturating_sub(2).max(8);
+
+    if let Some(diff) = &p.diff {
+        let w = (inner.width as usize).saturating_sub(1);
+        for l in diff.iter().take(PEEK_MAX_ROWS) {
+            lines.push(diff_line(l, 0, w));
         }
-        // Soft wrap long lines into the dialogue.
-        let mut rest = raw;
-        let mut first = true;
-        while !rest.is_empty() {
-            if lines.len() >= max_lines.saturating_sub(1) {
-                lines.push(Line::from(Span::styled(
-                    "…".to_string(),
-                    Style::default().fg(theme::FAINT),
-                )));
-                break;
-            }
-            let take = rest
-                .chars()
-                .take(max_cols)
-                .collect::<String>()
-                .chars()
-                .count();
-            let chunk: String = rest.chars().take(take).collect();
-            let advanced = chunk.len();
-            rest = if advanced >= rest.len() {
-                ""
-            } else {
-                &rest[advanced..]
-            };
-            let style = if matches!(cell, Cell::Thinking { .. }) {
-                theme::style_thinking_violet()
-            } else {
-                Style::default().fg(theme::FG)
-            };
+        if diff.len() > PEEK_MAX_ROWS {
             lines.push(Line::from(Span::styled(
-                if first {
-                    chunk
-                } else {
-                    format!("  {chunk}")
-                },
-                style,
+                format!("… +{} more · e expands in place", diff.len() - PEEK_MAX_ROWS),
+                theme::style_faint(),
             )));
-            first = false;
+        }
+    } else {
+        let clean = ansi::strip(&p.body);
+        let style = if p.thinking {
+            theme::style_thinking_violet()
+        } else {
+            Style::default().fg(theme::FG)
+        };
+        'outer: for raw in clean.lines() {
+            // Soft wrap long lines into the dialogue.
+            let mut rest = raw;
+            let mut first = true;
+            loop {
+                if lines.len() >= PEEK_MAX_ROWS {
+                    lines.push(Line::from(Span::styled(
+                        "… truncated".to_string(),
+                        Style::default().fg(theme::FAINT),
+                    )));
+                    break 'outer;
+                }
+                let chunk: String = rest.chars().take(max_cols).collect();
+                let advanced = chunk.len();
+                rest = if advanced >= rest.len() {
+                    ""
+                } else {
+                    &rest[advanced..]
+                };
+                lines.push(Line::from(Span::styled(
+                    if first { chunk } else { format!("  {chunk}") },
+                    style,
+                )));
+                first = false;
+                if rest.is_empty() {
+                    break;
+                }
+            }
         }
     }
     if lines.is_empty() {
@@ -1620,11 +1726,49 @@ fn draw_hover_peek(f: &mut Frame, app: &App, area: Rect) -> Option<(Rect, Rect)>
         )));
     }
 
-    f.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2)),
-        inner,
-    );
+    let total_rows = lines.len() as u16;
+    app.peek_rows = total_rows;
+    let bg = Style::default().bg(theme::SURFACE_2);
+
+    if total_rows <= inner.height {
+        // Fits — plain paragraph, no scroll state to keep.
+        app.peek_scroll = 0;
+        f.render_widget(Paragraph::new(lines).style(bg), inner);
+    } else {
+        // Overflows — tui-scrollview: content renders into an offscreen buffer
+        // and the wheel (over the box) drives the offset; it draws its own
+        // scrollbar on the right edge.
+        use ratatui::widgets::StatefulWidget;
+        let scroll = app
+            .peek_scroll
+            .min(total_rows.saturating_sub(inner.height));
+        app.peek_scroll = scroll;
+        let size = Size::new(inner.width.saturating_sub(1).max(1), total_rows);
+        let mut sv = tui_scrollview::ScrollView::new(size);
+        sv.render_widget(
+            Paragraph::new(lines).style(bg),
+            Rect::new(0, 0, size.width, size.height),
+        );
+        let mut st =
+            tui_scrollview::ScrollViewState::with_offset(Position::new(0, scroll));
+        StatefulWidget::render(sv, inner, f.buffer_mut(), &mut st);
+    }
     Some((rect, close))
+}
+
+/// Workspace image path from a `look` tool's args, if it's a decodable format.
+fn image_arg_path(args: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(args).ok()?;
+    let p = v.get("path")?.as_str()?;
+    let ext = std::path::Path::new(p)
+        .extension()?
+        .to_str()?
+        .to_lowercase();
+    if matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp") {
+        Some(p.to_string())
+    } else {
+        None
+    }
 }
 
 /// Per-character aurora shimmer for a run of text — a colour wave travels

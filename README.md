@@ -13,7 +13,7 @@ meta          # primary — Meta-blue interactive TUI
 muse          # legacy alias (same binary)
 ```
 
-**v0.6.11** — Production-minded agent harness, end to end: **[Docs](https://nuroctane.github.io/meta-cli/)**
+**v0.7.0** — Production-minded agent harness, end to end: **[Docs](https://nuroctane.github.io/meta-cli/)**
 
 | Surface | What ships |
 |---------|------------|
@@ -21,7 +21,7 @@ muse          # legacy alias (same binary)
 | **Agent** | Manual / plan / auto · tool loop · subagents · todos · auto-compact · Esc cancel · Shift+Tab mid-turn · prompt-cache keys |
 | **Vision** | **`look`** (images / short video) · **`extract_frames`** (ffmpeg keyframes) · prompt auto-attach of media paths |
 | **Tools** | read · edit · bash · web · git · knowledge stack · agent |
-| **Ecosystem** | Graphify · PLUR · Ruflo · Executor · AKM · **800+ skills** — background provision |
+| **Ecosystem** | Graphify · PLUR · Ruflo · Executor · **omp** · AKM · **800+ skills** — background provision |
 | **Hardening** | Sandbox · bash denylist · SSRF blocks · atomic `~/.meta` IO · API retries · install SHA-256 · `meta doctor` |
 | **Host panels** | Live `status.json` / `usage.jsonl` · Orca hook when present |
 
@@ -63,6 +63,7 @@ muse          # legacy alias (same binary)
 | web | `web_search` `web_fetch` (text only; SSRF / private-IP blocks) |
 | git | `git_status` `git_diff` |
 | knowledge | `graphify` `plur` `ruflo` `executor` `skill` `memory` |
+| delegate | `agent` `omp` — omp.sh coding-agent backend (LSP renames, DAP debugging, AST rewrites) |
 | agent | `todo_write` `submit_plan` `agent` |
 
 ### Vision (design / multimodal)
@@ -308,7 +309,16 @@ wouldn't exist without the Ratatui folks — huge thanks to them. 💙
 
 Assistant markdown in the transcript is parsed by joshka's
 **[tui-markdown](https://github.com/joshka/tui-markdown)** — we re-tint its
-output to the Meta-blue palette on top.
+output to the Meta-blue palette on top. Long peek dialogues scroll via
+**[tui-scrollview](https://crates.io/crates/tui-scrollview)**, inline image
+peeks render through **[ratatui-image](https://crates.io/crates/ratatui-image)**
+(sixel / kitty / iTerm2, halfblocks fallback), and the smooth fractional
+scrollbar is modelled on **[tui-scrollbar](https://crates.io/crates/tui-scrollbar)**'s
+subcell math.
+
+The `omp` tool delegates to **[Oh My Pi](https://omp.sh)**
+([can1357/oh-my-pi](https://github.com/can1357/oh-my-pi)) — headless backend
+runs only, provisioned automatically when Bun is available.
 
 Also built on: [tokio](https://tokio.rs), [reqwest](https://github.com/seanmonstar/reqwest),
 [serde](https://serde.rs), and [clap](https://github.com/clap-rs/clap).

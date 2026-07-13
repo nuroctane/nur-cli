@@ -12,6 +12,8 @@ mod list_dir;
 mod memory_tool;
 pub mod media;
 mod multi_edit;
+pub mod omp;
+pub use omp::is_read_only_action as omp_is_read_only;
 pub mod plur;
 mod read_file;
 pub mod ruflo;
@@ -87,6 +89,7 @@ impl ToolHost {
             Box::new(plur::Plur),
             Box::new(ruflo::Ruflo),
             Box::new(executor_tool::ExecutorTool),
+            Box::new(omp::OmpTool),
             Box::new(skill_tool::SkillTool),
             Box::new(memory_tool::MemoryTool),
             Box::new(todo_write::TodoWrite {
@@ -154,6 +157,7 @@ impl ToolHost {
             "plur" => plur::Plur.execute(&args, ctx),
             "ruflo" => ruflo::Ruflo.execute(&args, ctx),
             "executor" => executor_tool::ExecutorTool.execute(&args, ctx),
+            "omp" => omp::OmpTool.execute(&args, ctx),
             "skill" => skill_tool::SkillTool.execute(&args, ctx),
             "memory" => memory_tool::MemoryTool.execute(&args, ctx),
             "todo_write" => todo_write::TodoWrite {

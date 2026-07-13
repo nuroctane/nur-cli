@@ -11,6 +11,7 @@ use crate::api::MetaClient;
 use crate::config::Config;
 use crate::error::Result;
 use crate::tui::input::InputState;
+use crate::tui::scrollbar::{Hit, ScrollMetrics};
 use crate::usage::{TokenUsage, UsageTracker};
 use crossterm::cursor::{Hide, Show};
 use crossterm::event::{
@@ -627,6 +628,21 @@ pub struct App {
     pub sticky_cell: Option<usize>,
     /// True while the user is dragging the scrollbar thumb.
     pub scrollbar_drag: bool,
+    /// Mouse is over the scrollbar rail (hover affordance — thumb widens).
+    pub scrollbar_hover: bool,
+    /// Subcell offset between the grab point and the thumb's top edge, so
+    /// dragging keeps the exact spot under the pointer (no jump-to-centre).
+    pub scrollbar_grab: usize,
+    /// Scroll offset (rows) inside the pinned peek dialogue.
+    pub peek_scroll: u16,
+    /// Total content rows of the current peek body (set at draw; drives clamping).
+    pub peek_rows: u16,
+    /// Peek cell the scroll offset belongs to — reset when the target changes.
+    pub peek_scroll_cell: Option<usize>,
+    /// Terminal graphics picker (protocol + font size) for inline image peeks.
+    pub img_picker: Option<ratatui_image::picker::Picker>,
+    /// Decoded image protocols keyed by path — encoding is expensive, cache it.
+    pub img_cache: HashMap<String, ratatui_image::protocol::StatefulProtocol>,
     /// True while drag-selecting transcript text (not scrollbar).
     pub selecting: bool,
     /// Left button is held — some hosts emit `Moved` instead of `Drag` while held.
@@ -780,6 +796,14 @@ pub async fn run_tui(
     let mut terminal = Terminal::new(backend)
         .map_err(|e| crate::error::MuseError::Other(format!("terminal init: {e}")))?;
 
+    // Query the terminal's graphics protocol + font size for inline image
+    // peeks (sixel / kitty / iTerm2, halfblocks fallback). 1s timeout inside;
+    // any failure degrades to a sane halfblocks picker, never an error.
+    let img_picker = Some(
+        ratatui_image::picker::Picker::from_query_stdio()
+            .unwrap_or_else(|_| ratatui_image::picker::Picker::from_fontsize((9, 18))),
+    );
+
     let (tx, rx) = mpsc::unbounded_channel();
     let u_session = usage.session_usage().clone();
     let session_id = session.id.clone();
@@ -825,6 +849,13 @@ pub async fn run_tui(
         sticky_banner: ratatui::layout::Rect::default(),
         sticky_cell: None,
         scrollbar_drag: false,
+        scrollbar_hover: false,
+        scrollbar_grab: 0,
+        peek_scroll: 0,
+        peek_rows: 0,
+        peek_scroll_cell: None,
+        img_picker,
+        img_cache: HashMap::new(),
         selecting: false,
         mouse_left_down: false,
         select_anchor: None,
@@ -1611,6 +1642,8 @@ impl App {
 
         self.mouse_col = m.column;
         self.mouse_row = m.row;
+        // Hover affordance: the thumb widens when the pointer is on the rail.
+        self.scrollbar_hover = self.scrollbar_drag || self.hit_scrollbar(m.column, m.row);
 
         // Context menu is modal — forward all mouse events.
         if self.ctx_menu.is_some() {
@@ -1631,6 +1664,9 @@ impl App {
             MouseEventKind::ScrollUp => {
                 if self.palette_visible() {
                     self.palette_wheel_step(-1);
+                } else if self.wheel_over_pinned_peek(m.column, m.row) {
+                    // Wheel inside a pinned peek scrolls its body, not the page.
+                    self.peek_scroll = self.peek_scroll.saturating_sub(3);
                 } else {
                     // Always works — including during streaming and under approval.
                     self.scroll_up(3);
@@ -1642,6 +1678,11 @@ impl App {
             MouseEventKind::ScrollDown => {
                 if self.palette_visible() {
                     self.palette_wheel_step(1);
+                } else if self.wheel_over_pinned_peek(m.column, m.row) {
+                    self.peek_scroll = self
+                        .peek_scroll
+                        .saturating_add(3)
+                        .min(self.peek_rows.saturating_sub(1));
                 } else {
                     self.scroll_down(3);
                 }
@@ -1662,11 +1703,10 @@ impl App {
                 if approval_open {
                     // Only allow grabbing the scrollbar to read context.
                     if self.hit_scrollbar(m.column, m.row) {
-                        self.scrollbar_drag = true;
                         self.selecting = false;
                         self.select_anchor = None;
                         self.selection = None;
-                        self.scroll_from_scrollbar_y(m.row);
+                        self.scrollbar_press(m.row);
                     }
                     return;
                 }
@@ -1712,11 +1752,10 @@ impl App {
                     self.last_click = None;
                 }
                 if self.hit_scrollbar(m.column, m.row) {
-                    self.scrollbar_drag = true;
                     self.selecting = false;
                     self.select_anchor = None;
                     self.selection = None;
-                    self.scroll_from_scrollbar_y(m.row);
+                    self.scrollbar_press(m.row);
                 } else if self.in_transcript(m.column, m.row) {
                     self.scrollbar_drag = false;
                     // Begin potential drag-select; click actions fire on Up if
@@ -1804,7 +1843,7 @@ impl App {
     /// Shared path for `Drag` and button-held `Moved` (scrollbar + text select).
     fn apply_mouse_drag(&mut self, col: u16, row: u16) {
         if self.scrollbar_drag {
-            self.scroll_from_scrollbar_y(row);
+            self.scrollbar_drag_to(row);
             return;
         }
         if self.approval.is_some() {
@@ -1944,6 +1983,28 @@ impl App {
         self.peek_pinned.or(self.hover_cell)
     }
 
+    /// Decoded terminal-graphics protocol for an image path, lazily built and
+    /// cached (encoding is expensive; re-doing it per frame would melt the UI).
+    pub fn image_protocol(
+        &mut self,
+        path: &str,
+    ) -> Option<&mut ratatui_image::protocol::StatefulProtocol> {
+        if !self.img_cache.contains_key(path) {
+            let picker = self.img_picker.as_ref()?;
+            let meta = std::fs::metadata(path).ok()?;
+            if meta.len() > 20 * 1024 * 1024 {
+                return None; // don't decode huge files on the UI thread
+            }
+            let img = image::ImageReader::open(path).ok()?.decode().ok()?;
+            if self.img_cache.len() >= 4 {
+                self.img_cache.clear();
+            }
+            self.img_cache
+                .insert(path.to_string(), picker.new_resize_protocol(img));
+        }
+        self.img_cache.get_mut(path)
+    }
+
     fn pin_peek_latest(&mut self) {
         if let Some(idx) = self
             .cells
@@ -1967,6 +2028,11 @@ impl App {
         col >= left && col < t.right() && row >= t.y && row < t.bottom()
     }
 
+    /// Wheel events over an open pinned peek scroll the peek body.
+    fn wheel_over_pinned_peek(&self, col: u16, row: u16) -> bool {
+        self.peek_pinned.is_some() && rect_contains(self.peek_box, col, row)
+    }
+
     fn hit_jump_chip(&self, col: u16, row: u16) -> bool {
         let t = self.jump_chip;
         t.width > 0
@@ -1977,31 +2043,65 @@ impl App {
             && row < t.bottom()
     }
 
-    /// Map a Y position on the scrollbar track to `scroll_from_bottom`.
-    ///
-    /// Track top = oldest (max scroll_from_bottom); track bottom = latest (0).
-    fn scroll_from_scrollbar_y(&mut self, row: u16) {
+    /// Subcell scrollbar geometry for the current transcript (same fractional
+    /// model the renderer uses, so hit-tests match what's on screen).
+    fn scrollbar_metrics(&self) -> ScrollMetrics {
+        let total = (self.plain_lines.len() as u16).max(self.view_total);
+        ScrollMetrics::new(
+            total as usize,
+            self.view_h as usize,
+            self.transcript_top as usize,
+            self.scrollbar_track.height,
+        )
+    }
+
+    /// Press on the rail — GUI-standard feel:
+    /// on the thumb → start a drag, remembering where inside the thumb you
+    /// grabbed (so it never jumps to centre under the pointer);
+    /// on the open track → page toward the click.
+    fn scrollbar_press(&mut self, row: u16) {
         let t = self.scrollbar_track;
         if t.height == 0 {
             return;
         }
-        let max = self.max_scroll();
-        if max == 0 {
-            self.scroll_from_bottom = 0;
+        let m = self.scrollbar_metrics();
+        if m.max_offset() == 0 {
             return;
         }
-        // Clamp row to track; if pointer is above/below, pin to ends.
-        let y = if row <= t.y {
-            0u16
-        } else if row >= t.bottom().saturating_sub(1) {
-            t.height.saturating_sub(1)
-        } else {
-            row.saturating_sub(t.y).min(t.height.saturating_sub(1))
-        };
-        let denom = t.height.saturating_sub(1).max(1) as f64;
-        let frac = (y as f64 / denom).clamp(0.0, 1.0);
-        // scroll_from_bottom is high when looking at old content (top of track).
-        self.set_scroll_from_bottom(((1.0 - frac) * max as f64).round() as u16);
+        let pos = ScrollMetrics::subcell_at_row(row.saturating_sub(t.y));
+        match m.hit_test(pos) {
+            Hit::Thumb => {
+                self.scrollbar_drag = true;
+                self.scrollbar_grab = pos.saturating_sub(m.thumb_start());
+            }
+            Hit::Track => {
+                let page = (m.viewport_len().saturating_sub(1).max(1)) as u16;
+                if pos < m.thumb_start() {
+                    self.scroll_up(page);
+                } else {
+                    self.scroll_down(page);
+                }
+            }
+        }
+    }
+
+    /// Drag the thumb: its top edge follows (pointer − grab offset).
+    fn scrollbar_drag_to(&mut self, row: u16) {
+        let t = self.scrollbar_track;
+        if t.height == 0 {
+            return;
+        }
+        let m = self.scrollbar_metrics();
+        if m.max_offset() == 0 {
+            return;
+        }
+        let rel = row.clamp(t.y, t.bottom().saturating_sub(1)).saturating_sub(t.y);
+        let pos = ScrollMetrics::subcell_at_row(rel);
+        let thumb_start = pos.saturating_sub(self.scrollbar_grab);
+        // `offset` counts lines from the top; scroll_from_bottom from the end.
+        let offset = m.offset_for_thumb_start(thumb_start) as u16;
+        let max = m.max_offset() as u16;
+        self.set_scroll_from_bottom(max.saturating_sub(offset));
     }
 
     /// Map a terminal (column, row) click onto the input buffer caret.

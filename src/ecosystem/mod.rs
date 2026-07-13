@@ -21,7 +21,7 @@ pub use skills::install_bundled_skills;
 const ECOSYSTEM_MARKER: &str = "ecosystem.json";
 /// Bump when new packs/tools are added so old markers re-run ensure.
 /// Bump when spawn/install logic changes so markers re-run ensure.
-const ECOSYSTEM_SCHEMA: u32 = 3;
+const ECOSYSTEM_SCHEMA: u32 = 4;
 /// Re-run ensure at most once per this many seconds unless forced.
 const ENSURE_TTL_SECS: u64 = 86_400;
 
@@ -47,6 +47,8 @@ pub struct EcosystemStatus {
     pub akm: ComponentStatus,
     #[serde(default)]
     pub executor: ComponentStatus,
+    #[serde(default)]
+    pub omp: ComponentStatus,
     pub skills_installed: Vec<String>,
     #[serde(default)]
     pub packs_installed: Vec<String>,
@@ -65,11 +67,12 @@ impl EcosystemStatus {
             }
         };
         format!(
-            "ecosystem · {}  {}  {}  {}  {}  · packs {}",
+            "ecosystem · {}  {}  {}  {}  {}  {}  · packs {}",
             bit(self.graphify.available, "graphify"),
             bit(self.plur.available, "plur"),
             bit(self.ruflo.available, "ruflo"),
             bit(self.executor.available, "executor"),
+            bit(self.omp.available, "omp"),
             bit(self.skills_cli.available, "skills"),
             if self.packs_installed.is_empty() {
                 "…".into()
@@ -88,6 +91,7 @@ impl EcosystemStatus {
             &self.skills_cli,
             &self.akm,
             &self.executor,
+            &self.omp,
         ];
         for c in comps {
             if c.name.is_empty() {
@@ -127,7 +131,7 @@ impl EcosystemStatus {
         }
         s.push_str(
             "\n  slash: /ecosystem /plur /ruflo /graphify /skills\n\
-             tools:  graphify plur ruflo executor skill\n\
+             tools:  graphify plur ruflo executor omp skill\n\
              packs:  design · clone-website · cybersecurity · opencode catalog · DCP patterns\n",
         );
         s
@@ -177,6 +181,7 @@ pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
     status.skills_cli = packs::ensure_skills_cli(status.node_ok);
     status.akm = packs::ensure_akm(status.node_ok);
     status.executor = packs::ensure_executor(status.node_ok);
+    status.omp = packs::ensure_omp();
 
     // Third-party skill packs (network; markers skip re-download).
     let (packs_ok, pack_notes) = packs::install_skill_packs(&status.skills_cli);
@@ -402,6 +407,10 @@ pub fn find_bin(name: &str) -> Option<String> {
         PathBuf::from(r"C:\Program Files\nodejs").join(format!("{name}.cmd")),
         PathBuf::from(r"C:\Program Files\nodejs").join(format!("{name}.exe")),
         PathBuf::from(r"C:\Program Files\nodejs").join(name),
+        // Bun global installs (`bun install -g`) — e.g. the omp coding agent.
+        home.join(".bun").join("bin").join(format!("{name}.exe")),
+        home.join(".bun").join("bin").join(format!("{name}.cmd")),
+        home.join(".bun").join("bin").join(name),
     ];
 
     // npm global prefix (use cmd-safe npm resolution to avoid recursion)

@@ -10,6 +10,7 @@ Meta CLI ships with an auto-provisioned knowledge stack.
 | **PLUR** | Shared engram memory across tools and sessions |
 | **Ruflo** | Vector memory + swarm / hive-mind patterns |
 | **Executor** | MCP / OpenAPI gateway catalog |
+| **omp** | [Oh My Pi](https://omp.sh) coding-agent backend — headless `omp -p` runs via the `omp` tool (needs Bun) |
 | **Skills** | Progressive packs (design-eng, clone-website, cybersecurity, …) via `skill` |
 | **AKM** | Agent knowledge package manager (requires Node.js) |
 

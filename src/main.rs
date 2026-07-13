@@ -342,12 +342,14 @@ fn run_doctor() -> Result<()> {
     theme::print_ok(&format!("shell   {}", sh.label));
 
     // Optional tools on PATH
-    for name in ["rg", "git", "node", "npm", "uv", "ffmpeg"] {
+    for name in ["rg", "git", "node", "npm", "uv", "bun", "ffmpeg"] {
         let found = which_bin(name);
         if let Some(p) = found {
             theme::print_ok(&format!("{name:<7} {p}"));
         } else if name == "ffmpeg" {
             theme::print_info("ffmpeg  not on PATH (optional — extract_frames / design-from-video)");
+        } else if name == "bun" {
+            theme::print_info("bun     not on PATH (optional — omp coding-agent backend)");
         } else {
             theme::print_info(&format!("{name:<7} not on PATH"));
         }
