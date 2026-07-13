@@ -76,7 +76,7 @@ pub enum Cell {
     User(String),
     Assistant { text: String, streaming: bool },
     /// Model reasoning stream. Collapsed by default when finished — click or
-    /// press `e` (empty input) to expand. `duration` set when the thought ends.
+    /// click to expand. `duration` set when the thought ends.
     Thinking {
         text: String,
         active: bool,
@@ -1631,20 +1631,8 @@ impl App {
             KeyCode::Char('u') if ctrl => self.input.delete_to_line_start(),
             KeyCode::Char('w') if ctrl => self.input.delete_word_back(),
             KeyCode::Char('j') if ctrl => self.input.insert_char('\n'),
-            // `e` with empty draft: expand/collapse the peeked card, else latest.
-            // (High-frequency path is unanimated — design-eng: no motion on keys.)
-            KeyCode::Char('e') if !ctrl && !alt && self.input.is_empty() && !self.busy => {
-                if let Some(idx) = self.peek_pinned.or(self.hover_cell) {
-                    self.toggle_cell_expand(idx);
-                    self.peek_pinned = None;
-                } else {
-                    self.toggle_last_collapsible();
-                }
-            }
-            // `p` with empty draft: pin-peek the latest thought/tool/turn.
-            KeyCode::Char('p') if !ctrl && !alt && self.input.is_empty() && !self.busy => {
-                self.pin_peek_latest();
-            }
+            // No bare/Alt letter shortcuts for peek/expand — those used to eat the
+            // first keystroke of normal typing ("e"xplain, "p"lease). Use click.
             KeyCode::Char(c) if !ctrl && !alt => {
                 self.input.insert_char(c);
                 self.palette_idx = 0;
@@ -2893,7 +2881,7 @@ impl App {
         }
     }
 
-    /// Expand/collapse the most recent collapsible card (keyboard: `e` when idle).
+    /// Expand/collapse the most recent collapsible card (click the card / ▸).
     fn toggle_last_collapsible(&mut self) {
         if let Some(idx) = self
             .cells

@@ -320,7 +320,7 @@ Launching from a drive root (`C:\`) auto-picks a safe workspace (git / last sess
 | **Drag on chat text** | Select + auto-copy |
 | **Click `↓ N · End`** | Jump to latest |
 | Click card / `▸` | Peek / expand |
-| `p` / `e` (empty input) | Peek latest / expand |
+| `Alt+p` / `Alt+e` | Peek latest / expand |
 | **Ctrl+A** | Select-all input (or whole transcript if input empty) |
 | **Ctrl+C** | Copy selection (transcript or input); else interrupt / double-tap quit |
 | **Ctrl+V** | Paste into input |
