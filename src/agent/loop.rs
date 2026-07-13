@@ -123,6 +123,10 @@ impl AgentRunner {
         tx: &mpsc::UnboundedSender<AgentEvent>,
         cancel: &CancellationToken,
     ) -> Result<String> {
+        // Discard any media a prior turn queued but never flushed (e.g. `look`
+        // ran, then the turn was cancelled before the attach) so a stale image
+        // can't bleed onto this unrelated prompt.
+        let _ = media::take_pending_media();
         session.push_user(user_text);
         // Auto-attach media paths mentioned in the user prompt (png/mp4/…).
         let auto_notes = media::auto_attach_from_text(&self.cwd, user_text);

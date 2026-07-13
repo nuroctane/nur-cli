@@ -87,7 +87,7 @@ fn draw_session_picker(f: &mut Frame, app: &mut App, area: Rect) {
     let scope_label = if this_cwd_only { "here" } else { "all" };
     let title = format!(" {spin}  sessions  ·  {total} ");
     let footer = " ↑↓/wheel  ·  ↵ open  ·  tab scope  ·  esc/✕ ";
-    draw_picker_frame(f, rect, phase, &title, scope_label, footer);
+    draw_modal_frame(f, rect, phase, theme::META_BLUE, &title, Some(scope_label), footer);
 
     let pad = 2u16;
     let inner = Rect {
@@ -255,23 +255,29 @@ fn draw_session_picker(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 /// Thick double-line frame with a traveling border accent (phase).
-fn draw_picker_frame(
+/// Shared ornate modal chrome (double border, traveling accent, inner hairline,
+/// title + footer). Every dialog in the TUI is drawn through this so the picker,
+/// command palette, and approval modal share one look. `hue` tints the border
+/// (per-tool colour for approvals, Meta blue elsewhere); `right_label` draws the
+/// `[label] ✕` cluster used by the sessions picker (None omits it).
+fn draw_modal_frame(
     f: &mut Frame,
     rect: Rect,
     phase: usize,
+    hue: Color,
     title: &str,
-    scope_label: &str,
+    right_label: Option<&str>,
     footer: &str,
 ) {
     let buf = f.buffer_mut();
-    let border = Style::default().fg(theme::META_BLUE).bg(theme::SURFACE_2);
+    let border = Style::default().fg(hue).bg(theme::SURFACE_2);
     let accent = Style::default()
         .fg(theme::META_BLUE_SKY)
         .bg(theme::SURFACE_2)
         .add_modifier(Modifier::BOLD);
     let dim = Style::default().fg(theme::BORDER).bg(theme::SURFACE_2);
     let title_s = Style::default()
-        .fg(theme::META_BLUE)
+        .fg(hue)
         .bg(theme::SURFACE_2)
         .add_modifier(Modifier::BOLD);
     let mute = Style::default().fg(theme::MUTED).bg(theme::SURFACE_2);
@@ -346,31 +352,34 @@ fn draw_picker_frame(
         }
     }
 
-    // Title into top edge
+    // Title into top edge — reserve room on the right only when a label is shown.
+    let reserve = if right_label.is_some() { 14 } else { 2 };
     let title_chars: Vec<char> = title.chars().collect();
-    let max_t = top_len.saturating_sub(14).max(8);
+    let max_t = top_len.saturating_sub(reserve).max(8);
     for (i, ch) in title_chars.iter().take(max_t).enumerate() {
         let x = x0 + 2 + i as u16;
         if x < x1 {
             buf[(x, y0)].set_char(*ch).set_style(title_s);
         }
     }
-    // Scope + close on the right of top edge
-    let right = format!(" [{scope_label}]  ✕ ");
-    let rc: Vec<char> = right.chars().collect();
-    let start_x = x1.saturating_sub(rc.len() as u16 + 1);
-    for (i, ch) in rc.iter().enumerate() {
-        let x = start_x + i as u16;
-        if x > x0 && x < x1 {
-            let st = if *ch == '✕' {
-                Style::default()
-                    .fg(theme::ERROR)
-                    .bg(theme::SURFACE_2)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                mute
-            };
-            buf[(x, y0)].set_char(*ch).set_style(st);
+    // Scope + close on the right of top edge (picker only)
+    if let Some(scope_label) = right_label {
+        let right = format!(" [{scope_label}]  ✕ ");
+        let rc: Vec<char> = right.chars().collect();
+        let start_x = x1.saturating_sub(rc.len() as u16 + 1);
+        for (i, ch) in rc.iter().enumerate() {
+            let x = start_x + i as u16;
+            if x > x0 && x < x1 {
+                let st = if *ch == '✕' {
+                    Style::default()
+                        .fg(theme::ERROR)
+                        .bg(theme::SURFACE_2)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    mute
+                };
+                buf[(x, y0)].set_char(*ch).set_style(st);
+            }
         }
     }
 
@@ -385,6 +394,22 @@ fn draw_picker_frame(
                 .set_style(Style::default().fg(theme::FAINT).bg(theme::SURFACE_2));
         }
     }
+}
+
+/// The content rect inside a `draw_modal_frame` (2-cell padding, matching the picker).
+fn modal_inner(rect: Rect) -> Rect {
+    let pad = 2u16;
+    Rect {
+        x: rect.x.saturating_add(pad),
+        y: rect.y.saturating_add(pad),
+        width: rect.width.saturating_sub(pad * 2),
+        height: rect.height.saturating_sub(pad * 2),
+    }
+}
+
+/// Modal animation phase (drives the traveling border accent), shared by all dialogs.
+fn modal_phase(app: &App) -> usize {
+    (app.spinner_epoch.elapsed().as_millis() / theme::SPINNER_MS) as usize
 }
 
 /// Soft rotating separator between session rows.
@@ -1262,6 +1287,10 @@ fn draw_hover_peek(f: &mut Frame, app: &App, area: Rect) {
         height: h,
     };
     f.render_widget(Clear, rect);
+    f.render_widget(
+        Block::default().style(Style::default().bg(theme::SURFACE_2)),
+        rect,
+    );
 
     let border_hue = match cell {
         Cell::Thinking { .. } => theme::VIOLET,
@@ -1276,28 +1305,22 @@ fn draw_hover_peek(f: &mut Frame, app: &App, area: Rect) {
         _ => theme::META_BLUE,
     };
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(border_hue))
-        .style(Style::default().bg(theme::SURFACE_2))
-        .title(Span::styled(
-            format!("  {title}  "),
-            Style::default()
-                .fg(border_hue)
-                .add_modifier(Modifier::BOLD),
-        ))
-        .title_bottom(Span::styled(
-            if pinned {
-                "  esc close · click again / e expand in place · click ▸ on chevron  "
-            } else {
-                "  click card to pin · esc close · e expand  "
-            }
-            .to_string(),
-            Style::default().fg(theme::FAINT),
-        ));
-    let inner = block.inner(rect);
-    f.render_widget(block, rect);
+    let footer = if pinned {
+        "  esc close  ·  e expand in place  ·  click ▸ chevron  "
+    } else {
+        "  click card to pin  ·  esc close  ·  e expand  "
+    };
+    let phase = modal_phase(app);
+    draw_modal_frame(
+        f,
+        rect,
+        phase,
+        border_hue,
+        &format!(" {title} "),
+        None,
+        footer,
+    );
+    let inner = modal_inner(rect);
 
     let mut lines: Vec<Line> = Vec::new();
     let max_lines = inner.height as usize;
@@ -1748,6 +1771,12 @@ fn draw_statusline(f: &mut Frame, app: &App, area: Rect) {
         };
         vec![
             Span::styled(app.cfg.model.clone(), Style::default().fg(theme::BLUE_300)),
+            // Reasoning effort rides with the model, violet like the thought cards.
+            Span::styled(" · ".to_string(), Style::default().fg(theme::FAINT)),
+            Span::styled(
+                effort_label(&app.cfg.reasoning_effort),
+                Style::default().fg(theme::VIOLET),
+            ),
             sep(),
             // Mode is the thing you most need to be sure of before a tool runs.
             Span::styled(
@@ -1782,14 +1811,26 @@ fn draw_statusline(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
+/// Compact reasoning-effort tag for the statusline (e.g. `high` → `※high`).
+fn effort_label(effort: &str) -> String {
+    let e = effort.trim();
+    if e.is_empty() {
+        "※?".to_string()
+    } else {
+        format!("※{e}")
+    }
+}
+
 // ── palette ────────────────────────────────────────────────────────────────
 fn draw_palette(f: &mut Frame, app: &App, input_area: Rect) {
     let matches = app.palette_matches();
     if matches.is_empty() {
         return;
     }
-    let h = (matches.len() as u16).min(10) + 2;
-    let w = 58.min(f.area().width.saturating_sub(4));
+    // content rows + 2 border + 2 inner padding, so the ornate frame has room.
+    let content = (matches.len() as u16).min(10);
+    let h = content + 4;
+    let w = 60.min(f.area().width.saturating_sub(4)).max(34);
     let y = input_area.y.saturating_sub(h);
     let rect = Rect {
         x: input_area.x + 1,
@@ -1798,17 +1839,21 @@ fn draw_palette(f: &mut Frame, app: &App, input_area: Rect) {
         height: h,
     };
     f.render_widget(Clear, rect);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme::META_BLUE))
-        .style(Style::default().bg(theme::SURFACE_2))
-        .title(Span::styled(
-            " commands ",
-            Style::default().fg(theme::META_BLUE_SKY),
-        ));
-    let inner = block.inner(rect);
-    f.render_widget(block, rect);
+    f.render_widget(
+        Block::default().style(Style::default().bg(theme::SURFACE_2)),
+        rect,
+    );
+    let phase = modal_phase(app);
+    draw_modal_frame(
+        f,
+        rect,
+        phase,
+        theme::META_BLUE,
+        " ⌘  commands ",
+        None,
+        " ↑↓ move  ·  ↵ run  ·  esc close ",
+    );
+    let inner = modal_inner(rect);
 
     let sel = app.palette_idx.min(matches.len() - 1);
     // Scroll the window so the selection is always visible (>10 commands).
@@ -1855,9 +1900,12 @@ fn draw_palette(f: &mut Frame, app: &App, input_area: Rect) {
 fn draw_approval(f: &mut Frame, app: &App, area: Rect) {
     let Some(a) = &app.approval else { return };
     let preview = approval_preview(&a.name, &a.args);
+    // body rows + 2 border + 2 inner padding.
     let max_body = (area.height.saturating_sub(6)).min(18).max(6) as usize;
     let body_lines: Vec<&str> = preview.iter().map(|s| s.as_str()).take(max_body).collect();
-    let h = (body_lines.len() as u16 + 5).min(area.height.saturating_sub(2));
+    let overflow = preview.len() > max_body;
+    let content = body_lines.len() as u16 + if overflow { 1 } else { 0 };
+    let h = (content + 4).min(area.height.saturating_sub(2)).max(7);
     let w = 78.min(area.width.saturating_sub(4)).max(48);
     let rect = Rect {
         x: (area.width.saturating_sub(w)) / 2,
@@ -1866,23 +1914,23 @@ fn draw_approval(f: &mut Frame, app: &App, area: Rect) {
         height: h,
     };
     f.render_widget(Clear, rect);
+    f.render_widget(
+        Block::default().style(Style::default().bg(theme::SURFACE_2)),
+        rect,
+    );
     let family = theme::tool_family(&a.name);
     let hue = theme::tool_color(&a.name);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(hue))
-        .style(Style::default().bg(theme::SURFACE_2))
-        .title(Span::styled(
-            format!("  approve · {} · {family}  ", a.name),
-            Style::default().fg(hue).add_modifier(Modifier::BOLD),
-        ))
-        .title_bottom(Span::styled(
-            "  y once   a always   n deny  ",
-            Style::default().fg(theme::FAINT),
-        ));
-    let inner = block.inner(rect);
-    f.render_widget(block, rect);
+    let phase = modal_phase(app);
+    draw_modal_frame(
+        f,
+        rect,
+        phase,
+        hue,
+        &format!(" ⚠ approve · {} · {family} ", a.name),
+        None,
+        "  y once   ·   a always   ·   n deny  ",
+    );
+    let inner = modal_inner(rect);
 
     let col_w = (inner.width as usize).saturating_sub(4).max(20);
     let mut lines: Vec<Line> = Vec::new();
