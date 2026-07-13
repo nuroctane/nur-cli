@@ -59,6 +59,11 @@ pub struct Config {
     /// Model context window (tokens) — used for the ctx% meter in the TUI.
     #[serde(default = "default_context_window")]
     pub context_window: u64,
+    /// Max chars of a single tool result kept inline in the model context.
+    /// Larger outputs spill to `~/.meta/tool-results/` with a short preview.
+    /// `0` = unlimited (legacy behavior).
+    #[serde(default = "default_tool_result_max_chars")]
+    pub tool_result_max_chars: u64,
 }
 
 fn default_model() -> String {
@@ -76,6 +81,9 @@ fn default_max_turns() -> u32 {
 fn default_context_window() -> u64 {
     1_000_000
 }
+fn default_tool_result_max_chars() -> u64 {
+    12_000
+}
 fn default_true() -> bool {
     true
 }
@@ -89,6 +97,7 @@ impl Default for Config {
             max_turns: default_max_turns(),
             stream: true,
             context_window: default_context_window(),
+            tool_result_max_chars: default_tool_result_max_chars(),
         }
     }
 }

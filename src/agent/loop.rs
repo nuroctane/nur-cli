@@ -11,7 +11,7 @@ use crate::config::Config;
 use crate::error::{MuseError, Result};
 use crate::tools::media::{self, MediaAttach};
 use crate::tools::{
-    is_parallel_safe, is_read_only_call, ToolContext, ToolHost,
+    is_parallel_safe, is_read_only_call, spill, ToolContext, ToolHost,
 };
 use crate::usage::{TokenUsage, UsageTracker};
 use serde_json::Value;
@@ -325,6 +325,12 @@ impl AgentRunner {
                             Ok(s) => (s, true),
                             Err(e) => (format!("error: {e}"), false),
                         };
+                        let body = spill::maybe_spill(
+                            &session.id,
+                            &name,
+                            body,
+                            self.config.tool_result_max_chars as usize,
+                        );
                         emit_side_effects(tx, &name, &body);
                         let _ = tx.send(AgentEvent::ToolEnd {
                             id,
@@ -448,6 +454,17 @@ impl AgentRunner {
                     }
                 };
 
+                let body = if ok {
+                    spill::maybe_spill(
+                        &session.id,
+                        &call.name,
+                        body,
+                        self.config.tool_result_max_chars as usize,
+                    )
+                } else {
+                    // Keep error messages intact (usually short).
+                    body
+                };
                 emit_side_effects(tx, &call.name, &body);
                 let _ = tx.send(AgentEvent::ToolEnd {
                     id,

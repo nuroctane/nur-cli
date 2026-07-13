@@ -23,6 +23,7 @@ pub mod ruflo;
 mod sandbox;
 mod search_util;
 mod shell;
+pub mod spill;
 mod skill_tool;
 mod submit_plan;
 mod todo_write;
