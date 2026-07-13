@@ -32,6 +32,14 @@ Then: `meta auth login` → `meta`.
 
 **<span class="install-hot">Windows EXE:</span>** download `meta-windows-x86_64.exe` from [Releases](https://github.com/nuroctane/meta-cli/releases/latest) → double‑click → **full install** (PATH + ecosystem + browser) then TUI. Same stack as the one-liner, no compile. Details: **[Setup](setup.md)**.
 
+### Update
+
+```bash
+meta update
+```
+
+That’s the normal upgrade. Pulls / rebuilds when you have a Laboratory checkout, reinstalls `meta` + ecosystem. Or re-run the one-liner / re-download the EXE. Full detail: **[Setup → Update](setup.md#update-keep-meta-current)**.
+
 ---
 
 ## What you get
@@ -52,7 +60,7 @@ Then: `meta auth login` → `meta`.
 
 ## Quick links
 
-- **[Setup](setup.md)** — System requirements, install, update, uninstall
+- **[Setup](setup.md)** — System requirements, install, **how to update**, uninstall
 - **[Quickstart](quickstart.md)** — Your first session in 60 seconds
 - **[Commands](commands.md)** — Full CLI reference
 - **[TUI](tui.md)** — Keyboard shortcuts, slash commands, colour system

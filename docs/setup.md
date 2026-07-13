@@ -88,13 +88,64 @@ meta auth login
 
 `meta install` is the same one-stop path the release EXE runs (binary → PATH → ecosystem → browser).
 
-### Update
+### Update (keep Meta current)
+
+**Default — one command:**
 
 ```bash
 meta update
 ```
 
-Pulls your local checkout (`~/laboratory/meta-cli` or `~/Laboratory/meta-cli`), runs `cargo build --release`, reinstalls the binary, and re-provisions the ecosystem stack.
+That is the supported upgrade path after any install. Same spirit as the one-liner: refresh source if present, rebuild, reinstall binary + ecosystem + browser stage.
+
+| What `meta update` does | Detail |
+|-------------------------|--------|
+| 1. Find source | `~/laboratory/meta-cli` or `~/Laboratory/meta-cli` (Windows `%USERPROFILE%\…`) |
+| 2. Pull | `git pull --ff-only origin main` when a checkout exists |
+| 3. Build | `cargo build --release` in that tree |
+| 4. Install binary | Copy → `~/.local/bin/meta` (+ `muse` alias) |
+| 5. Stack | `ecosystem ensure --force` · `browser setup` · Orca hook |
+| No source tree? | Falls back to **`meta install`** (self-repair from the running binary) |
+
+Then verify:
+
+```bash
+meta --version
+meta doctor
+```
+
+!!! tip "Remember this"
+    After install, the CLI prints: **`Update: meta update`**.  
+    Bookmark it. Re-run anytime you want the latest main + stack repair.
+
+#### Other upgrade options
+
+| Method | When to use |
+|--------|-------------|
+| **`meta update`** | **Preferred** — always try this first |
+| **Re-run the one-liner** | Same as first install; rebuilds from GitHub main |
+| **Re-download + double‑click** `meta-windows-x86_64.exe` | Windows prebuilt path (no local compile) |
+| **`meta install`** | Re-copy *this* binary + full stack (no `git pull` / rebuild) |
+| **Manual** | `cd` checkout → `git pull` → `cargo build --release` → `.\target\release\meta.exe install` |
+
+=== "Windows (PowerShell)"
+
+    ```powershell
+    meta update
+    # or reinstall from network:
+    irm https://raw.githubusercontent.com/nuroctane/meta-cli/main/install.ps1 | iex
+    # or re-download EXE from Releases and double-click
+    ```
+
+=== "macOS / Linux"
+
+    ```bash
+    meta update
+    # or:
+    curl -fsSL https://raw.githubusercontent.com/nuroctane/meta-cli/main/install.sh | bash
+    ```
+
+Disable automatic background repair (not the same as `meta update`): set `DISABLE_AUTOUPDATER=1` / `DISABLE_UPDATES=1` or `ecosystem_auto_ensure = false` in config — see [Configuration](configuration.md).
 
 ### Verify
 

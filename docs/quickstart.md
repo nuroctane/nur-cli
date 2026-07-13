@@ -89,9 +89,22 @@ Later opens only run light **background repair** if `ecosystem_auto_ensure` is o
 
 ---
 
+## Update later
+
+Keep Meta current with one command:
+
+```bash
+meta update
+```
+
+Pulls latest main (when a Laboratory checkout exists), rebuilds, reinstalls the binary, and re-provisions the ecosystem. Alternatives (re-run one-liner, re-download Windows EXE): **[Setup → Update](setup.md#update-keep-meta-current)**.
+
+---
+
 ## Next steps
 
-- **[Commands](commands.md)** — Full CLI reference
+- **[Setup](setup.md)** — Install paths, **how to update**, uninstall
+- **[Commands](commands.md)** — Full CLI reference (`meta update`, `meta doctor`, …)
 - **[TUI](tui.md)** — Keyboard shortcuts, slash commands
 - **[Tools](tools.md)** — What the agent can do
 - **[Vision](vision.md)** — Send images and video to the model

@@ -61,6 +61,32 @@ doctor complete
 
 ---
 
+## How do I update Meta?
+
+```bash
+meta update
+```
+
+That pulls your Laboratory checkout (`~/laboratory/meta-cli` or `~/Laboratory/meta-cli`), runs `cargo build --release`, reinstalls `~/.local/bin/meta`, and re-runs ecosystem / browser setup.
+
+| If… | Then… |
+|-----|--------|
+| No source checkout | `meta update` falls back to `meta install` (repair from the running binary) |
+| You use the Windows EXE only | Re-download `meta-windows-x86_64.exe` from [Releases](https://github.com/nuroctane/meta-cli/releases/latest) and double‑click, **or** `meta update` if you later have a clone |
+| You want a full network reinstall | Re-run the [one-liner](setup.md) |
+| You only want stack packs refreshed | `meta ecosystem ensure --force` (does not rebuild the CLI) |
+
+Confirm:
+
+```bash
+meta --version
+meta doctor
+```
+
+More: **[Setup → Update](setup.md#update-keep-meta-current)** · **[Commands → meta update](commands.md#meta-update)**.
+
+---
+
 ## Common issues
 
 ### `command not found: meta`

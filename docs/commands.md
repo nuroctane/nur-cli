@@ -144,13 +144,24 @@ Double-clicking `meta-windows-x86_64.exe` from [Releases](https://github.com/nur
 
 ### `meta update`
 
-Pull latest source from your local checkout, rebuild release, reinstall binary + ecosystem.
+**How you upgrade Meta.** Pull latest source, rebuild release, reinstall binary + full stack.
 
 ```bash
 meta update
 ```
 
-See [Setup](setup.md).
+| Step | Action |
+|------|--------|
+| Source | Uses `~/laboratory/meta-cli` or `~/Laboratory/meta-cli` if present |
+| Git | `git pull --ff-only origin main` |
+| Build | `cargo build --release` |
+| Binary | Installs to `~/.local/bin/meta` (+ `muse`) |
+| Stack | `ecosystem ensure --force`, `browser setup`, Orca hook |
+| No checkout | Falls back to `meta install` (repair from the running binary) |
+
+Afterward: `meta --version` · `meta doctor`.
+
+Full paths and alternatives (one-liner / EXE / `meta install`): **[Setup → Update](setup.md#update-keep-meta-current)**.
 
 ---
 

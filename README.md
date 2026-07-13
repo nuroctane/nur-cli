@@ -41,6 +41,22 @@ meta doctor          # health check
 
 Or skip the CLI login: run `meta` and use **`/login`** in the TUI (masked entry). No key? login opens automatically.
 
+### Update (do this later)
+
+```bash
+meta update
+```
+
+**That’s how you upgrade.** Pulls latest `main` when a Laboratory checkout exists (`~/laboratory/meta-cli` or `~/Laboratory/meta-cli`), runs `cargo build --release`, reinstalls `meta` on PATH, and re-provisions the ecosystem stack. No checkout? It falls back to `meta install` (self-repair).
+
+| Also fine | |
+|-----------|--|
+| Re-run the **one-liner** above | Full rebuild from GitHub |
+| Re-download + double‑click **Windows EXE** | Prebuilt path |
+| `meta install` | Reinstall *this* binary + stack (no git pull) |
+
+Verify: `meta --version` · `meta doctor`. Full write-up: [docs/setup.md → Update](./docs/setup.md#update-keep-meta-current).
+
 ### Other ways to install
 
 <table>
@@ -61,7 +77,7 @@ Same full stack as the one-liner (no compile).
 
 The EXE is a **one-stop installer**: copies itself to `~\.local\bin\meta.exe`, adds PATH, pulls prereqs it can (node · bun · uv · rg · ffmpeg), runs **ecosystem ensure** + **browser setup**, then opens Meta. No hand-rolled PATH. No “open TUI while packs install later.”
 
-Sign in when prompted (`/login`, or `meta auth login`). Re-run the release EXE anytime to upgrade.
+Sign in when prompted (`/login`, or `meta auth login`). **To upgrade day-to-day: `meta update`.** Or re-download + re-run the release EXE anytime.
 
 **③ Already cloned**
 
@@ -177,6 +193,7 @@ Docs: **[nuroctane.github.io/meta-cli](https://nuroctane.github.io/meta-cli/)** 
 | **Real agent, not a wrapper** | Custom Rust harness: modes, tools, sandbox, streaming, cancel, subagents, auto-compact |
 | **Sees media** | Muse multimodal via Responses `input_image` / `input_video` — sparse frames, not frame-by-frame spam |
 | **One-shot install** | One-liner **or** Windows EXE · PATH · ecosystem · browser · Orca hook · optional auth |
+| **Easy updates** | **`meta update`** — pull · rebuild · reinstall stack (or re-run one-liner / EXE) |
 | **Install first, then TUI** | Full stack runs **before** the UI; later sessions only do light background repair |
 | **Knowledge stack** | Code graph · shared engrams · vector memory · MCP gateway · skill packs |
 | **Resume other agents** | Skills: `resume-claude` · `resume-codex` · `resume-cursor` · `resume-meta` · **`resume-grok`** (shared reader: `~/.meta/skills/resume-session/`) |
