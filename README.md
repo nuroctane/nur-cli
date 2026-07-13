@@ -240,6 +240,12 @@ Launching from a drive root (`C:\`) auto-picks a safe workspace (git / last sess
 | `/compact` `/usage` `/model` `/effort` | Context & model |
 | `/sessions` `/resume` | Same sessions browser |
 | `/init` `/config` `/clear` `/new` `/exit` | Project & shell |
+| `/login` `/logout` | Authenticate / clear stored key |
+| `/bug` | Open GitHub issues page |
+
+### Quick memory
+
+Type `#` followed by a note to save it directly to `~/.meta/memory.md` without starting a turn — persisted and recalled across sessions.
 
 ### Colour system
 
