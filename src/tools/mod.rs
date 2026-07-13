@@ -98,15 +98,22 @@ impl ToolHost {
     }
 
     pub fn tool_defs(&self) -> Vec<ToolDef> {
-        self.boxed_tools()
-            .into_iter()
-            .map(|t| ToolDef {
-                type_: "function".into(),
-                name: t.name().into(),
-                description: Some(t.description().into()),
-                parameters: Some(t.parameters_schema()),
+        // Cache the static tool defs — todo_write/ submit_plan schema doesn't depend on state
+        static CACHE: std::sync::OnceLock<Vec<ToolDef>> = std::sync::OnceLock::new();
+        CACHE
+            .get_or_init(|| {
+                let host = ToolHost::default();
+                host.boxed_tools()
+                    .into_iter()
+                    .map(|t| ToolDef {
+                        type_: "function".into(),
+                        name: t.name().into(),
+                        description: Some(t.description().into()),
+                        parameters: Some(t.parameters_schema()),
+                    })
+                    .collect()
             })
-            .collect()
+            .clone()
     }
 
     pub fn dispatch(&self, name: &str, arguments: &str, ctx: &ToolContext) -> Result<String> {
@@ -122,12 +129,38 @@ impl ToolHost {
             ));
         }
         let args: Value = serde_json::from_str(arguments).unwrap_or_else(|_| serde_json::json!({}));
-        for tool in self.boxed_tools() {
-            if tool.name() == name {
-                return tool.execute(&args, ctx);
+
+        // Direct match dispatch — no Vec<Box> allocation per call
+        match name {
+            "read_file" => read_file::ReadFile.execute(&args, ctx),
+            "list_dir" => list_dir::ListDir.execute(&args, ctx),
+            "write_file" => write_file::WriteFile.execute(&args, ctx),
+            "edit_file" => edit_file::EditFile.execute(&args, ctx),
+            "multi_edit" => multi_edit::MultiEdit.execute(&args, ctx),
+            "apply_patch" => apply_patch::ApplyPatch.execute(&args, ctx),
+            "bash" => bash::Bash.execute(&args, ctx),
+            "grep" => grep::Grep.execute(&args, ctx),
+            "glob" => glob::GlobTool.execute(&args, ctx),
+            "web_fetch" => web_fetch::WebFetch.execute(&args, ctx),
+            "web_search" => web_search::WebSearch.execute(&args, ctx),
+            "git_status" => git_status::GitStatus.execute(&args, ctx),
+            "git_diff" => git_diff::GitDiff.execute(&args, ctx),
+            "graphify" => graphify::Graphify.execute(&args, ctx),
+            "plur" => plur::Plur.execute(&args, ctx),
+            "ruflo" => ruflo::Ruflo.execute(&args, ctx),
+            "executor" => executor_tool::ExecutorTool.execute(&args, ctx),
+            "skill" => skill_tool::SkillTool.execute(&args, ctx),
+            "memory" => memory_tool::MemoryTool.execute(&args, ctx),
+            "todo_write" => todo_write::TodoWrite {
+                todos: self.todos.clone(),
             }
+            .execute(&args, ctx),
+            "submit_plan" => SubmitPlan {
+                plan: self.plan.clone(),
+            }
+            .execute(&args, ctx),
+            _ => Err(MuseError::Tool(format!("unknown tool: {name}"))),
         }
-        Err(MuseError::Tool(format!("unknown tool: {name}")))
     }
 
     pub fn todos_snapshot(&self) -> TodoList {

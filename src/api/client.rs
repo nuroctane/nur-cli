@@ -35,29 +35,63 @@ impl MetaClient {
         })
     }
 
+    fn is_retryable_status(status: u16) -> bool {
+        matches!(status, 429 | 500 | 502 | 503 | 504)
+    }
+
     pub async fn create_response(&self, req: &ResponseRequest) -> Result<ApiResponse> {
         let url = format!("{}/responses", self.base_url);
-        let res = self
-            .http
-            .post(&url)
-            .bearer_auth(&self.api_key)
-            .header("Content-Type", "application/json")
-            .json(req)
-            .send()
-            .await?;
+        let mut attempt = 0u32;
+        loop {
+            attempt += 1;
+            let res = match self
+                .http
+                .post(&url)
+                .bearer_auth(&self.api_key)
+                .header("Content-Type", "application/json")
+                .json(req)
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    if attempt < 4 {
+                        let backoff = std::time::Duration::from_millis(200 * (1 << (attempt - 1)) + rand_jitter());
+                        tokio::time::sleep(backoff).await;
+                        continue;
+                    }
+                    return Err(MuseError::Other(format!("request failed after {attempt} attempts: {e}")));
+                }
+            };
 
-        let status = res.status();
-        let body = res.text().await?;
+            let status = res.status();
+            let headers = res.headers().clone();
+            let body = res.text().await.unwrap_or_default();
 
-        if !status.is_success() {
-            let msg = parse_error_message(&body).unwrap_or(body.clone());
-            return Err(MuseError::Api {
-                status: status.as_u16(),
-                message: msg,
-            });
+            if !status.is_success() {
+                if Self::is_retryable_status(status.as_u16()) && attempt < 4 {
+                    let retry_after = headers
+                        .get("retry-after")
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .unwrap_or(0);
+                    let base = if retry_after > 0 {
+                        std::time::Duration::from_secs(retry_after)
+                    } else {
+                        std::time::Duration::from_millis(300 * (1 << (attempt - 1)) + rand_jitter())
+                    };
+                    tokio::time::sleep(base).await;
+                    continue;
+                }
+                let msg = parse_error_message(&body).unwrap_or(body.clone());
+                return Err(MuseError::Api {
+                    status: status.as_u16(),
+                    message: msg,
+                });
+            }
+
+            return parse_response_body(&body, status.as_u16());
         }
-
-        parse_response_body(&body, status.as_u16())
     }
 
     /// Stream a response via SSE. `on_event` receives deltas as they arrive;
@@ -70,65 +104,125 @@ impl MetaClient {
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<ApiResponse> {
         let url = format!("{}/responses", self.base_url);
-        let res = self
-            .http
-            .post(&url)
-            .bearer_auth(&self.api_key)
-            .header("Content-Type", "application/json")
-            .header("Accept", "text/event-stream")
-            .json(req)
-            .send()
-            .await?;
-
-        let status = res.status();
-        let content_type = res
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_string();
-
-        if !status.is_success() {
-            let body = res.text().await?;
-            let msg = parse_error_message(&body).unwrap_or(body.clone());
-            return Err(MuseError::Api {
-                status: status.as_u16(),
-                message: msg,
-            });
-        }
-
-        // Server ignored stream=true → plain JSON body.
-        if !content_type.contains("text/event-stream") {
-            let body = res.text().await?;
-            return parse_response_body(&body, status.as_u16());
-        }
-
-        let mut stream = res.bytes_stream();
-        // Byte-level framing: chunks can split a multi-byte character.
-        let mut parser = super::sse::SseParser::new();
-        let mut final_response: Option<ApiResponse> = None;
+        let mut attempt = 0u32;
+        let mut last_err: Option<MuseError> = None;
 
         loop {
-            let chunk = tokio::select! {
-                _ = cancel.cancelled() => return Err(MuseError::Interrupted),
-                c = stream.next() => c,
+            attempt += 1;
+            let res = match self
+                .http
+                .post(&url)
+                .bearer_auth(&self.api_key)
+                .header("Content-Type", "application/json")
+                .header("Accept", "text/event-stream")
+                .json(req)
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    if attempt < 3 {
+                        tokio::time::sleep(std::time::Duration::from_millis(400 * attempt as u64)).await;
+                        last_err = Some(MuseError::Other(e.to_string()));
+                        continue;
+                    }
+                    return Err(MuseError::Other(format!("stream connect failed after {attempt}: {e}")));
+                }
             };
-            let Some(chunk) = chunk else { break };
-            let chunk = chunk?;
 
-            for data in parser.push(&chunk) {
-                if data.trim() == "[DONE]" {
+            let status = res.status();
+            let content_type = res
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_string();
+
+            if !status.is_success() {
+                if Self::is_retryable_status(status.as_u16()) && attempt < 3 {
+                    let body = res.text().await.unwrap_or_default();
+                    last_err = Some(MuseError::Api {
+                        status: status.as_u16(),
+                        message: parse_error_message(&body).unwrap_or(body),
+                    });
+                    let backoff = std::time::Duration::from_millis(500 * (1 << (attempt - 1)));
+                    tokio::time::sleep(backoff).await;
                     continue;
                 }
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
-                    handle_sse_json(&v, &mut on_event, &mut final_response)?;
+                let body = res.text().await?;
+                let msg = parse_error_message(&body).unwrap_or(body.clone());
+                return Err(MuseError::Api {
+                    status: status.as_u16(),
+                    message: msg,
+                });
+            }
+
+            // Server ignored stream=true → plain JSON body.
+            if !content_type.contains("text/event-stream") {
+                let body = res.text().await?;
+                return parse_response_body(&body, status.as_u16());
+            }
+
+            let mut stream = res.bytes_stream();
+            let mut parser = super::sse::SseParser::new();
+            let mut final_response: Option<ApiResponse> = None;
+            let mut saw_any_data = false;
+
+            loop {
+                let chunk = tokio::select! {
+                    _ = cancel.cancelled() => return Err(MuseError::Interrupted),
+                    c = stream.next() => c,
+                };
+                let Some(chunk) = chunk else { break };
+                let chunk = match chunk {
+                    Ok(c) => c,
+                    Err(e) => {
+                        if attempt < 3 {
+                            last_err = Some(MuseError::Other(format!("stream chunk error: {e}")));
+                            break;
+                        } else {
+                            return Err(MuseError::Other(format!("stream chunk error: {e}")));
+                        }
+                    }
+                };
+
+                for data in parser.push(&chunk) {
+                    if data.trim() == "[DONE]" {
+                        continue;
+                    }
+                    saw_any_data = true;
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
+                        if let Err(e) = handle_sse_json(&v, &mut on_event, &mut final_response) {
+                            // If server signaled failure but we have partial response, retry
+                            if attempt < 3 {
+                                last_err = Some(e);
+                                break;
+                            } else {
+                                return Err(e);
+                            }
+                        }
+                    }
+                }
+                if final_response.is_some() {
+                    break;
                 }
             }
-        }
 
-        final_response.ok_or_else(|| {
-            MuseError::Other("stream ended without a completed response".into())
-        })
+            if let Some(fr) = final_response {
+                return Ok(fr);
+            }
+
+            // Fallback: stream ended without completed response — if we saw deltas, try one more time non-streaming?
+            if attempt >= 3 {
+                return Err(last_err.unwrap_or_else(|| {
+                    MuseError::Other(format!(
+                        "stream ended without a completed response (saw_data={saw_any_data})"
+                    ))
+                }));
+            }
+            // retry with backoff before next attempt
+            tokio::time::sleep(std::time::Duration::from_millis(600 * attempt as u64)).await;
+        }
     }
 }
 
@@ -200,4 +294,12 @@ fn parse_error_message(body: &str) -> Option<String> {
                 .and_then(|m| m.as_str())
                 .map(|s| s.to_string())
         })
+}
+
+fn rand_jitter() -> u64 {
+    // Simple jitter without extra dep — use system time lower bits
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64 % 200)
+        .unwrap_or(0)
 }

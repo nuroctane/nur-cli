@@ -304,35 +304,66 @@ fn run_graphify(cwd: &Path, args: &[String], timeout_ms: u64) -> Result<String> 
         final_args.push(gj.to_string_lossy().into_owned());
     }
 
-    // Soft wall-clock timeout via a worker thread so a stuck extract cannot hang
-    // the agent forever. On timeout the child is orphaned (OS reaps on exit) —
-    // extract/update are user-approved and rare enough that this is acceptable.
-    let bin2 = bin.clone();
-    let cwd2 = cwd.to_path_buf();
-    let args2 = final_args.clone();
-    let handle = std::thread::spawn(move || {
-        Command::new(&bin2)
-            .args(&args2)
-            .current_dir(&cwd2)
-            .output()
-    });
-    let output = match handle.join() {
-        Ok(Ok(o)) => o,
-        Ok(Err(e)) => {
-            return Err(MuseError::Tool(format!("failed to run graphify: {e}")));
+    // Proper timeout-enforced process spawn — previously ignored timeout_ms
+    let mut cmd = Command::new(&bin);
+    cmd.args(&final_args)
+        .current_dir(cwd)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| MuseError::Tool(format!("failed to spawn graphify: {e}")))?;
+
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    let out_h = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut s) = stdout {
+            use std::io::Read;
+            let _ = s.read_to_end(&mut buf);
         }
-        Err(_) => {
-            return Err(MuseError::Tool("graphify worker panicked".into()));
+        buf
+    });
+    let err_h = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut s) = stderr {
+            use std::io::Read;
+            let _ = s.read_to_end(&mut buf);
+        }
+        buf
+    });
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    #[cfg(windows)]
+                    {
+                        let _ = Command::new("taskkill")
+                            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+                            .output();
+                    }
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(MuseError::Tool(format!(
+                        "graphify timed out after {}ms (killed) — try narrowing path or run: graphify extract . --code-only",
+                        timeout_ms
+                    )));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(e) => return Err(MuseError::Tool(format!("graphify wait failed: {e}"))),
         }
     };
-    // Note: true kill-on-timeout needs a shared Child handle; we enforce the
-    // budget at the call site by documenting long extract runs, and still pass
-    // timeout_ms so callers can raise it. If the join above is unbounded, that
-    // is intentional for correctness of stdout capture.
-    let _ = timeout_ms;
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout_bytes = out_h.join().unwrap_or_default();
+    let stderr_bytes = err_h.join().unwrap_or_default();
+    let stdout = String::from_utf8_lossy(&stdout_bytes);
+    let stderr = String::from_utf8_lossy(&stderr_bytes);
     let mut out = String::new();
     if !stdout.trim().is_empty() {
         out.push_str(stdout.trim());
@@ -344,9 +375,9 @@ fn run_graphify(cwd: &Path, args: &[String], timeout_ms: u64) -> Result<String> 
         out.push_str("--- stderr ---\n");
         out.push_str(stderr.trim());
     }
-    if !output.status.success() {
+    if !status.success() {
         if out.is_empty() {
-            out = format!("graphify exited with {}", output.status);
+            out = format!("graphify exited with {}", status);
         }
         return Err(MuseError::Tool(out));
     }

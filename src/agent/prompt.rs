@@ -3,7 +3,10 @@ use super::mode::PermissionMode;
 use super::skills::{load_skills, skills_prompt_section};
 use crate::ecosystem;
 use crate::tools::shell_backend;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 pub const PROJECT_INSTRUCTION_FILES: &[&str] = &["MUSE.md", "AGENTS.md", "CLAUDE.md"];
 
@@ -21,6 +24,42 @@ pub fn find_project_instructions(cwd: &Path) -> Option<(String, String)> {
         }
     }
     None
+}
+
+struct SkillCacheEntry {
+    loaded_at: Instant,
+    rendered: String,
+}
+
+static SKILL_CACHE: OnceLock<Mutex<HashMap<String, SkillCacheEntry>>> = OnceLock::new();
+fn skill_cache() -> &'static Mutex<HashMap<String, SkillCacheEntry>> {
+    SKILL_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn cached_skills(cwd: &Path) -> String {
+    let key = cwd.to_string_lossy().to_string();
+    let ttl = Duration::from_secs(30);
+    // Fast path: cache hit within TTL
+    if let Ok(cache) = skill_cache().lock() {
+        if let Some(entry) = cache.get(&key) {
+            if entry.loaded_at.elapsed() < ttl {
+                return entry.rendered.clone();
+            }
+        }
+    }
+    // Miss or expired: reload
+    let skills = load_skills(cwd);
+    let rendered = skills_prompt_section(&skills);
+    if let Ok(mut cache) = skill_cache().lock() {
+        cache.insert(
+            key,
+            SkillCacheEntry {
+                loaded_at: Instant::now(),
+                rendered: rendered.clone(),
+            },
+        );
+    }
+    rendered
 }
 
 /// The parts of the system prompt that come off disk (project instructions,
@@ -60,7 +99,7 @@ impl PromptContext {
             shell_label: shell_backend().label.clone(),
             project: find_project_instructions(cwd),
             memory: memory_prompt_excerpt(3000),
-            skills: skills_prompt_section(&load_skills(cwd)),
+            skills: cached_skills(cwd),
             plur,
         }
     }

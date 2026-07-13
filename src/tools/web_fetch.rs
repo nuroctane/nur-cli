@@ -135,11 +135,25 @@ fn validate_public_url(
 
     // Literal IP → check directly (no pin needed); hostname → resolve, check
     // every record, and pin the first validated address for the connection.
+    // Handle obfuscated forms: decimal (2130706433), octal (0177.0.0.1), hex (0x7f.0.0.1)
+    if let Some(ip) = parse_obfuscated_ip(&hl) {
+        if !ip_is_public(ip) {
+            return Err(MuseError::Tool(format!(
+                "refused non-public address: {host} → {ip} (obfuscated)"
+            )));
+        }
+        // If obfuscation resolved to public, still treat as literal (no DNS pin needed)
+        return Ok((parsed, None));
+    }
     if let Ok(ip) = hl.trim_matches(['[', ']']).parse::<IpAddr>() {
         if !ip_is_public(ip) {
             return Err(MuseError::Tool(format!(
                 "refused non-public address: {host} → {ip}"
             )));
+        }
+        // Extra: block 0.0.0.0 explicitly even though is_unspecified covers it
+        if ip.is_unspecified() {
+            return Err(MuseError::Tool(format!("refused unspecified address: {host}")));
         }
         return Ok((parsed, None));
     }
@@ -161,6 +175,60 @@ fn validate_public_url(
         }
     }
     Ok((parsed, Some((host.to_string(), sockaddrs[0]))))
+}
+
+fn parse_obfuscated_ip(host: &str) -> Option<IpAddr> {
+    let h = host.trim().trim_matches(['[', ']']);
+    // Single decimal number e.g. 2130706433 or 0x7f000001 or 0o...
+    if h.chars().all(|c| c.is_ascii_digit()) {
+        if let Ok(n) = h.parse::<u32>() {
+            return Some(IpAddr::V4(Ipv4Addr::from(n)));
+        }
+    }
+    if h.to_ascii_lowercase().starts_with("0x") {
+        let hex = h.trim_start_matches("0x").trim_start_matches("0X");
+        if let Ok(n) = u32::from_str_radix(hex, 16) {
+            return Some(IpAddr::V4(Ipv4Addr::from(n)));
+        }
+    }
+    // Dotted form with possible octal/hex octets: e.g. 0177.0.0.01 or 0x7f.0.0.1 or 127.0.0.0x01
+    if h.contains('.') {
+        let parts: Vec<&str> = h.split('.').collect();
+        if parts.len() == 4 {
+            let mut octets = [0u8; 4];
+            for (i, p) in parts.iter().enumerate() {
+                let p = p.trim();
+                if p.is_empty() {
+                    return None;
+                }
+                let val = if p.to_ascii_lowercase().starts_with("0x") {
+                    u32::from_str_radix(p.trim_start_matches("0x").trim_start_matches("0X"), 16).ok()?
+                } else if p.len() > 1 && p.starts_with('0') && p.chars().skip(1).all(|c| c.is_ascii_digit()) {
+                    // octal: 0177 -> 127
+                    // Ensure all chars are octal digits
+                    if p.chars().all(|c| ('0'..='7').contains(&c)) || p.starts_with("0") {
+                        // If any digit 8 or 9, treat as decimal octal invalid -> fallback decimal
+                        if p.chars().any(|c| c == '8' || c == '9') {
+                            p.parse::<u32>().ok()?
+                        } else {
+                            u32::from_str_radix(p, 8).ok()?
+                        }
+                    } else {
+                        p.parse::<u32>().ok()?
+                    }
+                } else {
+                    p.parse::<u32>().ok()?
+                };
+                if val > 255 {
+                    // Could be large value in last octet representing 2 octets? Simplified: reject unless it's single-part handling
+                    return None;
+                }
+                octets[i] = val as u8;
+            }
+            return Some(IpAddr::V4(Ipv4Addr::from(octets)));
+        }
+    }
+    None
 }
 
 fn ip_is_public(ip: IpAddr) -> bool {
@@ -220,6 +288,10 @@ mod tests {
             "http://[fe80::1]/",
             "http://[::ffff:10.0.0.1]/",
             "http://2130706433/", // decimal 127.0.0.1
+            "http://0x7f.0.0.1/", // hex
+            "http://0177.0.0.1/", // octal
+            "http://0x7f000001/", // hex single
+            "http://0.0.0.0/",
             "file:///etc/passwd",
             "http://metadata.google.internal/",
         ] {

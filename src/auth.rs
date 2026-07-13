@@ -35,14 +35,25 @@ pub fn resolve_api_key() -> Result<String> {
 
 pub fn save_api_key(key: &str) -> Result<()> {
     ensure_dirs()?;
+    let trimmed = key.trim();
+    if trimmed.len() < 20 {
+        return Err(MuseError::Other(
+            "API key too short — expected Meta API key (min 20 chars)".into(),
+        ));
+    }
+    if trimmed.contains(' ') || trimmed.contains('\n') {
+        return Err(MuseError::Other("API key contains whitespace".into()));
+    }
     let auth = Auth {
-        api_key: key.trim().to_string(),
+        api_key: trimmed.to_string(),
         source: "login".to_string(),
     };
     let text = serde_json::to_string_pretty(&auth)?;
     let path = auth_path();
-    fs::write(&path, text)?;
-    // Best-effort restrictive perms on Unix; no-op equivalent on Windows via file ACLs left default.
+    crate::config::atomic_write(&path, text.as_bytes())
+        .map_err(|e| MuseError::Other(format!("failed to save auth atomically: {e}")))?;
+    // Restrictive perms on Unix. On Windows, ~/.muse under the user profile is
+    // already private via default NTFS ACLs — no portable 0600 equivalent.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

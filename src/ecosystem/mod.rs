@@ -527,10 +527,14 @@ pub fn run_capture(
     bin: &str,
     args: &[&str],
     cwd: Option<&Path>,
-    _timeout_ms: u64,
+    timeout_ms: u64,
 ) -> std::result::Result<String, String> {
     // Re-resolve bare names to absolute paths (Windows .cmd safety).
-    let resolved = if bin.contains('\\') || bin.contains('/') || bin.ends_with(".cmd") || bin.ends_with(".exe") {
+    let resolved = if bin.contains('\\')
+        || bin.contains('/')
+        || bin.ends_with(".cmd")
+        || bin.ends_with(".exe")
+    {
         bin.to_string()
     } else {
         find_bin(bin).unwrap_or_else(|| bin.to_string())
@@ -540,6 +544,10 @@ pub fn run_capture(
     if let Some(c) = cwd {
         cmd.current_dir(c);
     }
+    // Capture output manually to enforce timeout
+    cmd.stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
     // Ruflo global memory path for any child that respects it.
     if let Ok(db) = ruflo_db_path().into_os_string().into_string() {
         cmd.env("CLAUDE_FLOW_DB_PATH", &db);
@@ -557,16 +565,67 @@ pub fn run_capture(
             }
         }
     }
-    let output = cmd
-        .output()
+    let mut child = cmd
+        .spawn()
         .map_err(|e| format!("failed to spawn {resolved}: {e}"))?;
-    let mut out = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    // Drain pipes on background threads with cap to avoid deadlock
+    let out_handle = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(s) = stdout {
+            use std::io::Read;
+            let mut limited = s.take(2_000_000); // 2MB cap for capture
+            let _ = limited.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let err_handle = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(s) = stderr {
+            use std::io::Read;
+            let mut limited = s.take(500_000);
+            let _ = limited.read_to_end(&mut buf);
+        }
+        buf
+    });
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms.max(1_000));
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    // Kill child and whole tree on timeout
+                    #[cfg(windows)]
+                    {
+                        let _ = std::process::Command::new("taskkill")
+                            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+                            .output();
+                    }
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "{resolved} timed out after {}ms (killed)",
+                        timeout_ms
+                    ));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(30));
+            }
+            Err(e) => return Err(format!("wait failed for {resolved}: {e}")),
+        }
+    };
+
+    let stdout_bytes = out_handle.join().unwrap_or_default();
+    let stderr_bytes = err_handle.join().unwrap_or_default();
+    let mut out = String::from_utf8_lossy(&stdout_bytes).trim().to_string();
+    let err = String::from_utf8_lossy(&stderr_bytes).trim().to_string();
     if !err.is_empty() {
         if !out.is_empty() {
             out.push_str("\n\n");
         }
-        // Drop noisy debug lines from ruflo.
         let filtered: Vec<&str> = err
             .lines()
             .filter(|l| !l.starts_with("[DEBUG]"))
@@ -575,10 +634,10 @@ pub fn run_capture(
             out.push_str(&filtered.join("\n"));
         }
     }
-    if !output.status.success() && out.is_empty() {
-        return Err(format!("{resolved} exited with {}", output.status));
+    if !status.success() && out.is_empty() {
+        return Err(format!("{resolved} exited with {}", status));
     }
-    if !output.status.success() {
+    if !status.success() {
         return Err(out);
     }
     Ok(if out.is_empty() {

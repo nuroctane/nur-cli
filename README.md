@@ -112,6 +112,7 @@ meta usage                   # token / cost for ADEs
 meta auth status
 meta ecosystem status        # graphify · plur · ruflo · executor · packs
 meta ecosystem ensure --force
+meta doctor                  # auth · config · ecosystem · PATH tools
 ```
 
 Launching from a drive root (`C:\`) auto-picks a safe workspace (git / last session / Laboratory) so tools never run on the entire disk.

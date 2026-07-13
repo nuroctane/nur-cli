@@ -78,6 +78,8 @@ pub enum Commands {
     },
     /// Install Orca agent hook for usage/status reporting
     InstallHook,
+    /// Diagnose install, auth, config, and ecosystem readiness
+    Doctor,
     /// Graphify · PLUR · Ruflo ecosystem (auto-provisioned on open)
     Ecosystem {
         #[command(subcommand)]

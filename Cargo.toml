@@ -1,6 +1,6 @@
 [package]
 name = "meta-cli"
-version = "0.5.10"
+version = "0.5.11"
 edition = "2021"
 description = "Meta CLI (unofficial) - coding agent for Meta Model API"
 license = "MIT"

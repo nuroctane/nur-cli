@@ -7,7 +7,8 @@
 //! Also mirrors into env-friendly fields so host tools can read the last write.
 
 use crate::config::{
-    ensure_dirs, status_path, usage_log_path, PRICE_INPUT_PER_MTOK, PRICE_OUTPUT_PER_MTOK,
+    atomic_write, ensure_dirs, status_path, usage_log_path, PRICE_INPUT_PER_MTOK,
+    PRICE_OUTPUT_PER_MTOK,
 };
 use crate::error::Result;
 use chrono::{DateTime, Utc};
@@ -222,13 +223,14 @@ impl UsageTracker {
             status_path: status_path().display().to_string(),
             usage_log_path: usage_log_path().display().to_string(),
         };
+        let json = serde_json::to_string_pretty(&snap)?;
         if self.global {
-            fs::write(status_path(), serde_json::to_string_pretty(&snap)?)?;
+            let _ = atomic_write(&status_path(), json.as_bytes());
         }
         // Session-scoped status for multi-agent ADE layouts
         let sess_status = crate::config::sessions_dir()
             .join(format!("{}.status.json", self.session_id));
-        let _ = fs::write(sess_status, serde_json::to_string_pretty(&snap)?);
+        let _ = atomic_write(&sess_status, json.as_bytes());
         Ok(())
     }
 

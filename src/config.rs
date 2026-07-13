@@ -142,12 +142,70 @@ pub fn load_config() -> Result<Config> {
         return Ok(cfg);
     }
     let text = fs::read_to_string(&path)?;
-    toml::from_str(&text).map_err(|e| MuseError::Config(e.to_string()))
+    let cfg: Config = toml::from_str(&text).map_err(|e| MuseError::Config(e.to_string()))?;
+    cfg.validate()?;
+    Ok(cfg)
+}
+
+pub fn atomic_write(path: &std::path::Path, content: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut tmp = path.to_path_buf();
+    let ext = format!(
+        "tmp.{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    tmp.set_extension(ext);
+    {
+        let mut f = fs::File::create(&tmp)?;
+        f.write_all(content)?;
+        f.sync_all()?;
+    }
+    // Windows can't rename over existing file that is open? fs::rename overwrites.
+    let _ = fs::remove_file(path);
+    fs::rename(&tmp, path)?;
+    Ok(())
 }
 
 pub fn save_config(cfg: &Config) -> Result<()> {
     ensure_dirs()?;
     let text = toml::to_string_pretty(cfg).map_err(|e| MuseError::Config(e.to_string()))?;
-    fs::write(config_path(), text)?;
+    atomic_write(&config_path(), text.as_bytes())
+        .map_err(|e| MuseError::Other(format!("save_config atomic write failed: {e}")))?;
     Ok(())
+}
+
+pub const VALID_EFFORTS: &[&str] = &["minimal", "low", "medium", "high", "xhigh"];
+
+impl Config {
+    pub fn validate(&self) -> Result<()> {
+        if !VALID_EFFORTS.contains(&self.reasoning_effort.as_str()) {
+            return Err(MuseError::Config(format!(
+                "invalid reasoning_effort '{}' — use {}",
+                self.reasoning_effort,
+                VALID_EFFORTS.join("|")
+            )));
+        }
+        if self.max_turns == 0 || self.max_turns > 200 {
+            return Err(MuseError::Config(format!(
+                "max_turns {} out of range 1..200",
+                self.max_turns
+            )));
+        }
+        if self.context_window < 1000 || self.context_window > 2_000_000 {
+            return Err(MuseError::Config(format!(
+                "context_window {} out of allowed range",
+                self.context_window
+            )));
+        }
+        if self.base_url.is_empty() || !(self.base_url.starts_with("http://") || self.base_url.starts_with("https://")) {
+            return Err(MuseError::Config(format!("invalid base_url '{}'", self.base_url)));
+        }
+        Ok(())
+    }
 }

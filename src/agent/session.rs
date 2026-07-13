@@ -1,4 +1,4 @@
-use crate::config::{ensure_dirs, muse_home, sessions_dir};
+use crate::config::{atomic_write, ensure_dirs, muse_home, sessions_dir};
 use crate::error::{MuseError, Result};
 use crate::usage::TokenUsage;
 use chrono::{DateTime, Utc};
@@ -63,7 +63,8 @@ impl Session {
     pub fn save(&self) -> Result<()> {
         ensure_dirs()?;
         let text = serde_json::to_string_pretty(self)?;
-        fs::write(self.path(), text)?;
+        atomic_write(&self.path(), text.as_bytes())
+            .map_err(|e| MuseError::Other(format!("session atomic save failed: {e}")))?;
         // Pointer for --continue and ADEs
         let latest = muse_home().join("latest_session.json");
         let ptr = serde_json::json!({
@@ -75,7 +76,11 @@ impl Session {
             "usage": self.usage,
             "estimated_cost_usd": self.usage.estimated_cost_usd(),
         });
-        fs::write(latest, serde_json::to_string_pretty(&ptr)?)?;
+        atomic_write(
+            &latest,
+            serde_json::to_string_pretty(&ptr)?.as_bytes(),
+        )
+        .map_err(|e| MuseError::Other(format!("latest_session atomic write failed: {e}")))?;
 
         // Per-cwd last session map (for continue in same project)
         let map_path = muse_home().join("cwd_sessions.json");
@@ -87,7 +92,11 @@ impl Session {
         };
         let key = normalize_cwd(&self.cwd);
         map.insert(key, Value::String(self.id.clone()));
-        fs::write(map_path, serde_json::to_string_pretty(&Value::Object(map))?)?;
+        atomic_write(
+            &map_path,
+            serde_json::to_string_pretty(&Value::Object(map))?.as_bytes(),
+        )
+        .map_err(|e| MuseError::Other(format!("cwd_sessions atomic write failed: {e}")))?;
         Ok(())
     }
 

@@ -359,7 +359,7 @@ impl InputState {
                 out.push('\n');
             }
         }
-        let _ = fs::write(history_path(), out);
+        let _ = crate::config::atomic_write(&history_path(), out.as_bytes());
     }
 }
 

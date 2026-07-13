@@ -68,6 +68,10 @@ async fn real_main() -> Result<()> {
             ade::install_orca_hook()?;
             return Ok(());
         }
+        Some(Commands::Doctor) => {
+            run_doctor()?;
+            return Ok(());
+        }
         Some(Commands::Ecosystem { action }) => {
             match action {
                 cli::EcosystemCmd::Ensure { force } => {
@@ -264,10 +268,92 @@ async fn real_main() -> Result<()> {
         | Some(Commands::Usage)
         | Some(Commands::Sessions { .. })
         | Some(Commands::InstallHook)
+        | Some(Commands::Doctor)
         | Some(Commands::Ecosystem { .. }) => unreachable!(),
     }
 
     Ok(())
+}
+
+/// Headless health check for install, auth, config, and ecosystem.
+fn run_doctor() -> Result<()> {
+    theme::print_info(&format!("meta doctor · v{}", env!("CARGO_PKG_VERSION")));
+    println!();
+
+    // Binary / PATH
+    let exe = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "(unknown)".into());
+    theme::print_ok(&format!("binary  {exe}"));
+
+    // Config
+    match load_config() {
+        Ok(cfg) => {
+            theme::print_ok(&format!(
+                "config  model={} effort={} max_turns={}  ({})",
+                cfg.model,
+                cfg.reasoning_effort,
+                cfg.max_turns,
+                config::config_path().display()
+            ));
+        }
+        Err(e) => theme::print_err(&format!("config  {e}")),
+    }
+
+    // Auth (never print key)
+    match resolve_api_key() {
+        Ok(k) => {
+            let tip: String = k.chars().rev().take(4).collect::<String>().chars().rev().collect();
+            theme::print_ok(&format!("auth    key set (…{tip})"));
+        }
+        Err(_) => theme::print_err("auth    not set — run: meta auth login"),
+    }
+
+    // Paths
+    theme::print_ok(&format!("home    {}", config::muse_home().display()));
+    theme::print_ok(&format!("status  {}", config::status_path().display()));
+    theme::print_ok(&format!("usage   {}", config::usage_log_path().display()));
+    theme::print_ok(&format!("sessions {}", config::sessions_dir().display()));
+
+    // Ecosystem
+    println!();
+    theme::print_info("ecosystem");
+    print!("{}", ecosystem::quick_status());
+
+    // Shell backend
+    println!();
+    let sh = tools::shell_backend();
+    theme::print_ok(&format!("shell   {}", sh.label));
+
+    // Optional tools on PATH
+    for name in ["rg", "git", "node", "npm", "uv"] {
+        let found = which_bin(name);
+        if let Some(p) = found {
+            theme::print_ok(&format!("{name:<7} {p}"));
+        } else {
+            theme::print_info(&format!("{name:<7} not on PATH"));
+        }
+    }
+
+    println!();
+    theme::print_ok("doctor complete");
+    Ok(())
+}
+
+fn which_bin(name: &str) -> Option<String> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        for cand in [
+            dir.join(name),
+            dir.join(format!("{name}.exe")),
+            dir.join(format!("{name}.cmd")),
+        ] {
+            if cand.is_file() {
+                return Some(cand.display().to_string());
+            }
+        }
+    }
+    None
 }
 
 #[allow(clippy::too_many_arguments)]

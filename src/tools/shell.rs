@@ -8,12 +8,16 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 fn read_all(pipe: Option<impl Read>) -> Vec<u8> {
+    // Cap at 2MB per stream to prevent memory blow-up from cat largefile etc
+    const CAP: u64 = 2_000_000;
     let mut buf = Vec::new();
-    if let Some(mut p) = pipe {
-        let _ = p.read_to_end(&mut buf);
+    if let Some(p) = pipe {
+        let mut limited = p.take(CAP);
+        let _ = limited.read_to_end(&mut buf);
     }
     buf
 }
+
 
 #[derive(Debug, Clone)]
 pub struct ShellBackend {
