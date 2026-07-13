@@ -19,13 +19,13 @@ muse          # legacy alias (same binary)
 
 One line. That’s it. The installer builds `meta`, drops it on your PATH, pulls in every runtime dependency it can, and wires the full agent stack so you’re ready to go.
 
-### Windows (PowerShell) — recommended
+### <img alt="Windows (PowerShell) — recommended" src="https://img.shields.io/badge/Windows_(PowerShell)_—_recommended-a855f7?style=for-the-badge">
 
 ```powershell
 irm https://raw.githubusercontent.com/nuroctane/meta-cli/main/install.ps1 | iex
 ```
 
-### macOS / Linux
+### <img alt="macOS / Linux" src="https://img.shields.io/badge/macOS_/_Linux-a855f7?style=for-the-badge">
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nuroctane/meta-cli/main/install.sh | bash
@@ -46,12 +46,14 @@ Or skip the CLI login: run `meta` and use **`/login`** in the TUI (masked entry)
 <table>
 <tr>
 <td width="33%"><strong>① One-liner (above)</strong><br/>Easiest. Builds from source + full stack.</td>
-<td width="33%"><strong>② Prebuilt EXE (Windows)</strong><br/>Download → double‑click → done.</td>
+<td width="33%"><img alt="② Prebuilt EXE (Windows)" src="https://img.shields.io/badge/②_Prebuilt_EXE_(Windows)-a855f7?style=for-the-badge"><br/>Download → double‑click → done.</td>
 <td width="33%"><strong>③ From a clone</strong><br/>You already have the repo.</td>
 </tr>
 </table>
 
-**② Prebuilt Windows binary** — same full stack as the one-liner (no compile).
+### <img alt="② Prebuilt Windows binary" src="https://img.shields.io/badge/②_Prebuilt_Windows_binary-a855f7?style=for-the-badge">
+
+Same full stack as the one-liner (no compile).
 
 1. Open **[Releases → latest](https://github.com/nuroctane/meta-cli/releases/latest)**
 2. Download **`meta-windows-x86_64.exe`**

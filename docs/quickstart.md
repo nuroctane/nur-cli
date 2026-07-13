@@ -4,13 +4,13 @@ Your first Meta CLI session in 60 seconds.
 
 ## 1. Install
 
-=== "Windows (PowerShell)"
+=== "<span class='install-hot'>Windows (PowerShell)</span>"
 
     ```powershell
     irm https://raw.githubusercontent.com/nuroctane/meta-cli/main/install.ps1 | iex
     ```
 
-=== "macOS / Linux"
+=== "<span class='install-hot'>macOS / Linux</span>"
 
     ```bash
     curl -fsSL https://raw.githubusercontent.com/nuroctane/meta-cli/main/install.sh | bash
@@ -18,7 +18,7 @@ Your first Meta CLI session in 60 seconds.
 
 That’s the full stack (binary + PATH + prereqs + ecosystem).
 
-**Windows without building:** download `meta-windows-x86_64.exe` from [Releases](https://github.com/nuroctane/meta-cli/releases/latest) and double‑click — it runs the **same full install**, then opens Meta. Other paths: **[Setup](setup.md)**.
+**<span class="install-hot">Windows without building:</span>** download `meta-windows-x86_64.exe` from [Releases](https://github.com/nuroctane/meta-cli/releases/latest) and double‑click — it runs the **same full install**, then opens Meta. Other paths: **[Setup](setup.md)**.
 
 ## 2. Authenticate
 

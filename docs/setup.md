@@ -3,8 +3,8 @@
 System requirements, **every install path**, what lands on your PC, updates, and uninstallation.
 
 !!! tip "It's one line"
-    **Windows:** `irm https://raw.githubusercontent.com/nuroctane/meta-cli/main/install.ps1 | iex`  
-    **macOS / Linux:** `curl -fsSL https://raw.githubusercontent.com/nuroctane/meta-cli/main/install.sh | bash`  
+    **<span class="install-hot">Windows:</span>** `irm https://raw.githubusercontent.com/nuroctane/meta-cli/main/install.ps1 | iex`  
+    **<span class="install-hot">macOS / Linux:</span>** `curl -fsSL https://raw.githubusercontent.com/nuroctane/meta-cli/main/install.sh | bash`  
     Then: `meta auth login` → `meta`. Full detail below.
 
 ---
@@ -27,19 +27,19 @@ System requirements, **every install path**, what lands on your PC, updates, and
 
 Does **everything**: Rust if needed, prereqs, build, PATH, ecosystem packs, browser stage, optional Orca hook + auth.
 
-=== "Windows (PowerShell)"
+=== "<span class='install-hot'>Windows (PowerShell)</span>"
 
     ```powershell
     irm https://raw.githubusercontent.com/nuroctane/meta-cli/main/install.ps1 | iex
     ```
 
-=== "macOS / Linux"
+=== "<span class='install-hot'>macOS / Linux</span>"
 
     ```bash
     curl -fsSL https://raw.githubusercontent.com/nuroctane/meta-cli/main/install.sh | bash
     ```
 
-### 2. Prebuilt Windows EXE (no local compile)
+### 2. <span class="install-hot">Prebuilt Windows EXE</span> (no local compile)
 
 **Same job as the one-liner** — download, run, full stack. The EXE *is* the installer.
 

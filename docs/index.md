@@ -16,13 +16,13 @@ muse          # legacy alias (same binary)
 
 ## Install — one line
 
-=== "Windows (PowerShell)"
+=== "<span class='install-hot'>Windows (PowerShell)</span>"
 
     ```powershell
     irm https://raw.githubusercontent.com/nuroctane/meta-cli/main/install.ps1 | iex
     ```
 
-=== "macOS / Linux"
+=== "<span class='install-hot'>macOS / Linux</span>"
 
     ```bash
     curl -fsSL https://raw.githubusercontent.com/nuroctane/meta-cli/main/install.sh | bash
@@ -30,7 +30,7 @@ muse          # legacy alias (same binary)
 
 Then: `meta auth login` → `meta`.
 
-**Windows EXE:** download `meta-windows-x86_64.exe` from [Releases](https://github.com/nuroctane/meta-cli/releases/latest) → double‑click → **full install** (PATH + ecosystem + browser) then TUI. Same stack as the one-liner, no compile. Details: **[Setup](setup.md)**.
+**<span class="install-hot">Windows EXE:</span>** download `meta-windows-x86_64.exe` from [Releases](https://github.com/nuroctane/meta-cli/releases/latest) → double‑click → **full install** (PATH + ecosystem + browser) then TUI. Same stack as the one-liner, no compile. Details: **[Setup](setup.md)**.
 
 ---
 

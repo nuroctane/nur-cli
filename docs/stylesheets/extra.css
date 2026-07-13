@@ -1,0 +1,12 @@
+/* One-shot install labels — purple so they stand out */
+.install-hot {
+  color: #a855f7 !important;
+  font-weight: 700;
+}
+
+/* Material tab labels that wrap the span */
+.md-typeset .tabbed-labels > label .install-hot,
+.md-typeset .tabbed-labels > label:has(.install-hot) {
+  color: #a855f7 !important;
+  font-weight: 700;
+}
