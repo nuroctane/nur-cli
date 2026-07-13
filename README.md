@@ -84,7 +84,7 @@ meta auth login
 
 ---
 
-### What the one-liner actually installs on your PC
+### What the one-liner and EXE install on your PC
 
 Everything below is **local to your machine**. Nothing secrets-related is written into the git repo.
 

@@ -95,9 +95,9 @@ meta doctor
 
 ---
 
-## What gets installed (A → Z)
+## What the one-liner and EXE install on your PC (A → Z)
 
-Everything is **on your machine only**. Secrets never go into the git checkout.
+Everything is **on your machine only**. Secrets never go into the git checkout. Same inventory for the PowerShell/bash one-liner **and** the prebuilt Windows EXE.
 
 ### A–G · Runtimes & build tools (one-liner installs if missing)
 
