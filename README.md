@@ -1,5 +1,9 @@
 # Meta CLI (unofficial)
 
+<p align="center">
+  <img src="docs/assets/muse-demo.gif" alt="Meta CLI demo" width="600">
+</p>
+
 **Fully loaded terminal coding agent** for [Meta Model API](https://dev.meta.ai/) — not a thin wrapper. Custom Rust harness, dense Meta-blue TUI, **native vision**, tools, knowledge stack, hardened sandbox. Any model id via `--model` / `/model` / config.
 
 > Not affiliated with Meta Platforms, Inc. · Community · [nuroctane/meta-cli](https://github.com/nuroctane/meta-cli)
