@@ -1,6 +1,7 @@
 pub mod memory;
 pub mod r#loop;
 pub mod mode;
+pub mod permissions;
 pub mod prompt;
 pub mod session;
 pub mod skills;
@@ -10,5 +11,6 @@ pub mod todos;
 #[allow(unused_imports)]
 pub use r#loop::{compact_session, spawn_turn, AgentEvent, AgentRunner, ApprovalDecision};
 pub use mode::{PermissionMode, SharedMode};
+pub use permissions::{PermissionRules, RuleDecision, SharedPermissions};
 pub use session::Session;
 pub use todos::{shared_empty, SharedTodos};

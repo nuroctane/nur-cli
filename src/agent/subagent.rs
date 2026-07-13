@@ -51,6 +51,7 @@ pub async fn run_subagent(
         verbose: false,
         approved_tools: Arc::new(Mutex::new(HashSet::new())),
         tools: host,
+        permissions: super::SharedPermissions::load(&cwd),
         is_subagent: true,
     });
 

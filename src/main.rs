@@ -618,11 +618,12 @@ async fn run_headless(
     let runner = Arc::new(AgentRunner {
         client,
         config: cfg,
-        cwd,
+        cwd: cwd.clone(),
         permission_mode,
         verbose,
         approved_tools: Arc::new(Mutex::new(HashSet::new())),
         tools: tools::ToolHost::default(),
+        permissions: agent::SharedPermissions::load(&cwd),
         is_subagent: false,
     });
 

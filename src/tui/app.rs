@@ -3,7 +3,7 @@
 
 use crate::agent::{
     self, AgentEvent, AgentRunner, ApprovalDecision, PermissionMode, Session, SharedMode,
-    SharedTodos,
+    SharedPermissions, SharedTodos,
 };
 use crate::theme::{self, Tone};
 use crate::tools::ToolHost;
@@ -56,6 +56,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/context", "context-window utilization for this session"),
     ("/status", "session snapshot: model · mode · cwd · tokens"),
     ("/doctor", "health check: version · auth · ecosystem · shell"),
+    ("/permissions", "show or reload allow/deny/ask rules (permissions.toml)"),
     ("/model", "show or switch model"),
     ("/effort", "reasoning effort: minimal|low|medium|high|xhigh"),
     ("/sessions", "browse & open past sessions  (same as /resume · Ctrl+R)"),
@@ -610,6 +611,7 @@ pub struct App {
     pub permission_mode: SharedMode,
     pub approved_tools: Arc<Mutex<HashSet<String>>>,
     pub tool_host: ToolHost,
+    pub permissions: SharedPermissions,
     pub todos: SharedTodos,
 
     pub cells: Vec<Cell>,
@@ -836,6 +838,7 @@ pub async fn run_tui(
         seed_prompt.as_deref().unwrap_or("ready"),
     ));
 
+    let permissions = SharedPermissions::load(&cwd);
     let mut app = App {
         client,
         cfg,
@@ -843,6 +846,7 @@ pub async fn run_tui(
         permission_mode,
         approved_tools: Arc::new(Mutex::new(HashSet::new())),
         tool_host: ToolHost::default(),
+        permissions,
         todos: agent::shared_empty(),
         cells: vec![Cell::Banner],
         tool_cells: HashMap::new(),
@@ -2531,6 +2535,7 @@ impl App {
             verbose: false,
             approved_tools: self.approved_tools.clone(),
             tools: host,
+            permissions: self.permissions.clone(),
             is_subagent: false,
         }
     }
@@ -3002,6 +3007,7 @@ impl App {
             }
             "/usage" | "/cost" => self.cmd_usage(),
             "/budget" => self.cmd_budget(&arg),
+            "/permissions" => self.cmd_permissions(&arg),
             "/context" => self.cmd_context(),
             "/status" => self.cmd_status(),
             "/doctor" => self.cmd_doctor(),
@@ -3429,6 +3435,29 @@ impl App {
             u.estimated_cost_usd(),
             crate::config::status_path().display(),
         ));
+    }
+
+    fn cmd_permissions(&mut self, arg: &str) {
+        let arg = arg.trim();
+        if arg == "reload" {
+            self.permissions.reload(&self.cwd);
+            self.push_note(
+                Tone::Skill,
+                format!(
+                    "permissions reloaded\n{}",
+                    self.permissions.summary()
+                ),
+            );
+            return;
+        }
+        self.push_note(
+            Tone::Skill,
+            format!(
+                "{}\n  path   {}\n  /permissions reload  re-read files",
+                self.permissions.summary(),
+                crate::agent::permissions::home_permissions_path().display(),
+            ),
+        );
     }
 
     /// Session spend ceiling: show, set cost/tokens, clear, or save to config.toml.

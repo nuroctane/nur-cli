@@ -1,4 +1,5 @@
 use super::mode::{PermissionMode, SharedMode};
+use super::permissions::{RuleDecision, SharedPermissions};
 use super::prompt::PromptContext;
 use super::session::Session;
 use super::subagent;
@@ -71,6 +72,8 @@ pub struct AgentRunner {
     pub verbose: bool,
     pub approved_tools: Arc<Mutex<HashSet<String>>>,
     pub tools: ToolHost,
+    /// Optional allow/deny/ask patterns (`permissions.toml`). Empty = no change.
+    pub permissions: SharedPermissions,
     /// Nested subagents cannot spawn further agents (depth limit 1).
     pub is_subagent: bool,
 }
@@ -496,43 +499,41 @@ impl AgentRunner {
         let mode = self.permission_mode.get();
         let read_only = is_read_only_call(name, args);
 
+        // 1) Explicit deny always wins (including auto mode).
+        if self.permissions.decide(name, args) == Some(RuleDecision::Deny) {
+            let _ = tx.send(AgentEvent::Status(format!(
+                "denied by permissions.toml · {name}"
+            )));
+            return false;
+        }
+
+        // 2) Plan-mode structural gates (cannot be overridden by allow rules).
+        if mode == PermissionMode::Plan {
+            let plan_ok = plan_mode_allows(name, args, read_only, tx);
+            if !plan_ok {
+                return false;
+            }
+            // Plan allowed — still honor ask rules (force a prompt).
+            if self.permissions.decide(name, args) == Some(RuleDecision::Ask) {
+                return self.prompt_approval(name, args, tx).await;
+            }
+            return true;
+        }
+
+        // 3) Allow rule skips approval (manual) / short-circuits auto.
+        if self.permissions.decide(name, args) == Some(RuleDecision::Allow) {
+            return true;
+        }
+
+        // 4) Ask rule forces a prompt even in auto.
+        if self.permissions.decide(name, args) == Some(RuleDecision::Ask) {
+            return self.prompt_approval(name, args, tx).await;
+        }
+
+        // 5) Mode default.
         match mode {
             PermissionMode::Auto => true,
-            PermissionMode::Plan => {
-                // Reading / parsing / analysis run freely.
-                if read_only && name != "agent" {
-                    return true;
-                }
-                // Scratch/media compute (ffmpeg keyframes) is explicitly allowed —
-                // "cut up a video and do random shit" without a prompt.
-                if name == "extract_frames" {
-                    return true;
-                }
-                // Browser screenshots are perception that writes an image —
-                // same class as extract_frames; page mutations stay blocked.
-                if name == "browser" && crate::tools::browser::is_plan_safe_action(args) {
-                    return true;
-                }
-                // Shell: free for analysis/scratch; refused only for repo/VCS
-                // mutations or dependency installs.
-                if name == "bash" {
-                    let cmd = serde_json::from_str::<Value>(args)
-                        .ok()
-                        .and_then(|v| v.get("command").and_then(|c| c.as_str()).map(String::from))
-                        .unwrap_or_default();
-                    return match plan_blocks_shell(&cmd) {
-                        None => true,
-                        Some(reason) => {
-                            let _ = tx.send(AgentEvent::Status(format!("plan mode · {reason}")));
-                            false
-                        }
-                    };
-                }
-                // Code authoring (write/edit/…), agent, and mutating knowledge
-                // ops stay blocked.
-                let _ = tx.send(AgentEvent::Status(format!("plan mode blocked · {name}")));
-                false
-            }
+            PermissionMode::Plan => true, // handled above
             PermissionMode::Manual => {
                 if read_only {
                     return true;
@@ -542,31 +543,73 @@ impl AgentRunner {
                         return true;
                     }
                 }
-                let (otx, orx) = oneshot::channel();
-                if tx
-                    .send(AgentEvent::ApprovalRequest {
-                        name: name.to_string(),
-                        args: args.to_string(),
-                        respond: otx,
-                    })
-                    .is_err()
-                {
-                    return false;
-                }
-                match orx.await {
-                    Ok(ApprovalDecision::Approve) => true,
-                    Ok(ApprovalDecision::ApproveAlways) => {
-                        if let Ok(mut set) = self.approved_tools.lock() {
-                            set.insert(name.to_string());
-                        }
-                        true
-                    }
-                    Ok(ApprovalDecision::Deny) => false,
-                    Err(_) => self.permission_mode.get().auto_approves(),
-                }
+                self.prompt_approval(name, args, tx).await
             }
         }
     }
+
+    async fn prompt_approval(
+        &self,
+        name: &str,
+        args: &str,
+        tx: &mpsc::UnboundedSender<AgentEvent>,
+    ) -> bool {
+        let (otx, orx) = oneshot::channel();
+        if tx
+            .send(AgentEvent::ApprovalRequest {
+                name: name.to_string(),
+                args: args.to_string(),
+                respond: otx,
+            })
+            .is_err()
+        {
+            return false;
+        }
+        match orx.await {
+            Ok(ApprovalDecision::Approve) => true,
+            Ok(ApprovalDecision::ApproveAlways) => {
+                if let Ok(mut set) = self.approved_tools.lock() {
+                    set.insert(name.to_string());
+                }
+                true
+            }
+            Ok(ApprovalDecision::Deny) => false,
+            Err(_) => self.permission_mode.get().auto_approves(),
+        }
+    }
+}
+
+/// Plan-mode structural allow/deny (same rules as before permissions.toml).
+fn plan_mode_allows(
+    name: &str,
+    args: &str,
+    read_only: bool,
+    tx: &mpsc::UnboundedSender<AgentEvent>,
+) -> bool {
+    if read_only && name != "agent" {
+        return true;
+    }
+    if name == "extract_frames" {
+        return true;
+    }
+    if name == "browser" && crate::tools::browser::is_plan_safe_action(args) {
+        return true;
+    }
+    if name == "bash" {
+        let cmd = serde_json::from_str::<Value>(args)
+            .ok()
+            .and_then(|v| v.get("command").and_then(|c| c.as_str()).map(String::from))
+            .unwrap_or_default();
+        return match plan_blocks_shell(&cmd) {
+            None => true,
+            Some(reason) => {
+                let _ = tx.send(AgentEvent::Status(format!("plan mode · {reason}")));
+                false
+            }
+        };
+    }
+    let _ = tx.send(AgentEvent::Status(format!("plan mode blocked · {name}")));
+    false
 }
 
 #[cfg(test)]
