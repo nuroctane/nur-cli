@@ -9,7 +9,7 @@ meta          # primary — Meta-blue interactive TUI
 muse          # legacy alias (same binary)
 ```
 
-**v0.6.9** — Production-minded agent harness, end to end: **[Docs](https://nuroctane.github.io/meta-cli/)**
+**v0.6.10** — Production-minded agent harness, end to end: **[Docs](https://nuroctane.github.io/meta-cli/)**
 
 | Surface | What ships |
 |---------|------------|

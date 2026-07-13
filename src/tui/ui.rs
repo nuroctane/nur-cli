@@ -69,7 +69,19 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // Grok-style hover dialogue over thoughts / tools / turns (above everything
     // except approval/picker, which already short-circuit interaction).
     if app.approval.is_none() && app.picker.is_none() && app.login.is_none() && app.ctx_menu.is_none() {
-        draw_hover_peek(f, app, area);
+        match draw_hover_peek(f, app, area) {
+            Some((b, c)) => {
+                app.peek_box = b;
+                app.peek_close = c;
+            }
+            None => {
+                app.peek_box = Rect::default();
+                app.peek_close = Rect::default();
+            }
+        }
+    } else {
+        app.peek_box = Rect::default();
+        app.peek_close = Rect::default();
     }
     // Context menu overlay — drawn last so it sits on top.
     if app.ctx_menu.is_some() {
@@ -1416,17 +1428,19 @@ fn apply_selection_style(line: Line<'static>, line_idx: usize, range: TextRange)
 ///
 /// Uses click-pinned peek first (always works). Free hover only when the
 /// terminal emits all-motion mouse events (we enable CSI ?1003h for that).
-fn draw_hover_peek(f: &mut Frame, app: &App, area: Rect) {
-    let Some(idx) = app.active_peek_cell() else { return };
-    let Some(cell) = app.cells.get(idx) else { return };
+/// Draws the floating peek dialogue. Returns the box + clickable-✕ rects (for
+/// click-outside / ✕ dismissal), or None when nothing is shown.
+fn draw_hover_peek(f: &mut Frame, app: &App, area: Rect) -> Option<(Rect, Rect)> {
+    let idx = app.active_peek_cell()?;
+    let cell = app.cells.get(idx)?;
     if !cell.is_peekable() {
-        return;
+        return None;
     }
     // If already expanded in-place, skip the floating box (content is visible).
     if cell.is_collapsible() && cell.expanded() {
-        return;
+        return None;
     }
-    let Some(title) = cell.peek_title() else { return };
+    let title = cell.peek_title()?;
     let body = cell.peek_body().unwrap_or_default();
     let pinned = app.peek_pinned == Some(idx);
 
@@ -1435,7 +1449,7 @@ fn draw_hover_peek(f: &mut Frame, app: &App, area: Rect) {
     let w = max_w.min(area.width.saturating_sub(4));
     let h = max_h.min(area.height.saturating_sub(2));
     if w < 20 || h < 5 {
-        return;
+        return None;
     }
 
     // Pinned: center-ish; hover: anchor near mouse.
@@ -1489,7 +1503,7 @@ fn draw_hover_peek(f: &mut Frame, app: &App, area: Rect) {
     };
 
     let footer = if pinned {
-        "  esc close  ·  e expand in place  ·  click ▸ chevron  "
+        "  ✕ / click outside / esc — close  ·  e expand  "
     } else {
         "  click card to pin  ·  esc close  ·  e expand  "
     };
@@ -1504,6 +1518,19 @@ fn draw_hover_peek(f: &mut Frame, app: &App, area: Rect) {
         footer,
     );
     let inner = modal_inner(rect);
+
+    // Clickable ✕ on the top-right of the box (matches the sessions picker).
+    let close = Rect::new(rect.x + rect.width.saturating_sub(4), rect.y, 3, 1);
+    {
+        let cx = rect.x + rect.width.saturating_sub(3);
+        let buf = f.buffer_mut();
+        buf[(cx, rect.y)].set_char('✕').set_style(
+            Style::default()
+                .fg(theme::ERROR)
+                .bg(theme::SURFACE_2)
+                .add_modifier(Modifier::BOLD),
+        );
+    }
 
     let mut lines: Vec<Line> = Vec::new();
     let max_lines = inner.height as usize;
@@ -1528,7 +1555,7 @@ fn draw_hover_peek(f: &mut Frame, app: &App, area: Rect) {
                 Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2)),
                 inner,
             );
-            return;
+            return Some((rect, close));
         }
     }
 
@@ -1591,6 +1618,7 @@ fn draw_hover_peek(f: &mut Frame, app: &App, area: Rect) {
         Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2)),
         inner,
     );
+    Some((rect, close))
 }
 
 /// Per-character aurora shimmer for a run of text — a colour wave travels

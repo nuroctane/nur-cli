@@ -647,8 +647,12 @@ pub struct App {
     pub expand_flash: Option<(usize, Instant)>,
     /// Cell under the mouse (all-motion tracking) for free hover peek.
     pub hover_cell: Option<usize>,
-    /// Click-pinned peek — stays open until Esc / click outside.
+    /// Click-pinned peek — stays open until Esc / click outside / ✕.
     pub peek_pinned: Option<usize>,
+    /// Bounds of the pinned peek box (for click-outside dismissal). Set each draw.
+    pub peek_box: ratatui::layout::Rect,
+    /// Clickable ✕ close rect on the peek box.
+    pub peek_close: ratatui::layout::Rect,
     /// Right-click / double-click context menu on a User prompt.
     pub ctx_menu: Option<CtxMenu>,
     /// Last left-button press (cell idx, time) — for double-click detection.
@@ -827,6 +831,8 @@ pub async fn run_tui(
         expand_flash: None,
         hover_cell: None,
         peek_pinned: None,
+        peek_box: ratatui::layout::Rect::default(),
+        peek_close: ratatui::layout::Rect::default(),
         ctx_menu: None,
         last_click: None,
         mouse_col: 0,
@@ -1650,6 +1656,16 @@ impl App {
                         self.select_anchor = None;
                         self.selection = None;
                         self.scroll_from_scrollbar_y(m.row);
+                    }
+                    return;
+                }
+                // Pinned peek acts like a popup: the ✕ or a click anywhere
+                // OUTSIDE the box closes it (and consumes the click); a click
+                // inside keeps it open. This is consistent on every side —
+                // including below the box.
+                if self.peek_pinned.is_some() {
+                    if peek_click_dismisses(self.peek_close, self.peek_box, m.column, m.row) {
+                        self.peek_pinned = None;
                     }
                     return;
                 }
@@ -3439,6 +3455,19 @@ pub fn truncate_session_before_prompt(session: &mut crate::agent::Session, from_
     session.updated_at = chrono::Utc::now();
 }
 
+/// A pinned peek behaves like a popup: a left-click dismisses it when it lands
+/// on the ✕ or **anywhere outside** the box — the same on every side (this is
+/// the fix for "clicking below the box didn't close it"). A click inside keeps
+/// it open.
+pub fn peek_click_dismisses(
+    close: ratatui::layout::Rect,
+    box_: ratatui::layout::Rect,
+    col: u16,
+    row: u16,
+) -> bool {
+    rect_contains(close, col, row) || !rect_contains(box_, col, row)
+}
+
 fn rect_contains(r: ratatui::layout::Rect, col: u16, row: u16) -> bool {
     r.width > 0
         && r.height > 0
@@ -3585,6 +3614,23 @@ mod tests {
             resolve_transcript_click(false, card, card, Some(3), true),
             TranscriptClick::ToggleExpand(3)
         );
+    }
+
+    #[test]
+    fn pinned_peek_dismisses_on_every_side_and_close() {
+        use ratatui::layout::Rect;
+        // Box at (10,5) 30x12 → spans cols 10..40, rows 5..17. ✕ at top-right.
+        let box_ = Rect::new(10, 5, 30, 12);
+        let close = Rect::new(box_.x + box_.width - 4, box_.y, 3, 1); // (36,5) 3x1
+        // Inside → stays open.
+        assert!(!peek_click_dismisses(close, box_, 20, 10));
+        // The ✕ → closes.
+        assert!(peek_click_dismisses(close, box_, 37, 5));
+        // Every outside direction closes — including BELOW (the reported bug).
+        assert!(peek_click_dismisses(close, box_, 20, 20), "below must close");
+        assert!(peek_click_dismisses(close, box_, 20, 2), "above must close");
+        assert!(peek_click_dismisses(close, box_, 2, 10), "left must close");
+        assert!(peek_click_dismisses(close, box_, 50, 10), "right must close");
     }
 
     #[test]
