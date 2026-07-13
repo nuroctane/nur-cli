@@ -179,7 +179,7 @@ Docs: **[nuroctane.github.io/meta-cli](https://nuroctane.github.io/meta-cli/)** 
 | **One-shot install** | One-liner **or** Windows EXE · PATH · ecosystem · browser · Orca hook · optional auth |
 | **Install first, then TUI** | Full stack runs **before** the UI; later sessions only do light background repair |
 | **Knowledge stack** | Code graph · shared engrams · vector memory · MCP gateway · skill packs |
-| **Resume other agents** | Skills: `resume-claude` · `resume-codex` · `resume-cursor` · `resume-meta` (shared reader under `~/.meta/skills/resume-session/`) |
+| **Resume other agents** | Skills: `resume-claude` · `resume-codex` · `resume-cursor` · `resume-meta` · **`resume-grok`** (shared reader: `~/.meta/skills/resume-session/`) |
 | **Simple input** | Drag-select · scrollbar · **Ctrl+A / C / V / X** — no mouse “mode” toggle |
 | **Secrets stay local** | API key only in `~/.meta/auth.json` |
 

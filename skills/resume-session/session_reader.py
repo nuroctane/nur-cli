@@ -24,7 +24,7 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
-TOOLS = ("claude", "codex", "cursor", "meta")
+TOOLS = ("claude", "codex", "cursor", "meta", "grok")
 UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
@@ -1867,6 +1867,8 @@ def _sort_and_dedupe(sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "claude-code": 0,
         "codex-cli": 0,
         "codex-vscode": 1,
+        "meta-cli": 0,
+        "grok-build": 0,
     }
     ordered = sorted(
         sessions,
@@ -2089,6 +2091,258 @@ def _find_meta_id(session_id: str, cwd: str) -> dict[str, Any] | None:
     return None
 
 
+
+def _grok_home() -> Path:
+    configured = os.environ.get("GROK_HOME")
+    return Path(configured).expanduser() if configured else Path.home() / ".grok"
+
+
+def _discover_grok(cwd: str, within_min: int) -> list[dict[str, Any]]:
+    """List Grok Build / Grok CLI sessions under ~/.grok/sessions."""
+    sessions: list[dict[str, Any]] = []
+    root = _grok_home() / "sessions"
+    if not root.is_dir():
+        return sessions
+    want = _normalize_cwd_key(cwd)
+    for summary_path in root.rglob("summary.json"):
+        if summary_path.is_symlink():
+            continue
+        session_dir = summary_path.parent
+        chat = session_dir / "chat_history.jsonl"
+        if not chat.is_file():
+            continue
+        updated = max(_mtime_millis(summary_path), _mtime_millis(chat))
+        if not _within(updated, within_min):
+            continue
+        try:
+            summary = json.loads(
+                summary_path.read_text(encoding="utf-8", errors="replace")
+            )
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(summary, dict):
+            continue
+        info = summary.get("info") if isinstance(summary.get("info"), dict) else {}
+        session_cwd = info.get("cwd") or summary.get("cwd") or ""
+        # Match exact cwd, or parent prefix (Grok often roots at drive / home).
+        sk = _normalize_cwd_key(str(session_cwd)) if session_cwd else ""
+        if sk and sk != want and not want.startswith(sk.rstrip("\\/")) and not sk.startswith(
+            want.rstrip("\\/")
+        ):
+            # Still include if path segment encodes the cwd (URL-encoded workspace dirs).
+            encoded = "".join(c if c.isalnum() else "%" for c in want)
+            if encoded not in str(session_dir).casefold() and slugify(want) not in str(
+                session_dir
+            ).casefold().replace("%", "-"):
+                # loose: allow any session whose summary title/path mentions cwd leaf
+                leaf = Path(want).name.casefold()
+                title = str(
+                    summary.get("generated_title")
+                    or summary.get("session_summary")
+                    or ""
+                ).casefold()
+                if leaf and leaf not in title and leaf not in str(session_dir).casefold():
+                    continue
+        session_id = (
+            (info.get("id") if isinstance(info, dict) else None)
+            or summary.get("id")
+            or session_dir.name
+        )
+        if not isinstance(session_id, str):
+            continue
+        title = (
+            summary.get("generated_title")
+            or summary.get("session_summary")
+            or summary.get("title")
+            or "(untitled)"
+        )
+        sessions.append(
+            {
+                "tool": "grok",
+                "source": "grok-build",
+                "session_id": session_id,
+                "path": str(chat),
+                "title": _one_line(title, 80),
+                "cwd": session_cwd or cwd,
+                "branch": None,
+                "updated_at_ms": updated,
+                "updated_at": summary.get("updated_at")
+                or summary.get("last_active_at")
+                or _iso_from_millis(updated),
+                "source_repo_root_path": session_cwd or None,
+                "summary_path": str(summary_path),
+            }
+        )
+    return sessions
+
+
+def _grok_content_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                if item.get("type") in {None, "text"} and isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+        return "\n".join(parts)
+    if isinstance(content, dict) and isinstance(content.get("text"), str):
+        return content["text"]
+    return ""
+
+
+def read_grok_session(path: Path | str, max_tool_chars: int = 300) -> dict[str, Any]:
+    """Read a Grok chat_history.jsonl (or parent session dir) as inert history."""
+    chat_path = Path(path)
+    if chat_path.is_dir():
+        session_dir = chat_path
+        chat_path = session_dir / "chat_history.jsonl"
+    else:
+        session_dir = chat_path.parent
+    if not chat_path.is_file():
+        raise ReaderError(f"no Grok chat_history.jsonl at {chat_path}")
+    warnings: list[dict[str, str]] = []
+    summary: dict[str, Any] = {}
+    summary_path = session_dir / "summary.json"
+    if summary_path.is_file():
+        try:
+            loaded = json.loads(
+                summary_path.read_text(encoding="utf-8", errors="replace")
+            )
+            if isinstance(loaded, dict):
+                summary = loaded
+        except (OSError, json.JSONDecodeError):
+            _add_warning(warnings, "grok-summary", "summary.json unreadable")
+    records, malformed = _read_plain_jsonl(chat_path)
+    if malformed:
+        _add_warning(
+            warnings,
+            "malformed-jsonl",
+            f"skipped {malformed} malformed chat_history lines",
+        )
+    turns: list[dict[str, Any]] = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        if record.get("synthetic_reason"):
+            # Env wrappers / system-reminders injected by the host — skip.
+            continue
+        rtype = str(record.get("type") or record.get("role") or "")
+        if rtype == "system":
+            continue
+        if rtype == "user":
+            text = _grok_content_text(record.get("content"))
+            # Strip outer <user_query> tags when present for cleaner handoff.
+            stripped = text.strip()
+            if stripped.startswith("<user_query>") and stripped.endswith("</user_query>"):
+                stripped = stripped[len("<user_query>") : -len("</user_query>")].strip()
+            if stripped and not stripped.startswith("<user_info>") and not stripped.startswith(
+                "<system-reminder>"
+            ):
+                turns.append(_turn("user", text=stripped))
+        elif rtype == "assistant":
+            text = _grok_content_text(record.get("content"))
+            tool_calls: list[dict[str, Any]] = []
+            # Optional tool call blocks on assistant messages
+            content = record.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    if block.get("type") in {"tool_use", "function_call", "tool_call"}:
+                        tool_calls.append(
+                            {
+                                "name": _safe_text(
+                                    block.get("name") or block.get("tool") or "tool"
+                                ),
+                                "input": _json_preview(
+                                    block.get("input")
+                                    or block.get("arguments")
+                                    or {},
+                                    max_tool_chars,
+                                ),
+                                "inert": True,
+                            }
+                        )
+            if text or tool_calls:
+                turns.append(_turn("assistant", text=text, tool_calls=tool_calls or None))
+        elif rtype in {"tool_result", "tool"}:
+            text = _grok_content_text(
+                record.get("content") or record.get("output") or record.get("result")
+            )
+            name = _safe_text(record.get("name") or record.get("tool_name") or "tool")
+            turns.append(
+                _turn(
+                    "assistant",
+                    tool_results=[
+                        {
+                            "content": _one_line(text, max_tool_chars),
+                            "is_error": bool(record.get("is_error")),
+                            "inert": True,
+                        }
+                    ],
+                    tool_calls=[{"name": name, "input": "", "inert": True}],
+                )
+            )
+        elif rtype == "reasoning":
+            # Do not inject chain-of-thought; note only if empty of user-visible work.
+            continue
+    info = summary.get("info") if isinstance(summary.get("info"), dict) else {}
+    session_id = (
+        (info.get("id") if isinstance(info, dict) else None)
+        or summary.get("id")
+        or session_dir.name
+    )
+    title = (
+        summary.get("generated_title")
+        or summary.get("session_summary")
+        or summary.get("title")
+    )
+    return _finalize_result(
+        {
+            "tool": "grok",
+            "source": "grok-build",
+            "session_id": session_id,
+            "path": str(chat_path),
+            "title": _one_line(title, 80) if title else None,
+            "cwd": (info.get("cwd") if isinstance(info, dict) else None)
+            or summary.get("cwd"),
+            "branch": None,
+            "created_at": summary.get("created_at"),
+            "updated_at": summary.get("updated_at") or summary.get("last_active_at"),
+            "source_repo_root_path": (info.get("cwd") if isinstance(info, dict) else None),
+            "turns": turns,
+            "warnings": warnings,
+        }
+    )
+
+
+def _find_grok_id(session_id: str, cwd: str) -> dict[str, Any] | None:
+    root = _grok_home() / "sessions"
+    if not root.is_dir():
+        return None
+    # Direct folder name match or nested UUID dir
+    for summary_path in root.rglob("summary.json"):
+        session_dir = summary_path.parent
+        if session_id in session_dir.name or session_dir.name == session_id:
+            chat = session_dir / "chat_history.jsonl"
+            if chat.is_file():
+                updated = _mtime_millis(chat)
+                return {
+                    "tool": "grok",
+                    "source": "grok-build",
+                    "session_id": session_id,
+                    "path": str(chat),
+                    "title": None,
+                    "cwd": cwd,
+                    "updated_at_ms": updated,
+                    "updated_at": _iso_from_millis(updated),
+                }
+    return None
+
+
 def discover_sessions(tool: str, cwd: str, within_min: int = 0) -> list[dict[str, Any]]:
     if tool not in TOOLS:
         raise ReaderError(f"unsupported tool: {tool}")
@@ -2099,6 +2353,8 @@ def discover_sessions(tool: str, cwd: str, within_min: int = 0) -> list[dict[str
         sessions = _discover_codex(requested_cwd, within_min)
     elif tool == "meta":
         sessions = _discover_meta(requested_cwd, within_min)
+    elif tool == "grok":
+        sessions = _discover_grok(requested_cwd, within_min)
     else:
         sessions = _discover_cursor_cli(requested_cwd, within_min)
         sessions.extend(_discover_cursor_desktop(requested_cwd, within_min))
@@ -2136,6 +2392,26 @@ def _candidate_from_path(tool: str, raw_path: str, cwd: str) -> dict[str, Any] |
             "source": "cursor-transcript",
             "session_id": path.stem,
             "path": str(path),
+            "title": None,
+            "cwd": cwd,
+            "updated_at_ms": updated,
+        }
+    if tool == "grok" and path.is_file() and path.name == "chat_history.jsonl":
+        return {
+            "tool": tool,
+            "source": "grok-build",
+            "session_id": path.parent.name,
+            "path": str(path),
+            "title": None,
+            "cwd": cwd,
+            "updated_at_ms": updated,
+        }
+    if tool == "grok" and path.is_dir() and (path / "chat_history.jsonl").is_file():
+        return {
+            "tool": tool,
+            "source": "grok-build",
+            "session_id": path.name,
+            "path": str(path / "chat_history.jsonl"),
             "title": None,
             "cwd": cwd,
             "updated_at_ms": updated,
@@ -2252,6 +2528,7 @@ def resolve_session(
             "codex": _find_codex_id,
             "cursor": _find_cursor_id,
             "meta": _find_meta_id,
+            "grok": _find_grok_id,
         }[tool]
         found = finder(ref, cwd)
         if found is not None:
@@ -2280,6 +2557,8 @@ def read_resolved_session(
         return read_codex_session(candidate["path"], max_tool_chars)
     if tool == "meta":
         return read_meta_session(candidate["path"], max_tool_chars)
+    if tool == "grok":
+        return read_grok_session(candidate["path"], max_tool_chars)
     return read_cursor_session(candidate, max_tool_chars)
 
 

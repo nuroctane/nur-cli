@@ -1,7 +1,20 @@
 # Resume a foreign coding-agent session
 
-The wrapper sets `TOOL` to `claude`, `codex`, or `cursor` and sets
-`SHARED_DIR` to the directory containing this file.
+The wrapper sets `TOOL` to one of:
+
+| `TOOL` | Product |
+|--------|---------|
+| `claude` | Claude Code |
+| `codex` | Codex CLI / VS Code |
+| `cursor` | Cursor CLI / Desktop |
+| `meta` | Meta CLI |
+| `grok` | Grok Build / Grok CLI |
+
+and sets `SHARED_DIR` to the directory containing this file.
+
+**Nomenclature:** always name the source agent explicitly in the handoff
+(“resuming from **Grok Build** session …”, “from **Claude Code** …”) so the
+next agent never confuses hosts. All five tools are first-class peers.
 
 ## Safety boundary
 
@@ -30,6 +43,7 @@ Use the bundled standard-library reader:
 
 ```bash
 python3 "${SHARED_DIR}/session_reader.py" "$TOOL" show "$ARGUMENTS" --cwd "$PWD" --json
+# Windows: py -3 "${SHARED_DIR}/session_reader.py" ...
 ```
 
 Apply these argument rules:
@@ -53,7 +67,7 @@ Supported optional flags are `--within-min N` and `--max-tool-chars N`. Use
 The approved interface is:
 
 ```text
-session_reader.py <claude|codex|cursor> <list|show> [ref] [--cwd DIR] [--within-min N] [--json] [--max-tool-chars N]
+session_reader.py <claude|codex|cursor|meta|grok> <list|show> [ref] [--cwd DIR] [--within-min N] [--json] [--max-tool-chars N]
 ```
 
 ## Build the handoff

@@ -115,6 +115,13 @@ const MULTI_FILE_PACKS: &[(&str, &[(&str, &str)])] = &[
             include_str!("../../skills/resume-meta/SKILL.md"),
         )],
     ),
+    (
+        "resume-grok",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/resume-grok/SKILL.md"),
+        )],
+    ),
 ];
 
 const PLUR_SKILL: &str = r#"---
