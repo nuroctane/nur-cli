@@ -47,14 +47,13 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/plur", "shared engram memory: status | learn | recall | inject"),
     ("/ruflo", "vector memory / swarm: status | search | store"),
     ("/ecosystem", "graphify · plur · ruflo readiness"),
-    ("/usage", "token usage + cost for this session"),
-    ("/cost", "alias for /usage"),
+    ("/usage", "token usage + cost for this session  (/cost)"),
     ("/model", "show or switch model"),
     ("/effort", "reasoning effort: minimal|low|medium|high|xhigh"),
-    ("/sessions", "list recent sessions"),
-    ("/resume", "pick a past session to return to  (Ctrl+R)"),
+    ("/sessions", "browse & open past sessions  (same as /resume · Ctrl+R)"),
+    ("/resume", "browse & open past sessions  (same as /sessions · Ctrl+R)"),
     ("/init", "generate a MUSE.md project guide"),
-    ("/mouse", "reminder: scrollbar always on · Shift+drag selects text"),
+    ("/mouse", "how mouse works: drag-select · scrollbar · peek"),
     ("/config", "show config + data paths"),
     ("/exit", "quit"),
 ];
@@ -320,19 +319,22 @@ pub struct ApprovalState {
     pub respond: Option<oneshot::Sender<ApprovalDecision>>,
 }
 
-/// One row of the session picker.
+/// One row of the unified sessions picker (`/sessions` · `/resume` · Ctrl+R).
 pub struct SessionRow {
     pub id: String,
+    /// Relative time label ("2h ago", "just now").
     pub when: String,
     pub messages: usize,
     pub tokens: u64,
+    pub cost: f64,
     pub cwd: String,
+    /// First user prompt, single-line.
     pub preview: String,
     /// Session belongs to the current workspace.
     pub here: bool,
 }
 
-/// Interactive `/resume` picker: arrow through recent sessions, Enter loads.
+/// Interactive sessions browser — open with `/sessions`, `/resume`, or Ctrl+R.
 pub struct SessionPicker {
     pub rows: Vec<SessionRow>,
     pub idx: usize,
@@ -346,6 +348,27 @@ impl SessionPicker {
             .iter()
             .filter(|r| !self.this_cwd_only || r.here)
             .collect()
+    }
+}
+
+/// Compact relative timestamp for the sessions picker.
+fn relative_when(dt: chrono::DateTime<chrono::Utc>) -> String {
+    let secs = chrono::Utc::now()
+        .signed_duration_since(dt)
+        .num_seconds()
+        .max(0);
+    if secs < 45 {
+        "just now".into()
+    } else if secs < 90 {
+        "1m ago".into()
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 3600 * 36 {
+        format!("{}h ago", secs / 3600)
+    } else if secs < 3600 * 24 * 14 {
+        format!("{}d ago", secs / (3600 * 24))
+    } else {
+        dt.format("%b %d").to_string()
     }
 }
 
@@ -1230,7 +1253,7 @@ impl App {
         self.input.click_at(local_y, char_col);
     }
 
-    // ── session picker ─────────────────────────────────────────────────
+    // ── session picker (`/sessions` · `/resume` · Ctrl+R) ─────────────
     fn open_session_picker(&mut self) {
         if self.busy {
             self.push_error("wait for the current turn to finish".into());
@@ -1246,31 +1269,42 @@ impl App {
         let here_key = self.cwd.display().to_string().to_lowercase();
         let rows: Vec<SessionRow> = sessions
             .iter()
-            .filter(|s| s.id != self.session_id) // current session isn't a resume target
-            // Every launch mints a session; empty ones are noise, not history.
-            .filter(|s| !s.messages.is_empty())
-            .take(50)
+            // Current session isn't a resume target; empty shells aren't history.
+            .filter(|s| s.id != self.session_id && !s.messages.is_empty())
+            .take(60)
             .map(|s| SessionRow {
                 id: s.id.clone(),
-                when: s.updated_at.format("%m-%d %H:%M").to_string(),
+                when: relative_when(s.updated_at),
                 messages: s.messages.len(),
                 tokens: s.usage.total_tokens,
+                cost: s.usage.estimated_cost_usd(),
                 cwd: s.cwd.clone(),
                 preview: s
                     .messages
                     .iter()
                     .find(|m| m.role == "user")
-                    .map(|m| m.content.replace('\n', " ").chars().take(90).collect())
+                    .map(|m| {
+                        m.content
+                            .split_whitespace()
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                            .chars()
+                            .take(100)
+                            .collect()
+                    })
                     .unwrap_or_else(|| "(no prompt)".into()),
                 here: s.cwd.to_lowercase() == here_key,
             })
             .collect();
 
         if rows.is_empty() {
-            self.push_info("no other sessions to resume".into());
+            self.push_note(
+                Tone::Session,
+                "no past sessions yet — keep chatting, then /sessions to jump back".into(),
+            );
             return;
         }
-        // Default to this-workspace-only if any session is from here.
+        // Prefer this workspace when we have any local history.
         let any_here = rows.iter().any(|r| r.here);
         self.picker = Some(SessionPicker {
             rows,
@@ -1879,11 +1913,12 @@ impl App {
             "/usage" | "/cost" => self.cmd_usage(),
             "/model" => self.cmd_model(&arg),
             "/effort" => self.cmd_effort(&arg),
-            "/sessions" => self.cmd_sessions(),
-            "/resume" => {
+            // /sessions and /resume are the same interactive picker.
+            "/sessions" | "/resume" => {
                 if arg.is_empty() {
                     self.open_session_picker();
                 } else {
+                    // Still accept /resume <id> for scripts / muscle memory.
                     self.cmd_resume(&arg);
                 }
             }
@@ -2297,37 +2332,13 @@ impl App {
         self.push_info(format!("reasoning effort → {arg}"));
     }
 
-    fn cmd_sessions(&mut self) {
-        match crate::agent::session::list_sessions() {
-            Ok(sessions) => {
-                if sessions.is_empty() {
-                    self.push_info("no sessions yet".into());
-                    return;
-                }
-                let mut s = String::from("recent sessions (/resume <id>)\n");
-                for sess in sessions.iter().take(10) {
-                    s.push_str(&format!(
-                        "  {}  {}  {:>4} msgs  {:>8} tok  {}\n",
-                        &sess.id[..8.min(sess.id.len())],
-                        sess.updated_at.format("%m-%d %H:%M"),
-                        sess.messages.len(),
-                        fmt_num(sess.usage.total_tokens),
-                        sess.cwd
-                    ));
-                }
-                self.push_info(s.trim_end().to_string());
-            }
-            Err(e) => self.push_error(format!("could not list sessions: {e}")),
-        }
-    }
-
     fn cmd_resume(&mut self, arg: &str) {
         if self.busy {
             self.push_error("wait for the current turn to finish".into());
             return;
         }
         if arg.is_empty() {
-            self.push_error("usage: /resume <session-id-prefix>".into());
+            self.open_session_picker();
             return;
         }
         match Session::load(arg) {
@@ -2350,20 +2361,30 @@ impl App {
                 );
                 tracker.seed_session(loaded.usage.clone());
                 self.u_session = loaded.usage.clone();
+                // Window title = first user prompt of the resumed session.
+                if let Some(first) = loaded.messages.iter().find(|m| m.role == "user") {
+                    crate::ade::set_terminal_title(&crate::ade::session_window_title(
+                        &first.content,
+                    ));
+                    self.title_from_prompt = true;
+                }
                 self.session = Some(Box::new(loaded));
                 self.usage = Some(Box::new(tracker));
                 self.cells.retain(|c| matches!(c, Cell::Banner));
                 let short = &self.session_id[..8.min(self.session_id.len())];
                 match from_elsewhere {
-                    Some(old) => self.push_info(format!(
-                        "resumed session {short}\n  was: {old}\n  now: {}  (tools stay sandboxed here)",
-                        self.cwd.display()
-                    )),
-                    None => self.push_info(format!("resumed session {short}")),
+                    Some(old) => self.push_note(
+                        Tone::Session,
+                        format!(
+                            "opened {short}\n  was  {old}\n  now  {}  · tools sandboxed here",
+                            self.cwd.display()
+                        ),
+                    ),
+                    None => self.push_note(Tone::Session, format!("opened {short}")),
                 }
                 self.replay_session_tail(20);
             }
-            Err(e) => self.push_error(format!("resume failed: {e}")),
+            Err(e) => self.push_error(format!("could not open session: {e}")),
         }
     }
 

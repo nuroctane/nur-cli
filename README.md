@@ -147,7 +147,7 @@ Mode lives in a shared atomic: **Shift+Tab applies immediately**, including mid-
 - **Project instructions** from `MUSE.md`, `AGENTS.md`, or `CLAUDE.md`  
 - **Sticky PROMPT banner** — full-width Meta-blue 3-row bar while you scroll older turns  
 - **Draggable scrollbar** — right edge of the transcript; click or drag to scrub history  
-- **Session picker** — `/resume` or `Ctrl+R` (preview first prompt; `Tab` = this workspace / all)  
+- **Sessions picker** — `/sessions`, `/resume`, or `Ctrl+R` (same prompt-first modal; `Tab` = here / all)  
 - **Slash palette** — type `/` for commands with live filter  
 - **Auto-compact** when context pressure is high; `/compact` anytime  
 
@@ -191,7 +191,7 @@ Mode lives in a shared atomic: **Shift+Tab applies immediately**, including mid-
 | `/compact` | Summarize conversation, free context |
 | `/usage` `/cost` | Tokens + est. USD |
 | `/model` `/effort` | Model / reasoning effort |
-| `/sessions` `/resume` | List / pick sessions |
+| `/sessions` `/resume` / `Ctrl+R` | Same sessions browser (open with ↵) |
 | `/init` | Generate a `MUSE.md` project guide |
 | `/config` | Paths + config dump |
 | `/mouse` | Mouse notes (capture always on for caret + scrollbar) |

@@ -54,13 +54,15 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 }
 
-// ── session picker ─────────────────────────────────────────────────────────
+// ── sessions picker (`/sessions` · `/resume` · Ctrl+R) ────────────────────
+// Prompt-first, quiet chrome. Selected row is a solid Meta-blue bar; everything
+// else is subdued so scanning feels like a modern command palette.
 fn draw_session_picker(f: &mut Frame, app: &App, area: Rect) {
     let Some(p) = &app.picker else { return };
     let rows = p.visible();
 
-    let w = 84.min(area.width.saturating_sub(4));
-    let h = 22.min(area.height.saturating_sub(2));
+    let w = 78.min(area.width.saturating_sub(4)).max(48);
+    let h = 18.min(area.height.saturating_sub(2)).max(10);
     let rect = Rect {
         x: (area.width.saturating_sub(w)) / 2,
         y: (area.height.saturating_sub(h)) / 2,
@@ -69,127 +71,120 @@ fn draw_session_picker(f: &mut Frame, app: &App, area: Rect) {
     };
     f.render_widget(Clear, rect);
 
-    let scope = if p.this_cwd_only {
-        "this workspace"
-    } else {
-        "all workspaces"
-    };
+    let scope = if p.this_cwd_only { "here" } else { "all" };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(theme::META_BLUE))
         .style(Style::default().bg(theme::SURFACE_2))
         .title(Span::styled(
-            format!("  resume session · {} ({})  ", rows.len(), scope),
+            format!("  sessions  ·  {}  ·  {scope}  ", rows.len()),
             Style::default()
                 .fg(theme::META_BLUE)
                 .add_modifier(Modifier::BOLD),
+        ))
+        .title_bottom(Span::styled(
+            "  ↑↓ move   ↵ open   tab scope   esc  ",
+            Style::default().fg(theme::FAINT),
         ));
     let inner = block.inner(rect);
     f.render_widget(block, rect);
 
     if rows.is_empty() {
         f.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                "  no sessions in this workspace — Tab to show all".to_string(),
-                theme::style_faint(),
-            )))
+            Paragraph::new(Line::from(vec![
+                Span::styled("  nothing here  ·  ".to_string(), theme::style_faint()),
+                Span::styled("tab".to_string(), theme::style_tool()),
+                Span::styled("  show all workspaces".to_string(), theme::style_faint()),
+            ]))
             .style(Style::default().bg(theme::SURFACE_2)),
             inner,
         );
         return;
     }
 
-    // Two lines per row + a footer line.
-    let body_h = inner.height.saturating_sub(1) as usize;
+    // 2 lines per session: prompt (primary) + meta (quiet).
+    let body_h = inner.height as usize;
     let per_row = 2usize;
     let vis_rows = (body_h / per_row).max(1);
     let sel = p.idx.min(rows.len() - 1);
     let start = sel.saturating_sub(vis_rows.saturating_sub(1));
+    let col_w = (inner.width as usize).saturating_sub(4).max(20);
 
     let mut lines: Vec<Line> = Vec::new();
     for (i, r) in rows.iter().enumerate().skip(start).take(vis_rows) {
         let selected = i == sel;
-        let (fg, bg) = if selected {
-            (theme::BG, theme::META_BLUE)
+        let bg = if selected {
+            theme::META_BLUE
         } else {
-            (theme::FG, theme::SURFACE_2)
+            theme::SURFACE_2
+        };
+        let prompt_fg = if selected { theme::BG } else { theme::FG };
+        let meta_fg = if selected {
+            theme::BLUE_100
+        } else {
+            theme::FAINT
         };
         let marker = if selected { "❯ " } else { "  " };
-        let short = &r.id[..8.min(r.id.len())];
+
+        // Line 1 — first user prompt (what you actually remember).
         lines.push(Line::from(vec![
             Span::styled(
-                format!("{marker}{short}  "),
+                marker.to_string(),
                 Style::default()
-                    .fg(fg)
+                    .fg(if selected {
+                        theme::BG
+                    } else {
+                        theme::META_BLUE
+                    })
                     .bg(bg)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!("{}  ·  {} msgs  ·  {} tok", r.when, r.messages, fmt_num(r.tokens)),
-                Style::default().fg(if selected { theme::BG } else { theme::MUTED }).bg(bg),
-            ),
-            Span::styled(
-                if r.here { "  · here".to_string() } else { String::new() },
+                truncate(&r.preview, col_w),
                 Style::default()
-                    .fg(if selected { theme::BG } else { theme::SUCCESS })
-                    .bg(bg),
+                    .fg(prompt_fg)
+                    .bg(bg)
+                    .add_modifier(if selected {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
             ),
         ]));
-        // Second line: first user prompt — plus the workspace when browsing all.
-        let avail = (inner.width as usize).saturating_sub(6);
-        let detail = if p.this_cwd_only {
-            r.preview.clone()
+
+        // Line 2 — when · size · cost · place (id last, small).
+        let short = &r.id[..8.min(r.id.len())];
+        let place = if p.this_cwd_only {
+            String::new()
         } else {
-            format!("{}  —  {}", short_path(&r.cwd), r.preview)
+            format!("  ·  {}", short_path(&r.cwd))
         };
-        lines.push(Line::from(vec![
-            Span::styled("    ".to_string(), Style::default().bg(bg)),
-            Span::styled(
-                truncate(&detail, avail),
-                Style::default()
-                    .fg(if selected { theme::BG } else { theme::FAINT })
-                    .bg(bg),
-            ),
-        ]));
+        let here = if r.here && !p.this_cwd_only {
+            "  ·  here"
+        } else {
+            ""
+        };
+        let cost = if r.cost > 0.0 {
+            format!("  ·  ${:.3}", r.cost)
+        } else {
+            String::new()
+        };
+        let meta = format!(
+            "    {}  ·  {} msgs  ·  {} tok{cost}{place}{here}  ·  {short}",
+            r.when,
+            r.messages,
+            fmt_num(r.tokens),
+        );
+        lines.push(Line::from(Span::styled(
+            truncate(&meta, col_w + 2),
+            Style::default().fg(meta_fg).bg(bg),
+        )));
     }
 
     f.render_widget(
         Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2)),
-        Rect {
-            height: inner.height.saturating_sub(1),
-            ..inner
-        },
-    );
-
-    // Footer hints.
-    let footer = Rect {
-        x: inner.x,
-        y: inner.bottom().saturating_sub(1),
-        width: inner.width,
-        height: 1,
-    };
-    f.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(" ↑↓ ".to_string(), theme::style_tool()),
-            Span::styled("move   ".to_string(), theme::style_faint()),
-            Span::styled("enter ".to_string(), theme::style_tool()),
-            Span::styled("resume   ".to_string(), theme::style_faint()),
-            Span::styled("tab ".to_string(), theme::style_tool()),
-            Span::styled(
-                if p.this_cwd_only {
-                    "show all workspaces   "
-                } else {
-                    "only this workspace   "
-                }
-                .to_string(),
-                theme::style_faint(),
-            ),
-            Span::styled("esc ".to_string(), theme::style_tool()),
-            Span::styled("cancel".to_string(), theme::style_faint()),
-        ]))
-        .style(Style::default().bg(theme::SURFACE_2)),
-        footer,
+        inner,
     );
 }
 
