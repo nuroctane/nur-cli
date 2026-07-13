@@ -21,6 +21,7 @@ pub struct ToolCaps {
 
 impl ToolCaps {
     /// Fail-closed defaults: not free, not parallel, not labeled destructive.
+    #[allow(dead_code)]
     pub const FAIL_CLOSED: Self = Self {
         read_only: false,
         concurrency_safe: false,
@@ -124,6 +125,7 @@ pub fn is_parallel_safe(name: &str, args_json: &str) -> bool {
     is_concurrency_safe(name, args_json)
 }
 
+#[allow(dead_code)] // completes the string-adapter trio; for upcoming permission rules
 pub fn is_destructive_call(name: &str, args_json: &str) -> bool {
     classify(name, args_json).destructive
 }

@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Default max chars of tool output kept inline in the transcript / API items.
 /// Keep in sync with `config::default_tool_result_max_chars`.
+#[allow(dead_code)] // canonical default; config supplies the live limit
 pub const DEFAULT_TOOL_RESULT_MAX_CHARS: usize = 12_000;
 
 /// How many leading characters of the full body to show in the preview.
