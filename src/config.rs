@@ -72,6 +72,13 @@ pub struct Config {
     /// `None` / omitted = unlimited.
     #[serde(default)]
     pub max_session_tokens: Option<u64>,
+    /// When compacting, keep this many recent user turns (messages) after the summary.
+    #[serde(default = "default_compact_keep_user_turns")]
+    pub compact_keep_user_turns: u32,
+    /// When building the compact-summary request, truncate older tool bodies to this many chars.
+    /// `0` = leave tool bodies intact for the summarizer.
+    #[serde(default = "default_compact_tool_body_max")]
+    pub compact_tool_body_max_chars: u64,
 }
 
 fn default_model() -> String {
@@ -108,8 +115,17 @@ impl Default for Config {
             tool_result_max_chars: default_tool_result_max_chars(),
             max_session_cost_usd: None,
             max_session_tokens: None,
+            compact_keep_user_turns: default_compact_keep_user_turns(),
+            compact_tool_body_max_chars: default_compact_tool_body_max(),
         }
     }
+}
+
+fn default_compact_keep_user_turns() -> u32 {
+    4
+}
+fn default_compact_tool_body_max() -> u64 {
+    800
 }
 
 /// Legacy home from pre-0.5.14 builds (`~/.muse`). Still read for migration.

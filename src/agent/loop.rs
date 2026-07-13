@@ -1059,15 +1059,35 @@ pub async fn compact_session(
     session: &mut Session,
     usage: &mut UsageTracker,
 ) -> Result<String> {
+    // Snapshot full session before rewrite (never-lose-context; beside .json.bak).
+    {
+        let path = session.path();
+        if path.is_file() {
+            let pre = path.with_extension("precompact.bak");
+            let _ = std::fs::copy(&path, &pre);
+        }
+    }
+
+    // Thin old tool bodies for the summarizer so we don't re-pay huge dumps.
     let mut items = session.input_items.clone();
+    let thinned = thin_tool_bodies_for_compact(
+        &mut items,
+        runner.config.compact_tool_body_max_chars as usize,
+        runner.config.compact_keep_user_turns as usize,
+    );
     items.push(user_text_item(
         "Summarize this conversation for a fresh context window. Capture: goals, decisions, \
-         files touched, current state, pending next steps. Dense bullets.",
+         files touched, current state, pending next steps. Prefer decisions over raw tool dumps. \
+         Dense bullets.",
     ));
     let req = ResponseRequest {
         model: runner.config.model.clone(),
         input: Value::Array(items),
-        instructions: Some("You compress agent conversations into handoff summaries.".into()),
+        instructions: Some(
+            "You compress agent conversations into handoff summaries. \
+             Preserve goals, decisions, file paths, and next steps; drop redundant tool noise."
+                .into(),
+        ),
         tools: None,
         tool_choice: None,
         store: Some(false),
@@ -1090,9 +1110,99 @@ pub async fn compact_session(
     if summary.is_empty() {
         return Err(MuseError::Other("compaction produced no summary".into()));
     }
-    session.input_items = vec![user_text_item(&format!(
+
+    // New context: summary + last N user/assistant display messages (not full tool stream).
+    let keep_n = runner.config.compact_keep_user_turns.max(1) as usize;
+    let mut new_items = vec![user_text_item(&format!(
         "[Context compacted. Summary of the conversation so far:]\n\n{summary}"
     ))];
+    let recent = recent_dialogue_items(&session.messages, keep_n);
+    let kept = recent.len();
+    new_items.extend(recent);
+    session.input_items = new_items;
     let _ = session.save();
-    Ok(summary)
+    Ok(format!(
+        "{summary}\n\n[compact: thinned {thinned} tool bodies · kept {kept} recent dialogue items · \
+         precompact bak written]"
+    ))
+}
+
+/// Truncate oversized `function_call_output` bodies outside the last `keep_user_turns`
+/// user messages. Returns how many bodies were thinned.
+fn thin_tool_bodies_for_compact(items: &mut [Value], max_chars: usize, keep_user_turns: usize) -> usize {
+    if max_chars == 0 {
+        return 0;
+    }
+    let user_idxs: Vec<usize> = items
+        .iter()
+        .enumerate()
+        .filter(|(_, it)| it.get("role").and_then(|r| r.as_str()) == Some("user"))
+        .map(|(i, _)| i)
+        .collect();
+    let protect_from = if user_idxs.len() > keep_user_turns.max(1) {
+        user_idxs[user_idxs.len() - keep_user_turns.max(1)]
+    } else {
+        0
+    };
+
+    let mut n = 0usize;
+    for (i, it) in items.iter_mut().enumerate() {
+        if i >= protect_from {
+            continue;
+        }
+        if it.get("type").and_then(|t| t.as_str()) != Some("function_call_output") {
+            continue;
+        }
+        let Some(out) = it.get("output").and_then(|o| o.as_str()) else {
+            continue;
+        };
+        if out.chars().count() <= max_chars {
+            continue;
+        }
+        let preview: String = out.chars().take(max_chars).collect();
+        let total = out.chars().count();
+        if let Some(m) = it.as_object_mut() {
+            m.insert(
+                "output".into(),
+                Value::String(format!(
+                    "{preview}\n… [thinned for compact: {total} → {max_chars} chars]"
+                )),
+            );
+        }
+        n += 1;
+    }
+    n
+}
+
+/// Last `keep_user_turns` user messages and any assistant reply immediately after each,
+/// as Responses-style user text items (lossy but preserves recent intent).
+fn recent_dialogue_items(
+    messages: &[crate::agent::session::SessionMessage],
+    keep_user_turns: usize,
+) -> Vec<Value> {
+    let user_idxs: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.role == "user")
+        .map(|(i, _)| i)
+        .collect();
+    if user_idxs.is_empty() || keep_user_turns == 0 {
+        return Vec::new();
+    }
+    let start_u = user_idxs.len().saturating_sub(keep_user_turns);
+    let from = user_idxs[start_u];
+    let mut out = Vec::new();
+    for m in &messages[from..] {
+        if m.role == "user" {
+            out.push(user_text_item(&m.content));
+        } else if m.role == "assistant" && !m.content.is_empty() {
+            // Fold assistant text as a user-visible note so the model still sees it
+            // (Responses multi-turn uses input items; assistant turns live in store/API).
+            out.push(user_text_item(&format!(
+                "[prior assistant]\n{}",
+                m.content.chars().take(4000).collect::<String>()
+            )));
+        }
+    }
+    out
 }
