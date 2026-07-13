@@ -861,7 +861,7 @@ impl App {
                     ),
                     None => self.push_note(Tone::Session, format!("opened {short}")),
                 }
-                self.replay_session_tail(20);
+                self.replay_session_history();
             }
             Err(e) => self.push_error(format!("could not open session: {e}")),
         }

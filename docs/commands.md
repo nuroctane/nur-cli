@@ -140,7 +140,15 @@ meta install
 meta self-install
 ```
 
-Double-clicking `meta-windows-x86_64.exe` from [Releases](https://github.com/nuroctane/meta-cli/releases/latest) runs this path automatically, then opens Meta. Force upgrade anytime with `meta install` or by re-running the release EXE.
+Double-clicking `meta-windows-x86_64.exe` from [Releases](https://github.com/nuroctane/meta-cli/releases/latest) runs this path automatically, then opens Meta.
+
+### `meta update`
+
+Pull latest source from your local checkout, rebuild release, reinstall binary + ecosystem.
+
+```bash
+meta update
+```
 
 See [Setup](setup.md).
 

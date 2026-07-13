@@ -23,6 +23,30 @@ pub struct Session {
     /// Full Responses input item history for multi-turn.
     #[serde(default)]
     pub input_items: Vec<Value>,
+    /// TUI transcript cards (thought · tools · answers) for reload. Additive.
+    #[serde(default)]
+    pub ui_log: Vec<UiLogItem>,
+}
+
+/// One persisted transcript card (display only — not API wire format).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiLogItem {
+    /// `user` | `assistant` | `thinking` | `tool` | `turn_done` | `info` | `error`
+    pub kind: String,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub args: Option<String>,
+    #[serde(default)]
+    pub ok: Option<bool>,
+    #[serde(default)]
+    pub ms: Option<u64>,
+    #[serde(default)]
+    pub thought_ms: Option<u64>,
+    #[serde(default)]
+    pub interrupted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,6 +98,7 @@ impl Session {
             messages: Vec::new(),
             usage: TokenUsage::default(),
             input_items: Vec::new(),
+            ui_log: Vec::new(),
         }
     }
 

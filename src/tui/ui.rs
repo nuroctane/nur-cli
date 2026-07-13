@@ -1571,7 +1571,7 @@ fn draw_hover_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
             image,
         }
     };
-    let pinned = app.peek_pinned == Some(idx);
+    let stable = app.peek_is_stable();
 
     let max_w = (area.width.saturating_mul(7) / 10).clamp(40, 96);
     let max_h = (area.height.saturating_mul(6) / 10).clamp(8, 28);
@@ -1581,12 +1581,16 @@ fn draw_hover_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
         return None;
     }
 
-    // Pinned: center-ish; hover: anchor near mouse.
-    let (mut x, mut y) = if pinned {
-        (
-            area.width.saturating_sub(w) / 2,
-            area.height.saturating_sub(h) / 3,
-        )
+    // Stable (click): freeze origin. Hover: follow near the pointer (temporary).
+    let (mut x, mut y) = if stable {
+        if let Some((ox, oy)) = app.peek_origin {
+            (ox.min(area.width.saturating_sub(w)), oy.min(area.height.saturating_sub(h)))
+        } else {
+            (
+                area.width.saturating_sub(w) / 2,
+                area.height.saturating_sub(h) / 3,
+            )
+        }
     } else {
         (
             app.mouse_col.saturating_add(2),
@@ -1597,14 +1601,18 @@ fn draw_hover_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
         x = area.width.saturating_sub(w);
     }
     if y + h > area.height {
-        y = if pinned {
+        y = if stable {
             area.height.saturating_sub(h)
         } else {
-            app.mouse_row.saturating_sub(h)
+            app.mouse_row.saturating_sub(h).min(area.height.saturating_sub(h))
         };
     }
     if y + h > area.height {
         y = area.height.saturating_sub(h);
+    }
+    // Remember freeze point if stable opened without origin.
+    if stable && app.peek_origin.is_none() {
+        app.peek_origin = Some((x, y));
     }
     let rect = Rect {
         x,
@@ -1618,10 +1626,10 @@ fn draw_hover_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
         rect,
     );
 
-    let footer = if pinned {
-        "  wheel scroll  ·  ✕ / outside / esc close  ·  e expand  "
+    let footer = if stable {
+        "  wheel scroll  ·  ✕ / outside / esc close  ·  Ctrl+C copy  "
     } else {
-        "  click card to pin  ·  esc close  ·  e expand  "
+        "  hover quickview  ·  click header to keep open  ·  move away to close  "
     };
     let phase = modal_phase(app);
     draw_modal_frame(

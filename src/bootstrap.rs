@@ -299,8 +299,99 @@ pub fn run_full_install() -> Result<()> {
     theme::print_info("Run:     meta");
     theme::print_info("Auth:    meta auth login   (or /login in the TUI)");
     theme::print_info("Doctor:  meta doctor");
+    theme::print_info("Update:  meta update");
     println!();
 
+    Ok(())
+}
+
+/// `meta update` — pull the git checkout, rebuild release, reinstall full stack.
+pub fn run_update() -> Result<()> {
+    println!();
+    theme::print_info("Meta CLI — update");
+    theme::print_info("git pull · cargo build --release · reinstall stack");
+    println!();
+
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let mut repo = home.join("laboratory").join("meta-cli");
+    if !repo.join("Cargo.toml").is_file() {
+        let alt = home.join("Laboratory").join("meta-cli");
+        if alt.join("Cargo.toml").is_file() {
+            repo = alt;
+        }
+    }
+
+    if repo.join("Cargo.toml").is_file() {
+        step(&format!("Updating checkout {}…", repo.display()));
+        let st = Command::new("git")
+            .args(["pull", "--ff-only", "origin", "main"])
+            .current_dir(&repo)
+            .status();
+        match st {
+            Ok(s) if s.success() => theme::print_ok("git pull ok"),
+            Ok(_) => theme::print_info("git pull non-zero — continuing with local tree"),
+            Err(e) => theme::print_info(&format!("git pull skipped: {e}")),
+        }
+        step("Building release…");
+        let st = Command::new("cargo")
+            .args(["build", "--release"])
+            .current_dir(&repo)
+            .status()
+            .map_err(|e| MuseError::Other(format!("cargo: {e}")))?;
+        if !st.success() {
+            return Err(MuseError::Other("cargo build --release failed".into()));
+        }
+        theme::print_ok("cargo build --release ok");
+        #[cfg(windows)]
+        let built = repo.join("target").join("release").join("meta.exe");
+        #[cfg(not(windows))]
+        let built = repo.join("target").join("release").join("meta");
+        if !built.is_file() {
+            return Err(MuseError::Other(format!(
+                "missing built binary at {}",
+                built.display()
+            )));
+        }
+        step("Installing built binary…");
+        let dest_dir = install_dir();
+        fs::create_dir_all(&dest_dir)?;
+        let dest = install_binary_path();
+        let alias = muse_alias_path();
+        install_binary_safe(&built, &dest)?;
+        let _ = install_binary_safe(&built, &alias);
+        theme::print_ok(&format!("Installed {}", dest.display()));
+        prepend_path(&dest_dir);
+        let _ = ensure_user_path(&dest_dir);
+    } else {
+        // No source tree — repair using the running binary (one-stop self-install).
+        return run_full_install();
+    }
+
+    // Stack repair via the *newly installed* binary (never re-copy this process).
+    let dest = install_binary_path();
+    step("Provisioning ecosystem…");
+    let _ = Command::new(&dest)
+        .args(["ecosystem", "ensure", "--force"])
+        .status();
+    let _ = Command::new(&dest).args(["browser", "setup"]).status();
+    let _ = Command::new(&dest).arg("install-hook").status();
+
+    let marker = BootstrapMarker {
+        schema: BOOTSTRAP_SCHEMA,
+        version: env!("CARGO_PKG_VERSION").into(),
+        binary: dest.display().to_string(),
+        completed_at: now_secs(),
+        ecosystem_ok: true,
+    };
+    if let Ok(text) = serde_json::to_string_pretty(&marker) {
+        let _ = fs::write(marker_path(), text);
+    }
+
+    println!();
+    theme::print_ok("Update complete.");
+    theme::print_info(&format!("Binary:  {}", dest.display()));
+    theme::print_info("Run:     meta");
+    println!();
     Ok(())
 }
 

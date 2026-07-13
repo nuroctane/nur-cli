@@ -107,6 +107,10 @@ async fn real_main() -> Result<()> {
             bootstrap::run_full_install()?;
             return Ok(());
         }
+        Some(Commands::Update) => {
+            bootstrap::run_update()?;
+            return Ok(());
+        }
         Some(Commands::Doctor) => {
             run_doctor()?;
             return Ok(());
@@ -359,6 +363,7 @@ async fn real_main() -> Result<()> {
         | Some(Commands::InstallHook)
         | Some(Commands::Install)
         | Some(Commands::SelfInstall)
+        | Some(Commands::Update)
         | Some(Commands::Doctor)
         | Some(Commands::Ecosystem { .. })
         | Some(Commands::Browser { .. }) => unreachable!(),

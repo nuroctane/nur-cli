@@ -97,6 +97,8 @@ pub enum Commands {
     Install,
     /// Alias for `meta install`
     SelfInstall,
+    /// Pull latest source + rebuild/reinstall full stack (same spirit as the one-liner)
+    Update,
     /// Diagnose install, auth, config, and ecosystem readiness
     Doctor,
     /// Graphify · PLUR · Ruflo ecosystem (auto-provisioned on open)

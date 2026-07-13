@@ -88,6 +88,14 @@ meta auth login
 
 `meta install` is the same one-stop path the release EXE runs (binary → PATH → ecosystem → browser).
 
+### Update
+
+```bash
+meta update
+```
+
+Pulls your local checkout (`~/laboratory/meta-cli` or `~/Laboratory/meta-cli`), runs `cargo build --release`, reinstalls the binary, and re-provisions the ecosystem stack.
+
 ### Verify
 
 ```bash

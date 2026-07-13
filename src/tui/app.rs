@@ -360,51 +360,52 @@ pub fn decide_arrow_action(input_empty: bool, on_edge: bool, palette_open: bool)
 /// Outcome of a click in the transcript body.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum TranscriptClick {
-    /// Expand/collapse a collapsible card in place.
+    /// Expand/collapse a collapsible card in place (chevron only).
     ToggleExpand(usize),
-    /// Open (pin) the floating peek dialogue for a peekable cell.
-    PinPeek(usize),
-    /// Dismiss any pinned peek.
+    /// Open a **stable** peek (click on the header / "click to peek" row).
+    OpenPeek(usize),
+    /// Dismiss the open stable peek.
     Dismiss,
 }
 
 /// Pure resolution of a transcript click — the single source of truth for what
-/// clicking a line does. Kept side-effect-free so it can be unit-tested (the
-/// physical mouse can't be injected through the test harness).
+/// clicking a line does. Kept side-effect-free so it can be unit-tested.
 ///
-/// - `chevron`: the click landed in the left gutter (~3 cols).
-/// - `header`: the collapsible card whose header this line is, if any.
-/// - `peekable`: the peekable cell this line belongs to (incl. the finished-turn
-///   timing strip), if any.
-/// - `pinned`: the currently pinned peek cell.
-/// - `target_collapsible`: whether the resolved target can expand in place.
+/// - `chevron`: left gutter (~3 cols) → expand/collapse.
+/// - `header`: collapsible card header line (where "click to peek" lives).
+/// - `peekable`: any line of a peekable cell (hover quickview uses this).
+/// - `open_peek`: currently open **stable** peek cell (from a prior click).
+/// - `target_collapsible`: whether the target can expand in place.
 pub fn resolve_transcript_click(
     chevron: bool,
     header: Option<usize>,
     peekable: Option<usize>,
-    pinned: Option<usize>,
+    open_peek: Option<usize>,
     target_collapsible: bool,
 ) -> TranscriptClick {
-    // Left-gutter click on a collapsible header → expand/collapse.
+    // Left-gutter click on a collapsible header → expand/collapse in place.
     if chevron {
         if let Some(h) = header {
             return TranscriptClick::ToggleExpand(h);
         }
     }
-    if let Some(idx) = peekable.or(header) {
-        // Second click on the already-pinned card: collapsible cards toggle
-        // expand-in-place; everything else (e.g. the turn strip) just closes.
-        if pinned == Some(idx) {
-            return if target_collapsible {
-                TranscriptClick::ToggleExpand(idx)
-            } else {
-                TranscriptClick::Dismiss
-            };
+    // Stable peek only from the header row ("click to peek"), not card body.
+    if let Some(h) = header {
+        if open_peek == Some(h) {
+            return TranscriptClick::Dismiss;
         }
-        // First click → open the peek.
-        return TranscriptClick::PinPeek(idx);
+        return TranscriptClick::OpenPeek(h);
     }
-    // Empty space → dismiss.
+    // Turn timing strip etc. (peekable, not collapsible) — click opens stable peek.
+    if let Some(idx) = peekable {
+        if !target_collapsible {
+            if open_peek == Some(idx) {
+                return TranscriptClick::Dismiss;
+            }
+            return TranscriptClick::OpenPeek(idx);
+        }
+        // Expanded tool/thought body lines: hover only; click does not open peek.
+    }
     TranscriptClick::Dismiss
 }
 
@@ -687,11 +688,13 @@ pub struct App {
     pub transcript_top: u16,
     /// Brief highlight after toggle: (cell_idx, when).
     pub expand_flash: Option<(usize, Instant)>,
-    /// Cell under the mouse (all-motion tracking) for free hover peek.
+    /// Cell under the mouse for temporary hover quickview.
     pub hover_cell: Option<usize>,
-    /// Click-pinned peek — stays open until Esc / click outside / ✕.
-    pub peek_pinned: Option<usize>,
-    /// Bounds of the pinned peek box (for click-outside dismissal). Set each draw.
+    /// Stable click-to-peek window — until Esc / outside / ✕.
+    pub peek_open: Option<usize>,
+    /// Frozen top-left of the stable peek (set once on open).
+    pub peek_origin: Option<(u16, u16)>,
+    /// Bounds of the peek box (for click-outside dismissal). Set each draw.
     pub peek_box: ratatui::layout::Rect,
     /// Clickable ✕ close rect on the peek box.
     pub peek_close: ratatui::layout::Rect,
@@ -894,7 +897,8 @@ pub async fn run_tui(
         transcript_top: 0,
         expand_flash: None,
         hover_cell: None,
-        peek_pinned: None,
+        peek_open: None,
+        peek_origin: None,
         peek_box: ratatui::layout::Rect::default(),
         peek_close: ratatui::layout::Rect::default(),
         ctx_menu: None,
@@ -931,7 +935,7 @@ pub async fn run_tui(
         authed: true,
     };
 
-    app.replay_session_tail(8);
+    app.replay_session_history();
     if let Some(note) = workspace_note {
         app.push_note(Tone::Session, note);
     }
@@ -1417,12 +1421,42 @@ impl App {
 
     /// Clear transient transcript interaction state after cells change.
     fn reset_transcript_interaction(&mut self) {
-        self.peek_pinned = None;
+        self.peek_open = None;
+        self.peek_origin = None;
         self.hover_cell = None;
         self.selection = None;
         self.select_anchor = None;
         self.selecting = false;
         self.expand_flash = None;
+    }
+
+    fn close_peek(&mut self) {
+        self.peek_open = None;
+        self.peek_origin = None;
+    }
+
+    fn open_stable_peek(&mut self, idx: usize) {
+        self.peek_open = Some(idx);
+        self.peek_origin = Some((
+            self.mouse_col.saturating_sub(2),
+            self.mouse_row.saturating_sub(1),
+        ));
+        self.hover_cell = None;
+    }
+
+    /// Persist expandable transcript cards so reloads keep thought/tool bodies.
+    fn sync_ui_log_to_session(&mut self) {
+        let log = cells_to_ui_log(&self.cells);
+        if let Some(session) = self.session.as_mut() {
+            session.ui_log = log;
+        }
+    }
+
+    fn save_session_with_ui_log(&mut self) {
+        self.sync_ui_log_to_session();
+        if let Some(session) = self.session.as_ref() {
+            let _ = session.save();
+        }
     }
 
     // ── keys ───────────────────────────────────────────────────────────
@@ -1468,7 +1502,7 @@ impl App {
                     }
                 }
                 // Full thought / shell / tool body from the pinned peek dialogue.
-                if let Some(idx) = self.peek_pinned {
+                if let Some(idx) = self.peek_open {
                     if let Some(body) = self.cells.get(idx).and_then(|c| c.peek_body()) {
                         if !body.trim().is_empty() {
                             clipboard_set(&body);
@@ -1527,8 +1561,8 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 // Peek closes first — same priority as a modal.
-                if self.peek_pinned.is_some() {
-                    self.peek_pinned = None;
+                if self.peek_open.is_some() {
+                    self.close_peek();
                 } else if self.busy {
                     self.interrupt();
                 } else if self.palette_visible() {
@@ -1706,7 +1740,7 @@ impl App {
             MouseEventKind::ScrollUp => {
                 if self.palette_visible() {
                     self.palette_wheel_step(-1);
-                } else if self.wheel_over_pinned_peek(m.column, m.row) {
+                } else if self.wheel_over_open_peek(m.column, m.row) {
                     // Wheel inside a pinned peek scrolls its body, not the page.
                     self.peek_scroll = self.peek_scroll.saturating_sub(3);
                 } else {
@@ -1724,7 +1758,7 @@ impl App {
             MouseEventKind::ScrollDown => {
                 if self.palette_visible() {
                     self.palette_wheel_step(1);
-                } else if self.wheel_over_pinned_peek(m.column, m.row) {
+                } else if self.wheel_over_open_peek(m.column, m.row) {
                     self.peek_scroll = self
                         .peek_scroll
                         .saturating_add(3)
@@ -1763,9 +1797,9 @@ impl App {
                 // OUTSIDE the box closes it (and consumes the click); a click
                 // inside keeps it open. This is consistent on every side —
                 // including below the box.
-                if self.peek_pinned.is_some() {
+                if self.peek_open.is_some() {
                     if peek_click_dismisses(self.peek_close, self.peek_box, m.column, m.row) {
-                        self.peek_pinned = None;
+                        self.close_peek();
                     }
                     return;
                 }
@@ -1777,6 +1811,7 @@ impl App {
                     self.selecting = false;
                     self.scrollbar_drag = false;
                     self.last_click = None;
+                    self.close_peek();
                     return;
                 }
                 // Double-click a User prompt (in the transcript OR the sticky
@@ -1822,7 +1857,7 @@ impl App {
                     self.select_anchor = None;
                     self.selecting = false;
                     self.selection = None;
-                    self.peek_pinned = None;
+                    self.close_peek();
                     self.click_input(m.column, m.row);
                 }
                 self.update_hover_from_mouse();
@@ -2062,8 +2097,19 @@ impl App {
         Some(out)
     }
 
-    /// Resolve `hover_cell` from mouse position over the transcript body.
+    /// Temporary hover quickview: only while the pointer is on that card's
+    /// text (or on the floating hover box). Leaves the moment you move off.
+    /// Stable click-peek ignores hover.
     fn update_hover_from_mouse(&mut self) {
+        if self.peek_open.is_some() {
+            return;
+        }
+        if self.hover_cell.is_some()
+            && self.peek_box.width > 0
+            && rect_contains(self.peek_box, self.mouse_col, self.mouse_row)
+        {
+            return;
+        }
         self.hover_cell = self.cell_at_mouse();
     }
 
@@ -2111,9 +2157,13 @@ impl App {
             .filter(|&i| matches!(self.cells.get(i), Some(Cell::User(_))))
     }
 
-    /// Active peek target: pinned click wins, else free hover.
+    /// Stable click-peek wins; otherwise temporary hover quickview.
     pub fn active_peek_cell(&self) -> Option<usize> {
-        self.peek_pinned.or(self.hover_cell)
+        self.peek_open.or(self.hover_cell)
+    }
+
+    pub fn peek_is_stable(&self) -> bool {
+        self.peek_open.is_some()
     }
 
     /// Decoded terminal-graphics protocol for an image path, lazily built and
@@ -2150,8 +2200,8 @@ impl App {
     }
 
     /// Wheel events over an open pinned peek scroll the peek body.
-    fn wheel_over_pinned_peek(&self, col: u16, row: u16) -> bool {
-        self.peek_pinned.is_some() && rect_contains(self.peek_box, col, row)
+    fn wheel_over_open_peek(&self, col: u16, row: u16) -> bool {
+        self.peek_open.is_some() && rect_contains(self.peek_box, col, row)
     }
 
     fn hit_jump_chip(&self, col: u16, row: u16) -> bool {
@@ -2872,6 +2922,7 @@ impl App {
                 self.session_id = session.id.clone();
                 self.session = Some(session);
                 self.usage = Some(usage);
+                self.save_session_with_ui_log();
                 self.busy = false;
                 self.cancelling = false;
                 self.cancel = None;
@@ -3005,43 +3056,69 @@ impl App {
             .map(|c| c.is_collapsible())
             .unwrap_or(false);
 
-        match resolve_transcript_click(chevron, header, peekable, self.peek_pinned, target_collapsible)
+        match resolve_transcript_click(chevron, header, peekable, self.peek_open, target_collapsible)
         {
             TranscriptClick::ToggleExpand(i) => {
                 self.toggle_cell_expand(i);
-                self.peek_pinned = None;
+                self.close_peek();
             }
-            TranscriptClick::PinPeek(i) => self.peek_pinned = Some(i),
-            TranscriptClick::Dismiss => self.peek_pinned = None,
+            TranscriptClick::OpenPeek(i) => self.open_stable_peek(i),
+            TranscriptClick::Dismiss => self.close_peek(),
         }
     }
 
     // ── helpers ────────────────────────────────────────────────────────
-    fn replay_session_tail(&mut self, n: usize) {
+    fn replay_session_history(&mut self) {
         let Some(session) = &self.session else { return };
-        let msgs: Vec<(String, String)> = session
-            .messages
-            .iter()
-            .rev()
-            .take(n)
-            .map(|m| (m.role.clone(), m.content.clone()))
-            .collect();
-        if msgs.is_empty() {
+        if !session.ui_log.is_empty() {
+            let n = session.ui_log.len();
+            self.cells.push(Cell::Info {
+                text: format!("history · {n} cards restored"),
+                tone: Tone::Session,
+            });
+            for item in session.ui_log.clone() {
+                if let Some(c) = ui_log_item_to_cell(&item) {
+                    self.cells.push(c);
+                }
+            }
+            return;
+        }
+        // Retroactive: rebuild tools (+ any reasoning summary) from input_items.
+        let rebuilt = rebuild_cells_from_session(session);
+        if rebuilt.is_empty() {
+            let msgs: Vec<(String, String)> = session
+                .messages
+                .iter()
+                .rev()
+                .take(12)
+                .map(|m| (m.role.clone(), m.content.clone()))
+                .collect();
+            if msgs.is_empty() {
+                return;
+            }
+            self.cells.push(Cell::Info {
+                text: format!("history · {} messages", session.messages.len()),
+                tone: Tone::Session,
+            });
+            for (role, content) in msgs.into_iter().rev() {
+                match role.as_str() {
+                    "user" => self.cells.push(Cell::User(content)),
+                    _ => self.cells.push(Cell::Assistant {
+                        text: content,
+                        streaming: false,
+                    }),
+                }
+            }
             return;
         }
         self.cells.push(Cell::Info {
-            text: format!("history · {} messages", session.messages.len()),
+            text: format!(
+                "history · {} messages · tools restored from session",
+                session.messages.len()
+            ),
             tone: Tone::Session,
         });
-        for (role, content) in msgs.into_iter().rev() {
-            match role.as_str() {
-                "user" => self.cells.push(Cell::User(content)),
-                _ => self.cells.push(Cell::Assistant {
-                    text: content,
-                    streaming: false,
-                }),
-            }
-        }
+        self.cells.extend(rebuilt);
     }
 
     fn push_info(&mut self, s: String) {
@@ -3153,6 +3230,260 @@ pub fn line_to_plain(line: &ratatui::text::Line<'_>) -> String {
     line.spans.iter().map(|s| s.content.as_ref()).collect()
 }
 
+
+fn cells_to_ui_log(cells: &[Cell]) -> Vec<crate::agent::session::UiLogItem> {
+    use crate::agent::session::UiLogItem;
+    let mut out = Vec::new();
+    for c in cells {
+        match c {
+            Cell::Banner => {}
+            Cell::User(text) => out.push(UiLogItem {
+                kind: "user".into(),
+                text: text.clone(),
+                name: None,
+                args: None,
+                ok: None,
+                ms: None,
+                thought_ms: None,
+                interrupted: false,
+            }),
+            Cell::Assistant { text, .. } => out.push(UiLogItem {
+                kind: "assistant".into(),
+                text: text.clone(),
+                name: None,
+                args: None,
+                ok: None,
+                ms: None,
+                thought_ms: None,
+                interrupted: false,
+            }),
+            Cell::Thinking { text, duration, .. } => out.push(UiLogItem {
+                kind: "thinking".into(),
+                text: text.clone(),
+                name: None,
+                args: None,
+                ok: None,
+                ms: duration.map(|d| d.as_millis() as u64),
+                thought_ms: None,
+                interrupted: false,
+            }),
+            Cell::Tool {
+                name,
+                args,
+                result,
+                ok,
+                duration,
+                ..
+            } => out.push(UiLogItem {
+                kind: "tool".into(),
+                text: result.clone().unwrap_or_default(),
+                name: Some(name.clone()),
+                args: Some(args.clone()),
+                ok: *ok,
+                ms: duration.map(|d| d.as_millis() as u64),
+                thought_ms: None,
+                interrupted: false,
+            }),
+            Cell::TurnDone {
+                duration,
+                thought,
+                interrupted,
+            } => out.push(UiLogItem {
+                kind: "turn_done".into(),
+                text: String::new(),
+                name: None,
+                args: None,
+                ok: None,
+                ms: Some(duration.as_millis() as u64),
+                thought_ms: Some(thought.as_millis() as u64),
+                interrupted: *interrupted,
+            }),
+            Cell::Info { text, .. } => out.push(UiLogItem {
+                kind: "info".into(),
+                text: text.clone(),
+                name: None,
+                args: None,
+                ok: None,
+                ms: None,
+                thought_ms: None,
+                interrupted: false,
+            }),
+            Cell::Error(text) => out.push(UiLogItem {
+                kind: "error".into(),
+                text: text.clone(),
+                name: None,
+                args: None,
+                ok: None,
+                ms: None,
+                thought_ms: None,
+                interrupted: false,
+            }),
+        }
+    }
+    out
+}
+
+fn ui_log_item_to_cell(item: &crate::agent::session::UiLogItem) -> Option<Cell> {
+    let ms = item.ms.unwrap_or(0);
+    let dur = Duration::from_millis(ms);
+    match item.kind.as_str() {
+        "user" => Some(Cell::User(item.text.clone())),
+        "assistant" => Some(Cell::Assistant {
+            text: item.text.clone(),
+            streaming: false,
+        }),
+        "thinking" => Some(Cell::Thinking {
+            text: item.text.clone(),
+            active: false,
+            started: Instant::now(),
+            duration: if ms > 0 { Some(dur) } else { None },
+            expanded: false,
+        }),
+        "tool" => Some(Cell::Tool {
+            name: item.name.clone().unwrap_or_else(|| "tool".into()),
+            args: item.args.clone().unwrap_or_else(|| "{}".into()),
+            result: if item.text.is_empty() {
+                None
+            } else {
+                Some(item.text.clone())
+            },
+            ok: item.ok,
+            started: Instant::now(),
+            duration: if ms > 0 { Some(dur) } else { None },
+            expanded: false,
+        }),
+        "turn_done" => Some(Cell::TurnDone {
+            duration: dur,
+            thought: Duration::from_millis(item.thought_ms.unwrap_or(0)),
+            interrupted: item.interrupted,
+        }),
+        "info" => Some(Cell::Info {
+            text: item.text.clone(),
+            tone: Tone::Session,
+        }),
+        "error" => Some(Cell::Error(item.text.clone())),
+        _ => None,
+    }
+}
+
+fn rebuild_cells_from_session(session: &Session) -> Vec<Cell> {
+    let mut cells = Vec::new();
+    let mut pending: std::collections::HashMap<String, (String, String)> =
+        std::collections::HashMap::new();
+    for it in &session.input_items {
+        let ty = it
+            .get("type")
+            .and_then(|t| t.as_str())
+            .or_else(|| it.get("role").and_then(|r| r.as_str()))
+            .unwrap_or("");
+        match ty {
+            "user" => {
+                let text = extract_item_text(it);
+                if !text.is_empty() {
+                    cells.push(Cell::User(text));
+                }
+            }
+            "assistant" => {
+                let text = extract_item_text(it);
+                if !text.is_empty() {
+                    cells.push(Cell::Assistant {
+                        text,
+                        streaming: false,
+                    });
+                }
+            }
+            "reasoning" => {
+                let text = extract_reasoning_summary(it);
+                if !text.is_empty() {
+                    cells.push(Cell::Thinking {
+                        text,
+                        active: false,
+                        started: Instant::now(),
+                        duration: None,
+                        expanded: false,
+                    });
+                }
+            }
+            "function_call" => {
+                let call_id = it
+                    .get("call_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let name = it
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("tool")
+                    .to_string();
+                let args = it
+                    .get("arguments")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("{}")
+                    .to_string();
+                if !call_id.is_empty() {
+                    pending.insert(call_id, (name, args));
+                }
+            }
+            "function_call_output" => {
+                let call_id = it.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
+                let output = it
+                    .get("output")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if let Some((name, args)) = pending.remove(call_id) {
+                    let ok = !output.to_lowercase().contains("cancelled");
+                    cells.push(Cell::Tool {
+                        name,
+                        args,
+                        result: Some(output),
+                        ok: Some(ok),
+                        started: Instant::now(),
+                        duration: None,
+                        expanded: false,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    cells
+}
+
+fn extract_item_text(it: &serde_json::Value) -> String {
+    if let Some(s) = it.get("content").and_then(|c| c.as_str()) {
+        return s.to_string();
+    }
+    if let Some(arr) = it.get("content").and_then(|c| c.as_array()) {
+        let mut parts = Vec::new();
+        for p in arr {
+            let ty = p.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            if matches!(ty, "input_text" | "output_text" | "text") {
+                if let Some(txt) = p.get("text").and_then(|t| t.as_str()) {
+                    parts.push(txt.to_string());
+                }
+            }
+        }
+        return parts.join("\n");
+    }
+    String::new()
+}
+
+fn extract_reasoning_summary(it: &serde_json::Value) -> String {
+    let mut parts = Vec::new();
+    if let Some(arr) = it.get("summary").and_then(|s| s.as_array()) {
+        for p in arr {
+            if let Some(txt) = p.get("text").and_then(|t| t.as_str()) {
+                parts.push(txt.to_string());
+            } else if let Some(txt) = p.as_str() {
+                parts.push(txt.to_string());
+            }
+        }
+    }
+    parts.join("\n")
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3224,12 +3555,12 @@ mod tests {
         // body click
         assert_eq!(
             resolve_transcript_click(false, None, strip, None, false),
-            TranscriptClick::PinPeek(7)
+            TranscriptClick::OpenPeek(7)
         );
         // gutter click (no header) still pins — never a dead click.
         assert_eq!(
             resolve_transcript_click(true, None, strip, None, false),
-            TranscriptClick::PinPeek(7)
+            TranscriptClick::OpenPeek(7)
         );
         // second click closes it (non-collapsible → dismiss, not toggle).
         assert_eq!(
@@ -3239,26 +3570,24 @@ mod tests {
     }
 
     #[test]
-    fn clicking_collapsible_card_pins_then_expands() {
+    fn clicking_collapsible_header_opens_stable_peek() {
         let card = Some(3);
         assert_eq!(
             resolve_transcript_click(false, card, card, None, true),
-            TranscriptClick::PinPeek(3)
+            TranscriptClick::OpenPeek(3)
         );
-        // gutter click on its header → expand in place.
         assert_eq!(
             resolve_transcript_click(true, card, card, None, true),
             TranscriptClick::ToggleExpand(3)
         );
-        // second body click on the pinned collapsible card → expand in place.
         assert_eq!(
             resolve_transcript_click(false, card, card, Some(3), true),
-            TranscriptClick::ToggleExpand(3)
+            TranscriptClick::Dismiss
         );
     }
 
     #[test]
-    fn pinned_peek_dismisses_on_every_side_and_close() {
+    fn open_peek_dismisses_on_every_side_and_close() {
         use ratatui::layout::Rect;
         // Box at (10,5) 30x12 → spans cols 10..40, rows 5..17. ✕ at top-right.
         let box_ = Rect::new(10, 5, 30, 12);
