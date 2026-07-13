@@ -319,7 +319,8 @@ Launching from a drive root (`C:\`) auto-picks a safe workspace (git / last sess
 | `↑` `↓` · wheel · drag scrollbar | Scroll transcript |
 | **Drag on chat text** | Select + auto-copy (survives scroll; expanded thought/tool text included) |
 | **Click `↓ N · End`** | Jump to latest |
-| Click card / `▸` | Peek / expand |
+| Hover thought / tool header | Temporary quickview (closes when you leave) |
+| Click **click to peek** | Stable peek (Esc · outside · ✕) · `▸` expands in place |
 | **Ctrl+A** | Select-all input (or whole transcript if input empty) |
 | **Ctrl+C** | Copy selection · open peek body · else interrupt / double-tap quit |
 | **Ctrl+V** | Paste into input |
