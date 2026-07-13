@@ -1,240 +1,137 @@
-//! Lightweight markdown → styled ratatui lines. Covers what coding agents
-//! actually emit: headings, bullets, numbered lists, fenced code, inline
-//! bold/italic/code, blockquotes, rules.
+//! Markdown → styled ratatui lines, powered by [`tui-markdown`] (joshka).
+//!
+//! We hand the assistant's markdown to `tui_markdown::from_str` for real parsing
+//! and structure — headings, **bold**, *italic*, ~~strikethrough~~, ordered /
+//! unordered / task lists, nested blockquotes, rules, and code — then layer the
+//! Meta theme on top: plain text takes the assistant foreground, and everything
+//! is owned into `'static` for the transcript's wrap cache.
+//!
+//! [`tui-markdown`]: https://github.com/joshka/tui-markdown
 
 use crate::theme;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
+/// Render markdown to styled lines. `base` supplies the default foreground for
+/// plain (uncoloured) text — e.g. the assistant message colour.
 pub fn render_markdown(text: &str, base: Style) -> Vec<Line<'static>> {
-    let mut out = Vec::new();
-    let mut in_code = false;
-    let code_style = Style::default().fg(theme::CODE_FG).bg(theme::CODE_BG);
+    // `from_str` borrows from `text`; we copy each span into an owned String
+    // so the result is `'static` and cacheable.
+    let parsed = tui_markdown::from_str(text);
+    let default_fg = base.fg.unwrap_or(theme::FG);
 
-    for raw in text.lines() {
-        let trimmed = raw.trim_start();
-
-        // Fence toggles.
-        if trimmed.starts_with("```") {
-            let lang = trimmed.trim_start_matches('`').trim();
-            if !in_code {
-                in_code = true;
-                let label = if lang.is_empty() {
-                    "── code".to_string()
-                } else {
-                    format!("── {lang}")
-                };
-                out.push(Line::from(Span::styled(label, theme::style_faint())));
-            } else {
-                in_code = false;
-                out.push(Line::from(Span::styled(
-                    "──".to_string(),
-                    theme::style_faint(),
-                )));
+    let mut out: Vec<Line<'static>> = Vec::with_capacity(parsed.lines.len());
+    for line in parsed.lines {
+        // Remap tui-markdown's default palette to the Meta palette at line level
+        // (code blocks / quotes set the style on the line).
+        let line_style = meta_palette(line.style);
+        let line_has_fg = line_style.fg.is_some();
+        let mut spans: Vec<Span<'static>> = Vec::with_capacity(line.spans.len());
+        for span in line.spans {
+            let mut style = meta_palette(span.style);
+            if style.fg.is_none() && !line_has_fg {
+                style.fg = Some(default_fg);
             }
-            continue;
+            spans.push(Span::styled(span.content.into_owned(), style));
         }
-
-        if in_code {
-            out.push(Line::from(Span::styled(format!("  {raw}"), code_style)));
-            continue;
-        }
-
-        // Horizontal rule.
-        if trimmed == "---" || trimmed == "***" || trimmed == "___" {
-            out.push(Line::from(Span::styled(
-                "─".repeat(24),
-                theme::style_faint(),
-            )));
-            continue;
-        }
-
-        // Headings.
-        if let Some(rest) = heading(trimmed) {
-            out.push(Line::from(Span::styled(
-                rest.to_string(),
-                Style::default()
-                    .fg(theme::META_BLUE_SKY)
-                    .add_modifier(Modifier::BOLD),
-            )));
-            continue;
-        }
-
-        // Blockquote.
-        if let Some(rest) = trimmed.strip_prefix("> ") {
-            let mut spans = vec![Span::styled(
-                "▌ ".to_string(),
-                Style::default().fg(theme::META_BLUE),
-            )];
-            spans.extend(inline(rest, theme::style_thinking()));
-            out.push(Line::from(spans));
-            continue;
-        }
-
-        // Bullets.
-        if let Some(rest) = trimmed
-            .strip_prefix("- ")
-            .or_else(|| trimmed.strip_prefix("* "))
-        {
-            let indent = raw.len() - trimmed.len();
-            let mut spans = vec![
-                Span::raw(" ".repeat(indent)),
-                Span::styled("• ".to_string(), Style::default().fg(theme::META_BLUE)),
-            ];
-            spans.extend(inline(rest, base));
-            out.push(Line::from(spans));
-            continue;
-        }
-
-        // Numbered list — keep the number, tint it.
-        if let Some(dot) = trimmed.find(". ") {
-            if dot <= 3 && trimmed[..dot].chars().all(|c| c.is_ascii_digit()) && dot > 0 {
-                let indent = raw.len() - trimmed.len();
-                let mut spans = vec![
-                    Span::raw(" ".repeat(indent)),
-                    Span::styled(
-                        trimmed[..dot + 2].to_string(),
-                        Style::default().fg(theme::META_BLUE_BRIGHT),
-                    ),
-                ];
-                spans.extend(inline(&trimmed[dot + 2..], base));
-                out.push(Line::from(spans));
-                continue;
-            }
-        }
-
-        out.push(Line::from(inline(raw, base)));
+        let mut l = Line::from(spans);
+        l.style = line_style;
+        l.alignment = line.alignment;
+        out.push(l);
+    }
+    if out.is_empty() {
+        out.push(Line::from(Span::styled(String::new(), base)));
     }
     out
 }
 
-fn heading(s: &str) -> Option<&str> {
-    for prefix in ["#### ", "### ", "## ", "# "] {
-        if let Some(rest) = s.strip_prefix(prefix) {
-            return Some(rest);
+/// Translate tui-markdown's stock colours (cyan headings, white-on-black code,
+/// green quotes, blue links/markers) into the Meta blue palette, so rendered
+/// markdown matches the rest of the UI. Modifiers (bold/italic/strikethrough)
+/// are preserved as-is.
+fn meta_palette(mut style: Style) -> Style {
+    use ratatui::style::Color;
+    // Inline code / code blocks: white-on-black → Meta code palette.
+    if style.bg == Some(Color::Black) {
+        style.bg = Some(theme::CODE_BG);
+        if matches!(style.fg, Some(Color::White) | None) {
+            style.fg = Some(theme::CODE_FG);
         }
     }
-    None
-}
-
-/// Inline markdown: **bold**, *italic*, _italic_, `code`.
-fn inline(s: &str, base: Style) -> Vec<Span<'static>> {
-    let mut spans = Vec::new();
-    let mut cur = String::new();
-    let chars: Vec<char> = s.chars().collect();
-    let mut i = 0;
-
-    let flush = |cur: &mut String, spans: &mut Vec<Span<'static>>| {
-        if !cur.is_empty() {
-            spans.push(Span::styled(std::mem::take(cur), base));
-        }
+    // H1 banner uses a cyan background bar — drop it, emphasize in blue instead.
+    if style.bg == Some(Color::Cyan) {
+        style.bg = None;
+        style.fg = Some(theme::META_BLUE_SKY);
+    }
+    style.fg = match style.fg {
+        Some(Color::Cyan) => Some(theme::META_BLUE_SKY),     // H2 / H3 headings
+        Some(Color::LightCyan) => Some(theme::BLUE_200),     // H4–H6 headings
+        Some(Color::Green) => Some(theme::MUTED),            // blockquotes
+        Some(Color::Blue) => Some(theme::META_BLUE_BRIGHT),  // links
+        Some(Color::LightBlue) => Some(theme::META_BLUE_SKY), // ordered-list markers
+        other => other,
     };
-
-    while i < chars.len() {
-        // `code`
-        if chars[i] == '`' {
-            if let Some(end) = find(&chars, i + 1, '`') {
-                flush(&mut cur, &mut spans);
-                let code: String = chars[i + 1..end].iter().collect();
-                spans.push(Span::styled(
-                    code,
-                    Style::default().fg(theme::CODE_FG).bg(theme::CODE_BG),
-                ));
-                i = end + 1;
-                continue;
-            }
-        }
-        // **bold** — body must not start or end with whitespace
-        if i + 1 < chars.len() && chars[i] == '*' && chars[i + 1] == '*' {
-            if let Some(end) = find2(&chars, i + 2, '*') {
-                if end > i + 2
-                    && !chars[i + 2].is_whitespace()
-                    && !chars[end - 1].is_whitespace()
-                {
-                    flush(&mut cur, &mut spans);
-                    let body: String = chars[i + 2..end].iter().collect();
-                    spans.push(Span::styled(body, base.add_modifier(Modifier::BOLD)));
-                    i = end + 2;
-                    continue;
-                }
-            }
-        }
-        // *italic* — same whitespace rule
-        if chars[i] == '*' {
-            if let Some(end) = find(&chars, i + 1, '*') {
-                if end > i + 1
-                    && !chars[i + 1].is_whitespace()
-                    && !chars[end - 1].is_whitespace()
-                {
-                    flush(&mut cur, &mut spans);
-                    let body: String = chars[i + 1..end].iter().collect();
-                    spans.push(Span::styled(body, base.add_modifier(Modifier::ITALIC)));
-                    i = end + 1;
-                    continue;
-                }
-            }
-        }
-        cur.push(chars[i]);
-        i += 1;
-    }
-    flush(&mut cur, &mut spans);
-    if spans.is_empty() {
-        spans.push(Span::styled(String::new(), base));
-    }
-    spans
+    style
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::style::Style;
+    use ratatui::style::{Color, Modifier};
 
-    fn flat(lines: &[Line<'static>]) -> Vec<String> {
+    fn flat(lines: &[Line<'static>]) -> String {
         lines
             .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
-            .collect()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     #[test]
-    fn code_fence_and_inline() {
-        let md = "before `x` **b**\n```rust\nlet a = 1;\n```\nafter";
+    fn renders_headings_and_text() {
+        let out = render_markdown("# Title\n\nsome text", Style::default().fg(Color::White));
+        let text = flat(&out);
+        assert!(text.contains("Title"), "heading text present: {text:?}");
+        assert!(text.contains("some text"), "body present: {text:?}");
+    }
+
+    #[test]
+    fn plain_text_gets_the_base_foreground() {
+        let base = Style::default().fg(Color::Rgb(1, 2, 3));
+        let out = render_markdown("just words", base);
+        // At least one span carries the base fg (plain text is not left uncoloured).
+        let got = out
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .any(|s| s.style.fg == Some(Color::Rgb(1, 2, 3)));
+        assert!(got, "plain text should adopt the base foreground");
+    }
+
+    #[test]
+    fn bold_carries_the_bold_modifier() {
+        let out = render_markdown("a **strong** word", Style::default());
+        let has_bold = out
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .any(|s| s.style.add_modifier.contains(Modifier::BOLD));
+        assert!(has_bold, "bold span should keep the BOLD modifier");
+    }
+
+    #[test]
+    fn lists_and_code_do_not_panic_and_produce_lines() {
+        let md = "- one\n- two\n  - nested\n\n```rust\nlet a = 1;\n```\n\n> quote\n\n- [x] done\n- [ ] todo";
         let out = render_markdown(md, Style::default());
-        let f = flat(&out);
-        assert!(f[0].contains("before"));
-        assert!(f[1].contains("rust"));
-        assert!(f[2].contains("let a = 1;"));
-        assert!(f[4].contains("after"));
+        assert!(out.len() >= 6, "list/code/quote should yield several lines");
+        assert!(flat(&out).contains("let a = 1;"), "code content preserved");
     }
 
     #[test]
-    fn bullets_and_headings() {
-        let md = "# Title\n- one\n- two\n1. three";
-        let out = render_markdown(md, Style::default());
-        let f = flat(&out);
-        assert_eq!(f[0], "Title");
-        assert!(f[1].contains("• one"));
-        assert!(f[3].contains("1. three"));
+    fn empty_input_is_safe() {
+        assert_eq!(render_markdown("", Style::default()).len(), 1);
     }
-
-    #[test]
-    fn unclosed_markers_are_literal() {
-        let out = render_markdown("a ** b ` c *", Style::default());
-        assert_eq!(flat(&out)[0], "a ** b ` c *");
-    }
-}
-
-fn find(chars: &[char], from: usize, ch: char) -> Option<usize> {
-    (from..chars.len()).find(|&j| chars[j] == ch)
-}
-
-fn find2(chars: &[char], from: usize, ch: char) -> Option<usize> {
-    let mut j = from;
-    while j + 1 < chars.len() {
-        if chars[j] == ch && chars[j + 1] == ch {
-            return Some(j);
-        }
-        j += 1;
-    }
-    None
 }

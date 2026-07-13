@@ -453,6 +453,7 @@ pub fn style_thinking_violet() -> Style {
     Style::default().fg(VIOLET).add_modifier(Modifier::ITALIC)
 }
 
+#[allow(dead_code)]
 pub fn style_thinking() -> Style {
     Style::default().fg(MUTED).add_modifier(Modifier::ITALIC)
 }

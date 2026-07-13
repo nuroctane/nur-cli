@@ -302,6 +302,10 @@ Rust TUI library, with **[crossterm](https://github.com/crossterm-rs/crossterm)*
 underneath for input and rendering. Meta CLI's dense Meta-blue interface simply
 wouldn't exist without the Ratatui folks — huge thanks to them. 💙
 
+Assistant markdown in the transcript is parsed by joshka's
+**[tui-markdown](https://github.com/joshka/tui-markdown)** — we re-tint its
+output to the Meta-blue palette on top.
+
 Also built on: [tokio](https://tokio.rs), [reqwest](https://github.com/seanmonstar/reqwest),
 [serde](https://serde.rs), and [clap](https://github.com/clap-rs/clap).
 
@@ -309,4 +313,10 @@ Also built on: [tokio](https://tokio.rs), [reqwest](https://github.com/seanmonst
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+**GNU General Public License v3.0 (or later)** — see [LICENSE](./LICENSE).
+
+Meta CLI is free software: you may redistribute it and/or modify it under the
+terms of the GPL as published by the Free Software Foundation, either version 3
+of the License, or (at your option) any later version. It is distributed in the
+hope that it will be useful, but **without any warranty**; without even the
+implied warranty of merchantability or fitness for a particular purpose.
