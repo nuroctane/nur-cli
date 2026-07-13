@@ -2,6 +2,13 @@
 
 The Meta-blue terminal UI for interactive sessions.
 
+!!! quote "Built with Ratatui"
+    The entire interface — cards, borders, animations, drag-select, and the
+    scrollbar — is built on **[Ratatui](https://ratatui.rs/)**
+    ([github.com/ratatui/ratatui](https://github.com/ratatui/ratatui)) with
+    **[crossterm](https://github.com/crossterm-rs/crossterm)** for input/rendering.
+    Enormous thanks to the Ratatui folks. 💙
+
 ## Opening the TUI
 
 ```bash
@@ -23,8 +30,15 @@ meta -r <session-id>    # resume specific session
 | **Drag on chat text** | Select + auto-copy |
 | **Click `↓ N · End`** | Jump to latest message |
 | Click card / `▸` | Peek / expand a card |
+| **Right-click or double-click a prompt** | Prompt menu: **fork · revert · copy** (works on the sticky header too) |
 | `p` (empty input) | Peek latest tool result |
 | `e` (empty input) | Expand latest card |
+| `Ctrl+P` / `Ctrl+N` · `Alt+↑`/`↓` | Previous / next prompt from history |
+
+!!! tip "Peek dialogue"
+    Click a card (or a finished turn's timing strip) to pin a peek box with its
+    full content. Close it with the **✕**, `Esc`, or a click **anywhere outside**
+    the box.
 
 ### Input
 
@@ -66,9 +80,11 @@ Type `/` in the input to see available commands.
 | Command | Purpose |
 |---------|---------|
 | `/mode` | Show current permission mode |
-| `/plan` | Switch to plan mode (read-only) |
+| `/plan` | Switch to plan mode (explore + shell freely; no code edits or repo commits) |
 | `/manual` | Switch to manual mode (approval required for writes) |
 | `/auto` | Switch to auto mode (auto-approve all) |
+
+See [Permission modes](#permission-modes) below for exactly what each mode allows.
 
 ### Session and state
 
@@ -124,6 +140,20 @@ The note is appended to your persistent memory file and recalled automatically i
 
 ---
 
+## Permission modes
+
+Cycle with **Shift+Tab** (`manual → plan → auto`); switch directly with `/manual`, `/plan`, `/auto`. The change applies immediately, even mid-turn.
+
+| Mode | What runs freely | What needs approval / is blocked |
+|------|------------------|----------------------------------|
+| **manual** | Reads (`read_file`, `grep`, `look`, `git_status`, …) | Writes, `bash`, `extract_frames` → prompt `y` / `a` / `n` |
+| **plan** | Reads **and shell** for reading, parsing, tests, and scratch/media compute (`ffmpeg`, `extract_frames`, copying a clip, analysis scripts) | **Blocked:** code authoring (`write_file` / `edit_file` / `multi_edit` / `apply_patch`) and repo/VCS mutation — `git commit`/`push`/`add`/`reset`/… , `gh pr create`, dependency installs |
+| **auto** | Everything (no prompts) | — |
+
+Plan mode is for exploring and understanding a codebase without changing it: run whatever analysis you like, but no edits land and nothing is committed until you switch to manual or auto.
+
+---
+
 ## Visual design
 
 ### Colour system
@@ -151,6 +181,22 @@ Each tool call shows a duration chip (e.g. `1.2s`) so you can see where time is 
 ### Approval mini-diff
 
 When a write tool requests approval, the TUI shows a compact diff preview of what will change. The diff is line-numbered with `+`/`-` indicators so you can see exactly which lines will be added or removed before approving.
+
+### Transcript diffs
+
+Edit tools (`edit_file`, `write_file`, `multi_edit`, `apply_patch`) render a **green/red unified diff inline** in the transcript — added lines in green bands, removed in red, with a `+adds -dels` chip on the card header. The full diff is shown when the card is expanded and inside its peek box.
+
+### Prompt menu — fork · revert · copy
+
+**Right-click** or **double-click** any of your prompts (in the transcript or on the sticky header) to open a small menu — styled like every other dialogue:
+
+| Action | What it does |
+|--------|--------------|
+| **Fork** | Branch into a **new session** seeded with the conversation up to that prompt. The original session is kept intact on disk; the prompt lands in your input to continue the fork. |
+| **Revert** | **Rewind** the session to just before that prompt (transcript, messages, and the model's context are all truncated). The prompt returns to the input to edit and resend. |
+| **Copy** | Copy the prompt text to the clipboard. |
+
+No keyboard shortcuts — move the highlight with the wheel or `↑`/`↓`, choose with `Enter` or a click, dismiss with `Esc`, the ✕, or a click outside.
 
 ### Sessions browser
 

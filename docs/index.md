@@ -18,7 +18,7 @@ muse          # legacy alias (same binary)
 
 | Surface | Details |
 |---------|---------|
-| **TUI** | Streaming · duration chips · expandable thought/tool cards · click-to-peek · drag-select · always-on scrollbar · ↓ End · sticky prompt · sessions browser · approval mini-diff |
+| **TUI** | Streaming · duration chips · expandable thought/tool cards · click-to-peek · **green/red transcript diffs** · **prompt menu (fork · revert · copy)** · drag-select · always-on scrollbar · ↓ End · sticky prompt · sessions browser · approval mini-diff |
 | **Agent** | Manual / plan / auto · tool loop · subagents · todos · auto-compact · Esc cancel · Shift+Tab mid-turn · prompt-cache keys |
 | **Vision** | `look` (images / short video) · `extract_frames` (ffmpeg keyframes) · prompt auto-attach of media paths |
 | **Tools** | read · edit · bash · web · git · knowledge stack · agent |
@@ -40,3 +40,9 @@ muse          # legacy alias (same binary)
 - **[Configuration](configuration.md)** — `config.toml`, environment variables, settings
 - **[Security](security.md)** — Where secrets live, sandbox, reporting
 - **[Troubleshooting](troubleshooting.md)** — `meta doctor`, common issues
+
+---
+
+## Built with
+
+The terminal UI is powered by **[Ratatui](https://ratatui.rs/)** ([github](https://github.com/ratatui/ratatui)) and **[crossterm](https://github.com/crossterm-rs/crossterm)** — huge thanks to the Ratatui project. Also built on [tokio](https://tokio.rs), [reqwest](https://github.com/seanmonstar/reqwest), [serde](https://serde.rs), and [clap](https://github.com/clap-rs/clap).

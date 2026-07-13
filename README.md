@@ -293,6 +293,20 @@ Override home with `META_HOME` (legacy `MUSE_HOME` still honored). Env: `META_AP
 
 ---
 
+## Acknowledgements
+
+The whole terminal UI — every card, border, animation, and the drag-select /
+scrollbar plumbing — is built on **[Ratatui](https://ratatui.rs/)**
+([github.com/ratatui/ratatui](https://github.com/ratatui/ratatui)), the
+Rust TUI library, with **[crossterm](https://github.com/crossterm-rs/crossterm)**
+underneath for input and rendering. Meta CLI's dense Meta-blue interface simply
+wouldn't exist without the Ratatui folks — huge thanks to them. 💙
+
+Also built on: [tokio](https://tokio.rs), [reqwest](https://github.com/seanmonstar/reqwest),
+[serde](https://serde.rs), and [clap](https://github.com/clap-rs/clap).
+
+---
+
 ## License
 
 MIT — see [LICENSE](./LICENSE).

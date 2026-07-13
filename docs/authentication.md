@@ -66,6 +66,8 @@ meta auth logout
 
 Removes the stored key from `~/.meta/auth.json`. Also clears any migrated key from the legacy `~/.muse/` directory.
 
+From inside the TUI, use the `/logout` slash command — it clears the stored key and blocks further turns until you `/login` again (environment-variable keys still apply on the next launch).
+
 ---
 
 ## Auth precedence

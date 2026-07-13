@@ -33,7 +33,7 @@ meta "fix the bug"                      # start with a prompt
 meta "design from ref.mp4"             # vision: auto-attach media
 meta -c                                 # continue last session
 meta -r abc123                          # resume session abc123
-meta --mode plan "explain this"         # plan mode (read-only)
+meta --mode plan "explain this"         # plan: explore + shell, no edits/commits
 meta --effort xhigh "deep analysis"     # maximum reasoning
 meta --model muse-spark-1.1 "hello"     # explicit model
 meta run "add tests" -y                 # headless + auto-approve
