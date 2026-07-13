@@ -28,7 +28,9 @@ muse          # legacy alias (same binary)
     curl -fsSL https://raw.githubusercontent.com/nuroctane/meta-cli/main/install.sh | bash
     ```
 
-Then: `meta auth login` → `meta`. Prebuilt Windows EXE, clone, and cargo paths — plus **everything the installer puts on your PC** — are documented in **[Setup](setup.md)**.
+Then: `meta auth login` → `meta`.
+
+**Windows EXE shortcut:** download `meta-windows-x86_64.exe` from [Releases](https://github.com/nuroctane/meta-cli/releases/latest) → double‑click → sign in. No PATH required for first run. Full inventory (clone, cargo, what lands on disk): **[Setup](setup.md)**.
 
 ---
 

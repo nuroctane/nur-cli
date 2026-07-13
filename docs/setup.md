@@ -41,28 +41,40 @@ Does **everything**: Rust if needed, prereqs, build, PATH, ecosystem packs, brow
 
 ### 2. Prebuilt Windows EXE (no local compile)
 
+**Download → run → login.** No PATH ritual required for first use.
+
 1. Open [**Releases → latest**](https://github.com/nuroctane/meta-cli/releases/latest)
-2. Download `meta-windows-x86_64.exe` (and `.sha256` if you want to verify)
-3. Install to the same location the one-liner uses:
+2. Download **`meta-windows-x86_64.exe`**
+3. **Double‑click it**, or from a terminal in that folder:
 
-```powershell
-$bin = "$env:USERPROFILE\.local\bin"
-New-Item -ItemType Directory -Force -Path $bin | Out-Null
-Copy-Item -Force .\meta-windows-x86_64.exe "$bin\meta.exe"
-Copy-Item -Force "$bin\meta.exe" "$bin\muse.exe"
-$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-if ($userPath -notlike "*$bin*") {
-  [Environment]::SetEnvironmentVariable("Path", "$bin;$userPath", "User")
-}
-# NEW terminal, then finish the stack:
-meta --version
-meta ecosystem ensure
-meta browser setup
-meta auth login
-```
+    ```powershell
+    .\meta-windows-x86_64.exe
+    ```
 
-!!! note "EXE vs one-liner"
-    The prebuilt EXE is just the **binary**. You still want `meta ecosystem ensure` + `meta browser setup` for Graphify / PLUR / Ruflo / omp / browser / skills — the one-liner runs those for you.
+4. Sign in when prompted (`/login`, or `meta auth login` if you put it on PATH)
+
+Core agent works from the EXE alone. Optional extras below.
+
+??? note "Optional: put `meta` on your PATH"
+
+    Rename to `meta.exe` and drop it in a folder on PATH (e.g. `%USERPROFILE%\.local\bin`), then open a **new** terminal.
+
+    ```powershell
+    $bin = "$env:USERPROFILE\.local\bin"
+    New-Item -ItemType Directory -Force -Path $bin | Out-Null
+    Copy-Item -Force .\meta-windows-x86_64.exe "$bin\meta.exe"
+    $p = [Environment]::GetEnvironmentVariable("Path", "User")
+    if ($p -notlike "*$bin*") { [Environment]::SetEnvironmentVariable("Path", "$bin;$p", "User") }
+    ```
+
+??? note "Optional: full stack (Graphify · PLUR · Ruflo · omp · browser · skills)"
+
+    ```powershell
+    meta ecosystem ensure
+    meta browser setup
+    ```
+
+    Or use the **one-liner** — it installs PATH + packs for you. The TUI also runs ecosystem repair in the **background** when `ecosystem_auto_ensure` is on (default).
 
 ### 3. From a local clone
 

@@ -46,34 +46,52 @@ Or skip the CLI login: run `meta` and use **`/login`** in the TUI (masked entry)
 <table>
 <tr>
 <td width="33%"><strong>① One-liner (above)</strong><br/>Easiest. Builds from source + full stack.</td>
-<td width="33%"><strong>② Prebuilt EXE (Windows)</strong><br/>Grab from <a href="https://github.com/nuroctane/meta-cli/releases/latest">Releases</a>.</td>
+<td width="33%"><strong>② Prebuilt EXE (Windows)</strong><br/>Download → double‑click → done.</td>
 <td width="33%"><strong>③ From a clone</strong><br/>You already have the repo.</td>
 </tr>
 </table>
 
-**② Prebuilt Windows binary**
+**② Prebuilt Windows binary** — download and run. That’s the whole path.
 
 1. Open **[Releases → latest](https://github.com/nuroctane/meta-cli/releases/latest)**
-2. Download `meta-windows-x86_64.exe` (+ optional `.sha256`)
-3. Put it on your PATH as `meta.exe` (and copy as `muse.exe` if you want the alias):
+2. Download **`meta-windows-x86_64.exe`**
+3. **Double‑click it** (or in a terminal in that folder: `.\meta-windows-x86_64.exe`)
+4. Sign in when prompted (`/login` in the TUI, or paste a key from [dev.meta.ai](https://dev.meta.ai/))
+
+You’re good. Core agent, tools, sessions — all work from the EXE alone.
+
+<details>
+<summary>Optional: type <code>meta</code> from any terminal (PATH)</summary>
+
+Rename the file to `meta.exe`, move it somewhere on your PATH (e.g. `C:\Users\you\.local\bin`), open a **new** terminal, run `meta`.
+
+Or one PowerShell shot:
 
 ```powershell
-# Example: user-local bin (same place the one-liner uses)
 $bin = "$env:USERPROFILE\.local\bin"
 New-Item -ItemType Directory -Force -Path $bin | Out-Null
 Copy-Item -Force .\meta-windows-x86_64.exe "$bin\meta.exe"
-Copy-Item -Force "$bin\meta.exe" "$bin\muse.exe"
-# Ensure PATH once:
-$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-if ($userPath -notlike "*$bin*") {
-  [Environment]::SetEnvironmentVariable("Path", "$bin;$userPath", "User")
-}
-# Then open a NEW terminal:
-meta --version
-meta ecosystem ensure   # full stack (Graphify · PLUR · Ruflo · omp · browser · skills)
-meta browser setup      # stage Chromium extension for your default browser
-meta auth login
+$p = [Environment]::GetEnvironmentVariable("Path", "User")
+if ($p -notlike "*$bin*") { [Environment]::SetEnvironmentVariable("Path", "$bin;$p", "User") }
 ```
+
+Then open a new terminal → `meta`.
+
+</details>
+
+<details>
+<summary>Optional: full knowledge stack (Graphify · browser · skills…)</summary>
+
+The prebuilt EXE is the agent binary. Extra packs install on demand (or in the background when you open the TUI):
+
+```powershell
+meta ecosystem ensure
+meta browser setup
+```
+
+Prefer zero setup? Use the **one-liner** above — it does PATH + stack for you.
+
+</details>
 
 **③ Already cloned**
 
