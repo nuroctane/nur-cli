@@ -62,8 +62,10 @@ What it does **before** any TUI (console progress):
 
 Re-download + re-run the release EXE to upgrade. Force again anytime: `meta install`.
 
-!!! tip "Dev / skip"
-    `META_SKIP_BOOTSTRAP=1` skips auto-install (e.g. local cargo builds).
+!!! tip "When auto-install runs"
+    **Release EXE** (`meta-windows-*.exe`) and **first** run with no `~\.local\bin\meta` → full one-stop install.  
+    Already-installed `meta` on PATH opens the TUI immediately (no reinstall).  
+    Force again: `meta install`. Dev skip: `META_SKIP_BOOTSTRAP=1`.
 
 ### 3. From a local clone
 

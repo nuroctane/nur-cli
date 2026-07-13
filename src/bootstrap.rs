@@ -103,6 +103,7 @@ fn paths_equal_loose(a: &Path, b: &Path) -> bool {
     norm(a) == norm(b)
 }
 
+#[allow(dead_code)]
 fn bootstrap_complete() -> bool {
     let text = match fs::read_to_string(marker_path()) {
         Ok(t) => t,
@@ -118,11 +119,15 @@ fn bootstrap_complete() -> bool {
 }
 
 /// Interactive TUI launch should run a full one-stop install first when:
-/// - user downloaded a release EXE, or
-/// - this machine has never finished bootstrap, or
+/// - user double-clicked a **release artifact** (`meta-windows-*.exe`), or
+/// - there is **no** installed `~/.local/bin/meta` yet (first-time cargo binary), or
 /// - `META_FORCE_BOOTSTRAP=1`
 ///
+/// Already-installed `meta` on PATH must **never** re-enter one-stop install on
+/// every open — that used to rename the running EXE to `meta.old` and brick PATH.
+///
 /// Skip with `META_SKIP_BOOTSTRAP=1` (dev / re-exec after install).
+/// Force anytime: `meta install`.
 pub fn should_bootstrap_on_launch() -> bool {
     if env_truthy("META_SKIP_BOOTSTRAP") {
         return false;
@@ -130,10 +135,16 @@ pub fn should_bootstrap_on_launch() -> bool {
     if env_truthy("META_FORCE_BOOTSTRAP") {
         return true;
     }
+    // Downloads folder / release asset: always one-stop.
     if looks_like_release_artifact() {
         return true;
     }
-    !bootstrap_complete()
+    // Installed binary (or already running from it): open TUI, do not reinstall.
+    if is_running_from_install() || install_binary_path().is_file() {
+        return false;
+    }
+    // No install on disk yet (e.g. bare `target/release/meta`) → offer full setup once.
+    true
 }
 
 fn env_truthy(key: &str) -> bool {
@@ -161,25 +172,35 @@ pub fn run_full_install() -> Result<()> {
     step("Installing binary to ~/.local/bin…");
     let dest_dir = install_dir();
     fs::create_dir_all(&dest_dir)?;
-    let src = env::current_exe().map_err(|e| MuseError::Io(e))?;
+    let src = env::current_exe().map_err(MuseError::Io)?;
     let dest = install_binary_path();
     let alias = muse_alias_path();
 
-    install_binary_safe(&src, &dest)?;
-    let _ = install_binary_safe(&src, &alias);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&dest, fs::Permissions::from_mode(0o755));
-        let _ = fs::set_permissions(&alias, fs::Permissions::from_mode(0o755));
+    if same_file(&src, &dest) {
+        theme::print_ok(&format!("Already at {}", dest.display()));
+        // Ensure muse alias exists even when we're already the install path.
+        if !alias.is_file() || !same_file(&src, &alias) {
+            let _ = install_binary_safe(&src, &alias);
+        }
+    } else {
+        install_binary_safe(&src, &dest)?;
+        let _ = install_binary_safe(&src, &alias);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&dest, fs::Permissions::from_mode(0o755));
+            let _ = fs::set_permissions(&alias, fs::Permissions::from_mode(0o755));
+        }
+        if let Some(hash) = file_sha256(&dest) {
+            let record = format!(
+                "{hash}  {}",
+                dest.file_name().and_then(|s| s.to_str()).unwrap_or("meta")
+            );
+            let _ = fs::write(dest_dir.join("meta.sha256"), format!("{record}\n"));
+            theme::print_ok(&format!("SHA-256 {hash}"));
+        }
+        theme::print_ok(&format!("Installed {}", dest.display()));
     }
-
-    if let Some(hash) = file_sha256(&dest) {
-        let record = format!("{hash}  {}", dest.file_name().and_then(|s| s.to_str()).unwrap_or("meta"));
-        let _ = fs::write(dest_dir.join("meta.sha256"), format!("{record}\n"));
-        theme::print_ok(&format!("SHA-256 {hash}"));
-    }
-    theme::print_ok(&format!("Installed {}", dest.display()));
 
     // Prefer the install dir for everything that follows in this process.
     prepend_path(&dest_dir);
@@ -350,24 +371,65 @@ fn prepend_path(dir: &Path) {
     }
 }
 
+fn same_file(a: &Path, b: &Path) -> bool {
+    if let (Ok(x), Ok(y)) = (fs::canonicalize(a), fs::canonicalize(b)) {
+        return x == y;
+    }
+    paths_equal_loose(a, b)
+}
+
 fn install_binary_safe(src: &Path, target: &Path) -> Result<()> {
+    // Never "install over ourselves" — rename/copy would delete the only image
+    // and leave PATH pointing at nothing (os error 2 after rename to .old).
+    if same_file(src, target) {
+        return Ok(());
+    }
+    if !src.is_file() {
+        return Err(MuseError::Other(format!(
+            "source binary missing: {}",
+            src.display()
+        )));
+    }
     match fs::copy(src, target) {
-        Ok(_) => return Ok(()),
+        Ok(_) => Ok(()),
         Err(_) => {
-            // Locked by a running TUI — swap via rename (same as install.ps1).
+            // Locked by a running instance of *target* — swap via rename, but
+            // only when source is a different file that still exists after.
             let bak = target.with_extension("old");
             let _ = fs::remove_file(&bak);
             if target.exists() {
-                let _ = fs::rename(target, &bak);
+                fs::rename(target, &bak).map_err(|e| {
+                    MuseError::Other(format!(
+                        "could not replace {} (close other meta sessions): {e}",
+                        target.display()
+                    ))
+                })?;
             }
-            fs::copy(src, target).map_err(|e| {
-                MuseError::Other(format!(
-                    "could not install {} (is meta still running?): {e}",
+            if !src.is_file() {
+                // Catastrophic: restore target if we renamed it.
+                if bak.is_file() {
+                    let _ = fs::rename(&bak, target);
+                }
+                return Err(MuseError::Other(format!(
+                    "source vanished while installing {} — restored previous binary if possible",
                     target.display()
-                ))
-            })?;
-            let _ = fs::remove_file(&bak);
-            Ok(())
+                )));
+            }
+            match fs::copy(src, target) {
+                Ok(_) => {
+                    let _ = fs::remove_file(&bak);
+                    Ok(())
+                }
+                Err(e) => {
+                    if bak.is_file() && !target.is_file() {
+                        let _ = fs::rename(&bak, target);
+                    }
+                    Err(MuseError::Other(format!(
+                        "could not install {} (is meta still running?): {e}",
+                        target.display()
+                    )))
+                }
+            }
         }
     }
 }
