@@ -31,8 +31,6 @@ meta -r <session-id>    # resume specific session
 | **Click `↓ N · End`** | Jump to latest message |
 | Click card / `▸` | Peek / expand a card |
 | **Right-click or double-click a prompt** | Prompt menu: **fork · revert · copy** (works on the sticky header too) |
-| `Alt+p` | Peek latest tool result |
-| `Alt+e` | Expand latest card |
 | `Ctrl+P` / `Ctrl+N` · `Alt+↑`/`↓` | Previous / next prompt from history |
 
 !!! tip "Peek dialogue"

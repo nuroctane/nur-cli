@@ -2029,19 +2029,6 @@ impl App {
         self.img_cache.get_mut(path)
     }
 
-    fn pin_peek_latest(&mut self) {
-        if let Some(idx) = self
-            .cells
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(_, c)| c.is_peekable())
-            .map(|(i, _)| i)
-        {
-            self.peek_pinned = Some(idx);
-        }
-    }
-
     fn hit_scrollbar(&self, col: u16, row: u16) -> bool {
         let t = self.scrollbar_track;
         if t.width == 0 || t.height == 0 {
@@ -2881,20 +2868,6 @@ impl App {
         }
     }
 
-    /// Expand/collapse the most recent collapsible card (click the card / ▸).
-    fn toggle_last_collapsible(&mut self) {
-        if let Some(idx) = self
-            .cells
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(_, c)| c.is_collapsible())
-            .map(|(i, _)| i)
-        {
-            self.toggle_cell_expand(idx);
-        }
-    }
-
     /// Map a click in the transcript body.
     ///
     /// - Click left edge / chevron (first ~3 cells): expand/collapse in place.
@@ -3307,7 +3280,6 @@ impl App {
             ("click ↓ End", "jump to latest"),
             ("click card  ·  ▸", "peek  ·  expand"),
             ("right/2×-click prompt", "menu: fork · revert · copy"),
-            ("e  ·  p  (empty)", "expand  ·  pin-peek latest"),
             ("Ctrl+A", "select all (input, or transcript if empty)"),
             ("Ctrl+C", "copy selection  ·  else cancel / double-tap quit"),
             ("Ctrl+V  ·  Ctrl+X", "paste  ·  cut"),
