@@ -2,24 +2,25 @@
 
 Meta CLI is **unofficial** community software. It is not affiliated with Meta Platforms, Inc.
 
-## Where secrets live (local only)
+## Where secrets live
 
 | Location | Contents |
 |----------|----------|
-| `~/.muse/auth.json` | Meta Model API key after `muse auth login` |
-| env `MODEL_API_KEY` / `MUSE_API_KEY` | Optional override (never print in logs) |
-| `~/.muse/sessions/`, `status.json`, `usage.jsonl` | Session + usage metadata (no key in usage log) |
+| `~/.meta/auth.json` | Meta Model API key after `meta auth login` |
+| env `META_API_KEY` / `MODEL_API_KEY` | Optional override (never print in logs). Legacy: `MUSE_API_KEY` |
+| `~/.meta/sessions/`, `status.json`, `usage.jsonl` | Session + usage metadata (no key in usage log) |
 
-These paths are **gitignored**. They are never part of this repository.
+**Never commit** `~/.meta/`, `.env` files with keys, or session dumps.
 
-## What is on GitHub
+Older installs used `~/.muse/`; Meta CLI migrates key files into `~/.meta/` on first launch when the new home is empty.
 
-Only source, docs, and install scripts. Install scripts:
+## Install scripts
 
-- Do **not** embed API keys
-- May **read** a key already present in your environment and store it under `~/.muse/` on your machine
-- Never echo the key value
+`install.ps1` / `install.sh`:
 
-## Reporting a leak
+- May **read** a key already present in your environment and store it under `~/.meta/` on your machine
+- Do **not** write keys into the git checkout or GitHub
 
-If you believe a secret was committed to this repo, rotate the key at [dev.meta.ai](https://dev.meta.ai/) immediately and open an issue (without pasting the secret).
+## Report issues
+
+Open a private report or issue on [nuroctane/meta-cli](https://github.com/nuroctane/meta-cli) if you find a vulnerability in this client.

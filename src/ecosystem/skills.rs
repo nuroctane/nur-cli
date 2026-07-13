@@ -1,5 +1,5 @@
 //! Install Meta-bundled SKILL.md packs for plur / ruflo / graphify into
-//! `~/.muse/skills/` so the agent discovers them on first launch.
+//! `~/.meta/skills/` so the agent discovers them on first launch.
 
 use crate::config::muse_home;
 use crate::error::Result;
@@ -99,7 +99,7 @@ description: "Agent meta-harness: vector memory, swarm coordination, hive-mind, 
 # Ruflo — agent orchestration harness
 
 Meta CLI auto-installs `ruflo` and provisions global vector memory at
-`~/.muse/ruflo/memory.db`. Use the **`ruflo`** tool (or `/ruflo`) — no separate init.
+`~/.meta/ruflo/memory.db`. Use the **`ruflo`** tool (or `/ruflo`) — no separate init.
 
 ## When to use
 
@@ -125,7 +125,7 @@ Meta CLI auto-installs `ruflo` and provisions global vector memory at
 
 ## Rules
 
-- Default memory lives under Meta's home (`~/.muse/ruflo/`) so project trees stay clean.
+- Default memory lives under Meta's home (`~/.meta/ruflo/`) so project trees stay clean.
 - Prefer PLUR for *preferences and corrections*; Ruflo memory for *patterns, trajectories, embeddings*.
 - Prefer graphify for *code structure graphs*.
 - Do not require Claude Code — Meta is the host agent.

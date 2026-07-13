@@ -11,7 +11,7 @@ impl Tool for MemoryTool {
     }
 
     fn description(&self) -> &str {
-        "Cross-session memory stored in ~/.muse/memory.md. action=read|append. \
+        "Cross-session memory stored in ~/.meta/memory.md. action=read|append. \
          Use for durable user preferences and project facts (never secrets)."
     }
 

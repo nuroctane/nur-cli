@@ -1,6 +1,6 @@
 [package]
 name = "meta-cli"
-version = "0.5.13"
+version = "0.5.14"
 edition = "2021"
 description = "Fully loaded unofficial Meta Model API coding agent — streaming Meta-blue TUI (timers, peek cards, drag-select), native tools + sandbox, Graphify/PLUR/Ruflo/Executor + 800+ skills, subagents, API retries, atomic sessions, meta doctor"
 license = "MIT"

@@ -1,8 +1,8 @@
-//! Token usage tracking for ADEs (Orca, etc.) and local dashboards.
+//! Token usage tracking for host panels (Orca ADE, etc.) and local dashboards.
 //!
 //! Writes:
-//! - `~/.muse/status.json` — current session snapshot (poll this from ADEs)
-//! - `~/.muse/usage.jsonl` — append-only per-request log
+//! - `~/.meta/status.json` — current session snapshot
+//! - `~/.meta/usage.jsonl` — append-only per-request log
 //!
 //! Also mirrors into env-friendly fields so host tools can read the last write.
 
@@ -166,20 +166,33 @@ impl UsageTracker {
         if !self.global {
             return;
         }
-        // ADE-friendly env (current process only — parent may not see, but children hooks can)
-        std::env::set_var("MUSE_USAGE_INPUT_TOKENS", self.session.input_tokens.to_string());
-        std::env::set_var(
-            "MUSE_USAGE_OUTPUT_TOKENS",
-            self.session.output_tokens.to_string(),
-        );
-        std::env::set_var("MUSE_USAGE_TOTAL_TOKENS", self.session.total_tokens.to_string());
-        std::env::set_var(
-            "MUSE_USAGE_COST_USD",
-            format!("{:.6}", self.session.estimated_cost_usd()),
-        );
-        std::env::set_var("MUSE_STATUS_PATH", status_path().display().to_string());
+        // Host-panel env (current process; children/hooks can read)
+        let status = status_path().display().to_string();
+        let cost = format!("{:.6}", self.session.estimated_cost_usd());
+        for (meta_k, muse_k, val) in [
+            (
+                "META_USAGE_INPUT_TOKENS",
+                "MUSE_USAGE_INPUT_TOKENS",
+                self.session.input_tokens.to_string(),
+            ),
+            (
+                "META_USAGE_OUTPUT_TOKENS",
+                "MUSE_USAGE_OUTPUT_TOKENS",
+                self.session.output_tokens.to_string(),
+            ),
+            (
+                "META_USAGE_TOTAL_TOKENS",
+                "MUSE_USAGE_TOTAL_TOKENS",
+                self.session.total_tokens.to_string(),
+            ),
+            ("META_USAGE_COST_USD", "MUSE_USAGE_COST_USD", cost),
+            ("META_STATUS_PATH", "MUSE_STATUS_PATH", status),
+        ] {
+            std::env::set_var(meta_k, &val);
+            std::env::set_var(muse_k, &val);
+        }
 
-        // ADE / Orca discovery + optional hook ping
+        // Discovery manifest + optional Orca hook ping
         crate::ade::write_ade_manifest(
             &self.session_id,
             &self.model,

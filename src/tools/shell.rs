@@ -48,7 +48,7 @@ pub fn shell_backend() -> &'static ShellBackend {
 /// Detect the best available shell (prefer `shell_backend()` — this probes disk).
 pub fn detect_shell() -> ShellBackend {
     // 1) Explicit override
-    if let Ok(p) = std::env::var("MUSE_SHELL") {
+    if let Ok(p) = std::env::var("META_SHELL").or_else(|_| std::env::var("MUSE_SHELL")) {
         let pb = PathBuf::from(&p);
         if pb.is_file() || which_exists(&p) {
             let kind = if p.to_ascii_lowercase().contains("bash") {
@@ -63,7 +63,7 @@ pub fn detect_shell() -> ShellBackend {
             return ShellBackend {
                 kind,
                 program: pb,
-                label: format!("MUSE_SHELL={p}"),
+                label: format!("META_SHELL={p}"),
             };
         }
     }
@@ -270,7 +270,7 @@ pub fn run_in_shell(
     if kind == ShellKind::Cmd {
         out.push_str(
             "note: shell is cmd.exe — use Windows syntax (dir, type, findstr). \
-             Install Git Bash or set MUSE_SHELL for real bash.\n",
+             Install Git Bash or set META_SHELL for real bash.\n",
         );
     }
     Ok(out)

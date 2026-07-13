@@ -11,9 +11,9 @@ pub struct Auth {
     pub source: String,
 }
 
-/// Resolve API key: META_API_KEY → MUSE_API_KEY → MODEL_API_KEY → ~/.muse/auth.json
+/// Resolve API key: META_API_KEY → MODEL_API_KEY → MUSE_API_KEY (legacy) → ~/.meta/auth.json
 pub fn resolve_api_key() -> Result<String> {
-    for var in ["META_API_KEY", "MUSE_API_KEY", "MODEL_API_KEY"] {
+    for var in ["META_API_KEY", "MODEL_API_KEY", "MUSE_API_KEY"] {
         if let Ok(k) = std::env::var(var) {
             let k = k.trim().to_string();
             if !k.is_empty() {
@@ -24,6 +24,16 @@ pub fn resolve_api_key() -> Result<String> {
     let path = auth_path();
     if path.exists() {
         let text = fs::read_to_string(&path)?;
+        let auth: Auth = serde_json::from_str(&text)?;
+        let k = auth.api_key.trim().to_string();
+        if !k.is_empty() {
+            return Ok(k);
+        }
+    }
+    // Legacy path if migration hasn't run yet
+    let legacy = crate::config::legacy_muse_home().join("auth.json");
+    if legacy.exists() {
+        let text = fs::read_to_string(&legacy)?;
         let auth: Auth = serde_json::from_str(&text)?;
         let k = auth.api_key.trim().to_string();
         if !k.is_empty() {
@@ -52,7 +62,7 @@ pub fn save_api_key(key: &str) -> Result<()> {
     let path = auth_path();
     crate::config::atomic_write(&path, text.as_bytes())
         .map_err(|e| MuseError::Other(format!("failed to save auth atomically: {e}")))?;
-    // Restrictive perms on Unix. On Windows, ~/.muse under the user profile is
+    // Restrictive perms on Unix. On Windows, ~/.meta under the user profile is
     // already private via default NTFS ACLs — no portable 0600 equivalent.
     #[cfg(unix)]
     {
@@ -83,12 +93,12 @@ pub fn auth_status() -> Result<()> {
         Ok(key) => {
             let source = if std::env::var("META_API_KEY").is_ok() {
                 "META_API_KEY env"
-            } else if std::env::var("MUSE_API_KEY").is_ok() {
-                "MUSE_API_KEY env"
             } else if std::env::var("MODEL_API_KEY").is_ok() {
                 "MODEL_API_KEY env"
+            } else if std::env::var("MUSE_API_KEY").is_ok() {
+                "MUSE_API_KEY env (legacy)"
             } else {
-                "~/.muse/auth.json"
+                "~/.meta/auth.json"
             };
             println!("authenticated: yes");
             println!("source: {source}");
@@ -97,8 +107,8 @@ pub fn auth_status() -> Result<()> {
         }
         Err(MuseError::NotAuthenticated) => {
             println!("authenticated: no");
-            println!("run: muse auth login");
-            println!("or set MODEL_API_KEY / MUSE_API_KEY");
+            println!("run: meta auth login");
+            println!("or set META_API_KEY / MODEL_API_KEY");
             Ok(())
         }
         Err(e) => Err(e),

@@ -15,17 +15,17 @@ What you get:\n\
   · Ecosystem auto-wired — Graphify · PLUR · Ruflo · Executor · 800+ skills · AKM\n\
   · Hardened by default — sandbox, bash denylist, SSRF blocks, API retries,\n\
     prompt-cache keys, atomic session IO, install SHA-256, meta doctor\n\
-  · ADE-ready — status.json / usage.jsonl / 🔵 window title for Orca panels\n\n\
-Default model: muse-spark-1.1 (any id via --model / /model).\n\
-Not affiliated with Meta Platforms, Inc.  ·  github.com/nuroctane/meta-cli\n\
-Invoke as: meta   (legacy alias: muse)"
+  · Host panels — live status.json / usage.jsonl for ADE/Orca-style dashboards\n\n\
+Model: any Meta Model API id via --model / /model / config (default from config).\n\
+Secrets stay in ~/.meta/ only.  Not affiliated with Meta Platforms, Inc.\n\
+Repo: github.com/nuroctane/meta-cli  ·  Invoke as: meta  (alias: muse)"
 )]
 pub struct Cli {
     /// Initial prompt for interactive session
     #[arg(value_name = "PROMPT")]
     pub prompt: Option<String>,
 
-    /// Meta Model API model id (default from config / muse-spark-1.1)
+    /// Meta Model API model id (default from config)
     #[arg(short, long, env = "META_MODEL")]
     pub model: Option<String>,
 
@@ -81,7 +81,7 @@ pub enum Commands {
         #[command(subcommand)]
         action: AuthCmd,
     },
-    /// Show last known token usage (ADE-friendly paths)
+    /// Show last known token usage (status / usage log paths)
     Usage,
     /// List recent sessions
     Sessions {
@@ -114,7 +114,7 @@ pub enum EcosystemCmd {
 
 #[derive(Subcommand, Debug)]
 pub enum AuthCmd {
-    /// Save API key to ~/.muse/auth.json
+    /// Save API key to ~/.meta/auth.json
     Login {
         /// API key (optional; prompts if omitted)
         #[arg(long)]

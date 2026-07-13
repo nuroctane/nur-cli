@@ -1,5 +1,5 @@
 //! Ruflo — agent meta-harness (vector memory, swarm, hive-mind).
-//! Wraps the `ruflo` CLI; memory defaults to Meta's global DB at ~/.muse/ruflo/.
+//! Wraps the `ruflo` CLI; memory defaults to Meta's global DB at ~/.meta/ruflo/.
 
 use super::{arg_str, arg_u64, Tool, ToolContext};
 use crate::ecosystem;
@@ -34,7 +34,7 @@ impl Tool for Ruflo {
 
     fn description(&self) -> &str {
         "Ruflo agent harness: vector memory (AgentDB), swarm coordination, hive-mind status. \
-         Memory is global under ~/.muse/ruflo/ (does not pollute project trees). \
+         Memory is global under ~/.meta/ruflo/ (does not pollute project trees). \
          action=status|memory_store|memory_search|memory_stats|memory_list|agent_list|\
          swarm_init|swarm_status|hive_status|doctor. Auto-installed with meta."
     }

@@ -42,8 +42,8 @@ impl Tool for SubmitPlan {
         if let Ok(mut g) = self.plan.lock() {
             *g = Some(text.clone());
         }
-        // Persist under workspace .muse/plan.md when possible
-        let dir = ctx.cwd.join(".muse");
+        // Persist under workspace .meta/plan.md when possible
+        let dir = ctx.cwd.join(".meta");
         let _ = fs::create_dir_all(&dir);
         let path = dir.join("plan.md");
         fs::write(&path, &text).map_err(|e| MuseError::Tool(e.to_string()))?;

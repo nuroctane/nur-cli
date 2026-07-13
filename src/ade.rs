@@ -1,6 +1,6 @@
 //! ADE (Orca, etc.) integration: hooks, terminal titles, usage discovery.
 
-use crate::config::{muse_home, status_path};
+use crate::config::{meta_home, status_path};
 use crate::usage::TokenUsage;
 use serde_json::json;
 use std::fs;
@@ -51,7 +51,7 @@ pub fn abbreviate_for_title(prompt: &str, max_chars: usize) -> String {
     s
 }
 
-/// Write ADE discovery file at ~/.muse/ade.json
+/// Write ADE discovery file at ~/.meta/ade.json
 pub fn write_ade_manifest(session_id: &str, model: &str, cwd: &str, usage: &TokenUsage) {
     let _ = crate::config::ensure_dirs();
     let body = json!({
@@ -65,27 +65,28 @@ pub fn write_ade_manifest(session_id: &str, model: &str, cwd: &str, usage: &Toke
         "cwd": cwd,
         "pid": std::process::id(),
         "status_path": status_path().display().to_string(),
-        "usage_log_path": muse_home().join("usage.jsonl").display().to_string(),
-        "latest_session_path": muse_home().join("latest_session.json").display().to_string(),
-        "home": muse_home().display().to_string(),
+        "usage_log_path": meta_home().join("usage.jsonl").display().to_string(),
+        "latest_session_path": meta_home().join("latest_session.json").display().to_string(),
+        "home": meta_home().display().to_string(),
         "usage": usage,
         "estimated_cost_usd": usage.estimated_cost_usd(),
         "env_keys": [
-            "MUSE_STATUS_PATH",
-            "MUSE_USAGE_LOG_PATH",
-            "MUSE_SESSION_ID",
-            "MUSE_MODEL",
-            "MUSE_PROVIDER",
-            "MUSE_USAGE_INPUT_TOKENS",
-            "MUSE_USAGE_OUTPUT_TOKENS",
-            "MUSE_USAGE_TOTAL_TOKENS",
-            "MUSE_USAGE_COST_USD",
-            "MODEL_API_KEY",
-            "MUSE_API_KEY"
+            "META_STATUS_PATH",
+            "META_USAGE_LOG_PATH",
+            "META_SESSION_ID",
+            "META_MODEL",
+            "META_PROVIDER",
+            "META_USAGE_INPUT_TOKENS",
+            "META_USAGE_OUTPUT_TOKENS",
+            "META_USAGE_TOTAL_TOKENS",
+            "META_USAGE_COST_USD",
+            "META_HOME",
+            "META_API_KEY",
+            "MODEL_API_KEY"
         ],
         "note": "Poll status_path for live Meta Model API token usage from the user's key."
     });
-    let path = muse_home().join("ade.json");
+    let path = meta_home().join("ade.json");
     let _ = fs::write(path, serde_json::to_string_pretty(&body).unwrap_or_default());
 }
 
@@ -121,7 +122,7 @@ fn notify_orca_hook_blocking(payload_json: &str) {
         return;
     }
 
-    let muse_home = muse_home().display().to_string();
+    let meta_home_s = meta_home().display().to_string();
     let url = format!("http://127.0.0.1:{port}/hook/meta");
 
     // Prefer packaged hook script if present
@@ -178,7 +179,7 @@ fn notify_orca_hook_blocking(payload_json: &str) {
                 std::env::var("ORCA_WORKTREE_ID").unwrap_or_default()
             ),
             "--data-urlencode",
-            &format!("museHome={muse_home}"),
+            &format!("metaHome={meta_home_s}"),
             "--data-urlencode",
             &format!("statusPath={}", status_path().display()),
             "--data-urlencode",
@@ -219,9 +220,9 @@ if defined ORCA_AGENT_HOOK_ENDPOINT if exist "%ORCA_AGENT_HOOK_ENDPOINT%" call "
 if "%ORCA_AGENT_HOOK_PORT%"=="" exit /b 0
 if "%ORCA_AGENT_HOOK_TOKEN%"=="" exit /b 0
 if "%ORCA_PANE_KEY%"=="" exit /b 0
-set "ORCA_META_HOME=%USERPROFILE%\.muse"
-if not "%MUSE_HOME%"=="" set "ORCA_META_HOME=%MUSE_HOME%"
+set "ORCA_META_HOME=%USERPROFILE%\.meta"
 if not "%META_HOME%"=="" set "ORCA_META_HOME=%META_HOME%"
+if not "%MUSE_HOME%"=="" set "ORCA_META_HOME=%MUSE_HOME%"
 "%SystemRoot%\System32\curl.exe" -sS -X POST "http://127.0.0.1:%ORCA_AGENT_HOOK_PORT%/hook/meta" ^
   --connect-timeout 0.5 --max-time 1.5 ^
   -H "Content-Type: application/x-www-form-urlencoded" ^

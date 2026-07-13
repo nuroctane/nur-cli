@@ -215,7 +215,7 @@ pub fn install_skill_packs(skills_cli: &ComponentStatus) -> (Vec<String>, Vec<St
                         out.chars().take(500).collect::<String>()
                     ),
                 );
-                // Mirror into ~/.muse/skills for dual discovery
+                // Mirror into ~/.meta/skills for dual discovery
                 mirror_agents_to_muse();
                 ok.push((*label).into());
             }

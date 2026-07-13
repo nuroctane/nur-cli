@@ -11,18 +11,20 @@ pub struct Skill {
 }
 
 /// Discover skills from (first match wins per name):
-/// - `~/.muse/skills/*/SKILL.md`
+/// - `~/.meta/skills/*/SKILL.md`  (also legacy `~/.muse/skills`)
 /// - `~/.agents/skills/*/SKILL.md`  (Agent Skills / graphify install --platform agents)
-/// - `<cwd>/.muse/skills/*/SKILL.md`
+/// - `<cwd>/.meta/skills/*/SKILL.md`  (also legacy `.muse/skills`)
 /// - `<cwd>/.agents/skills/*/SKILL.md`
 pub fn load_skills(cwd: &Path) -> Vec<Skill> {
     let mut out = Vec::new();
     let mut dirs = Vec::new();
     if let Some(home) = dirs::home_dir() {
-        dirs.push(home.join(".muse").join("skills"));
+        dirs.push(home.join(".meta").join("skills"));
+        dirs.push(home.join(".muse").join("skills")); // legacy
         dirs.push(home.join(".agents").join("skills"));
     }
-    dirs.push(cwd.join(".muse").join("skills"));
+    dirs.push(cwd.join(".meta").join("skills"));
+    dirs.push(cwd.join(".muse").join("skills")); // legacy
     dirs.push(cwd.join(".agents").join("skills"));
 
     for root in dirs {

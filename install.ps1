@@ -11,10 +11,10 @@
 
   Steps: ensure Rust → clone if needed → cargo build --release →
   install meta (+ muse alias) to %USERPROFILE%\.local\bin → PATH → Orca hook →
-  optional auth if MODEL_API_KEY is set.
+  optional auth if META_API_KEY / MODEL_API_KEY is set.
 
   Secrets are NEVER written into the repo. Keys live only in:
-    %USERPROFILE%\.muse\auth.json   or   env MODEL_API_KEY / MUSE_API_KEY
+    %USERPROFILE%\.meta\auth.json   or   env META_API_KEY / MODEL_API_KEY
 
 .PARAMETER SkipHook
   Skip Orca agent-hook install.
@@ -203,15 +203,19 @@ try {
 if (-not $SkipHook) {
     try {
         & $dest install-hook 2>$null | Out-Null
-        Write-Ok "Orca ADE hook installed (if Orca is present)"
+        Write-Ok "Orca hook installed (if Orca is present)"
     } catch {
         Write-Warn "Orca hook skipped ($($_.Exception.Message))"
     }
 }
 
 # ── auth: never print the key ─────────────────────────────────────────────
-$key = $env:MODEL_API_KEY
+$key = $env:META_API_KEY
+if (-not $key) { $key = $env:MODEL_API_KEY }
 if (-not $key) { $key = $env:MUSE_API_KEY }
+if (-not $key) {
+    $key = [Environment]::GetEnvironmentVariable("META_API_KEY", "User")
+}
 if (-not $key) {
     $key = [Environment]::GetEnvironmentVariable("MODEL_API_KEY", "User")
 }
@@ -220,21 +224,21 @@ if (-not $key) {
 }
 
 if ($key -and $key.Trim().Length -gt 0) {
-    Write-Step "MODEL_API_KEY found in environment — saving to ~/.muse/auth.json (local only)…"
+    Write-Step "API key found in environment — saving to ~/.meta/auth.json (local only)…"
     # Pipe via env so the key is not put on the process command line
-    $env:MODEL_API_KEY = $key.Trim()
-    & $dest auth login --key $env:MODEL_API_KEY 2>$null | Out-Null
-    Write-Ok "Auth stored under $env:USERPROFILE\.muse\ (never committed to git)"
+    $env:META_API_KEY = $key.Trim()
+    & $dest auth login --key $env:META_API_KEY 2>$null | Out-Null
+    Write-Ok "Auth stored under $env:USERPROFILE\.meta\ (never committed to git)"
 } else {
     Write-Warn "No API key in env yet. After install:"
     Write-Host "      meta auth login" -ForegroundColor DarkGray
-    Write-Host "    or set User env MODEL_API_KEY from https://dev.meta.ai/" -ForegroundColor DarkGray
+    Write-Host "    or set User env META_API_KEY from https://dev.meta.ai/" -ForegroundColor DarkGray
 }
 
 Write-Host ""
 Write-Host "  Done." -ForegroundColor Green
 Write-Host "  Run:   meta" -ForegroundColor White
-Write-Host "  Auth:  meta auth login     (key stays in ~/.muse only)" -ForegroundColor DarkGray
+Write-Host "  Auth:  meta auth login     (key stays in ~/.meta only)" -ForegroundColor DarkGray
 Write-Host "  Stack: graphify + plur + ruflo auto-ready on open" -ForegroundColor DarkGray
 Write-Host "  Orca:  orca terminal create --command meta" -ForegroundColor DarkGray
 Write-Host "  Docs:  https://github.com/nuroctane/meta-cli" -ForegroundColor DarkGray

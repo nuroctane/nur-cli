@@ -226,7 +226,7 @@ pub fn resolve_safe_workspace(
         }
     }
 
-    // 3) Last session cwd from ~/.muse/latest_session.json
+    // 3) Last session cwd from ~/.meta/latest_session.json
     if let Some(p) = last_session_cwd() {
         if p.is_dir() && !is_dangerous_workspace(&p) {
             return Ok((

@@ -1,6 +1,6 @@
 # Meta CLI (unofficial)
 
-**Fully loaded terminal coding agent** for [Meta Model API](https://dev.meta.ai/) — not a thin wrapper. Custom Rust harness, dense Meta-blue TUI, native tools, knowledge stack, hardened sandbox. Default model [Muse Spark](https://ai.meta.com/blog/introducing-muse-spark-meta-model-api/); any model id via `--model` / `/model`.
+**Fully loaded terminal coding agent** for [Meta Model API](https://dev.meta.ai/) — not a thin wrapper. Custom Rust harness, dense Meta-blue TUI, native tools, knowledge stack, hardened sandbox. Any model id via `--model` / `/model` / config (default from your config).
 
 > Not affiliated with Meta Platforms, Inc. · Community · [nuroctane/meta-cli](https://github.com/nuroctane/meta-cli)
 
@@ -9,7 +9,7 @@ meta          # primary — Meta-blue interactive TUI
 muse          # legacy alias (same binary)
 ```
 
-**v0.5.13** — Production-minded agent harness, end to end:
+**v0.5.14** — Production-minded agent harness, end to end:
 
 | Surface | What ships |
 |---------|------------|
@@ -18,7 +18,7 @@ muse          # legacy alias (same binary)
 | **Tools** | read · edit · multi_edit · apply_patch · bash · web · git · graphify · plur · ruflo · executor · skill · memory · agent |
 | **Ecosystem** | Graphify · PLUR · Ruflo · Executor · AKM · **800+ skills** — auto-provisioned in the background |
 | **Hardening** | Sandbox · bash denylist · SSRF blocks · atomic session/auth IO · API retries · install SHA-256 · `meta doctor` |
-| **ADE** | Live `status.json` / `usage.jsonl` · window title `🔵 meta · prompt…` · Orca hook |
+| **Host panels** | Live `status.json` / `usage.jsonl` · Orca hook when present |
 
 ---
 
@@ -32,8 +32,8 @@ muse          # legacy alias (same binary)
 | **Knowledge stack, auto-wired** | Code graph · shared engrams · vector memory · MCP gateway · skill packs |
 | **Tasteful, dense TUI** | Duration chips, expandable thoughts/tools, click-to-peek, drag-select, sticky prompt, sessions browser |
 | **Hardened by default** | Sandbox, bash denylist, SSRF blocks, atomic writes, API retries, SHA-256 install verify |
-| **ADE-ready** | Live `status.json` / usage log for Orca-style panels; window title `🔵 meta · prompt…` |
-| **Secrets stay local** | API key only in `~/.muse/auth.json` — never in the repo |
+| **Host-panel ready** | Live `status.json` / usage log for Orca-style panels |
+| **Secrets stay local** | API key only in `~/.meta/auth.json` — never in the repo |
 
 ---
 
@@ -44,7 +44,7 @@ muse          # legacy alias (same binary)
 - **Manual / plan / auto** permission modes — **Shift+Tab** applies mid-turn
 - Tool loop with parallel-safe tools, approval gates, Esc cancel
 - **Subagents**, todos, plan mode (`submit_plan`), auto-compact under context pressure
-- Project instructions: `MUSE.md` · `AGENTS.md` · `CLAUDE.md`
+- Project instructions: `META.md` · `AGENTS.md` · `CLAUDE.md` (legacy `MUSE.md` still loaded)
 - Session resume (`-c`, `-r`, `/sessions`) with prompt-first picker
 - **Prompt cache key** per session (helps surface `cached_tokens` / cheaper multi-turn)
 
@@ -78,10 +78,10 @@ muse          # legacy alias (same binary)
 - Sticky PROMPT banner · click-to-caret · clipboard · sessions modal  
 - Approval modal with **mini unified-diff** for edits  
 - Per-cell **wrap cache** so long sessions stay snappy while animating  
-- Splash subtitle spells the stack: *fully loaded · TUI · tools · Graphify/PLUR/Ruflo · 800+ skills*
+- Splash shows the **active model title** only there; rest of chrome is model-agnostic  
 
 ### Reliability & safety
-- Atomic writes for sessions, status, auth, config, history  
+- Atomic writes for sessions, status, auth, config, history under **`~/.meta/`**  
 - API client **retries** with backoff (429 / 5xx / flaky streams)  
 - Real **process timeouts** for graphify / ecosystem CLIs (kill on hang)  
 - Config validation · auth key hygiene · `meta doctor`  
@@ -110,11 +110,11 @@ That command will:
 3. `cargo build --release`  
 4. Install **`meta`** (+ `muse` alias) to `~/.local/bin` and **verify SHA-256**  
 5. `meta ecosystem ensure` when Node/uv are available  
-6. Orca ADE hook when possible  
-7. Save auth if `MODEL_API_KEY` is set (**machine-local only**)  
+6. Orca hook when possible  
+7. Save auth if `META_API_KEY` / `MODEL_API_KEY` is set (**machine-local only**)  
 
 ```powershell
-meta auth login    # paste Meta Model API key → ~/.muse/auth.json only
+meta auth login    # paste Meta Model API key → ~/.meta/auth.json only
 meta               # open the TUI
 meta doctor        # health check
 ```
@@ -143,10 +143,12 @@ cd meta-cli
 
 | On GitHub | On your PC only |
 |-----------|-----------------|
-| Source, README, install scripts | `~/.muse/auth.json` (API key) |
-| No keys, no `.env`, no sessions | `~/.muse/sessions/`, usage logs, ecosystem marker |
+| Source, README, install scripts | `~/.meta/auth.json` (API key) |
+| No keys, no `.env`, no sessions | `~/.meta/sessions/`, usage logs, ecosystem marker |
 
 See [SECURITY.md](./SECURITY.md). **Never commit your Meta API key.**
+
+Upgrading from older builds: first launch migrates key files from `~/.muse/` → `~/.meta/` when the new home is empty.
 
 ---
 
@@ -160,7 +162,7 @@ meta -r <session-id>         # resume a session
 meta --mode plan "…"         # plan mode (read-only tools)
 meta run "…" -y              # headless + auto-approve
 meta sessions
-meta usage                   # token / cost for ADEs
+meta usage                   # token / cost for host panels
 meta auth status
 meta ecosystem status        # graphify · plur · ruflo · executor · packs
 meta ecosystem ensure --force
@@ -191,7 +193,7 @@ Launching from a drive root (`C:\`) auto-picks a safe workspace (git / last sess
 - **Streaming** + violet thinking · colour-coded tools · sticky PROMPT banner  
 - **Approvals** with mini **diff preview** for edits · Esc cancel  
 - **Sessions** browser: `/sessions` = `/resume` = `Ctrl+R`  
-- Markdown input, usage + cost + **ctx%**, model-agnostic banner  
+- Markdown input, usage + cost + **ctx%**, model shown only on splash  
 
 ### Keys
 
@@ -237,10 +239,9 @@ Launching from a drive root (`C:\`) auto-picks a safe workspace (git / last sess
 
 | Path | Role |
 |------|------|
-| `~/.muse/status.json` | Live tokens · cost · model · state |
-| `~/.muse/usage.jsonl` | Per-request log |
-| `~/.muse/ade.json` | Discovery manifest |
-| Window title | `🔵 meta · <first prompt…>` |
+| `~/.meta/status.json` | Live tokens · cost · model · state |
+| `~/.meta/usage.jsonl` | Per-request log |
+| `~/.meta/ade.json` | Discovery manifest |
 
 ```text
 meta install-hook
@@ -251,10 +252,10 @@ orca terminal create --command meta
 
 ## Config
 
-`~/.muse/config.toml` (created on first run):
+`~/.meta/config.toml` (created on first run):
 
 ```toml
-model = "muse-spark-1.1"
+model = "muse-spark-1.1"   # any Meta Model API model id
 base_url = "https://api.meta.ai/v1"
 reasoning_effort = "high"
 max_turns = 40
@@ -262,6 +263,8 @@ stream = true
 context_window = 1000000
 mouse = true
 ```
+
+Override home with `META_HOME` if you need a custom data directory.
 
 ---
 

@@ -7,8 +7,8 @@
 # Remote one-shot:
 #   curl -fsSL https://raw.githubusercontent.com/nuroctane/meta-cli/main/install.sh | bash
 #
-# Secrets are NEVER written into the repo. Keys live only in ~/.muse/auth.json
-# or env MODEL_API_KEY / MUSE_API_KEY / META_API_KEY.
+# Secrets are NEVER written into the repo. Keys live only in ~/.meta/auth.json
+# or env META_API_KEY / MODEL_API_KEY (legacy: MUSE_API_KEY).
 
 set -euo pipefail
 
@@ -114,14 +114,14 @@ fi
 ok "Ecosystem ready (or will finish on first open)"
 
 if [[ "${SKIP_HOOK}" != "1" ]]; then
-  "${DEST_DIR}/meta" install-hook >/dev/null 2>&1 && ok "Orca ADE hook installed (if applicable)" || true
+  "${DEST_DIR}/meta" install-hook >/dev/null 2>&1 && ok "Orca hook installed (if applicable)" || true
 fi
 
-KEY="${MODEL_API_KEY:-${META_API_KEY:-${MUSE_API_KEY:-}}}"
+KEY="${META_API_KEY:-${MODEL_API_KEY:-${MUSE_API_KEY:-}}}"
 if [[ -n "${KEY}" ]]; then
-  step "API key found in environment — saving to ~/.muse/auth.json (local only)…"
+  step "API key found in environment — saving to ~/.meta/auth.json (local only)…"
   "${DEST_DIR}/meta" auth login --key "${KEY}" >/dev/null
-  ok "Auth stored under ~/.muse/ (never committed to git)"
+  ok "Auth stored under ~/.meta/ (never committed to git)"
 else
   warn "No API key in env yet. After install:  meta auth login"
   warn "Get a key: https://dev.meta.ai/"
@@ -130,7 +130,7 @@ fi
 echo ""
 echo "  Done."
 echo "  Run:   meta"
-echo "  Auth:  meta auth login     (key stays in ~/.muse only)"
+echo "  Auth:  meta auth login     (key stays in ~/.meta only)"
 echo "  Stack: graphify + plur + ruflo auto-ready on open"
 echo "  Orca:  orca terminal create --command meta"
 echo "  Docs:  https://github.com/nuroctane/meta-cli"

@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-pub const PROJECT_INSTRUCTION_FILES: &[&str] = &["MUSE.md", "AGENTS.md", "CLAUDE.md"];
+/// Project instruction files (first found wins). META.md preferred; MUSE.md kept as legacy.
+pub const PROJECT_INSTRUCTION_FILES: &[&str] = &["META.md", "MUSE.md", "AGENTS.md", "CLAUDE.md"];
 
 pub fn find_project_instructions(cwd: &Path) -> Option<(String, String)> {
     for name in PROJECT_INSTRUCTION_FILES {
@@ -130,15 +131,16 @@ Tools auto-approved. Prefer minimal safe diffs; avoid destructive shell.
 "#,
         };
 
-        // Model-agnostic role: works for muse-spark, future Meta models, or overrides.
-        let model_label = crate::config::model_display_name(&self.model);
+        // Identity is product-agnostic; model id is only for the model's own context.
         let role = if self.is_subagent {
             format!(
-                "You are a focused SUBAGENT ({model_label}). Complete the delegated task and return a concise report. Do not ask the user questions."
+                "You are a focused SUBAGENT (model id: {}). Complete the delegated task and return a concise report. Do not ask the user questions.",
+                self.model
             )
         } else {
             format!(
-                "You are Meta — a coding agent for Meta CLI (unofficial), powered by {model_label} on Meta Model API."
+                "You are Meta — a coding agent for Meta CLI (unofficial) on Meta Model API (model id: {}).",
+                self.model
             )
         };
 
@@ -165,7 +167,7 @@ todo_write, submit_plan, agent
   the graph exists. extract defaults to code-only AST (local, free). Auto-installed with meta.
 - plur: shared engram memory (~/.plur/). learn corrections/preferences; inject/recall across
   sessions. Auto-injected at session start. Never store secrets.
-- ruflo: vector memory + swarm harness. Global DB at ~/.muse/ruflo/. Prefer plur for preferences,
+- ruflo: vector memory + swarm harness. Global DB at ~/.meta/ruflo/. Prefer plur for preferences,
   ruflo for pattern/embedding memory, graphify for code structure.
 - executor: MCP gateway (executor.sh) for external OpenAPI/GraphQL/MCP integrations — not for
   local repo edits. action=sources|search|call.
@@ -177,7 +179,7 @@ todo_write, submit_plan, agent
 - agent: spawn explore (read-only) or general subagent for parallel research
 - todo_write: maintain a live task list for multi-step work (always keep one in_progress)
 - submit_plan: formal plan artifact in plan mode
-- memory: local markdown journal ~/.muse/memory.md (never store secrets) — complementary to plur
+- memory: local markdown journal ~/.meta/memory.md (never store secrets) — complementary to plur
 - Prefer edit_file / multi_edit / apply_patch over full rewrites
 
 # Workflow (Claude-class)

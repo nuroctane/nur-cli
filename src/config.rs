@@ -4,13 +4,14 @@ use std::fs;
 use std::path::PathBuf;
 
 pub const DEFAULT_BASE_URL: &str = "https://api.meta.ai/v1";
-/// Default Meta Model API model id. Swap via `/model`, `--model`, or config —
-/// UI and prompts use [`model_display_name`] so any future Meta model works.
+/// Default Meta Model API model id (wire format). Override via `/model`, `--model`,
+/// config, or `META_MODEL`. UI chrome stays model-agnostic except the splash title,
+/// which uses [`model_display_name`].
 pub const DEFAULT_MODEL: &str = "muse-spark-1.1";
 pub const DEFAULT_REASONING: &str = "high";
 
-/// Pretty-print a Meta model id for banners, status, and system prompts.
-/// Works for any future model string (`muse-spark-1.1` → `Muse Spark 1.1`).
+/// Pretty-print a Meta model id for the splash title / status only.
+/// Example: `muse-spark-1.1` → `Muse Spark 1.1`.
 pub fn model_display_name(model_id: &str) -> String {
     let s = model_id.trim();
     if s.is_empty() {
@@ -38,7 +39,7 @@ pub fn model_display_name(model_id: &str) -> String {
         .join(" ")
 }
 
-/// Approximate Meta Model API list prices (USD per 1M tokens) for ADE cost display.
+/// Approximate Meta Model API list prices (USD per 1M tokens) for usage/cost display.
 /// Update when Meta publishes new rates: https://dev.meta.ai/docs/getting-started/pricing-rate-limits
 pub const PRICE_INPUT_PER_MTOK: f64 = 1.25;
 pub const PRICE_OUTPUT_PER_MTOK: f64 = 4.25;
@@ -98,38 +99,131 @@ impl Default for Config {
     }
 }
 
-pub fn muse_home() -> PathBuf {
+/// Legacy home from pre-0.5.14 builds (`~/.muse`). Still read for migration.
+pub fn legacy_muse_home() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".muse")
 }
 
+/// Meta CLI data home: `~/.meta` (secrets, sessions, status, skills, memory).
+/// Override with `META_HOME` (or legacy `MUSE_HOME`).
+pub fn meta_home() -> PathBuf {
+    for var in ["META_HOME", "MUSE_HOME"] {
+        if let Ok(h) = std::env::var(var) {
+            let h = h.trim();
+            if !h.is_empty() {
+                return PathBuf::from(h);
+            }
+        }
+    }
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".meta")
+}
+
+/// Alias for call sites still named `muse_home` — always resolves to [`meta_home`].
+pub fn muse_home() -> PathBuf {
+    meta_home()
+}
+
 pub fn config_path() -> PathBuf {
-    muse_home().join("config.toml")
+    meta_home().join("config.toml")
 }
 
 pub fn auth_path() -> PathBuf {
-    muse_home().join("auth.json")
+    meta_home().join("auth.json")
 }
 
 pub fn sessions_dir() -> PathBuf {
-    muse_home().join("sessions")
+    meta_home().join("sessions")
 }
 
-/// Live status file for ADEs (Orca, etc.) — token usage, model, session.
+/// Live status file for ADE / host panels — token usage, model, session.
 pub fn status_path() -> PathBuf {
-    muse_home().join("status.json")
+    meta_home().join("status.json")
 }
 
-/// Append-only usage log for ADE billing dashboards.
+/// Append-only usage log for host billing dashboards.
 pub fn usage_log_path() -> PathBuf {
-    muse_home().join("usage.jsonl")
+    meta_home().join("usage.jsonl")
+}
+
+/// One-shot copy of key artifacts from `~/.muse` → `~/.meta` when the new home is empty.
+fn migrate_legacy_home_if_needed(meta: &std::path::Path) {
+    let legacy = legacy_muse_home();
+    if !legacy.is_dir() || legacy == meta {
+        return;
+    }
+    // Only migrate when the new home has no auth yet (fresh install after upgrade).
+    if meta.join("auth.json").exists() || meta.join("config.toml").exists() {
+        return;
+    }
+    let files = [
+        "auth.json",
+        "config.toml",
+        "memory.md",
+        "history.jsonl",
+        "latest_session.json",
+        "cwd_sessions.json",
+        "usage.jsonl",
+        "status.json",
+        "ade.json",
+        "ecosystem.json",
+    ];
+    for name in files {
+        let src = legacy.join(name);
+        let dst = meta.join(name);
+        if src.is_file() && !dst.exists() {
+            let _ = fs::copy(&src, &dst);
+        }
+    }
+    let src_sess = legacy.join("sessions");
+    let dst_sess = meta.join("sessions");
+    if src_sess.is_dir() {
+        let _ = fs::create_dir_all(&dst_sess);
+        if let Ok(entries) = fs::read_dir(&src_sess) {
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.is_file() {
+                    let dst = dst_sess.join(e.file_name());
+                    if !dst.exists() {
+                        let _ = fs::copy(&p, &dst);
+                    }
+                }
+            }
+        }
+    }
+    // Skills + ruflo DB: copy tree when destination is missing.
+    for name in ["skills", "ruflo", "skill-packs"] {
+        let src = legacy.join(name);
+        let dst = meta.join(name);
+        if src.is_dir() && !dst.exists() {
+            let _ = copy_dir_recursive(&src, &dst);
+        }
+    }
+}
+
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if from.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else if !to.exists() {
+            let _ = fs::copy(&from, &to);
+        }
+    }
+    Ok(())
 }
 
 pub fn ensure_dirs() -> Result<()> {
-    let home = muse_home();
+    let home = meta_home();
     fs::create_dir_all(&home)?;
     fs::create_dir_all(sessions_dir())?;
+    migrate_legacy_home_if_needed(&home);
     Ok(())
 }
 

@@ -41,7 +41,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/manual", "switch to manual mode (approve tools)"),
     ("/auto", "switch to auto-approve mode"),
     ("/todos", "show session task list"),
-    ("/memory", "show ~/.muse/memory.md excerpt"),
+    ("/memory", "show ~/.meta/memory.md excerpt"),
     ("/skills", "list installed skills"),
     ("/graphify", "knowledge graph: status | query | path | explain | extract"),
     ("/plur", "shared engram memory: status | learn | recall | inject"),
@@ -52,7 +52,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/effort", "reasoning effort: minimal|low|medium|high|xhigh"),
     ("/sessions", "browse & open past sessions  (same as /resume · Ctrl+R)"),
     ("/resume", "browse & open past sessions  (same as /sessions · Ctrl+R)"),
-    ("/init", "generate a MUSE.md project guide"),
+    ("/init", "generate a META.md project guide"),
     ("/mouse", "how mouse works: drag-select · scrollbar · peek"),
     ("/config", "show config + data paths"),
     ("/exit", "quit"),
@@ -526,7 +526,7 @@ pub async fn run_tui(
     let session_id = session.id.clone();
     let mode_label = permission_mode.get().label().to_string();
 
-    // Window title = 🔵 meta · <first prompt>. Prefer CLI seed, else resume history.
+    // Host tab title from first prompt (prefer CLI seed, else resume history).
     let seed_prompt = initial_prompt
         .as_deref()
         .map(str::trim)
@@ -1904,7 +1904,7 @@ impl App {
                 if skills.is_empty() {
                     self.push_note(
                         Tone::Skill,
-                        "no skills found — add ~/.muse/skills/<name>/SKILL.md\n\
+                        "no skills found — add ~/.meta/skills/<name>/SKILL.md\n\
                          or ~/.agents/skills/<name>/SKILL.md  (graphify install --platform agents)\n\
                          the agent can also load them itself via the `skill` tool"
                             .into(),
@@ -1933,7 +1933,7 @@ impl App {
             "/init" => {
                 self.submit_text(
                     "Analyze this codebase (structure, build/test commands, conventions, \
-                     architecture) and create a MUSE.md file at the workspace root that future \
+                     architecture) and create a META.md file at the workspace root that future \
                      agent sessions can use as project instructions. Keep it under 120 lines.",
                 );
             }

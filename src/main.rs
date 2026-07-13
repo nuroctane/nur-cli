@@ -51,7 +51,7 @@ async fn real_main() -> Result<()> {
                 AuthCmd::Status => auth_status()?,
                 AuthCmd::Logout => {
                     logout()?;
-                    theme::print_ok("logged out (removed ~/.muse/auth.json)");
+                    theme::print_ok("logged out (removed ~/.meta/auth.json)");
                 }
             }
             return Ok(());
@@ -104,7 +104,9 @@ async fn real_main() -> Result<()> {
     let api_key = match resolve_api_key() {
         Ok(k) => k,
         Err(_) => {
-            if let Ok(k) = std::env::var("MODEL_API_KEY").or_else(|_| std::env::var("MUSE_API_KEY"))
+            if let Ok(k) = std::env::var("META_API_KEY")
+                .or_else(|_| std::env::var("MODEL_API_KEY"))
+                .or_else(|_| std::env::var("MUSE_API_KEY"))
             {
                 if !k.trim().is_empty() {
                     let _ = save_api_key(k.trim());
@@ -121,7 +123,7 @@ async fn real_main() -> Result<()> {
     let mut cfg = load_config()?;
     if let Some(m) = &cli.model {
         cfg.model = m.clone();
-    } else if let Ok(m) = std::env::var("MUSE_MODEL").or_else(|_| std::env::var("META_MODEL")) {
+    } else if let Ok(m) = std::env::var("META_MODEL").or_else(|_| std::env::var("MUSE_MODEL")) {
         if !m.trim().is_empty() {
             cfg.model = m;
         }
@@ -172,20 +174,26 @@ async fn real_main() -> Result<()> {
     session.cwd = cwd_str.clone();
 
     let mut usage = UsageTracker::new(session.id.clone(), cfg.model.clone(), cwd.clone());
-    // Seed tracker with prior session usage so ADE totals stay cumulative
+    // Seed tracker with prior session usage so host panel totals stay cumulative
     if session.usage.total_tokens > 0 {
         usage.seed_session(session.usage.clone());
     }
 
-    std::env::set_var("MUSE_STATUS_PATH", config::status_path().display().to_string());
-    std::env::set_var(
-        "MUSE_USAGE_LOG_PATH",
-        config::usage_log_path().display().to_string(),
-    );
-    std::env::set_var("MUSE_SESSION_ID", &session.id);
-    std::env::set_var("MUSE_MODEL", &cfg.model);
-    std::env::set_var("MUSE_PROVIDER", "meta");
-    std::env::set_var("MUSE_HOME", config::muse_home().display().to_string());
+    let home_s = config::meta_home().display().to_string();
+    let status_s = config::status_path().display().to_string();
+    let usage_s = config::usage_log_path().display().to_string();
+    // Prefer META_* env; keep MUSE_* aliases for older ADE hooks.
+    for (meta_k, muse_k, val) in [
+        ("META_STATUS_PATH", "MUSE_STATUS_PATH", status_s.as_str()),
+        ("META_USAGE_LOG_PATH", "MUSE_USAGE_LOG_PATH", usage_s.as_str()),
+        ("META_SESSION_ID", "MUSE_SESSION_ID", session.id.as_str()),
+        ("META_MODEL", "MUSE_MODEL", cfg.model.as_str()),
+        ("META_PROVIDER", "MUSE_PROVIDER", "meta"),
+        ("META_HOME", "MUSE_HOME", home_s.as_str()),
+    ] {
+        std::env::set_var(meta_k, val);
+        std::env::set_var(muse_k, val);
+    }
     // Ruflo global memory (so child CLIs share Meta's store without polluting projects).
     std::env::set_var(
         "CLAUDE_FLOW_DB_PATH",
@@ -234,8 +242,7 @@ async fn real_main() -> Result<()> {
             .await?;
         }
         None => {
-            // Tab title: 🔵 meta · <abbreviated first prompt>
-            // Prefer CLI seed prompt, else first user message (resume), else idle.
+            // Compact host tab title from first prompt (implementation detail, not marketing).
             let seed = cli
                 .prompt
                 .as_deref()
@@ -310,7 +317,7 @@ fn run_doctor() -> Result<()> {
     }
 
     // Paths
-    theme::print_ok(&format!("home    {}", config::muse_home().display()));
+    theme::print_ok(&format!("home    {}", config::meta_home().display()));
     theme::print_ok(&format!("status  {}", config::status_path().display()));
     theme::print_ok(&format!("usage   {}", config::usage_log_path().display()));
     theme::print_ok(&format!("sessions {}", config::sessions_dir().display()));

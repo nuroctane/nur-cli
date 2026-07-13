@@ -1,11 +1,11 @@
-//! Cross-session memory — simple markdown journal under ~/.muse/memory.md
+//! Cross-session memory — simple markdown journal under ~/.meta/memory.md
 
-use crate::config::muse_home;
+use crate::config::meta_home;
 use std::fs;
 use std::path::PathBuf;
 
 pub fn memory_path() -> PathBuf {
-    muse_home().join("memory.md")
+    meta_home().join("memory.md")
 }
 
 pub fn read_memory() -> String {
@@ -31,5 +31,5 @@ pub fn memory_prompt_excerpt(max_chars: usize) -> String {
         return String::new();
     }
     let excerpt: String = m.chars().rev().take(max_chars).collect::<String>().chars().rev().collect();
-    format!("\n# Persistent memory (excerpt from ~/.muse/memory.md)\n{excerpt}\n")
+    format!("\n# Persistent memory (excerpt from ~/.meta/memory.md)\n{excerpt}\n")
 }
