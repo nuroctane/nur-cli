@@ -1162,7 +1162,7 @@ fn banner_lines(app: &App, out: &mut Vec<Line<'static>>) {
             Style::default().fg(Color::Rgb(r, g, b)),
         )));
     }
-    // Model-agnostic subtitle: shows whatever Meta model is selected.
+    // Model-agnostic title row + feature-loaded subtitle (not model-tied).
     let model_label = crate::config::model_display_name(&app.cfg.model);
     out.push(Line::from(vec![
         Span::raw("  ".to_string()),
@@ -1178,7 +1178,15 @@ fn banner_lines(app: &App, out: &mut Vec<Line<'static>>) {
     out.push(Line::from(vec![
         Span::raw("  ".to_string()),
         Span::styled(
-            "unofficial  ·  not affiliated with Meta".to_string(),
+            "fully loaded  ·  streaming TUI · tools · sandbox · subagents".to_string(),
+            theme::style_faint(),
+        ),
+    ]));
+    out.push(Line::from(vec![
+        Span::raw("  ".to_string()),
+        Span::styled(
+            "Graphify · PLUR · Ruflo · Executor · 800+ skills  ·  unofficial"
+                .to_string(),
             theme::style_faint(),
         ),
     ]));
@@ -1193,7 +1201,7 @@ fn banner_lines(app: &App, out: &mut Vec<Line<'static>>) {
     out.push(Line::from(vec![
         Span::raw("  ".to_string()),
         Span::styled(
-            "/help  ·  drag text to select  ·  drag scrollbar  ·  click peek  ·  Shift+Tab  ·  Esc"
+            "/help  ·  drag-select  ·  scrollbar  ·  peek cards  ·  timers  ·  Shift+Tab  ·  Esc"
                 .to_string(),
             theme::style_faint(),
         ),

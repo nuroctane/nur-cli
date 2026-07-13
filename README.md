@@ -1,6 +1,6 @@
 # Meta CLI (unofficial)
 
-**Unofficial, fully loaded terminal coding agent** for [Meta Model API](https://dev.meta.ai/) — default model [Muse Spark](https://ai.meta.com/blog/introducing-muse-spark-meta-model-api/), any model id via `--model` / `/model`.
+**Fully loaded terminal coding agent** for [Meta Model API](https://dev.meta.ai/) — not a thin wrapper. Custom Rust harness, dense Meta-blue TUI, native tools, knowledge stack, hardened sandbox. Default model [Muse Spark](https://ai.meta.com/blog/introducing-muse-spark-meta-model-api/); any model id via `--model` / `/model`.
 
 > Not affiliated with Meta Platforms, Inc. · Community · [nuroctane/meta-cli](https://github.com/nuroctane/meta-cli)
 
@@ -9,7 +9,16 @@ meta          # primary — Meta-blue interactive TUI
 muse          # legacy alias (same binary)
 ```
 
-**v0.5.12** — Production-minded agent harness: streaming TUI with timers & peek cards, in-app drag-select, always-on scrollbar, knowledge stack (Graphify · PLUR · Ruflo · Executor · 800+ skills), hardened tools, API retries + prompt-cache keys, atomic session IO, install integrity hashes, `meta doctor`.
+**v0.5.13** — Production-minded agent harness, end to end:
+
+| Surface | What ships |
+|---------|------------|
+| **TUI** | Streaming · duration chips · expandable thought/tool cards · click-to-peek · drag-select · always-on scrollbar · ↓ End chip · sticky prompt · sessions browser · approval mini-diff |
+| **Agent** | Manual / plan / auto modes · tool loop · subagents · todos · auto-compact · Esc cancel · Shift+Tab mid-turn · prompt-cache keys |
+| **Tools** | read · edit · multi_edit · apply_patch · bash · web · git · graphify · plur · ruflo · executor · skill · memory · agent |
+| **Ecosystem** | Graphify · PLUR · Ruflo · Executor · AKM · **800+ skills** — auto-provisioned in the background |
+| **Hardening** | Sandbox · bash denylist · SSRF blocks · atomic session/auth IO · API retries · install SHA-256 · `meta doctor` |
+| **ADE** | Live `status.json` / `usage.jsonl` · window title `🔵 meta · prompt…` · Orca hook |
 
 ---
 
@@ -69,6 +78,7 @@ muse          # legacy alias (same binary)
 - Sticky PROMPT banner · click-to-caret · clipboard · sessions modal  
 - Approval modal with **mini unified-diff** for edits  
 - Per-cell **wrap cache** so long sessions stay snappy while animating  
+- Splash subtitle spells the stack: *fully loaded · TUI · tools · Graphify/PLUR/Ruflo · 800+ skills*
 
 ### Reliability & safety
 - Atomic writes for sessions, status, auth, config, history  

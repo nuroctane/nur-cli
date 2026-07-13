@@ -1,13 +1,13 @@
 [package]
 name = "meta-cli"
-version = "0.5.12"
+version = "0.5.13"
 edition = "2021"
-description = "Unofficial Meta Model API coding agent — streaming TUI, tools, Graphify/PLUR/Ruflo ecosystem, hardened sandbox"
+description = "Fully loaded unofficial Meta Model API coding agent — streaming Meta-blue TUI (timers, peek cards, drag-select), native tools + sandbox, Graphify/PLUR/Ruflo/Executor + 800+ skills, subagents, API retries, atomic sessions, meta doctor"
 license = "MIT"
 authors = ["meta-cli contributors"]
 repository = "https://github.com/nuroctane/meta-cli"
 readme = "README.md"
-keywords = ["meta", "muse", "ai", "cli", "agent", "tui", "coding-agent"]
+keywords = ["meta", "muse", "ai", "cli", "agent", "tui", "coding-agent", "graphify", "skills"]
 categories = ["command-line-utilities", "development-tools"]
 
 # Single binary; install scripts copy meta(.exe) → muse(.exe) for the alias.

@@ -4,8 +4,21 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "meta",
     version,
-    about = "Meta CLI (unofficial) — full coding agent for Meta Model API (TUI · tools · Graphify/PLUR/Ruflo)",
-    long_about = "Meta CLI is an unofficial, fully loaded community coding agent for Meta Model API.\n\nStreaming Meta-blue TUI (timers, peek cards, drag-select, sessions browser),\nnative tools + sandbox, Graphify/PLUR/Ruflo/Executor ecosystem, skills,\nhardened bash/web, API retries + prompt-cache keys, atomic session IO, meta doctor.\n\nDefault model: muse-spark-1.1 (switch with --model / /model).\nNot affiliated with Meta Platforms, Inc.  Repo: github.com/nuroctane/meta-cli\n\nInvoke as: meta   (alias: muse)"
+    about = "Meta CLI (unofficial) — fully loaded Meta Model API coding agent · TUI · tools · Graphify/PLUR/Ruflo · 800+ skills",
+    long_about = "Meta CLI — unofficial, fully loaded community coding agent for Meta Model API.\n\n\
+What you get:\n\
+  · Streaming Meta-blue TUI — duration chips, expandable thought/tool cards,\n\
+    click-to-peek, drag-select + always-on scrollbar, sessions browser, sticky prompt\n\
+  · Real agent harness — manual/plan/auto modes, tool loop, subagents, todos,\n\
+    auto-compact, approvals with mini-diff, Esc cancel, Shift+Tab live mode flip\n\
+  · Native tools — read/edit/shell/web/git + knowledge stack\n\
+  · Ecosystem auto-wired — Graphify · PLUR · Ruflo · Executor · 800+ skills · AKM\n\
+  · Hardened by default — sandbox, bash denylist, SSRF blocks, API retries,\n\
+    prompt-cache keys, atomic session IO, install SHA-256, meta doctor\n\
+  · ADE-ready — status.json / usage.jsonl / 🔵 window title for Orca panels\n\n\
+Default model: muse-spark-1.1 (any id via --model / /model).\n\
+Not affiliated with Meta Platforms, Inc.  ·  github.com/nuroctane/meta-cli\n\
+Invoke as: meta   (legacy alias: muse)"
 )]
 pub struct Cli {
     /// Initial prompt for interactive session

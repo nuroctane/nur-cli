@@ -391,7 +391,8 @@ pub fn banner() {
     );
     println!(
         "  {}\n",
-        "Unofficial coding agent — not affiliated with Meta".truecolor(100, 108, 118)
+        "fully loaded agent  ·  TUI · tools · Graphify/PLUR/Ruflo · 800+ skills  ·  unofficial"
+            .truecolor(100, 108, 118)
     );
 }
 
