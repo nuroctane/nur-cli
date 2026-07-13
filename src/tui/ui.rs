@@ -19,6 +19,17 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         area,
     );
 
+    // Too-small terminal: show a terse message instead of crashing.
+    if area.width < 20 || area.height < 5 {
+        let msg = "terminal too small — resize to ≥ 20×5";
+        let p = Paragraph::new(Line::from(Span::styled(
+            msg,
+            theme::style_faint(),
+        )));
+        f.render_widget(p, area);
+        return;
+    }
+
     let input_lines = app.input.line_count().min(6) as u16;
     let busy_h = if app.busy { 1 } else { 0 };
 
@@ -163,7 +174,7 @@ fn draw_session_picker(f: &mut Frame, app: &mut App, area: Rect) {
     };
 
     let w = 82.min(area.width.saturating_sub(4)).max(54);
-    let h = 22.min(area.height.saturating_sub(2)).max(12);
+    let h = 40.min(area.height.saturating_sub(2)).max(4);
     let rect = Rect {
         x: (area.width.saturating_sub(w)) / 2,
         y: (area.height.saturating_sub(h)) / 2,

@@ -388,7 +388,12 @@ fn summarize_session_file(path: &Path) -> Result<SessionSummary> {
 }
 
 pub fn print_sessions(limit: usize) -> Result<()> {
-    let sessions = list_session_summaries()?;
+    let mut sessions = list_session_summaries()?;
+    // Hide empty sessions when real chats exist.
+    let has_real = sessions.iter().any(|s| s.messages > 0);
+    if has_real {
+        sessions.retain(|s| s.messages > 0);
+    }
     if sessions.is_empty() {
         println!("no sessions yet");
         return Ok(());

@@ -1617,7 +1617,7 @@ impl App {
             }
         };
         let here_key = self.cwd.display().to_string().to_lowercase();
-        let rows: Vec<SessionRow> = sessions
+        let mut rows: Vec<SessionRow> = sessions
             .into_iter()
             // Current session isn't a resume target.
             .filter(|s| s.id != self.session_id)
@@ -1642,6 +1642,12 @@ impl App {
                 }
             })
             .collect();
+
+        // Hide empty sessions (0 messages) when real chats exist.
+        let has_real = rows.iter().any(|r| r.messages > 0);
+        if has_real {
+            rows.retain(|r| r.messages > 0);
+        }
 
         if rows.is_empty() {
             self.push_note(
