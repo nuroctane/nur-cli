@@ -1,7 +1,6 @@
 //! Rendering for the Meta CLI TUI — Meta-blue surfaces, motion, cursors.
 
 use super::app::{fmt_num, line_to_plain, App, Cell, TextRange};
-use super::input::DisplaySeg;
 use super::{ansi, markdown, scrollbar::ScrollMetrics, wrap};
 use crate::theme;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect, Size};
@@ -31,7 +30,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         return;
     }
 
-    let input_lines = app.input.line_count().min(6) as u16;
+    // Soft-wrapped visual height: grow with content up to INPUT_VIEW_MAX, then scroll.
+    // Estimate content width from terminal (borders + ❯ prefix).
+    let est_w = (area.width as usize).saturating_sub(5).max(8);
+    let vcount = app.input.visual_line_count(est_w).max(1);
+    const INPUT_VIEW_MAX: usize = 8;
+    let input_body = vcount.min(INPUT_VIEW_MAX).max(1) as u16;
     let busy_h = if app.busy { 1 } else { 0 };
 
     let chunks = Layout::default()
@@ -39,7 +43,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .constraints([
             Constraint::Min(3),
             Constraint::Length(busy_h),
-            Constraint::Length(input_lines + 2),
+            Constraint::Length(input_body + 2),
             Constraint::Length(1),
         ])
         .split(area);
@@ -1956,6 +1960,9 @@ fn draw_busy_line(f: &mut Frame, app: &App, area: Rect) {
 }
 
 // ── input ──────────────────────────────────────────────────────────────────
+/// Max soft-wrapped rows shown in the composer before scrolling.
+const INPUT_VIEW_MAX: usize = 8;
+
 fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
     let tick = app.spinner_epoch.elapsed();
     // Border is calm-but-alive when ready for input (slow whole-border aurora
@@ -2009,10 +2016,8 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
             );
     }
 
-    let text = app.input.text();
     let focused = app.approval.is_none() && app.picker.is_none() && app.login.is_none();
     let sel = app.input.selection_range();
-    let mut lines: Vec<Line> = Vec::new();
     let sel_style = Style::default()
         .fg(theme::BG)
         .bg(theme::META_BLUE_SKY)
@@ -2027,21 +2032,27 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
         .bg(theme::META_BLUE)
         .add_modifier(Modifier::BOLD);
 
-    // Absolute char index at the start of each line.
-    let mut line_starts: Vec<usize> = vec![0];
-    {
-        for (i, ch) in text.chars().enumerate() {
-            if ch == '\n' {
-                line_starts.push(i + 1);
-            }
-        }
+    // Content width after "❯ " / "  " prefix.
+    let usable = (inner.width as usize).saturating_sub(3).max(1);
+    app.input_usable_w = usable;
+    let vrows = app.input.visual_rows(usable);
+    let vcount = vrows.len().max(1);
+    let h = (inner.height as usize).max(1).min(INPUT_VIEW_MAX);
+    app.input_view_h = h;
+    let max_top = vcount.saturating_sub(h);
+    if app.input_scroll_top > max_top {
+        app.input_scroll_top = max_top;
     }
+    let top = app.input_scroll_top;
+    // Soft-wrap replaces horizontal pan for normal text; keep x_off at 0.
+    app.input_x_off = 0;
 
-    if text.is_empty() {
+    let mut lines: Vec<Line> = Vec::new();
+    if app.input.is_empty() {
         let hint = if app.busy {
             "type a follow-up — Enter queues it"
         } else {
-            "plan, build, debug  ·  paste large text → chip  ·  wheel over input scrolls"
+            "plan, build, debug  ·  paste large text → chip  ·  wheel scrolls draft"
         };
         let mut spans = vec![Span::styled(
             "❯ ".to_string(),
@@ -2060,18 +2071,16 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
         spans.push(Span::styled(format!(" {hint}"), theme::style_faint()));
         lines.push(Line::from(spans));
     } else {
-        let line_count = app.input.line_count();
-        for i in 0..line_count {
-            let prefix = if i == 0 { "❯ " } else { "  " };
+        let cursor = app.input.cursor_index();
+        let buf_len = app.input.text().chars().count();
+        for (vi, row) in vrows.iter().enumerate().skip(top).take(h) {
+            let prefix = if vi == 0 { "❯ " } else { "  " };
             let mut spans = vec![Span::styled(
                 prefix.to_string(),
                 Style::default()
                     .fg(theme::META_BLUE)
                     .add_modifier(Modifier::BOLD),
             )];
-            let base = line_starts.get(i).copied().unwrap_or(0);
-            let segs = app.input.line_display_segs(i);
-            let mut abs = base;
             let mut run = String::new();
             let mut run_sel = false;
             let flush = |run: &mut String, run_sel: bool, spans: &mut Vec<Span>| {
@@ -2081,128 +2090,109 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
                 let style = if run_sel { sel_style } else { normal };
                 spans.push(Span::styled(std::mem::take(run), style));
             };
-            for seg in segs {
-                match seg {
-                    DisplaySeg::Text(s) => {
-                        for ch in s.chars() {
-                            let is_sel =
-                                sel.map(|(lo, hi)| abs >= lo && abs < hi).unwrap_or(false);
-                            let caret_on = focused && {
-                                let (cl, cc) = app.input.cursor_line_col();
-                                i == cl && abs == base + cc
-                            };
-                            if caret_on {
-                                flush(&mut run, run_sel, &mut spans);
-                                run_sel = false;
-                                spans.push(Span::styled(
-                                    ch.to_string(),
-                                    if is_sel {
-                                        Style::default()
-                                            .fg(theme::BG)
-                                            .bg(theme::META_BLUE)
-                                            .add_modifier(Modifier::BOLD)
-                                    } else {
-                                        theme::style_cursor_on()
-                                    },
-                                ));
-                            } else if is_sel != run_sel && !run.is_empty() {
-                                flush(&mut run, run_sel, &mut spans);
-                                run_sel = is_sel;
-                                run.push(ch);
-                            } else {
-                                if run.is_empty() {
-                                    run_sel = is_sel;
-                                }
-                                run.push(ch);
-                            }
-                            abs += 1;
-                        }
-                    }
-                    DisplaySeg::Chip { label, .. } => {
-                        flush(&mut run, run_sel, &mut spans);
-                        let is_sel =
-                            sel.map(|(lo, hi)| abs >= lo && abs < hi).unwrap_or(false);
-                        let caret_on = focused && {
-                            let (cl, cc) = app.input.cursor_line_col();
-                            i == cl && abs == base + cc
-                        };
-                        let style = if caret_on {
-                            if is_sel {
-                                chip_sel_style
-                            } else {
-                                Style::default()
-                                    .fg(theme::BG)
-                                    .bg(theme::META_BLUE)
-                                    .add_modifier(Modifier::BOLD)
-                            }
-                        } else if is_sel {
+            let mut i = row.abs_start;
+            while i < row.abs_end {
+                let is_sel = sel.map(|(lo, hi)| i >= lo && i < hi).unwrap_or(false);
+                let caret_on = focused && i == cursor;
+                if let Some(label) = app.input.chip_label_at(i) {
+                    flush(&mut run, run_sel, &mut spans);
+                    let style = if caret_on {
+                        if is_sel {
                             chip_sel_style
                         } else {
-                            chip_style
-                        };
-                        // Label width matches InputState::display_width_at (no extra brackets).
-                        spans.push(Span::styled(label, style));
-                        abs += 1;
-                    }
+                            Style::default()
+                                .fg(theme::BG)
+                                .bg(theme::META_BLUE)
+                                .add_modifier(Modifier::BOLD)
+                        }
+                    } else if is_sel {
+                        chip_sel_style
+                    } else {
+                        chip_style
+                    };
+                    spans.push(Span::styled(label, style));
+                    i += 1;
+                    continue;
                 }
+                let Some(ch) = app.input.char_at(i) else {
+                    break;
+                };
+                if caret_on {
+                    flush(&mut run, run_sel, &mut spans);
+                    spans.push(Span::styled(
+                        ch.to_string(),
+                        if is_sel {
+                            Style::default()
+                                .fg(theme::BG)
+                                .bg(theme::META_BLUE)
+                                .add_modifier(Modifier::BOLD)
+                        } else {
+                            theme::style_cursor_on()
+                        },
+                    ));
+                } else if is_sel != run_sel && !run.is_empty() {
+                    flush(&mut run, run_sel, &mut spans);
+                    run_sel = is_sel;
+                    run.push(ch);
+                } else {
+                    if run.is_empty() {
+                        run_sel = is_sel;
+                    }
+                    run.push(ch);
+                }
+                i += 1;
             }
             flush(&mut run, run_sel, &mut spans);
-            let (cl, cc) = app.input.cursor_line_col();
-            let line_buf_len = text
-                .split('\n')
-                .nth(i)
-                .map(|l| l.chars().count())
-                .unwrap_or(0);
-            if focused && i == cl && cc >= line_buf_len {
+            // Caret at end of buffer on the last visual row, or on an empty row.
+            let caret_at_end = focused
+                && cursor == buf_len
+                && cursor == row.abs_end
+                && (vi + 1 == vcount || row.abs_start == row.abs_end);
+            if caret_at_end {
                 spans.push(Span::styled(" ".to_string(), theme::style_cursor_on()));
             }
             lines.push(Line::from(spans));
         }
     }
 
-    let (cur_line, cur_disp_col) = app.input.cursor_display_line_col();
-    let h = (inner.height as usize).max(1);
-    app.input_view_h = h;
-    // User-controlled vertical + horizontal scroll; clamp only here.
-    // Caret visibility is adjusted on type/paste/nav via ensure_input_caret_visible.
-    let max_top = app.input.line_count().saturating_sub(h);
-    if app.input_scroll_top > max_top {
-        app.input_scroll_top = max_top;
-    }
-    let top = app.input_scroll_top;
-
-    let usable = (inner.width as usize).saturating_sub(3);
-    app.input_usable_w = usable;
-    let max_x = app
-        .input
-        .max_line_display_width()
-        .saturating_sub(usable) as u16;
-    if app.input_x_off > max_x {
-        app.input_x_off = max_x;
-    }
-    let x_off = app.input_x_off;
-
-    let visible: Vec<Line> = lines.into_iter().skip(top).take(h).collect();
-    f.render_widget(
-        Paragraph::new(visible)
-            .scroll((0, x_off))
-            .style(theme::style_surface()),
-        inner,
-    );
-
-    if app.approval.is_none() && app.picker.is_none() && app.login.is_none() {
-        let cx = inner.x + 2 + (cur_disp_col as u16).saturating_sub(x_off);
-        let cy = inner.y + (cur_line.saturating_sub(top)) as u16;
-        if cx < inner.right() && cy < inner.bottom() {
-            f.set_cursor_position((cx, cy));
+    // Scroll indicator in the title area when content overflows.
+    if max_top > 0 {
+        let shown_from = top + 1;
+        let shown_to = (top + h).min(vcount);
+        let ind = format!(" {shown_from}–{shown_to}/{vcount} ");
+        let ind_w = ind.width() as u16;
+        if area.width > ind_w + 8 {
+            let x = area.right().saturating_sub(ind_w + 1);
+            let buf = f.buffer_mut();
+            for (i, ch) in ind.chars().enumerate() {
+                let cell = &mut buf[(x + i as u16, area.y)];
+                cell.set_char(ch);
+                cell.set_style(theme::style_faint());
+            }
         }
     }
 
-    // Geometry for hit-testing / next mouse frame (outer = full bordered box).
+    f.render_widget(
+        Paragraph::new(lines).style(theme::style_surface()),
+        inner,
+    );
+
+    if focused && !app.input.is_empty() {
+        let (vr, vc) = app.input.cursor_visual_pos(usable);
+        if vr >= top && vr < top + h {
+            let cx = inner.x + 2 + vc as u16;
+            let cy = inner.y + (vr - top) as u16;
+            if cx < inner.right() && cy < inner.bottom() {
+                f.set_cursor_position((cx, cy));
+            }
+        }
+    } else if focused && app.input.is_empty() {
+        f.set_cursor_position((inner.x + 2, inner.y));
+    }
+
     app.input_area = area;
     app.input_inner = inner;
     app.input_scroll_top = top;
-    // input_x_off already updated above (clamped)
 }
 
 // ── statusline ─────────────────────────────────────────────────────────────

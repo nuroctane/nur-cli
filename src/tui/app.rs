@@ -1989,8 +1989,10 @@ impl App {
                     self.input_selecting = false;
                     self.input_drag_origin = None;
                     if !selecting {
-                        if let Some((line, dcol)) = self.input_pos_at(m.column, m.row) {
-                            self.input.click_at(line, dcol);
+                        if let Some((vrow, dcol)) = self.input_pos_at(m.column, m.row) {
+                            let w = self.input_usable_w.max(1);
+                            let idx = self.input.index_at_visual(vrow, dcol, w);
+                            self.input.set_cursor_index(idx);
                         } else {
                             self.input.clear_selection();
                         }
@@ -2050,9 +2052,11 @@ impl App {
             self.maybe_autoscroll_input_while_selecting(col, row);
             if self.input_selecting {
                 self.input_drag_to(col, row);
-            } else if let Some((line, dcol)) = self.input_pos_at(col, row) {
+            } else if let Some((vrow, dcol)) = self.input_pos_at(col, row) {
                 // Still a click — keep selection collapsed under the pointer.
-                self.input.select_start_at(line, dcol);
+                let w = self.input_usable_w.max(1);
+                let idx = self.input.index_at_visual(vrow, dcol, w);
+                self.input.select_start_at_index(idx);
             }
             return;
         }
@@ -2394,39 +2398,46 @@ impl App {
             && row < a.bottom()
     }
 
-    /// Map terminal coords → (line, display_col) inside the input editor.
+    /// Map terminal coords → (visual_row, col_in_row) inside the soft-wrapped input.
     fn input_pos_at(&self, col: u16, row: u16) -> Option<(usize, usize)> {
         let inner = self.input_inner;
         if inner.width == 0 || inner.height == 0 {
             return None;
         }
-        // Clamp into the inner text region (clicks on the border still map).
         let c = col.clamp(inner.x, inner.right().saturating_sub(1));
         let r = row.clamp(inner.y, inner.bottom().saturating_sub(1));
         let prefix_w: u16 = 2;
-        let display_col = c.saturating_sub(inner.x).saturating_sub(prefix_w) as usize
-            + self.input_x_off as usize;
-        let line = r.saturating_sub(inner.y) as usize + self.input_scroll_top;
-        let line = line.min(self.input.line_count().saturating_sub(1));
-        Some((line, display_col))
+        let display_col = c.saturating_sub(inner.x).saturating_sub(prefix_w) as usize;
+        let vrow = r.saturating_sub(inner.y) as usize + self.input_scroll_top;
+        let usable = self.input_usable_w.max(1);
+        let vcount = self.input.visual_line_count(usable).max(1);
+        let vrow = vrow.min(vcount - 1);
+        Some((vrow, display_col))
     }
 
     fn input_select_start(&mut self, col: u16, row: u16) {
-        if let Some((line, dcol)) = self.input_pos_at(col, row) {
-            self.input.select_start_at(line, dcol);
+        if let Some((vrow, dcol)) = self.input_pos_at(col, row) {
+            let w = self.input_usable_w.max(1);
+            let idx = self.input.index_at_visual(vrow, dcol, w);
+            // Place caret via absolute index so soft-wrap clicks map correctly.
+            self.input.select_start_at_index(idx);
         }
     }
 
     fn input_drag_to(&mut self, col: u16, row: u16) {
-        if let Some((line, dcol)) = self.input_pos_at(col, row) {
-            self.input.select_drag_to(line, dcol);
+        if let Some((vrow, dcol)) = self.input_pos_at(col, row) {
+            let w = self.input_usable_w.max(1);
+            let idx = self.input.index_at_visual(vrow, dcol, w);
+            self.input.select_drag_to_index(idx);
         }
     }
 
-    /// Scroll the input viewport by `delta` lines (negative = older / up).
+    /// Scroll the input viewport by `delta` **visual rows** (negative = up).
+    /// Always ±1-sized steps from the wheel so intermediate lines stay visible.
     fn scroll_input(&mut self, delta: i32) {
         let h = self.input_view_h.max(1);
-        let max_top = self.input.line_count().saturating_sub(h);
+        let w = self.input_usable_w.max(1);
+        let max_top = self.input.visual_line_count(w).saturating_sub(h);
         if delta < 0 {
             self.input_scroll_top = self
                 .input_scroll_top
@@ -2437,34 +2448,12 @@ impl App {
         }
     }
 
-    fn max_input_x_off(&self) -> u16 {
-        let usable = self.input_usable_w.max(1);
-        let w = self.input.max_line_display_width();
-        w.saturating_sub(usable) as u16
-    }
-
-    fn nudge_input_x(&mut self, delta: i32) {
-        let max = self.max_input_x_off();
-        if delta < 0 {
-            self.input_x_off = self.input_x_off.saturating_sub((-delta) as u16);
-        } else {
-            self.input_x_off = (self.input_x_off.saturating_add(delta as u16)).min(max);
-        }
-    }
-
-    /// Wheel over input: vertical when content is taller than the pane;
-    /// otherwise pan horizontally when the line is wider than the pane.
+    /// Wheel over input: one visual row per notch (smooth, no top↔bottom jumps).
     fn wheel_input(&mut self, dir: i32) {
-        let h = self.input_view_h.max(1);
-        let max_top = self.input.line_count().saturating_sub(h);
-        if max_top > 0 {
-            self.scroll_input(dir * 3);
-        } else if self.max_input_x_off() > 0 {
-            self.nudge_input_x(dir * 4);
-        }
+        self.scroll_input(dir); // dir is ±1 from ScrollUp/Down callers after fix
     }
 
-    /// Cross the click→drag threshold (display cells or line change).
+    /// Cross the click→drag threshold (visual cells or row change).
     fn note_input_drag_motion(&mut self, col: u16, row: u16) {
         if self.input_selecting {
             return;
@@ -2480,75 +2469,45 @@ impl App {
         }
     }
 
-    /// Keep the caret line (and its column) inside the visible input window.
+    /// Keep the caret's **visual** row inside the input viewport after typing.
     fn ensure_input_caret_visible(&mut self) {
         let h = self.input_view_h.max(1);
-        let (line, dcol) = self.input.cursor_display_line_col();
-        let max_top = self.input.line_count().saturating_sub(h);
-        if line < self.input_scroll_top {
-            self.input_scroll_top = line;
-        } else if line >= self.input_scroll_top + h {
-            self.input_scroll_top = line + 1 - h;
+        let w = self.input_usable_w.max(1);
+        let (vrow, _) = self.input.cursor_visual_pos(w);
+        let max_top = self.input.visual_line_count(w).saturating_sub(h);
+        if vrow < self.input_scroll_top {
+            self.input_scroll_top = vrow;
+        } else if vrow >= self.input_scroll_top + h {
+            self.input_scroll_top = vrow + 1 - h;
         }
         self.input_scroll_top = self.input_scroll_top.min(max_top);
-
-        let usable = self.input_usable_w.max(1);
-        if dcol < self.input_x_off as usize {
-            self.input_x_off = dcol as u16;
-        } else if dcol >= self.input_x_off as usize + usable {
-            self.input_x_off = (dcol + 1).saturating_sub(usable) as u16;
-        }
-        self.input_x_off = self.input_x_off.min(self.max_input_x_off());
+        self.input_x_off = 0;
     }
 
-    /// While drag-selecting, accelerate scroll at edges (vertical + horizontal).
-    fn maybe_autoscroll_input_while_selecting(&mut self, col: u16, row: u16) {
+    /// While drag-selecting, scroll one visual row at a time at the edges.
+    fn maybe_autoscroll_input_while_selecting(&mut self, _col: u16, row: u16) {
         if !self.input_selecting {
             return;
         }
         let inner = self.input_inner;
-        if inner.height == 0 || inner.width == 0 {
+        if inner.height == 0 {
             return;
         }
-        // Vertical: scale by how far outside the box the pointer is.
-        if row < inner.y {
-            let dist = (inner.y - row) as i32;
-            self.scroll_input(-(1 + dist.min(6)));
-        } else if row >= inner.bottom() {
-            let dist = (row + 1 - inner.bottom()) as i32;
-            self.scroll_input(1 + dist.min(6));
-        } else if row < inner.y.saturating_add(1) {
-            self.scroll_input(-2);
+        // One row per event at the edge — smooth, not a leap to top/bottom.
+        if row < inner.y.saturating_add(1) {
+            self.scroll_input(-1);
         } else if row + 1 >= inner.bottom() {
-            self.scroll_input(2);
-        }
-
-        // Horizontal pan at left/right of the text area (after prefix).
-        let content_left = inner.x.saturating_add(2);
-        let content_right = inner.right().saturating_sub(1);
-        if col <= content_left.saturating_add(1) {
-            self.nudge_input_x(-4);
-        } else if col + 1 >= content_right {
-            self.nudge_input_x(4);
-        }
-
-        // Keep the drag point's column in view.
-        if let Some((_, dcol)) = self.input_pos_at(col, row) {
-            let usable = self.input_usable_w.max(1);
-            if dcol < self.input_x_off as usize {
-                self.input_x_off = dcol as u16;
-            } else if dcol >= self.input_x_off as usize + usable {
-                self.input_x_off = (dcol + 1).saturating_sub(usable) as u16;
-            }
-            self.input_x_off = self.input_x_off.min(self.max_input_x_off());
+            self.scroll_input(1);
         }
     }
 
     /// Map a terminal (column, row) click onto the input buffer caret.
     #[allow(dead_code)]
     fn click_input(&mut self, col: u16, row: u16) {
-        if let Some((line, dcol)) = self.input_pos_at(col, row) {
-            self.input.click_at(line, dcol);
+        if let Some((vrow, dcol)) = self.input_pos_at(col, row) {
+            let w = self.input_usable_w.max(1);
+            let idx = self.input.index_at_visual(vrow, dcol, w);
+            self.input.set_cursor_index(idx);
             self.ensure_input_caret_visible();
         }
     }

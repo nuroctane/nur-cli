@@ -31,6 +31,15 @@ pub enum DisplaySeg {
     },
 }
 
+/// One soft-wrapped row in the input viewport (scroll unit = one of these).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VisualRow {
+    /// Inclusive start buffer index.
+    pub abs_start: usize,
+    /// Exclusive end buffer index (may equal start for empty row after `\n`).
+    pub abs_end: usize,
+}
+
 pub struct InputState {
     /// Buffer with embedded '\n' for multi-line prompts.
     /// Large pastes may appear as a single private-use sentinel char.
@@ -520,25 +529,43 @@ impl InputState {
         self.cursor
     }
 
-    /// Place the caret from a mouse click at (line, **display** column).
+    pub fn char_at(&self, idx: usize) -> Option<char> {
+        self.buffer.get(idx).copied()
+    }
+
+    /// Place the caret from a mouse click at (hard line, **display** column).
     pub fn click_at(&mut self, line: usize, display_col: usize) {
         self.selection_anchor = None;
         self.cursor = self.index_at_display_col(line, display_col);
     }
 
-    /// Start a drag-select: anchor + caret at (line, display col).
+    pub fn set_cursor_index(&mut self, idx: usize) {
+        self.selection_anchor = None;
+        self.cursor = idx.min(self.buffer.len());
+    }
+
+    /// Start a drag-select: anchor + caret at (hard line, display col).
     pub fn select_start_at(&mut self, line: usize, display_col: usize) {
         let idx = self.index_at_display_col(line, display_col);
+        self.select_start_at_index(idx);
+    }
+
+    pub fn select_start_at_index(&mut self, idx: usize) {
+        let idx = idx.min(self.buffer.len());
         self.selection_anchor = Some(idx);
         self.cursor = idx;
     }
 
-    /// Extend selection end to (line, display col); keeps anchor.
+    /// Extend selection end to (hard line, display col); keeps anchor.
     pub fn select_drag_to(&mut self, line: usize, display_col: usize) {
+        self.select_drag_to_index(self.index_at_display_col(line, display_col));
+    }
+
+    pub fn select_drag_to_index(&mut self, idx: usize) {
         if self.selection_anchor.is_none() {
             self.selection_anchor = Some(self.cursor);
         }
-        self.cursor = self.index_at_display_col(line, display_col);
+        self.cursor = idx.min(self.buffer.len());
     }
 
     pub fn move_line_home(&mut self) {
@@ -613,9 +640,134 @@ impl InputState {
         self.gc_pastes();
     }
 
-    /// Line count of the current buffer (chips count as one char on one line).
+    /// Hard line count of the buffer (`\n` separators; chips count as one char).
     pub fn line_count(&self) -> usize {
         1 + self.buffer.iter().filter(|c| **c == '\n').count()
+    }
+
+    /// Soft-wrapped visual rows for a content width in terminal cells.
+    /// This is what the input viewport scrolls through — one notch = one row.
+    pub fn visual_rows(&self, width: usize) -> Vec<VisualRow> {
+        let width = width.max(1);
+        let mut rows = Vec::new();
+        let mut row_start = 0usize;
+        let mut col = 0usize;
+        let n = self.buffer.len();
+
+        if n == 0 {
+            return vec![VisualRow {
+                abs_start: 0,
+                abs_end: 0,
+            }];
+        }
+
+        let mut i = 0usize;
+        while i < n {
+            let c = self.buffer[i];
+            if c == '\n' {
+                rows.push(VisualRow {
+                    abs_start: row_start,
+                    abs_end: i,
+                });
+                i += 1;
+                row_start = i;
+                col = 0;
+                continue;
+            }
+            let w = self.display_width_at(i).max(1);
+            // Wrap before placing if this glyph won't fit (keep at least one per row).
+            if col > 0 && col + w > width {
+                rows.push(VisualRow {
+                    abs_start: row_start,
+                    abs_end: i,
+                });
+                row_start = i;
+                col = 0;
+            }
+            col += w;
+            i += 1;
+            // If a single glyph is wider than the pane, still put it alone.
+            if col >= width {
+                rows.push(VisualRow {
+                    abs_start: row_start,
+                    abs_end: i,
+                });
+                row_start = i;
+                col = 0;
+            }
+        }
+        // Trailing partial row (or empty row after final newline).
+        if row_start < n || rows.is_empty() || self.buffer.last() == Some(&'\n') {
+            rows.push(VisualRow {
+                abs_start: row_start,
+                abs_end: n,
+            });
+        }
+        rows
+    }
+
+    pub fn visual_line_count(&self, width: usize) -> usize {
+        self.visual_rows(width).len().max(1)
+    }
+
+    /// Which visual row contains buffer index `abs` (clamped).
+    /// Caret at a wrap boundary belongs to the **next** row when one starts there;
+    /// caret at end-of-buffer belongs to the last row.
+    pub fn visual_row_of_index(&self, abs: usize, width: usize) -> usize {
+        let rows = self.visual_rows(width);
+        if rows.is_empty() {
+            return 0;
+        }
+        let abs = abs.min(self.buffer.len());
+        for (ri, r) in rows.iter().enumerate() {
+            if abs < r.abs_end {
+                return ri;
+            }
+            // Empty row (after newline): caret at abs_start == abs_end
+            if r.abs_start == r.abs_end && abs == r.abs_start {
+                return ri;
+            }
+        }
+        // abs == end of buffer (or end of last non-empty row)
+        rows.len() - 1
+    }
+
+    /// Display column of `abs` within its visual row (0-based cells).
+    pub fn visual_col_of_index(&self, abs: usize, width: usize) -> usize {
+        let rows = self.visual_rows(width);
+        let ri = self.visual_row_of_index(abs, width);
+        let row = &rows[ri.min(rows.len().saturating_sub(1))];
+        let mut col = 0usize;
+        let mut i = row.abs_start;
+        let end = abs.min(row.abs_end).min(self.buffer.len());
+        while i < end {
+            col += self.display_width_at(i);
+            i += 1;
+        }
+        col
+    }
+
+    /// Map a click on visual row `vrow` at display col `dcol` → buffer index.
+    pub fn index_at_visual(&self, vrow: usize, dcol: usize, width: usize) -> usize {
+        let rows = self.visual_rows(width);
+        if rows.is_empty() {
+            return 0;
+        }
+        let row = &rows[vrow.min(rows.len() - 1)];
+        let mut col = 0usize;
+        let mut i = row.abs_start;
+        while i < row.abs_end && i < self.buffer.len() {
+            let w = self.display_width_at(i).max(1);
+            if col + w > dcol {
+                return i;
+            }
+            col += w;
+            i += 1;
+            if col >= dcol {
+                return i;
+            }
+        }
+        row.abs_end.min(self.buffer.len())
     }
 
     /// (line, **buffer** col) of the cursor — col counts chips as 1.
@@ -623,11 +775,18 @@ impl InputState {
         self.line_col_of_index(self.cursor)
     }
 
-    /// (line, **display** col) of the caret for rendering.
+    /// (line, **display** col) of the caret for rendering (hard-line based).
     pub fn cursor_display_line_col(&self) -> (usize, usize) {
         let (line, _) = self.cursor_line_col();
         let col = self.display_col_of_index(self.cursor);
         (line, col)
+    }
+
+    /// (visual_row, col_in_row) of the caret for soft-wrapped viewports.
+    pub fn cursor_visual_pos(&self, width: usize) -> (usize, usize) {
+        let row = self.visual_row_of_index(self.cursor, width);
+        let col = self.visual_col_of_index(self.cursor, width);
+        (row, col)
     }
 
     /// Is the cursor on the first / last line? (for history vs line nav)
@@ -918,5 +1077,43 @@ mod tests {
         assert_eq!(i.index_at_display_col(0, mid), 2);
         // Past chip → 'c'
         assert_eq!(i.index_at_display_col(0, 2 + chip_w), 3);
+    }
+
+    #[test]
+    fn soft_wrap_produces_multiple_visual_rows() {
+        let mut i = InputState::empty_for_test();
+        // 30 'a' chars with width 10 → 3 visual rows
+        i.insert_str(&"a".repeat(30));
+        let rows = i.visual_rows(10);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].abs_start, 0);
+        assert_eq!(rows[0].abs_end, 10);
+        assert_eq!(rows[1].abs_start, 10);
+        assert_eq!(rows[1].abs_end, 20);
+        assert_eq!(rows[2].abs_start, 20);
+        assert_eq!(rows[2].abs_end, 30);
+    }
+
+    #[test]
+    fn soft_wrap_newlines_and_scroll_units() {
+        let mut i = InputState::empty_for_test();
+        i.insert_str("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten");
+        // Narrow width still one visual row per hard line (short words).
+        let rows = i.visual_rows(40);
+        assert_eq!(rows.len(), 10);
+        // Scroll max with view of 8: max_top = 2 — intermediate positions exist.
+        let max_top = rows.len().saturating_sub(8);
+        assert_eq!(max_top, 2);
+        assert_eq!(i.index_at_visual(3, 0, 40), rows[3].abs_start);
+    }
+
+    #[test]
+    fn visual_row_of_cursor_tracks_wrap() {
+        let mut i = InputState::empty_for_test();
+        i.insert_str(&"x".repeat(25));
+        // Caret at end
+        assert_eq!(i.visual_row_of_index(25, 10), 2);
+        // Caret mid second row
+        assert_eq!(i.visual_row_of_index(15, 10), 1);
     }
 }
