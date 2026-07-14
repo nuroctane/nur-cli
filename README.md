@@ -5,7 +5,7 @@
 ### ⚡ Extremely efficient token spend
 
 **Cut costs for every provider by up to ~85%.**  
-Meta’s harness is built to burn fewer tokens — less waste, more work per dollar — on Meta, OpenAI, Anthropic, Grok, Gemini, and the rest of the catalog.
+Nur’s harness is built to burn fewer tokens — less waste, more work per dollar — on Meta, OpenAI, Anthropic, Grok, Gemini, and the rest of the catalog.
 
 </div>
 
