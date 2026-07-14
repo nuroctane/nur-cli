@@ -135,6 +135,7 @@ Non-zero **pre_tool** exit blocks the tool. Missing file = no hooks. Check statu
 | `META_API_KEY` | API key (preferred) |
 | `MODEL_API_KEY` | API key (alternative) |
 | `MUSE_API_KEY` | API key (legacy) |
+| `META_BASE_URL` | Override API base URL (self-hosted Ollama/vLLM/LiteLLM/gateways) |
 | `META_MODEL` | Override model id |
 | `MUSE_MODEL` | Override model id (legacy) |
 

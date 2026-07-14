@@ -143,6 +143,10 @@ pub enum AuthCmd {
     },
     /// Show auth status (never prints full key)
     Status,
-    /// Remove saved key
-    Logout,
+    /// Remove saved key / OAuth session
+    Logout {
+        /// Best-effort remote revoke note (vendor CLI / account UI); always deletes local file
+        #[arg(long)]
+        revoke: bool,
+    },
 }

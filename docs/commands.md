@@ -105,6 +105,7 @@ Remove saved key from `~/.meta/auth.json` and legacy `~/.muse/`.
 
 ```bash
 meta auth logout
+meta auth logout --revoke   # local delete + best-effort revoke notes for az/aws/gcloud
 ```
 
 ---

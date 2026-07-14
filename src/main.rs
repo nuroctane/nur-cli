@@ -85,9 +85,15 @@ async fn real_main() -> Result<()> {
             match action {
                 AuthCmd::Login { key } => login_interactive(key.clone())?,
                 AuthCmd::Status => auth_status()?,
-                AuthCmd::Logout => {
-                    logout()?;
-                    theme::print_ok("logged out (removed ~/.meta/auth.json)");
+                AuthCmd::Logout { revoke } => {
+                    logout(*revoke)?;
+                    if *revoke {
+                        theme::print_ok(
+                            "logged out (local ~/.meta/auth.json removed; see revoke notes above)",
+                        );
+                    } else {
+                        theme::print_ok("logged out (removed ~/.meta/auth.json)");
+                    }
                 }
             }
             return Ok(());
@@ -178,12 +184,29 @@ async fn real_main() -> Result<()> {
         _ => {}
     }
 
+    let mut cfg = load_config()?;
+    if let Some(m) = &cli.model {
+        cfg.model = m.clone();
+    } else if let Ok(m) = std::env::var("META_MODEL").or_else(|_| std::env::var("MUSE_MODEL")) {
+        if !m.trim().is_empty() {
+            cfg.model = m;
+        }
+    }
+    if let Some(e) = &cli.effort {
+        cfg.reasoning_effort = e.clone();
+    }
+    if let Some(t) = cli.max_turns {
+        cfg.max_turns = t;
+    }
+
     // Interactive TUI can start without a key and prompt `/login`; headless
     // `run` still needs a key up front (no place to prompt).
+    // Resolve against the *active* provider so a Grok OAuth session is not
+    // silently reused against OpenAI/etc. after a config switch.
     let interactive = cli.command.is_none();
-    let api_key = match resolve_api_key() {
+    let api_key = match auth::resolve_api_key_for(Some(cfg.provider.as_str())) {
         Ok(k) => k,
-        Err(_) => {
+        Err(error::MuseError::NotAuthenticated) => {
             let env_key = std::env::var("META_API_KEY")
                 .or_else(|_| std::env::var("MODEL_API_KEY"))
                 .or_else(|_| std::env::var("MUSE_API_KEY"))
@@ -200,22 +223,19 @@ async fn real_main() -> Result<()> {
                 return Err(error::MuseError::NotAuthenticated);
             }
         }
-    };
-
-    let mut cfg = load_config()?;
-    if let Some(m) = &cli.model {
-        cfg.model = m.clone();
-    } else if let Ok(m) = std::env::var("META_MODEL").or_else(|_| std::env::var("MUSE_MODEL")) {
-        if !m.trim().is_empty() {
-            cfg.model = m;
+        Err(e) => {
+            // Provider mismatch: interactive → open TUI unauthed; headless → fail.
+            let msg = e.to_string();
+            if interactive && msg.contains("mismatch") {
+                theme::print_info(&msg);
+                String::new()
+            } else if interactive {
+                String::new()
+            } else {
+                return Err(e);
+            }
         }
-    }
-    if let Some(e) = &cli.effort {
-        cfg.reasoning_effort = e.clone();
-    }
-    if let Some(t) = cli.max_turns {
-        cfg.max_turns = t;
-    }
+    };
 
     let explicit_cwd = cli.cwd.is_some();
     let requested = cli

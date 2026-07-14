@@ -2991,7 +2991,7 @@ impl App {
         // /login clears the prior key/auth up front — a clean slate to pick a
         // provider and enter a fresh key / browser session.
         self.cancel_oauth();
-        let _ = crate::auth::logout();
+        let _ = crate::auth::logout(false);
         self.authed = false;
         self.login = Some(LoginModal {
             stage: LoginStage::Provider,
@@ -3411,18 +3411,13 @@ impl App {
             return;
         }
 
-        // Persist the key (single active key — /login already cleared the old one).
+        // Persist the key tagged to this provider (prevents cross-provider reuse).
         if !key.is_empty() {
-            if let Err(e) = crate::auth::save_api_key(&key) {
+            if let Err(e) = crate::auth::save_api_key_for(&key, Some(&provider_id)) {
                 if let Some(m) = &mut self.login {
                     m.error = Some(e.to_string());
                 }
                 return;
-            }
-            // Tag provider on the saved api-key auth record.
-            if let Ok(Some(mut a)) = crate::auth::load_auth() {
-                a.provider = provider_id.clone();
-                let _ = crate::auth::save_auth(&a);
             }
         }
 
@@ -3438,6 +3433,8 @@ impl App {
         self.cfg.provider = provider.id.to_string();
         self.cfg.base_url = provider.base_url.to_string();
         self.cfg.model = provider.default_model.to_string();
+        // Self-hosted override wins over catalog default.
+        crate::config::apply_base_url_env(&mut self.cfg);
         let _ = crate::config::save_config(&self.cfg);
         if let Some(s) = &mut self.session {
             s.model = self.cfg.model.clone();

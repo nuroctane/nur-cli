@@ -361,7 +361,7 @@ impl App {
     }
 
     fn cmd_logout(&mut self) {
-        match crate::auth::logout() {
+        match crate::auth::logout(false) {
             Ok(()) => {
                 self.authed = false;
                 self.push_note(

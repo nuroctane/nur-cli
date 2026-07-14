@@ -5,7 +5,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthMethod {
     #[default]
@@ -58,16 +58,70 @@ impl Default for Auth {
     }
 }
 
-fn now_unix() -> u64 {
+pub fn now_unix() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
 }
 
-/// Resolve a usable bearer credential.
-/// Order: env keys → `~/.meta/auth.json` (with OAuth refresh if needed) → legacy `~/.muse`.
+/// Human-relative expiry: `in 42m`, `expired 3m ago`, `no expiry`.
+pub fn format_expires_relative(expires_at: Option<u64>) -> String {
+    format_expires_relative_at(expires_at, now_unix())
+}
+
+/// Testable variant of [`format_expires_relative`].
+pub fn format_expires_relative_at(expires_at: Option<u64>, now: u64) -> String {
+    let Some(exp) = expires_at else {
+        return "no expiry".into();
+    };
+    if exp > now {
+        let secs = exp - now;
+        format!("in {}", format_duration_short(secs))
+    } else {
+        let secs = now - exp;
+        format!("expired {} ago", format_duration_short(secs))
+    }
+}
+
+fn format_duration_short(secs: u64) -> String {
+    if secs < 60 {
+        return format!("{secs}s");
+    }
+    let mins = secs / 60;
+    if mins < 60 {
+        return format!("{mins}m");
+    }
+    let hours = mins / 60;
+    if hours < 48 {
+        let rem_m = mins % 60;
+        if rem_m == 0 {
+            format!("{hours}h")
+        } else {
+            format!("{hours}h{rem_m}m")
+        }
+    } else {
+        let days = hours / 24;
+        format!("{days}d")
+    }
+}
+
+/// True when saved credentials must not be used for `cfg_provider`.
+/// Empty `auth.provider` (legacy files) is treated as compatible with any provider.
+pub fn provider_mismatch(auth: &Auth, cfg_provider: &str) -> bool {
+    !auth.provider.is_empty() && auth.provider != cfg_provider
+}
+
+/// Resolve a usable bearer credential (any provider / env).
+/// Order: env keys → `~/.meta/auth.json` (with OAuth refresh) → legacy `~/.muse`.
 pub fn resolve_api_key() -> Result<String> {
+    resolve_api_key_for(None)
+}
+
+/// Resolve credentials for a catalog provider. Refuses to reuse a key tagged for
+/// a different provider (prevents sending Grok tokens to OpenAI, etc.).
+/// Env keys always win and are not provider-scoped.
+pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
     for var in ["META_API_KEY", "MODEL_API_KEY", "MUSE_API_KEY"] {
         if let Ok(k) = std::env::var(var) {
             let k = k.trim().to_string();
@@ -78,6 +132,14 @@ pub fn resolve_api_key() -> Result<String> {
     }
     if let Some(auth) = load_auth()? {
         let mut auth = auth;
+        if let Some(exp) = expected_provider {
+            if provider_mismatch(&auth, exp) {
+                return Err(MuseError::Other(format!(
+                    "saved credentials are for provider '{}' but active provider is '{}'. Run /login (or meta auth logout) and sign in again.",
+                    auth.provider, exp
+                )));
+            }
+        }
         ensure_fresh_oauth(&mut auth)?;
         let k = auth.api_key.trim().to_string();
         if !k.is_empty() {
@@ -91,10 +153,18 @@ pub fn resolve_api_key() -> Result<String> {
         let auth: Auth = serde_json::from_str(&text)?;
         let k = auth.api_key.trim().to_string();
         if !k.is_empty() {
+            if let Some(exp) = expected_provider {
+                if provider_mismatch(&auth, exp) {
+                    return Err(MuseError::Other(format!(
+                        "legacy credentials are for provider '{}' but active provider is '{}'. Run /login.",
+                        auth.provider, exp
+                    )));
+                }
+            }
             let _ = crate::config::promote_legacy_file("auth.json");
             if !auth_path().exists() {
                 let _ = ensure_dirs();
-                let _ = save_api_key(&k);
+                let _ = save_api_key_for(&k, expected_provider);
             }
             return Ok(k);
         }
@@ -168,6 +238,11 @@ pub fn save_auth(auth: &Auth) -> Result<()> {
 }
 
 pub fn save_api_key(key: &str) -> Result<()> {
+    save_api_key_for(key, None)
+}
+
+/// Save an API key, optionally tagging it with the catalog provider id.
+pub fn save_api_key_for(key: &str, provider: Option<&str>) -> Result<()> {
     let trimmed = key.trim();
     if trimmed.len() < 8 {
         return Err(MuseError::Other(
@@ -177,13 +252,25 @@ pub fn save_api_key(key: &str) -> Result<()> {
     if trimmed.contains(' ') || trimmed.contains('\n') {
         return Err(MuseError::Other("API key contains whitespace".into()));
     }
-    let mut auth = load_auth()?.unwrap_or_default();
-    auth.api_key = trimmed.to_string();
-    auth.source = "login".to_string();
-    auth.auth_method = AuthMethod::ApiKey;
-    auth.refresh_token = None;
-    auth.expires_at = None;
-    auth.oauth_meta = None;
+    let mut auth = Auth {
+        api_key: trimmed.to_string(),
+        source: "login".to_string(),
+        auth_method: AuthMethod::ApiKey,
+        provider: provider.unwrap_or("").to_string(),
+        refresh_token: None,
+        expires_at: None,
+        oauth_meta: None,
+    };
+    // Preserve provider if caller omitted but we already had one for the same key path? No —
+    // clean api-key login should set provider explicitly from TUI.
+    if auth.provider.is_empty() {
+        if let Ok(Some(prev)) = load_auth() {
+            // Only keep prior provider when re-saving without an explicit tag and method was key.
+            if matches!(prev.auth_method, AuthMethod::ApiKey) && !prev.provider.is_empty() {
+                auth.provider = prev.provider;
+            }
+        }
+    }
     save_auth(&auth)
 }
 
@@ -211,7 +298,22 @@ pub fn save_oauth_session(
     save_auth(&auth)
 }
 
-pub fn logout() -> Result<()> {
+/// Delete local credentials. If `revoke` is true, best-effort remote revoke first.
+pub fn logout(revoke: bool) -> Result<()> {
+    if revoke {
+        if let Ok(Some(auth)) = load_auth() {
+            match crate::oauth::revoke_session(&auth) {
+                Ok(msg) => {
+                    if !msg.is_empty() {
+                        eprintln!("{msg}");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("revoke note: {e} (continuing with local logout)");
+                }
+            }
+        }
+    }
     let path = auth_path();
     if path.exists() {
         fs::remove_file(&path)?;
@@ -232,46 +334,84 @@ pub fn key_fingerprint(key: &str) -> String {
 }
 
 pub fn auth_status() -> Result<()> {
-    match resolve_api_key() {
-        Ok(key) => {
-            let source = if std::env::var("META_API_KEY").is_ok() {
-                "META_API_KEY env"
-            } else if std::env::var("MODEL_API_KEY").is_ok() {
-                "MODEL_API_KEY env"
-            } else if std::env::var("MUSE_API_KEY").is_ok() {
-                "MUSE_API_KEY env (legacy)"
-            } else if auth_path().exists() {
-                "~/.meta/auth.json"
-            } else if crate::config::legacy_muse_home().join("auth.json").exists() {
-                "~/.muse/auth.json (legacy — will promote on next save)"
-            } else {
-                "resolved"
-            };
+    // Status should report mismatch without hard-failing the command.
+    let env_source = if std::env::var("META_API_KEY").map(|k| !k.trim().is_empty()).unwrap_or(false)
+    {
+        Some("META_API_KEY env")
+    } else if std::env::var("MODEL_API_KEY")
+        .map(|k| !k.trim().is_empty())
+        .unwrap_or(false)
+    {
+        Some("MODEL_API_KEY env")
+    } else if std::env::var("MUSE_API_KEY")
+        .map(|k| !k.trim().is_empty())
+        .unwrap_or(false)
+    {
+        Some("MUSE_API_KEY env (legacy)")
+    } else {
+        None
+    };
+
+    if let Some(src) = env_source {
+        let key = resolve_api_key()?;
+        println!("authenticated: yes");
+        println!("source: {src}");
+        println!("method: api_key (env)");
+        println!("provider: (env — not scoped)");
+        println!("expires: no expiry");
+        println!("key: {}", key_fingerprint(&key));
+        println!("note: env keys override ~/.meta/auth.json");
+        return Ok(());
+    }
+
+    match load_auth()? {
+        Some(mut auth) if !auth.api_key.trim().is_empty() => {
+            let _ = ensure_fresh_oauth(&mut auth);
+            let cfg_provider = crate::config::load_config()
+                .map(|c| c.provider)
+                .unwrap_or_default();
             println!("authenticated: yes");
-            println!("source: {source}");
-            if let Ok(Some(a)) = load_auth() {
-                if !a.provider.is_empty() {
-                    println!("provider: {}", a.provider);
-                }
-                println!(
-                    "method: {}",
-                    match a.auth_method {
-                        AuthMethod::ApiKey => "api_key",
-                        AuthMethod::Oauth => "oauth / browser",
-                    }
-                );
+            println!("source: ~/.meta/auth.json");
+            if !auth.provider.is_empty() {
+                println!("provider: {}", auth.provider);
+            } else {
+                println!("provider: (unset — legacy file)");
             }
-            println!("key: {}", key_fingerprint(&key));
+            if !cfg_provider.is_empty() && provider_mismatch(&auth, &cfg_provider) {
+                println!(
+                    "config_provider: {cfg_provider}  ⚠ mismatch — run /login before chatting"
+                );
+            } else if !cfg_provider.is_empty() {
+                println!("config_provider: {cfg_provider}");
+            }
+            println!(
+                "method: {}",
+                match auth.auth_method {
+                    AuthMethod::ApiKey => "api_key",
+                    AuthMethod::Oauth => "oauth / browser",
+                }
+            );
+            println!("expires: {}", format_expires_relative(auth.expires_at));
+            println!("key: {}", key_fingerprint(&auth.api_key));
+            println!(
+                "note: ~/.meta/auth.json is plaintext secrets (Unix 0600; Windows profile ACLs)"
+            );
             Ok(())
         }
-        Err(MuseError::NotAuthenticated) => {
+        _ => {
+            // Legacy muse path?
+            let legacy = crate::config::legacy_muse_home().join("auth.json");
+            if legacy.exists() {
+                println!("authenticated: yes (legacy ~/.muse — will promote on use)");
+                println!("source: ~/.muse/auth.json");
+                return Ok(());
+            }
             println!("authenticated: no");
             println!("run: meta auth login");
             println!("or set META_API_KEY / MODEL_API_KEY");
             println!("or /login in the TUI (browser sign-in for Grok, Claude, …)");
             Ok(())
         }
-        Err(e) => Err(e),
     }
 }
 
@@ -294,7 +434,7 @@ pub fn login_interactive(key_arg: Option<String>) -> Result<()> {
     if key.is_empty() {
         return Err(MuseError::Other("empty API key".into()));
     }
-    save_api_key(key)?;
+    save_api_key_for(key, Some("meta"))?;
     println!("saved to {}", auth_path().display());
     println!("key: {}", key_fingerprint(key));
     Ok(())
@@ -333,5 +473,33 @@ mod tests {
         assert_eq!(b.provider, "xai");
         assert!(matches!(b.auth_method, AuthMethod::Oauth));
         assert_eq!(b.refresh_token.as_deref(), Some("refresh"));
+    }
+
+    #[test]
+    fn expires_relative_future_and_past() {
+        let now = 1_000_000u64;
+        assert_eq!(
+            format_expires_relative_at(Some(now + 120), now),
+            "in 2m"
+        );
+        assert_eq!(
+            format_expires_relative_at(Some(now - 90), now),
+            "expired 1m ago"
+        );
+        assert_eq!(format_expires_relative_at(None, now), "no expiry");
+        assert_eq!(
+            format_expires_relative_at(Some(now + 3700), now),
+            "in 1h1m"
+        );
+    }
+
+    #[test]
+    fn provider_mismatch_rules() {
+        let mut a = Auth::default();
+        a.provider = String::new();
+        assert!(!provider_mismatch(&a, "xai"));
+        a.provider = "xai".into();
+        assert!(!provider_mismatch(&a, "xai"));
+        assert!(provider_mismatch(&a, "openai"));
     }
 }

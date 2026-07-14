@@ -79,8 +79,22 @@ automatically. Many catalog entries also document a vendor-specific env name
 (e.g. `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) — use those with your shell when
 you prefer not to store a key via `/login`.
 
+Self-hosted OpenAI-compatible servers (Ollama, vLLM, LiteLLM, custom gateways):
+
+```bash
+export META_BASE_URL="http://localhost:11434/v1"   # overrides config base_url
+```
+
+`META_BASE_URL` wins over the catalog default after `/login` and on every startup.
+
 !!! note "Legacy variables"
     `MUSE_API_KEY` is also accepted for backwards compatibility.
+
+!!! warning "Plaintext secrets on disk"
+    `~/.meta/auth.json` stores API keys and OAuth access/refresh tokens in
+    **plaintext JSON**. On Unix Meta sets mode `0600`. On Windows the file lives
+    under your user profile (default NTFS ACLs — not a portable 0600). Never commit
+    or share `~/.meta/`. OS keychain storage is a future option, not the default.
 
 ## Check auth status
 
@@ -88,16 +102,27 @@ you prefer not to store a key via `/login`.
 meta auth status
 ```
 
-Shows whether a key is set (last 4 characters only — never the full key).
+Shows whether credentials are set, plus:
+
+- **provider** (catalog id the secret is tagged to)
+- **method** (`api_key` or `oauth / browser`)
+- **expires** (relative: `in 42m`, `expired 3m ago`, or `no expiry`)
+- **key** fingerprint (first/last 4 chars only — never the full secret)
+
+If `auth.provider` does not match the active config provider, status warns
+**mismatch** — run `/login` before chatting so tokens are not sent to the wrong API.
 
 ## Log out
 
 ```bash
 meta auth logout
+meta auth logout --revoke   # local delete + best-effort revoke notes (az/aws/gcloud)
 ```
 
 Removes the stored key from `~/.meta/auth.json` (and any migrated key under
-legacy `~/.muse/`). Same effect as TUI `/logout` for the key file.
+legacy `~/.muse/`). Same effect as TUI `/logout` for the key file. `--revoke`
+does not call undocumented token revoke APIs for every vendor; for Azure/AWS/Google
+it points you at `az logout` / `aws sso logout` / `gcloud auth revoke`.
 
 ---
 
@@ -147,9 +172,10 @@ Active **provider id / base URL / model** come from `~/.meta/config.toml`
 
 | Location | Contents |
 |----------|----------|
-| `~/.meta/auth.json` | API key **or** OAuth access/refresh tokens (browser sign-in) |
+| `~/.meta/auth.json` | API key **or** OAuth access/refresh tokens (**plaintext**) |
 | `~/.meta/config.toml` | `provider`, `base_url`, `model`, … (no secret) |
 | Env `META_API_KEY` / `MODEL_API_KEY` | Optional override (never printed in logs) |
+| Env `META_BASE_URL` | Optional API base override (self-hosted) |
 | `~/.meta/sessions/` | Session metadata (no key) |
 | `~/.meta/status.json` | Live token usage (no key) |
 | `~/.meta/usage.jsonl` | Per-request usage log (no key) |

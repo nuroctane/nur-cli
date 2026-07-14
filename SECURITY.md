@@ -6,10 +6,15 @@ Meta CLI is **unofficial** community software. It is not affiliated with Meta Pl
 
 | Location | Contents |
 |----------|----------|
-| `~/.meta/auth.json` | API key or OAuth tokens after `meta auth login` / TUI `/login` |
+| `~/.meta/auth.json` | API key or OAuth tokens after `meta auth login` / TUI `/login` (**plaintext JSON**) |
 | env `META_API_KEY` / `MODEL_API_KEY` | Optional override (never print in logs). Legacy: `MUSE_API_KEY` |
+| env `META_BASE_URL` | Optional endpoint override (not secret, but points traffic) |
 | `~/.meta/sessions/`, `status.json`, `usage.jsonl` | Session + usage metadata (no key in usage log) |
 | Workspace `.meta/frames/` | Extracted video keyframes (local artifacts; may be large) |
+
+**`auth.json` is not encrypted.** Unix installs set file mode `0600`. On Windows,
+protection is the default user-profile NTFS ACL. Do not sync `~/.meta/` to shared
+drives or commit it. OS keychain storage is not the default (future option).
 
 **Never commit** `~/.meta/`, workspace `.meta/frames/` dumps of sensitive UI, `.env` files with keys, or session dumps.
 

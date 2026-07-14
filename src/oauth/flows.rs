@@ -326,13 +326,17 @@ pub mod xai {
             } else {
                 900
             });
-        let interval = Duration::from_secs(device.interval.max(3));
+        let base_interval = device.interval.max(3);
+        let mut attempt = 0u32;
+        let mut slow = false;
 
         while std::time::Instant::now() < deadline {
             if cancel.is_cancelled() {
                 return Err(MuseError::Other("login cancelled".into()));
             }
-            thread::sleep(interval);
+            thread::sleep(crate::oauth::device_poll_sleep(base_interval, slow, attempt));
+            attempt = attempt.saturating_add(1);
+            slow = false;
             for turl in &token_urls {
                 let form = [
                     ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
@@ -351,7 +355,11 @@ pub mod xai {
                     error_description: Some(body.clone()),
                 });
                 if let Some(err) = parsed.error.as_deref() {
-                    if err == "authorization_pending" || err == "slow_down" {
+                    if err == "authorization_pending" {
+                        continue;
+                    }
+                    if err == "slow_down" {
+                        slow = true;
                         continue;
                     }
                     if err == "parse" {
@@ -902,12 +910,16 @@ pub mod huggingface {
                 } else {
                     900
                 });
-            let interval = Duration::from_secs(device.interval.max(3));
+            let base_interval = device.interval.max(3);
+            let mut attempt = 0u32;
+            let mut slow = false;
             while std::time::Instant::now() < deadline {
                 if cancel.is_cancelled() {
                     return Err(MuseError::Other("login cancelled".into()));
                 }
-                thread::sleep(interval);
+                thread::sleep(crate::oauth::device_poll_sleep(base_interval, slow, attempt));
+                attempt = attempt.saturating_add(1);
+                slow = false;
                 let form = [
                     ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
                     ("device_code", device.device_code.as_str()),
@@ -930,10 +942,11 @@ pub mod huggingface {
                         token: None,
                     });
                     if let Some(err) = parsed.error.as_deref() {
-                        if err == "authorization_pending"
-                            || err == "slow_down"
-                            || err == "pending"
-                        {
+                        if err == "authorization_pending" || err == "pending" {
+                            continue;
+                        }
+                        if err == "slow_down" {
+                            slow = true;
                             continue;
                         }
                     }
@@ -1075,28 +1088,54 @@ pub mod azure {
                 "json",
             ])
             .output()
-            .map_err(|e| MuseError::Other(format!("az get-access-token: {e}")))?;
+            .map_err(|e| {
+                MuseError::Other(format!(
+                    "Azure CLI not available ({e}). Install `az`, run `az login`, or paste AZURE_OPENAI_API_KEY."
+                ))
+            })?;
         if !out.status.success() {
+            let err = String::from_utf8_lossy(&out.stderr);
             return Err(MuseError::Other(format!(
-                "az get-access-token failed: {}",
-                String::from_utf8_lossy(&out.stderr)
+                "az get-access-token failed: {err}. Fix: `az login` then retry, or paste AZURE_OPENAI_API_KEY in /login."
             )));
         }
-        let v: serde_json::Value = serde_json::from_slice(&out.stdout)
-            .map_err(|e| MuseError::Other(format!("parse az token: {e}")))?;
-        let access = v
-            .get("accessToken")
-            .and_then(|x| x.as_str())
-            .ok_or_else(|| MuseError::Other("no accessToken from az".into()))?
-            .to_string();
-        let expires_at = v
-            .get("expiresOn")
-            .and_then(|x| x.as_str())
-            .and_then(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f").ok())
+        // Prefer structured JSON (stable az contract).
+        #[derive(Deserialize)]
+        struct AzToken {
+            #[serde(rename = "accessToken")]
+            access_token: Option<String>,
+            #[serde(rename = "expiresOn")]
+            expires_on: Option<String>,
+            #[serde(default)]
+            expires_on_ts: Option<String>,
+        }
+        let parsed: AzToken = serde_json::from_slice(&out.stdout).map_err(|e| {
+            MuseError::Other(format!(
+                "could not parse az JSON token output ({e}). Update Azure CLI or use API key path."
+            ))
+        })?;
+        let access = parsed
+            .access_token
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                MuseError::Other(
+                    "az returned empty accessToken. Run `az login` or paste AZURE_OPENAI_API_KEY."
+                        .into(),
+                )
+            })?;
+        let expires_at = parsed
+            .expires_on
+            .as_deref()
+            .and_then(|s| {
+                chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f")
+                    .or_else(|_| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S"))
+                    .ok()
+            })
             .map(|ndt| ndt.and_utc().timestamp() as u64)
             .or_else(|| {
-                v.get("expires_on")
-                    .and_then(|x| x.as_str())
+                parsed
+                    .expires_on_ts
+                    .as_deref()
                     .and_then(|s| s.parse().ok())
             });
         Ok(OAuthTokens {
@@ -1201,57 +1240,11 @@ pub mod bedrock {
             )));
         }
 
-        // Try to export short-lived creds / bearer if available.
+        // Prefer env bearer (OpenAI-compat Bedrock gateways) then JSON credential export.
         send(
             tx,
             BrowserLoginProgress::Status("exporting AWS session credentials…".into()),
         );
-        if let Ok(out) = Command::new("aws")
-            .args(["configure", "export-credentials", "--format", "env"])
-            .output()
-        {
-            if out.status.success() {
-                let text = String::from_utf8_lossy(&out.stdout);
-                // Not a single bearer — store a session marker; user may use Bedrock
-                // OpenAI-compat with AWS_BEARER_TOKEN_BEDROCK if set.
-                if let Ok(token) = std::env::var("AWS_BEARER_TOKEN_BEDROCK") {
-                    if !token.is_empty() {
-                        return Ok(OAuthTokens {
-                            access_token: token,
-                            refresh_token: Some("aws-sso".into()),
-                            expires_at: Some(super::super::now_unix() + 3600),
-                            meta: Some(OauthMeta {
-                                issuer: "aws-sso".into(),
-                                client_id: "aws-cli".into(),
-                                extra: serde_json::json!({"via": "aws sso login", "env": true}),
-                            }),
-                        });
-                    }
-                }
-                // Encode session marker so resolve has *something*; real SigV4
-                // Bedrock still needs AWS env. Document endpoint override.
-                let marker = format!(
-                    "aws-sso-session:{}",
-                    STANDARD.encode(text.chars().take(64).collect::<String>().as_bytes())
-                );
-                return Ok(OAuthTokens {
-                    access_token: marker,
-                    refresh_token: Some("aws-sso".into()),
-                    expires_at: Some(super::super::now_unix() + 3600),
-                    meta: Some(OauthMeta {
-                        issuer: "aws-sso".into(),
-                        client_id: "aws-cli".into(),
-                        extra: serde_json::json!({
-                            "via": "aws sso login",
-                            "hint": "Set AWS_BEARER_TOKEN_BEDROCK or use a Bedrock OpenAI-compat gateway with SigV4 proxy"
-                        }),
-                    }),
-                });
-            }
-        }
-
-        // Session succeeded but we couldn't export — still mark oauth success
-        // with env-backed hint for the user.
         if let Ok(token) = std::env::var("AWS_BEARER_TOKEN_BEDROCK") {
             if !token.is_empty() {
                 return Ok(OAuthTokens {
@@ -1267,8 +1260,62 @@ pub mod bedrock {
             }
         }
 
+        // JSON-first (stable AWS CLI contract). Fall back to process env format.
+        if let Ok(out) = Command::new("aws")
+            .args(["configure", "export-credentials", "--format", "process"])
+            .output()
+        {
+            if out.status.success() {
+                #[derive(Deserialize)]
+                struct AwsProcessCreds {
+                    #[serde(rename = "AccessKeyId")]
+                    access_key_id: Option<String>,
+                    #[serde(rename = "SessionToken")]
+                    session_token: Option<String>,
+                    #[serde(rename = "Expiration")]
+                    expiration: Option<String>,
+                }
+                if let Ok(c) = serde_json::from_slice::<AwsProcessCreds>(&out.stdout) {
+                    if let Some(ak) = c.access_key_id.filter(|s| !s.is_empty()) {
+                        // Not a pure bearer for Bedrock OpenAI path — store marker + session hint.
+                        let token_part = c
+                            .session_token
+                            .as_deref()
+                            .unwrap_or("")
+                            .chars()
+                            .take(24)
+                            .collect::<String>();
+                        let marker = format!(
+                            "aws-sso-session:{}:{}",
+                            &ak.chars().take(8).collect::<String>(),
+                            STANDARD.encode(token_part.as_bytes())
+                        );
+                        let expires_at = c
+                            .expiration
+                            .as_deref()
+                            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                            .map(|dt| dt.timestamp() as u64)
+                            .or(Some(super::super::now_unix() + 3600));
+                        return Ok(OAuthTokens {
+                            access_token: marker,
+                            refresh_token: Some("aws-sso".into()),
+                            expires_at,
+                            meta: Some(OauthMeta {
+                                issuer: "aws-sso".into(),
+                                client_id: "aws-cli".into(),
+                                extra: serde_json::json!({
+                                    "via": "aws sso login",
+                                    "hint": "SSO session active. For Bedrock OpenAI-compat set AWS_BEARER_TOKEN_BEDROCK or a gateway key; native Bedrock uses SigV4 via AWS env."
+                                }),
+                            }),
+                        });
+                    }
+                }
+            }
+        }
+
         Err(MuseError::Other(
-            "AWS SSO completed, but no Bedrock bearer was found. Set AWS_BEARER_TOKEN_BEDROCK or paste a gateway key, then re-run /login → API key. SSO session is active for the AWS CLI."
+            "AWS SSO completed, but no Bedrock bearer was found. Set AWS_BEARER_TOKEN_BEDROCK or paste a gateway key (/login → API key). SSO is active for the AWS CLI (`aws sso logout` to drop it)."
                 .into(),
         ))
     }

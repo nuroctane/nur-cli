@@ -296,15 +296,33 @@ pub fn ensure_dirs() -> Result<()> {
 pub fn load_config() -> Result<Config> {
     ensure_dirs()?;
     let path = config_path();
-    if !path.exists() {
+    let mut cfg = if !path.exists() {
         let cfg = Config::default();
         save_config(&cfg)?;
-        return Ok(cfg);
+        cfg
+    } else {
+        let text = fs::read_to_string(&path)?;
+        toml::from_str(&text).map_err(|e| MuseError::Config(e.to_string()))?
+    };
+    // Self-hosted OpenAI-compat (Ollama, vLLM, LiteLLM, custom gateways).
+    if let Ok(u) = std::env::var("META_BASE_URL") {
+        let u = u.trim().trim_end_matches('/').to_string();
+        if !u.is_empty() {
+            cfg.base_url = u;
+        }
     }
-    let text = fs::read_to_string(&path)?;
-    let cfg: Config = toml::from_str(&text).map_err(|e| MuseError::Config(e.to_string()))?;
     cfg.validate()?;
     Ok(cfg)
+}
+
+/// Apply `META_BASE_URL` env override onto a config (e.g. after `/login` sets catalog URL).
+pub fn apply_base_url_env(cfg: &mut Config) {
+    if let Ok(u) = std::env::var("META_BASE_URL") {
+        let u = u.trim().trim_end_matches('/').to_string();
+        if !u.is_empty() {
+            cfg.base_url = u;
+        }
+    }
 }
 
 pub fn atomic_write(path: &std::path::Path, content: &[u8]) -> std::io::Result<()> {
