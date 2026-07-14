@@ -1065,17 +1065,17 @@ pub async fn run_tui(
             Duration::from_millis(frame_ms)
         };
         if event::poll(wait)? {
-            // Drain every event queued this frame. A paste is delivered as many
-            // events at once: modern terminals send one bracketed `Event::Paste`
-            // (chipped immediately); others "drip" it as a burst of key events.
-            // We coalesce a burst into `paste_accum` — but ONLY while more input
-            // is already queued, so a lone keystroke (Enter, a typed char, a
-            // shortcut) is never mistaken for a paste. The buffer flushes as one
-            // chip once the stream goes quiet (see below), which also stitches a
-            // paste that the PTY split across frames.
+            // Drain every event queued this frame.
+            // Paste: bracketed Event::Paste → one chip; key drips coalesce into
+            // paste_accum only when more *text* presses are already queued (not
+            // KeyRelease — Windows always pairs Press+Release, which broke Enter).
+            // Enter is never paste: plain Enter submits, Shift+Enter = newline.
+            let mut deferred: Option<Event> = None;
             let mut first = true;
             loop {
-                let ev = if first {
+                let ev = if let Some(e) = deferred.take() {
+                    e
+                } else if first {
                     first = false;
                     event::read()?
                 } else if event::poll(Duration::ZERO)? {
@@ -1088,19 +1088,66 @@ pub async fn run_tui(
                     Event::Key(key)
                         if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat =>
                     {
-                        if let Some(c) = key_as_text_char(&key) {
-                            let more_queued = event::poll(Duration::ZERO)?;
-                            // Burst if more is already waiting, or we're mid-paste —
-                            // except a lone Enter always submits (flush + on_key).
-                            let is_enter = matches!(key.code, KeyCode::Enter);
-                            if more_queued || (!app.paste_accum.is_empty() && !is_enter) {
-                                app.paste_accum.push(c);
+                        // Enter handling is hard-split from paste char drips:
+                        // - Mid unbracketed paste (accum non-empty): '\n' in the burst.
+                        // - Otherwise: on_key — plain Enter submits, Shift+Enter newline.
+                        // Never treat a lone typed Enter as paste (that was the bug:
+                        // Windows KeyRelease made poll look busy → Enter became '\n').
+                        if matches!(key.code, KeyCode::Enter) {
+                            if !app.paste_accum.is_empty() {
+                                app.paste_accum.push('\n');
+                                app.paste_accum_at = Some(Instant::now());
+                            } else if key.kind == KeyEventKind::Press {
+                                app.on_key(key);
+                            }
+                            dirty = true;
+                            continue;
+                        }
+
+                        if let Some(c) = key_as_paste_burst_char(&key) {
+                            // Drain only further paste-text / Event::Paste; park
+                            // anything else in `deferred` (incl. KeyRelease).
+                            let mut burst = String::new();
+                            burst.push(c);
+                            loop {
+                                if !event::poll(Duration::ZERO)? {
+                                    break;
+                                }
+                                match event::read()? {
+                                    Event::Key(k)
+                                        if key_as_paste_burst_char(&k).is_some() =>
+                                    {
+                                        if let Some(ch) = key_as_paste_burst_char(&k) {
+                                            burst.push(ch);
+                                        }
+                                    }
+                                    Event::Paste(p) => burst.push_str(&p),
+                                    other => {
+                                        deferred = Some(other);
+                                        break;
+                                    }
+                                }
+                            }
+                            // Multi-char burst, or mid-paste drip → accumulate.
+                            // Single isolated char (burst len 1, empty accum) → type.
+                            if burst.chars().count() > 1 || !app.paste_accum.is_empty() {
+                                app.paste_accum.push_str(&burst);
                                 app.paste_accum_at = Some(Instant::now());
                                 dirty = true;
                                 continue;
                             }
+                            // Lone character: normal typing via on_key.
+                            app.flush_paste_accum();
+                            if key.kind == KeyEventKind::Press {
+                                // Rebuild a Press for the single char we held.
+                                let mut k = key;
+                                k.code = KeyCode::Char(c);
+                                app.on_key(k);
+                            }
+                            dirty = true;
+                            continue;
                         }
-                        // Real keystroke: flush any pending paste, then handle it.
+
                         app.flush_paste_accum();
                         if key.kind == KeyEventKind::Press {
                             app.on_key(key);
@@ -1113,7 +1160,6 @@ pub async fn run_tui(
                         dirty = true;
                     }
                     Event::Paste(s) => {
-                        // Bracketed paste — the clean path. One chip, no drip.
                         app.flush_paste_accum();
                         app.on_paste(&s);
                         dirty = true;
@@ -1122,6 +1168,9 @@ pub async fn run_tui(
                     _ => {}
                 }
                 if app.should_quit {
+                    break;
+                }
+                if deferred.is_none() && !event::poll(Duration::ZERO)? {
                     break;
                 }
             }
@@ -1679,7 +1728,8 @@ impl App {
                     self.input.clear();
                 }
             }
-            KeyCode::Enter if alt || ctrl => {
+            // Shift+Enter → newline. Plain Enter → always submit. Never the reverse.
+            KeyCode::Enter if shift && !ctrl && !alt => {
                 self.input.insert_char('\n');
                 self.ensure_input_caret_visible();
             }
@@ -1701,14 +1751,7 @@ impl App {
                     self.palette_scroll = 0;
                     return;
                 }
-                let text = self.input.text();
-                if text.ends_with('\\') {
-                    // Trailing backslash → literal newline.
-                    self.input.backspace();
-                    self.input.insert_char('\n');
-                    return;
-                }
-                if text.trim().is_empty() {
+                if self.input.text().trim().is_empty() {
                     return;
                 }
                 let submitted = self.input.submit();
@@ -3581,11 +3624,12 @@ fn rect_contains(r: ratatui::layout::Rect, col: u16, row: u16) -> bool {
 /// enough to feel instant; large enough to stitch a PTY-split paste together.
 const PASTE_FLUSH_MS: u64 = 30;
 
-/// The text a key would contribute if it turns out to be part of a paste burst.
-/// Ctrl/Alt/Super chords are shortcuts, not text — they return `None` and are
-/// handled as real keystrokes. Enter/Tab map to their characters (only ever
-/// coalesced when more paste input is already queued).
-fn key_as_text_char(key: &KeyEvent) -> Option<char> {
+/// Printable text that may be part of an unbracketed paste drip.
+/// **Never** Enter or Tab — those are real keys (submit / focus), not paste.
+fn key_as_paste_burst_char(key: &KeyEvent) -> Option<char> {
+    if key.kind != KeyEventKind::Press && key.kind != KeyEventKind::Repeat {
+        return None;
+    }
     if key
         .modifiers
         .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
@@ -3593,9 +3637,8 @@ fn key_as_text_char(key: &KeyEvent) -> Option<char> {
         return None;
     }
     match key.code {
-        KeyCode::Char(c) => Some(c),
-        KeyCode::Enter => Some('\n'),
-        KeyCode::Tab => Some('\t'),
+        // Never treat CR/LF Char as paste — submit is KeyCode::Enter only.
+        KeyCode::Char(c) if c != '\n' && c != '\r' => Some(c),
         _ => None,
     }
 }

@@ -399,7 +399,7 @@ impl App {
             ("Ctrl+C", "copy selection  ·  else cancel / double-tap quit"),
             ("Ctrl+V  ·  Ctrl+X", "paste (chips big blobs)  ·  cut"),
             ("Ctrl+P / N", "prompt history  (also Alt+↑/↓)"),
-            ("Enter", "send  ·  \\+Enter or Ctrl+J = newline"),
+            ("Enter  ·  Shift+Enter", "send  ·  newline"),
             ("Shift+Tab", "cycle permission mode"),
             ("Ctrl+R", "sessions browser  (/sessions · /resume)"),
             ("Esc", "close peek  →  cancel turn  →  clear input"),
