@@ -72,7 +72,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/btw", "add a one-off note to your next message"),
     ("/codesearch", "fast ripgrep over the workspace  (/cs)"),
     ("/mc", "manage MCP servers via the executor gateway  (/mcp)"),
-    ("/login", "choose a provider + enter an API key"),
+    ("/login", "provider · API key or browser sign-in"),
     ("/logout", "clear the stored API key"),
     ("/config", "show config + data paths"),
     ("/feedback", "file a GitHub issue from here"),
@@ -403,13 +403,16 @@ pub struct ApprovalState {
     pub respond: Option<oneshot::Sender<ApprovalDecision>>,
 }
 
-/// Secure in-TUI API-key entry (`/login`). The key is captured masked and
-/// never enters the transcript or the persisted input history.
-/// Two-stage sign-in: pick a provider, then enter its key.
+/// Secure in-TUI sign-in (`/login`). API keys are masked; browser flows never
+/// echo tokens. Stages: provider → (optional) method → key | browser wait.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoginStage {
     Provider,
+    /// Browser vs API key (only for `provider.browser_auth`).
+    Method,
     Key,
+    /// Device-code / SSO wait (URL + short code like `hf auth login`).
+    Browser,
 }
 
 pub struct LoginModal {
@@ -427,12 +430,25 @@ pub struct LoginModal {
     pub hit: PickerHit,
     /// Coalesce trackpad/OS wheel floods to one step per tick (same as sessions).
     pub last_step_at: Instant,
-    /// Provider id chosen once we reach the key stage.
+    /// Provider id chosen once we leave the provider stage.
     pub provider_id: String,
+    /// Method stage selection: 0 = browser, 1 = API key, 2 = import existing (if any).
+    pub method_sel: usize,
+    /// Whether an existing first-party CLI session can be imported.
+    pub can_import: bool,
     /// The key characters typed/pasted so far (rendered as dots).
     pub buf: String,
     /// Transient error to show under the field (e.g. "key too short").
     pub error: Option<String>,
+    /// Browser-stage status line.
+    pub browser_status: String,
+    /// Verification / authorize URL.
+    pub browser_url: String,
+    /// Short user code for device-code flows (HF / xAI style).
+    pub browser_user_code: String,
+    /// Progress from the background OAuth thread.
+    pub oauth_rx: Option<std::sync::mpsc::Receiver<crate::oauth::BrowserLoginProgress>>,
+    pub oauth_cancel: Option<crate::oauth::CancelFlag>,
 }
 
 impl LoginModal {
@@ -1143,6 +1159,7 @@ pub async fn run_tui(
     let mut last_mouse_rearm = Instant::now();
     loop {
         // 1) Agent events (streaming text/tools).
+        app.poll_oauth_login();
         while let Ok(ev) = app.rx.try_recv() {
             app.on_agent_event(ev);
             dirty = true;
@@ -2972,7 +2989,8 @@ impl App {
     // ── secure login ───────────────────────────────────────────────────
     fn open_login(&mut self) {
         // /login clears the prior key/auth up front — a clean slate to pick a
-        // provider and enter a fresh key.
+        // provider and enter a fresh key / browser session.
+        self.cancel_oauth();
         let _ = crate::auth::logout();
         self.authed = false;
         self.login = Some(LoginModal {
@@ -2986,9 +3004,28 @@ impl App {
                 .checked_sub(Duration::from_secs(1))
                 .unwrap_or_else(Instant::now),
             provider_id: self.cfg.provider.clone(),
+            method_sel: 0,
+            can_import: false,
             buf: String::new(),
             error: None,
+            browser_status: String::new(),
+            browser_url: String::new(),
+            browser_user_code: String::new(),
+            oauth_rx: None,
+            oauth_cancel: None,
         });
+    }
+
+    fn cancel_oauth(&mut self) {
+        if let Some(m) = &self.login {
+            if let Some(c) = &m.oauth_cancel {
+                c.cancel();
+            }
+        }
+        if let Some(m) = &mut self.login {
+            m.oauth_rx = None;
+            m.oauth_cancel = None;
+        }
     }
 
     fn on_login_key(&mut self, key: event::KeyEvent) {
@@ -2996,7 +3033,9 @@ impl App {
         let stage = self.login.as_ref().map(|m| m.stage);
         match stage {
             Some(LoginStage::Provider) => self.on_login_picker_key(key, ctrl),
+            Some(LoginStage::Method) => self.on_login_method_key(key, ctrl),
             Some(LoginStage::Key) => self.on_login_key_entry(key, ctrl),
+            Some(LoginStage::Browser) => self.on_login_browser_key(key),
             None => {}
         }
     }
@@ -3009,9 +3048,217 @@ impl App {
         let picks = m.filtered();
         if let Some(p) = picks.get(m.sel) {
             m.provider_id = p.id.to_string();
-            m.stage = LoginStage::Key;
             m.error = None;
             m.buf.clear();
+            if p.browser_auth {
+                m.can_import = crate::oauth::import_existing_session(p.id)
+                    .ok()
+                    .flatten()
+                    .is_some();
+                m.method_sel = 0;
+                m.stage = LoginStage::Method;
+            } else {
+                m.stage = LoginStage::Key;
+            }
+        }
+    }
+
+    fn method_option_count(m: &LoginModal) -> usize {
+        if m.can_import {
+            3
+        } else {
+            2
+        }
+    }
+
+    fn on_login_method_key(&mut self, key: event::KeyEvent, _ctrl: bool) {
+        let Some(m) = &mut self.login else { return };
+        let n = Self::method_option_count(m);
+        match key.code {
+            KeyCode::Esc => {
+                m.stage = LoginStage::Provider;
+                m.error = None;
+            }
+            KeyCode::Up => {
+                if m.method_sel > 0 {
+                    m.method_sel -= 1;
+                }
+            }
+            KeyCode::Down => {
+                if m.method_sel + 1 < n {
+                    m.method_sel += 1;
+                }
+            }
+            KeyCode::Enter => self.login_method_confirm(),
+            KeyCode::Char('1') => {
+                m.method_sel = 0;
+                self.login_method_confirm();
+            }
+            KeyCode::Char('2') => {
+                m.method_sel = 1.min(n.saturating_sub(1));
+                self.login_method_confirm();
+            }
+            KeyCode::Char('3') if n >= 3 => {
+                m.method_sel = 2;
+                self.login_method_confirm();
+            }
+            _ => {}
+        }
+    }
+
+    fn login_method_confirm(&mut self) {
+        let (provider_id, sel, can_import) = match &self.login {
+            Some(m) => (m.provider_id.clone(), m.method_sel, m.can_import),
+            None => return,
+        };
+        match sel {
+            0 => self.start_browser_login(&provider_id),
+            1 => {
+                if let Some(m) = &mut self.login {
+                    m.stage = LoginStage::Key;
+                    m.buf.clear();
+                    m.error = None;
+                }
+            }
+            2 if can_import => {
+                match crate::oauth::import_existing_session(&provider_id) {
+                    Ok(Some(tokens)) => {
+                        if let Err(e) = crate::auth::save_oauth_session(
+                            &provider_id,
+                            &tokens.access_token,
+                            tokens.refresh_token,
+                            tokens.expires_at,
+                            tokens.meta,
+                        ) {
+                            if let Some(m) = &mut self.login {
+                                m.error = Some(e.to_string());
+                            }
+                            return;
+                        }
+                        self.apply_provider_login(&provider_id, &{
+                            crate::auth::resolve_api_key().unwrap_or_default()
+                        }, true);
+                    }
+                    Ok(None) => {
+                        if let Some(m) = &mut self.login {
+                            m.error = Some("no existing session found".into());
+                        }
+                    }
+                    Err(e) => {
+                        if let Some(m) = &mut self.login {
+                            m.error = Some(e.to_string());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn start_browser_login(&mut self, provider_id: &str) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cancel = crate::oauth::CancelFlag::new();
+        let cancel_bg = cancel.clone();
+        let pid = provider_id.to_string();
+        if let Some(m) = &mut self.login {
+            m.stage = LoginStage::Browser;
+            m.browser_status = "starting browser sign-in…".into();
+            m.browser_url.clear();
+            m.browser_user_code.clear();
+            m.error = None;
+            m.oauth_rx = Some(rx);
+            m.oauth_cancel = Some(cancel);
+        }
+        std::thread::spawn(move || {
+            crate::oauth::login_browser(&pid, tx, cancel_bg);
+        });
+    }
+
+    fn on_login_browser_key(&mut self, key: event::KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.cancel_oauth();
+                if let Some(m) = &mut self.login {
+                    m.stage = LoginStage::Method;
+                    m.error = None;
+                    m.browser_status.clear();
+                }
+            }
+            KeyCode::Char('c')
+                if key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.cancel_oauth();
+                if let Some(m) = &mut self.login {
+                    m.stage = LoginStage::Method;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Drain OAuth progress while the browser stage is open (called from main loop).
+    pub fn poll_oauth_login(&mut self) {
+        let Some(stage) = self.login.as_ref().map(|m| m.stage) else {
+            return;
+        };
+        if stage != LoginStage::Browser {
+            return;
+        }
+        let mut events = Vec::new();
+        if let Some(m) = &self.login {
+            if let Some(rx) = &m.oauth_rx {
+                while let Ok(ev) = rx.try_recv() {
+                    events.push(ev);
+                }
+            }
+        }
+        for ev in events {
+            match ev {
+                crate::oauth::BrowserLoginProgress::Status(s) => {
+                    if let Some(m) = &mut self.login {
+                        m.browser_status = s;
+                    }
+                }
+                crate::oauth::BrowserLoginProgress::DeviceCode {
+                    verification_url,
+                    user_code,
+                } => {
+                    if let Some(m) = &mut self.login {
+                        m.browser_url = verification_url;
+                        m.browser_user_code = user_code;
+                        m.browser_status = "open the URL and enter the code".into();
+                    }
+                }
+                crate::oauth::BrowserLoginProgress::OpenUrl(url) => {
+                    if let Some(m) = &mut self.login {
+                        m.browser_url = url;
+                        m.browser_status = "complete sign-in in your browser…".into();
+                    }
+                }
+                crate::oauth::BrowserLoginProgress::Done(tokens) => {
+                    let provider_id = self
+                        .login
+                        .as_ref()
+                        .map(|m| m.provider_id.clone())
+                        .unwrap_or_default();
+                    let access = tokens.access_token.clone();
+                    if let Some(m) = &mut self.login {
+                        m.oauth_rx = None;
+                        m.oauth_cancel = None;
+                    }
+                    self.apply_provider_login(&provider_id, &access, true);
+                }
+                crate::oauth::BrowserLoginProgress::Failed(err) => {
+                    if let Some(m) = &mut self.login {
+                        m.error = Some(err);
+                        m.browser_status = "sign-in failed".into();
+                        m.oauth_rx = None;
+                        m.oauth_cancel = None;
+                        // Stay on browser stage so user can read the error, or back to method.
+                        m.stage = LoginStage::Method;
+                    }
+                }
+            }
         }
     }
 
@@ -3021,7 +3268,7 @@ impl App {
         self.mouse_col = m.column;
         self.mouse_row = m.row;
         let stage = self.login.as_ref().map(|l| l.stage);
-        // Key stage: no list to wheel; clicks outside dismiss? keep key modal focused.
+        // Only the provider list is mouse-driven for now.
         if stage != Some(LoginStage::Provider) {
             return;
         }
@@ -3120,9 +3367,16 @@ impl App {
     fn on_login_key_entry(&mut self, key: event::KeyEvent, ctrl: bool) {
         let Some(m) = &mut self.login else { return };
         match key.code {
-            // Esc backs up to the provider picker (not straight out).
+            // Esc backs up to method (if browser auth) or provider picker.
             KeyCode::Esc => {
-                m.stage = LoginStage::Provider;
+                let browser = crate::providers::by_id(&m.provider_id)
+                    .map(|p| p.browser_auth)
+                    .unwrap_or(false);
+                m.stage = if browser {
+                    LoginStage::Method
+                } else {
+                    LoginStage::Provider
+                };
                 m.buf.clear();
                 m.error = None;
             }
@@ -3165,9 +3419,22 @@ impl App {
                 }
                 return;
             }
+            // Tag provider on the saved api-key auth record.
+            if let Ok(Some(mut a)) = crate::auth::load_auth() {
+                a.provider = provider_id.clone();
+                let _ = crate::auth::save_auth(&a);
+            }
         }
 
-        // Point config at the chosen provider: endpoint + default model + style.
+        self.apply_provider_login(&provider_id, &key, false);
+    }
+
+    /// Apply provider config + hot-swap HTTP client after key or OAuth success.
+    fn apply_provider_login(&mut self, provider_id: &str, key: &str, via_oauth: bool) {
+        let provider = crate::providers::by_id(provider_id)
+            .copied()
+            .unwrap_or(*crate::providers::default_provider());
+
         self.cfg.provider = provider.id.to_string();
         self.cfg.base_url = provider.base_url.to_string();
         self.cfg.model = provider.default_model.to_string();
@@ -3180,15 +3447,24 @@ impl App {
         }
 
         let chat = provider.style == crate::providers::ApiStyle::ChatCompletions;
-        match crate::api::MetaClient::new(&self.cfg.base_url, &key).map(|c| c.with_chat_completions(chat)) {
+        let bearer = if key.is_empty() {
+            crate::auth::resolve_api_key().unwrap_or_default()
+        } else {
+            key.to_string()
+        };
+        match crate::api::MetaClient::new(&self.cfg.base_url, &bearer)
+            .map(|c| c.with_chat_completions(chat))
+        {
             Ok(client) => {
                 self.client = client;
-                self.authed = true;
+                self.authed = !bearer.is_empty() || provider.key_optional;
                 self.login = None;
-                let keynote = if key.is_empty() {
+                let keynote = if bearer.is_empty() {
                     "no key (local)".to_string()
+                } else if via_oauth {
+                    format!("browser · {}", crate::auth::key_fingerprint(&bearer))
                 } else {
-                    format!("key {}", crate::auth::key_fingerprint(&key))
+                    format!("key {}", crate::auth::key_fingerprint(&bearer))
                 };
                 self.push_note(
                     Tone::Mode,

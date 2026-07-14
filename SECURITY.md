@@ -6,7 +6,7 @@ Meta CLI is **unofficial** community software. It is not affiliated with Meta Pl
 
 | Location | Contents |
 |----------|----------|
-| `~/.meta/auth.json` | Meta Model API key after `meta auth login` |
+| `~/.meta/auth.json` | API key or OAuth tokens after `meta auth login` / TUI `/login` |
 | env `META_API_KEY` / `MODEL_API_KEY` | Optional override (never print in logs). Legacy: `MUSE_API_KEY` |
 | `~/.meta/sessions/`, `status.json`, `usage.jsonl` | Session + usage metadata (no key in usage log) |
 | Workspace `.meta/frames/` | Extracted video keyframes (local artifacts; may be large) |

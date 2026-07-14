@@ -99,9 +99,182 @@ fn draw_login(f: &mut Frame, app: &mut App, area: Rect) {
     let stage = app.login.as_ref().map(|m| m.stage);
     match stage {
         Some(super::app::LoginStage::Provider) => draw_login_picker(f, app, area),
+        Some(super::app::LoginStage::Method) => draw_login_method(f, app, area),
         Some(super::app::LoginStage::Key) => draw_login_key(f, app, area),
+        Some(super::app::LoginStage::Browser) => draw_login_browser(f, app, area),
         None => {}
     }
+}
+
+/// Stage: browser vs API key (and optional import of existing CLI session).
+fn draw_login_method(f: &mut Frame, app: &App, area: Rect) {
+    let Some(m) = &app.login else { return };
+    let provider = crate::providers::by_id(&m.provider_id)
+        .copied()
+        .unwrap_or(*crate::providers::default_provider());
+    let w = 64u16.min(area.width.saturating_sub(4)).max(44);
+    let want: u16 = if m.error.is_some() { 14 } else { 13 };
+    let h = want.min(area.height.saturating_sub(2));
+    let rect = Rect {
+        x: (area.width.saturating_sub(w)) / 2,
+        y: (area.height.saturating_sub(h)) / 2,
+        width: w,
+        height: h,
+    };
+    f.render_widget(Clear, rect);
+    f.render_widget(Block::default().style(Style::default().bg(theme::SURFACE_2)), rect);
+    let phase = modal_phase(app);
+    draw_modal_frame(
+        f,
+        rect,
+        phase,
+        theme::INDIGO,
+        &format!(" 🔑 {} · how to sign in ", provider.name),
+        None,
+        "  ↑↓  ·  ↵ choose  ·  esc back  ",
+    );
+    let inner = modal_inner(rect);
+    let mut options: Vec<(&str, String)> = vec![
+        (
+            "Sign in with browser",
+            "URL + code / SSO — no API key to manage".into(),
+        ),
+        ("Enter API key", format!("env {}", provider.env_key)),
+    ];
+    if m.can_import {
+        options.push((
+            "Use existing CLI session",
+            "import from Grok / Claude desktop login".into(),
+        ));
+    }
+    let mut lines: Vec<Line> = vec![
+        Line::from(Span::styled(
+            format!("  {}", provider.note),
+            theme::style_faint(),
+        )),
+        Line::default(),
+    ];
+    for (i, (title, sub)) in options.iter().enumerate() {
+        let selected = m.method_sel == i;
+        let marker = if selected { "❯ " } else { "  " };
+        let title_style = if selected {
+            Style::default()
+                .fg(theme::BG)
+                .bg(theme::META_BLUE)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::FG).add_modifier(Modifier::BOLD)
+        };
+        let sub_style = if selected {
+            Style::default().fg(theme::BLUE_100).bg(theme::META_BLUE)
+        } else {
+            theme::style_faint()
+        };
+        lines.push(Line::from(Span::styled(
+            format!("{marker}{title}"),
+            title_style,
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("    {sub}"),
+            sub_style,
+        )));
+        lines.push(Line::default());
+    }
+    if let Some(e) = &m.error {
+        lines.push(Line::from(Span::styled(
+            format!("  {e}"),
+            theme::style_error(),
+        )));
+    }
+    f.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2)),
+        inner,
+    );
+}
+
+/// Browser / device-code wait (Hugging Face–style URL + short code).
+fn draw_login_browser(f: &mut Frame, app: &App, area: Rect) {
+    let Some(m) = &app.login else { return };
+    let provider = crate::providers::by_id(&m.provider_id)
+        .copied()
+        .unwrap_or(*crate::providers::default_provider());
+    let w = 72u16.min(area.width.saturating_sub(4)).max(48);
+    let want: u16 = if m.error.is_some() { 14 } else { 13 };
+    let h = want.min(area.height.saturating_sub(2));
+    let rect = Rect {
+        x: (area.width.saturating_sub(w)) / 2,
+        y: (area.height.saturating_sub(h)) / 2,
+        width: w,
+        height: h,
+    };
+    f.render_widget(Clear, rect);
+    f.render_widget(Block::default().style(Style::default().bg(theme::SURFACE_2)), rect);
+    let phase = modal_phase(app);
+    let spin = if theme::blink_on(app.spinner_epoch.elapsed()) {
+        "◐"
+    } else {
+        "◑"
+    };
+    draw_modal_frame(
+        f,
+        rect,
+        phase,
+        theme::INDIGO,
+        &format!(" {spin} {} · browser sign-in ", provider.name),
+        None,
+        "  esc cancel  ",
+    );
+    let inner = modal_inner(rect);
+    let col = (inner.width as usize).saturating_sub(4);
+    let mut lines: Vec<Line> = vec![
+        Line::from(Span::styled(
+            format!("  {}", m.browser_status),
+            Style::default().fg(theme::BLUE_100),
+        )),
+        Line::default(),
+    ];
+    if !m.browser_user_code.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled("  code  ".to_string(), theme::style_faint()),
+            Span::styled(
+                m.browser_user_code.clone(),
+                Style::default()
+                    .fg(theme::BG)
+                    .bg(theme::META_BLUE)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        lines.push(Line::default());
+    }
+    if !m.browser_url.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  open in browser:".to_string(),
+            theme::style_faint(),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("  {}", truncate(&m.browser_url, col)),
+            Style::default()
+                .fg(theme::FG)
+                .add_modifier(Modifier::UNDERLINED),
+        )));
+        lines.push(Line::default());
+    }
+    lines.push(Line::from(Span::styled(
+        "  Complete sign-in in the browser. This window updates when you're done."
+            .to_string(),
+        theme::style_faint(),
+    )));
+    if let Some(e) = &m.error {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            format!("  {e}"),
+            theme::style_error(),
+        )));
+    }
+    f.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2)),
+        inner,
+    );
 }
 
 /// Stage 1 — scrollable, filterable provider list.
@@ -221,7 +394,8 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
         } else {
             theme::style_faint()
         };
-        let text = format!("{marker}{:<22}{}", p.name, p.note);
+        let badge = if p.browser_auth { "  🌐" } else { "" };
+        let text = format!("{marker}{:<22}{}{badge}", p.name, p.note);
         let style = if selected { name_style } else { note_style };
         lines.push(Line::from(Span::styled(truncate(&text, col), style)));
 

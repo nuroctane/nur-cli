@@ -7,6 +7,7 @@ mod cli;
 mod config;
 mod ecosystem;
 mod error;
+mod oauth;
 mod providers;
 mod theme;
 mod tools;

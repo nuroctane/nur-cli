@@ -48,6 +48,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rpassword = "7"
 colored = "2"
 arboard = "3"
+sha2 = "0.11.0"
+base64 = "0.22.1"
 
 [features]
 default = ["image-peek"]

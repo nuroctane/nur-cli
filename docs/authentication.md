@@ -1,18 +1,26 @@
 # Authentication
 
 Meta CLI can talk to **many providers** — not only the Meta Model API. Sign-in is
-a two-step flow: pick a provider, then enter its API key (local servers can skip
-the key). The active provider, endpoint, and default model are stored in
-`~/.meta/config.toml`; the key lives only in `~/.meta/auth.json`.
+usually: pick a provider, then enter its API key (local servers can skip the key).
+For selected providers you can also **sign in with a browser** (device code / SSO),
+same idea as `hf auth login`, `az login`, or `aws sso login`.
 
-## Get a key
+The active provider, endpoint, and default model are stored in
+`~/.meta/config.toml`; secrets live only in `~/.meta/auth.json`.
 
-| Provider | Where to get a key |
-|----------|--------------------|
-| **Meta Model API** (default) | [dev.meta.ai](https://dev.meta.ai/) → API keys |
-| OpenAI, Anthropic, Gemini, xAI, … | Each vendor’s dashboard |
-| OpenRouter, OmniRoute, Together, Groq, … | Aggregator / cloud dashboard |
-| Ollama, LM Studio, llama.cpp, vLLM | Often **no key** (local) |
+## Get a key (or browser session)
+
+| Provider | API key | Browser / SSO |
+|----------|---------|----------------|
+| **Meta Model API** (default) | [dev.meta.ai](https://dev.meta.ai/) | — |
+| **xAI Grok** | `XAI_API_KEY` | Device code / Grok CLI session |
+| **Anthropic Claude** | `ANTHROPIC_API_KEY` | Browser OAuth (Claude-style) or import Claude Code session |
+| **Google Antigravity** | Gemini key fallback | `gcloud auth login` browser SSO |
+| **Hugging Face** | `HF_TOKEN` | Device code (`hf auth login` style) |
+| **Azure OpenAI** | `AZURE_OPENAI_API_KEY` | `az login` / Entra device code |
+| **AWS Bedrock** | gateway / bearer | `aws sso login` |
+| OpenAI, Gemini, Groq, … | Vendor dashboard | — |
+| Ollama, LM Studio, … | Often none (local) | — |
 
 ## Log in from the TUI (recommended)
 
@@ -22,18 +30,27 @@ the key). The active provider, endpoint, and default model are stored in
 
 What happens:
 
-1. Prior key is cleared so you start from a clean slate.
+1. Prior credentials are cleared so you start from a clean slate.
 2. A **scrollable, type-to-filter** picker lists **45+ providers** (frontier APIs,
    inference clouds, Chinese labs, OpenAI-compatible routers, local servers).
-3. You enter the key for that provider (**masked** — never echoed to the
-   transcript or shell history). Local providers may allow an empty key.
+   Providers with browser sign-in show a 🌐 hint.
+3. If the provider supports browser auth, choose:
+   - **Sign in with browser** — opens a URL (and may show a short code); approve in the browser; Meta stores tokens and refreshes when needed.
+   - **Enter API key** — masked paste (classic path).
+   - **Use existing CLI session** — when a Grok or Claude Code login is already on disk.
 4. Config is updated: `provider`, `base_url`, and `model` (that provider’s
    default). The HTTP client is **hot-swapped** for the rest of the session.
 
-`/logout` clears the stored key and blocks further turns until you `/login`
+`/logout` clears the stored key/tokens and blocks further turns until you `/login`
 again (environment-variable keys still apply on the next launch).
 
 No key on launch → the login modal opens automatically.
+
+!!! note "Browser / SSO notes"
+    Azure, AWS, and Antigravity browser paths shell out to official CLIs (`az`, `aws`, `gcloud`) when installed.
+    Set your Azure resource URL or Bedrock region/endpoint in config after login if the
+    catalog default is a placeholder. Subscription OAuth is a convenience path — API keys
+    always remain available.
 
 ## Log in from the command line
 
@@ -130,7 +147,7 @@ Active **provider id / base URL / model** come from `~/.meta/config.toml`
 
 | Location | Contents |
 |----------|----------|
-| `~/.meta/auth.json` | API key only |
+| `~/.meta/auth.json` | API key **or** OAuth access/refresh tokens (browser sign-in) |
 | `~/.meta/config.toml` | `provider`, `base_url`, `model`, … (no secret) |
 | Env `META_API_KEY` / `MODEL_API_KEY` | Optional override (never printed in logs) |
 | `~/.meta/sessions/` | Session metadata (no key) |

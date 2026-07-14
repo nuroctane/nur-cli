@@ -1,5 +1,14 @@
 # Meta CLI (unofficial)
 
+<div align="center">
+
+### ⚡ Extremely efficient token spend
+
+**Cut costs for every provider by up to ~85%.**  
+Meta’s harness is built to burn fewer tokens — less waste, more work per dollar — on Meta, OpenAI, Anthropic, Grok, Gemini, and the rest of the catalog.
+
+</div>
+
 <p align="center">
   <img src="docs/assets/muse-demo-obfuscated.gif" alt="Meta CLI demo" width="600">
 </p>
@@ -40,8 +49,8 @@ meta doctor          # health check
 ```
 
 Or run `meta` and use **`/login`** in the TUI: pick any of **45+ providers**
-(OpenAI, Anthropic, Gemini, xAI, Groq, OpenRouter, OmniRoute, local Ollama/LM Studio, …),
-enter a masked key, and the endpoint + default model swap with it. No key on launch → login opens automatically.
+(OpenAI, Anthropic, Gemini, xAI, Groq, OpenRouter, OmniRoute, local Ollama/LM Studio, …).
+For **Grok, Claude, Antigravity, Hugging Face, Azure, and AWS Bedrock** you can **sign in with the browser** (URL + code / SSO — same idea as `hf auth login`, `az login`, `aws sso login`) **or** paste an API key. Endpoint + default model swap with the provider. No key on launch → login opens automatically.
 
 ### Update (do this later)
 
