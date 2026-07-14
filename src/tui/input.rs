@@ -417,46 +417,46 @@ impl InputState {
         self.selection_anchor = None;
     }
 
-    /// Paste from clipboard / bracketed paste / unbracketed key-flood.
-    /// Multi-line or long blobs become a **single chip** in the composer; full
-    /// text is stored and expanded on submit (Claude Code behaviour).
-    ///
-    /// Consecutive paste chunks (Windows drips text across many idle gaps) **merge**
-    /// into the chip under the caret — never a thousand `[pasted 1-1 lines]` chips.
+    /// Paste from clipboard / bracketed paste. Large blobs → one chip.
     pub fn insert_paste(&mut self, s: &str) {
-        self.insert_paste_ex(s, false);
-    }
-
-    /// Like `insert_paste`, but `force_chip` starts/continues a chip even for a
-    /// short chunk (used by the cross-frame key catcher mid-stream).
-    pub fn insert_paste_ex(&mut self, s: &str, force_chip: bool) {
         let normalized = normalize_paste(s);
         if normalized.is_empty() {
             return;
         }
-        self.delete_selection();
-
-        // Merge into the chip immediately before the caret (paste stream continuation).
-        if self.cursor > 0 {
-            if let Some(id) = paste_id_of(self.buffer[self.cursor - 1]) {
-                if let Some(p) = self.pastes.get_mut(&id) {
-                    p.content.push_str(&normalized);
-                    self.selection_anchor = None;
-                    return;
-                }
-            }
-        }
-
-        // Small snippet and not forcing a chip → normal text.
-        if !force_chip && !should_chip(&normalized) {
+        if !should_chip(&normalized) {
             self.insert_str(&normalized);
             return;
         }
+        let _ = self.start_paste_chip(&normalized);
+    }
 
-        let Some(id) = self.alloc_paste(normalized) else {
-            self.insert_str(s);
-            return;
+    /// Append to an existing paste chip by id. Returns false if the id is gone.
+    pub fn append_to_paste(&mut self, id: u32, s: &str) -> bool {
+        let normalized = normalize_paste(s);
+        if normalized.is_empty() {
+            return self.pastes.contains_key(&id);
+        }
+        let Some(p) = self.pastes.get_mut(&id) else {
+            return false;
         };
+        p.content.push_str(&normalized);
+        // Keep caret after this chip's sentinel if it's still in the buffer.
+        if let Some(pos) = self
+            .buffer
+            .iter()
+            .position(|c| paste_id_of(*c) == Some(id))
+        {
+            self.cursor = pos + 1;
+        }
+        self.selection_anchor = None;
+        true
+    }
+
+    /// Create a new paste chip at the caret; returns its id.
+    pub fn start_paste_chip(&mut self, s: &str) -> Option<u32> {
+        let normalized = normalize_paste(s);
+        self.delete_selection();
+        let id = self.alloc_paste(normalized)?;
         let ch = paste_sentinel(id);
         let mut new_buf = Vec::with_capacity(self.buffer.len() + 1);
         new_buf.extend_from_slice(&self.buffer[..self.cursor]);
@@ -465,6 +465,20 @@ impl InputState {
         self.buffer = new_buf;
         self.cursor += 1;
         self.selection_anchor = None;
+        Some(id)
+    }
+
+    /// Legacy helper used by tests / stream catcher.
+    pub fn insert_paste_ex(&mut self, s: &str, force_chip: bool) {
+        let normalized = normalize_paste(s);
+        if normalized.is_empty() {
+            return;
+        }
+        if !force_chip && !should_chip(&normalized) {
+            self.insert_str(&normalized);
+            return;
+        }
+        let _ = self.start_paste_chip(&normalized);
     }
 
     pub fn backspace(&mut self) {
@@ -1057,20 +1071,22 @@ mod tests {
     }
 
     #[test]
-    fn drip_paste_chunks_merge_into_one_chip() {
-        // Simulates Windows delivering paste in many short flushes.
+    fn drip_paste_chunks_merge_via_append() {
         let mut i = InputState::empty_for_test();
-        i.insert_paste_ex("line one of many\n", true);
-        i.insert_paste_ex("line two of many\n", true);
-        i.insert_paste_ex("line three of many\n", true);
-        i.insert_paste_ex(&"x".repeat(50), true);
+        let id = i.start_paste_chip("line one of many\n").unwrap();
+        assert!(i.append_to_paste(id, "line two of many\n"));
+        assert!(i.append_to_paste(id, "line three of many\n"));
+        assert!(i.append_to_paste(id, &"x".repeat(50)));
         assert_eq!(i.buffer.len(), 1, "must be ONE chip, not one per drip");
         let expanded = i.text_expanded();
         assert!(expanded.contains("line one"));
         assert!(expanded.contains("line three"));
         assert!(expanded.contains(&"x".repeat(50)));
         let label = i.chip_label_at(0).unwrap();
-        assert_eq!(label, format!("[pasted 1-{} lines]", expanded.lines().count()));
+        assert_eq!(
+            label,
+            format!("[pasted 1-{} lines]", expanded.lines().count())
+        );
     }
 
     #[test]

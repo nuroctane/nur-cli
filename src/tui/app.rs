@@ -633,6 +633,10 @@ pub struct App {
     /// single typed char or a paste chip — never live-typed as a wall of text.
     key_pending: String,
     key_pending_last: Option<Instant>,
+    /// Active paste-chip session (App-level, not cursor-based). All paste drips
+    /// append here until the session idles out — prevents N× `[pasted 1-1]`.
+    paste_session_id: Option<u32>,
+    paste_session_last: Option<Instant>,
     /// Transcript body area (excluding sticky banner) for scrollbar hit-testing.
     pub transcript_body: ratatui::layout::Rect,
     /// Right-edge scrollbar track (1 column).
@@ -878,6 +882,8 @@ pub async fn run_tui(
         input_drag_origin: None,
         key_pending: String::new(),
         key_pending_last: None,
+        paste_session_id: None,
+        paste_session_last: None,
         transcript_body: ratatui::layout::Rect::default(),
         scrollbar_track: ratatui::layout::Rect::default(),
         jump_chip: ratatui::layout::Rect::default(),
@@ -1037,39 +1043,74 @@ pub async fn run_tui(
                 match ev {
                     Event::Key(key) if key.kind == KeyEventKind::Press => {
                         if let Some(c) = key_as_paste_burst_char(&key) {
-                            app.key_pending.push(c);
-                            app.key_pending_last = Some(Instant::now());
-                            // Drain anything already queued into the same burst.
-                            loop {
-                                if !event::poll(Duration::ZERO)? {
-                                    break;
-                                }
-                                match event::read()? {
-                                    Event::Key(k) if k.kind == KeyEventKind::Press => {
-                                        if let Some(ch) = key_as_paste_burst_char(&k) {
-                                            app.key_pending.push(ch);
-                                            app.key_pending_last = Some(Instant::now());
-                                        } else {
-                                            deferred = Some(Event::Key(k));
+                            // Active paste session: every char appends to the SAME chip.
+                            if app.paste_session_alive() {
+                                let mut burst = String::new();
+                                burst.push(c);
+                                loop {
+                                    if !event::poll(Duration::ZERO)? {
+                                        break;
+                                    }
+                                    match event::read()? {
+                                        Event::Key(k) if k.kind == KeyEventKind::Press => {
+                                            if let Some(ch) = key_as_paste_burst_char(&k) {
+                                                burst.push(ch);
+                                            } else {
+                                                deferred = Some(Event::Key(k));
+                                                break;
+                                            }
+                                        }
+                                        Event::Paste(p) => burst.push_str(&p),
+                                        other => {
+                                            deferred = Some(other);
                                             break;
                                         }
                                     }
-                                    Event::Paste(p) => {
-                                        app.key_pending.push_str(&p);
-                                        app.key_pending_last = Some(Instant::now());
-                                    }
-                                    other => {
-                                        deferred = Some(other);
+                                }
+                                app.ingest_paste_text(&burst);
+                                dirty = true;
+                            } else {
+                                app.key_pending.push(c);
+                                app.key_pending_last = Some(Instant::now());
+                                // Drain anything already queued into the same burst.
+                                loop {
+                                    if !event::poll(Duration::ZERO)? {
                                         break;
                                     }
+                                    match event::read()? {
+                                        Event::Key(k) if k.kind == KeyEventKind::Press => {
+                                            if let Some(ch) = key_as_paste_burst_char(&k) {
+                                                app.key_pending.push(ch);
+                                                app.key_pending_last = Some(Instant::now());
+                                            } else {
+                                                deferred = Some(Event::Key(k));
+                                                break;
+                                            }
+                                        }
+                                        Event::Paste(p) => {
+                                            app.key_pending.push_str(&p);
+                                            app.key_pending_last = Some(Instant::now());
+                                        }
+                                        other => {
+                                            deferred = Some(other);
+                                            break;
+                                        }
+                                    }
                                 }
+                                // Promote to paste session as soon as it looks like a wall.
+                                if paste_pending_looks_like_wall(&app.key_pending) {
+                                    let burst = std::mem::take(&mut app.key_pending);
+                                    app.key_pending_last = None;
+                                    app.ingest_paste_text(&burst);
+                                }
+                                dirty = true;
                             }
-                            dirty = true;
                         } else {
                             // Shortcut / nav — commit any pending text first.
                             if app.flush_key_pending() {
                                 dirty = true;
                             }
+                            app.end_paste_session();
                             app.on_key(key);
                             dirty = true;
                         }
@@ -1082,14 +1123,14 @@ pub async fn run_tui(
                         dirty = true;
                     }
                     Event::Paste(s) => {
-                        // Bracketed paste: merge with any partial burst, then chip.
+                        // Bracketed paste: fold any pending keys, then session ingest.
                         if !app.key_pending.is_empty() {
                             app.key_pending.push_str(&s);
                             let burst = std::mem::take(&mut app.key_pending);
                             app.key_pending_last = None;
-                            apply_composer_paste(&mut app, &burst);
+                            app.ingest_paste_text(&burst);
                         } else {
-                            apply_composer_paste(&mut app, &s);
+                            app.ingest_paste_text(&s);
                         }
                         dirty = true;
                     }
@@ -1109,17 +1150,24 @@ pub async fn run_tui(
             break;
         }
 
-        // Flush buffered keystrokes after a short idle.
-        // Single typed char: ~18ms. Multi-char paste stream: longer idle so we
-        // merge fewer partial flushes (merge-into-chip also glues leftovers).
+        // Flush buffered keystrokes after a short idle (normal typing only).
+        // Paste session text is already in the chip; only key_pending remains.
         if let Some(last) = app.key_pending_last {
             let n = app.key_pending.chars().count();
-            let idle_ms = if n <= 1 { 18 } else { 200 };
+            let idle_ms = if n <= 1 { 18 } else { 250 };
             if last.elapsed() >= Duration::from_millis(idle_ms) {
                 if app.flush_key_pending() {
                     dirty = true;
                 }
             }
+        }
+        // Expire paste session after quiet period so the next paste is a new chip.
+        if app
+            .paste_session_last
+            .map(|t| t.elapsed() >= Duration::from_millis(600))
+            .unwrap_or(false)
+        {
+            app.end_paste_session();
         }
 
         // 3) Ambient / animation dirty flags.
@@ -1618,16 +1666,14 @@ impl App {
             KeyCode::Char('v') if ctrl => {
                 let _ = self.flush_key_pending();
                 if let Some(t) = clipboard_get() {
-                    self.input.insert_paste(&t);
-                    self.ensure_input_caret_visible();
+                    self.ingest_paste_text(&t);
                 }
                 return;
             }
             KeyCode::Insert if shift => {
                 let _ = self.flush_key_pending();
                 if let Some(t) = clipboard_get() {
-                    self.input.insert_paste(&t);
-                    self.ensure_input_caret_visible();
+                    self.ingest_paste_text(&t);
                 }
                 return;
             }
@@ -3513,22 +3559,63 @@ fn key_as_paste_burst_char(key: &KeyEvent) -> Option<char> {
     }
 }
 
-/// Apply pasted text to the login field or composer (chips large blobs).
-fn apply_composer_paste(app: &mut App, s: &str) {
-    if let Some(m) = &mut app.login {
-        m.buf.push_str(s.trim());
-        return;
-    }
-    if app.approval.is_some() || app.picker.is_some() {
-        return;
-    }
-    app.input.insert_paste(s);
-    app.ensure_input_caret_visible();
+/// True when buffered keystrokes already look like a paste wall, not typing.
+fn paste_pending_looks_like_wall(s: &str) -> bool {
+    s.contains('\n') || s.chars().count() >= 24
 }
 
 impl App {
-    /// Commit buffered plain keystrokes: multi-char stream → paste chip
-    /// (merged with any chip already under the caret); single char → typing.
+    fn paste_session_alive(&self) -> bool {
+        self.paste_session_id.is_some()
+            && self
+                .paste_session_last
+                .map(|t| t.elapsed() < Duration::from_millis(600))
+                .unwrap_or(false)
+    }
+
+    fn end_paste_session(&mut self) {
+        self.paste_session_id = None;
+        self.paste_session_last = None;
+    }
+
+    /// Ingest paste text into exactly one chip for the current session.
+    /// Cursor position is irrelevant — session id owns the chip.
+    fn ingest_paste_text(&mut self, s: &str) {
+        if s.is_empty() {
+            return;
+        }
+        if let Some(m) = &mut self.login {
+            m.buf.push_str(s);
+            return;
+        }
+        if self.approval.is_some() || self.picker.is_some() {
+            return;
+        }
+
+        // Continue open session.
+        if let Some(id) = self.paste_session_id {
+            if self.input.append_to_paste(id, s) {
+                self.paste_session_last = Some(Instant::now());
+                self.ensure_input_caret_visible();
+                self.palette_idx = 0;
+                self.palette_scroll = 0;
+                return;
+            }
+            // Chip was deleted (backspace) — start fresh.
+            self.paste_session_id = None;
+        }
+
+        // Start a new chip with this text (any size — stream will grow it).
+        if let Some(id) = self.input.start_paste_chip(s) {
+            self.paste_session_id = Some(id);
+            self.paste_session_last = Some(Instant::now());
+            self.ensure_input_caret_visible();
+            self.palette_idx = 0;
+            self.palette_scroll = 0;
+        }
+    }
+
+    /// Commit buffered plain keystrokes.
     fn flush_key_pending(&mut self) -> bool {
         if self.key_pending.is_empty() {
             self.key_pending_last = None;
@@ -3537,7 +3624,6 @@ impl App {
         let s = std::mem::take(&mut self.key_pending);
         self.key_pending_last = None;
 
-        // Login modal: always raw.
         if let Some(m) = &mut self.login {
             m.buf.push_str(&s);
             return true;
@@ -3546,34 +3632,20 @@ impl App {
             return false;
         }
 
-        let nchars = s.chars().count();
-        let multiline = s.contains('\n');
-        if nchars > 1 || multiline {
-            // force_chip: even a short drip starts/continues ONE chip (merge).
-            self.input.insert_paste_ex(&s, true);
-            self.ensure_input_caret_visible();
-            self.palette_idx = 0;
-            self.palette_scroll = 0;
+        // Active paste session or wall-like buffer → one chip (session).
+        if self.paste_session_alive() || paste_pending_looks_like_wall(&s) {
+            self.ingest_paste_text(&s);
             return true;
         }
-        if let Some(c) = s.chars().next() {
-            // If a paste chip is open under the caret, keep growing it (mid-stream
-            // single-char drips between longer bursts).
-            if self.input.cursor_index() > 0 {
-                let prev = self.input.char_at(self.input.cursor_index() - 1);
-                if prev.is_some_and(crate::tui::input::is_paste_sentinel) {
-                    self.input.insert_paste_ex(&s, true);
-                    self.ensure_input_caret_visible();
-                    return true;
-                }
-            }
+
+        // Normal typing (including very fast short words) — not a paste wall.
+        for c in s.chars() {
             self.input.insert_char(c);
-            self.ensure_input_caret_visible();
-            self.palette_idx = 0;
-            self.palette_scroll = 0;
-            return true;
         }
-        false
+        self.ensure_input_caret_visible();
+        self.palette_idx = 0;
+        self.palette_scroll = 0;
+        true
     }
 }
 
