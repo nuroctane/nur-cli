@@ -365,7 +365,10 @@ Launching from a drive root (`C:\`) auto-picks a safe workspace (git / last sess
 | `/model` `/effort` | Model & reasoning |
 | `/sessions` `/resume` | Sessions browser (all workspaces by default) |
 | `/init` `/config` `/clear` `/new` `/exit` | Project & shell |
-| `/login` `/logout` | Authenticate / clear stored key |
+| `/login` `/logout` | Pick a provider + enter a key / clear it (45+ providers: OpenAI, Anthropic, Gemini, xAI, Groq, OpenRouter, OmniRoute, Together, local Ollama/LM Studio, …) |
+| `/goal` `/btw` | Standing session goal / one-off note added to your next message |
+| `/codesearch` `/mc` `/feedback` | Fast ripgrep · manage MCP servers · file a GitHub issue |
+| `/tips` | Mouse + keyboard interaction tips |
 | `/bug` | Open GitHub issues page |
 
 ### Quick memory

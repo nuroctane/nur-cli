@@ -142,7 +142,9 @@ The note is appended to your persistent memory file and recalled automatically i
 | `/hooks` | Local tool hook status (`hooks.toml`) |
 | `/doctor` | Inline health check: version · auth · ecosystem · shell · budgets |
 | `/help` | Show keys + commands reference |
-| `/login` | Authenticate (masked key entry) |
+| `/login` | Pick a provider (45+: OpenAI, Anthropic, Gemini, xAI, Groq, OpenRouter, OmniRoute, local Ollama/LM Studio, …) + masked key entry |
+| `/goal` `/btw` | Standing session goal · one-off note for your next message |
+| `/codesearch` `/mc` `/feedback` `/tips` | Ripgrep · MCP servers · file an issue · interaction tips |
 | `/logout` | Clear stored API key |
 | `/bug` | Open GitHub issues page (report a bug) |
 | `/exit` | Quit Meta CLI |
