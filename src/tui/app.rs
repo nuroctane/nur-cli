@@ -628,6 +628,11 @@ pub struct App {
     pub input_selecting: bool,
     /// Origin (line, display_col) of the input press for threshold math.
     pub input_drag_origin: Option<(usize, usize)>,
+    /// Pending plain-text keystrokes (unbracketed paste arrives char-by-char
+    /// across many frames on Windows). Flushed after a short idle as either a
+    /// single typed char or a paste chip — never live-typed as a wall of text.
+    key_pending: String,
+    key_pending_last: Option<Instant>,
     /// Transcript body area (excluding sticky banner) for scrollbar hit-testing.
     pub transcript_body: ratatui::layout::Rect,
     /// Right-edge scrollbar track (1 column).
@@ -871,6 +876,8 @@ pub async fn run_tui(
         input_drag: false,
         input_selecting: false,
         input_drag_origin: None,
+        key_pending: String::new(),
+        key_pending_last: None,
         transcript_body: ratatui::layout::Rect::default(),
         scrollbar_track: ratatui::layout::Rect::default(),
         jump_chip: ratatui::layout::Rect::default(),
@@ -1010,16 +1017,15 @@ pub async fn run_tui(
             Duration::from_millis(frame_ms)
         };
         if event::poll(wait)? {
-            // Unbracketed paste (Windows Terminal right-click, some hosts) arrives as a
-            // flood of Key events — not Event::Paste. Coalesce ready key chars into one
-            // insert_paste so the composer gets a chip, not a wall of slow typing.
+            // Windows often delivers paste as Key events spaced across frames
+            // (not one Event::Paste, not one ready queue). Buffer plain chars
+            // and flush after idle → chip. Never stream a wall of text live.
             let mut deferred: Option<Event> = None;
             let mut first = true;
             loop {
                 let ev = if let Some(e) = deferred.take() {
                     e
                 } else if first {
-                    // Outer poll already said something is ready.
                     first = false;
                     event::read()?
                 } else if event::poll(Duration::ZERO)? {
@@ -1031,48 +1037,60 @@ pub async fn run_tui(
                 match ev {
                     Event::Key(key) if key.kind == KeyEventKind::Press => {
                         if let Some(c) = key_as_paste_burst_char(&key) {
-                            // More input already queued → treat as paste burst.
-                            if event::poll(Duration::ZERO)? {
-                                let mut burst = String::new();
-                                burst.push(c);
-                                loop {
-                                    if !event::poll(Duration::ZERO)? {
-                                        break;
-                                    }
-                                    match event::read()? {
-                                        Event::Key(k) if k.kind == KeyEventKind::Press => {
-                                            if let Some(ch) = key_as_paste_burst_char(&k) {
-                                                burst.push(ch);
-                                            } else {
-                                                deferred = Some(Event::Key(k));
-                                                break;
-                                            }
-                                        }
-                                        Event::Paste(p) => burst.push_str(&p),
-                                        other => {
-                                            deferred = Some(other);
+                            app.key_pending.push(c);
+                            app.key_pending_last = Some(Instant::now());
+                            // Drain anything already queued into the same burst.
+                            loop {
+                                if !event::poll(Duration::ZERO)? {
+                                    break;
+                                }
+                                match event::read()? {
+                                    Event::Key(k) if k.kind == KeyEventKind::Press => {
+                                        if let Some(ch) = key_as_paste_burst_char(&k) {
+                                            app.key_pending.push(ch);
+                                            app.key_pending_last = Some(Instant::now());
+                                        } else {
+                                            deferred = Some(Event::Key(k));
                                             break;
                                         }
                                     }
+                                    Event::Paste(p) => {
+                                        app.key_pending.push_str(&p);
+                                        app.key_pending_last = Some(Instant::now());
+                                    }
+                                    other => {
+                                        deferred = Some(other);
+                                        break;
+                                    }
                                 }
-                                apply_composer_paste(&mut app, &burst);
-                                dirty = true;
-                            } else {
-                                // Single keystroke typing path (palette, etc.).
-                                app.on_key(key);
+                            }
+                            dirty = true;
+                        } else {
+                            // Shortcut / nav — commit any pending text first.
+                            if app.flush_key_pending() {
                                 dirty = true;
                             }
-                        } else {
                             app.on_key(key);
                             dirty = true;
                         }
                     }
                     Event::Mouse(m) => {
+                        if app.flush_key_pending() {
+                            dirty = true;
+                        }
                         app.on_mouse(m);
                         dirty = true;
                     }
                     Event::Paste(s) => {
-                        apply_composer_paste(&mut app, &s);
+                        // Bracketed paste: merge with any partial burst, then chip.
+                        if !app.key_pending.is_empty() {
+                            app.key_pending.push_str(&s);
+                            let burst = std::mem::take(&mut app.key_pending);
+                            app.key_pending_last = None;
+                            apply_composer_paste(&mut app, &burst);
+                        } else {
+                            apply_composer_paste(&mut app, &s);
+                        }
                         dirty = true;
                     }
                     Event::Resize(_, _) => dirty = true,
@@ -1081,7 +1099,6 @@ pub async fn run_tui(
                 if app.should_quit {
                     break;
                 }
-                // Continue if we have deferred work or more events ready.
                 if deferred.is_none() && !event::poll(Duration::ZERO)? {
                     break;
                 }
@@ -1090,6 +1107,19 @@ pub async fn run_tui(
 
         if app.should_quit {
             break;
+        }
+
+        // Flush buffered keystrokes after a short idle.
+        // Single typed char: ~18ms (snappy). Multi-char paste stream: wait until
+        // the flood pauses (~45ms) so the whole wall becomes one chip.
+        if let Some(last) = app.key_pending_last {
+            let n = app.key_pending.chars().count();
+            let idle_ms = if n <= 1 { 18 } else { 45 };
+            if last.elapsed() >= Duration::from_millis(idle_ms) {
+                if app.flush_key_pending() {
+                    dirty = true;
+                }
+            }
         }
 
         // 3) Ambient / animation dirty flags.
@@ -1586,6 +1616,7 @@ impl App {
             }
             // Ctrl+V / Shift+Insert: paste — walls of text become chips, never dump raw.
             KeyCode::Char('v') if ctrl => {
+                let _ = self.flush_key_pending();
                 if let Some(t) = clipboard_get() {
                     self.input.insert_paste(&t);
                     self.ensure_input_caret_visible();
@@ -1593,6 +1624,7 @@ impl App {
                 return;
             }
             KeyCode::Insert if shift => {
+                let _ = self.flush_key_pending();
                 if let Some(t) = clipboard_get() {
                     self.input.insert_paste(&t);
                     self.ensure_input_caret_visible();
@@ -3492,6 +3524,48 @@ fn apply_composer_paste(app: &mut App, s: &str) {
     }
     app.input.insert_paste(s);
     app.ensure_input_caret_visible();
+}
+
+impl App {
+    /// Commit buffered plain keystrokes: multi-char / multi-line → paste chip;
+    /// a single character → normal typing (palette, etc.).
+    fn flush_key_pending(&mut self) -> bool {
+        if self.key_pending.is_empty() {
+            self.key_pending_last = None;
+            return false;
+        }
+        let s = std::mem::take(&mut self.key_pending);
+        self.key_pending_last = None;
+
+        // Login modal: always raw.
+        if let Some(m) = &mut self.login {
+            m.buf.push_str(&s);
+            return true;
+        }
+        if self.approval.is_some() || self.picker.is_some() {
+            return false;
+        }
+
+        let nchars = s.chars().count();
+        let multiline = s.contains('\n');
+        // More than one character, any newline, or a long token → chip path.
+        if nchars > 1 || multiline {
+            self.input.insert_paste(&s);
+            self.ensure_input_caret_visible();
+            self.palette_idx = 0;
+            self.palette_scroll = 0;
+            return true;
+        }
+        // Single character — same as a normal keypress side-effects.
+        if let Some(c) = s.chars().next() {
+            self.input.insert_char(c);
+            self.ensure_input_caret_visible();
+            self.palette_idx = 0;
+            self.palette_scroll = 0;
+            return true;
+        }
+        false
+    }
 }
 
 fn clipboard_set(text: &str) {
