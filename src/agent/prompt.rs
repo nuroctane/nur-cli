@@ -66,12 +66,14 @@ fn cached_skills(cwd: &Path) -> String {
 
 /// The parts of the system prompt that come off disk (project instructions,
 /// memory, skills, shell probe). Built **once per user turn** — rebuilding it
-/// per model request re-read every SKILL.md and MUSE.md on every API call.
+/// per model request re-read every SKILL.md and project instruction file on every API call.
 pub struct PromptContext {
     cwd: PathBuf,
     is_subagent: bool,
-    /// Selected Meta Model API model id — used for role/nomenclature only.
+    /// Active model id (wire format).
     model: String,
+    /// Human provider name (e.g. "xAI Grok", "Meta Model API").
+    provider: String,
     shell_label: String,
     project: Option<(String, String)>,
     memory: String,
@@ -81,13 +83,19 @@ pub struct PromptContext {
 }
 
 impl PromptContext {
-    pub fn build(cwd: &Path, is_subagent: bool, model: &str) -> Self {
-        Self::build_with_opts(cwd, is_subagent, model, false)
+    pub fn build(cwd: &Path, is_subagent: bool, model: &str, provider: &str) -> Self {
+        Self::build_with_opts(cwd, is_subagent, model, provider, false)
     }
 
     /// `poor_mode`: skip PLUR inject, skills catalog, and long memory excerpts
     /// to cut background token spend (toggle via `/poor`).
-    pub fn build_with_opts(cwd: &Path, is_subagent: bool, model: &str, poor_mode: bool) -> Self {
+    pub fn build_with_opts(
+        cwd: &Path,
+        is_subagent: bool,
+        model: &str,
+        provider: &str,
+        poor_mode: bool,
+    ) -> Self {
         let plur = if is_subagent || poor_mode {
             String::new()
         } else {
@@ -114,6 +122,7 @@ impl PromptContext {
             cwd: cwd.to_path_buf(),
             is_subagent,
             model: model.to_string(),
+            provider: provider.to_string(),
             shell_label: shell_backend().label.clone(),
             project: find_project_instructions(cwd),
             memory,
@@ -160,16 +169,18 @@ Tools auto-approved. Prefer minimal safe diffs; avoid destructive shell.
 "#,
         };
 
-        // Identity is product-agnostic; model id is only for the model's own context.
+        // Product identity is always Nur. Backend provider/model are facts only.
         let role = if self.is_subagent {
             format!(
-                "You are a focused SUBAGENT (model id: {}). Complete the delegated task and return a concise report. Do not ask the user questions.",
-                self.model
+                "You are a focused NurCLI SUBAGENT (backend: {} · model id: {}). Complete the delegated task and return a concise report. Do not ask the user questions.",
+                self.provider, self.model
             )
         } else {
             format!(
-                "You are Meta — a coding agent for NurCLI (unofficial) on Meta Model API (model id: {}).",
-                self.model
+                "You are **Nur**, the coding agent for **NurCLI** (the user's personal CLI).\n\
+Backend this session: **{}** · model id: `{}`.\n\
+If asked your name or who you are: say you are **Nur** (NurCLI). Do **not** call yourself Meta, Muse, or Claude unless the user is asking about a different product. The backend provider/model above is how requests are routed — not your product name.",
+                self.provider, self.model
             )
         };
 
@@ -192,14 +203,13 @@ skill, memory, todo_write, submit_plan, agent
 - bash: real shell when available (Git Bash/pwsh); output header labels the backend
 - git_status/git_diff (diff|staged|log|show): approval-free repo inspection — prefer over bash git
 - web_search → find docs/errors; web_fetch → read a result url (text only — not video)
-- look: attach image(s) or a short video for **vision** (Responses input_image / input_video).
-  The model sees pixels next turn. Prefer look over guessing from filenames.
+- look: attach image(s) or a short video for **vision**. Prefer look over guessing from filenames.
 - extract_frames: sparse keyframes via ffmpeg (default ~1fps, max ~8). Writes `.nur/frames/…`
   and auto-queues look. Use for design-from-video — never frame-by-frame every pixel.
 - Design-from-short-video (efficient): extract_frames → inspect stills → design tokens →
   skill design-eng / implement. User paths to .png/.mp4 in the prompt auto-attach when present.
 - graphify: code knowledge graph (graphify-out/). Prefer query/path/explain over broad grep when
-  the graph exists. extract defaults to code-only AST (local, free). Auto-installed with meta.
+  the graph exists. extract defaults to code-only AST (local, free).
 - plur: shared engram memory (~/.plur/). learn corrections/preferences; inject/recall across
   sessions. Auto-injected at session start. Never store secrets.
 - ruflo: vector memory + swarm harness. Global DB at ~/.nur/ruflo/. Prefer plur for preferences,
@@ -217,7 +227,7 @@ skill, memory, todo_write, submit_plan, agent
 - memory: local markdown journal ~/.nur/memory.md (never store secrets) — complementary to plur
 - Prefer edit_file / multi_edit / apply_patch over full rewrites
 
-# Workflow (Claude-class)
+# Workflow
 1. Orient — git_status + targeted grep/read
 2. Plan — todo_write for multi-step; submit_plan in plan mode
 3. Implement — smallest correct change; verify with tests/build
@@ -225,7 +235,6 @@ skill, memory, todo_write, submit_plan, agent
 
 # Style
 Direct technical markdown. Fence code with languages.
-Unofficial community software — not Meta Platforms, Inc.
 "#,
             self.cwd.display(),
             std::env::consts::OS,
@@ -255,6 +264,7 @@ pub fn system_instructions(
     is_subagent: bool,
     todos_render: &str,
     model: &str,
+    provider: &str,
 ) -> String {
-    PromptContext::build(cwd, is_subagent, model).render(mode, todos_render)
+    PromptContext::build(cwd, is_subagent, model, provider).render(mode, todos_render)
 }

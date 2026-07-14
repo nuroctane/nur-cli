@@ -2268,16 +2268,18 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
         theme::BORDER
     };
 
+    // Active provider chrome (tracks /login) — not a hard-coded product brand.
+    let provider = crate::config::active_provider_chrome(&app.cfg);
     let title = if app.busy {
         let t = if app.queue.is_empty() {
-            " meta · working ".to_string()
+            format!(" {provider} · working ")
         } else {
-            format!(" meta · working · {} queued ", app.queue.len())
+            format!(" {provider} · working · {} queued ", app.queue.len())
         };
         Span::styled(t, theme::style_faint())
     } else {
         Span::styled(
-            " meta ",
+            format!(" {provider} "),
             Style::default()
                 .fg(theme::aurora_cell(tick, 3, 6, 3200))
                 .add_modifier(Modifier::BOLD),

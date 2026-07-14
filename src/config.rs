@@ -99,11 +99,41 @@ fn default_provider_id() -> String {
 }
 
 /// Display name of the active provider for the banner / status. Falls back to
-/// the catalog default (Meta Model API) when the id is unknown.
+/// the catalog default when the id is unknown.
 pub fn active_provider_label(cfg: &Config) -> String {
     crate::providers::by_id(&cfg.provider)
         .map(|p| p.name.to_string())
         .unwrap_or_else(|| crate::providers::default_provider().name.to_string())
+}
+
+/// Compact label for TUI chrome (input border title). Short enough for a tab.
+pub fn active_provider_chrome(cfg: &Config) -> String {
+    match cfg.provider.as_str() {
+        "meta" => "meta".into(),
+        "xai" => "grok".into(),
+        "anthropic" => "claude".into(),
+        "openai" | "openai-cc" => "openai".into(),
+        "google" | "antigravity" => "gemini".into(),
+        "openrouter" => "openrouter".into(),
+        "ollama" => "ollama".into(),
+        "lmstudio" => "lmstudio".into(),
+        other => {
+            // Prefer catalog short id; fall back to first word of name.
+            if other.len() <= 14 {
+                other.to_string()
+            } else {
+                crate::providers::by_id(other)
+                    .map(|p| {
+                        p.name
+                            .split_whitespace()
+                            .next()
+                            .unwrap_or(other)
+                            .to_lowercase()
+                    })
+                    .unwrap_or_else(|| other.chars().take(12).collect())
+            }
+        }
+    }
 }
 fn default_base_url() -> String {
     DEFAULT_BASE_URL.to_string()

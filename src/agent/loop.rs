@@ -143,10 +143,12 @@ impl AgentRunner {
         let tools = self.tools.tool_defs();
         // Disk-backed prompt parts (skills, MUSE.md, memory, shell) — read once
         // per user turn, not once per model request.
+        let provider_label = crate::config::active_provider_label(&self.config);
         let prompt_ctx = PromptContext::build_with_opts(
             &self.cwd,
             self.is_subagent,
             &self.config.model,
+            &provider_label,
             self.config.poor_mode,
         );
         let mut turns = 0u32;
