@@ -416,10 +416,17 @@ pub struct LoginModal {
     pub stage: LoginStage,
     /// Provider-search filter typed in the picker stage.
     pub filter: String,
-    /// Selected row index into the filtered provider list.
+    /// Selected row index into the filtered provider list (same role as
+    /// `SessionPicker::idx` — one-step ↑↓/wheel).
     pub sel: usize,
-    /// Scroll offset of the provider list.
+    /// First visible row — only moves by 1 when selection leaves the window.
     pub scroll: usize,
+    /// How many provider rows fit in the body (set by last draw).
+    pub vis_page: usize,
+    /// Hit-test geometry filled by the last draw (screen coords).
+    pub hit: PickerHit,
+    /// Coalesce trackpad/OS wheel floods to one step per tick (same as sessions).
+    pub last_step_at: Instant,
     /// Provider id chosen once we reach the key stage.
     pub provider_id: String,
     /// The key characters typed/pasted so far (rendered as dots).
@@ -441,6 +448,88 @@ impl LoginModal {
                     || p.note.to_lowercase().contains(&f)
             })
             .collect()
+    }
+
+    pub fn count(&self) -> usize {
+        self.filtered().len()
+    }
+
+    /// Same clamp rules as `SessionPicker` — selection stays in view with min scroll.
+    pub fn clamp_scroll(&mut self) {
+        let count = self.count();
+        if count == 0 {
+            self.sel = 0;
+            self.scroll = 0;
+            return;
+        }
+        self.sel = self.sel.min(count - 1);
+        let page = self.vis_page.max(1);
+        let max_scroll = count.saturating_sub(page);
+        if self.scroll > max_scroll {
+            self.scroll = max_scroll;
+        }
+        if self.sel < self.scroll {
+            self.scroll = self.sel;
+        }
+        let last_vis = self.scroll + page - 1;
+        if self.sel > last_vis {
+            self.scroll = self.sel + 1 - page;
+        }
+    }
+
+    /// Move selection by exactly one entry. Viewport shifts by at most 1.
+    pub fn step(&mut self, dir: i32) {
+        if dir == 0 {
+            return;
+        }
+        let count = self.count();
+        if count == 0 {
+            return;
+        }
+        let page = self.vis_page.max(1);
+        if dir < 0 {
+            if self.sel == 0 {
+                return;
+            }
+            self.sel -= 1;
+            if self.sel < self.scroll {
+                self.scroll = self.sel;
+            }
+        } else {
+            if self.sel + 1 >= count {
+                return;
+            }
+            self.sel += 1;
+            let last_vis = self.scroll + page - 1;
+            if self.sel > last_vis {
+                self.scroll += 1;
+            }
+        }
+        let max_scroll = count.saturating_sub(page);
+        if self.scroll > max_scroll {
+            self.scroll = max_scroll;
+        }
+    }
+
+    /// Wheel: one step max every 45ms (identical to sessions picker).
+    pub fn wheel_step(&mut self, dir: i32) {
+        let now = Instant::now();
+        if now.duration_since(self.last_step_at) < Duration::from_millis(45) {
+            return;
+        }
+        self.last_step_at = now;
+        self.step(dir.signum());
+    }
+
+    pub fn set_idx(&mut self, i: usize) {
+        let count = self.count();
+        if count == 0 {
+            self.sel = 0;
+            self.scroll = 0;
+            return;
+        }
+        self.sel = i.min(count - 1);
+        self.clamp_scroll();
     }
 }
 
@@ -1917,8 +2006,13 @@ impl App {
             self.on_picker_mouse(m);
             return;
         }
-        // Login is fully modal (masked key entry) — no transcript interaction.
+        // Login picker is modal — same wheel/click routing as the sessions picker.
         if self.login.is_some() {
+            self.scrollbar_drag = false;
+            self.selecting = false;
+            self.select_anchor = None;
+            self.mouse_left_down = false;
+            self.on_login_mouse(m);
             return;
         }
 
@@ -2820,6 +2914,11 @@ impl App {
             filter: String::new(),
             sel: 0,
             scroll: 0,
+            vis_page: 8,
+            hit: PickerHit::default(),
+            last_step_at: Instant::now()
+                .checked_sub(Duration::from_secs(1))
+                .unwrap_or_else(Instant::now),
             provider_id: self.cfg.provider.clone(),
             buf: String::new(),
             error: None,
@@ -2836,31 +2935,107 @@ impl App {
         }
     }
 
+    fn login_picker_confirm(&mut self) {
+        let Some(m) = &mut self.login else { return };
+        if m.stage != LoginStage::Provider {
+            return;
+        }
+        let picks = m.filtered();
+        if let Some(p) = picks.get(m.sel) {
+            m.provider_id = p.id.to_string();
+            m.stage = LoginStage::Key;
+            m.error = None;
+            m.buf.clear();
+        }
+    }
+
+    /// Mouse while the provider picker is open — same contract as `on_picker_mouse`:
+    /// one-entry wheel, click row to select, second click / Enter confirms.
+    fn on_login_mouse(&mut self, m: event::MouseEvent) {
+        self.mouse_col = m.column;
+        self.mouse_row = m.row;
+        let stage = self.login.as_ref().map(|l| l.stage);
+        // Key stage: no list to wheel; clicks outside dismiss? keep key modal focused.
+        if stage != Some(LoginStage::Provider) {
+            return;
+        }
+        match m.kind {
+            MouseEventKind::ScrollUp => {
+                if let Some(l) = &mut self.login {
+                    l.wheel_step(-1);
+                }
+            }
+            MouseEventKind::ScrollDown => {
+                if let Some(l) = &mut self.login {
+                    l.wheel_step(1);
+                }
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                let Some(l) = &self.login else { return };
+                let hit = l.hit.clone();
+                let col = m.column;
+                let row = m.row;
+                if rect_contains(hit.close, col, row) {
+                    self.login = None;
+                    return;
+                }
+                for (i, r) in &hit.rows {
+                    if rect_contains(*r, col, row) {
+                        let same = self.login.as_ref().map(|l| l.sel == *i).unwrap_or(false);
+                        if let Some(l) = &mut self.login {
+                            l.set_idx(*i);
+                        }
+                        if same {
+                            self.login_picker_confirm();
+                        }
+                        return;
+                    }
+                }
+                if !rect_contains(hit.frame, col, row) {
+                    self.login = None;
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn on_login_picker_key(&mut self, key: event::KeyEvent, ctrl: bool) {
         let Some(m) = &mut self.login else { return };
         match key.code {
             KeyCode::Esc => self.login = None,
-            KeyCode::Up => {
-                m.sel = m.sel.saturating_sub(1);
-            }
-            KeyCode::Down => {
-                let n = m.filtered().len();
-                if n > 0 {
-                    m.sel = (m.sel + 1).min(n - 1);
+            // One entry per key — same `step` path the wheel uses (sessions picker).
+            // Arrows only: j/k stay available for type-to-filter.
+            KeyCode::Up => m.step(-1),
+            KeyCode::Down => m.step(1),
+            KeyCode::PageUp => {
+                let n = m.vis_page.max(1) as i32;
+                for _ in 0..n {
+                    m.step(-1);
                 }
             }
-            KeyCode::Enter => {
-                let picks = m.filtered();
-                if let Some(p) = picks.get(m.sel) {
-                    m.provider_id = p.id.to_string();
-                    m.stage = LoginStage::Key;
-                    m.error = None;
+            KeyCode::PageDown => {
+                let n = m.vis_page.max(1) as i32;
+                for _ in 0..n {
+                    m.step(1);
                 }
             }
+            KeyCode::Home => {
+                m.sel = 0;
+                m.scroll = 0;
+            }
+            KeyCode::End => {
+                let count = m.count();
+                if count > 0 {
+                    m.sel = count - 1;
+                    m.clamp_scroll();
+                }
+            }
+            KeyCode::Enter => self.login_picker_confirm(),
             KeyCode::Backspace => {
                 m.filter.pop();
                 m.sel = 0;
                 m.scroll = 0;
+                m.clamp_scroll();
             }
             KeyCode::Char('u') if ctrl => {
                 m.filter.clear();

@@ -95,18 +95,21 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 }
 
 // ── secure login modal (`/login`) ───────────────────────────────────────────
-fn draw_login(f: &mut Frame, app: &App, area: Rect) {
-    let Some(m) = &app.login else { return };
-    match m.stage {
-        super::app::LoginStage::Provider => draw_login_picker(f, app, m, area),
-        super::app::LoginStage::Key => draw_login_key(f, app, m, area),
+fn draw_login(f: &mut Frame, app: &mut App, area: Rect) {
+    let stage = app.login.as_ref().map(|m| m.stage);
+    match stage {
+        Some(super::app::LoginStage::Provider) => draw_login_picker(f, app, area),
+        Some(super::app::LoginStage::Key) => draw_login_key(f, app, area),
+        None => {}
     }
 }
 
 /// Stage 1 — scrollable, filterable provider list.
-fn draw_login_picker(f: &mut Frame, app: &App, m: &super::app::LoginModal, area: Rect) {
+/// Scroll/select contract matches `draw_session_picker`: one entry per ↑↓/wheel
+/// notch (`step` / `wheel_step`), click row to select, second click confirms.
+fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
     let w = 74u16.min(area.width.saturating_sub(4)).max(48);
-    let h = 24u16.min(area.height.saturating_sub(2)).max(10);
+    let h = 28u16.min(area.height.saturating_sub(2)).max(12);
     let rect = Rect {
         x: (area.width.saturating_sub(w)) / 2,
         y: (area.height.saturating_sub(h)) / 2,
@@ -116,8 +119,9 @@ fn draw_login_picker(f: &mut Frame, app: &App, m: &super::app::LoginModal, area:
     f.render_widget(Clear, rect);
     f.render_widget(Block::default().style(Style::default().bg(theme::SURFACE_2)), rect);
     let phase = modal_phase(app);
-    let picks = m.filtered();
-    let title = format!(" 🔑 choose a provider  ·  {} ", picks.len());
+
+    let total = app.login.as_ref().map(|m| m.count()).unwrap_or(0);
+    let title = format!(" 🔑 choose a provider  ·  {total} ");
     draw_modal_frame(
         f,
         rect,
@@ -125,33 +129,90 @@ fn draw_login_picker(f: &mut Frame, app: &App, m: &super::app::LoginModal, area:
         theme::INDIGO,
         &title,
         None,
-        "  type to filter  ·  ↑↓ move  ·  ↵ pick  ·  esc cancel  ",
+        " ↑↓/wheel  ·  ↵ pick  ·  type to filter  ·  esc/✕  ",
     );
     let inner = modal_inner(rect);
 
-    // Filter line.
-    let mut caret = m.filter.clone();
+    let close = Rect {
+        x: rect.x + rect.width.saturating_sub(5),
+        y: rect.y,
+        width: 3,
+        height: 1,
+    };
+    let mut hit = super::app::PickerHit {
+        frame: rect,
+        close,
+        body: inner,
+        scope: Rect::default(),
+        rows: Vec::new(),
+    };
+
+    // Filter line (2 rows) + provider list below — same one-step scroll as sessions.
+    const FILTER_ROWS: usize = 2;
+    let list_h = (inner.height as usize).saturating_sub(FILTER_ROWS).max(1);
+    // One screen row per provider (no separator stride — still one-step select).
+    let vis_rows = list_h.max(1);
+
+    let (filter, mut sel, mut start) = {
+        let m = app.login.as_ref().unwrap();
+        (m.filter.clone(), m.sel, m.scroll)
+    };
+
+    if let Some(m) = &mut app.login {
+        m.vis_page = vis_rows;
+        m.clamp_scroll();
+        sel = m.sel;
+        start = m.scroll;
+    }
+
+    let mut caret = filter;
     if theme::blink_on(app.spinner_epoch.elapsed()) {
         caret.push('▉');
     }
     let mut lines: Vec<Line> = vec![
         Line::from(vec![
             Span::styled("  search  ".to_string(), theme::style_faint()),
-            Span::styled(caret, Style::default().fg(theme::BLUE_100).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                caret,
+                Style::default()
+                    .fg(theme::BLUE_100)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]),
         Line::default(),
     ];
 
-    // Visible window around the selection.
-    let body_rows = (inner.height as usize).saturating_sub(3).max(1);
-    let sel = m.sel.min(picks.len().saturating_sub(1));
-    let start = sel.saturating_sub(body_rows.saturating_sub(1));
+    let picks = app
+        .login
+        .as_ref()
+        .map(|m| m.filtered())
+        .unwrap_or_default();
     let col = (inner.width as usize).saturating_sub(4);
-    for (i, p) in picks.iter().enumerate().skip(start).take(body_rows) {
+
+    if total == 0 {
+        lines.push(Line::from(Span::styled(
+            "  no providers match".to_string(),
+            theme::style_faint(),
+        )));
+        f.render_widget(
+            Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2)),
+            inner,
+        );
+        if let Some(m) = &mut app.login {
+            m.hit = hit;
+            m.vis_page = 1;
+        }
+        return;
+    }
+
+    for (i, p) in picks.iter().enumerate().skip(start).take(vis_rows) {
         let selected = i == sel;
         let marker = if selected { "❯ " } else { "  " };
         let name_style = if selected {
-            Style::default().fg(theme::BG).bg(theme::META_BLUE).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(theme::BG)
+                .bg(theme::META_BLUE)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme::FG)
         };
@@ -161,16 +222,37 @@ fn draw_login_picker(f: &mut Frame, app: &App, m: &super::app::LoginModal, area:
             theme::style_faint()
         };
         let text = format!("{marker}{:<22}{}", p.name, p.note);
-        lines.push(Line::from(Span::styled(truncate(&text, col), if selected { name_style } else { note_style })));
+        let style = if selected { name_style } else { note_style };
+        lines.push(Line::from(Span::styled(truncate(&text, col), style)));
+
+        // Hit row: absolute index i, screen y under filter header.
+        let drawn = i - start;
+        let row_y = inner.y + FILTER_ROWS as u16 + drawn as u16;
+        if row_y < inner.y + inner.height {
+            hit.rows.push((
+                i,
+                Rect {
+                    x: inner.x,
+                    y: row_y,
+                    width: inner.width,
+                    height: 1,
+                },
+            ));
+        }
     }
+
     f.render_widget(
         Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2)),
         inner,
     );
+    if let Some(m) = &mut app.login {
+        m.hit = hit;
+    }
 }
 
 /// Stage 2 — masked key entry for the chosen provider.
-fn draw_login_key(f: &mut Frame, app: &App, m: &super::app::LoginModal, area: Rect) {
+fn draw_login_key(f: &mut Frame, app: &App, area: Rect) {
+    let Some(m) = &app.login else { return };
     let provider = crate::providers::by_id(&m.provider_id)
         .copied()
         .unwrap_or(*crate::providers::default_provider());
