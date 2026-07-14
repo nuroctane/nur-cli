@@ -610,11 +610,17 @@ pub struct App {
     /// PageUp/Home can scroll in real pages instead of guessing.
     pub view_h: u16,
     pub view_total: u16,
+    /// Full input box (border + body) for hit-testing hover/wheel/drag.
+    pub input_area: ratatui::layout::Rect,
     /// Inner text area of the input box (updated every draw) for click-to-caret.
     pub input_inner: ratatui::layout::Rect,
     /// First visible input line (vertical scroll) + horizontal scroll offset.
     pub input_scroll_top: usize,
     pub input_x_off: u16,
+    /// Visible row count inside the input inner area (set each draw).
+    pub input_view_h: usize,
+    /// Dragging to select text inside the input box.
+    pub input_drag: bool,
     /// Transcript body area (excluding sticky banner) for scrollbar hit-testing.
     pub transcript_body: ratatui::layout::Rect,
     /// Right-edge scrollbar track (1 column).
@@ -849,9 +855,12 @@ pub async fn run_tui(
         scroll_from_bottom: 0,
         view_h: 20,
         view_total: 0,
+        input_area: ratatui::layout::Rect::default(),
         input_inner: ratatui::layout::Rect::default(),
         input_scroll_top: 0,
         input_x_off: 0,
+        input_view_h: 1,
+        input_drag: false,
         transcript_body: ratatui::layout::Rect::default(),
         scrollbar_track: ratatui::layout::Rect::default(),
         jump_chip: ratatui::layout::Rect::default(),
@@ -1006,7 +1015,8 @@ pub async fn run_tui(
                             m.buf.push_str(s.trim());
                             dirty = true;
                         } else if app.approval.is_none() && app.picker.is_none() {
-                            app.input.insert_str(&s);
+                            app.input.insert_paste(&s);
+                            app.ensure_input_caret_visible();
                             dirty = true;
                         }
                     }
@@ -1517,14 +1527,15 @@ impl App {
                 self.should_quit = true;
                 return;
             }
-            // Ctrl+V: paste into the input (replaces any input selection).
+            // Ctrl+V: paste into the input (large pastes collapse to chips).
             KeyCode::Char('v') if ctrl => {
                 if let Some(t) = clipboard_get() {
-                    self.input.insert_str(&t);
+                    self.input.insert_paste(&t);
+                    self.ensure_input_caret_visible();
                 }
                 return;
             }
-            // Ctrl+X: cut input selection (or whole input if none).
+            // Ctrl+X: cut input selection (or whole input if none); chips expand.
             KeyCode::Char('x') if ctrl => {
                 if self.input.has_selection() {
                     if let Some(t) = self.input.selected_text() {
@@ -1532,7 +1543,7 @@ impl App {
                         self.input.delete_selection();
                     }
                 } else if !self.input.is_empty() {
-                    clipboard_set(&self.input.text());
+                    clipboard_set(&self.input.text_expanded());
                     self.input.clear();
                 }
                 return;
@@ -1559,7 +1570,10 @@ impl App {
                     self.input.clear();
                 }
             }
-            KeyCode::Enter if alt || ctrl => self.input.insert_char('\n'),
+            KeyCode::Enter if alt || ctrl => {
+                self.input.insert_char('\n');
+                self.ensure_input_caret_visible();
+            }
             KeyCode::Enter => {
                 if self.palette_visible() {
                     let matches = self.palette_matches();
@@ -1608,26 +1622,45 @@ impl App {
             KeyCode::Down if alt => self.input.history_next(),
             KeyCode::Up => match self.arrow_action(true) {
                 ArrowAction::Palette => self.palette_step(-1),
-                ArrowAction::Caret => self.input.move_up_line(),
+                ArrowAction::Caret => {
+                    self.input.move_up_line();
+                    self.ensure_input_caret_visible();
+                }
                 ArrowAction::Scroll => self.scroll_up(1),
             },
             KeyCode::Down => match self.arrow_action(false) {
                 ArrowAction::Palette => self.palette_step(1),
-                ArrowAction::Caret => self.input.move_down_line(),
+                ArrowAction::Caret => {
+                    self.input.move_down_line();
+                    self.ensure_input_caret_visible();
+                }
                 ArrowAction::Scroll => self.scroll_down(1),
             },
             KeyCode::Char('p') if ctrl => self.input.history_prev(),
             KeyCode::Char('n') if ctrl => self.input.history_next(),
-            KeyCode::Left if ctrl => self.input.word_left(),
-            KeyCode::Right if ctrl => self.input.word_right(),
-            KeyCode::Left => self.input.move_left(),
-            KeyCode::Right => self.input.move_right(),
+            KeyCode::Left if ctrl => {
+                self.input.word_left();
+                self.ensure_input_caret_visible();
+            }
+            KeyCode::Right if ctrl => {
+                self.input.word_right();
+                self.ensure_input_caret_visible();
+            }
+            KeyCode::Left => {
+                self.input.move_left();
+                self.ensure_input_caret_visible();
+            }
+            KeyCode::Right => {
+                self.input.move_right();
+                self.ensure_input_caret_visible();
+            }
             // Home/End edit the draft when there is one, else jump the transcript.
             KeyCode::Home => {
                 if self.input.is_empty() {
                     self.scroll_to_top();
                 } else {
                     self.input.move_line_home();
+                    self.ensure_input_caret_visible();
                 }
             }
             KeyCode::End => {
@@ -1635,10 +1668,17 @@ impl App {
                     self.scroll_to_bottom();
                 } else {
                     self.input.move_line_end();
+                    self.ensure_input_caret_visible();
                 }
             }
-            KeyCode::Backspace => self.input.backspace(),
-            KeyCode::Delete => self.input.delete(),
+            KeyCode::Backspace => {
+                self.input.backspace();
+                self.ensure_input_caret_visible();
+            }
+            KeyCode::Delete => {
+                self.input.delete();
+                self.ensure_input_caret_visible();
+            }
             KeyCode::PageUp => self.scroll_up(self.page()),
             KeyCode::PageDown => self.scroll_down(self.page()),
             KeyCode::Char('l') if ctrl => {
@@ -1675,6 +1715,7 @@ impl App {
             // first keystroke of normal typing ("e"xplain, "p"lease). Use click.
             KeyCode::Char(c) if !ctrl && !alt => {
                 self.input.insert_char(c);
+                self.ensure_input_caret_visible();
                 self.palette_idx = 0;
                 self.palette_scroll = 0;
             }
@@ -1731,6 +1772,12 @@ impl App {
                 } else if self.wheel_over_open_peek(m.column, m.row) {
                     // Wheel inside a pinned peek scrolls its body, not the page.
                     self.peek_scroll = self.peek_scroll.saturating_sub(3);
+                } else if self.hit_input_box(m.column, m.row) && !approval_open {
+                    // Hover/scroll over the entire input hitbox scrolls the prompt.
+                    self.scroll_input(-3);
+                    if self.input_drag {
+                        self.input_drag_to(m.column, m.row);
+                    }
                 } else {
                     // Always works — including during streaming and under approval.
                     self.scroll_up(3);
@@ -1751,6 +1798,11 @@ impl App {
                         .peek_scroll
                         .saturating_add(3)
                         .min(self.peek_rows.saturating_sub(1));
+                } else if self.hit_input_box(m.column, m.row) && !approval_open {
+                    self.scroll_input(3);
+                    if self.input_drag {
+                        self.input_drag_to(m.column, m.row);
+                    }
                 } else {
                     self.scroll_down(3);
                     if self.mouse_left_down && self.select_anchor.is_some() {
@@ -1827,9 +1879,21 @@ impl App {
                     self.selecting = false;
                     self.select_anchor = None;
                     self.selection = None;
+                    self.input_drag = false;
                     self.scrollbar_press(m.row);
+                } else if self.hit_input_box(m.column, m.row) {
+                    // Input owns the pointer: place caret + start drag-select.
+                    self.scrollbar_drag = false;
+                    self.select_anchor = None;
+                    self.selecting = false;
+                    self.selection = None;
+                    self.close_peek();
+                    self.input_drag = true;
+                    self.input_select_start(m.column, m.row);
                 } else if self.in_transcript(m.column, m.row) {
                     self.scrollbar_drag = false;
+                    self.input_drag = false;
+                    self.input.clear_selection();
                     // Begin potential drag-select; click actions fire on Up if
                     // the pointer barely moved (so drag never fights peek/expand).
                     if let Some(pos) = self.pos_at(m.column, m.row) {
@@ -1845,8 +1909,8 @@ impl App {
                     self.select_anchor = None;
                     self.selecting = false;
                     self.selection = None;
+                    self.input_drag = false;
                     self.close_peek();
-                    self.click_input(m.column, m.row);
                 }
                 self.update_hover_from_mouse();
             }
@@ -1871,6 +1935,12 @@ impl App {
                 self.mouse_left_down = false;
                 if self.scrollbar_drag {
                     self.scrollbar_drag = false;
+                } else if self.input_drag {
+                    // Keep a real selection; clear empty click-anchor.
+                    self.input_drag = false;
+                    if !self.input.has_selection() {
+                        self.input.clear_selection();
+                    }
                 } else if approval_open {
                     // Don't run transcript click handlers under the modal.
                     self.selecting = false;
@@ -1919,6 +1989,11 @@ impl App {
             return;
         }
         if self.approval.is_some() {
+            return;
+        }
+        if self.input_drag {
+            self.maybe_autoscroll_input_while_selecting(row);
+            self.input_drag_to(col, row);
             return;
         }
         if self.select_anchor.is_none() {
@@ -2248,38 +2323,93 @@ impl App {
         self.set_scroll_from_bottom(max.saturating_sub(offset));
     }
 
-    /// Map a terminal (column, row) click onto the input buffer caret.
-    fn click_input(&mut self, col: u16, row: u16) {
+    /// True when the pointer is over the full input box (border + body).
+    fn hit_input_box(&self, col: u16, row: u16) -> bool {
+        let a = self.input_area;
+        a.width > 0
+            && a.height > 0
+            && col >= a.x
+            && col < a.right()
+            && row >= a.y
+            && row < a.bottom()
+    }
+
+    /// Map terminal coords → (line, display_col) inside the input editor.
+    fn input_pos_at(&self, col: u16, row: u16) -> Option<(usize, usize)> {
         let inner = self.input_inner;
         if inner.width == 0 || inner.height == 0 {
-            return;
+            return None;
         }
-        // Outside the input pane — ignore (transcript clicks don't move caret).
-        if col < inner.x || col >= inner.right() || row < inner.y || row >= inner.bottom() {
-            return;
-        }
-        // Content starts after the "❯ " / "  " prefix (2 cells).
+        // Clamp into the inner text region (clicks on the border still map).
+        let c = col.clamp(inner.x, inner.right().saturating_sub(1));
+        let r = row.clamp(inner.y, inner.bottom().saturating_sub(1));
         let prefix_w: u16 = 2;
-        let local_x = col.saturating_sub(inner.x).saturating_sub(prefix_w) as usize
+        let display_col = c.saturating_sub(inner.x).saturating_sub(prefix_w) as usize
             + self.input_x_off as usize;
-        let local_y = row.saturating_sub(inner.y) as usize + self.input_scroll_top;
-        // Convert display column → char column on that line (unicode-width).
-        let text = self.input.text();
-        let line_str = text.split('\n').nth(local_y).unwrap_or("");
-        let mut used = 0usize;
-        let mut char_col = 0usize;
-        for ch in line_str.chars() {
-            let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
-            if used + w > local_x {
-                break;
-            }
-            used += w;
-            char_col += 1;
-            if used >= local_x {
-                break;
-            }
+        let line = r.saturating_sub(inner.y) as usize + self.input_scroll_top;
+        let line = line.min(self.input.line_count().saturating_sub(1));
+        Some((line, display_col))
+    }
+
+    fn input_select_start(&mut self, col: u16, row: u16) {
+        if let Some((line, dcol)) = self.input_pos_at(col, row) {
+            self.input.select_start_at(line, dcol);
         }
-        self.input.click_at(local_y, char_col);
+    }
+
+    fn input_drag_to(&mut self, col: u16, row: u16) {
+        if let Some((line, dcol)) = self.input_pos_at(col, row) {
+            self.input.select_drag_to(line, dcol);
+        }
+    }
+
+    /// Scroll the input viewport by `delta` lines (negative = older / up).
+    fn scroll_input(&mut self, delta: i32) {
+        let h = self.input_view_h.max(1);
+        let max_top = self.input.line_count().saturating_sub(h);
+        if delta < 0 {
+            self.input_scroll_top = self
+                .input_scroll_top
+                .saturating_sub((-delta) as usize)
+                .min(max_top);
+        } else {
+            self.input_scroll_top = (self.input_scroll_top + delta as usize).min(max_top);
+        }
+    }
+
+    /// Keep the caret line inside the visible input window after typing/paste.
+    fn ensure_input_caret_visible(&mut self) {
+        let h = self.input_view_h.max(1);
+        let (line, _) = self.input.cursor_line_col();
+        let max_top = self.input.line_count().saturating_sub(h);
+        if line < self.input_scroll_top {
+            self.input_scroll_top = line;
+        } else if line >= self.input_scroll_top + h {
+            self.input_scroll_top = line + 1 - h;
+        }
+        self.input_scroll_top = self.input_scroll_top.min(max_top);
+    }
+
+    /// While drag-selecting in the input, nudge the viewport at the edges.
+    fn maybe_autoscroll_input_while_selecting(&mut self, row: u16) {
+        let inner = self.input_inner;
+        if inner.height == 0 {
+            return;
+        }
+        if row < inner.y.saturating_add(1) {
+            self.scroll_input(-1);
+        } else if row + 1 >= inner.bottom() {
+            self.scroll_input(1);
+        }
+    }
+
+    /// Map a terminal (column, row) click onto the input buffer caret.
+    #[allow(dead_code)]
+    fn click_input(&mut self, col: u16, row: u16) {
+        if let Some((line, dcol)) = self.input_pos_at(col, row) {
+            self.input.click_at(line, dcol);
+            self.ensure_input_caret_visible();
+        }
     }
 
     // ── session picker (`/sessions` · `/resume` · Ctrl+R) ─────────────

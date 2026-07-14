@@ -1,6 +1,7 @@
 //! Rendering for the Meta CLI TUI — Meta-blue surfaces, motion, cursors.
 
 use super::app::{fmt_num, line_to_plain, App, Cell, TextRange};
+use super::input::DisplaySeg;
 use super::{ansi, markdown, scrollbar::ScrollMetrics, wrap};
 use crate::theme;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect, Size};
@@ -2017,25 +2018,30 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
         .bg(theme::META_BLUE_SKY)
         .add_modifier(Modifier::BOLD);
     let normal = Style::default().fg(theme::FG);
+    let chip_style = Style::default()
+        .fg(theme::META_BLUE)
+        .bg(theme::SURFACE)
+        .add_modifier(Modifier::BOLD);
+    let chip_sel_style = Style::default()
+        .fg(theme::BG)
+        .bg(theme::META_BLUE)
+        .add_modifier(Modifier::BOLD);
 
     // Absolute char index at the start of each line.
     let mut line_starts: Vec<usize> = vec![0];
     {
-        let mut acc = 0usize;
         for (i, ch) in text.chars().enumerate() {
             if ch == '\n' {
                 line_starts.push(i + 1);
             }
-            acc = i + 1;
         }
-        let _ = acc;
     }
 
     if text.is_empty() {
         let hint = if app.busy {
             "type a follow-up — Enter queues it"
         } else {
-            "plan, build, debug  ·  click to place caret  ·  Ctrl+A/C/V"
+            "plan, build, debug  ·  paste large text → chip  ·  wheel over input scrolls"
         };
         let mut spans = vec![Span::styled(
             "❯ ".to_string(),
@@ -2054,8 +2060,8 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
         spans.push(Span::styled(format!(" {hint}"), theme::style_faint()));
         lines.push(Line::from(spans));
     } else {
-        let (cur_line, cur_col) = app.input.cursor_line_col();
-        for (i, l) in text.split('\n').enumerate() {
+        let line_count = app.input.line_count();
+        for i in 0..line_count {
             let prefix = if i == 0 { "❯ " } else { "  " };
             let mut spans = vec![Span::styled(
                 prefix.to_string(),
@@ -2064,8 +2070,8 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
                     .add_modifier(Modifier::BOLD),
             )];
             let base = line_starts.get(i).copied().unwrap_or(0);
-            let chars: Vec<char> = l.chars().collect();
-            // Paint selection + caret per character.
+            let segs = app.input.line_display_segs(i);
+            let mut abs = base;
             let mut run = String::new();
             let mut run_sel = false;
             let flush = |run: &mut String, run_sel: bool, spans: &mut Vec<Span>| {
@@ -2075,57 +2081,98 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
                 let style = if run_sel { sel_style } else { normal };
                 spans.push(Span::styled(std::mem::take(run), style));
             };
-            for (ci, ch) in chars.iter().enumerate() {
-                let abs = base + ci;
-                let is_sel = sel.map(|(lo, hi)| abs >= lo && abs < hi).unwrap_or(false);
-                let is_caret = focused && i == cur_line && ci == cur_col;
-                if is_caret {
-                    flush(&mut run, run_sel, &mut spans);
-                    run_sel = false;
-                    spans.push(Span::styled(
-                        ch.to_string(),
-                        if is_sel {
-                            Style::default()
-                                .fg(theme::BG)
-                                .bg(theme::META_BLUE)
-                                .add_modifier(Modifier::BOLD)
-                        } else {
-                            theme::style_cursor_on()
-                        },
-                    ));
-                } else if is_sel != run_sel && !run.is_empty() {
-                    flush(&mut run, run_sel, &mut spans);
-                    run_sel = is_sel;
-                    run.push(*ch);
-                } else {
-                    if run.is_empty() {
-                        run_sel = is_sel;
+            for seg in segs {
+                match seg {
+                    DisplaySeg::Text(s) => {
+                        for ch in s.chars() {
+                            let is_sel =
+                                sel.map(|(lo, hi)| abs >= lo && abs < hi).unwrap_or(false);
+                            let caret_on = focused && {
+                                let (cl, cc) = app.input.cursor_line_col();
+                                i == cl && abs == base + cc
+                            };
+                            if caret_on {
+                                flush(&mut run, run_sel, &mut spans);
+                                run_sel = false;
+                                spans.push(Span::styled(
+                                    ch.to_string(),
+                                    if is_sel {
+                                        Style::default()
+                                            .fg(theme::BG)
+                                            .bg(theme::META_BLUE)
+                                            .add_modifier(Modifier::BOLD)
+                                    } else {
+                                        theme::style_cursor_on()
+                                    },
+                                ));
+                            } else if is_sel != run_sel && !run.is_empty() {
+                                flush(&mut run, run_sel, &mut spans);
+                                run_sel = is_sel;
+                                run.push(ch);
+                            } else {
+                                if run.is_empty() {
+                                    run_sel = is_sel;
+                                }
+                                run.push(ch);
+                            }
+                            abs += 1;
+                        }
                     }
-                    run.push(*ch);
+                    DisplaySeg::Chip { label, .. } => {
+                        flush(&mut run, run_sel, &mut spans);
+                        let is_sel =
+                            sel.map(|(lo, hi)| abs >= lo && abs < hi).unwrap_or(false);
+                        let caret_on = focused && {
+                            let (cl, cc) = app.input.cursor_line_col();
+                            i == cl && abs == base + cc
+                        };
+                        let style = if caret_on {
+                            if is_sel {
+                                chip_sel_style
+                            } else {
+                                Style::default()
+                                    .fg(theme::BG)
+                                    .bg(theme::META_BLUE)
+                                    .add_modifier(Modifier::BOLD)
+                            }
+                        } else if is_sel {
+                            chip_sel_style
+                        } else {
+                            chip_style
+                        };
+                        // Label width matches InputState::display_width_at (no extra brackets).
+                        spans.push(Span::styled(label, style));
+                        abs += 1;
+                    }
                 }
             }
-            // Caret past end of line.
-            if focused && i == cur_line && cur_col >= chars.len() {
-                flush(&mut run, run_sel, &mut spans);
+            flush(&mut run, run_sel, &mut spans);
+            let (cl, cc) = app.input.cursor_line_col();
+            let line_buf_len = text
+                .split('\n')
+                .nth(i)
+                .map(|l| l.chars().count())
+                .unwrap_or(0);
+            if focused && i == cl && cc >= line_buf_len {
                 spans.push(Span::styled(" ".to_string(), theme::style_cursor_on()));
-            } else {
-                flush(&mut run, run_sel, &mut spans);
             }
             lines.push(Line::from(spans));
         }
     }
 
-    let (cur_line, cur_col) = app.input.cursor_line_col();
-    let h = inner.height as usize;
-    let top = cur_line.saturating_sub(h.saturating_sub(1));
+    let (cur_line, cur_disp_col) = app.input.cursor_display_line_col();
+    let h = (inner.height as usize).max(1);
+    app.input_view_h = h;
+    // User-controlled vertical scroll (wheel / drag); clamp only here.
+    // Caret visibility is adjusted on type/paste/nav via ensure_input_caret_visible.
+    let max_top = app.input.line_count().saturating_sub(h);
+    if app.input_scroll_top > max_top {
+        app.input_scroll_top = max_top;
+    }
+    let top = app.input_scroll_top;
 
-    let cur_disp_w: usize = text
-        .split('\n')
-        .nth(cur_line)
-        .map(|l| l.chars().take(cur_col).collect::<String>().width())
-        .unwrap_or(cur_col);
     let usable = (inner.width as usize).saturating_sub(3);
-    let x_off = cur_disp_w.saturating_sub(usable) as u16;
+    let x_off = cur_disp_col.saturating_sub(usable) as u16;
 
     let visible: Vec<Line> = lines.into_iter().skip(top).take(h).collect();
     f.render_widget(
@@ -2136,14 +2183,15 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
     );
 
     if app.approval.is_none() && app.picker.is_none() && app.login.is_none() {
-        let cx = inner.x + 2 + (cur_disp_w as u16).saturating_sub(x_off);
-        let cy = inner.y + (cur_line - top) as u16;
+        let cx = inner.x + 2 + (cur_disp_col as u16).saturating_sub(x_off);
+        let cy = inner.y + (cur_line.saturating_sub(top)) as u16;
         if cx < inner.right() && cy < inner.bottom() {
             f.set_cursor_position((cx, cy));
         }
     }
 
-    // Geometry for click-to-caret / next mouse frame.
+    // Geometry for hit-testing / next mouse frame (outer = full bordered box).
+    app.input_area = area;
     app.input_inner = inner;
     app.input_scroll_top = top;
     app.input_x_off = x_off;

@@ -382,15 +382,16 @@ impl App {
         s.push_str("keyboard\n");
         // Two-column: shortcut (left, fixed) · action
         let keys: &[(&str, &str)] = &[
-            ("↑ ↓  ·  wheel", "scroll transcript"),
+            ("↑ ↓  ·  wheel", "scroll transcript (wheel on input scrolls prompt)"),
+            ("drag in input", "select prompt  ·  large paste → chip"),
             ("drag scrollbar", "scrub history"),
-            ("drag text", "select + auto-copy"),
+            ("drag text", "select transcript + auto-copy"),
             ("click ↓ End", "jump to latest"),
             ("click card  ·  ▸", "peek  ·  expand"),
             ("right/2×-click prompt", "menu: fork · revert · copy"),
             ("Ctrl+A", "select all (input, or transcript if empty)"),
             ("Ctrl+C", "copy selection  ·  else cancel / double-tap quit"),
-            ("Ctrl+V  ·  Ctrl+X", "paste  ·  cut"),
+            ("Ctrl+V  ·  Ctrl+X", "paste (chips big blobs)  ·  cut"),
             ("Ctrl+P / N", "prompt history  (also Alt+↑/↓)"),
             ("Enter", "send  ·  \\+Enter or Ctrl+J = newline"),
             ("Shift+Tab", "cycle permission mode"),
