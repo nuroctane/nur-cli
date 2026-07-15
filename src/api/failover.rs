@@ -6,9 +6,10 @@
 //! `fallback_providers` in config to a list of catalog provider ids. Failover
 //! spends the fallback provider's credits, so it never happens implicitly.
 //!
-//! Credentials for a fallback come from that provider's own catalog env var
-//! (e.g. `OPENAI_API_KEY`), never from the primary's saved login — so a Meta
-//! outage falls over to OpenAI only if you actually have an OpenAI key present.
+//! Credentials for a fallback come from, in order: that provider's catalog env
+//! var (e.g. `OPENAI_API_KEY`), a key saved via `/failover`, a browser OAuth
+//! session saved via `/failover` (or dual-written from `/login`), or empty for
+//! key-optional local servers — never from the primary's active `auth.json`.
 
 use crate::error::MuseError;
 use crate::providers::{self, ApiStyle, Provider};
@@ -72,10 +73,11 @@ pub fn plan_targets(
     out
 }
 
-/// Runtime key resolver for a fallback provider, in priority order:
+/// Runtime credential resolver for a fallback provider, in priority order:
 /// 1. the provider's own catalog env var (e.g. `OPENAI_API_KEY`),
-/// 2. a key saved via the provider picker (`auth::load_provider_key`),
-/// 3. an empty string for local servers that don't need one.
+/// 2. an API key saved via `/failover` (`auth::load_provider_key`),
+/// 3. a browser OAuth session for that provider (`auth::load_provider_oauth_token`),
+/// 4. an empty string for local servers that don't need one.
 /// `None` = no credentials, skip this provider.
 pub fn resolve_target_key(p: &Provider) -> Option<String> {
     if let Ok(k) = std::env::var(p.env_key) {
@@ -85,6 +87,12 @@ pub fn resolve_target_key(p: &Provider) -> Option<String> {
         }
     }
     if let Some(k) = crate::auth::load_provider_key(p.id) {
+        let k = k.trim().to_string();
+        if !k.is_empty() {
+            return Some(k);
+        }
+    }
+    if let Some(k) = crate::auth::load_provider_oauth_token(p.id) {
         let k = k.trim().to_string();
         if !k.is_empty() {
             return Some(k);

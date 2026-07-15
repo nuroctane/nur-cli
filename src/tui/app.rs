@@ -3557,7 +3557,8 @@ impl App {
     }
 
     /// Toggle the currently-selected provider in the failover chain. When newly
-    /// added without a resolvable key, drops into Key entry for it.
+    /// added without resolvable credentials, capture them now — Method stage
+    /// (browser / key / import) for OAuth-capable providers, Key stage otherwise.
     fn toggle_fallback_selected(&mut self) {
         let provider = {
             let Some(m) = &self.login else { return };
@@ -3587,15 +3588,43 @@ impl App {
         if let Some(m) = &mut self.login {
             m.error = None;
         }
-        // Newly added and no key yet → capture one now so failover can use it.
+        // Newly added and no credentials yet → capture key and/or OAuth now.
         if !present && crate::api::failover::resolve_target_key(&provider).is_none() {
             if let Some(m) = &mut self.login {
                 m.provider_id = id;
                 m.buf.clear();
                 m.fallback_key = true;
-                m.stage = LoginStage::Key;
+                m.error = None;
+                if provider.browser_auth {
+                    m.can_import = crate::oauth::import_existing_session(provider.id)
+                        .ok()
+                        .flatten()
+                        .is_some();
+                    m.method_sel = 0;
+                    m.stage = LoginStage::Method;
+                } else {
+                    m.stage = LoginStage::Key;
+                }
             }
         }
+    }
+
+    /// Finish a failover-only credential capture (key or OAuth) and return to
+    /// the manage-failover picker without switching the active provider.
+    fn finish_fallback_credential(&mut self, note: impl Into<String>) {
+        if let Some(m) = &mut self.login {
+            m.fallback_key = false;
+            m.buf.clear();
+            m.error = None;
+            m.browser_status.clear();
+            m.browser_url.clear();
+            m.browser_user_code.clear();
+            m.oauth_rx = None;
+            m.oauth_cancel = None;
+            m.stage = LoginStage::Provider;
+            m.manage_failover = true;
+        }
+        self.push_info(note.into());
     }
 
     /// Open the `/model` chooser and kick off a live model-list fetch for the
@@ -4072,6 +4101,10 @@ impl App {
         let n = Self::method_option_count(m);
         match key.code {
             KeyCode::Esc => {
+                // Failover capture: cancel credential step, stay in manage mode.
+                if m.fallback_key {
+                    m.fallback_key = false;
+                }
                 m.stage = LoginStage::Provider;
                 m.error = None;
             }
@@ -4103,8 +4136,13 @@ impl App {
     }
 
     fn login_method_confirm(&mut self) {
-        let (provider_id, sel, can_import) = match &self.login {
-            Some(m) => (m.provider_id.clone(), m.method_sel, m.can_import),
+        let (provider_id, sel, can_import, is_fallback) = match &self.login {
+            Some(m) => (
+                m.provider_id.clone(),
+                m.method_sel,
+                m.can_import,
+                m.fallback_key,
+            ),
             None => return,
         };
         match sel {
@@ -4119,6 +4157,27 @@ impl App {
             2 if can_import => {
                 match crate::oauth::import_existing_session(&provider_id) {
                     Ok(Some(tokens)) => {
+                        if is_fallback {
+                            if let Err(e) = crate::auth::save_provider_oauth(
+                                &provider_id,
+                                &tokens.access_token,
+                                tokens.refresh_token,
+                                tokens.expires_at,
+                                tokens.meta,
+                            ) {
+                                if let Some(m) = &mut self.login {
+                                    m.error = Some(e.to_string());
+                                }
+                                return;
+                            }
+                            let name = crate::providers::by_id(&provider_id)
+                                .map(|p| p.name)
+                                .unwrap_or(provider_id.as_str());
+                            self.finish_fallback_credential(format!(
+                                "failover · {name} · browser session saved"
+                            ));
+                            return;
+                        }
                         if let Err(e) = crate::auth::save_oauth_session(
                             &provider_id,
                             &tokens.access_token,
@@ -4232,17 +4291,56 @@ impl App {
                     }
                 }
                 crate::oauth::BrowserLoginProgress::Done(tokens) => {
-                    let provider_id = self
+                    let (provider_id, is_fallback) = self
                         .login
                         .as_ref()
-                        .map(|m| m.provider_id.clone())
+                        .map(|m| (m.provider_id.clone(), m.fallback_key))
                         .unwrap_or_default();
                     let access = tokens.access_token.clone();
                     if let Some(m) = &mut self.login {
                         m.oauth_rx = None;
                         m.oauth_cancel = None;
                     }
-                    self.apply_provider_login(&provider_id, &access, true);
+                    if is_fallback {
+                        // Failover-only: stash OAuth for this provider, stay on
+                        // the manage picker — do not switch active login.
+                        if let Err(e) = crate::auth::save_provider_oauth(
+                            &provider_id,
+                            &tokens.access_token,
+                            tokens.refresh_token,
+                            tokens.expires_at,
+                            tokens.meta,
+                        ) {
+                            if let Some(m) = &mut self.login {
+                                m.error = Some(e.to_string());
+                                m.stage = LoginStage::Method;
+                            }
+                            continue;
+                        }
+                        let name = crate::providers::by_id(&provider_id)
+                            .map(|p| p.name)
+                            .unwrap_or(provider_id.as_str());
+                        self.finish_fallback_credential(format!(
+                            "failover · {name} · browser session saved"
+                        ));
+                    } else {
+                        // Active login: save_oauth_session dual-writes the
+                        // per-provider store for later failover use.
+                        if let Err(e) = crate::auth::save_oauth_session(
+                            &provider_id,
+                            &tokens.access_token,
+                            tokens.refresh_token.clone(),
+                            tokens.expires_at,
+                            tokens.meta.clone(),
+                        ) {
+                            if let Some(m) = &mut self.login {
+                                m.error = Some(e.to_string());
+                                m.stage = LoginStage::Method;
+                            }
+                            continue;
+                        }
+                        self.apply_provider_login(&provider_id, &access, true);
+                    }
                 }
                 crate::oauth::BrowserLoginProgress::Failed(err) => {
                     if let Some(m) = &mut self.login {
@@ -4372,20 +4470,19 @@ impl App {
     fn on_login_key_entry(&mut self, key: event::KeyEvent, ctrl: bool) {
         let Some(m) = &mut self.login else { return };
         match key.code {
-            // Esc backs up to the picker (failover key) / method (browser auth) / provider.
+            // Esc backs up: key → method (if browser) → provider (failover keeps manage mode).
             KeyCode::Esc => {
-                if m.fallback_key {
+                let browser = crate::providers::by_id(&m.provider_id)
+                    .map(|p| p.browser_auth)
+                    .unwrap_or(false);
+                if browser {
+                    // Keep fallback_key so Method still knows this is failover capture.
+                    m.stage = LoginStage::Method;
+                } else if m.fallback_key {
                     m.fallback_key = false;
                     m.stage = LoginStage::Provider;
                 } else {
-                    let browser = crate::providers::by_id(&m.provider_id)
-                        .map(|p| p.browser_auth)
-                        .unwrap_or(false);
-                    m.stage = if browser {
-                        LoginStage::Method
-                    } else {
-                        LoginStage::Provider
-                    };
+                    m.stage = LoginStage::Provider;
                 }
                 m.buf.clear();
                 m.error = None;

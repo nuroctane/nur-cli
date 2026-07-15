@@ -192,20 +192,22 @@ pub fn load_auth() -> Result<Option<Auth>> {
 }
 
 /// Refresh OAuth access token if within 5 minutes of expiry (or already expired).
-pub fn ensure_fresh_oauth(auth: &mut Auth) -> Result<()> {
+/// Mutates `auth` in place; does **not** persist — callers write to the right
+/// store (`auth.json` vs per-provider sessions).
+pub fn refresh_oauth_in_place(auth: &mut Auth) -> Result<bool> {
     if !matches!(auth.auth_method, AuthMethod::Oauth) {
-        return Ok(());
+        return Ok(false);
     }
     let Some(exp) = auth.expires_at else {
-        return Ok(());
+        return Ok(false);
     };
     let now = now_unix();
     // Refresh when < 5 min remaining.
     if exp > now.saturating_add(300) {
-        return Ok(());
+        return Ok(false);
     }
     let Some(refresh) = auth.refresh_token.clone().filter(|s| !s.is_empty()) else {
-        return Ok(());
+        return Ok(false);
     };
     let provider = auth.provider.as_str();
     match crate::oauth::refresh_tokens(provider, auth, &refresh) {
@@ -216,13 +218,12 @@ pub fn ensure_fresh_oauth(auth: &mut Auth) -> Result<()> {
             }
             auth.expires_at = tokens.expires_at;
             auth.source = "oauth".into();
-            let _ = save_auth(auth);
-            Ok(())
+            Ok(true)
         }
         Err(e) => {
             // Soft-fail if still not expired — let the request try.
             if exp > now {
-                Ok(())
+                Ok(false)
             } else {
                 Err(MuseError::Other(format!(
                     "OAuth token expired and refresh failed ({e}). Run /login again."
@@ -230,6 +231,14 @@ pub fn ensure_fresh_oauth(auth: &mut Auth) -> Result<()> {
             }
         }
     }
+}
+
+/// Refresh OAuth access token if needed and persist to the active `auth.json`.
+pub fn ensure_fresh_oauth(auth: &mut Auth) -> Result<()> {
+    if refresh_oauth_in_place(auth)? {
+        let _ = save_auth(auth);
+    }
+    Ok(())
 }
 
 pub fn save_auth(auth: &Auth) -> Result<()> {
@@ -332,7 +341,9 @@ pub fn save_provider_key(provider_id: &str, key: &str) -> Result<()> {
     save_key_at(&crate::config::provider_keys_path(), provider_id, key)
 }
 
-/// Persist an OAuth session (access + optional refresh).
+/// Persist an OAuth session as the **active** login (`auth.json`), and also
+/// stash it in the per-provider session store so the same provider can later
+/// be used as a failover target without re-signing-in.
 pub fn save_oauth_session(
     provider: &str,
     access_token: &str,
@@ -340,11 +351,25 @@ pub fn save_oauth_session(
     expires_at: Option<u64>,
     meta: Option<OauthMeta>,
 ) -> Result<()> {
+    let auth = oauth_auth(provider, access_token, refresh_token, expires_at, meta)?;
+    save_auth(&auth)?;
+    // Best-effort dual-write for failover; active login already succeeded.
+    let _ = save_provider_session(&auth);
+    Ok(())
+}
+
+fn oauth_auth(
+    provider: &str,
+    access_token: &str,
+    refresh_token: Option<String>,
+    expires_at: Option<u64>,
+    meta: Option<OauthMeta>,
+) -> Result<Auth> {
     let access = access_token.trim();
     if access.is_empty() {
         return Err(MuseError::Other("empty OAuth access token".into()));
     }
-    let auth = Auth {
+    Ok(Auth {
         api_key: access.to_string(),
         source: "oauth".into(),
         auth_method: AuthMethod::Oauth,
@@ -352,8 +377,101 @@ pub fn save_oauth_session(
         refresh_token,
         expires_at,
         oauth_meta: meta,
-    };
-    save_auth(&auth)
+    })
+}
+
+// ── Per-provider OAuth sessions (failover for browser-auth providers) ────────
+
+fn read_sessions_at(path: &Path) -> BTreeMap<String, Auth> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+fn write_sessions_at(path: &Path, map: &BTreeMap<String, Auth>) -> Result<()> {
+    let text = serde_json::to_string_pretty(map)?;
+    crate::config::atomic_write(path, text.as_bytes())
+        .map_err(|e| MuseError::Other(format!("failed to save provider sessions: {e}")))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+fn save_provider_session_at(path: &Path, auth: &Auth) -> Result<()> {
+    let id = auth.provider.trim();
+    if id.is_empty() {
+        return Err(MuseError::Other(
+            "provider session needs a non-empty provider id".into(),
+        ));
+    }
+    let mut map = read_sessions_at(path);
+    map.insert(id.to_string(), auth.clone());
+    write_sessions_at(path, &map)
+}
+
+/// Persist an OAuth session for a provider **without** changing the active
+/// `auth.json` — used when capturing a failover credential via `/failover`.
+pub fn save_provider_oauth(
+    provider: &str,
+    access_token: &str,
+    refresh_token: Option<String>,
+    expires_at: Option<u64>,
+    meta: Option<OauthMeta>,
+) -> Result<()> {
+    ensure_dirs()?;
+    let auth = oauth_auth(provider, access_token, refresh_token, expires_at, meta)?;
+    save_provider_session(&auth)
+}
+
+fn save_provider_session(auth: &Auth) -> Result<()> {
+    ensure_dirs()?;
+    save_provider_session_at(&crate::config::provider_sessions_path(), auth)
+}
+
+/// Load a usable bearer for a failover provider from the per-provider OAuth
+/// store (refreshing if needed). `None` if no session or refresh failed hard.
+pub fn load_provider_oauth_token(provider_id: &str) -> Option<String> {
+    load_provider_oauth_token_at(&crate::config::provider_sessions_path(), provider_id)
+}
+
+fn load_provider_oauth_token_at(path: &Path, provider_id: &str) -> Option<String> {
+    let mut map = read_sessions_at(path);
+    let mut auth = map.get(provider_id)?.clone();
+    if !matches!(auth.auth_method, AuthMethod::Oauth) {
+        return None;
+    }
+    // Keep provider id consistent even if an older file omitted it.
+    if auth.provider.is_empty() {
+        auth.provider = provider_id.to_string();
+    }
+    match refresh_oauth_in_place(&mut auth) {
+        Ok(true) => {
+            map.insert(provider_id.to_string(), auth.clone());
+            let _ = write_sessions_at(path, &map);
+        }
+        Ok(false) => {}
+        Err(_) => return None,
+    }
+    let k = auth.api_key.trim().to_string();
+    if k.is_empty() {
+        None
+    } else {
+        Some(k)
+    }
+}
+
+/// Whether a stored OAuth session exists for this provider (may still need refresh).
+pub fn has_provider_oauth(provider_id: &str) -> bool {
+    read_sessions_at(&crate::config::provider_sessions_path())
+        .get(provider_id)
+        .map(|a| {
+            matches!(a.auth_method, AuthMethod::Oauth) && !a.api_key.trim().is_empty()
+        })
+        .unwrap_or(false)
 }
 
 /// Delete local credentials. If `revoke` is true, best-effort remote revoke first.
@@ -595,6 +713,47 @@ mod tests {
         assert_eq!(read_keys_at(&path).len(), 2);
         // Too-short keys are rejected.
         assert!(save_key_at(&path, "openai", "short").is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn provider_oauth_session_store_roundtrip() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "nur_ps_{nanos}_{}",
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("provider_sessions.json");
+
+        assert!(load_provider_oauth_token_at(&path, "xai").is_none());
+        let auth = oauth_auth(
+            "xai",
+            "oauth-access-token-xxxxx",
+            Some("refresh-yyyy".into()),
+            Some(now_unix() + 3600),
+            None,
+        )
+        .unwrap();
+        save_provider_session_at(&path, &auth).unwrap();
+        assert_eq!(
+            load_provider_oauth_token_at(&path, "xai").as_deref(),
+            Some("oauth-access-token-xxxxx")
+        );
+        // Second provider coexists.
+        let auth2 = oauth_auth("anthropic", "claude-token-zzzzzzzz", None, None, None).unwrap();
+        save_provider_session_at(&path, &auth2).unwrap();
+        assert_eq!(read_sessions_at(&path).len(), 2);
+        assert_eq!(
+            load_provider_oauth_token_at(&path, "anthropic").as_deref(),
+            Some("claude-token-zzzzzzzz")
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

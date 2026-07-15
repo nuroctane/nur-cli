@@ -136,12 +136,18 @@ fn draw_login_method(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Clear, rect);
     f.render_widget(Block::default().style(Style::default().bg(theme::SURFACE_2)), rect);
     let phase = modal_phase(app);
+    let failover = m.fallback_key;
+    let title = if failover {
+        format!(" ↻ {} · failover credentials ", provider.name)
+    } else {
+        format!(" 🔑 {} · how to sign in ", provider.name)
+    };
     draw_modal_frame(
         f,
         rect,
         phase,
         theme::INDIGO,
-        &format!(" 🔑 {} · how to sign in ", provider.name),
+        &title,
         None,
         "  ↑↓  ·  ↵ choose  ·  esc back  ",
     );
@@ -227,12 +233,17 @@ fn draw_login_browser(f: &mut Frame, app: &App, area: Rect) {
     } else {
         "◑"
     };
+    let title = if m.fallback_key {
+        format!(" {spin} ↻ {} · failover browser sign-in ", provider.name)
+    } else {
+        format!(" {spin} {} · browser sign-in ", provider.name)
+    };
     draw_modal_frame(
         f,
         rect,
         phase,
         theme::INDIGO,
-        &format!(" {spin} {} · browser sign-in ", provider.name),
+        &title,
         None,
         "  esc cancel  ",
     );

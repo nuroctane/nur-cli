@@ -1,7 +1,7 @@
 //! Per-provider browser / device-code / external-CLI login flows.
 
 use super::{expires_in_to_at, open_browser, CancelFlag};
-use crate::auth::{save_oauth_session, Auth, OauthMeta};
+use crate::auth::{Auth, OauthMeta};
 use crate::error::{MuseError, Result};
 use base64::engine::general_purpose::{URL_SAFE_NO_PAD, STANDARD};
 use base64::Engine;
@@ -61,20 +61,10 @@ pub fn login_browser(provider_id: &str, tx: ProgressTx, cancel: CancelFlag) {
             "browser login not supported for '{other}'"
         ))),
     };
+    // Do not persist here — the TUI decides active login vs failover-only
+    // storage so a `/failover` browser capture never overwrites auth.json.
     match result {
-        Ok(tokens) => {
-            if let Err(e) = save_oauth_session(
-                provider_id,
-                &tokens.access_token,
-                tokens.refresh_token.clone(),
-                tokens.expires_at,
-                tokens.meta.clone(),
-            ) {
-                send(&tx, BrowserLoginProgress::Failed(e.to_string()));
-            } else {
-                send(&tx, BrowserLoginProgress::Done(tokens));
-            }
-        }
+        Ok(tokens) => send(&tx, BrowserLoginProgress::Done(tokens)),
         Err(e) => send(&tx, BrowserLoginProgress::Failed(e.to_string())),
     }
 }

@@ -243,6 +243,13 @@ pub fn provider_keys_path() -> PathBuf {
     nur_home().join("provider_keys.json")
 }
 
+/// Per-provider OAuth sessions for cross-provider failover (JSON map
+/// `{provider_id: Auth}`). Lets a browser-signed-in provider stay usable as a
+/// fallback after you switch the active login.
+pub fn provider_sessions_path() -> PathBuf {
+    nur_home().join("provider_sessions.json")
+}
+
 pub fn sessions_dir() -> PathBuf {
     nur_home().join("sessions")
 }
