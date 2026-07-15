@@ -11,10 +11,10 @@
 
   Steps: ensure Rust → clone if needed → cargo build --release →
   install nur to %USERPROFILE%\.local\bin → PATH → Orca hook →
-  optional auth if META_API_KEY / MODEL_API_KEY is set.
+  optional auth if NUR_API_KEY (or legacy META_/MODEL_/MUSE_) is set.
 
   Secrets are NEVER written into the repo. Keys live only in:
-    %USERPROFILE%\.nur\auth.json   or   env META_API_KEY / MODEL_API_KEY
+    %USERPROFILE%\.nur\auth.json   or   env NUR_API_KEY (legacy META_/MODEL_/MUSE_)
 
 .PARAMETER SkipHook
   Skip Orca agent-hook install.
@@ -248,6 +248,9 @@ if (-not $key) { $key = $env:META_API_KEY }
 if (-not $key) { $key = $env:MODEL_API_KEY }
 if (-not $key) { $key = $env:MUSE_API_KEY }
 if (-not $key) {
+    $key = [Environment]::GetEnvironmentVariable("NUR_API_KEY", "User")
+}
+if (-not $key) {
     $key = [Environment]::GetEnvironmentVariable("META_API_KEY", "User")
 }
 if (-not $key) {
@@ -259,14 +262,14 @@ if (-not $key) {
 
 if ($key -and $key.Trim().Length -gt 0) {
     Write-Step "API key found in environment — saving to ~/.nur/auth.json (local only)…"
-    # Pipe via env so the key is not put on the process command line
-    $env:META_API_KEY = $key.Trim()
-    & $dest auth login --key $env:META_API_KEY 2>$null | Out-Null
+    # Prefer NUR_API_KEY so auth login matches current nomenclature.
+    $env:NUR_API_KEY = $key.Trim()
+    & $dest auth login --key $env:NUR_API_KEY 2>$null | Out-Null
     Write-Ok "Auth stored under $env:USERPROFILE\.nur\ (never committed to git)"
 } else {
     Write-Warn "No API key in env yet. After install:"
     Write-Host "      nur auth login" -ForegroundColor DarkGray
-    Write-Host "    or set User env NUR_API_KEY (or META_API_KEY for Meta Model API) from https://dev.meta.ai/" -ForegroundColor DarkGray
+    Write-Host "    or set User env NUR_API_KEY (or META_API_KEY for Meta Model API)" -ForegroundColor DarkGray
 }
 
 Write-Host ""

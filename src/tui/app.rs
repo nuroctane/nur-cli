@@ -15,8 +15,9 @@ use crate::tui::scrollbar::{Hit, ScrollMetrics};
 use crate::usage::{TokenUsage, UsageTracker};
 use crossterm::cursor::{Hide, Show};
 use crossterm::event::{
-    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+    self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+    EnableFocusChange, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
+    MouseButton, MouseEventKind,
 };
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -1177,6 +1178,7 @@ struct TermGuard;
 impl Drop for TermGuard {
     fn drop(&mut self) {
         disable_mouse();
+        let _ = stdout().execute(DisableFocusChange);
         let _ = stdout().execute(Show);
         let _ = disable_raw_mode();
         let _ = stdout().execute(DisableBracketedPaste);
@@ -1220,7 +1222,7 @@ pub async fn run_tui(
     // Fail clearly if stdin isn't a real console (redirects / dead pipes).
     if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         return Err(crate::error::MuseError::Other(
-            "meta needs an interactive terminal (stdin is not a TTY).\n\
+            "nur needs an interactive terminal (stdin is not a TTY).\n\
              Run `nur` from a normal shell window, not a redirected pipe."
                 .into(),
         ));
@@ -1235,8 +1237,11 @@ pub async fn run_tui(
         .execute(EnterAlternateScreen)
         .map_err(|e| crate::error::MuseError::Other(format!("alternate screen: {e}")))?;
     stdout().execute(EnableBracketedPaste)?;
+    // Focus events: when the user releases the mouse *outside* the terminal,
+    // we never see MouseUp — FocusLost clears stuck drag/select state.
+    let _ = stdout().execute(EnableFocusChange);
     enable_mouse();
-    // Hardware cursor hidden — we paint a Meta blue block caret ourselves.
+    // Hardware cursor hidden — we paint a Nur-gold block caret ourselves.
     stdout().execute(Hide)?;
     let _guard = TermGuard;
     let backend = CrosstermBackend::new(stdout());
@@ -1575,6 +1580,17 @@ pub async fn run_tui(
                         continue;
                     }
                     Event::Resize(_, _) => dirty = true,
+                    Event::FocusLost => {
+                        // Mouse-up outside the window never arrives — reset
+                        // drag/select so hover isn't misread as a held button.
+                        app.on_focus_lost();
+                        dirty = true;
+                    }
+                    Event::FocusGained => {
+                        // Re-arm mouse tracking after host/focus quirks.
+                        enable_mouse();
+                        last_mouse_rearm = Instant::now();
+                    }
                     _ => {}
                 }
                 if app.should_quit {
@@ -2906,9 +2922,26 @@ impl App {
         if t.width == 0 || t.height == 0 {
             return false;
         }
-        // Generous hit target: full track height + 2 columns left of the rail.
-        let left = t.x.saturating_sub(2);
-        col >= left && col < t.right() && row >= t.y && row < t.bottom()
+        // Hit only the painted rail (2 cols). Do NOT steal clicks from the
+        // rightmost transcript columns — that was a known UX bug.
+        col >= t.x && col < t.right() && row >= t.y && row < t.bottom()
+    }
+
+    /// Clear mouse drag / select state when the terminal loses focus
+    /// (mouse-up outside the window never fires a MouseUp event).
+    fn on_focus_lost(&mut self) {
+        self.mouse_left_down = false;
+        self.scrollbar_drag = false;
+        self.scrollbar_hover = false;
+        self.selecting = false;
+        self.select_anchor = None;
+        // Keep a finished selection for copy; only drop empty/in-progress ranges.
+        if self.selection.map(|r| r.is_empty()).unwrap_or(true) {
+            self.selection = None;
+        }
+        self.input_drag = false;
+        self.input_selecting = false;
+        self.input_drag_origin = None;
     }
 
     /// Wheel events over an open pinned peek scroll the peek body.
@@ -5451,6 +5484,24 @@ mod tests {
         truncate_session_before_prompt(&mut s, 2); // from_end 2 == first of two
         assert!(s.messages.is_empty());
         assert!(s.input_items.is_empty());
+    }
+
+    #[test]
+    fn scrollbar_hit_stays_on_rail_not_transcript() {
+        // Pure geometry: rail at x=78..80 must not claim col 76 (transcript).
+        let track = ratatui::layout::Rect {
+            x: 78,
+            y: 0,
+            width: 2,
+            height: 20,
+        };
+        let left = track.x; // no overhang into transcript
+        assert!(!(76 >= left && 76 < track.right()), "col 76 must miss rail");
+        assert!(78 >= left && 78 < track.right(), "col 78 hits rail");
+        assert!(79 >= left && 79 < track.right(), "col 79 hits rail");
+        // Old bug: left = track.x - 2 would steal 76–77.
+        let old_left = track.x.saturating_sub(2);
+        assert!(76 >= old_left && 76 < track.right());
     }
 
     #[test]

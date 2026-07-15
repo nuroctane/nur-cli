@@ -156,7 +156,7 @@ Docs: **[nuroctane.github.io/nur-cli](https://nuroctane.github.io/nur-cli/)** ·
 
 ---
 
-**v0.13.1**: Excalidraw diagrams · clickable links · plugins marketplace. **[Docs](https://nuroctane.github.io/nur-cli/)**
+**v0.13.2**: Excalidraw · clickable links · FocusLost drag fix · plugins. **[Docs](https://nuroctane.github.io/nur-cli/)**
 
 | Surface | What ships |
 |---------|------------|
