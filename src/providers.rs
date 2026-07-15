@@ -141,6 +141,118 @@ pub fn browser_auth_ids() -> impl Iterator<Item = &'static str> {
     PROVIDERS.iter().filter(|p| p.browser_auth).map(|p| p.id)
 }
 
+/// Data-handling posture of a provider, strongest → weakest. A hardened, honest
+/// adaptation of Origin's ZDR/TEE tags for a **client** CLI: nur can't verify a
+/// third party's deployment, so it only asserts `Local` (localhost = structurally
+/// private) by default. `Tee` / `Zdr` are claims **you** make about your own
+/// account or endpoint (set in the provider picker). `Standard` = assume
+/// standard retention unless you know otherwise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Privacy {
+    /// Runs on your machine — prompts never leave localhost.
+    Local,
+    /// Trusted Execution Environment — hardware-encrypted enclave (Intel TDX/SGX).
+    Tee,
+    /// Zero Data Retention — a contractual promise not to retain or train.
+    Zdr,
+    /// Standard API terms — may retain (abuse monitoring, etc.).
+    Standard,
+}
+
+impl Privacy {
+    /// Higher = stronger privacy. Drives the failover floor.
+    pub fn rank(self) -> u8 {
+        match self {
+            Privacy::Local => 3,
+            Privacy::Tee => 2,
+            Privacy::Zdr => 1,
+            Privacy::Standard => 0,
+        }
+    }
+    /// Short badge for the picker (empty for Standard — no clutter).
+    pub fn tag(self) -> &'static str {
+        match self {
+            Privacy::Local => "LOCAL",
+            Privacy::Tee => "TEE",
+            Privacy::Zdr => "ZDR",
+            Privacy::Standard => "",
+        }
+    }
+    /// Canonical lowercase name (for saving overrides).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Privacy::Local => "local",
+            Privacy::Tee => "tee",
+            Privacy::Zdr => "zdr",
+            Privacy::Standard => "standard",
+        }
+    }
+    /// Parse a config/override value (case-insensitive). Unknown → `None`.
+    pub fn parse(s: &str) -> Option<Privacy> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "local" => Some(Privacy::Local),
+            "tee" => Some(Privacy::Tee),
+            "zdr" => Some(Privacy::Zdr),
+            "standard" | "std" | "" => Some(Privacy::Standard),
+            _ => None,
+        }
+    }
+    /// Cycle to the next tier (picker toggle): Standard→Zdr→Tee→Local→Standard.
+    pub fn next(self) -> Privacy {
+        match self {
+            Privacy::Standard => Privacy::Zdr,
+            Privacy::Zdr => Privacy::Tee,
+            Privacy::Tee => Privacy::Local,
+            Privacy::Local => Privacy::Standard,
+        }
+    }
+}
+
+/// Built-in privacy tier per provider, from a review of each provider's public
+/// data policy (retention + training). A user override always wins — see
+/// [`effective_privacy`]. When a policy is unclear or a provider trains by
+/// default, it stays `Standard` (the honest, conservative default).
+pub fn builtin_privacy(id: &str) -> Privacy {
+    match id {
+        // Runs on your machine — prompts never leave localhost.
+        "ollama" | "lmstudio" | "llamacpp" | "vllm" | "jan" => Privacy::Local,
+
+        // Hardware-enclave inference with remote attestation + zero retention
+        // (Venice runs on TEE partners NEAR AI / Phala; content never logged).
+        "venice" => Privacy::Tee,
+
+        // Business APIs that, by default, do NOT train on your data and offer or
+        // default to zero data retention (verified from provider policy pages):
+        //   openai/anthropic — no-train by default, ZDR available, short logs
+        //   google/antigravity — paid Gemini API is no-train
+        //   xai — no-train by default, ZDR (enterprise)
+        //   mistral (paid) · cohere · perplexity Sonar — no-train
+        //   groq · cerebras · together · fireworks · deepinfra · hyperbolic ·
+        //   nebius — inference clouds with ZDR / no-store defaults
+        //   azure · bedrock — enterprise no-train + ZDR data handling
+        //   openrouter · vercel — ZDR routing / gateway policy
+        "openai" | "openai-cc" | "anthropic" | "google" | "antigravity" | "xai"
+        | "mistral" | "cohere" | "perplexity" | "groq" | "cerebras" | "together"
+        | "fireworks" | "deepinfra" | "hyperbolic" | "nebius" | "azure" | "bedrock"
+        | "openrouter" | "vercel" => Privacy::Zdr,
+
+        // Everything else stays Standard: trains by default (DeepSeek and the
+        // Chinese labs, Meta's API), logs by default (observability gateways
+        // like Portkey / Helicone / Cloudflare), decentralized/untrusted nodes
+        // (Chutes, Targon), or no clear public ZDR/no-train commitment.
+        _ => Privacy::Standard,
+    }
+}
+
+/// Effective privacy for a provider id: a valid user override wins, else the
+/// built-in default.
+pub fn effective_privacy(overrides: &std::collections::HashMap<String, String>, id: &str) -> Privacy {
+    overrides
+        .get(id)
+        .and_then(|s| Privacy::parse(s))
+        .unwrap_or_else(|| builtin_privacy(id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,6 +265,30 @@ mod tests {
         ids.dedup();
         assert_eq!(ids.len(), n, "duplicate provider id");
         assert_eq!(default_provider().id, "meta");
+    }
+
+    #[test]
+    fn privacy_tiers_rank_parse_and_override() {
+        // Strongest → weakest: Local > Tee > Zdr > Standard.
+        assert!(Privacy::Local.rank() > Privacy::Tee.rank());
+        assert!(Privacy::Tee.rank() > Privacy::Zdr.rank());
+        assert!(Privacy::Zdr.rank() > Privacy::Standard.rank());
+        assert_eq!(Privacy::parse("TEE"), Some(Privacy::Tee));
+        assert_eq!(Privacy::parse("zdr"), Some(Privacy::Zdr));
+        assert_eq!(Privacy::parse("nonsense"), None);
+        // Research-backed built-in tiers.
+        assert_eq!(builtin_privacy("ollama"), Privacy::Local); // localhost
+        assert_eq!(builtin_privacy("venice"), Privacy::Tee); // hardware enclave
+        assert_eq!(builtin_privacy("openai"), Privacy::Zdr); // no-train + ZDR
+        assert_eq!(builtin_privacy("anthropic"), Privacy::Zdr);
+        assert_eq!(builtin_privacy("deepseek"), Privacy::Standard); // trains, China
+        assert_eq!(builtin_privacy("meta"), Privacy::Standard);
+        // A user override wins over the built-in default (here: a downgrade).
+        let mut ov = std::collections::HashMap::new();
+        ov.insert("openai".to_string(), "standard".to_string());
+        assert_eq!(effective_privacy(&ov, "openai"), Privacy::Standard);
+        // No override → built-in still applies.
+        assert_eq!(effective_privacy(&ov, "ollama"), Privacy::Local);
     }
 
     #[test]

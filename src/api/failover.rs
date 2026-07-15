@@ -40,6 +40,14 @@ pub fn should_failover(err: &MuseError) -> bool {
     }
 }
 
+/// Whether a fallback at `target_rank` privacy is acceptable when the active
+/// provider is at `active_rank` (see `crate::providers::Privacy::rank`).
+/// Failover must never silently move you to a *weaker* tier — so a target is
+/// allowed only if it's at least as strong, unless `allow_downgrade` is set.
+pub fn privacy_allowed(active_rank: u8, target_rank: u8, allow_downgrade: bool) -> bool {
+    allow_downgrade || target_rank >= active_rank
+}
+
 /// Build the ordered failover chain from configured fallback provider ids.
 /// Skips ids that are empty, unknown to the catalog, equal to the primary, or
 /// already seen, plus any provider for which `resolve_key` yields `None`
@@ -164,6 +172,20 @@ mod tests {
     #[test]
     fn plan_targets_empty_when_no_fallbacks() {
         assert!(plan_targets("meta", &[], |_| Some("k".into())).is_empty());
+    }
+
+    #[test]
+    fn privacy_floor_blocks_downgrades_unless_allowed() {
+        // Active provider at Zdr (rank 1): weaker Standard (0) is blocked;
+        // equal/stronger tiers pass.
+        assert!(!privacy_allowed(1, 0, false));
+        assert!(privacy_allowed(1, 1, false));
+        assert!(privacy_allowed(1, 2, false)); // Tee
+        assert!(privacy_allowed(1, 3, false)); // Local
+        // Explicit opt-in lets a downgrade through.
+        assert!(privacy_allowed(1, 0, true));
+        // Active at Standard (0) → everything is >= floor.
+        assert!(privacy_allowed(0, 0, false));
     }
 
     #[test]

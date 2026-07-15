@@ -306,7 +306,7 @@ Launching from a drive root (`C:\`) auto-picks a safe workspace (git / last sess
 | Enter | Send |
 | Shift+Enter | Newline |
 | Shift+Tab | Cycle permission mode |
-| Ctrl+R | Sessions browser |
+| Ctrl+R | Reverse-search prompt history (Ctrl+R steps older, Esc cancels) |
 | y / a / n | Approve once / always / deny |
 | Esc | Close peek → cancel turn |
 
@@ -325,6 +325,9 @@ Launching from a drive root (`C:\`) auto-picks a safe workspace (git / last sess
 | `/budget` `/poor` | Spend ceiling / lean prompt |
 | `/cd` `/pwd` `/doctor` `/status` | Workspace + health |
 | `/sessions` `/resume` | Session browser |
+| `/failover` | Cross-provider failover + privacy tiers (provider-picker; Space adds a fallback, Ctrl+P sets its privacy tier) |
+| `/undo` | Revert the last file edit (write / edit / multi_edit) this session |
+| `/receipt` | Session receipt — verify what actually ran (models, tools, privacy tiers), hash-chained |
 
 ---
 

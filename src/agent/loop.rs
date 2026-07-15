@@ -2,6 +2,7 @@ use super::hooks::HooksConfig;
 use super::mode::{PermissionMode, SharedMode};
 use super::permissions::{RuleDecision, SharedPermissions};
 use super::prompt::PromptContext;
+use super::receipt;
 use super::session::Session;
 use super::subagent;
 use crate::api::types::{
@@ -106,6 +107,13 @@ pub fn spawn_turn(
     })
 }
 
+/// Which provider/model actually served a model request (for the receipt).
+struct Served {
+    provider: String,
+    model: String,
+    failover: bool,
+}
+
 impl AgentRunner {
     /// Run one model request against `client`, forwarding stream events to the
     /// UI. Returns `(response, text_deltas_emitted)` on success, or
@@ -161,9 +169,19 @@ impl AgentRunner {
         req: &ResponseRequest,
         tx: &mpsc::UnboundedSender<AgentEvent>,
         cancel: &CancellationToken,
-    ) -> Result<(ApiResponse, usize)> {
+    ) -> Result<(ApiResponse, usize, Served)> {
         let primary_err = match self.stream_one(&self.client, req, tx, cancel).await {
-            Ok(pair) => return Ok(pair),
+            Ok((resp, deltas)) => {
+                return Ok((
+                    resp,
+                    deltas,
+                    Served {
+                        provider: self.config.provider.clone(),
+                        model: self.config.model.clone(),
+                        failover: false,
+                    },
+                ))
+            }
             Err((e, emitted)) => {
                 if emitted > 0 || !crate::api::failover::should_failover(&e) {
                     return Err(e);
@@ -172,12 +190,39 @@ impl AgentRunner {
             }
         };
 
+        // Privacy floor: never fail over to a weaker data-privacy tier than the
+        // active provider unless explicitly allowed (see `providers::Privacy`).
+        let active_privacy =
+            crate::providers::effective_privacy(&self.config.provider_privacy, &self.config.provider);
+        let allowed: Vec<String> = self
+            .config
+            .fallback_providers
+            .iter()
+            .filter(|id| {
+                let r = crate::providers::effective_privacy(&self.config.provider_privacy, id).rank();
+                crate::api::failover::privacy_allowed(
+                    active_privacy.rank(),
+                    r,
+                    self.config.failover_allow_downgrade,
+                )
+            })
+            .cloned()
+            .collect();
+        let dropped = self.config.fallback_providers.len() - allowed.len();
+
         let targets = crate::api::failover::plan_targets(
             &self.config.provider,
-            &self.config.fallback_providers,
+            &allowed,
             crate::api::failover::resolve_target_key,
         );
         if targets.is_empty() {
+            if dropped > 0 {
+                let _ = tx.send(AgentEvent::Status(format!(
+                    "failover skipped {dropped} provider(s) weaker than your {} tier — \
+                     enable failover_allow_downgrade or raise their privacy tags to allow",
+                    active_privacy.as_str()
+                )));
+            }
             return Err(primary_err);
         }
 
@@ -197,7 +242,17 @@ impl AgentRunner {
             let mut req2 = req.clone();
             req2.model = t.model.clone();
             match self.stream_one(&client, &req2, tx, cancel).await {
-                Ok(pair) => return Ok(pair),
+                Ok((resp, deltas)) => {
+                    return Ok((
+                        resp,
+                        deltas,
+                        Served {
+                            provider: t.provider_id.clone(),
+                            model: t.model.clone(),
+                            failover: true,
+                        },
+                    ))
+                }
                 Err((e, emitted)) => {
                     if emitted > 0 || !crate::api::failover::should_failover(&e) {
                         return Err(e);
@@ -329,18 +384,40 @@ impl AgentRunner {
                 prompt_cache_key: Some(session.id.clone()),
             };
 
-            let (resp, text_deltas): (ApiResponse, usize) =
+            let (resp, text_deltas, served): (ApiResponse, usize, Served) =
                 self.request_with_failover(&req, tx, cancel).await?;
 
-            if let Some(u) = &resp.usage {
+            let (in_tok, out_tok) = if let Some(u) = &resp.usage {
                 let tu: TokenUsage = u.into();
                 usage.record_request(tu.clone(), resp.id.clone());
                 session.usage.add(&tu);
+                let toks = (tu.input_tokens, tu.output_tokens);
                 let _ = tx.send(AgentEvent::Usage {
                     session: usage.session_usage().clone(),
                     last: tu,
                 });
-            }
+                toks
+            } else {
+                (0, 0)
+            };
+
+            // Session receipt: record where this request actually went.
+            receipt::record(
+                &session.id,
+                receipt::Event::Model {
+                    provider: served.provider.clone(),
+                    model: served.model.clone(),
+                    privacy: crate::providers::effective_privacy(
+                        &self.config.provider_privacy,
+                        &served.provider,
+                    )
+                    .as_str()
+                    .to_string(),
+                    failover: served.failover,
+                    input_tokens: in_tok,
+                    output_tokens: out_tok,
+                },
+            );
 
             let replayed = replay_output_items(&resp.output);
             session.input_items.extend(replayed);
@@ -437,6 +514,15 @@ impl AgentRunner {
                             &name,
                             body,
                             self.config.tool_result_max_chars as usize,
+                        );
+                        receipt::record(
+                            &session.id,
+                            receipt::Event::Tool {
+                                name: name.clone(),
+                                args_sha256: None,
+                                result_sha256: receipt::sha256_hex(body.as_bytes()),
+                                ok,
+                            },
                         );
                         emit_side_effects(tx, &name, &body);
                         let _ = tx.send(AgentEvent::ToolEnd {
@@ -603,6 +689,15 @@ impl AgentRunner {
                     // Keep error messages intact (usually short).
                     body
                 };
+                receipt::record(
+                    &session.id,
+                    receipt::Event::Tool {
+                        name: call.name.clone(),
+                        args_sha256: Some(receipt::sha256_hex(call.arguments.as_bytes())),
+                        result_sha256: receipt::sha256_hex(body.as_bytes()),
+                        ok,
+                    },
+                );
                 self.hooks.run_post(
                     &call.name,
                     &call.arguments,

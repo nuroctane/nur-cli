@@ -95,6 +95,16 @@ pub struct Config {
     /// no failover. See `crate::api::failover`.
     #[serde(default)]
     pub fallback_providers: Vec<String>,
+    /// Fail over only to providers whose privacy tier is >= the active provider's
+    /// (see `crate::providers::Privacy`). `true` allows downgrading to a weaker
+    /// tier. Default `false` — an outage never silently weakens data privacy.
+    #[serde(default)]
+    pub failover_allow_downgrade: bool,
+    /// Per-provider privacy you assert about your own account/endpoint
+    /// (`{provider_id: "local"|"tee"|"zdr"|"standard"}`). Set in the provider
+    /// picker; overrides the built-in default.
+    #[serde(default)]
+    pub provider_privacy: std::collections::HashMap<String, String>,
 }
 
 fn default_model() -> String {
@@ -178,6 +188,8 @@ impl Default for Config {
             poor_mode: false,
             ecosystem_auto_ensure: true,
             fallback_providers: Vec::new(),
+            failover_allow_downgrade: false,
+            provider_privacy: std::collections::HashMap::new(),
         }
     }
 }

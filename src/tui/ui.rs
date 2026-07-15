@@ -324,9 +324,9 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
         format!(" 🔑 choose a provider  ·  {total} ")
     };
     let hint = if manage {
-        " ↑↓  ·  space/↵ toggle failover  ·  type to filter  ·  esc done  "
+        " ↑↓  ·  space/↵ failover  ·  ^p privacy  ·  type filter  ·  esc done  "
     } else {
-        " ↑↓/wheel  ·  ↵ pick  ·  space failover  ·  type filter  ·  esc  "
+        " ↑↓  ·  ↵ pick  ·  space failover  ·  ^p privacy  ·  esc  "
     };
     draw_modal_frame(f, rect, phase, theme::INDIGO, &title, None, hint);
     let inner = modal_inner(rect);
@@ -420,6 +420,12 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
             theme::style_faint()
         };
         let badge = if p.browser_auth { "  🌐" } else { "" };
+        let priv_tag = crate::providers::effective_privacy(&app.cfg.provider_privacy, p.id).tag();
+        let priv_badge = if priv_tag.is_empty() {
+            String::new()
+        } else {
+            format!("  [{priv_tag}]")
+        };
         let fb = app
             .cfg
             .fallback_providers
@@ -427,7 +433,7 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
             .position(|x| x == p.id)
             .map(|i| format!("  ↻#{}", i + 1))
             .unwrap_or_default();
-        let text = format!("{marker}{:<22}{}{badge}{fb}", p.name, p.note);
+        let text = format!("{marker}{:<22}{}{badge}{priv_badge}{fb}", p.name, p.note);
         let style = if selected { name_style } else { note_style };
         lines.push(Line::from(Span::styled(truncate(&text, col), style)));
 

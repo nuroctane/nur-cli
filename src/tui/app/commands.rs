@@ -82,6 +82,7 @@ impl App {
             "/poor" => self.cmd_poor(),
             "/undo" => self.cmd_undo(),
             "/failover" => self.open_failover(),
+            "/receipt" => self.cmd_receipt(),
             "/permissions" => self.cmd_permissions(&arg),
             "/hooks" => self.push_note(
                 Tone::Skill,
@@ -527,6 +528,11 @@ impl App {
             u.estimated_cost_usd(),
             crate::config::status_path().display(),
         ));
+    }
+
+    fn cmd_receipt(&mut self) {
+        let text = crate::agent::receipt::render(&self.session_id);
+        self.push_note(Tone::Session, text);
     }
 
     fn cmd_undo(&mut self) {

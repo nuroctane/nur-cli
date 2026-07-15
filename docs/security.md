@@ -44,6 +44,25 @@ NurCLI hardens shell execution by default:
 
 ---
 
+## Provider privacy & cross-provider failover
+
+Each provider in the picker carries a **privacy tier**, shown as a badge:
+
+- `LOCAL` — runs on your machine (Ollama, LM Studio, llama.cpp, vLLM, Jan); prompts never leave localhost.
+- `TEE` — hardware-enclave inference with remote attestation (e.g. Venice).
+- `ZDR` — the provider's default policy does not train on your data and offers/defaults to zero data retention (OpenAI, Anthropic, Google paid, Groq, Together, Fireworks, Azure, Bedrock, …).
+- *(no badge)* `STANDARD` — standard API terms; assume retention unless you know otherwise (DeepSeek and other train-by-default providers, logging gateways, unclear policies).
+
+Tiers are built in from a review of each provider's public policy, and you can override any of them for your own account/endpoint with **Ctrl+P** in the provider picker (saved as a `provider_privacy` override — no config file).
+
+**Failover respects privacy.** When the active provider returns a server error, nur can retry against a configured `fallback_providers` chain (set up in `/failover`). Failover **never silently downgrades** you to a weaker privacy tier than your active provider — a weaker fallback is skipped unless you set `failover_allow_downgrade`. It also only fails over *before any output has streamed*, so the transcript never duplicates. Fallback keys come from each provider's own env var or a key/OAuth session you save in `/failover` — never from the active provider's `auth.json`.
+
+## Session receipt (verify what ran)
+
+`/receipt` shows an append-only, **hash-chained** log of the session at `~/.nur/receipts/<session>.jsonl`: every model request (provider, model, **privacy tier used**, whether a failover served it, token counts) and every tool call (name, args/result SHA-256, outcome). Each entry folds in the previous entry's hash, so altering any earlier line breaks the chain — `/receipt` prints an integrity check and flags the first tampered entry. This is the proof that your prompts stayed in the tier you chose and that failover didn't move them.
+
+---
+
 ## Cost controls
 
 - `/budget` and `max_session_cost_usd` / `max_session_tokens` hard-stop new API turns

@@ -60,6 +60,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/budget", "session spend ceiling: /budget [cost <usd>|tokens <n>|clear|save]"),
     ("/poor", "toggle cost-saver: skip PLUR inject + skills catalog + long memory in prompt"),
     ("/undo", "revert the last file edit (write/edit/multi_edit) made this session"),
+    ("/receipt", "session receipt: verify what actually ran (models, tools, privacy tiers)"),
     ("/failover", "set up cross-provider failover in the provider picker (space toggles)"),
     ("/context", "context-window utilization for this session"),
     ("/status", "session snapshot: model · mode · cwd · tokens"),
@@ -3556,6 +3557,31 @@ impl App {
         });
     }
 
+    /// Cycle the asserted privacy tier of the selected provider and persist it
+    /// as an override. Cycling back to the built-in default removes the override.
+    fn cycle_privacy_selected(&mut self) {
+        let provider = {
+            let Some(m) = &self.login else { return };
+            if m.stage != LoginStage::Provider {
+                return;
+            }
+            match m.filtered().get(m.sel) {
+                Some(p) => **p,
+                None => return,
+            }
+        };
+        let cur = crate::providers::effective_privacy(&self.cfg.provider_privacy, provider.id);
+        let next = cur.next();
+        if next == crate::providers::builtin_privacy(provider.id) {
+            self.cfg.provider_privacy.remove(provider.id);
+        } else {
+            self.cfg
+                .provider_privacy
+                .insert(provider.id.to_string(), next.as_str().to_string());
+        }
+        let _ = crate::config::save_config(&self.cfg);
+    }
+
     /// Toggle the currently-selected provider in the failover chain. When newly
     /// added without resolvable credentials, capture them now — Method stage
     /// (browser / key / import) for OAuth-capable providers, Key stage otherwise.
@@ -4447,6 +4473,9 @@ impl App {
             }
             // Space / Tab toggle the selected provider in the failover chain.
             KeyCode::Char(' ') | KeyCode::Tab => self.toggle_fallback_selected(),
+            // Ctrl+P cycles the asserted privacy tier of the selected provider
+            // (Standard → ZDR → TEE → Local → …), saved as an override.
+            KeyCode::Char('p') if ctrl => self.cycle_privacy_selected(),
             KeyCode::Backspace => {
                 m.filter.pop();
                 m.sel = 0;

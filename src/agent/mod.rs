@@ -4,6 +4,7 @@ pub mod r#loop;
 pub mod mode;
 pub mod permissions;
 pub mod prompt;
+pub mod receipt;
 pub mod session;
 pub mod skills;
 pub mod subagent;
