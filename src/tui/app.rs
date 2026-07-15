@@ -4434,6 +4434,7 @@ impl App {
 
     fn on_login_picker_key(&mut self, key: event::KeyEvent, ctrl: bool) {
         let manage = self.login.as_ref().map(|m| m.manage_failover).unwrap_or(false);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
         let Some(m) = &mut self.login else { return };
         match key.code {
             KeyCode::Esc => self.login = None,
@@ -4473,9 +4474,10 @@ impl App {
             }
             // Space / Tab toggle the selected provider in the failover chain.
             KeyCode::Char(' ') | KeyCode::Tab => self.toggle_fallback_selected(),
-            // Ctrl+P cycles the asserted privacy tier of the selected provider
-            // (Standard → ZDR → TEE → Local → …), saved as an override.
-            KeyCode::Char('p') if ctrl => self.cycle_privacy_selected(),
+            // Alt+P cycles the asserted privacy tier of the selected provider
+            // (Standard → ZDR → TEE → Local → …), saved as an override. Alt, not
+            // Ctrl — Ctrl+P is taken by many terminals/ADEs.
+            KeyCode::Char('p') if alt => self.cycle_privacy_selected(),
             KeyCode::Backspace => {
                 m.filter.pop();
                 m.sel = 0;
@@ -4487,7 +4489,7 @@ impl App {
                 m.sel = 0;
                 m.scroll = 0;
             }
-            KeyCode::Char(c) if !ctrl && !c.is_control() => {
+            KeyCode::Char(c) if !ctrl && !alt && !c.is_control() => {
                 m.filter.push(c);
                 m.sel = 0;
                 m.scroll = 0;

@@ -324,9 +324,9 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
         format!(" 🔑 choose a provider  ·  {total} ")
     };
     let hint = if manage {
-        " ↑↓  ·  space/↵ failover  ·  ^p privacy  ·  type filter  ·  esc done  "
+        " ↑↓ move  ·  space add failover  ·  alt+p privacy tier  ·  type to filter  ·  esc done  "
     } else {
-        " ↑↓  ·  ↵ pick  ·  space failover  ·  ^p privacy  ·  esc  "
+        " ↑↓ move  ·  enter pick  ·  space add failover  ·  alt+p privacy tier  ·  esc  "
     };
     draw_modal_frame(f, rect, phase, theme::INDIGO, &title, None, hint);
     let inner = modal_inner(rect);

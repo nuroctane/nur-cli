@@ -325,7 +325,7 @@ Launching from a drive root (`C:\`) auto-picks a safe workspace (git / last sess
 | `/budget` `/poor` | Spend ceiling / lean prompt |
 | `/cd` `/pwd` `/doctor` `/status` | Workspace + health |
 | `/sessions` `/resume` | Session browser |
-| `/failover` | Cross-provider failover + privacy tiers (provider-picker; Space adds a fallback, Ctrl+P sets its privacy tier) |
+| `/failover` | Cross-provider failover + privacy tiers (provider-picker; Space adds a fallback, Alt+P sets its privacy tier) |
 | `/undo` | Revert the last file edit (write / edit / multi_edit) this session |
 | `/receipt` | Session receipt — verify what actually ran (models, tools, privacy tiers), hash-chained |
 
