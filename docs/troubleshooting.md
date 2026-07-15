@@ -30,7 +30,7 @@ nur doctor
 **All green:**
 
 ```text
-nur doctor · v0.13.0
+nur doctor · v0.13.1
 
 binary  C:\Users\you\.local\bin\nur.exe
 config  model=muse-spark-1.1 effort=high max_turns=40 budget=∞$/∞tok  (C:\Users\you\.nur\config.toml)
@@ -145,7 +145,7 @@ Or edit `max_session_cost_usd` / `max_session_tokens` in `~/.nur/config.toml`.
 
 ### Garbled text in the TUI on launch
 
-Logs go to `~/.nur/nur.log` (not stderr). If you still see noise, check that you're on **v0.13.0+** and no wrapper is redirecting `RUST_LOG` to the console at `warn` for syntect.
+Logs go to `~/.nur/nur.log` (not stderr). If you still see noise, check that you're on **v0.13.1+** and no wrapper is redirecting `RUST_LOG` to the console at `warn` for syntect.
 
 ### Ecosystem components missing
 
