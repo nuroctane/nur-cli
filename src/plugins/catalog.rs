@@ -95,6 +95,14 @@ pub const CATALOG: &[PluginEntry] = &[
         source_url: "https://github.com/railwayapp/railway-skills.git",
         path_in_repo: Some("plugins/railway"),
     },
+    PluginEntry {
+        id: "fable",
+        name: "Fable",
+        description: "Think / act / prove workflow: fable-method, fable-loop, fable-judge",
+        category: "development",
+        source_url: "https://github.com/Sahir619/fable-method.git",
+        path_in_repo: None,
+    },
 ];
 
 pub fn catalog() -> &'static [PluginEntry] {

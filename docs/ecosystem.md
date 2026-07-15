@@ -13,7 +13,7 @@ NurCLI ships with an auto-provisioned knowledge stack.
 | **omp** | [Oh My Pi](https://omp.sh) coding-agent backend — headless `omp -p` runs via the `omp` tool (needs Bun) |
 | **browser** | [agent-browser-cli](https://github.com/sleepinginsummer/agent-browser-cli) real **default browser** bridge (Arc / Chrome / Edge / Brave / …) — perception + control via the `browser` tool; `nur browser setup` stages the extension once |
 | **Skills** | Progressive packs (design-eng, clone-website, cybersecurity, …) via `skill` |
-| **Plugins** | In-product marketplace (`/plugins` · `nur plugins`) — install Superpowers, Vercel, Firecrawl, Chrome DevTools, Figma, Sentry, … into `~/.nur/plugins` |
+| **Plugins** | In-product marketplace (`/plugins` · `nur plugins`) — install Superpowers, Vercel, Firecrawl, Chrome DevTools, Figma, Sentry, Fable, … into `~/.nur/plugins` |
 | **Resume packs** | `resume-claude` · `resume-codex` · `resume-cursor` · `resume-nur` · **`resume-grok`** + shared `resume-session` reader |
 | **AKM** | Agent knowledge package manager (requires Node.js) |
 
@@ -47,7 +47,7 @@ nur plugins disable superpowers
 | `~/.nur/plugins/registry.json` | installed + enabled flags |
 | `~/.nur/skills/` | skill packs mirrored on install so discovery always finds them |
 
-Enabled plugins are scanned on each agent turn. Catalog includes Superpowers, Vercel, Chrome DevTools, Firecrawl, Figma, Sentry, Cloudflare, MongoDB, Axiom, Railway.
+Enabled plugins are scanned on each agent turn. Catalog includes Superpowers, Vercel, Chrome DevTools, Firecrawl, Figma, Sentry, Cloudflare, MongoDB, Axiom, Railway, Fable.
 
 ---
 

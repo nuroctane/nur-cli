@@ -134,6 +134,7 @@ mod tests {
         assert!(ids.contains(&"superpowers"));
         assert!(ids.contains(&"vercel"));
         assert!(ids.contains(&"firecrawl"));
+        assert!(ids.contains(&"fable"));
         assert!(ids.len() >= 8);
     }
 

@@ -178,7 +178,7 @@ Docs: **[nuroctane.github.io/nur-cli](https://nuroctane.github.io/nur-cli/)** ·
 | **One-shot install** | One-liner or Windows EXE · PATH · ecosystem · browser |
 | **Easy updates** | `nur update` |
 | **Knowledge stack** | Graph · engrams · vector memory · MCP · skills |
-| **Plugin marketplace** | `/plugins` picker (same UX as `/login`) · install Superpowers, Vercel, Firecrawl, … into `~/.nur/plugins` |
+| **Plugin marketplace** | `/plugins` picker (same UX as `/login`) · install Superpowers, Vercel, Firecrawl, Fable, … into `~/.nur/plugins` |
 | **Resume other agents** | `resume-claude` · `resume-codex` · `resume-cursor` · `resume-nur` · `resume-grok` |
 | **Secrets stay local** | Keys only in `~/.nur/auth.json` (or env) |
 
