@@ -268,7 +268,7 @@ async fn real_main() -> Result<()> {
     let workspace_note = why.map(|reason| {
         format!(
             "workspace  {}  ·  {reason}\n\
-             tip  /cd into your repo, or set META_CWD for a default",
+             tip  /cd into your repo, or set NUR_CWD for a default",
             cwd.display()
         )
     });

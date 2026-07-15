@@ -156,7 +156,7 @@ Docs: **[nuroctane.github.io/nur-cli](https://nuroctane.github.io/nur-cli/)** ·
 
 ---
 
-**v0.13.2**: Excalidraw · clickable links · FocusLost drag fix · plugins. **[Docs](https://nuroctane.github.io/nur-cli/)**
+**v0.13.3**: Fable plugin · NUR_* host-panel envs · FocusLost drag fix · Excalidraw · plugins. **[Docs](https://nuroctane.github.io/nur-cli/)**
 
 | Surface | What ships |
 |---------|------------|

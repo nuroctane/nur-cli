@@ -223,7 +223,7 @@ External CLIs / packs (not inside the `nur` binary):
 | Piece | Notes |
 |-------|--------|
 | Orca hook | `nur install-hook` when Orca is present |
-| Env-based auth | `META_API_KEY` / `MODEL_API_KEY` → saved under `~/.nur/auth.json` only |
+| Env-based auth | `NUR_API_KEY` (legacy `META_API_KEY` / `MODEL_API_KEY`) → saved under `~/.nur/auth.json` only |
 
 ---
 

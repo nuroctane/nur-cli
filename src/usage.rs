@@ -171,28 +171,43 @@ impl UsageTracker {
         if !self.global {
             return;
         }
-        // Host-panel env (current process; children/hooks can read)
+        // Host-panel env (current process; children/hooks can read).
+        // Prefer NUR_*; keep META_* / MUSE_* so older Orca panels and hooks keep working.
         let status = status_path().display().to_string();
         let cost = format!("{:.6}", self.session.estimated_cost_usd());
-        for (meta_k, muse_k, val) in [
+        for (nur_k, meta_k, muse_k, val) in [
             (
+                "NUR_USAGE_INPUT_TOKENS",
                 "META_USAGE_INPUT_TOKENS",
                 "MUSE_USAGE_INPUT_TOKENS",
                 self.session.input_tokens.to_string(),
             ),
             (
+                "NUR_USAGE_OUTPUT_TOKENS",
                 "META_USAGE_OUTPUT_TOKENS",
                 "MUSE_USAGE_OUTPUT_TOKENS",
                 self.session.output_tokens.to_string(),
             ),
             (
+                "NUR_USAGE_TOTAL_TOKENS",
                 "META_USAGE_TOTAL_TOKENS",
                 "MUSE_USAGE_TOTAL_TOKENS",
                 self.session.total_tokens.to_string(),
             ),
-            ("META_USAGE_COST_USD", "MUSE_USAGE_COST_USD", cost),
-            ("META_STATUS_PATH", "MUSE_STATUS_PATH", status),
+            (
+                "NUR_USAGE_COST_USD",
+                "META_USAGE_COST_USD",
+                "MUSE_USAGE_COST_USD",
+                cost,
+            ),
+            (
+                "NUR_STATUS_PATH",
+                "META_STATUS_PATH",
+                "MUSE_STATUS_PATH",
+                status,
+            ),
         ] {
+            std::env::set_var(nur_k, &val);
             std::env::set_var(meta_k, &val);
             std::env::set_var(muse_k, &val);
         }

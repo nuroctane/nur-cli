@@ -115,7 +115,8 @@ No API key found.
 ```bash
 nur auth login
 # or
-export META_API_KEY="your-key-here"
+export NUR_API_KEY="your-key-here"
+# Meta Model API / older installs also accept META_API_KEY / MODEL_API_KEY
 ```
 
 ### Missing session in `/sessions`

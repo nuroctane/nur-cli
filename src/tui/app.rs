@@ -1406,7 +1406,7 @@ pub async fn run_tui(
         app.authed = false;
         app.push_note(
             Tone::Mode,
-            "no API key found — press any key, then /login to sign in (or set META_API_KEY)".into(),
+            "no API key found — press any key, then /login to sign in (or set NUR_API_KEY)".into(),
         );
         app.open_login();
     }
