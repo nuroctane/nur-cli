@@ -5410,6 +5410,15 @@ impl App {
             return;
         }
 
+        // Reverse history search owns the keyboard — a paste extends the search
+        // query, it must not leak into the stashed composer buffer.
+        if self.input.search_is_active() {
+            for c in text.chars() {
+                self.input.search_push(c);
+            }
+            return;
+        }
+
         let now = Instant::now();
         let within_merge = self
             .active_paste_at

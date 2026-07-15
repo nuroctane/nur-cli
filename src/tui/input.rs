@@ -197,6 +197,9 @@ impl InputState {
         self.cursor = 0;
         self.selection_anchor = None;
         self.hist_idx = None;
+        // Clearing the input always exits reverse search — the stashed draft it
+        // would restore is gone, so never leave a dangling search session.
+        self.search = None;
     }
 
     fn drop_all_pastes(&mut self) {
