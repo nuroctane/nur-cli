@@ -1,13 +1,13 @@
 # Security
 
-NurCLI is **unofficial** community software. It is not affiliated with Meta Platforms, Inc.
+NurCLI is community software. Keys and sessions stay on your machine.
 
 ## Where secrets live
 
 | Location | Contents |
 |----------|----------|
-| `~/.nur/auth.json` | Meta Model API key after `nur auth login` |
-| Env `META_API_KEY` / `MODEL_API_KEY` | Optional override (never printed in logs) |
+| `~/.nur/auth.json` | Provider API key / tokens after `/login` or `nur auth login` |
+| Env `NUR_API_KEY` / vendor keys | Optional override (never printed in logs) |
 | `~/.nur/sessions/` | Session files + `.json.bak` / `.precompact.bak` (no key) |
 | `~/.nur/tool-results/` | Spilled large tool outputs (may include workspace text) |
 | `~/.nur/nur.log` | Tracing log (not the terminal; may include paths) |
@@ -25,7 +25,7 @@ NurCLI is **unofficial** community software. It is not affiliated with Meta Plat
 - Workspace `.nur/frames/` dumps of sensitive UI
 
 !!! warning "Session sensitivity"
-    Session `input_items` may include base64 media when vision (`look` / auto-attach) is used — treat session files as potentially sensitive.
+    Session `input_items` may include base64 media when vision (`look` / auto-attach) is used. Treat session files as potentially sensitive.
 
 ---
 
@@ -33,13 +33,13 @@ NurCLI is **unofficial** community software. It is not affiliated with Meta Plat
 
 NurCLI hardens shell execution by default:
 
-- **Bash denylist** — blocks dangerous commands
-- **Timeout** — long-running commands are killed
-- **SSRF blocks** — web tools reject private-IP targets
-- **Atomic IO** — all writes to `~/.nur/` use atomic file operations (write-to-temp, rename)
-- **Session bak** — each session save copies the previous file to `*.json.bak` first
-- **Optional rules** — `permissions.toml` deny/ask/allow; plan mode still blocks code authoring / VCS
-- **Optional hooks** — `hooks.toml` pre/post tool shell (local only; you control the script)
+- **Bash denylist**: blocks dangerous commands
+- **Timeout**: long-running commands are killed
+- **SSRF blocks**: web tools reject private-IP targets
+- **Atomic IO**: all writes to `~/.nur/` use atomic file operations (write-to-temp, rename)
+- **Session bak**: each session save copies the previous file to `*.json.bak` first
+- **Optional rules**: `permissions.toml` deny/ask/allow; plan mode still blocks code authoring / VCS
+- **Optional hooks**: `hooks.toml` pre/post tool shell (local only; you control the script)
 
 ---
 

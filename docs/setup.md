@@ -15,7 +15,7 @@ System requirements, **every install path**, what lands on your PC, updates, and
 |-------------|---------|
 | **Operating system** | Windows 10+ · macOS 13+ · Ubuntu 20.04+ · Debian 10+ · Alpine 3.19+ |
 | **Hardware** | 4 GB+ RAM, x64 or ARM64 processor |
-| **Network** | Internet (Meta Model API + first install downloads) |
+| **Network** | Internet (provider APIs + first install downloads) |
 | **Shell** | PowerShell, CMD, Bash, or Zsh |
 | **Git** | Required for the one-liner / clone paths |
 
@@ -41,17 +41,17 @@ Does **everything**: Rust if needed, prereqs, build, PATH, ecosystem packs, brow
 
 ### 2. <span class="install-hot">Prebuilt Windows EXE</span> (no local compile)
 
-**Same job as the one-liner** — download, run, full stack. The EXE *is* the installer.
+**Same job as the one-liner:** download, run, full stack. The EXE *is* the installer.
 
 1. Open [**Releases → latest**](https://github.com/nuroctane/nur-cli/releases/latest)
 2. Download **`nur-windows-x86_64.exe`**
-3. **Double‑click it** (or `.\nur-windows-x86_64.exe`)
+3. **Double-click it** (or `.\nur-windows-x86_64.exe`)
 
 What it does **before** any TUI (console progress):
 
 | Step | Action |
 |------|--------|
-| Binary | Copies itself → `%USERPROFILE%\.local\bin\nur.exe` (+ `muse.exe` alias) |
+| Binary | Copies itself → `%USERPROFILE%\.local\bin\nur.exe` |
 | PATH | Adds `~\.local\bin` to User PATH |
 | Prereqs | Best-effort: node · bun · uv · rg · ffmpeg |
 | Ecosystem | `ecosystem ensure --force` (graphify · plur · ruflo · omp · browser · skills) |
@@ -182,7 +182,7 @@ Everything is **on your machine only**. Secrets never go into the git checkout. 
 | **Source tree** (one-liner) | `~/laboratory/nur-cli` (Windows: `%USERPROFILE%\laboratory\nur-cli`) |
 | **PATH** | `~/.local/bin` added to User PATH (Windows) or a shell rc (Unix) |
 
-### Data home — `~/.nur/`
+### Data home: `~/.nur/`
 
 Created on first auth / first run:
 

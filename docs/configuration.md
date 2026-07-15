@@ -133,7 +133,7 @@ Non-zero **pre_tool** exit blocks the tool. Missing file = no hooks. Check statu
 | Variable | Purpose |
 |----------|---------|
 | `NUR_API_KEY` | API key (preferred) |
-| `META_API_KEY` | API key (Meta Model API / legacy app) |
+| `META_API_KEY` | Optional key for Meta Model API provider / legacy installs |
 | `MODEL_API_KEY` | API key (alternative) |
 | `MUSE_API_KEY` | API key (legacy) |
 | `NUR_BASE_URL` | Override API base URL (self-hosted Ollama/vLLM/LiteLLM/gateways); legacy `META_BASE_URL` |

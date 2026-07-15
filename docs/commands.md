@@ -70,10 +70,10 @@ nur run "explain what this repo does" -v
 
 Manage the stored API key (`~/.nur/auth.json`).
 
-For **multi-provider** sign-in (pick OpenAI, OpenRouter, Ollama, … + endpoint
-and default model), use the TUI slash command **`/login`** — see
-[Authentication](authentication.md). CLI `nur auth login` is the classic
-prompt for a Meta Model API key.
+For **multi-provider** sign-in (pick OpenAI, OpenRouter, Ollama, xAI, … + endpoint
+and default model), use the TUI slash command **`/login`**. See
+[Authentication](authentication.md). CLI `nur auth login` stores a key for the
+active provider without opening the full catalog picker.
 
 ```bash
 nur auth <SUBCOMMAND>

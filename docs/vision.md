@@ -1,10 +1,12 @@
 # Vision
 
-Native multimodal support — send images and short video to the model.
+Native multimodal support: send images and short video to the model.
 
 ## Overview
 
-NurCLI supports the Meta Model API Responses API multimodal input via `input_image` / `input_video`. The model can **see** workspace images and short video clips directly.
+NurCLI attaches workspace media on the Responses-style multimodal path (`input_image` /
+`input_video`) when the active provider supports it. The model can **see** workspace images
+and short video clips directly.
 
 ---
 

@@ -423,7 +423,7 @@ pub fn auth_status() -> Result<()> {
             }
             println!("authenticated: no");
             println!("run: nur auth login");
-            println!("or set NUR_API_KEY (or META_API_KEY for Meta Model API)");
+            println!("or set NUR_API_KEY (or a vendor key env for your provider)");
             println!("or /login in the TUI (browser sign-in for Grok, Claude, …)");
             Ok(())
         }
@@ -434,7 +434,7 @@ pub fn login_interactive(key_arg: Option<String>) -> Result<()> {
     let key = if let Some(k) = key_arg {
         k
     } else {
-        print!("Meta Model API key: ");
+        print!("API key: ");
         io::stdout().flush()?;
         match rpassword::read_password() {
             Ok(k) if !k.trim().is_empty() => k,

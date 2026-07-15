@@ -73,7 +73,7 @@ pub enum Commands {
         #[arg(long, short = 'y')]
         yes: bool,
     },
-    /// Authentication against Meta Model API
+    /// Authentication (API key / status / logout)
     Auth {
         #[command(subcommand)]
         action: AuthCmd,
