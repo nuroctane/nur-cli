@@ -3435,6 +3435,20 @@ impl App {
                     }
                 }
             }
+            KeyCode::Home => {
+                if let Some(m) = &mut self.model_picker {
+                    m.sel = 0;
+                    m.scroll = 0;
+                }
+            }
+            KeyCode::End => {
+                if let Some(m) = &mut self.model_picker {
+                    let count = m.count();
+                    if count > 0 {
+                        m.set_idx(count - 1);
+                    }
+                }
+            }
             KeyCode::Backspace => {
                 if let Some(m) = &mut self.model_picker {
                     m.filter.pop();
@@ -3451,7 +3465,7 @@ impl App {
                     m.clamp_scroll();
                 }
             }
-            KeyCode::Char(c) if !ctrl => {
+            KeyCode::Char(c) if !ctrl && !c.is_control() => {
                 if let Some(m) = &mut self.model_picker {
                     m.filter.push(c);
                     m.sel = 0;

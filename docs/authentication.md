@@ -156,13 +156,14 @@ streaming keep working.
 
 ## Auth precedence
 
-API key resolution order:
+API key resolution order (env always wins over the saved file):
 
-1. `~/.nur/auth.json` (from `nur auth login` or successful `/login`)
-2. `META_API_KEY`
+1. `NUR_API_KEY`
+2. `META_API_KEY` (Meta Model API / legacy app)
 3. `MODEL_API_KEY`
 4. `MUSE_API_KEY` (legacy)
-5. Interactive TUI prompt (opens `/login` when no key is found)
+5. `~/.nur/auth.json` (from `nur auth login` or successful `/login`)
+6. Interactive TUI prompt (opens `/login` when no key is found)
 
 Active **provider id / base URL / model** come from `~/.nur/config.toml`
 (written by `/login`).

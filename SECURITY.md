@@ -7,8 +7,8 @@ NurCLI is **unofficial** community software. It is not affiliated with Meta Plat
 | Location | Contents |
 |----------|----------|
 | `~/.nur/auth.json` | API key or OAuth tokens after `nur auth login` / TUI `/login` (**plaintext JSON**) |
-| env `META_API_KEY` / `MODEL_API_KEY` | Optional override (never print in logs). Legacy: `MUSE_API_KEY` |
-| env `META_BASE_URL` | Optional endpoint override (not secret, but points traffic) |
+| env `NUR_API_KEY` | Optional override (never print in logs). Legacy aliases: `META_API_KEY` / `MODEL_API_KEY` / `MUSE_API_KEY` |
+| env `NUR_BASE_URL` | Optional endpoint override (not secret, but points traffic). Legacy: `META_BASE_URL` |
 | `~/.nur/sessions/`, `status.json`, `usage.jsonl` | Session + usage metadata (no key in usage log) |
 | Workspace `.nur/frames/` | Extracted video keyframes (local artifacts; may be large) |
 
@@ -20,7 +20,7 @@ drives or commit it. OS keychain storage is not the default (future option).
 
 Session `input_items` may include base64 media when vision (`look` / auto-attach) is used — treat session files as potentially sensitive.
 
-Older installs used `~/.muse/`. NurCLI **gap-fills** missing files into `~/.nur/` (does not overwrite). `nur auth logout` removes auth from **both** `~/.nur` and legacy `~/.muse`.
+Older installs used `~/.meta/` or `~/.muse/`. NurCLI **gap-fills** missing files into `~/.nur/` (does not overwrite). `nur auth logout` removes auth from `~/.nur` and the legacy homes.
 
 ## Install scripts & release EXE
 
