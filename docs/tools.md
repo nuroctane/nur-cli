@@ -172,7 +172,14 @@ mode and is blocked in plan mode; `status`/`version` are free. Provisioned by
 
 ### `skill`
 
-Load a skill into context.
+List or load a skill pack (`SKILL.md`) into context.
+
+| Action | Behaviour |
+|--------|-----------|
+| `list` | Installed skills under `~/.nur/skills`, enabled plugins, project skill dirs |
+| `read` | Full skill body (large packs are not truncated the way the system catalog is) |
+
+**Natural-language activation:** many workflow skills also auto-activate from plain wording (no slash, no first `skill` call). Examples: *think like fable*, *TDD this*, *debug systematically*, *polish the UI*, *resume from Claude*. When that fires, the harness injects the skill body for the whole turn and shows a status chip. Details: **[Ecosystem → Natural-language skill activation](ecosystem.md#natural-language-skill-activation)**.
 
 ### `memory`
 

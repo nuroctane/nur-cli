@@ -156,15 +156,15 @@ Docs: **[nuroctane.github.io/nur-cli](https://nuroctane.github.io/nur-cli/)** ·
 
 ---
 
-**v0.13.3**: Fable plugin · NUR_* host-panel envs · FocusLost drag fix · Excalidraw · plugins. **[Docs](https://nuroctane.github.io/nur-cli/)**
+**v0.13.4**: Natural-language skill activation · Fable + Superpowers phrases · full skill mirror · NUR_* host-panel envs · plugins. **[Docs](https://nuroctane.github.io/nur-cli/)**
 
 | Surface | What ships |
 |---------|------------|
 | **TUI** | Streaming · duration chips · thought/tool cards · peek · drag-select · scrollbar · sessions · multi-provider `/login` · **`/model` picker** · **`/plugins` marketplace** · `/goal` `/btw` `/codesearch` `/mc` `/feedback` `/tips` · budgets · doctor |
-| **Agent** | Manual / plan / auto · tools · subagents · todos · auto-compact · session $ / token budgets · Esc cancel · Shift+Tab mid-turn |
+| **Agent** | Manual / plan / auto · tools · subagents · todos · auto-compact · session $ / token budgets · Esc cancel · Shift+Tab mid-turn · **NL skill auto-activation** |
 | **Vision** | `look` · `extract_frames` · prompt auto-attach of media paths |
-| **Tools** | read · edit · bash · web · **browser** · git · knowledge · agent |
-| **Ecosystem** | Graphify · PLUR · Ruflo · Executor · omp · browser · AKM · 800+ skills · **plugin marketplace** (`~/.nur/plugins`) |
+| **Tools** | read · edit · bash · web · **browser** · git · knowledge · agent · **excalidraw** |
+| **Ecosystem** | Graphify · PLUR · Ruflo · Executor · omp · browser · AKM · 800+ skills · **plugin marketplace** (Fable, Superpowers, Vercel, …) |
 | **Hardening** | Sandbox · denylist · SSRF blocks · atomic `~/.nur` IO · permissions/hooks · SHA-256 install · `nur doctor` |
 
 ---
@@ -179,8 +179,9 @@ Docs: **[nuroctane.github.io/nur-cli](https://nuroctane.github.io/nur-cli/)** ·
 | **Easy updates** | `nur update` |
 | **Knowledge stack** | Graph · engrams · vector memory · MCP · skills |
 | **Plugin marketplace** | `/plugins` picker (same UX as `/login`) · install Superpowers, Vercel, Firecrawl, Fable, … into `~/.nur/plugins` |
+| **Natural-language skills** | *think like fable* · *TDD this* · *debug systematically* · *polish the UI* · *resume from Claude* — no slash required |
 | **Resume other agents** | `resume-claude` · `resume-codex` · `resume-cursor` · `resume-nur` · `resume-grok` |
-| **Secrets stay local** | Keys only in `~/.nur/auth.json` (or env) |
+| **Secrets stay local** | Keys only in `~/.nur/auth.json` (or env) · prefer `NUR_API_KEY` |
 
 ---
 
@@ -196,7 +197,8 @@ Docs: **[nuroctane.github.io/nur-cli](https://nuroctane.github.io/nur-cli/)** ·
 - Project instructions: `NUR.md` · `AGENTS.md` · `CLAUDE.md` (also loads legacy `META.md` / `MUSE.md` if present)
 - Session resume: `-c`, `-r`, `/sessions`
 - `/model` opens a live model list for the active provider (or `/model <id>` to set one directly)
-- `/plugins` marketplace picker (same UX as `/login`): install Superpowers, Vercel, Firecrawl, Chrome DevTools, and more into `~/.nur/plugins`
+- `/plugins` marketplace picker (same UX as `/login`): install Superpowers, Vercel, Firecrawl, Chrome DevTools, **Fable**, and more into `~/.nur/plugins`
+- **Natural-language skill activation**: plain phrases inject the skill body for the turn (Fable, TDD, systematic debugging, design-eng, resume-*, Excalidraw, …). Status chip confirms activation. [Docs](https://nuroctane.github.io/nur-cli/ecosystem/#natural-language-skill-activation)
 
 ### Tools (native)
 

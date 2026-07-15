@@ -178,11 +178,14 @@ Marketplace plugins (install into `~/.nur/plugins`, skills mirrored to `~/.nur/s
 ```bash
 nur plugins                 # list catalog + install state
 nur plugins list
-nur plugins install <id>    # e.g. superpowers, vercel, firecrawl
+nur plugins install <id>    # e.g. superpowers, vercel, firecrawl, fable
 nur plugins enable <id>
 nur plugins disable <id>
 nur plugins uninstall <id>
 ```
+
+Natural-language skill activation (no slash): *think like fable*, *TDD this*, *debug systematically*, *resume from Claude* — see [Ecosystem](ecosystem.md#natural-language-skill-activation).
+
 
 In the TUI, bare **`/plugins`** opens the full marketplace picker (provider-picker UX).
 

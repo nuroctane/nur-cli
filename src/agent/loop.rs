@@ -142,7 +142,8 @@ impl AgentRunner {
 
         let tools = self.tools.tool_defs();
         // Disk-backed prompt parts (skills, NUR.md, memory, shell) — read once
-        // per user turn, not once per model request.
+        // per user turn, not once per model request. Pass user_text so natural
+        // language (e.g. "think like fable") can auto-activate skills.
         let provider_label = crate::config::active_provider_label(&self.config);
         let prompt_ctx = PromptContext::build_with_opts(
             &self.cwd,
@@ -150,7 +151,16 @@ impl AgentRunner {
             &self.config.model,
             &provider_label,
             self.config.poor_mode,
+            Some(user_text),
         );
+        if prompt_ctx.has_skill_activation() {
+            let label = prompt_ctx
+                .skill_activation_label()
+                .unwrap_or("skill");
+            let _ = tx.send(AgentEvent::Status(format!(
+                "{label} · activated from your wording (no slash command needed)"
+            )));
+        }
         let mut turns = 0u32;
         let mut tool_seq: u64 = 0;
         // Prevent compact→still-hot→compact infinite loop within one user turn.

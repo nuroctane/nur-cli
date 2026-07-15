@@ -294,16 +294,23 @@ fn mirror_skills_to_nur_home(plugin_root: &Path) -> Result<(), String> {
             .and_then(|n| n.to_str())
             .unwrap_or("skill");
         let dest = dest_root.join(name);
-        // Refresh copy of SKILL.md (+ sibling files when present).
-        let _ = fs::create_dir_all(&dest);
-        if let Ok(rd) = fs::read_dir(&src) {
-            for e in rd.flatten() {
-                let from = e.path();
-                if from.is_file() {
-                    let to = dest.join(e.file_name());
-                    let _ = fs::copy(&from, &to);
-                }
-            }
+        // Full tree (SKILL.md + references/ etc.) so multi-file skills stay complete.
+        let _ = fs::remove_dir_all(&dest);
+        copy_dir_recursive(&src, &dest)?;
+    }
+    Ok(())
+}
+
+fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<(), String> {
+    fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+    let rd = fs::read_dir(src).map_err(|e| e.to_string())?;
+    for e in rd.flatten() {
+        let from = e.path();
+        let to = dest.join(e.file_name());
+        if from.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else if from.is_file() {
+            fs::copy(&from, &to).map_err(|e| e.to_string())?;
         }
     }
     Ok(())

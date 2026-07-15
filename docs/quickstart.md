@@ -113,6 +113,20 @@ Pulls latest main (when a Laboratory checkout exists), rebuilds, reinstalls the 
 
 Or from the shell: `nur plugins install superpowers`. Skills land under `~/.nur/plugins` and mirror into `~/.nur/skills`. Details: **[Ecosystem → Plugin marketplace](ecosystem.md#plugin-marketplace)**.
 
+### Talk to skills in plain language
+
+After `nur plugins install fable` (or Superpowers, etc.), you do **not** need `/fable-method`:
+
+```text
+think like fable and fix the flaky auth test
+TDD the rate limiter
+debug systematically — find the root cause
+polish the UI on this settings page
+pick up claude's session and finish the install
+```
+
+Nur matches the wording, injects the skill for that turn, and shows e.g. `fable-method · activated from your wording…`. Full phrase table: **[Ecosystem → Natural-language skill activation](ecosystem.md#natural-language-skill-activation)**.
+
 ---
 
 ## Next steps

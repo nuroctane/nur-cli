@@ -48,11 +48,11 @@ That's the normal upgrade. Pulls / rebuilds when you have a Laboratory checkout,
 | **Agent** | Manual / plan / auto · tool loop · subagents · todos · **smarter auto-compact** · **session $ / token budgets** · **tool-result spill** · Esc cancel · Shift+Tab mid-turn · prompt-cache keys · **Chat Completions adapter** for non-Responses providers |
 | **Vision** | `look` (images / short video) · `extract_frames` (ffmpeg keyframes) · prompt auto-attach of media paths |
 | **Tools** | read · edit · bash · web · **browser** · git · knowledge stack · agent (all first-class) |
-| **Ecosystem** | Graphify · PLUR · Ruflo · Executor · **omp** · **browser** · AKM · **800+ skills** · **plugin marketplace** (`~/.nur/plugins`). Full install at setup; later open = TTL repair (`ecosystem_auto_ensure`) |
+| **Ecosystem** | Graphify · PLUR · Ruflo · Executor · **omp** · **browser** · AKM · **800+ skills** · **plugin marketplace** (`~/.nur/plugins`, incl. **Fable**) · **natural-language skill activation** (*think like fable*, *TDD this*, *resume from Claude*, …). Full install at setup; later open = TTL repair (`ecosystem_auto_ensure`) |
 | **Hardening** | Sandbox · bash denylist · SSRF blocks · atomic `~/.nur` IO · session **`.json.bak`** · **permissions.toml** · optional **hooks.toml** · API retries · install SHA-256 · `nur doctor` |
-| **Host panels** | Live `status.json` / `usage.jsonl` · Orca hook when present |
+| **Host panels** | Live `status.json` / `usage.jsonl` · dual **`NUR_*` + `META_*`** env exports · Orca hook (`nur-hook.cmd` / `meta-hook.cmd`) |
 
-**Current version: v0.13.3**
+**Current version: v0.13.4**
 
 ---
 

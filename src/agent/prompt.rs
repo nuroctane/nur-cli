@@ -1,6 +1,6 @@
 use super::memory::memory_prompt_excerpt;
 use super::mode::PermissionMode;
-use super::skills::{load_skills, skills_prompt_section};
+use super::skills::{load_skills, skill_activation, skills_prompt_section};
 use crate::ecosystem;
 use crate::tools::shell_backend;
 use std::collections::HashMap;
@@ -80,21 +80,29 @@ pub struct PromptContext {
     skills: String,
     /// PLUR inject block — auto-loaded so the agent remembers past corrections.
     plur: String,
+    /// Natural-language skill activation for this user turn (injected body).
+    activation: String,
+    /// Short label for TUI status when activation fires (e.g. `fable-method`).
+    activation_label: Option<String>,
 }
 
 impl PromptContext {
     pub fn build(cwd: &Path, is_subagent: bool, model: &str, provider: &str) -> Self {
-        Self::build_with_opts(cwd, is_subagent, model, provider, false)
+        Self::build_with_opts(cwd, is_subagent, model, provider, false, None)
     }
 
     /// `poor_mode`: skip PLUR inject, skills catalog, and long memory excerpts
     /// to cut background token spend (toggle via `/poor`).
+    ///
+    /// `user_text`: current user message — used for natural-language skill
+    /// activation (e.g. "think like fable" → inject fable-method body).
     pub fn build_with_opts(
         cwd: &Path,
         is_subagent: bool,
         model: &str,
         provider: &str,
         poor_mode: bool,
+        user_text: Option<&str>,
     ) -> Self {
         let plur = if is_subagent || poor_mode {
             String::new()
@@ -118,6 +126,17 @@ impl PromptContext {
         } else {
             cached_skills(cwd)
         };
+        let (activation, activation_label) = if poor_mode || is_subagent {
+            (String::new(), None)
+        } else if let Some(text) = user_text {
+            let loaded = load_skills(cwd);
+            match skill_activation(text, &loaded) {
+                Some(a) => (a.section, Some(a.label)),
+                None => (String::new(), None),
+            }
+        } else {
+            (String::new(), None)
+        };
         Self {
             cwd: cwd.to_path_buf(),
             is_subagent,
@@ -128,7 +147,19 @@ impl PromptContext {
             memory,
             skills,
             plur,
+            activation,
+            activation_label,
         }
+    }
+
+    /// True when natural-language skill activation fired this turn.
+    pub fn has_skill_activation(&self) -> bool {
+        !self.activation.is_empty()
+    }
+
+    /// Short label for status UI (`fable-method`, `tdd`, …).
+    pub fn skill_activation_label(&self) -> Option<&str> {
+        self.activation_label.as_deref()
     }
 
     /// Render with the live bits: permission mode and the todo list, both of
@@ -226,6 +257,8 @@ plur, ruflo, skill, memory, todo_write, submit_plan, agent
   opencode-awesome catalog, executor-gateway, akm-manager, plur, ruflo, graphify.
 - UI work → skill design-eng / emil-design-eng. Site clone → clone-website-meta. Security →
   cybersecurity router then skill(read, name=<specific>). Long context → /compact + context-pruning.
+- Natural language skill requests (e.g. \"think like fable\", \"how fable would\") auto-activate
+  the matching skill for this turn — follow the injected body; slash commands are never required.
 - agent: spawn explore (read-only) or general subagent for parallel research
 - todo_write: maintain a live task list for multi-step work (always keep one in_progress)
 - submit_plan: formal plan artifact in plan mode
@@ -254,6 +287,8 @@ Direct technical markdown. Fence code with languages.
             s.push_str(&format!("\n# Project instructions ({name})\n{text}\n"));
         }
 
+        // Activation first so it outranks generic workflow defaults.
+        s.push_str(&self.activation);
         s.push_str(&self.memory);
         s.push_str(&self.plur);
         s.push_str(&self.skills);

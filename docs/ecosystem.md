@@ -49,6 +49,44 @@ nur plugins disable superpowers
 
 Enabled plugins are scanned on each agent turn. Catalog includes Superpowers, Vercel, Chrome DevTools, Firecrawl, Figma, Sentry, Cloudflare, MongoDB, Axiom, Railway, Fable.
 
+On install, skill packs are **mirrored in full** (including `references/`) into `~/.nur/skills/<name>/` so discovery paths stay complete.
+
+---
+
+## Natural-language skill activation
+
+Slash commands are **optional**. When your wording matches a high-signal workflow skill that is installed, Nur **auto-injects** that skill’s full body into the system prompt for the turn and shows a status chip:
+
+```text
+fable-method · activated from your wording (no slash command needed)
+```
+
+| Say something like… | Activates (if installed) |
+|---------------------|---------------------------|
+| *think like fable*, *how fable would*, *fable method*, *do it like fable* | `fable-method` |
+| *fable loop*, *run the fable loop* | `fable-loop` |
+| *fable judge*, *verify like fable* | `fable-judge` |
+| *debug systematically*, *find the root cause* | `systematic-debugging` |
+| *TDD this*, *tests first*, *red green refactor* | `test-driven-development` |
+| *let’s brainstorm*, *brainstorm this* | `brainstorming` |
+| *write a plan*, *plan first then…* | `writing-plans` |
+| *execute the plan*, *implement the plan* | `executing-plans` |
+| *verify before claiming done*, *check your work thoroughly* | `verification-before-completion` |
+| *code review this*, *review my changes* | `requesting-code-review` |
+| *polish the UI*, *emil style*, *design eng* | `design-eng` |
+| *clone this website*, *pixel-perfect clone* | `clone-website-meta` |
+| *draw a diagram*, *excalidraw* | `excalidraw` |
+| *resume from Claude / Grok / Codex / Cursor / Nur* | matching `resume-*` skill |
+
+Only **installed** skills fire (marketplace plugin or skill pack). Unrelated chat does not activate anything. The injected skill is **mandatory for that turn** — the model must follow it, not freestyle a shorter path.
+
+Install Fable (and others) with:
+
+```bash
+nur plugins install fable
+nur plugins install superpowers
+```
+
 ---
 
 ## Resume sessions (Claude · Codex · Cursor · Nur · Grok)
