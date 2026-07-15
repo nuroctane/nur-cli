@@ -781,6 +781,29 @@ mod tests {
     }
 
     #[test]
+    fn excalidraw_status_is_free_but_create_needs_approval() {
+        assert!(is_read_only_call("excalidraw", r#"{"action":"status"}"#));
+        assert!(is_read_only_call("excalidraw", r#"{"action":"reference"}"#));
+        assert!(is_read_only_call(
+            "excalidraw",
+            r#"{"action":"checkpoint","checkpoint_action":"list"}"#
+        ));
+        assert!(!is_read_only_call(
+            "excalidraw",
+            r#"{"action":"create","output":"x.excalidraw"}"#
+        ));
+        assert!(!is_read_only_call(
+            "excalidraw",
+            r#"{"action":"export","path":"x.excalidraw"}"#
+        ));
+        assert!(is_parallel_safe("excalidraw", r#"{"action":"status"}"#));
+        assert!(!is_parallel_safe(
+            "excalidraw",
+            r#"{"action":"create","output":"x.excalidraw"}"#
+        ));
+    }
+
+    #[test]
     fn plan_shell_allows_analysis_blocks_repo_mutation() {
         // Reading / parsing / scratch / media compute — all free in plan mode.
         for ok in [

@@ -210,6 +210,7 @@ Docs: **[nuroctane.github.io/nur-cli](https://nuroctane.github.io/nur-cli/)** ·
 | browser | real default browser via agent-browser-cli |
 | git | `git_status` `git_diff` |
 | knowledge | `graphify` `plur` `ruflo` `executor` `skill` `memory` |
+| diagrams | `excalidraw` (hand-drawn `.excalidraw` via excalidraw-cli) |
 | agent | `todo_write` `submit_plan` `agent` `omp` |
 
 ### Vision
@@ -228,6 +229,7 @@ nur "steal UI design tokens from demo.mp4 and scaffold a matching component"
 | Piece | Role |
 |-------|------|
 | **Graphify** | Code knowledge graph (`graphify-out/` in the workspace; gitignored, regenerable) |
+| **Excalidraw** | Architecture / flow diagrams → `.excalidraw` (`npm i -g excalidraw-cli`; auto-provisioned) |
 | **PLUR** | Shared engram memory |
 | **Ruflo** | Vector memory / swarm helpers under `~/.nur/ruflo/` |
 | **Executor** | MCP / OpenAPI gateway |

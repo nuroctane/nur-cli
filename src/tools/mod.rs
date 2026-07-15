@@ -10,6 +10,7 @@ mod glob;
 pub mod executor_tool;
 pub use executor_tool::is_read_only_action as executor_is_read_only;
 pub mod graphify;
+pub mod excalidraw;
 mod grep;
 mod list_dir;
 mod memory_tool;
@@ -119,6 +120,7 @@ impl ToolHost {
             Box::new(git_status::GitStatus),
             Box::new(git_diff::GitDiff),
             Box::new(graphify::Graphify),
+            Box::new(excalidraw::Excalidraw),
             Box::new(plur::Plur),
             Box::new(ruflo::Ruflo),
             Box::new(executor_tool::ExecutorTool),
@@ -194,6 +196,7 @@ impl ToolHost {
             "git_status" => git_status::GitStatus.execute(&args, ctx),
             "git_diff" => git_diff::GitDiff.execute(&args, ctx),
             "graphify" => graphify::Graphify.execute(&args, ctx),
+            "excalidraw" => excalidraw::Excalidraw.execute(&args, ctx),
             "plur" => plur::Plur.execute(&args, ctx),
             "ruflo" => ruflo::Ruflo.execute(&args, ctx),
             "executor" => executor_tool::ExecutorTool.execute(&args, ctx),
@@ -291,8 +294,8 @@ mod tests {
         let mut want = vec![
             "read_file", "list_dir", "write_file", "edit_file", "multi_edit", "apply_patch",
             "bash", "grep", "glob", "web_fetch", "web_search", "browser", "look",
-            "extract_frames", "git_status", "git_diff", "graphify", "plur", "ruflo", "executor",
-            "omp", "skill", "memory", "todo_write", "submit_plan", "agent",
+            "extract_frames", "git_status", "git_diff", "graphify", "excalidraw", "plur", "ruflo",
+            "executor", "omp", "skill", "memory", "todo_write", "submit_plan", "agent",
         ];
         want.sort();
 

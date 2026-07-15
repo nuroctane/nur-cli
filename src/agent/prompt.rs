@@ -145,16 +145,18 @@ permission here.
 
 Free: read_file, list_dir, grep, glob, web_fetch, web_search, look, extract_frames,
 git_status, git_diff, skill, memory(read), todo_write, submit_plan,
-graphify(query|path|explain|status|report|affected), plur(recall|status|…),
-ruflo(memory_search|status|…), executor(search|status), and bash for the above.
+graphify(query|path|explain|status|report|affected), excalidraw(status|reference),
+plur(recall|status|…), ruflo(memory_search|status|…), executor(search|status),
+and bash for the above.
 
 BLOCKED in plan mode (do NOT attempt — they need manual/auto via Shift+Tab):
 - Authoring code: write_file, edit_file, multi_edit, apply_patch.
 - Submitting/mutating the repo via shell: git commit/push/add/reset/checkout/
   restore/stash/merge/rebase/pull, gh pr create/merge, and dependency installs
   (npm/pnpm/yarn/pip/cargo/… install/add).
-- Mutating knowledge: graphify(extract|update), plur(learn|capture),
-  ruflo(memory_store|swarm_init), executor(call|install), memory(append), agent.
+- Mutating knowledge: graphify(extract|update), excalidraw(create|export),
+  plur(learn|capture), ruflo(memory_store|swarm_init), executor(call|install),
+  memory(append), agent.
 
 Do your investigation, then deliver the plan via submit_plan. Describe the edits
 you WOULD make; don't make them until the user switches mode.
@@ -193,8 +195,8 @@ OS: {} · shell: {}
 {mode_block}
 # Tools
 read_file, list_dir, write_file, edit_file, multi_edit, apply_patch, bash, grep, glob,
-web_fetch, web_search, look, extract_frames, git_status, git_diff, graphify, plur, ruflo,
-skill, memory, todo_write, submit_plan, agent
+web_fetch, web_search, look, extract_frames, git_status, git_diff, graphify, excalidraw,
+plur, ruflo, skill, memory, todo_write, submit_plan, agent
 
 ## Tool policy
 - grep/glob: ripgrep-backed; pass narrow paths — never scan drive roots
@@ -210,6 +212,9 @@ skill, memory, todo_write, submit_plan, agent
   skill design-eng / implement. User paths to .png/.mp4 in the prompt auto-attach when present.
 - graphify: code knowledge graph (graphify-out/). Prefer query/path/explain over broad grep when
   the graph exists. extract defaults to code-only AST (local, free).
+- excalidraw: hand-drawn diagrams → `.excalidraw` files (architecture, flowcharts, decisions).
+  Prefer excalidraw(create) over bash or mermaid when the user wants an openable diagram.
+  skill(action=read, name=excalidraw) for element templates; export for share URLs.
 - plur: shared engram memory (~/.plur/). learn corrections/preferences; inject/recall across
   sessions. Auto-injected at session start. Never store secrets.
 - ruflo: vector memory + swarm harness. Global DB at ~/.nur/ruflo/. Prefer plur for preferences,

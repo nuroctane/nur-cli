@@ -22,7 +22,7 @@ pub use skills::install_bundled_skills;
 const ECOSYSTEM_MARKER: &str = "ecosystem.json";
 /// Bump when new packs/tools are added so old markers re-run ensure.
 /// Bump when spawn/install logic changes so markers re-run ensure.
-const ECOSYSTEM_SCHEMA: u32 = 5;
+const ECOSYSTEM_SCHEMA: u32 = 6;
 /// Re-run ensure at most once per this many seconds unless forced.
 const ENSURE_TTL_SECS: u64 = 86_400;
 
@@ -52,6 +52,8 @@ pub struct EcosystemStatus {
     pub omp: ComponentStatus,
     #[serde(default)]
     pub browser: ComponentStatus,
+    #[serde(default)]
+    pub excalidraw: ComponentStatus,
     pub skills_installed: Vec<String>,
     #[serde(default)]
     pub packs_installed: Vec<String>,
@@ -70,13 +72,14 @@ impl EcosystemStatus {
             }
         };
         format!(
-            "ecosystem · {}  {}  {}  {}  {}  {}  {}  · packs {}",
+            "ecosystem · {}  {}  {}  {}  {}  {}  {}  {}  · packs {}",
             bit(self.graphify.available, "graphify"),
             bit(self.plur.available, "plur"),
             bit(self.ruflo.available, "ruflo"),
             bit(self.executor.available, "executor"),
             bit(self.omp.available, "omp"),
             bit(self.browser.available, "browser"),
+            bit(self.excalidraw.available, "excalidraw"),
             bit(self.skills_cli.available, "skills"),
             if self.packs_installed.is_empty() {
                 "…".into()
@@ -97,6 +100,7 @@ impl EcosystemStatus {
             &self.executor,
             &self.omp,
             &self.browser,
+            &self.excalidraw,
         ];
         for c in comps {
             if c.name.is_empty() {
@@ -136,7 +140,7 @@ impl EcosystemStatus {
         }
         s.push_str(
             "\n  slash: /ecosystem /plur /ruflo /graphify /skills\n\
-             tools:  graphify plur ruflo executor omp browser skill\n\
+             tools:  graphify plur ruflo executor omp browser excalidraw skill\n\
              packs:  design · clone-website · cybersecurity · opencode catalog · DCP patterns\n",
         );
         s
@@ -188,6 +192,7 @@ pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
     status.executor = packs::ensure_executor(status.node_ok);
     status.omp = packs::ensure_omp();
     status.browser = packs::ensure_browser_cli(status.node_ok);
+    status.excalidraw = ensure_excalidraw(status.node_ok);
 
     // Third-party skill packs (network; markers skip re-download).
     let (packs_ok, pack_notes) = packs::install_skill_packs(&status.skills_cli);
@@ -234,6 +239,53 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+// ── Excalidraw CLI ────────────────────────────────────────────────────────
+
+fn ensure_excalidraw(node_ok: bool) -> ComponentStatus {
+    let mut c = ComponentStatus {
+        name: "excalidraw".into(),
+        ..Default::default()
+    };
+    if let Some(bin) = find_bin("excalidraw").or_else(|| find_bin("excalidraw-cli")) {
+        c.available = true;
+        c.path = Some(bin.clone());
+        c.version = cmd_version(&bin, &["--version"]);
+        c.detail = "CLI ready · diagrams via excalidraw tool".into();
+        return c;
+    }
+    if !node_ok {
+        c.detail = "needs Node.js 18+ — npm i -g excalidraw-cli".into();
+        return c;
+    }
+    let npm = find_bin("npm").unwrap_or_else(|| "npm".into());
+    match run_capture(
+        &npm,
+        &["install", "-g", "excalidraw-cli"],
+        None,
+        300_000,
+    ) {
+        Ok(_) => {}
+        Err(e) => {
+            c.detail = format!(
+                "npm install failed: {}",
+                e.chars().take(200).collect::<String>()
+            );
+            return c;
+        }
+    }
+    if let Some(bin) = find_bin("excalidraw").or_else(|| find_bin("excalidraw-cli")) {
+        c.available = true;
+        c.path = Some(bin.clone());
+        c.version = cmd_version(&bin, &["--version"]);
+        c.detail = "installed via npm i -g excalidraw-cli".into();
+        return c;
+    }
+    if c.detail.is_empty() {
+        c.detail = "not found after npm install — try: npm i -g excalidraw-cli".into();
+    }
+    c
 }
 
 // ── Graphify ──────────────────────────────────────────────────────────────
