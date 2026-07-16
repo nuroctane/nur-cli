@@ -46,6 +46,17 @@ pub struct Auth {
     pub oauth_meta: Option<OauthMeta>,
 }
 
+/// Non-secret OAuth attributes needed to route and authorize provider requests.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OAuthRequestContext {
+    /// ChatGPT workspace/account header required by OpenAI's OAuth backend.
+    pub account_id: Option<String>,
+    /// Whether OpenAI must route this account through its FedRAMP edge.
+    pub is_fedramp: bool,
+    /// Google Cloud quota project required by Gemini OAuth requests.
+    pub project_id: Option<String>,
+}
+
 impl Default for Auth {
     fn default() -> Self {
         Self {
@@ -147,10 +158,11 @@ pub(crate) fn pick_provider_credential(
 /// **With `Some(provider_id)`** (client init, `/model`, etc.) — provider-scoped
 /// first so a leftover `MODEL_API_KEY` / `META_API_KEY` never gets sent to xAI,
 /// Anthropic, OpenAI, … after you `/login` that provider:
-/// 1. catalog env (`XAI_API_KEY`, `OPENAI_API_KEY`, …)
-/// 2. `auth.json` when tagged for this provider (API key or OAuth, refreshed)
-/// 3. per-provider failover key / OAuth stores
-/// 4. `NUR_API_KEY` only as a true global override (not META_/MODEL_/MUSE_)
+/// 1. matching active OAuth session (refreshed), so env cannot replace it after restart
+/// 2. catalog env (`XAI_API_KEY`, `OPENAI_API_KEY`, …)
+/// 3. matching `auth.json` API key
+/// 4. per-provider failover key / OAuth stores
+/// 5. `NUR_API_KEY` only as a true global override (not META_/MODEL_/MUSE_)
 ///
 /// **With `None`** — generic envs then `auth.json` (scripts / headless).
 pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
@@ -162,6 +174,7 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
                 .filter(|k| !k.is_empty())
         });
         let mut matching_auth = None;
+        let mut matching_oauth = None;
         let mut mismatched = false;
         if let Some(auth) = load_auth()? {
             if provider_mismatch(&auth, exp) {
@@ -171,9 +184,18 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
                 ensure_fresh_oauth(&mut auth)?;
                 let k = auth.api_key.trim().to_string();
                 if !k.is_empty() {
-                    matching_auth = Some(k);
+                    if matches!(auth.auth_method, AuthMethod::Oauth) {
+                        matching_oauth = Some(k);
+                    } else {
+                        matching_auth = Some(k);
+                    }
                 }
             }
+        }
+        // An explicit browser sign-in is the active login choice. Do not let a
+        // stale vendor env key silently replace it after restart.
+        if let Some(k) = matching_oauth {
+            return Ok(k);
         }
         let failover_key = load_provider_key(exp);
         let failover_oauth = load_provider_oauth_token(exp);
@@ -271,6 +293,47 @@ pub fn load_auth() -> Result<Option<Auth>> {
     Ok(Some(auth))
 }
 
+/// Return OAuth request metadata when `access_token` belongs to a stored OAuth
+/// session for `provider_id`. API keys deliberately return `None`.
+pub fn oauth_request_context(
+    provider_id: &str,
+    access_token: &str,
+) -> Option<OAuthRequestContext> {
+    let matches_session = |auth: &Auth| {
+        matches!(auth.auth_method, AuthMethod::Oauth)
+            && auth.provider == provider_id
+            && auth.api_key.trim() == access_token.trim()
+    };
+    let active = load_auth().ok().flatten().filter(&matches_session);
+    let stored = read_sessions_at(&crate::config::provider_sessions_path())
+        .remove(provider_id)
+        .filter(&matches_session);
+    let auth = active.or(stored)?;
+    let account_id = auth
+        .oauth_meta
+        .as_ref()
+        .and_then(|meta| meta.extra.get("account_id"))
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
+    let is_fedramp = auth
+        .oauth_meta
+        .as_ref()
+        .and_then(|meta| meta.extra.get("is_fedramp"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let project_id = auth
+        .oauth_meta
+        .as_ref()
+        .and_then(|meta| meta.extra.get("project_id"))
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
+    Some(OAuthRequestContext {
+        account_id,
+        is_fedramp,
+        project_id,
+    })
+}
+
 /// Refresh OAuth access token if within 5 minutes of expiry (or already expired).
 /// Mutates `auth` in place; does **not** persist — callers write to the right
 /// store (`auth.json` vs per-provider sessions).
@@ -297,6 +360,9 @@ pub fn refresh_oauth_in_place(auth: &mut Auth) -> Result<bool> {
                 auth.refresh_token = Some(r);
             }
             auth.expires_at = tokens.expires_at;
+            if let Some(meta) = tokens.meta {
+                auth.oauth_meta = Some(meta);
+            }
             auth.source = "oauth".into();
             Ok(true)
         }

@@ -111,24 +111,46 @@ pub fn plan_targets(
         let Some(key) = resolve_key(p) else {
             continue;
         };
+        let is_oauth = crate::auth::oauth_request_context(p.id, &key).is_some();
+        let base_url = if is_oauth {
+            crate::providers::oauth_base_url(p.id).unwrap_or(p.base_url)
+        } else {
+            p.base_url
+        };
+        let style = if is_oauth && p.id == "xai" {
+            ApiStyle::Responses
+        } else {
+            p.style
+        };
+        let model = if is_oauth && p.id == "xai" {
+            "grok-4.5"
+        } else {
+            p.default_model
+        };
         out.push(FailoverTarget {
             provider_id: p.id.to_string(),
-            base_url: p.base_url.trim_end_matches('/').to_string(),
+            base_url: base_url.trim_end_matches('/').to_string(),
             api_key: key,
-            style: p.style,
-            model: p.default_model.to_string(),
+            style,
+            model: model.to_string(),
         });
     }
     out
 }
 
 /// Runtime credential resolver for a fallback provider, in priority order:
-/// 1. the provider's own catalog env var (e.g. `OPENAI_API_KEY`),
-/// 2. an API key saved via `/failover` (`auth::load_provider_key`),
-/// 3. a browser OAuth session for that provider (`auth::load_provider_oauth_token`),
+/// 1. a browser OAuth session explicitly saved via `/failover` or `/login`,
+/// 2. the provider's own catalog env var (e.g. `OPENAI_API_KEY`),
+/// 3. an API key saved via `/failover` (`auth::load_provider_key`),
 /// 4. an empty string for local servers that don't need one.
 /// `None` = no credentials, skip this provider.
 pub fn resolve_target_key(p: &Provider) -> Option<String> {
+    if let Some(k) = crate::auth::load_provider_oauth_token(p.id) {
+        let k = k.trim().to_string();
+        if !k.is_empty() {
+            return Some(k);
+        }
+    }
     if let Ok(k) = std::env::var(p.env_key) {
         let k = k.trim().to_string();
         if !k.is_empty() {
@@ -136,12 +158,6 @@ pub fn resolve_target_key(p: &Provider) -> Option<String> {
         }
     }
     if let Some(k) = crate::auth::load_provider_key(p.id) {
-        let k = k.trim().to_string();
-        if !k.is_empty() {
-            return Some(k);
-        }
-    }
-    if let Some(k) = crate::auth::load_provider_oauth_token(p.id) {
         let k = k.trim().to_string();
         if !k.is_empty() {
             return Some(k);

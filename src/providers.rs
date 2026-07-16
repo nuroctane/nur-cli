@@ -46,13 +46,27 @@ pub struct Provider {
 
 use ApiStyle::{AnthropicMessages as AM, ChatCompletions as CC, Responses as R};
 
+/// OpenAI's ChatGPT/Codex backend used by ChatGPT OAuth sessions.
+pub const OPENAI_OAUTH_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
+/// xAI's inference proxy for Grok Build browser/device sessions.
+pub const XAI_OAUTH_BASE_URL: &str = "https://cli-chat-proxy.grok.com/v1";
+
+/// Fixed inference backends bound to first-party OAuth access tokens.
+pub fn oauth_base_url(provider_id: &str) -> Option<&'static str> {
+    match provider_id {
+        "openai" => Some(OPENAI_OAUTH_BASE_URL),
+        "xai" => Some(XAI_OAUTH_BASE_URL),
+        _ => None,
+    }
+}
+
 /// The full catalog. First entry (`meta` = Meta Model API vendor) is the default.
 pub const PROVIDERS: &[Provider] = &[
     // ── default vendor (Meta company API — not the NurCLI product name) ──
     Provider { id: "meta", name: "Meta Model API", base_url: "https://api.meta.ai/v1", default_model: "muse-spark-1.1", env_key: "META_API_KEY", style: R, note: "muse-spark · Meta vendor default", key_optional: false, browser_auth: false },
 
     // ── frontier direct APIs ─────────────────────────────────────────────
-    Provider { id: "openai", name: "OpenAI", base_url: "https://api.openai.com/v1", default_model: "gpt-5.5", env_key: "OPENAI_API_KEY", style: R, note: "GPT · Responses API", key_optional: false, browser_auth: false },
+    Provider { id: "openai", name: "OpenAI", base_url: "https://api.openai.com/v1", default_model: "gpt-5.5", env_key: "OPENAI_API_KEY", style: R, note: "GPT · API key or ChatGPT OAuth", key_optional: false, browser_auth: true },
     Provider { id: "openai-cc", name: "OpenAI (Chat Completions)", base_url: "https://api.openai.com/v1", default_model: "gpt-5.5", env_key: "OPENAI_API_KEY", style: CC, note: "GPT · legacy chat endpoint", key_optional: false, browser_auth: false },
     Provider { id: "anthropic", name: "Anthropic", base_url: "https://api.anthropic.com/v1", default_model: "claude-sonnet-5", env_key: "ANTHROPIC_API_KEY", style: AM, note: "Claude Messages API · key or browser OAuth", key_optional: false, browser_auth: true },
     Provider { id: "google", name: "Google Gemini", base_url: "https://generativelanguage.googleapis.com/v1beta/openai", default_model: "gemini-3-pro", env_key: "GEMINI_API_KEY", style: CC, note: "Gemini · OpenAI-compat", key_optional: false, browser_auth: false },
@@ -304,6 +318,21 @@ mod tests {
     }
 
     #[test]
+    fn openai_supports_chatgpt_oauth_on_responses_api() {
+        let p = by_id("openai").expect("openai");
+        assert!(p.browser_auth);
+        assert_eq!(p.style, ApiStyle::Responses);
+        assert!(OPENAI_OAUTH_BASE_URL.ends_with("/backend-api/codex"));
+    }
+
+    #[test]
+    fn oauth_tokens_route_only_to_their_fixed_first_party_backends() {
+        assert_eq!(oauth_base_url("openai"), Some(OPENAI_OAUTH_BASE_URL));
+        assert_eq!(oauth_base_url("xai"), Some(XAI_OAUTH_BASE_URL));
+        assert_eq!(oauth_base_url("anthropic"), None);
+    }
+
+    #[test]
     fn every_browser_auth_flag_is_in_oauth_id_list() {
         let listed: std::collections::HashSet<&str> =
             oauth_browser_provider_ids().iter().copied().collect();
@@ -352,6 +381,7 @@ mod tests {
 #[allow(dead_code)] // used by tests; available for TUI/docs tooling
 pub fn oauth_browser_provider_ids() -> &'static [&'static str] {
     &[
+        "openai",
         "xai",
         "anthropic",
         "antigravity",

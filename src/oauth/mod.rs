@@ -55,7 +55,7 @@ pub fn revoke_session(auth: &Auth) -> Result<String> {
             "Google session is managed by `gcloud`; run `gcloud auth revoke` to drop ADC tokens."
                 .into(),
         ),
-        "xai" | "anthropic" | "huggingface" => Ok(format!(
+        "openai" | "xai" | "anthropic" | "huggingface" => Ok(format!(
             "no remote revoke endpoint wired for '{}' — local tokens deleted; revoke in the vendor account UI if needed",
             auth.provider
         )),
@@ -85,6 +85,7 @@ impl CancelFlag {
 /// Refresh an OAuth access token for the given provider.
 pub fn refresh_tokens(provider: &str, auth: &Auth, refresh: &str) -> Result<OAuthTokens> {
     match provider {
+        "openai" => flows::openai::refresh(auth, refresh),
         "xai" => flows::xai::refresh(auth, refresh),
         "anthropic" => flows::claude::refresh(refresh),
         "antigravity" | "google-oauth" => flows::antigravity::refresh(auth, refresh),
@@ -112,6 +113,7 @@ mod tests {
 
     #[test]
     fn browser_supported_ids() {
+        assert!(supports_browser("openai"));
         assert!(supports_browser("xai"));
         assert!(supports_browser("anthropic"));
         assert!(!supports_browser("meta"));
@@ -134,6 +136,7 @@ mod tests {
     fn every_browser_auth_provider_has_login_and_refresh_path() {
         // Mirrors match arms in flows::login_browser and refresh_tokens.
         const LOGIN: &[&str] = &[
+            "openai",
             "xai",
             "anthropic",
             "antigravity",
@@ -143,6 +146,7 @@ mod tests {
             "github-models",
         ];
         const REFRESH: &[&str] = &[
+            "openai",
             "xai",
             "anthropic",
             "antigravity",

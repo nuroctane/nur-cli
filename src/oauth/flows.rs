@@ -3,7 +3,7 @@
 use super::{expires_in_to_at, open_browser, CancelFlag};
 use crate::auth::{Auth, OauthMeta};
 use crate::error::{MuseError, Result};
-use base64::engine::general_purpose::{URL_SAFE_NO_PAD, STANDARD};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -50,6 +50,7 @@ fn send(tx: &ProgressTx, ev: BrowserLoginProgress) {
 /// Blocks until success, failure, cancel, or timeout.
 pub fn login_browser(provider_id: &str, tx: ProgressTx, cancel: CancelFlag) {
     let result = match provider_id {
+        "openai" => openai::login(&tx, &cancel),
         "xai" => xai::login(&tx, &cancel),
         "anthropic" => claude::login(&tx, &cancel),
         "antigravity" => antigravity::login(&tx, &cancel),
@@ -109,6 +110,15 @@ fn wait_localhost_code(
 ) -> Result<String> {
     let listener = TcpListener::bind(("127.0.0.1", port))
         .map_err(|e| MuseError::Other(format!("cannot bind localhost:{port}: {e}")))?;
+    wait_localhost_code_on(listener, expected_state, cancel, timeout)
+}
+
+fn wait_localhost_code_on(
+    listener: TcpListener,
+    expected_state: Option<&str>,
+    cancel: &CancelFlag,
+    timeout: Duration,
+) -> Result<String> {
     listener
         .set_nonblocking(true)
         .map_err(|e| MuseError::Other(e.to_string()))?;
@@ -196,6 +206,262 @@ fn urlencoding_decode(s: &str) -> String {
         }
     }
     out
+}
+
+fn jwt_claims(token: &str) -> Option<serde_json::Value> {
+    let payload = token.split('.').nth(1)?;
+    let decoded = URL_SAFE_NO_PAD.decode(payload).ok()?;
+    serde_json::from_slice(&decoded).ok()
+}
+
+fn jwt_expiration(token: &str) -> Option<u64> {
+    jwt_claims(token)?.get("exp")?.as_u64()
+}
+
+fn chatgpt_account_meta(id_token: &str) -> (Option<String>, bool) {
+    let Some(claims) = jwt_claims(id_token) else {
+        return (None, false);
+    };
+    let auth = claims
+        .get("https://api.openai.com/auth")
+        .and_then(|value| value.as_object());
+    let account_id = auth
+        .and_then(|value| value.get("chatgpt_account_id"))
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
+    let is_fedramp = auth
+        .and_then(|value| value.get("chatgpt_account_is_fedramp"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    (account_id, is_fedramp)
+}
+
+// ── OpenAI (ChatGPT OAuth / Codex backend) ─────────────────────────────────
+
+pub mod openai {
+    use super::*;
+
+    pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+    const ISSUER: &str = "https://auth.openai.com";
+    const CALLBACK_PORTS: &[u16] = &[1455, 1457];
+
+    #[derive(Deserialize)]
+    struct TokenResp {
+        access_token: Option<String>,
+        refresh_token: Option<String>,
+        id_token: Option<String>,
+        expires_in: Option<u64>,
+        error: Option<serde_json::Value>,
+    }
+
+    #[derive(Deserialize)]
+    struct CodexAuthFile {
+        tokens: CodexTokenSet,
+    }
+
+    #[derive(Deserialize)]
+    struct CodexTokenSet {
+        access_token: String,
+        refresh_token: Option<String>,
+        id_token: Option<String>,
+        account_id: Option<String>,
+    }
+
+    pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
+        if let Some(tokens) = import_codex_cli()? {
+            send(
+                tx,
+                BrowserLoginProgress::Status("imported existing Codex session".into()),
+            );
+            return Ok(tokens);
+        }
+        let (listener, port) = CALLBACK_PORTS
+            .iter()
+            .find_map(|port| {
+                TcpListener::bind(("127.0.0.1", *port))
+                    .ok()
+                    .map(|listener| (listener, *port))
+            })
+            .ok_or_else(|| {
+                MuseError::Other(
+                    "OpenAI login needs localhost port 1455 or 1457, but both are in use".into(),
+                )
+            })?;
+        let redirect = format!("http://localhost:{port}/auth/callback");
+        let verifier = random_urlsafe(64);
+        let challenge = pkce_challenge(&verifier);
+        let state = random_urlsafe(32);
+        let scope =
+            "openid profile email offline_access api.connectors.read api.connectors.invoke";
+        let auth_url = format!(
+            "{ISSUER}/oauth/authorize?response_type=code&client_id={CLIENT_ID}&redirect_uri={}&scope={}&code_challenge={challenge}&code_challenge_method=S256&id_token_add_organizations=true&codex_cli_simplified_flow=true&state={state}&originator=nur_cli",
+            urlencoding_encode(&redirect),
+            urlencoding_encode(scope),
+        );
+
+        send(tx, BrowserLoginProgress::OpenUrl(auth_url.clone()));
+        send(
+            tx,
+            BrowserLoginProgress::Status("complete OpenAI sign-in in your browser…".into()),
+        );
+        let _ = open_browser(&auth_url);
+        let code = wait_localhost_code_on(
+            listener,
+            Some(&state),
+            cancel,
+            Duration::from_secs(600),
+        )?;
+        send(
+            tx,
+            BrowserLoginProgress::Status("exchanging OpenAI authorization code…".into()),
+        );
+
+        let form = [
+            ("grant_type", "authorization_code"),
+            ("code", code.as_str()),
+            ("redirect_uri", redirect.as_str()),
+            ("client_id", CLIENT_ID),
+            ("code_verifier", verifier.as_str()),
+        ];
+        let response = http()?
+            .post(format!("{ISSUER}/oauth/token"))
+            .form(&form)
+            .send()
+            .map_err(|error| {
+                MuseError::Other(format!("OpenAI token exchange failed: {error}"))
+            })?;
+        parse_token_response(response, None, None)
+    }
+
+    pub fn refresh(auth: &Auth, refresh_token: &str) -> Result<OAuthTokens> {
+        let body = serde_json::json!({
+            "client_id": CLIENT_ID,
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+        });
+        let response = http()?
+            .post(format!("{ISSUER}/oauth/token"))
+            .json(&body)
+            .send()
+            .map_err(|error| MuseError::Other(format!("OpenAI token refresh failed: {error}")))?;
+        parse_token_response(response, Some(refresh_token), auth.oauth_meta.clone())
+    }
+
+    /// Reuse the official Codex CLI login when present. This reads only the
+    /// first-party token cache and converts it into Nur's normal OAuth shape.
+    fn import_codex_cli() -> Result<Option<OAuthTokens>> {
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let path = home.join(".codex").join("auth.json");
+        if !path.exists() {
+            return Ok(None);
+        }
+        let text = std::fs::read_to_string(path)?;
+        let mut tokens = codex_tokens_from_json(&text)?;
+        if tokens
+            .expires_at
+            .is_some_and(|expiry| expiry <= super::super::now_unix().saturating_add(300))
+        {
+            if let Some(refresh_token) = tokens.refresh_token.clone() {
+                let auth = Auth {
+                    api_key: tokens.access_token.clone(),
+                    source: "oauth".into(),
+                    auth_method: crate::auth::AuthMethod::Oauth,
+                    provider: "openai".into(),
+                    refresh_token: Some(refresh_token.clone()),
+                    expires_at: tokens.expires_at,
+                    oauth_meta: tokens.meta.clone(),
+                };
+                tokens = refresh(&auth, &refresh_token)?;
+            }
+        }
+        Ok(Some(tokens))
+    }
+
+    pub(super) fn codex_tokens_from_json(text: &str) -> Result<OAuthTokens> {
+        let parsed: CodexAuthFile = serde_json::from_str(text)
+            .map_err(|error| MuseError::Other(format!("invalid Codex auth file: {error}")))?;
+        let access_token = parsed.tokens.access_token.trim().to_string();
+        if access_token.is_empty() {
+            return Err(MuseError::Other(
+                "Codex auth file has no access token; run `codex login` again".into(),
+            ));
+        }
+        let (claim_account_id, is_fedramp) = parsed
+            .tokens
+            .id_token
+            .as_deref()
+            .map(chatgpt_account_meta)
+            .unwrap_or((None, false));
+        let account_id = parsed
+            .tokens
+            .account_id
+            .filter(|value| !value.trim().is_empty())
+            .or(claim_account_id);
+        Ok(OAuthTokens {
+            expires_at: jwt_expiration(&access_token),
+            access_token,
+            refresh_token: parsed.tokens.refresh_token,
+            meta: Some(OauthMeta {
+                issuer: ISSUER.into(),
+                client_id: CLIENT_ID.into(),
+                extra: serde_json::json!({
+                    "account_id": account_id,
+                    "is_fedramp": is_fedramp,
+                    "imported_from": "codex-cli",
+                }),
+            }),
+        })
+    }
+
+    fn parse_token_response(
+        response: reqwest::blocking::Response,
+        previous_refresh: Option<&str>,
+        previous_meta: Option<OauthMeta>,
+    ) -> Result<OAuthTokens> {
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        let parsed: TokenResp = serde_json::from_str(&body).map_err(|error| {
+            MuseError::Other(format!(
+                "OpenAI returned an invalid token response ({status}): {error}"
+            ))
+        })?;
+        if !status.is_success() {
+            let detail = parsed
+                .error
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| format!("HTTP {}", status.as_u16()));
+            return Err(MuseError::Other(format!("OpenAI OAuth failed: {detail}")));
+        }
+        let access_token = parsed
+            .access_token
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                MuseError::Other("OpenAI OAuth response did not include an access token".into())
+            })?;
+        let refresh_token = parsed
+            .refresh_token
+            .or_else(|| previous_refresh.map(str::to_string));
+        let mut meta = previous_meta.unwrap_or(OauthMeta {
+            issuer: ISSUER.into(),
+            client_id: CLIENT_ID.into(),
+            extra: serde_json::json!({}),
+        });
+        if let Some(id_token) = parsed.id_token.as_deref() {
+            let (account_id, is_fedramp) = chatgpt_account_meta(id_token);
+            meta.extra = serde_json::json!({
+                "account_id": account_id,
+                "is_fedramp": is_fedramp,
+            });
+        }
+        let expires_at =
+            expires_in_to_at(parsed.expires_in).or_else(|| jwt_expiration(&access_token));
+        Ok(OAuthTokens {
+            access_token,
+            refresh_token,
+            expires_at,
+            meta: Some(meta),
+        })
+    }
 }
 
 // ── xAI Grok (device code / Grok CLI import) ───────────────────────────────
@@ -759,12 +1025,12 @@ pub mod antigravity {
 
     fn fetch_access_token() -> Result<OAuthTokens> {
         let out = Command::new("gcloud")
-            .args(["auth", "print-access-token"])
+            .args(["auth", "application-default", "print-access-token"])
             .output()
-            .map_err(|e| MuseError::Other(format!("gcloud print-access-token: {e}")))?;
+            .map_err(|e| MuseError::Other(format!("gcloud ADC print-access-token: {e}")))?;
         if !out.status.success() {
             return Err(MuseError::Other(format!(
-                "gcloud print-access-token failed: {}",
+                "gcloud application-default print-access-token failed: {}",
                 String::from_utf8_lossy(&out.stderr)
             )));
         }
@@ -772,6 +1038,27 @@ pub mod antigravity {
         if access.is_empty() {
             return Err(MuseError::Other("empty token from gcloud".into()));
         }
+        let project_id = std::env::var("GOOGLE_CLOUD_PROJECT")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                let out = Command::new("gcloud")
+                    .args(["config", "get-value", "project"])
+                    .output()
+                    .ok()?;
+                if !out.status.success() {
+                    return None;
+                }
+                let value = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                (!value.is_empty() && value != "(unset)").then_some(value)
+            })
+            .ok_or_else(|| {
+                MuseError::Other(
+                    "Google OAuth needs a quota project. Run `gcloud config set project PROJECT_ID` or set GOOGLE_CLOUD_PROJECT, then retry /login."
+                        .into(),
+                )
+            })?;
         Ok(OAuthTokens {
             access_token: access,
             // Marker so ensure_fresh_oauth can re-call gcloud.
@@ -780,7 +1067,11 @@ pub mod antigravity {
             meta: Some(OauthMeta {
                 issuer: "https://accounts.google.com".into(),
                 client_id: "gcloud".into(),
-                extra: serde_json::json!({"product": "antigravity", "via": "gcloud auth login"}),
+                extra: serde_json::json!({
+                    "product": "antigravity",
+                    "via": "gcloud application-default login",
+                    "project_id": project_id,
+                }),
             }),
         })
     }
@@ -1355,10 +1646,13 @@ pub mod bedrock {
             )));
         }
 
-        // Prefer env bearer (OpenAI-compat Bedrock gateways) then JSON credential export.
+        // AWS SSO credentials are SigV4 material, not Bedrock bearer tokens. Nur's
+        // OpenAI-compatible HTTP path can only use an actual Bedrock API key/token.
+        // Never persist an access-key marker as a bearer: it makes login appear
+        // successful and guarantees every subsequent request will be rejected.
         send(
             tx,
-            BrowserLoginProgress::Status("exporting AWS session credentials…".into()),
+            BrowserLoginProgress::Status("checking for a Bedrock bearer token…".into()),
         );
         if let Ok(token) = std::env::var("AWS_BEARER_TOKEN_BEDROCK") {
             if !token.is_empty() {
@@ -1375,62 +1669,8 @@ pub mod bedrock {
             }
         }
 
-        // JSON-first (stable AWS CLI contract). Fall back to process env format.
-        if let Ok(out) = Command::new("aws")
-            .args(["configure", "export-credentials", "--format", "process"])
-            .output()
-        {
-            if out.status.success() {
-                #[derive(Deserialize)]
-                struct AwsProcessCreds {
-                    #[serde(rename = "AccessKeyId")]
-                    access_key_id: Option<String>,
-                    #[serde(rename = "SessionToken")]
-                    session_token: Option<String>,
-                    #[serde(rename = "Expiration")]
-                    expiration: Option<String>,
-                }
-                if let Ok(c) = serde_json::from_slice::<AwsProcessCreds>(&out.stdout) {
-                    if let Some(ak) = c.access_key_id.filter(|s| !s.is_empty()) {
-                        // Not a pure bearer for Bedrock OpenAI path — store marker + session hint.
-                        let token_part = c
-                            .session_token
-                            .as_deref()
-                            .unwrap_or("")
-                            .chars()
-                            .take(24)
-                            .collect::<String>();
-                        let marker = format!(
-                            "aws-sso-session:{}:{}",
-                            &ak.chars().take(8).collect::<String>(),
-                            STANDARD.encode(token_part.as_bytes())
-                        );
-                        let expires_at = c
-                            .expiration
-                            .as_deref()
-                            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                            .map(|dt| dt.timestamp() as u64)
-                            .or(Some(super::super::now_unix() + 3600));
-                        return Ok(OAuthTokens {
-                            access_token: marker,
-                            refresh_token: Some("aws-sso".into()),
-                            expires_at,
-                            meta: Some(OauthMeta {
-                                issuer: "aws-sso".into(),
-                                client_id: "aws-cli".into(),
-                                extra: serde_json::json!({
-                                    "via": "aws sso login",
-                                    "hint": "SSO session active. For Bedrock OpenAI-compat set AWS_BEARER_TOKEN_BEDROCK or a gateway key; native Bedrock uses SigV4 via AWS env."
-                                }),
-                            }),
-                        });
-                    }
-                }
-            }
-        }
-
         Err(MuseError::Other(
-            "AWS SSO completed, but no Bedrock bearer was found. Set AWS_BEARER_TOKEN_BEDROCK or paste a gateway key (/login → API key). SSO is active for the AWS CLI (`aws sso logout` to drop it)."
+            "AWS SSO completed, but SSO credentials require SigV4 and cannot be sent as a bearer token. Generate a short-term Bedrock API key, set AWS_BEARER_TOKEN_BEDROCK, then retry /login; or paste a Bedrock API key. The AWS CLI SSO session remains active."
                 .into(),
         ))
     }
@@ -1449,6 +1689,69 @@ pub mod bedrock {
         Err(MuseError::Other(
             "AWS Bedrock refresh: re-run /login browser (aws sso login)".into(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unsigned_jwt(payload: serde_json::Value) -> String {
+        let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
+        format!("header.{payload}.signature")
+    }
+
+    #[test]
+    fn openai_id_token_yields_expiry_and_account_context() {
+        let token = unsigned_jwt(serde_json::json!({
+            "exp": 1_900_000_000_u64,
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": "acct_test",
+                "chatgpt_account_is_fedramp": true
+            }
+        }));
+
+        assert_eq!(jwt_expiration(&token), Some(1_900_000_000));
+        assert_eq!(
+            chatgpt_account_meta(&token),
+            (Some("acct_test".to_string()), true)
+        );
+    }
+
+    #[test]
+    fn malformed_openai_id_token_has_no_account_context() {
+        assert_eq!(jwt_expiration("not-a-jwt"), None);
+        assert_eq!(chatgpt_account_meta("not-a-jwt"), (None, false));
+    }
+
+    #[test]
+    fn imports_current_codex_auth_shape_without_exposing_api_key_field() {
+        let access = unsigned_jwt(serde_json::json!({"exp": 1_900_000_000_u64}));
+        let id = unsigned_jwt(serde_json::json!({
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": "claim-account",
+                "chatgpt_account_is_fedramp": false
+            }
+        }));
+        let text = serde_json::json!({
+            "auth_mode": "chatgpt",
+            "OPENAI_API_KEY": null,
+            "tokens": {
+                "id_token": id,
+                "access_token": access,
+                "refresh_token": "refresh-test",
+                "account_id": "file-account"
+            }
+        })
+        .to_string();
+
+        let tokens = openai::codex_tokens_from_json(&text).unwrap();
+        assert_eq!(tokens.expires_at, Some(1_900_000_000));
+        assert_eq!(tokens.refresh_token.as_deref(), Some("refresh-test"));
+        assert_eq!(
+            tokens.meta.unwrap().extra["account_id"],
+            serde_json::json!("file-account")
+        );
     }
 }
 

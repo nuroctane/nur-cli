@@ -4644,10 +4644,41 @@ impl App {
             .unwrap_or(*crate::providers::default_provider());
 
         self.cfg.provider = provider.id.to_string();
-        self.cfg.base_url = provider.base_url.to_string();
-        self.cfg.model = provider.default_model.to_string();
-        // Self-hosted override wins over catalog default.
-        crate::config::apply_base_url_env(&mut self.cfg);
+        let fixed_oauth_base = via_oauth
+            .then(|| crate::providers::oauth_base_url(provider.id))
+            .flatten();
+        self.cfg.base_url = fixed_oauth_base
+            .unwrap_or(provider.base_url)
+            .to_string();
+        self.cfg.model = if via_oauth && provider.id == "xai" {
+            "grok-4.5".to_string()
+        } else {
+            provider.default_model.to_string()
+        };
+        // Self-hosted overrides apply only when the access token is not bound
+        // to a first-party OAuth inference backend.
+        if fixed_oauth_base.is_none() {
+            crate::config::apply_base_url_env(&mut self.cfg);
+        }
+        if via_oauth {
+            if let Ok(ids) = crate::api::models::fetch_model_ids(
+                &self.cfg.base_url,
+                key,
+                Some(provider.id),
+            ) {
+                if !ids.iter().any(|id| id == &self.cfg.model) {
+                    let usable = ids.iter().rev().find(|id| {
+                        let id = id.to_ascii_lowercase();
+                        !["embedding", "image", "audio", "realtime", "transcribe", "tts"]
+                            .iter()
+                            .any(|kind| id.contains(kind))
+                    });
+                    if let Some(model) = usable.or_else(|| ids.last()) {
+                        self.cfg.model = model.clone();
+                    }
+                }
+            }
+        }
         let _ = crate::config::save_config(&self.cfg);
         if let Some(s) = &mut self.session {
             s.model = self.cfg.model.clone();
@@ -4661,7 +4692,7 @@ impl App {
         } else {
             key.to_string()
         };
-        match crate::api::ApiClient::new(&self.cfg.base_url, &bearer)
+        match crate::api::ApiClient::for_provider(&self.cfg.base_url, &bearer, provider.id)
             .map(|c| c.with_style(provider.style))
         {
             Ok(client) => {
@@ -4679,7 +4710,7 @@ impl App {
                     Tone::Mode,
                     format!(
                         "signed in · {} · {keynote}\n  model {}  ·  {}",
-                        provider.name, self.cfg.model, provider.base_url,
+                        provider.name, self.cfg.model, self.cfg.base_url,
                     ),
                 );
             }

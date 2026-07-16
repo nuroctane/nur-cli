@@ -12,6 +12,7 @@ The active provider, endpoint, and default model are stored in
 | Provider | API key | Browser / SSO |
 |----------|---------|----------------|
 | **Meta Model API** | [dev.meta.ai](https://dev.meta.ai/) | - |
+| **OpenAI** | `OPENAI_API_KEY` | Sign in with ChatGPT OAuth or import Codex session |
 | **xAI Grok** | `XAI_API_KEY` | Device code / Grok CLI session |
 | **Anthropic Claude** | `ANTHROPIC_API_KEY` | Browser OAuth (Claude-style) or import Claude Code session |
 | **Google Antigravity** | Gemini key fallback | `gcloud auth login` browser SSO |
@@ -19,7 +20,7 @@ The active provider, endpoint, and default model are stored in
 | **Azure OpenAI** | `AZURE_OPENAI_API_KEY` | `az login` / Entra device code |
 | **AWS Bedrock** | gateway / bearer | `aws sso login` |
 | **GitHub Models** | GitHub PAT (`models:read`) | `gh auth login` browser SSO |
-| OpenAI, Gemini, Groq, … | Vendor dashboard | - |
+| Gemini, Groq, … | Vendor dashboard | - |
 | OpenCode Zen, Vercel AI Gateway, GitHub Models, Helicone, … | Gateway key | - |
 | Baseten, Friendli, Chutes, Venice, Writer, Upstage, … | Vendor dashboard | - |
 | Ollama, LM Studio, … | Often none (local) | - |
@@ -43,6 +44,15 @@ What happens:
 4. Config is updated: `provider`, `base_url`, and `model` (that provider’s
    default). The HTTP client is **hot-swapped** for the rest of the session.
 
+After browser sign-in, `/model` queries that provider with the OAuth credential and
+shows only models the account can use. OpenAI ChatGPT OAuth uses the Codex backend,
+including the account context from the ID token; an `OPENAI_API_KEY` login continues
+to use the public OpenAI API endpoint.
+
+xAI browser/device sessions use the Grok Build Responses proxy and its account model
+catalog (currently defaulting to `grok-4.5`). `XAI_API_KEY` continues to use the public
+xAI API endpoint and its normal catalog style.
+
 `/logout` clears the stored key/tokens and blocks further turns until you `/login`
 again (environment-variable keys still apply on the next launch).
 
@@ -53,6 +63,15 @@ No key on launch → the login modal opens automatically.
     Set your Azure resource URL or Bedrock region/endpoint in config after login if the
     catalog default is a placeholder. Subscription OAuth is a convenience path; API keys
     always remain available.
+
+    AWS SSO credentials use SigV4 and are not bearer tokens. NurCLI never stores them as
+    if they were. Its OpenAI-compatible Bedrock transport needs a Bedrock API key in
+    `AWS_BEARER_TOKEN_BEDROCK` (short-term keys can be generated from an SSO-backed AWS
+    session) or a pasted gateway/API key.
+
+    Google OAuth uses Application Default Credentials and sends the configured Cloud
+    project as `x-goog-user-project`. Set it with `gcloud config set project PROJECT_ID`
+    (or `GOOGLE_CLOUD_PROJECT`) before browser sign-in.
 
 ## Log in from the command line
 
@@ -87,7 +106,7 @@ Self-hosted OpenAI-compatible servers (Ollama, vLLM, LiteLLM, custom gateways):
 export NUR_BASE_URL="http://localhost:11434/v1"   # overrides config base_url
 ```
 
-`NUR_BASE_URL` (legacy `META_BASE_URL`) wins over the catalog default after `/login` and on every startup.
+`NUR_BASE_URL` (legacy `META_BASE_URL`) wins over the catalog default after `/login` and on every startup, except that provider OAuth sessions with a fixed secure backend (currently OpenAI ChatGPT OAuth) cannot be redirected by this override.
 
 !!! note "Legacy variables"
     `META_API_KEY`, `MODEL_API_KEY`, and `MUSE_API_KEY` are also accepted for backwards compatibility.
@@ -159,14 +178,17 @@ console API keys use `x-api-key`.
 
 ## Auth precedence
 
-API key resolution order (env always wins over the saved file):
+Credential resolution order:
 
-1. `NUR_API_KEY`
-2. `META_API_KEY` (Meta Model API / legacy app)
-3. `MODEL_API_KEY`
-4. `MUSE_API_KEY` (legacy)
-5. `~/.nur/auth.json` (from `nur auth login` or successful `/login`)
-6. Interactive TUI prompt (opens `/login` when no key is found)
+1. A matching active OAuth session (refreshed automatically before use)
+2. For provider-scoped API-key sign-ins, the provider variable (such as
+   `OPENAI_API_KEY`), then the matching saved key, then `NUR_API_KEY`
+3. `~/.nur/auth.json` (from `nur auth login` or successful `/login`)
+4. Interactive TUI prompt (opens `/login` when no key is found)
+
+Legacy generic variables (`META_API_KEY`, `MODEL_API_KEY`, and `MUSE_API_KEY`) are
+used only by unscoped/headless resolution. They are never sent to a different
+explicitly selected provider.
 
 Active **provider id / base URL / model** come from `~/.nur/config.toml`
 (written by `/login`).

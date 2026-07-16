@@ -288,7 +288,7 @@ async fn real_main() -> Result<()> {
     let style = providers::by_id(&cfg.provider)
         .map(|p| p.style)
         .unwrap_or(providers::ApiStyle::Responses);
-    let client = ApiClient::new(&cfg.base_url, &api_key)?.with_style(style);
+    let client = ApiClient::for_provider(&cfg.base_url, &api_key, &cfg.provider)?.with_style(style);
 
     let mut session = if let Some(id) = &cli.resume {
         theme::print_info(&format!("resuming session {id}…"));

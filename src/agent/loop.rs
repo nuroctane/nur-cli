@@ -297,7 +297,7 @@ impl AgentRunner {
                 "provider error ({last}) — failing over to {} · {}",
                 t.provider_id, t.model
             )));
-            let client = match ApiClient::new(&t.base_url, &t.api_key) {
+            let client = match ApiClient::for_provider(&t.base_url, &t.api_key, &t.provider_id) {
                 Ok(c) => c.with_style(t.style),
                 Err(e) => {
                     last = e;

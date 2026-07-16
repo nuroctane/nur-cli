@@ -5,11 +5,22 @@ use futures_util::StreamExt;
 use reqwest::Client;
 use reqwest::RequestBuilder;
 
+fn effective_base_url(base_url: &str, provider_id: &str, is_oauth: bool) -> String {
+    if is_oauth {
+        if let Some(fixed) = crate::providers::oauth_base_url(provider_id) {
+            return fixed.to_string();
+        }
+    }
+    base_url.trim_end_matches('/').to_string()
+}
+
 #[derive(Clone)]
 pub struct ApiClient {
     http: Client,
     base_url: String,
     api_key: String,
+    provider_id: String,
+    oauth: Option<crate::auth::OAuthRequestContext>,
     /// Wire format for this client (Responses / Chat Completions / Anthropic Messages).
     style: ApiStyle,
 }
@@ -36,13 +47,38 @@ impl ApiClient {
             http,
             base_url: base_url.into().trim_end_matches('/').to_string(),
             api_key: api_key.into(),
+            provider_id: String::new(),
+            oauth: None,
             style: ApiStyle::Responses,
         })
     }
 
+    /// Build a provider-aware client, preserving OAuth routing and metadata.
+    pub fn for_provider(
+        base_url: impl Into<String>,
+        api_key: impl Into<String>,
+        provider_id: impl Into<String>,
+    ) -> Result<Self> {
+        let api_key = api_key.into();
+        let provider_id = provider_id.into();
+        let oauth = crate::auth::oauth_request_context(&provider_id, &api_key);
+        let requested_base = base_url.into();
+        let effective_base = effective_base_url(&requested_base, &provider_id, oauth.is_some());
+        let mut client = Self::new(effective_base, api_key)?;
+        client.provider_id = provider_id;
+        client.oauth = oauth;
+        Ok(client)
+    }
+
     /// Set the wire format from the provider catalog (`ApiStyle`).
     pub fn with_style(mut self, style: ApiStyle) -> Self {
-        self.style = style;
+        // Grok Build session tokens target xAI's Responses-based CLI proxy;
+        // API-key xAI requests retain the catalog's Chat Completions style.
+        self.style = if self.provider_id == "xai" && self.oauth.is_some() {
+            ApiStyle::Responses
+        } else {
+            style
+        };
         self
     }
 
@@ -66,10 +102,10 @@ impl ApiClient {
     /// console keys and Bearer + beta for Claude OAuth tokens — never treat
     /// Anthropic as plain Bearer-only Chat Completions.
     fn auth_headers(&self, mut req: RequestBuilder) -> RequestBuilder {
-        match self.style {
+        req = match self.style {
             ApiStyle::AnthropicMessages => {
                 req = req.header("anthropic-version", "2023-06-01");
-                if super::anthropic::is_oauth_token(&self.api_key) {
+                if self.oauth.is_some() || super::anthropic::is_oauth_token(&self.api_key) {
                     req = req
                         .bearer_auth(&self.api_key)
                         .header("anthropic-beta", super::anthropic::OAUTH_BETA);
@@ -79,7 +115,32 @@ impl ApiClient {
                 req
             }
             ApiStyle::Responses | ApiStyle::ChatCompletions => req.bearer_auth(&self.api_key),
+        };
+        if self.provider_id == "openai" {
+            if let Some(oauth) = &self.oauth {
+                if let Some(account_id) = &oauth.account_id {
+                    req = req.header("ChatGPT-Account-ID", account_id);
+                }
+                if oauth.is_fedramp {
+                    req = req.header("X-OpenAI-Fedramp", "true");
+                }
+            }
         }
+        if self.provider_id == "antigravity" {
+            if let Some(project_id) = self
+                .oauth
+                .as_ref()
+                .and_then(|context| context.project_id.as_deref())
+            {
+                req = req.header("x-goog-user-project", project_id);
+            }
+        }
+        if self.provider_id == "github-models" {
+            req = req
+                .header("Accept", "application/vnd.github+json")
+                .header("X-GitHub-Api-Version", "2026-03-10");
+        }
+        req
     }
 
     pub async fn create_response(&self, req: &ResponseRequest) -> Result<ApiResponse> {
@@ -641,4 +702,116 @@ fn rand_jitter() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.subsec_nanos() as u64 % 200)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn openai_oauth_cannot_be_redirected_to_public_or_custom_api() {
+        assert_eq!(
+            effective_base_url("https://example.test/v1", "openai", true),
+            crate::providers::OPENAI_OAUTH_BASE_URL
+        );
+        assert_eq!(
+            effective_base_url("https://api.openai.com/v1/", "openai", false),
+            "https://api.openai.com/v1"
+        );
+        assert_eq!(
+            effective_base_url("https://api.x.ai/v1", "xai", true),
+            crate::providers::XAI_OAUTH_BASE_URL
+        );
+    }
+
+    #[test]
+    fn openai_oauth_applies_account_and_fedramp_headers() {
+        let client = ApiClient {
+            http: Client::new(),
+            base_url: crate::providers::OPENAI_OAUTH_BASE_URL.to_string(),
+            api_key: "oauth-token".to_string(),
+            provider_id: "openai".to_string(),
+            oauth: Some(crate::auth::OAuthRequestContext {
+                account_id: Some("acct_test".to_string()),
+                is_fedramp: true,
+                project_id: None,
+            }),
+            style: ApiStyle::Responses,
+        };
+        let request = client
+            .auth_headers(client.http.get("https://example.test"))
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            request.headers().get("ChatGPT-Account-ID").unwrap(),
+            "acct_test"
+        );
+        assert_eq!(
+            request.headers().get("X-OpenAI-Fedramp").unwrap(),
+            "true"
+        );
+        assert_eq!(
+            request.headers().get("Authorization").unwrap(),
+            "Bearer oauth-token"
+        );
+    }
+
+    #[test]
+    fn google_oauth_applies_quota_project_header() {
+        let client = ApiClient {
+            http: Client::new(),
+            base_url: "https://generativelanguage.googleapis.com/v1beta/openai".to_string(),
+            api_key: "oauth-token".to_string(),
+            provider_id: "antigravity".to_string(),
+            oauth: Some(crate::auth::OAuthRequestContext {
+                account_id: None,
+                is_fedramp: false,
+                project_id: Some("project-test".to_string()),
+            }),
+            style: ApiStyle::ChatCompletions,
+        };
+        let request = client
+            .auth_headers(client.http.get("https://example.test"))
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            request.headers().get("x-goog-user-project").unwrap(),
+            "project-test"
+        );
+    }
+
+    #[test]
+    fn xai_oauth_uses_responses_while_api_keys_keep_catalog_style() {
+        let mut oauth_client = ApiClient::new("https://example.test", "oauth-token").unwrap();
+        oauth_client.provider_id = "xai".to_string();
+        oauth_client.oauth = Some(crate::auth::OAuthRequestContext::default());
+        assert_eq!(
+            oauth_client.with_style(ApiStyle::ChatCompletions).style,
+            ApiStyle::Responses
+        );
+
+        let mut key_client = ApiClient::new("https://api.x.ai/v1", "xai-key").unwrap();
+        key_client.provider_id = "xai".to_string();
+        assert_eq!(
+            key_client.with_style(ApiStyle::ChatCompletions).style,
+            ApiStyle::ChatCompletions
+        );
+    }
+
+    #[test]
+    fn github_models_requests_use_the_current_api_contract() {
+        let mut client = ApiClient::new("https://models.github.ai/inference", "token").unwrap();
+        client.provider_id = "github-models".to_string();
+        client.style = ApiStyle::ChatCompletions;
+        let request = client
+            .auth_headers(client.http.get("https://example.test"))
+            .build()
+            .unwrap();
+        assert_eq!(
+            request.headers().get("X-GitHub-Api-Version").unwrap(),
+            "2026-03-10"
+        );
+    }
 }

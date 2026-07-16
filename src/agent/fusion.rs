@@ -89,7 +89,7 @@ async fn run(
         }));
     }
     for t in &targets {
-        let client = match ApiClient::new(&t.base_url, &t.api_key) {
+        let client = match ApiClient::for_provider(&t.base_url, &t.api_key, &t.provider_id) {
             Ok(c) => c.with_style(t.style),
             Err(_) => continue,
         };
