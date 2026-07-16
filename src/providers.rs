@@ -349,6 +349,7 @@ mod tests {
 
 /// Catalog ids with `browser_auth: true`. Keep in sync with
 /// `oauth::login_browser` / `refresh_tokens` match arms (enforced by tests).
+#[allow(dead_code)] // used by tests; available for TUI/docs tooling
 pub fn oauth_browser_provider_ids() -> &'static [&'static str] {
     &[
         "xai",
