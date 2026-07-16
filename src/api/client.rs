@@ -194,6 +194,15 @@ impl ApiClient {
                 }
             }
         }
+        // Grok Build OAuth → cli-chat-proxy enforces a CLI version fingerprint.
+        // Missing `x-grok-client-version` is reported as version "(none)" → HTTP 426.
+        if self.provider_id == "xai" && self.oauth.is_some() {
+            let ver = crate::providers::xai_grok_cli_version();
+            req = req
+                .header("x-grok-client-version", ver.as_str())
+                .header("X-XAI-Token-Auth", "xai-grok-cli")
+                .header("User-Agent", format!("xai-grok-workspace/{ver}"));
+        }
         if self.provider_id == "github-models" {
             req = req
                 .header("Accept", "application/vnd.github+json")
@@ -892,6 +901,48 @@ mod tests {
         assert_eq!(
             key_client.with_style(ApiStyle::ChatCompletions).style,
             ApiStyle::ChatCompletions
+        );
+    }
+
+    #[test]
+    fn xai_oauth_requests_send_cli_version_fingerprint() {
+        // cli-chat-proxy returns 426 with version "(none)" without these headers.
+        let mut client = ApiClient::new(
+            crate::providers::XAI_OAUTH_BASE_URL,
+            "oauth-token",
+        )
+        .unwrap();
+        client.provider_id = "xai".to_string();
+        client.oauth = Some(crate::auth::OAuthRequestContext::default());
+        client.style = ApiStyle::Responses;
+        let request = client
+            .auth_headers(client.http.post("https://example.test/v1/responses"))
+            .build()
+            .unwrap();
+        let ver = crate::providers::xai_grok_cli_version();
+        assert_eq!(
+            request
+                .headers()
+                .get("x-grok-client-version")
+                .and_then(|v| v.to_str().ok()),
+            Some(ver.as_str()),
+            "missing x-grok-client-version causes 426 version (none)"
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get("X-XAI-Token-Auth")
+                .and_then(|v| v.to_str().ok()),
+            Some("xai-grok-cli")
+        );
+        let ua = request
+            .headers()
+            .get("User-Agent")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(
+            ua.contains(&format!("xai-grok-workspace/{ver}")) || ua.contains(&ver),
+            "User-Agent should fingerprint workspace CLI, got {ua}"
         );
     }
 

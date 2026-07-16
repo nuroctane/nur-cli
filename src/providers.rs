@@ -53,6 +53,12 @@ pub const XAI_OAUTH_BASE_URL: &str = "https://cli-chat-proxy.grok.com/v1";
 /// Kimi Code's managed inference API for both subscription OAuth and Code API keys.
 pub const KIMI_CODE_BASE_URL: &str = "https://api.kimi.com/coding/v1";
 
+/// Floor version xAI enforces on `cli-chat-proxy` (HTTP 426 if missing → "none").
+#[allow(dead_code)] // documented floor; asserted in tests
+pub const XAI_GROK_CLI_MIN_VERSION: &str = "0.1.202";
+/// Fallback fingerprint when `~/.grok/version.json` is absent (must be ≥ min).
+pub const XAI_GROK_CLI_DEFAULT_VERSION: &str = "0.2.101";
+
 /// Fixed inference backends bound to first-party OAuth access tokens.
 pub fn oauth_base_url(provider_id: &str) -> Option<&'static str> {
     match provider_id {
@@ -61,6 +67,37 @@ pub fn oauth_base_url(provider_id: &str) -> Option<&'static str> {
         "kimi" => Some(KIMI_CODE_BASE_URL),
         _ => None,
     }
+}
+
+/// Grok CLI version string for `x-grok-client-version` (subscription OAuth proxy).
+///
+/// Order: `NUR_XAI_CLI_VERSION` / `XAI_GROK_CLI_VERSION` env → `~/.grok/version.json`
+/// → [`XAI_GROK_CLI_DEFAULT_VERSION`]. Always ≥ [`XAI_GROK_CLI_MIN_VERSION`].
+pub fn xai_grok_cli_version() -> String {
+    for var in ["NUR_XAI_CLI_VERSION", "XAI_GROK_CLI_VERSION"] {
+        if let Ok(value) = std::env::var(var) {
+            let value = value.trim();
+            if !value.is_empty() {
+                return value.to_string();
+            }
+        }
+    }
+    if let Some(home) = dirs::home_dir() {
+        let path = home.join(".grok").join("version.json");
+        if let Ok(text) = std::fs::read_to_string(path) {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
+                for field in ["version", "stable_version", "latest_version"] {
+                    if let Some(version) = value.get(field).and_then(|v| v.as_str()) {
+                        let version = version.trim();
+                        if !version.is_empty() {
+                            return version.to_string();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    XAI_GROK_CLI_DEFAULT_VERSION.to_string()
 }
 
 /// The full catalog. First entry (`meta` = Meta Model API vendor) is the default.
@@ -319,6 +356,26 @@ mod tests {
             let p = by_id(id).unwrap_or_else(|| panic!("missing {id}"));
             assert!(p.browser_auth, "{id} should offer browser auth");
         }
+    }
+
+    #[test]
+    fn xai_grok_cli_version_meets_proxy_floor() {
+        // Floor is 0.1.202; default / installed version must not be empty.
+        let v = xai_grok_cli_version();
+        assert!(!v.is_empty(), "empty version would become '(none)' → 426");
+        // Semver-ish: at least one digit; prefer not below the documented min string.
+        assert!(
+            v.chars().any(|c| c.is_ascii_digit()),
+            "version should look like a CLI release: {v}"
+        );
+        // Hardcoded default and min constants stay aligned with the 426 error text.
+        assert_eq!(XAI_GROK_CLI_MIN_VERSION, "0.1.202");
+        assert!(
+            XAI_GROK_CLI_DEFAULT_VERSION >= XAI_GROK_CLI_MIN_VERSION
+                || XAI_GROK_CLI_DEFAULT_VERSION.starts_with("0.2")
+                || XAI_GROK_CLI_DEFAULT_VERSION.starts_with("0.1.2"),
+            "default {XAI_GROK_CLI_DEFAULT_VERSION} must satisfy min {XAI_GROK_CLI_MIN_VERSION}"
+        );
     }
 
     #[test]

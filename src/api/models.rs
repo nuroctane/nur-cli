@@ -260,6 +260,14 @@ fn fetch_once(
                     }
                 }
             }
+            "xai" if oauth.is_some() => {
+                let ver = crate::providers::xai_grok_cli_version();
+                req = req
+                    .bearer_auth(api_key)
+                    .header("x-grok-client-version", ver.as_str())
+                    .header("X-XAI-Token-Auth", "xai-grok-cli")
+                    .header("User-Agent", format!("xai-grok-workspace/{ver}"));
+            }
             _ => {
                 req = req.bearer_auth(api_key);
             }
