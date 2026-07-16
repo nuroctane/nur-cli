@@ -120,11 +120,99 @@ pub fn resolve_api_key() -> Result<String> {
     resolve_api_key_for(None)
 }
 
-/// Resolve credentials for a catalog provider. Refuses to reuse a key tagged for
-/// a different provider (prevents sending Grok tokens to OpenAI, etc.).
-/// Env keys always win and are not provider-scoped.
+/// Pure pick order for a *specific* catalog provider. Used by
+/// [`resolve_api_key_for`] and unit-tested so META_/MODEL_ leftovers cannot
+/// outrank provider login for *any* host (xai, openai, anthropic, …).
+///
+/// Inputs are already trimmed; empty string is treated as absent.
+pub(crate) fn pick_provider_credential(
+    provider_env: Option<&str>,
+    matching_auth: Option<&str>,
+    failover_key: Option<&str>,
+    failover_oauth: Option<&str>,
+    nur_global: Option<&str>,
+    // Intentionally ignored for provider-scoped resolve (Meta-era aliases).
+    _meta_model_muse_generic: Option<&str>,
+) -> Option<String> {
+    for cand in [provider_env, matching_auth, failover_key, failover_oauth, nur_global] {
+        if let Some(k) = cand.map(str::trim).filter(|s| !s.is_empty()) {
+            return Some(k.to_string());
+        }
+    }
+    None
+}
+
+/// Resolve credentials for a catalog provider.
+///
+/// **With `Some(provider_id)`** (client init, `/model`, etc.) — provider-scoped
+/// first so a leftover `MODEL_API_KEY` / `META_API_KEY` never gets sent to xAI,
+/// Anthropic, OpenAI, … after you `/login` that provider:
+/// 1. catalog env (`XAI_API_KEY`, `OPENAI_API_KEY`, …)
+/// 2. `auth.json` when tagged for this provider (API key or OAuth, refreshed)
+/// 3. per-provider failover key / OAuth stores
+/// 4. `NUR_API_KEY` only as a true global override (not META_/MODEL_/MUSE_)
+///
+/// **With `None`** — generic envs then `auth.json` (scripts / headless).
 pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
-    // NUR_API_KEY = app generic; META_API_KEY kept for Meta Model API / old installs.
+    if let Some(exp) = expected_provider {
+        let provider_env = crate::providers::by_id(exp).and_then(|p| {
+            std::env::var(p.env_key)
+                .ok()
+                .map(|k| k.trim().to_string())
+                .filter(|k| !k.is_empty())
+        });
+        let mut matching_auth = None;
+        let mut mismatched = false;
+        if let Some(auth) = load_auth()? {
+            if provider_mismatch(&auth, exp) {
+                mismatched = true;
+            } else {
+                let mut auth = auth;
+                ensure_fresh_oauth(&mut auth)?;
+                let k = auth.api_key.trim().to_string();
+                if !k.is_empty() {
+                    matching_auth = Some(k);
+                }
+            }
+        }
+        let failover_key = load_provider_key(exp);
+        let failover_oauth = load_provider_oauth_token(exp);
+        let nur_global = std::env::var("NUR_API_KEY")
+            .ok()
+            .map(|k| k.trim().to_string())
+            .filter(|k| !k.is_empty());
+        // Read Meta-era generics only to prove we ignore them (not passed as winners).
+        let meta_era = ["META_API_KEY", "MODEL_API_KEY", "MUSE_API_KEY"]
+            .iter()
+            .find_map(|v| {
+                std::env::var(v)
+                    .ok()
+                    .map(|k| k.trim().to_string())
+                    .filter(|k| !k.is_empty())
+            });
+
+        if let Some(k) = pick_provider_credential(
+            provider_env.as_deref(),
+            matching_auth.as_deref(),
+            failover_key.as_deref(),
+            failover_oauth.as_deref(),
+            nur_global.as_deref(),
+            meta_era.as_deref(),
+        ) {
+            return Ok(k);
+        }
+        if mismatched {
+            if let Ok(Some(auth)) = load_auth() {
+                return Err(MuseError::Other(format!(
+                    "saved credentials are for provider '{}' but active provider is '{}'. Run /login (or nur auth logout) and sign in again.",
+                    auth.provider, exp
+                )));
+            }
+        }
+        return Err(MuseError::NotAuthenticated);
+    }
+
+    // No expected provider: generic env first (scripts / headless), then auth.json.
     for var in ["NUR_API_KEY", "META_API_KEY", "MODEL_API_KEY", "MUSE_API_KEY"] {
         if let Ok(k) = std::env::var(var) {
             let k = k.trim().to_string();
@@ -133,40 +221,8 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
             }
         }
     }
-    // Provider catalog env (e.g. TINKER_API_KEY, XAI_API_KEY, ANTHROPIC_API_KEY).
-    if let Some(exp) = expected_provider {
-        if let Some(p) = crate::providers::by_id(exp) {
-            if let Ok(k) = std::env::var(p.env_key) {
-                let k = k.trim().to_string();
-                if !k.is_empty() {
-                    return Ok(k);
-                }
-            }
-        }
-        // Failover key / OAuth session stores (same provider, not active login).
-        if let Some(k) = load_provider_key(exp) {
-            let k = k.trim().to_string();
-            if !k.is_empty() {
-                return Ok(k);
-            }
-        }
-        if let Some(k) = load_provider_oauth_token(exp) {
-            let k = k.trim().to_string();
-            if !k.is_empty() {
-                return Ok(k);
-            }
-        }
-    }
     if let Some(auth) = load_auth()? {
         let mut auth = auth;
-        if let Some(exp) = expected_provider {
-            if provider_mismatch(&auth, exp) {
-                return Err(MuseError::Other(format!(
-                    "saved credentials are for provider '{}' but active provider is '{}'. Run /login (or nur auth logout) and sign in again.",
-                    auth.provider, exp
-                )));
-            }
-        }
         ensure_fresh_oauth(&mut auth)?;
         let k = auth.api_key.trim().to_string();
         if !k.is_empty() {
@@ -709,6 +765,66 @@ mod tests {
         a.provider = "xai".into();
         assert!(!provider_mismatch(&a, "xai"));
         assert!(provider_mismatch(&a, "openai"));
+    }
+
+    #[test]
+    fn provider_scoped_pick_ignores_meta_era_generic_keys() {
+        // Leftover MODEL_API_KEY must never beat xAI/OpenAI/Anthropic login.
+        assert_eq!(
+            pick_provider_credential(
+                None,
+                Some("xai-oauth-jwt"),
+                None,
+                None,
+                None,
+                Some("meta-or-model-key-leftover"),
+            )
+            .as_deref(),
+            Some("xai-oauth-jwt")
+        );
+        assert_eq!(
+            pick_provider_credential(
+                Some("sk-openai-from-env"),
+                Some("xai-oauth-jwt"),
+                None,
+                None,
+                Some("nur-global"),
+                Some("model-api-key"),
+            )
+            .as_deref(),
+            Some("sk-openai-from-env"),
+            "catalog env wins first for that provider"
+        );
+        assert_eq!(
+            pick_provider_credential(
+                None,
+                None,
+                Some("failover-key"),
+                Some("failover-oauth"),
+                Some("nur-global"),
+                Some("model-api-key"),
+            )
+            .as_deref(),
+            Some("failover-key")
+        );
+        // Only NUR_API_KEY is a valid last-resort global — META_/MODEL_ ignored.
+        assert_eq!(
+            pick_provider_credential(
+                None,
+                None,
+                None,
+                None,
+                Some("nur-global"),
+                Some("model-api-key"),
+            )
+            .as_deref(),
+            Some("nur-global")
+        );
+        assert_eq!(
+            pick_provider_credential(None, None, None, None, None, Some("model-api-key")),
+            None,
+            "META_/MODEL_/MUSE_ alone must not satisfy a provider-scoped resolve"
+        );
     }
 
     #[test]

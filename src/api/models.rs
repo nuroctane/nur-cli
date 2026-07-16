@@ -153,7 +153,14 @@ fn fetch_once(url: &str, api_key: &str, provider_id: &str) -> Result<Vec<String>
     let body = res.text().unwrap_or_default();
     if !status.is_success() {
         let snippet: String = body.trim().chars().take(160).collect();
-        return Err(format!("HTTP {} · {}", status.as_u16(), snippet));
+        let mut msg = format!("HTTP {} · {}", status.as_u16(), snippet);
+        // Multi-provider footgun: wrong credential type for this host.
+        if matches!(status.as_u16(), 400 | 401 | 403) {
+            msg.push_str(
+                " · tip: use this provider's /login or its env key (XAI_API_KEY, OPENAI_API_KEY, …) — a leftover MODEL_API_KEY must not be sent to other hosts",
+            );
+        }
+        return Err(msg);
     }
 
     let mut ids = parse_model_ids(&body)?;
@@ -164,9 +171,26 @@ fn fetch_once(url: &str, api_key: &str, provider_id: &str) -> Result<Vec<String>
     Ok(ids)
 }
 
+/// Common xAI chat ids — soft fallback if live list fails (wrong key, outage).
+const XAI_CATALOG: &[&str] = &[
+    "grok-4",
+    "grok-4.3",
+    "grok-4.5",
+    "grok-4.20-0309-reasoning",
+    "grok-4.20-0309-non-reasoning",
+    "grok-4.20-multi-agent-0309",
+    "grok-build-0.1",
+    "grok-code-fast-1",
+    "grok-3",
+    "grok-3-mini",
+    "grok-2-1212",
+    "grok-2-vision-1212",
+];
+
 fn static_catalog(provider_id: &str) -> Option<&'static [&'static str]> {
     match provider_id {
         "thinkingmachines" => Some(THINKING_MACHINES_CATALOG),
+        "xai" => Some(XAI_CATALOG),
         _ => None,
     }
 }
