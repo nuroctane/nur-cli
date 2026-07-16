@@ -109,6 +109,9 @@ fn model_list_urls(base_url: &str, provider_id: &str, is_oauth: bool) -> Vec<Str
         "xai" if is_oauth => {
             urls.push(format!("{}/models", crate::providers::XAI_OAUTH_BASE_URL));
         }
+        "kimi" if is_oauth => {
+            urls.push(format!("{}/models", crate::providers::KIMI_CODE_BASE_URL));
+        }
         "antigravity" if is_oauth => {
             // Google's OAuth quickstart documents this endpoint; the
             // OpenAI-compatible base does not consistently expose /models.
@@ -426,6 +429,15 @@ mod tests {
             "client_version={}",
             env!("CARGO_PKG_VERSION")
         )));
+    }
+
+    #[test]
+    fn kimi_oauth_uses_managed_coding_model_endpoint() {
+        let urls = model_list_urls("https://example.invalid/v1", "kimi", true);
+        assert_eq!(
+            urls,
+            vec![format!("{}/models", crate::providers::KIMI_CODE_BASE_URL)]
+        );
     }
 
     #[test]

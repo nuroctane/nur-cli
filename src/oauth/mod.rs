@@ -55,7 +55,7 @@ pub fn revoke_session(auth: &Auth) -> Result<String> {
             "Google session is managed by `gcloud`; run `gcloud auth revoke` to drop ADC tokens."
                 .into(),
         ),
-        "openai" | "xai" | "anthropic" | "huggingface" => Ok(format!(
+        "openai" | "xai" | "kimi" | "anthropic" | "huggingface" => Ok(format!(
             "no remote revoke endpoint wired for '{}' — local tokens deleted; revoke in the vendor account UI if needed",
             auth.provider
         )),
@@ -87,6 +87,7 @@ pub fn refresh_tokens(provider: &str, auth: &Auth, refresh: &str) -> Result<OAut
     match provider {
         "openai" => flows::openai::refresh(auth, refresh),
         "xai" => flows::xai::refresh(auth, refresh),
+        "kimi" => flows::kimi::refresh(auth, refresh),
         "anthropic" => flows::claude::refresh(refresh),
         "antigravity" | "google-oauth" => flows::antigravity::refresh(auth, refresh),
         "huggingface" => flows::huggingface::refresh(refresh),
@@ -115,6 +116,7 @@ mod tests {
     fn browser_supported_ids() {
         assert!(supports_browser("openai"));
         assert!(supports_browser("xai"));
+        assert!(supports_browser("kimi"));
         assert!(supports_browser("anthropic"));
         assert!(!supports_browser("meta"));
     }
@@ -138,6 +140,7 @@ mod tests {
         const LOGIN: &[&str] = &[
             "openai",
             "xai",
+            "kimi",
             "anthropic",
             "antigravity",
             "huggingface",
@@ -148,6 +151,7 @@ mod tests {
         const REFRESH: &[&str] = &[
             "openai",
             "xai",
+            "kimi",
             "anthropic",
             "antigravity",
             "google-oauth", // alias used by some stored sessions

@@ -52,6 +52,7 @@ pub fn login_browser(provider_id: &str, tx: ProgressTx, cancel: CancelFlag) {
     let result = match provider_id {
         "openai" => openai::login(&tx, &cancel),
         "xai" => xai::login(&tx, &cancel),
+        "kimi" => kimi::login(&tx, &cancel),
         "anthropic" => claude::login(&tx, &cancel),
         "antigravity" => antigravity::login(&tx, &cancel),
         "huggingface" => huggingface::login(&tx, &cancel),
@@ -74,6 +75,7 @@ pub fn login_browser(provider_id: &str, tx: ProgressTx, cancel: CancelFlag) {
 pub fn import_existing_session(provider_id: &str) -> Result<Option<OAuthTokens>> {
     match provider_id {
         "xai" => xai::import_grok_cli(),
+        "kimi" => kimi::import_kimi_cli(),
         "anthropic" => claude::import_claude_cli(),
         _ => Ok(None),
     }
@@ -731,6 +733,384 @@ pub mod xai {
             }
         }
         Ok(None)
+    }
+}
+
+// ── Kimi Code (RFC 8628 device authorization / Kimi CLI import) ────────────
+
+// Kimi uses the same managed bearer for model discovery and inference.
+pub mod kimi {
+    use super::*;
+    use reqwest::blocking::RequestBuilder;
+
+    /// Public client used by the first-party Kimi Code CLI. No secret is used.
+    pub const CLIENT_ID: &str = "17e5f671-d194-4dfb-9706-5516cb48c098";
+    pub const ISSUER: &str = "https://auth.kimi.com";
+
+    #[derive(Deserialize)]
+    struct DeviceCodeResp {
+        device_code: String,
+        user_code: String,
+        #[serde(default)]
+        verification_uri: String,
+        #[serde(default)]
+        verification_uri_complete: String,
+        #[serde(default)]
+        expires_in: u64,
+        #[serde(default = "default_interval")]
+        interval: u64,
+    }
+
+    fn default_interval() -> u64 {
+        5
+    }
+
+    #[derive(Deserialize)]
+    struct TokenResp {
+        access_token: Option<String>,
+        refresh_token: Option<String>,
+        expires_in: Option<u64>,
+        #[serde(default)]
+        scope: String,
+        #[serde(default)]
+        token_type: String,
+        error: Option<String>,
+        error_description: Option<String>,
+    }
+
+    fn oauth_host() -> String {
+        ["KIMI_CODE_OAUTH_HOST", "KIMI_OAUTH_HOST"]
+            .into_iter()
+            .find_map(|name| {
+                std::env::var(name)
+                    .ok()
+                    .map(|value| value.trim().trim_end_matches('/').to_string())
+                    .filter(|value| !value.is_empty() && value.starts_with("https://"))
+            })
+            .unwrap_or_else(|| ISSUER.to_string())
+    }
+
+    fn kimi_share_dir() -> PathBuf {
+        std::env::var("KIMI_SHARE_DIR")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| dirs::home_dir().map(|home| home.join(".kimi")))
+            .unwrap_or_else(|| PathBuf::from(".kimi"))
+    }
+
+    fn device_id() -> Result<String> {
+        // Reuse the first-party CLI identity when present. Otherwise keep a
+        // Nur-specific stable id so polls and refreshes describe one device.
+        let kimi_path = kimi_share_dir().join("device_id");
+        if let Ok(value) = std::fs::read_to_string(&kimi_path) {
+            let value = value.trim();
+            if let Ok(id) = Uuid::parse_str(value) {
+                return Ok(id.to_string());
+            }
+        }
+        let path = crate::config::nur_home().join("kimi_device_id");
+        if let Ok(value) = std::fs::read_to_string(&path) {
+            let value = value.trim();
+            if let Ok(id) = Uuid::parse_str(value) {
+                return Ok(id.to_string());
+            }
+        }
+        let value = Uuid::new_v4().to_string();
+        crate::config::atomic_write(&path, value.as_bytes())
+            .map_err(|e| MuseError::Other(format!("failed to save Kimi device id: {e}")))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        }
+        Ok(value)
+    }
+
+    fn with_device_headers(req: RequestBuilder) -> Result<RequestBuilder> {
+        let device_name = std::env::var("COMPUTERNAME")
+            .or_else(|_| std::env::var("HOSTNAME"))
+            .unwrap_or_else(|_| "unknown".to_string());
+        let device_model = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
+        let os_version = std::env::var("OS").unwrap_or_else(|_| std::env::consts::OS.to_string());
+        let ascii = |value: String| {
+            value
+                .chars()
+                .take(256)
+                .map(|ch| {
+                    if ch.is_ascii_graphic() || ch == ' ' {
+                        ch
+                    } else {
+                        '_'
+                    }
+                })
+                .collect::<String>()
+        };
+        Ok(req
+            // Required protocol value for Kimi's public CLI OAuth client. The
+            // HTTP User-Agent still identifies this application as NurCLI.
+            .header("X-Msh-Platform", "kimi_cli")
+            .header("X-Msh-Version", env!("CARGO_PKG_VERSION"))
+            .header("X-Msh-Device-Name", ascii(device_name))
+            .header("X-Msh-Device-Model", ascii(device_model))
+            .header("X-Msh-Os-Version", ascii(os_version))
+            .header("X-Msh-Device-Id", device_id()?))
+    }
+
+    fn token_error(parsed: &TokenResp, status: u16) -> String {
+        parsed
+            .error_description
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .or(parsed.error.as_deref())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("HTTP {status}"))
+    }
+
+    fn into_tokens(
+        parsed: TokenResp,
+        previous_refresh: Option<&str>,
+        meta: Option<OauthMeta>,
+    ) -> Result<OAuthTokens> {
+        let access_token = parsed
+            .access_token
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| MuseError::Other("Kimi token response omitted access_token".into()))?;
+        let refresh_token = parsed
+            .refresh_token
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| previous_refresh.map(str::to_string));
+        Ok(OAuthTokens {
+            access_token,
+            refresh_token,
+            expires_at: expires_in_to_at(parsed.expires_in),
+            meta,
+        })
+    }
+
+    fn meta(extra: serde_json::Value) -> OauthMeta {
+        OauthMeta {
+            issuer: oauth_host(),
+            client_id: CLIENT_ID.into(),
+            extra,
+        }
+    }
+
+    pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
+        send(
+            tx,
+            BrowserLoginProgress::Status("requesting Kimi device code…".into()),
+        );
+        let client = http()?;
+        let host = oauth_host();
+        let request = with_device_headers(
+            client
+                .post(format!("{host}/api/oauth/device_authorization"))
+                .form(&[("client_id", CLIENT_ID)]),
+        )?;
+        let response = request
+            .send()
+            .map_err(|e| MuseError::Other(format!("Kimi device authorization failed: {e}")))?;
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        if !status.is_success() {
+            return Err(MuseError::Other(format!(
+                "Kimi device authorization failed (HTTP {})",
+                status.as_u16()
+            )));
+        }
+        let device: DeviceCodeResp = serde_json::from_str(&body)
+            .map_err(|e| MuseError::Other(format!("invalid Kimi device response: {e}")))?;
+        if device.device_code.trim().is_empty() || device.user_code.trim().is_empty() {
+            return Err(MuseError::Other(
+                "Kimi device response omitted the authorization code".into(),
+            ));
+        }
+        let verification_url = if !device.verification_uri_complete.trim().is_empty() {
+            device.verification_uri_complete.clone()
+        } else {
+            device.verification_uri.clone()
+        };
+        if verification_url.trim().is_empty() {
+            return Err(MuseError::Other(
+                "Kimi device response omitted the verification URL".into(),
+            ));
+        }
+        send(
+            tx,
+            BrowserLoginProgress::DeviceCode {
+                verification_url: verification_url.clone(),
+                user_code: device.user_code.clone(),
+            },
+        );
+        let _ = open_browser(&verification_url);
+
+        let deadline = std::time::Instant::now()
+            + Duration::from_secs(if device.expires_in > 0 {
+                device.expires_in
+            } else {
+                900
+            });
+        let interval = device.interval.max(1);
+        let mut attempt = 0u32;
+        let mut slow_down = false;
+        while std::time::Instant::now() < deadline {
+            if cancel.is_cancelled() {
+                return Err(MuseError::Other("login cancelled".into()));
+            }
+            thread::sleep(crate::oauth::device_poll_sleep(
+                interval, slow_down, attempt,
+            ));
+            attempt = attempt.saturating_add(1);
+            slow_down = false;
+            let request =
+                with_device_headers(client.post(format!("{host}/api/oauth/token")).form(&[
+                    ("client_id", CLIENT_ID),
+                    ("device_code", device.device_code.as_str()),
+                    ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+                ]))?;
+            let Ok(response) = request.send() else {
+                continue;
+            };
+            let status = response.status().as_u16();
+            let body = response.text().unwrap_or_default();
+            let Ok(parsed) = serde_json::from_str::<TokenResp>(&body) else {
+                if status >= 500 {
+                    continue;
+                }
+                return Err(MuseError::Other(format!(
+                    "invalid Kimi token response (HTTP {status})"
+                )));
+            };
+            if parsed.access_token.is_some() {
+                let extra = serde_json::json!({
+                    "scope": parsed.scope,
+                    "token_type": parsed.token_type,
+                });
+                return into_tokens(parsed, None, Some(meta(extra)));
+            }
+            match parsed.error.as_deref() {
+                Some("authorization_pending") | None => {}
+                Some("slow_down") => slow_down = true,
+                Some("expired_token") => {
+                    return Err(MuseError::Other(
+                        "Kimi device code expired; start browser sign-in again".into(),
+                    ));
+                }
+                Some("access_denied") => {
+                    return Err(MuseError::Other("Kimi authorization was denied".into()));
+                }
+                Some(_) if status >= 500 || status == 429 => continue,
+                Some(_) => {
+                    return Err(MuseError::Other(format!(
+                        "Kimi token error: {}",
+                        token_error(&parsed, status)
+                    )));
+                }
+            }
+            send(
+                tx,
+                BrowserLoginProgress::Status("waiting for Kimi browser approval…".into()),
+            );
+        }
+        Err(MuseError::Other("Kimi device login timed out".into()))
+    }
+
+    pub fn refresh(auth: &Auth, refresh: &str) -> Result<OAuthTokens> {
+        let client = http()?;
+        let host = oauth_host();
+        let request = with_device_headers(client.post(format!("{host}/api/oauth/token")).form(&[
+            ("client_id", CLIENT_ID),
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh),
+        ]))?;
+        let response = request
+            .send()
+            .map_err(|e| MuseError::Other(format!("Kimi token refresh failed: {e}")))?;
+        let status = response.status().as_u16();
+        let body = response.text().unwrap_or_default();
+        let parsed: TokenResp = serde_json::from_str(&body).map_err(|_| {
+            MuseError::Other(format!("invalid Kimi refresh response (HTTP {status})"))
+        })?;
+        if !(200..300).contains(&status) || parsed.access_token.is_none() {
+            return Err(MuseError::Other(format!(
+                "Kimi token refresh failed: {}",
+                token_error(&parsed, status)
+            )));
+        }
+        into_tokens(parsed, Some(refresh), auth.oauth_meta.clone())
+    }
+
+    pub fn import_kimi_cli() -> Result<Option<OAuthTokens>> {
+        let path = kimi_share_dir().join("credentials").join("kimi-code.json");
+        if !path.exists() {
+            return Ok(None);
+        }
+        let body = std::fs::read_to_string(path)?;
+        let value: serde_json::Value = serde_json::from_str(&body)?;
+        let access_token = value
+            .get("access_token")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .trim();
+        if access_token.is_empty() {
+            return Ok(None);
+        }
+        let refresh_token = value
+            .get("refresh_token")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let expires_at = value
+            .get("expires_at")
+            .and_then(|value| value.as_u64().or_else(|| value.as_f64().map(|v| v as u64)))
+            .filter(|value| *value > 0);
+        Ok(Some(OAuthTokens {
+            access_token: access_token.to_string(),
+            refresh_token,
+            expires_at,
+            meta: Some(meta(serde_json::json!({"imported_from": "kimi-cli"}))),
+        }))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn token_conversion_keeps_rotated_refresh_and_expiry() {
+            let parsed = TokenResp {
+                access_token: Some("new-access".into()),
+                refresh_token: Some("new-refresh".into()),
+                expires_in: Some(900),
+                scope: "kimi-code".into(),
+                token_type: "Bearer".into(),
+                error: None,
+                error_description: None,
+            };
+            let before = crate::oauth::now_unix();
+            let tokens = into_tokens(parsed, Some("old-refresh"), None).unwrap();
+            assert_eq!(tokens.access_token, "new-access");
+            assert_eq!(tokens.refresh_token.as_deref(), Some("new-refresh"));
+            assert!(tokens.expires_at.unwrap() >= before + 900);
+        }
+
+        #[test]
+        fn token_conversion_preserves_refresh_when_server_omits_rotation() {
+            let parsed = TokenResp {
+                access_token: Some("new-access".into()),
+                refresh_token: None,
+                expires_in: Some(900),
+                scope: String::new(),
+                token_type: String::new(),
+                error: None,
+                error_description: None,
+            };
+            let tokens = into_tokens(parsed, Some("old-refresh"), None).unwrap();
+            assert_eq!(tokens.refresh_token.as_deref(), Some("old-refresh"));
+        }
     }
 }
 

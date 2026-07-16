@@ -50,12 +50,15 @@ use ApiStyle::{AnthropicMessages as AM, ChatCompletions as CC, Responses as R};
 pub const OPENAI_OAUTH_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 /// xAI's inference proxy for Grok Build browser/device sessions.
 pub const XAI_OAUTH_BASE_URL: &str = "https://cli-chat-proxy.grok.com/v1";
+/// Kimi Code's managed inference API for both subscription OAuth and Code API keys.
+pub const KIMI_CODE_BASE_URL: &str = "https://api.kimi.com/coding/v1";
 
 /// Fixed inference backends bound to first-party OAuth access tokens.
 pub fn oauth_base_url(provider_id: &str) -> Option<&'static str> {
     match provider_id {
         "openai" => Some(OPENAI_OAUTH_BASE_URL),
         "xai" => Some(XAI_OAUTH_BASE_URL),
+        "kimi" => Some(KIMI_CODE_BASE_URL),
         _ => None,
     }
 }
@@ -108,7 +111,8 @@ pub const PROVIDERS: &[Provider] = &[
     Provider { id: "venice", name: "Venice AI", base_url: "https://api.venice.ai/api/v1", default_model: "llama-3.3-70b", env_key: "VENICE_API_KEY", style: CC, note: "private · uncensored", key_optional: false, browser_auth: false },
 
     // ── Chinese labs ─────────────────────────────────────────────────────
-    Provider { id: "moonshot", name: "Moonshot (Kimi)", base_url: "https://api.moonshot.ai/v1", default_model: "kimi-k2-0711-preview", env_key: "MOONSHOT_API_KEY", style: CC, note: "Kimi K2", key_optional: false, browser_auth: false },
+    Provider { id: "kimi", name: "Kimi Code (kimi.com)", base_url: KIMI_CODE_BASE_URL, default_model: "kimi-for-coding", env_key: "KIMI_API_KEY", style: CC, note: "Coding plan · API key or browser OAuth", key_optional: false, browser_auth: true },
+    Provider { id: "moonshot", name: "Moonshot Open Platform", base_url: "https://api.moonshot.ai/v1", default_model: "kimi-k2-0711-preview", env_key: "MOONSHOT_API_KEY", style: CC, note: "Kimi K2 · platform API", key_optional: false, browser_auth: false },
     Provider { id: "zhipu", name: "Z.AI / Zhipu GLM", base_url: "https://api.z.ai/api/paas/v4", default_model: "glm-4.6", env_key: "ZAI_API_KEY", style: CC, note: "GLM", key_optional: false, browser_auth: false },
     Provider { id: "qwen", name: "Alibaba Qwen (DashScope)", base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", default_model: "qwen-max", env_key: "DASHSCOPE_API_KEY", style: CC, note: "Qwen", key_optional: false, browser_auth: false },
     Provider { id: "minimax", name: "MiniMax", base_url: "https://api.minimaxi.chat/v1", default_model: "MiniMax-M1", env_key: "MINIMAX_API_KEY", style: CC, note: "MiniMax M1", key_optional: false, browser_auth: false },
@@ -326,9 +330,24 @@ mod tests {
     }
 
     #[test]
+    fn kimi_code_supports_key_and_oauth_on_managed_chat_api() {
+        let p = by_id("kimi").expect("kimi");
+        assert!(p.browser_auth);
+        assert_eq!(p.env_key, "KIMI_API_KEY");
+        assert_eq!(p.base_url, KIMI_CODE_BASE_URL);
+        assert_eq!(p.default_model, "kimi-for-coding");
+        assert_eq!(p.style, ApiStyle::ChatCompletions);
+
+        let moonshot = by_id("moonshot").expect("moonshot");
+        assert_eq!(moonshot.base_url, "https://api.moonshot.ai/v1");
+        assert!(!moonshot.browser_auth);
+    }
+
+    #[test]
     fn oauth_tokens_route_only_to_their_fixed_first_party_backends() {
         assert_eq!(oauth_base_url("openai"), Some(OPENAI_OAUTH_BASE_URL));
         assert_eq!(oauth_base_url("xai"), Some(XAI_OAUTH_BASE_URL));
+        assert_eq!(oauth_base_url("kimi"), Some(KIMI_CODE_BASE_URL));
         assert_eq!(oauth_base_url("anthropic"), None);
     }
 
@@ -383,6 +402,7 @@ pub fn oauth_browser_provider_ids() -> &'static [&'static str] {
     &[
         "openai",
         "xai",
+        "kimi",
         "anthropic",
         "antigravity",
         "huggingface",

@@ -14,6 +14,7 @@ The active provider, endpoint, and default model are stored in
 | **Meta Model API** | [dev.meta.ai](https://dev.meta.ai/) | - |
 | **OpenAI** | `OPENAI_API_KEY` | Sign in with ChatGPT OAuth or import Codex session |
 | **xAI Grok** | `XAI_API_KEY` | Device code / Grok CLI session |
+| **Kimi Code (kimi.com)** | `KIMI_API_KEY` | Device code / Kimi CLI session |
 | **Anthropic Claude** | `ANTHROPIC_API_KEY` | Browser OAuth (Claude-style) or import Claude Code session |
 | **Google Antigravity** | Gemini key fallback | `gcloud auth login` browser SSO |
 | **Hugging Face** | `HF_TOKEN` | Device code (`hf auth login` style) |
@@ -40,7 +41,7 @@ What happens:
 3. If the provider supports browser auth, choose:
    - **Sign in with browser**: opens a URL (and may show a short code); approve in the browser; NurCLI stores tokens and refreshes when needed.
    - **Enter API key**: masked paste (classic path).
-   - **Use existing CLI session**: when a Grok or Claude Code login is already on disk.
+   - **Use existing CLI session**: when a Codex, Grok, Kimi Code, or Claude Code login is already on disk.
 4. Config is updated: `provider`, `base_url`, and `model` (that provider’s
    default). The HTTP client is **hot-swapped** for the rest of the session.
 
@@ -52,6 +53,12 @@ to use the public OpenAI API endpoint.
 xAI browser/device sessions use the Grok Build Responses proxy and its account model
 catalog (currently defaulting to `grok-4.5`). `XAI_API_KEY` continues to use the public
 xAI API endpoint and its normal catalog style.
+
+Kimi Code supports both Kimi membership OAuth and Kimi Code API keys at
+`https://api.kimi.com/coding/v1`. OAuth uses Kimi's device flow, refreshes rotated
+tokens automatically, and discovers the account's live models from `/models`.
+The separate Moonshot Open Platform catalog entry remains available for
+`https://api.moonshot.ai/v1` keys.
 
 `/logout` clears the stored key/tokens and blocks further turns until you `/login`
 again (environment-variable keys still apply on the next launch).
@@ -106,7 +113,7 @@ Self-hosted OpenAI-compatible servers (Ollama, vLLM, LiteLLM, custom gateways):
 export NUR_BASE_URL="http://localhost:11434/v1"   # overrides config base_url
 ```
 
-`NUR_BASE_URL` (legacy `META_BASE_URL`) wins over the catalog default after `/login` and on every startup, except that provider OAuth sessions with a fixed secure backend (currently OpenAI ChatGPT OAuth) cannot be redirected by this override.
+`NUR_BASE_URL` (legacy `META_BASE_URL`) wins over the catalog default after `/login` and on every startup, except that provider OAuth sessions with a fixed secure backend (OpenAI ChatGPT, xAI Grok Build, and Kimi Code OAuth) cannot be redirected by this override.
 
 !!! note "Legacy variables"
     `META_API_KEY`, `MODEL_API_KEY`, and `MUSE_API_KEY` are also accepted for backwards compatibility.
@@ -155,7 +162,7 @@ The catalog lives in code (`src/providers.rs`). Categories include:
 |----------|----------|
 | Frontier | OpenAI, Anthropic, Google Gemini, xAI Grok, DeepSeek, Mistral, Cohere, Meta Model API, Inception (Mercury), Writer, Upstage, … |
 | Inference clouds | Groq, Cerebras, Together, Fireworks, DeepInfra, Perplexity, NVIDIA NIM, Baseten, Friendli, Chutes, Venice, … |
-| Chinese labs | Moonshot (Kimi), Zhipu GLM, Qwen (DashScope), MiniMax, … |
+| Chinese labs | Kimi Code (kimi.com), Moonshot Open Platform, Zhipu GLM, Qwen (DashScope), MiniMax, … |
 | Aggregators / routers | OpenRouter, OmniRoute, Requesty, Vercel / Cloudflare AI gateways, OpenCode Zen, GitHub Models, Helicone, AI/ML API, … |
 | Local | Ollama, LM Studio, llama.cpp, vLLM (key often optional) |
 

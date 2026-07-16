@@ -348,7 +348,7 @@ impl ApiClient {
     // ── OpenAI Chat Completions adapter ───────────────────────────────────
     async fn create_chat(&self, req: &ResponseRequest) -> Result<ApiResponse> {
         let url = format!("{}/chat/completions", self.base_url);
-        let body = super::chat::build_body(req, false);
+        let body = super::chat::build_body_for_provider(req, false, &self.provider_id);
         let mut attempt = 0u32;
         loop {
             attempt += 1;
@@ -397,7 +397,7 @@ impl ApiClient {
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<ApiResponse> {
         let url = format!("{}/chat/completions", self.base_url);
-        let body = super::chat::build_body(req, true);
+        let body = super::chat::build_body_for_provider(req, true, &self.provider_id);
         let res = self
             .auth_headers(
                 self.http
@@ -721,6 +721,10 @@ mod tests {
         assert_eq!(
             effective_base_url("https://api.x.ai/v1", "xai", true),
             crate::providers::XAI_OAUTH_BASE_URL
+        );
+        assert_eq!(
+            effective_base_url("https://example.test/v1", "kimi", true),
+            crate::providers::KIMI_CODE_BASE_URL
         );
     }
 

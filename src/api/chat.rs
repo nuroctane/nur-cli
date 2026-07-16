@@ -10,7 +10,15 @@ use super::types::{ApiResponse, ResponseRequest};
 use serde_json::{json, Value};
 
 /// Build a `/chat/completions` request body from a Responses request.
+#[cfg(test)]
 pub fn build_body(req: &ResponseRequest, stream: bool) -> Value {
+    build_body_for_provider(req, stream, "")
+}
+
+/// Provider-aware Chat Completions body. Kimi's compatible API has two small
+/// extensions: an explicit thinking toggle and strict JSON-schema property
+/// types for tools.
+pub fn build_body_for_provider(req: &ResponseRequest, stream: bool, provider_id: &str) -> Value {
     let mut messages: Vec<Value> = Vec::new();
     if let Some(instr) = &req.instructions {
         if !instr.is_empty() {
@@ -32,12 +40,19 @@ pub fn build_body(req: &ResponseRequest, stream: bool) -> Value {
         let mapped: Vec<Value> = tools
             .iter()
             .map(|t| {
+                let mut parameters = t
+                    .parameters
+                    .clone()
+                    .unwrap_or_else(|| json!({"type":"object","properties":{}}));
+                if provider_id == "kimi" {
+                    ensure_kimi_schema_types(&mut parameters);
+                }
                 json!({
                     "type": "function",
                     "function": {
                         "name": t.name,
                         "description": t.description,
-                        "parameters": t.parameters.clone().unwrap_or_else(|| json!({"type":"object","properties":{}})),
+                        "parameters": parameters,
                     }
                 })
             })
@@ -56,7 +71,58 @@ pub fn build_body(req: &ResponseRequest, stream: bool) -> Value {
         // Ask providers that support it to include a final usage frame.
         body["stream_options"] = json!({ "include_usage": true });
     }
+    if provider_id == "kimi" && req.reasoning.is_some() {
+        body["thinking"] = json!({ "type": "enabled" });
+    }
     body
+}
+
+/// Kimi rejects nested tool properties that omit JSON Schema `type`. Infer a
+/// conservative type from structure or the first enum value, matching the
+/// first-party Kimi provider's normalization behavior.
+fn ensure_kimi_schema_types(schema: &mut Value) {
+    let Value::Object(object) = schema else {
+        return;
+    };
+    if !object.contains_key("type") {
+        let inferred = if object.contains_key("properties") {
+            Some("object")
+        } else if object.contains_key("items") {
+            Some("array")
+        } else {
+            object
+                .get("enum")
+                .and_then(Value::as_array)
+                .and_then(|values| values.first())
+                .and_then(|value| match value {
+                    Value::String(_) => Some("string"),
+                    Value::Bool(_) => Some("boolean"),
+                    Value::Number(number) if number.is_i64() || number.is_u64() => Some("integer"),
+                    Value::Number(_) => Some("number"),
+                    Value::Array(_) => Some("array"),
+                    Value::Object(_) => Some("object"),
+                    Value::Null => None,
+                })
+        };
+        if let Some(inferred) = inferred {
+            object.insert("type".into(), Value::String(inferred.into()));
+        }
+    }
+    if let Some(Value::Object(properties)) = object.get_mut("properties") {
+        for property in properties.values_mut() {
+            ensure_kimi_schema_types(property);
+        }
+    }
+    if let Some(items) = object.get_mut("items") {
+        ensure_kimi_schema_types(items);
+    }
+    for keyword in ["anyOf", "oneOf", "allOf"] {
+        if let Some(Value::Array(branches)) = object.get_mut(keyword) {
+            for branch in branches {
+                ensure_kimi_schema_types(branch);
+            }
+        }
+    }
 }
 
 /// Translate one Responses `input` item into zero or more chat messages.
@@ -75,7 +141,6 @@ fn push_item_messages(item: &Value, out: &mut Vec<Value>) {
         let call_id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
         out.push(json!({
             "role": "assistant",
-            "content": Value::Null,
             "tool_calls": [{
                 "id": call_id,
                 "type": "function",
@@ -342,6 +407,38 @@ mod tests {
         assert_eq!(msgs[4]["content"], "done");
         assert_eq!(b["tools"][0]["function"]["name"], "grep");
         assert_eq!(b["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn kimi_body_enables_thinking_and_repairs_enum_only_tool_properties() {
+        let mut request = req();
+        request.tools.as_mut().unwrap()[0].parameters = Some(json!({
+            "type": "object",
+            "properties": {
+                "mode": {"enum": ["fast", "safe"]},
+                "options": {"properties": {"confirm": {"enum": [true, false]}}}
+            }
+        }));
+        request.reasoning = Some(crate::api::types::ReasoningConfig {
+            effort: Some("high".into()),
+            summary: Some("auto".into()),
+        });
+
+        let body = build_body_for_provider(&request, true, "kimi");
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(
+            body["tools"][0]["function"]["parameters"]["properties"]["mode"]["type"],
+            "string"
+        );
+        assert_eq!(
+            body["tools"][0]["function"]["parameters"]["properties"]["options"]["type"],
+            "object"
+        );
+        assert_eq!(
+            body["tools"][0]["function"]["parameters"]["properties"]["options"]["properties"]
+                ["confirm"]["type"],
+            "boolean"
+        );
     }
 
     #[test]
