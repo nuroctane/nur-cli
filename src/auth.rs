@@ -133,6 +133,30 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
             }
         }
     }
+    // Provider catalog env (e.g. TINKER_API_KEY, XAI_API_KEY, ANTHROPIC_API_KEY).
+    if let Some(exp) = expected_provider {
+        if let Some(p) = crate::providers::by_id(exp) {
+            if let Ok(k) = std::env::var(p.env_key) {
+                let k = k.trim().to_string();
+                if !k.is_empty() {
+                    return Ok(k);
+                }
+            }
+        }
+        // Failover key / OAuth session stores (same provider, not active login).
+        if let Some(k) = load_provider_key(exp) {
+            let k = k.trim().to_string();
+            if !k.is_empty() {
+                return Ok(k);
+            }
+        }
+        if let Some(k) = load_provider_oauth_token(exp) {
+            let k = k.trim().to_string();
+            if !k.is_empty() {
+                return Ok(k);
+            }
+        }
+    }
     if let Some(auth) = load_auth()? {
         let mut auth = auth;
         if let Some(exp) = expected_provider {

@@ -1,6 +1,6 @@
 [package]
 name = "nur-cli"
-version = "0.14.0"
+version = "0.14.1"
 edition = "2021"
 description = "NurCLI — fully loaded multi-provider coding agent (TUI, vision, tools, sandbox, Graphify/PLUR/Ruflo/Executor + 800+ skills). Optional Meta Model API provider (muse-spark) among many."
 license = "GPL-3.0-or-later"

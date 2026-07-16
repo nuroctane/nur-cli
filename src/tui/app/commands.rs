@@ -131,7 +131,7 @@ impl App {
             "/context" => self.cmd_context(),
             "/status" => self.cmd_status(),
             "/doctor" => self.cmd_doctor(),
-            "/model" => self.cmd_model(&arg),
+            "/model" | "/models" => self.cmd_model(&arg),
             "/plugins" | "/plugin" => self.cmd_plugins(&arg),
             "/effort" => self.cmd_effort(&arg),
             // /sessions and /resume are the same interactive picker.

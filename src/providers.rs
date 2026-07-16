@@ -63,7 +63,7 @@ pub const PROVIDERS: &[Provider] = &[
     Provider { id: "inception", name: "Inception (Mercury)", base_url: "https://api.inceptionlabs.ai/v1", default_model: "mercury-coder", env_key: "INCEPTION_API_KEY", style: CC, note: "Mercury · diffusion LLM", key_optional: false, browser_auth: false },
     Provider { id: "writer", name: "Writer (Palmyra)", base_url: "https://api.writer.com/v1", default_model: "palmyra-x5", env_key: "WRITER_API_KEY", style: CC, note: "Palmyra · enterprise", key_optional: false, browser_auth: false },
     Provider { id: "upstage", name: "Upstage (Solar)", base_url: "https://api.upstage.ai/v1", default_model: "solar-pro2", env_key: "UPSTAGE_API_KEY", style: CC, note: "Solar", key_optional: false, browser_auth: false },
-    Provider { id: "thinkingmachines", name: "Thinking Machines", base_url: "https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1", default_model: "thinkingmachines/inkling", env_key: "TINKER_API_KEY", style: CC, note: "Inkling · open-weights MoE · also on Together/Fireworks/Baseten", key_optional: false, browser_auth: false },
+    Provider { id: "thinkingmachines", name: "Thinking Machines", base_url: "https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1", default_model: "thinkingmachines/Inkling", env_key: "TINKER_API_KEY", style: CC, note: "Tinker · Inkling + open models · /model lists full catalog", key_optional: false, browser_auth: false },
 
     // ── cloud / subscription SSO ─────────────────────────────────────────
     Provider { id: "huggingface", name: "Hugging Face", base_url: "https://router.huggingface.co/v1", default_model: "meta-llama/Llama-3.3-70B-Instruct", env_key: "HF_TOKEN", style: CC, note: "HF · key or browser", key_optional: false, browser_auth: true },

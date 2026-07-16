@@ -2555,8 +2555,7 @@ fn banner_lines(app: &App, out: &mut Vec<Line<'static>>) {
     // Shimmering underline beneath the logotype.
     out.push(aurora_rule(40, elapsed, '─', 2200));
 
-    // Row 1: "<active provider API> loaded  ·  v<cli>". The provider name tracks
-    // whatever `/login` selected (Meta Model API by default).
+    // Row 1: "<active provider> loaded  ·  v<cli>".
     let provider = crate::config::active_provider_label(&app.cfg);
     let sparkle = theme::frame_at(theme::SPARKLE, elapsed, 200);
     let mut title_row = vec![
@@ -2574,8 +2573,6 @@ fn banner_lines(app: &App, out: &mut Vec<Line<'static>>) {
     ));
     out.push(Line::from(title_row));
 
-    out.push(Line::default());
-
     // Row 2: model  ·  cwd  ·  session hash.
     let session8 = &app.session_id[..8.min(app.session_id.len())];
     out.push(Line::from(vec![
@@ -2586,6 +2583,47 @@ fn banner_lines(app: &App, out: &mut Vec<Line<'static>>) {
         Span::styled(app.cwd.display().to_string(), theme::style_status()),
         Span::styled("    ·  ".to_string(), theme::style_faint()),
         Span::styled(session8.to_string(), theme::style_faint()),
+    ]));
+    out.push(Line::default());
+
+    // Feature map — short, organized, matches what the product actually ships.
+    // Deeper interaction tips stay behind /tips; ecosystem detail behind /ecosystem.
+    let feat_rows: &[(&str, &str)] = &[
+        (
+            "agent",
+            "tools · sandbox · subagents · /undo · /receipt · Shift+Tab modes",
+        ),
+        (
+            "models",
+            "/model · /login · /failover (key or OAuth) · /fusion · /local · /bench",
+        ),
+        (
+            "memory",
+            "/skills · NL skill activation · /plur · /ruflo · /graphify · /plugins",
+        ),
+        (
+            "desktop",
+            "/cua · excalidraw · click links · paste chips · Ctrl+R history",
+        ),
+    ];
+    for (label, body) in feat_rows {
+        out.push(Line::from(vec![
+            Span::raw("  ".to_string()),
+            Span::styled(
+                format!("{label:<8}"),
+                Style::default()
+                    .fg(theme::META_BLUE)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled((*body).to_string(), theme::style_faint()),
+        ]));
+    }
+    out.push(Line::from(vec![
+        Span::raw("  ".to_string()),
+        Span::styled(
+            "/tips  ·  /help  ·  /ecosystem  ·  github.com/nuroctane/nur-cli".to_string(),
+            theme::style_faint(),
+        ),
     ]));
     out.push(Line::default());
 }

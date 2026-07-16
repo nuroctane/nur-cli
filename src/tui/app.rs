@@ -71,7 +71,8 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/doctor", "health check: version · auth · ecosystem · shell"),
     ("/permissions", "show or reload allow/deny/ask rules (permissions.toml)"),
     ("/hooks", "show local tool hook status (hooks.toml)"),
-    ("/model", "show and switch models"),
+    ("/model", "show and switch models  (/models)"),
+    ("/models", "show and switch models  (alias of /model)"),
     ("/plugins", "browse · install · enable marketplace plugins"),
     ("/effort", "reasoning effort: minimal|low|medium|high|xhigh"),
     ("/sessions", "browse & open past sessions  (same as /resume)"),
@@ -1402,17 +1403,13 @@ pub async fn run_tui(
     if let Some(note) = workspace_note {
         app.push_note(Tone::Session, note);
     }
-    // Ecosystem (purple) then mode — the tail of the opening intro. Core
-    // always-on capabilities (sandbox · subagents · tools) ride the ecosystem
-    // line so the banner above stays lean. Deeper tips live behind /tips.
+    // Ecosystem snapshot (graphify / plur / …) then active mode — banner already
+    // lists feature groups; these notes stay short so the open screen is clean.
     if !ecosystem_summary.is_empty() {
-        app.push_note(
-            Tone::Skill,
-            format!("{ecosystem_summary}  ·  sandbox · subagents · tools"),
-        );
+        app.push_note(Tone::Skill, format!("ecosystem · {ecosystem_summary}"));
     }
     app.push_info(format!(
-        "mode · {mode_label}  ·  Shift+Tab cycles  manual → plan → auto  ·  /mode  ·  /tips"
+        "mode · {mode_label}  ·  Shift+Tab  manual → plan → auto  ·  /mode"
     ));
 
     // Started without any API key → sign-in required before the first turn.
@@ -3664,11 +3661,15 @@ impl App {
             .copied()
             .unwrap_or(*crate::providers::default_provider());
         let base_url = self.cfg.base_url.clone();
-        let key = crate::auth::resolve_api_key().unwrap_or_default();
+        // Resolve against the *active* provider so OAuth tokens refresh and
+        // catalog env keys (TINKER_API_KEY, XAI_API_KEY, …) are picked up —
+        // not a stale generic NUR_API_KEY or empty string.
+        let key = crate::auth::resolve_api_key_for(Some(provider.id)).unwrap_or_default();
+        let pid = provider.id.to_string();
 
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(crate::api::fetch_model_ids(&base_url, &key));
+            let _ = tx.send(crate::api::fetch_model_ids(&base_url, &key, Some(&pid)));
         });
 
         self.model_picker = Some(ModelPicker {
