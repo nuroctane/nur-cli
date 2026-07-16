@@ -78,9 +78,15 @@ pub fn scoreboard(task: &str, results: &[BenchResult]) -> String {
     for (i, r) in ranked.iter().enumerate() {
         let mark = if r.passed { "PASS" } else { "FAIL" };
         let win = if i == 0 && r.passed { " ◀ best" } else { "" };
+        let err = r
+            .error
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(|s| format!("  · {s}"))
+            .unwrap_or_default();
         out.push_str(&format!(
-            "  {:<28} {:<6} {:>9.1} {:>10}{}\n",
-            r.model, mark, r.secs, r.tokens, win
+            "  {:<28} {:<6} {:>9.1} {:>10}{}{}\n",
+            r.model, mark, r.secs, r.tokens, win, err
         ));
     }
     out

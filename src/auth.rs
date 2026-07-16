@@ -545,6 +545,8 @@ fn load_provider_oauth_token_at(path: &Path, provider_id: &str) -> Option<String
 }
 
 /// Whether a stored OAuth session exists for this provider (may still need refresh).
+/// Used by failover UI / doctor when deciding if browser auth is already on file.
+#[allow(dead_code)] // public API for plugins/TUI; load path uses load_provider_oauth_token
 pub fn has_provider_oauth(provider_id: &str) -> bool {
     read_sessions_at(&crate::config::provider_sessions_path())
         .get(provider_id)

@@ -93,11 +93,6 @@ pub fn fetch_model_ids(
     Err(last_err)
 }
 
-/// Back-compat wrapper used by older call sites.
-pub fn fetch_model_ids_simple(base_url: &str, api_key: &str) -> Result<Vec<String>, String> {
-    fetch_model_ids(base_url, api_key, None)
-}
-
 fn model_list_urls(base_url: &str, provider_id: &str) -> Vec<String> {
     let base = base_url.trim_end_matches('/').to_string();
     let mut urls = Vec::new();

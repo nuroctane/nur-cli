@@ -9,7 +9,8 @@ mod registry;
 
 pub use catalog::{by_id, catalog};
 pub use registry::{
-    install_plugin, plugins_home, set_enabled, uninstall_plugin, Registry,
+    install_plugin, is_enabled, is_installed, list_installed, plugins_home, set_enabled,
+    uninstall_plugin, Registry,
 };
 
 use catalog::PluginEntry as Entry;
@@ -55,15 +56,9 @@ pub fn marketplace_rows() -> Vec<PluginRow> {
 }
 
 fn row_for(p: &Entry, reg: &Registry) -> PluginRow {
-    let inst = reg.plugins.get(p.id);
-    let installed = inst.is_some() || plugins_home().join(p.id).is_dir();
-    let enabled = inst.map(|i| i.enabled).unwrap_or(false);
-    // Dir without registry entry still counts as installed (partial install).
-    let enabled = if installed && inst.is_none() {
-        true // treat bare clone as enabled until registry says otherwise
-    } else {
-        enabled
-    };
+    let _ = reg; // registry is still loaded by marketplace_rows for batch consistency
+    let installed = is_installed(p.id);
+    let enabled = installed && is_enabled(p.id);
     PluginRow {
         id: p.id.to_string(),
         name: p.name.to_string(),
@@ -71,7 +66,7 @@ fn row_for(p: &Entry, reg: &Registry) -> PluginRow {
         category: p.category.to_string(),
         source: p.source_url.to_string(),
         installed,
-        enabled: installed && enabled,
+        enabled,
     }
 }
 
@@ -116,8 +111,13 @@ pub fn enabled_skill_roots() -> Vec<std::path::PathBuf> {
 /// One-line marketplace status for `/doctor` / notes.
 pub fn quick_status() -> String {
     let rows = marketplace_rows();
-    let installed = rows.iter().filter(|r| r.installed).count();
-    let enabled = rows.iter().filter(|r| r.enabled).count();
+    let on_disk = list_installed();
+    let installed = on_disk.len().max(rows.iter().filter(|r| r.installed).count());
+    let enabled = on_disk
+        .iter()
+        .filter(|p| p.enabled)
+        .count()
+        .max(rows.iter().filter(|r| r.enabled).count());
     format!(
         "plugins  {enabled} enabled · {installed} installed · {} in catalog  (~/.nur/plugins)\n  /plugins  open marketplace picker",
         rows.len()

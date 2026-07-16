@@ -331,12 +331,19 @@ pub fn run_update() -> Result<()> {
             Err(e) => theme::print_info(&format!("git pull skipped: {e}")),
         }
         step("Building release…");
+        // Quiet compiler warnings in the update UX; real errors still print.
+        // (Source tree is kept warning-clean so -q is safe for users.)
         let st = Command::new("cargo")
-            .args(["build", "--release"])
+            .args(["build", "--release", "-q"])
             .current_dir(&repo)
             .status()
             .map_err(|e| MuseError::Other(format!("cargo: {e}")))?;
         if !st.success() {
+            // Re-run verbose so the user sees the actual failure.
+            let _ = Command::new("cargo")
+                .args(["build", "--release"])
+                .current_dir(&repo)
+                .status();
             return Err(MuseError::Other("cargo build --release failed".into()));
         }
         theme::print_ok("cargo build --release ok");

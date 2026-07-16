@@ -70,7 +70,32 @@ pub fn is_enabled(id: &str) -> bool {
 }
 
 pub fn list_installed() -> Vec<InstalledPlugin> {
-    Registry::load().plugins.values().cloned().collect()
+    let mut v: Vec<_> = Registry::load().plugins.values().cloned().collect();
+    // Also surface bare plugin dirs that never got a registry row.
+    if let Ok(rd) = fs::read_dir(plugins_home()) {
+        for e in rd.flatten() {
+            let Ok(ft) = e.file_type() else { continue };
+            if !ft.is_dir() {
+                continue;
+            }
+            let id = e.file_name().to_string_lossy().to_string();
+            if id.starts_with('.') {
+                continue;
+            }
+            if v.iter().any(|p| p.id == id) {
+                continue;
+            }
+            v.push(InstalledPlugin {
+                id: id.clone(),
+                source: String::new(),
+                enabled: true,
+                installed_at: String::new(),
+                path: e.path().display().to_string(),
+            });
+        }
+    }
+    v.sort_by(|a, b| a.id.cmp(&b.id));
+    v
 }
 
 pub fn set_enabled(id: &str, enabled: bool) -> Result<(), String> {

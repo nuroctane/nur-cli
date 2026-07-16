@@ -76,14 +76,17 @@ pub const BLUE_500: Color = Color::Rgb(184, 134, 11);
 pub const BLUE_600: Color = Color::Rgb(140, 100, 10);
 
 pub const BLUE_050: Color = Color::Rgb(255, 250, 220);
+#[allow(dead_code)] // brand palette reserved for future chrome
 pub const BLUE_150: Color = Color::Rgb(255, 236, 160);
 pub const BLUE_250: Color = Color::Rgb(255, 216, 100);
 
 /// Accents: purple family + deep teal (kept per brand brief).
 pub const INDIGO: Color = Color::Rgb(139, 120, 220); // structure: skills, todos
+#[allow(dead_code)] // brand palette reserved for future chrome
 pub const PERIWINKLE: Color = Color::Rgb(168, 150, 230);
 pub const VIOLET: Color = Color::Rgb(178, 148, 255); // thought & authored change
 pub const LAVENDER: Color = Color::Rgb(202, 180, 255);
+#[allow(dead_code)] // brand palette reserved for future chrome
 pub const MAGENTA: Color = Color::Rgb(200, 120, 200);
 pub const PINK: Color = Color::Rgb(220, 140, 180);
 #[allow(dead_code)]
@@ -91,10 +94,12 @@ pub const ROSE: Color = Color::Rgb(255, 143, 168);
 #[allow(dead_code)]
 pub const CORAL: Color = Color::Rgb(255, 138, 120);
 pub const AMBER: Color = Color::Rgb(255, 186, 73); // shell == WARN
+#[allow(dead_code)] // brand palette reserved for future chrome
 pub const GOLD: Color = Color::Rgb(255, 208, 110);
 pub const ORANGE: Color = Color::Rgb(255, 150, 89); // memory
 #[allow(dead_code)]
 pub const LIME: Color = Color::Rgb(160, 224, 122);
+#[allow(dead_code)] // brand palette reserved for future chrome
 pub const MINT: Color = Color::Rgb(80, 190, 170); // deep-teal bridge
 pub const SEAFOAM: Color = Color::Rgb(56, 170, 160);
 pub const TEAL: Color = Color::Rgb(32, 150, 148); // deep teal — network

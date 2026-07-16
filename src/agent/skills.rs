@@ -18,8 +18,6 @@ pub struct Skill {
 /// Result of matching the user message to an installed skill.
 #[derive(Debug, Clone)]
 pub struct SkillActivation {
-    /// Skill id (folder name).
-    pub skill_name: String,
     /// Short status chip label, e.g. `fable-method` or `tdd`.
     pub label: String,
     /// Full system-prompt section (header + body).
@@ -28,7 +26,7 @@ pub struct SkillActivation {
 
 /// One natural-language → skill rule. First matching rule whose skill is
 /// installed wins (rules are ordered most-specific first).
-struct IntentRule {
+pub(crate) struct IntentRule {
     /// Prefer first installed name in this list.
     skill_names: &'static [&'static str],
     /// Substrings matched against normalized user text.
@@ -568,15 +566,9 @@ pub fn skill_activation(user_text: &str, skills: &[Skill]) -> Option<SkillActiva
     let _ = &mut section;
 
     Some(SkillActivation {
-        skill_name: sk.name.clone(),
         label: rule.label.to_string(),
         section,
     })
-}
-
-/// Back-compat alias used by older call sites / tests.
-pub fn fable_activation_section(user_text: &str, skills: &[Skill]) -> Option<String> {
-    skill_activation(user_text, skills).map(|a| a.section)
 }
 
 fn read_skill_body(sk: &Skill) -> String {

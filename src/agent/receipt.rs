@@ -192,7 +192,9 @@ pub fn render(session_id: &str) -> String {
             }
         }
     }
-    let v = verify_at(&p);
+    // Public `verify` keeps the hash-chain API reachable; render uses it so
+    // the receipt always shows integrity (and `verify` is not dead_code).
+    let v = verify(session_id);
     let integrity = if v.ok {
         format!("integrity ✓ verified · {} entries hash-chained", v.entries)
     } else {
