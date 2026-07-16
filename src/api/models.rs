@@ -126,18 +126,28 @@ fn fetch_once(url: &str, api_key: &str, provider_id: &str) -> Result<Vec<String>
 
     let mut req = client.get(url);
     if !api_key.is_empty() {
-        req = req.bearer_auth(api_key);
-        // Anthropic accepts bearer OAuth tokens; also send version header.
-        // Some legacy key flows still want x-api-key — try both when provider matches.
-        if provider_id == "anthropic" {
-            req = req
-                .header("anthropic-version", "2023-06-01")
-                .header("x-api-key", api_key);
-        }
-        if provider_id == "github-models" {
-            req = req
-                .header("Accept", "application/vnd.github+json")
-                .header("X-GitHub-Api-Version", "2022-11-28");
+        match provider_id {
+            "anthropic" => {
+                // Console API keys → x-api-key. Claude OAuth (sk-ant-oat*) → Bearer + beta.
+                // Sending x-api-key for OAuth tokens causes 401 for some accounts.
+                req = req.header("anthropic-version", "2023-06-01");
+                if crate::api::anthropic::is_oauth_token(api_key) {
+                    req = req
+                        .bearer_auth(api_key)
+                        .header("anthropic-beta", crate::api::anthropic::OAUTH_BETA);
+                } else {
+                    req = req.header("x-api-key", api_key);
+                }
+            }
+            "github-models" => {
+                req = req
+                    .bearer_auth(api_key)
+                    .header("Accept", "application/vnd.github+json")
+                    .header("X-GitHub-Api-Version", "2022-11-28");
+            }
+            _ => {
+                req = req.bearer_auth(api_key);
+            }
         }
     }
     // Prefer JSON; some hosts misbehave without Accept.
@@ -182,10 +192,39 @@ const XAI_CATALOG: &[&str] = &[
     "grok-2-vision-1212",
 ];
 
+/// Anthropic Claude model ids (soft fallback when `/v1/models` is unreachable).
+const ANTHROPIC_CATALOG: &[&str] = &[
+    "claude-opus-4-20250514",
+    "claude-sonnet-4-20250514",
+    "claude-3-7-sonnet-20250219",
+    "claude-3-5-sonnet-20241022",
+    "claude-3-5-haiku-20241022",
+    "claude-3-opus-20240229",
+    "claude-3-haiku-20240307",
+    "claude-sonnet-4-5",
+    "claude-haiku-4-5",
+    "claude-opus-4-1",
+];
+
+/// GitHub Models soft catalog (when catalog API is blocked).
+const GITHUB_MODELS_CATALOG: &[&str] = &[
+    "openai/gpt-4o",
+    "openai/gpt-4o-mini",
+    "openai/gpt-4.1",
+    "openai/o1",
+    "openai/o3-mini",
+    "meta/Llama-3.3-70B-Instruct",
+    "microsoft/Phi-4",
+    "deepseek/DeepSeek-R1",
+    "xai/grok-3",
+];
+
 fn static_catalog(provider_id: &str) -> Option<&'static [&'static str]> {
     match provider_id {
         "thinkingmachines" => Some(THINKING_MACHINES_CATALOG),
         "xai" => Some(XAI_CATALOG),
+        "anthropic" => Some(ANTHROPIC_CATALOG),
+        "github-models" => Some(GITHUB_MODELS_CATALOG),
         _ => None,
     }
 }

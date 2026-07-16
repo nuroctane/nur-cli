@@ -126,4 +126,67 @@ mod tests {
         assert!(slow.as_secs() >= 10);
         assert!(slow.as_secs() <= 30);
     }
+
+    /// Every catalog browser_auth provider must have a `login_browser` arm
+    /// and a `refresh_tokens` arm — otherwise `/login` browser or mid-session
+    /// refresh fails silently for that vendor.
+    #[test]
+    fn every_browser_auth_provider_has_login_and_refresh_path() {
+        // Mirrors match arms in flows::login_browser and refresh_tokens.
+        const LOGIN: &[&str] = &[
+            "xai",
+            "anthropic",
+            "antigravity",
+            "huggingface",
+            "azure",
+            "bedrock",
+            "github-models",
+        ];
+        const REFRESH: &[&str] = &[
+            "xai",
+            "anthropic",
+            "antigravity",
+            "google-oauth", // alias used by some stored sessions
+            "huggingface",
+            "azure",
+            "bedrock",
+            "github-models",
+        ];
+        for id in crate::providers::oauth_browser_provider_ids() {
+            assert!(
+                LOGIN.contains(id),
+                "provider '{id}' is browser_auth but missing from login_browser match"
+            );
+            assert!(
+                REFRESH.contains(id) || (*id == "antigravity" && REFRESH.contains(&"google-oauth")),
+                "provider '{id}' is browser_auth but missing from refresh_tokens match"
+            );
+            assert!(supports_browser(id), "supports_browser({id}) false");
+        }
+        // Inverse: every LOGIN id must be browser_auth in the catalog.
+        for id in LOGIN {
+            assert!(
+                supports_browser(id),
+                "login_browser has '{id}' but catalog browser_auth=false"
+            );
+        }
+    }
+
+    #[test]
+    fn refresh_unknown_provider_errors_clearly() {
+        let auth = crate::auth::Auth {
+            api_key: "x".into(),
+            source: "oauth".into(),
+            auth_method: crate::auth::AuthMethod::Oauth,
+            provider: "not-a-real-provider".into(),
+            expires_at: None,
+            refresh_token: Some("r".into()),
+            oauth_meta: None,
+        };
+        let err = refresh_tokens("not-a-real-provider", &auth, "r").unwrap_err();
+        assert!(
+            err.to_string().contains("no OAuth refresh"),
+            "unexpected: {err}"
+        );
+    }
 }

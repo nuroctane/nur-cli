@@ -4647,14 +4647,13 @@ impl App {
             u.set_model(self.cfg.model.clone());
         }
 
-        let chat = provider.style == crate::providers::ApiStyle::ChatCompletions;
         let bearer = if key.is_empty() {
-            crate::auth::resolve_api_key().unwrap_or_default()
+            crate::auth::resolve_api_key_for(Some(provider_id)).unwrap_or_default()
         } else {
             key.to_string()
         };
         match crate::api::ApiClient::new(&self.cfg.base_url, &bearer)
-            .map(|c| c.with_chat_completions(chat))
+            .map(|c| c.with_style(provider.style))
         {
             Ok(client) => {
                 self.client = client;

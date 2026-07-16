@@ -17,6 +17,9 @@ pub enum ApiStyle {
     Responses,
     /// OpenAI Chat Completions API (`POST /chat/completions`).
     ChatCompletions,
+    /// Anthropic Messages API (`POST /v1/messages`) — **not** OpenAI-compatible.
+    /// Used by the official Claude API (API keys and Claude OAuth tokens).
+    AnthropicMessages,
 }
 
 /// A selectable provider.
@@ -41,7 +44,7 @@ pub struct Provider {
     pub browser_auth: bool,
 }
 
-use ApiStyle::{ChatCompletions as CC, Responses as R};
+use ApiStyle::{AnthropicMessages as AM, ChatCompletions as CC, Responses as R};
 
 /// The full catalog. First entry (`meta` = Meta Model API vendor) is the default.
 pub const PROVIDERS: &[Provider] = &[
@@ -51,7 +54,7 @@ pub const PROVIDERS: &[Provider] = &[
     // ── frontier direct APIs ─────────────────────────────────────────────
     Provider { id: "openai", name: "OpenAI", base_url: "https://api.openai.com/v1", default_model: "gpt-5.5", env_key: "OPENAI_API_KEY", style: R, note: "GPT · Responses API", key_optional: false, browser_auth: false },
     Provider { id: "openai-cc", name: "OpenAI (Chat Completions)", base_url: "https://api.openai.com/v1", default_model: "gpt-5.5", env_key: "OPENAI_API_KEY", style: CC, note: "GPT · legacy chat endpoint", key_optional: false, browser_auth: false },
-    Provider { id: "anthropic", name: "Anthropic", base_url: "https://api.anthropic.com/v1", default_model: "claude-sonnet-5", env_key: "ANTHROPIC_API_KEY", style: CC, note: "Claude · key or browser", key_optional: false, browser_auth: true },
+    Provider { id: "anthropic", name: "Anthropic", base_url: "https://api.anthropic.com/v1", default_model: "claude-sonnet-4-20250514", env_key: "ANTHROPIC_API_KEY", style: AM, note: "Claude Messages API · key or browser OAuth", key_optional: false, browser_auth: true },
     Provider { id: "google", name: "Google Gemini", base_url: "https://generativelanguage.googleapis.com/v1beta/openai", default_model: "gemini-3-pro", env_key: "GEMINI_API_KEY", style: CC, note: "Gemini · OpenAI-compat", key_optional: false, browser_auth: false },
     Provider { id: "antigravity", name: "Google Antigravity", base_url: "https://generativelanguage.googleapis.com/v1beta/openai", default_model: "gemini-3-pro", env_key: "GEMINI_API_KEY", style: CC, note: "browser SSO · Code Assist", key_optional: false, browser_auth: true },
     Provider { id: "xai", name: "xAI Grok", base_url: "https://api.x.ai/v1", default_model: "grok-4", env_key: "XAI_API_KEY", style: CC, note: "Grok · key or browser", key_optional: false, browser_auth: true },
@@ -294,17 +297,66 @@ mod tests {
 
     #[test]
     fn browser_auth_providers_present() {
-        for id in [
-            "xai",
-            "anthropic",
-            "antigravity",
-            "huggingface",
-            "azure",
-            "bedrock",
-            "github-models",
-        ] {
+        for id in oauth_browser_provider_ids() {
             let p = by_id(id).unwrap_or_else(|| panic!("missing {id}"));
             assert!(p.browser_auth, "{id} should offer browser auth");
         }
     }
+
+    #[test]
+    fn every_browser_auth_flag_is_in_oauth_id_list() {
+        let listed: std::collections::HashSet<&str> =
+            oauth_browser_provider_ids().iter().copied().collect();
+        for p in PROVIDERS {
+            if p.browser_auth {
+                assert!(
+                    listed.contains(p.id),
+                    "provider '{}' has browser_auth but is missing from oauth_browser_provider_ids()",
+                    p.id
+                );
+            } else {
+                assert!(
+                    !listed.contains(p.id),
+                    "provider '{}' is in oauth_browser_provider_ids() but browser_auth=false",
+                    p.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn anthropic_uses_messages_api_not_chat_completions() {
+        let p = by_id("anthropic").expect("anthropic");
+        assert_eq!(
+            p.style,
+            ApiStyle::AnthropicMessages,
+            "Anthropic must use Messages API — Chat Completions on api.anthropic.com is invalid"
+        );
+        assert!(p.base_url.contains("api.anthropic.com"));
+        assert!(!p.default_model.is_empty());
+    }
+
+    #[test]
+    fn oauth_browser_providers_have_nonempty_defaults() {
+        for id in oauth_browser_provider_ids() {
+            let p = by_id(id).unwrap();
+            assert!(!p.base_url.is_empty(), "{id} base_url empty");
+            assert!(!p.default_model.is_empty(), "{id} default_model empty");
+            assert!(!p.env_key.is_empty(), "{id} env_key empty");
+        }
+    }
+}
+
+/// Catalog ids with `browser_auth: true`. Keep in sync with
+/// `oauth::login_browser` / `refresh_tokens` match arms (enforced by tests).
+pub fn oauth_browser_provider_ids() -> &'static [&'static str] {
+    &[
+        "xai",
+        "anthropic",
+        "antigravity",
+        "huggingface",
+        "azure",
+        "bedrock",
+        "github-models",
+    ]
 }

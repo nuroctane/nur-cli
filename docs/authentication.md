@@ -144,13 +144,16 @@ Each entry declares:
 
 - **base URL** and a sensible **default model**
 - usual **env var** for the key
-- **API style**: **Responses** (`POST /responses`) or **Chat Completions**
-  (`POST /chat/completions`)
+- **API style**:
+  - **Responses** (`POST /responses`) — OpenAI/Meta
+  - **Chat Completions** (`POST /chat/completions`) — most OpenAI-compatible hosts
+  - **Anthropic Messages** (`POST /v1/messages`) — official Claude API (API keys **and** Claude OAuth). Anthropic is **not** OpenAI Chat Completions.
 
-NurCLI’s agent always speaks an internal Responses-shaped protocol. For Chat
-Completions providers, a built-in adapter (`src/api/chat.rs`) translates
-requests and replies (including streamed tool-call fragments) so tools and
-streaming keep working.
+NurCLI’s agent always speaks an internal Responses-shaped protocol. Adapters
+translate for Chat Completions (`src/api/chat.rs`) and Anthropic Messages
+(`src/api/anthropic.rs`), including streamed tool calls. Claude OAuth tokens
+(`sk-ant-oat…`) use `Authorization: Bearer` + `anthropic-beta: oauth-2025-04-20`;
+console API keys use `x-api-key`.
 
 ---
 

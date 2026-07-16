@@ -284,11 +284,11 @@ async fn real_main() -> Result<()> {
     let _ = std::env::set_current_dir(&cwd);
     let cwd_str = cwd.display().to_string();
 
-    // Honor the saved provider's API shape (Responses vs Chat Completions).
-    let chat_mode = providers::by_id(&cfg.provider)
-        .map(|p| p.style == providers::ApiStyle::ChatCompletions)
-        .unwrap_or(false);
-    let client = ApiClient::new(&cfg.base_url, &api_key)?.with_chat_completions(chat_mode);
+    // Honor the saved provider's API shape (Responses / Chat / Anthropic Messages).
+    let style = providers::by_id(&cfg.provider)
+        .map(|p| p.style)
+        .unwrap_or(providers::ApiStyle::Responses);
+    let client = ApiClient::new(&cfg.base_url, &api_key)?.with_style(style);
 
     let mut session = if let Some(id) = &cli.resume {
         theme::print_info(&format!("resuming session {id}…"));

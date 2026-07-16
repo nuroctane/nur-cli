@@ -286,7 +286,7 @@ impl AgentRunner {
                 t.provider_id, t.model
             )));
             let client = match ApiClient::new(&t.base_url, &t.api_key) {
-                Ok(c) => c.with_chat_completions(t.chat),
+                Ok(c) => c.with_style(t.style),
                 Err(e) => {
                     last = e;
                     continue;

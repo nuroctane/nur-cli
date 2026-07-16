@@ -21,8 +21,8 @@ pub struct FailoverTarget {
     pub provider_id: String,
     pub base_url: String,
     pub api_key: String,
-    /// True → OpenAI Chat Completions shape; false → Responses API.
-    pub chat: bool,
+    /// Wire format from the provider catalog (Responses / Chat / Anthropic Messages).
+    pub style: ApiStyle,
     pub model: String,
 }
 
@@ -74,7 +74,7 @@ pub fn plan_targets(
             provider_id: p.id.to_string(),
             base_url: p.base_url.trim_end_matches('/').to_string(),
             api_key: key,
-            chat: p.style == ApiStyle::ChatCompletions,
+            style: p.style,
             model: p.default_model.to_string(),
         });
     }
@@ -141,11 +141,11 @@ mod tests {
         let targets = plan_targets("meta", &ids, |p| Some(format!("key-{}", p.id)));
         assert_eq!(targets.len(), 2);
         assert_eq!(targets[0].provider_id, "openai");
-        assert_eq!(targets[0].chat, false); // OpenAI uses the Responses API
+        assert_eq!(targets[0].style, ApiStyle::Responses); // OpenAI Responses API
         assert_eq!(targets[0].model, "gpt-5.5");
         assert_eq!(targets[0].api_key, "key-openai");
         assert_eq!(targets[1].provider_id, "anthropic");
-        assert_eq!(targets[1].chat, true); // Anthropic uses Chat Completions
+        assert_eq!(targets[1].style, ApiStyle::AnthropicMessages); // Messages, not Chat
         assert_eq!(targets[1].api_key, "key-anthropic");
     }
 

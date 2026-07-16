@@ -1,17 +1,17 @@
 use super::types::{ApiResponse, ResponseRequest};
 use crate::error::{MuseError, Result};
+use crate::providers::ApiStyle;
 use futures_util::StreamExt;
 use reqwest::Client;
+use reqwest::RequestBuilder;
 
 #[derive(Clone)]
 pub struct ApiClient {
     http: Client,
     base_url: String,
     api_key: String,
-    /// When true, speak OpenAI Chat Completions (`/chat/completions`) instead of
-    /// the Meta/OpenAI Responses API. Set for aggregators and most third-party
-    /// providers (see `crate::providers`).
-    chat: bool,
+    /// Wire format for this client (Responses / Chat Completions / Anthropic Messages).
+    style: ApiStyle,
 }
 
 /// Incremental events surfaced while a response streams in.
@@ -36,13 +36,25 @@ impl ApiClient {
             http,
             base_url: base_url.into().trim_end_matches('/').to_string(),
             api_key: api_key.into(),
-            chat: false,
+            style: ApiStyle::Responses,
         })
     }
 
+    /// Set the wire format from the provider catalog (`ApiStyle`).
+    pub fn with_style(mut self, style: ApiStyle) -> Self {
+        self.style = style;
+        self
+    }
+
     /// Switch this client to the OpenAI Chat Completions shape.
+    /// Prefer [`Self::with_style`] for new code.
+    #[allow(dead_code)]
     pub fn with_chat_completions(mut self, on: bool) -> Self {
-        self.chat = on;
+        self.style = if on {
+            ApiStyle::ChatCompletions
+        } else {
+            ApiStyle::Responses
+        };
         self
     }
 
@@ -50,20 +62,43 @@ impl ApiClient {
         matches!(status, 429 | 500 | 502 | 503 | 504)
     }
 
+    /// Apply auth headers for the active style. Anthropic needs `x-api-key` for
+    /// console keys and Bearer + beta for Claude OAuth tokens — never treat
+    /// Anthropic as plain Bearer-only Chat Completions.
+    fn auth_headers(&self, mut req: RequestBuilder) -> RequestBuilder {
+        match self.style {
+            ApiStyle::AnthropicMessages => {
+                req = req.header("anthropic-version", "2023-06-01");
+                if super::anthropic::is_oauth_token(&self.api_key) {
+                    req = req
+                        .bearer_auth(&self.api_key)
+                        .header("anthropic-beta", super::anthropic::OAUTH_BETA);
+                } else {
+                    req = req.header("x-api-key", &self.api_key);
+                }
+                req
+            }
+            ApiStyle::Responses | ApiStyle::ChatCompletions => req.bearer_auth(&self.api_key),
+        }
+    }
+
     pub async fn create_response(&self, req: &ResponseRequest) -> Result<ApiResponse> {
-        if self.chat {
-            return self.create_chat(req).await;
+        match self.style {
+            ApiStyle::ChatCompletions => return self.create_chat(req).await,
+            ApiStyle::AnthropicMessages => return self.create_anthropic(req).await,
+            ApiStyle::Responses => {}
         }
         let url = format!("{}/responses", self.base_url);
         let mut attempt = 0u32;
         loop {
             attempt += 1;
             let res = match self
-                .http
-                .post(&url)
-                .bearer_auth(&self.api_key)
-                .header("Content-Type", "application/json")
-                .json(req)
+                .auth_headers(
+                    self.http
+                        .post(&url)
+                        .header("Content-Type", "application/json")
+                        .json(req),
+                )
                 .send()
                 .await
             {
@@ -117,8 +152,14 @@ impl ApiClient {
         mut on_event: impl FnMut(StreamEvent),
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<ApiResponse> {
-        if self.chat {
-            return self.create_chat_stream(req, on_event, cancel).await;
+        match self.style {
+            ApiStyle::ChatCompletions => {
+                return self.create_chat_stream(req, on_event, cancel).await
+            }
+            ApiStyle::AnthropicMessages => {
+                return self.create_anthropic_stream(req, on_event, cancel).await
+            }
+            ApiStyle::Responses => {}
         }
         let url = format!("{}/responses", self.base_url);
         let mut attempt = 0u32;
@@ -127,12 +168,13 @@ impl ApiClient {
         loop {
             attempt += 1;
             let res = match self
-                .http
-                .post(&url)
-                .bearer_auth(&self.api_key)
-                .header("Content-Type", "application/json")
-                .header("Accept", "text/event-stream")
-                .json(req)
+                .auth_headers(
+                    self.http
+                        .post(&url)
+                        .header("Content-Type", "application/json")
+                        .header("Accept", "text/event-stream")
+                        .json(req),
+                )
                 .send()
                 .await
             {
@@ -250,11 +292,12 @@ impl ApiClient {
         loop {
             attempt += 1;
             let res = self
-                .http
-                .post(&url)
-                .bearer_auth(&self.api_key)
-                .header("Content-Type", "application/json")
-                .json(&body)
+                .auth_headers(
+                    self.http
+                        .post(&url)
+                        .header("Content-Type", "application/json")
+                        .json(&body),
+                )
                 .send()
                 .await;
             let res = match res {
@@ -295,12 +338,13 @@ impl ApiClient {
         let url = format!("{}/chat/completions", self.base_url);
         let body = super::chat::build_body(req, true);
         let res = self
-            .http
-            .post(&url)
-            .bearer_auth(&self.api_key)
-            .header("Content-Type", "application/json")
-            .header("Accept", "text/event-stream")
-            .json(&body)
+            .auth_headers(
+                self.http
+                    .post(&url)
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "text/event-stream")
+                    .json(&body),
+            )
             .send()
             .await
             .map_err(|e| MuseError::Other(format!("stream connect failed: {e}")))?;
@@ -361,6 +405,148 @@ impl ApiClient {
         let shaped = acc.finish();
         let resp = super::chat::to_api_response(shaped)
             .map_err(|e| MuseError::Other(format!("chat stream map failed: {e}")))?;
+        on_event(StreamEvent::Completed(resp.clone()));
+        Ok(resp)
+    }
+
+    // ── Anthropic Messages API ────────────────────────────────────────────
+    async fn create_anthropic(&self, req: &ResponseRequest) -> Result<ApiResponse> {
+        let url = format!("{}/messages", self.base_url);
+        let body = super::anthropic::build_body(req, false);
+        let mut attempt = 0u32;
+        loop {
+            attempt += 1;
+            let res = self
+                .auth_headers(
+                    self.http
+                        .post(&url)
+                        .header("Content-Type", "application/json")
+                        .json(&body),
+                )
+                .send()
+                .await;
+            let res = match res {
+                Ok(r) => r,
+                Err(e) if attempt < 4 => {
+                    tokio::time::sleep(std::time::Duration::from_millis(300 * attempt as u64)).await;
+                    let _ = e;
+                    continue;
+                }
+                Err(e) => return Err(MuseError::Other(format!("request failed: {e}"))),
+            };
+            let status = res.status();
+            let text = res.text().await.unwrap_or_default();
+            if !status.is_success() {
+                if Self::is_retryable_status(status.as_u16()) && attempt < 4 {
+                    tokio::time::sleep(std::time::Duration::from_millis(400 * (1 << (attempt - 1))))
+                        .await;
+                    continue;
+                }
+                return Err(MuseError::Api {
+                    status: status.as_u16(),
+                    message: parse_error_message(&text).unwrap_or(text),
+                });
+            }
+            let v: serde_json::Value = serde_json::from_str(&text)
+                .map_err(|e| MuseError::Other(format!("bad anthropic response: {e}; body={text}")))?;
+            let shaped = super::anthropic::parse_message(&v);
+            return super::chat::to_api_response(shaped)
+                .map_err(|e| MuseError::Other(format!("anthropic response map failed: {e}")));
+        }
+    }
+
+    async fn create_anthropic_stream(
+        &self,
+        req: &ResponseRequest,
+        mut on_event: impl FnMut(StreamEvent),
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<ApiResponse> {
+        let url = format!("{}/messages", self.base_url);
+        let body = super::anthropic::build_body(req, true);
+        let res = self
+            .auth_headers(
+                self.http
+                    .post(&url)
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "text/event-stream")
+                    .json(&body),
+            )
+            .send()
+            .await
+            .map_err(|e| MuseError::Other(format!("stream connect failed: {e}")))?;
+
+        let status = res.status();
+        let content_type = res
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+
+        if !status.is_success() {
+            let text = res.text().await.unwrap_or_default();
+            return Err(MuseError::Api {
+                status: status.as_u16(),
+                message: parse_error_message(&text).unwrap_or(text),
+            });
+        }
+
+        // Server ignored stream=true → plain JSON message.
+        if !content_type.contains("text/event-stream") {
+            let text = res.text().await?;
+            let v: serde_json::Value = serde_json::from_str(&text)
+                .map_err(|e| MuseError::Other(format!("bad anthropic response: {e}; body={text}")))?;
+            let shaped = super::anthropic::parse_message(&v);
+            return super::chat::to_api_response(shaped)
+                .map_err(|e| MuseError::Other(format!("anthropic response map failed: {e}")));
+        }
+
+        let mut stream = res.bytes_stream();
+        let mut parser = super::sse::SseParser::new();
+        let mut acc = super::anthropic::StreamAccumulator::default();
+
+        loop {
+            let chunk = tokio::select! {
+                _ = cancel.cancelled() => return Err(MuseError::Interrupted),
+                c = stream.next() => c,
+            };
+            let Some(chunk) = chunk else { break };
+            let chunk = chunk.map_err(|e| MuseError::Other(format!("stream chunk error: {e}")))?;
+            for data in parser.push(&chunk) {
+                if data.trim().is_empty() {
+                    continue;
+                }
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
+                    if let Some(msg) = v
+                        .pointer("/error/message")
+                        .and_then(|m| m.as_str())
+                        .or_else(|| v.get("error").and_then(|e| e.as_str()))
+                    {
+                        return Err(MuseError::Api {
+                            status: 0,
+                            message: msg.to_string(),
+                        });
+                    }
+                    if v.get("type").and_then(|t| t.as_str()) == Some("error") {
+                        let msg = v
+                            .pointer("/error/message")
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("anthropic stream error");
+                        return Err(MuseError::Api {
+                            status: 0,
+                            message: msg.to_string(),
+                        });
+                    }
+                    if let Some(delta) = acc.push(&v) {
+                        on_event(StreamEvent::TextDelta(delta));
+                    }
+                }
+            }
+        }
+
+        let shaped = acc.finish();
+        let resp = super::chat::to_api_response(shaped)
+            .map_err(|e| MuseError::Other(format!("anthropic stream map failed: {e}")))?;
         on_event(StreamEvent::Completed(resp.clone()));
         Ok(resp)
     }
