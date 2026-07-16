@@ -4377,7 +4377,6 @@ impl App {
                         .as_ref()
                         .map(|m| (m.provider_id.clone(), m.fallback_key))
                         .unwrap_or_default();
-                    let access = tokens.access_token.clone();
                     if let Some(m) = &mut self.login {
                         m.oauth_rx = None;
                         m.oauth_cancel = None;
@@ -4420,7 +4419,7 @@ impl App {
                             }
                             continue;
                         }
-                        self.apply_provider_login(&provider_id, &access, true);
+                        self.apply_provider_login(&provider_id, "", true);
                     }
                 }
                 crate::oauth::BrowserLoginProgress::Failed(err) => {
@@ -4660,10 +4659,18 @@ impl App {
         if fixed_oauth_base.is_none() {
             crate::config::apply_base_url_env(&mut self.cfg);
         }
+        // OAuth tokens may be refreshed while the login result is persisted.
+        // Always use the canonical stored token for model detection and the
+        // hot-swapped client instead of the raw pre-refresh login result.
+        let bearer = if via_oauth || key.is_empty() {
+            crate::auth::resolve_api_key_for(Some(provider_id)).unwrap_or_default()
+        } else {
+            key.to_string()
+        };
         if via_oauth {
             if let Ok(ids) = crate::api::models::fetch_model_ids(
                 &self.cfg.base_url,
-                key,
+                &bearer,
                 Some(provider.id),
             ) {
                 if !ids.iter().any(|id| id == &self.cfg.model) {
@@ -4687,11 +4694,6 @@ impl App {
             u.set_model(self.cfg.model.clone());
         }
 
-        let bearer = if key.is_empty() {
-            crate::auth::resolve_api_key_for(Some(provider_id)).unwrap_or_default()
-        } else {
-            key.to_string()
-        };
         match crate::api::ApiClient::for_provider(&self.cfg.base_url, &bearer, provider.id)
             .map(|c| c.with_style(provider.style))
         {

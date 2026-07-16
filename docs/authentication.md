@@ -50,13 +50,20 @@ shows only models the account can use. OpenAI ChatGPT OAuth uses the Codex backe
 including the account context from the ID token; an `OPENAI_API_KEY` login continues
 to use the public OpenAI API endpoint.
 
+NurCLI resolves the current OAuth token before every model or inference request, keeps
+the active and per-provider session stores synchronized after token rotation, and
+forces one refresh/retry if a provider rejects an access token early. **Sign in with
+browser** always starts that provider's real OAuth flow; reuse of Codex, Grok, Kimi, or
+Claude Code credentials happens only through **Use existing CLI session**.
+
 xAI browser/device sessions use the Grok Build Responses proxy and its account model
 catalog (currently defaulting to `grok-4.5`). `XAI_API_KEY` continues to use the public
 xAI API endpoint and its normal catalog style.
 
 Kimi Code supports both Kimi membership OAuth and Kimi Code API keys at
 `https://api.kimi.com/coding/v1`. OAuth uses Kimi's device flow, refreshes rotated
-tokens automatically, and discovers the account's live models from `/models`.
+tokens automatically, sends the managed API's device-bound request headers, and
+discovers the account's live models from `/models`.
 The separate Moonshot Open Platform catalog entry remains available for
 `https://api.moonshot.ai/v1` keys.
 

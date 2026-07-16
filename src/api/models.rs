@@ -40,6 +40,20 @@ impl ModelEntry {
     }
 }
 
+struct ModelFetchError {
+    message: String,
+    status: Option<u16>,
+}
+
+impl ModelFetchError {
+    fn request(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            status: None,
+        }
+    }
+}
+
 /// Fetch the provider's model ids for **this** api_key / OAuth token.
 ///
 /// `base_url` is the catalog base (no trailing slash required).
@@ -62,30 +76,53 @@ pub fn fetch_model_ids(
         }
     }
 
-    let oauth = crate::auth::oauth_request_context(pid, api_key);
+    let mut current_key = api_key.to_string();
+    let mut oauth = crate::auth::oauth_request_context(pid, &current_key);
     let urls = model_list_urls(base_url, pid, oauth.is_some());
     let mut last_err = String::from("no /models endpoint tried");
+    let mut oauth_refreshed = false;
 
     for url in urls {
-        match fetch_once(&url, api_key, pid, oauth.as_ref()) {
-            Ok(mut ids) => {
-                if ids.is_empty() {
-                    last_err = "provider returned no models for this credential".into();
-                    continue;
+        loop {
+            match fetch_once(&url, &current_key, pid, oauth.as_ref()) {
+                Ok(mut ids) => {
+                    if ids.is_empty() {
+                        last_err = "provider returned no models for this credential".into();
+                        break;
+                    }
+                    if matches!(pid, "google" | "antigravity") {
+                        for id in &mut ids {
+                            if let Some(stripped) = id.strip_prefix("models/") {
+                                *id = stripped.to_string();
+                            }
+                        }
+                        ids.sort_unstable();
+                        ids.dedup();
+                    }
+                    // Live list only — do not merge static catalogs.
+                    return Ok(ids);
                 }
-                if matches!(pid, "google" | "antigravity") {
-                    for id in &mut ids {
-                        if let Some(stripped) = id.strip_prefix("models/") {
-                            *id = stripped.to_string();
+                Err(error)
+                    if error.status == Some(401)
+                        && oauth.is_some()
+                        && !oauth_refreshed =>
+                {
+                    oauth_refreshed = true;
+                    if crate::auth::force_refresh_oauth(pid).unwrap_or(false) {
+                        if let Ok(Some(token)) = crate::auth::resolve_oauth_access_token(pid) {
+                            current_key = token;
+                            oauth = crate::auth::oauth_request_context(pid, &current_key);
+                            continue;
                         }
                     }
-                    ids.sort_unstable();
-                    ids.dedup();
+                    last_err = error.message;
+                    break;
                 }
-                // Live list only — do not merge static catalogs.
-                return Ok(ids);
+                Err(error) => {
+                    last_err = error.message;
+                    break;
+                }
             }
-            Err(e) => last_err = e,
         }
     }
 
@@ -173,12 +210,12 @@ fn fetch_once(
     api_key: &str,
     provider_id: &str,
     oauth: Option<&crate::auth::OAuthRequestContext>,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, ModelFetchError> {
     let client = reqwest::blocking::Client::builder()
         .user_agent(concat!("nur-cli/", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(15))
         .build()
-        .map_err(|e| format!("client error: {e}"))?;
+        .map_err(|e| ModelFetchError::request(format!("client error: {e}")))?;
 
     let mut req = client.get(url);
     if !api_key.is_empty() {
@@ -215,6 +252,14 @@ fn fetch_once(
                     req = req.header("x-goog-user-project", project_id);
                 }
             }
+            "kimi" if oauth.is_some() => {
+                req = req.bearer_auth(api_key);
+                if let Ok(headers) = crate::oauth::kimi_request_headers() {
+                    for (name, value) in headers {
+                        req = req.header(name, value);
+                    }
+                }
+            }
             _ => {
                 req = req.bearer_auth(api_key);
             }
@@ -222,7 +267,9 @@ fn fetch_once(
     }
     req = req.header("Accept", "application/json");
 
-    let res = req.send().map_err(|e| format!("request failed: {e}"))?;
+    let res = req
+        .send()
+        .map_err(|e| ModelFetchError::request(format!("request failed: {e}")))?;
     let status = res.status();
     let body = res.text().unwrap_or_default();
     if !status.is_success() {
@@ -233,13 +280,18 @@ fn fetch_once(
                 " · tip: use this provider's /login (key or OAuth) — wrong host credentials hide the real plan list",
             );
         }
-        return Err(msg);
+        return Err(ModelFetchError {
+            message: msg,
+            status: Some(status.as_u16()),
+        });
     }
 
-    let mut ids = parse_model_ids(&body)?;
+    let mut ids = parse_model_ids(&body).map_err(ModelFetchError::request)?;
     ids.retain(|id| !id.trim().is_empty());
     if ids.is_empty() {
-        return Err("provider returned no models for this credential".to_string());
+        return Err(ModelFetchError::request(
+            "provider returned no models for this credential",
+        ));
     }
     Ok(ids)
 }

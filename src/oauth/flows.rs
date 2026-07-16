@@ -74,6 +74,7 @@ pub fn login_browser(provider_id: &str, tx: ProgressTx, cancel: CancelFlag) {
 /// Import tokens from a first-party CLI session file when present.
 pub fn import_existing_session(provider_id: &str) -> Result<Option<OAuthTokens>> {
     match provider_id {
+        "openai" => openai::import_codex_cli(),
         "xai" => xai::import_grok_cli(),
         "kimi" => kimi::import_kimi_cli(),
         "anthropic" => claude::import_claude_cli(),
@@ -270,13 +271,6 @@ pub mod openai {
     }
 
     pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
-        if let Some(tokens) = import_codex_cli()? {
-            send(
-                tx,
-                BrowserLoginProgress::Status("imported existing Codex session".into()),
-            );
-            return Ok(tokens);
-        }
         let (listener, port) = CALLBACK_PORTS
             .iter()
             .find_map(|port| {
@@ -351,7 +345,7 @@ pub mod openai {
 
     /// Reuse the official Codex CLI login when present. This reads only the
     /// first-party token cache and converts it into Nur's normal OAuth shape.
-    fn import_codex_cli() -> Result<Option<OAuthTokens>> {
+    pub fn import_codex_cli() -> Result<Option<OAuthTokens>> {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let path = home.join(".codex").join("auth.json");
         if !path.exists() {
@@ -500,14 +494,6 @@ pub mod xai {
     }
 
     pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
-        // Prefer importing an existing Grok CLI session.
-        if let Some(t) = import_grok_cli()? {
-            send(
-                tx,
-                BrowserLoginProgress::Status("imported existing Grok CLI session".into()),
-            );
-            return Ok(t);
-        }
         send(
             tx,
             BrowserLoginProgress::Status("requesting xAI device code…".into()),
@@ -828,7 +814,9 @@ pub mod kimi {
         Ok(value)
     }
 
-    fn with_device_headers(req: RequestBuilder) -> Result<RequestBuilder> {
+    /// Device identity headers required by Kimi's managed OAuth API for token,
+    /// model, and inference requests.
+    pub fn request_headers() -> Result<Vec<(&'static str, String)>> {
         let device_name = std::env::var("COMPUTERNAME")
             .or_else(|_| std::env::var("HOSTNAME"))
             .unwrap_or_else(|_| "unknown".to_string());
@@ -847,15 +835,21 @@ pub mod kimi {
                 })
                 .collect::<String>()
         };
-        Ok(req
-            // Required protocol value for Kimi's public CLI OAuth client. The
-            // HTTP User-Agent still identifies this application as NurCLI.
-            .header("X-Msh-Platform", "kimi_cli")
-            .header("X-Msh-Version", env!("CARGO_PKG_VERSION"))
-            .header("X-Msh-Device-Name", ascii(device_name))
-            .header("X-Msh-Device-Model", ascii(device_model))
-            .header("X-Msh-Os-Version", ascii(os_version))
-            .header("X-Msh-Device-Id", device_id()?))
+        Ok(vec![
+            ("X-Msh-Platform", "kimi_cli".to_string()),
+            ("X-Msh-Version", env!("CARGO_PKG_VERSION").to_string()),
+            ("X-Msh-Device-Name", ascii(device_name)),
+            ("X-Msh-Device-Model", ascii(device_model)),
+            ("X-Msh-Os-Version", ascii(os_version)),
+            ("X-Msh-Device-Id", device_id()?),
+        ])
+    }
+
+    fn with_device_headers(mut req: RequestBuilder) -> Result<RequestBuilder> {
+        for (name, value) in request_headers()? {
+            req = req.header(name, value);
+        }
+        Ok(req)
     }
 
     fn token_error(parsed: &TokenResp, status: u16) -> String {
@@ -1134,13 +1128,6 @@ pub mod claude {
     }
 
     pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
-        if let Some(t) = import_claude_cli()? {
-            send(
-                tx,
-                BrowserLoginProgress::Status("imported existing Claude Code session".into()),
-            );
-            return Ok(t);
-        }
         let verifier = random_urlsafe(32);
         let challenge = pkce_challenge(&verifier);
         let state = random_urlsafe(16);

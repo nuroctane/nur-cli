@@ -14,6 +14,23 @@ fn effective_base_url(base_url: &str, provider_id: &str, is_oauth: bool) -> Stri
     base_url.trim_end_matches('/').to_string()
 }
 
+fn oauth_blocking<T: Send>(operation: impl FnOnce() -> T + Send) -> T {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle)
+            if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread =>
+        {
+            tokio::task::block_in_place(operation)
+        }
+        Ok(_) => std::thread::scope(|scope| {
+            scope
+                .spawn(operation)
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+        }),
+        Err(_) => operation(),
+    }
+}
+
 #[derive(Clone)]
 pub struct ApiClient {
     http: Client,
@@ -21,6 +38,7 @@ pub struct ApiClient {
     api_key: String,
     provider_id: String,
     oauth: Option<crate::auth::OAuthRequestContext>,
+    refresh_oauth: bool,
     /// Wire format for this client (Responses / Chat Completions / Anthropic Messages).
     style: ApiStyle,
 }
@@ -49,6 +67,7 @@ impl ApiClient {
             api_key: api_key.into(),
             provider_id: String::new(),
             oauth: None,
+            refresh_oauth: false,
             style: ApiStyle::Responses,
         })
     }
@@ -66,6 +85,7 @@ impl ApiClient {
         let effective_base = effective_base_url(&requested_base, &provider_id, oauth.is_some());
         let mut client = Self::new(effective_base, api_key)?;
         client.provider_id = provider_id;
+        client.refresh_oauth = oauth.is_some();
         client.oauth = oauth;
         Ok(client)
     }
@@ -98,23 +118,55 @@ impl ApiClient {
         matches!(status, 429 | 500 | 502 | 503 | 504)
     }
 
+    fn api_key_for_request(&self) -> String {
+        if self.refresh_oauth {
+            let provider_id = self.provider_id.as_str();
+            if let Ok(Some(token)) = oauth_blocking(|| {
+                crate::auth::resolve_oauth_access_token(provider_id)
+            }) {
+                return token;
+            }
+        }
+        self.api_key.clone()
+    }
+
+    fn refresh_after_unauthorized(&self) -> bool {
+        if !self.refresh_oauth {
+            return false;
+        }
+        let provider_id = self.provider_id.as_str();
+        oauth_blocking(|| crate::auth::force_refresh_oauth(provider_id)).unwrap_or(false)
+    }
+
+    async fn send_with_oauth_retry(
+        &self,
+        build: impl Fn() -> RequestBuilder,
+    ) -> reqwest::Result<reqwest::Response> {
+        let response = self.auth_headers(build()).send().await?;
+        if response.status().as_u16() == 401 && self.refresh_after_unauthorized() {
+            return self.auth_headers(build()).send().await;
+        }
+        Ok(response)
+    }
+
     /// Apply auth headers for the active style. Anthropic needs `x-api-key` for
     /// console keys and Bearer + beta for Claude OAuth tokens — never treat
     /// Anthropic as plain Bearer-only Chat Completions.
     fn auth_headers(&self, mut req: RequestBuilder) -> RequestBuilder {
+        let api_key = self.api_key_for_request();
         req = match self.style {
             ApiStyle::AnthropicMessages => {
                 req = req.header("anthropic-version", "2023-06-01");
-                if self.oauth.is_some() || super::anthropic::is_oauth_token(&self.api_key) {
+                if self.oauth.is_some() || super::anthropic::is_oauth_token(&api_key) {
                     req = req
-                        .bearer_auth(&self.api_key)
+                        .bearer_auth(&api_key)
                         .header("anthropic-beta", super::anthropic::OAUTH_BETA);
                 } else {
-                    req = req.header("x-api-key", &self.api_key);
+                    req = req.header("x-api-key", &api_key);
                 }
                 req
             }
-            ApiStyle::Responses | ApiStyle::ChatCompletions => req.bearer_auth(&self.api_key),
+            ApiStyle::Responses | ApiStyle::ChatCompletions => req.bearer_auth(&api_key),
         };
         if self.provider_id == "openai" {
             if let Some(oauth) = &self.oauth {
@@ -135,6 +187,13 @@ impl ApiClient {
                 req = req.header("x-goog-user-project", project_id);
             }
         }
+        if self.provider_id == "kimi" && self.oauth.is_some() {
+            if let Ok(headers) = crate::oauth::kimi_request_headers() {
+                for (name, value) in headers {
+                    req = req.header(name, value);
+                }
+            }
+        }
         if self.provider_id == "github-models" {
             req = req
                 .header("Accept", "application/vnd.github+json")
@@ -151,6 +210,7 @@ impl ApiClient {
         }
         let url = format!("{}/responses", self.base_url);
         let mut attempt = 0u32;
+        let mut oauth_refreshed = false;
         loop {
             attempt += 1;
             let res = match self
@@ -179,6 +239,13 @@ impl ApiClient {
             let body = res.text().await.unwrap_or_default();
 
             if !status.is_success() {
+                if status.as_u16() == 401
+                    && !oauth_refreshed
+                    && self.refresh_after_unauthorized()
+                {
+                    oauth_refreshed = true;
+                    continue;
+                }
                 if Self::is_retryable_status(status.as_u16()) && attempt < 4 {
                     let retry_after = headers
                         .get("retry-after")
@@ -225,6 +292,7 @@ impl ApiClient {
         let url = format!("{}/responses", self.base_url);
         let mut attempt = 0u32;
         let mut last_err: Option<MuseError> = None;
+        let mut oauth_refreshed = false;
 
         loop {
             attempt += 1;
@@ -259,6 +327,13 @@ impl ApiClient {
                 .to_string();
 
             if !status.is_success() {
+                if status.as_u16() == 401
+                    && !oauth_refreshed
+                    && self.refresh_after_unauthorized()
+                {
+                    oauth_refreshed = true;
+                    continue;
+                }
                 if Self::is_retryable_status(status.as_u16()) && attempt < 3 {
                     let body = res.text().await.unwrap_or_default();
                     last_err = Some(MuseError::Api {
@@ -350,6 +425,7 @@ impl ApiClient {
         let url = format!("{}/chat/completions", self.base_url);
         let body = super::chat::build_body_for_provider(req, false, &self.provider_id);
         let mut attempt = 0u32;
+        let mut oauth_refreshed = false;
         loop {
             attempt += 1;
             let res = self
@@ -373,6 +449,13 @@ impl ApiClient {
             let status = res.status();
             let text = res.text().await.unwrap_or_default();
             if !status.is_success() {
+                if status.as_u16() == 401
+                    && !oauth_refreshed
+                    && self.refresh_after_unauthorized()
+                {
+                    oauth_refreshed = true;
+                    continue;
+                }
                 if Self::is_retryable_status(status.as_u16()) && attempt < 4 {
                     tokio::time::sleep(std::time::Duration::from_millis(400 * (1 << (attempt - 1)))).await;
                     continue;
@@ -399,14 +482,13 @@ impl ApiClient {
         let url = format!("{}/chat/completions", self.base_url);
         let body = super::chat::build_body_for_provider(req, true, &self.provider_id);
         let res = self
-            .auth_headers(
+            .send_with_oauth_retry(|| {
                 self.http
                     .post(&url)
                     .header("Content-Type", "application/json")
                     .header("Accept", "text/event-stream")
-                    .json(&body),
-            )
-            .send()
+                    .json(&body)
+            })
             .await
             .map_err(|e| MuseError::Other(format!("stream connect failed: {e}")))?;
 
@@ -475,6 +557,7 @@ impl ApiClient {
         let url = format!("{}/messages", self.base_url);
         let body = super::anthropic::build_body(req, false);
         let mut attempt = 0u32;
+        let mut oauth_refreshed = false;
         loop {
             attempt += 1;
             let res = self
@@ -498,6 +581,13 @@ impl ApiClient {
             let status = res.status();
             let text = res.text().await.unwrap_or_default();
             if !status.is_success() {
+                if status.as_u16() == 401
+                    && !oauth_refreshed
+                    && self.refresh_after_unauthorized()
+                {
+                    oauth_refreshed = true;
+                    continue;
+                }
                 if Self::is_retryable_status(status.as_u16()) && attempt < 4 {
                     tokio::time::sleep(std::time::Duration::from_millis(400 * (1 << (attempt - 1))))
                         .await;
@@ -538,14 +628,13 @@ impl ApiClient {
         let url = format!("{}/messages", self.base_url);
         let body = super::anthropic::build_body(req, true);
         let res = self
-            .auth_headers(
+            .send_with_oauth_retry(|| {
                 self.http
                     .post(&url)
                     .header("Content-Type", "application/json")
                     .header("Accept", "text/event-stream")
-                    .json(&body),
-            )
-            .send()
+                    .json(&body)
+            })
             .await
             .map_err(|e| MuseError::Other(format!("stream connect failed: {e}")))?;
 
@@ -740,6 +829,7 @@ mod tests {
                 is_fedramp: true,
                 project_id: None,
             }),
+            refresh_oauth: false,
             style: ApiStyle::Responses,
         };
         let request = client
@@ -773,6 +863,7 @@ mod tests {
                 is_fedramp: false,
                 project_id: Some("project-test".to_string()),
             }),
+            refresh_oauth: false,
             style: ApiStyle::ChatCompletions,
         };
         let request = client

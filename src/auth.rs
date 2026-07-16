@@ -5,7 +5,17 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static OAUTH_STORE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn oauth_store_guard() -> MutexGuard<'static, ()> {
+    OAUTH_STORE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -15,7 +25,7 @@ pub enum AuthMethod {
     Oauth,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct OauthMeta {
     #[serde(default)]
     pub issuer: String,
@@ -26,7 +36,7 @@ pub struct OauthMeta {
     pub extra: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Auth {
     /// Current access token or API key (used as HTTP bearer).
     pub api_key: String,
@@ -142,10 +152,18 @@ pub(crate) fn pick_provider_credential(
     failover_key: Option<&str>,
     failover_oauth: Option<&str>,
     nur_global: Option<&str>,
+    legacy_auth: Option<&str>,
     // Intentionally ignored for provider-scoped resolve (Meta-era aliases).
     _meta_model_muse_generic: Option<&str>,
 ) -> Option<String> {
-    for cand in [provider_env, matching_auth, failover_key, failover_oauth, nur_global] {
+    for cand in [
+        provider_env,
+        matching_auth,
+        failover_key,
+        failover_oauth,
+        nur_global,
+        legacy_auth,
+    ] {
         if let Some(k) = cand.map(str::trim).filter(|s| !s.is_empty()) {
             return Some(k.to_string());
         }
@@ -175,18 +193,22 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
         });
         let mut matching_auth = None;
         let mut matching_oauth = None;
+        let mut legacy_auth = None;
         let mut mismatched = false;
         if let Some(auth) = load_auth()? {
             if provider_mismatch(&auth, exp) {
                 mismatched = true;
             } else {
-                let mut auth = auth;
-                ensure_fresh_oauth(&mut auth)?;
-                let k = auth.api_key.trim().to_string();
-                if !k.is_empty() {
-                    if matches!(auth.auth_method, AuthMethod::Oauth) {
-                        matching_oauth = Some(k);
-                    } else {
+                if matches!(auth.auth_method, AuthMethod::Oauth) {
+                    matching_oauth = resolve_oauth_access_token(exp)?;
+                } else {
+                    let k = auth.api_key.trim().to_string();
+                    if !k.is_empty() && auth.provider.is_empty() {
+                        // Legacy providerless keys are compatible fallbacks,
+                        // but must never outrank a provider-bound key or OAuth
+                        // session selected explicitly for this provider.
+                        legacy_auth = Some(k);
+                    } else if !k.is_empty() {
                         matching_auth = Some(k);
                     }
                 }
@@ -219,6 +241,7 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
             failover_key.as_deref(),
             failover_oauth.as_deref(),
             nur_global.as_deref(),
+            legacy_auth.as_deref(),
             meta_era.as_deref(),
         ) {
             return Ok(k);
@@ -352,39 +375,119 @@ pub fn refresh_oauth_in_place(auth: &mut Auth) -> Result<bool> {
     let Some(refresh) = auth.refresh_token.clone().filter(|s| !s.is_empty()) else {
         return Ok(false);
     };
-    let provider = auth.provider.as_str();
-    match crate::oauth::refresh_tokens(provider, auth, &refresh) {
-        Ok(tokens) => {
-            auth.api_key = tokens.access_token;
-            if let Some(r) = tokens.refresh_token {
-                auth.refresh_token = Some(r);
-            }
-            auth.expires_at = tokens.expires_at;
-            if let Some(meta) = tokens.meta {
-                auth.oauth_meta = Some(meta);
-            }
-            auth.source = "oauth".into();
-            Ok(true)
-        }
-        Err(e) => {
-            // Soft-fail if still not expired — let the request try.
-            if exp > now {
-                Ok(false)
-            } else {
-                Err(MuseError::Other(format!(
-                    "OAuth token expired and refresh failed ({e}). Run /login again."
-                )))
-            }
-        }
+    match refresh_oauth_with_token(auth, &refresh) {
+        Ok(refreshed) => Ok(refreshed),
+        Err(_) if exp > now => Ok(false),
+        Err(error) => Err(MuseError::Other(format!(
+            "OAuth token expired and refresh failed ({error}). Run /login again."
+        ))),
     }
 }
 
-/// Refresh OAuth access token if needed and persist to the active `auth.json`.
+fn refresh_oauth_with_token(auth: &mut Auth, refresh: &str) -> Result<bool> {
+    let provider = auth.provider.as_str();
+    // Provider adapters use reqwest's blocking client. Always isolate refresh
+    // on a plain worker thread so callers are safe both inside and outside a
+    // Tokio runtime (headless startup, streaming retries, TUI model refresh).
+    let tokens = std::thread::scope(|scope| {
+        scope
+            .spawn(|| crate::oauth::refresh_tokens(provider, auth, refresh))
+            .join()
+    })
+    .map_err(|_| MuseError::Other("OAuth refresh worker panicked".into()))??;
+    auth.api_key = tokens.access_token;
+    if let Some(r) = tokens.refresh_token {
+        auth.refresh_token = Some(r);
+    }
+    auth.expires_at = tokens.expires_at;
+    if let Some(meta) = tokens.meta {
+        auth.oauth_meta = Some(meta);
+    }
+    auth.source = "oauth".into();
+    Ok(true)
+}
+
+/// Refresh OAuth access token if needed and keep the active and provider stores
+/// synchronized. The active login is canonical when both contain this provider.
 pub fn ensure_fresh_oauth(auth: &mut Auth) -> Result<()> {
     if refresh_oauth_in_place(auth)? {
-        let _ = save_auth(auth);
+        save_auth(auth)?;
+    }
+    if matches!(auth.auth_method, AuthMethod::Oauth) && !auth.provider.trim().is_empty() {
+        save_provider_session(auth)?;
     }
     Ok(())
+}
+
+/// Resolve the current access token for an OAuth-backed client without allowing
+/// environment API keys to change that client's routing or wire protocol.
+pub fn resolve_oauth_access_token(provider_id: &str) -> Result<Option<String>> {
+    let _guard = oauth_store_guard();
+    if let Some(mut auth) = load_auth()? {
+        if matches!(auth.auth_method, AuthMethod::Oauth) && auth.provider == provider_id {
+            ensure_fresh_oauth(&mut auth)?;
+            return Ok(non_empty_access_token(&auth));
+        }
+    }
+
+    let path = crate::config::provider_sessions_path();
+    let mut map = read_sessions_at(&path);
+    let Some(mut auth) = map.get(provider_id).cloned() else {
+        return Ok(None);
+    };
+    if !matches!(auth.auth_method, AuthMethod::Oauth) {
+        return Ok(None);
+    }
+    if auth.provider.is_empty() {
+        auth.provider = provider_id.to_string();
+    }
+    if refresh_oauth_in_place(&mut auth)? {
+        map.insert(provider_id.to_string(), auth.clone());
+        write_sessions_at(&path, &map)?;
+    }
+    Ok(non_empty_access_token(&auth))
+}
+
+/// Force one OAuth refresh after a provider rejects an otherwise unexpired
+/// access token. Returns `false` when the session has no refresh capability.
+pub fn force_refresh_oauth(provider_id: &str) -> Result<bool> {
+    let _guard = oauth_store_guard();
+    if let Some(mut auth) = load_auth()? {
+        if matches!(auth.auth_method, AuthMethod::Oauth) && auth.provider == provider_id {
+            let Some(refresh) = auth.refresh_token.clone().filter(|value| !value.trim().is_empty())
+            else {
+                return Ok(false);
+            };
+            refresh_oauth_with_token(&mut auth, &refresh)?;
+            save_auth(&auth)?;
+            save_provider_session(&auth)?;
+            return Ok(true);
+        }
+    }
+
+    let path = crate::config::provider_sessions_path();
+    let mut map = read_sessions_at(&path);
+    let Some(mut auth) = map.get(provider_id).cloned() else {
+        return Ok(false);
+    };
+    if !matches!(auth.auth_method, AuthMethod::Oauth) {
+        return Ok(false);
+    }
+    let Some(refresh) = auth.refresh_token.clone().filter(|value| !value.trim().is_empty()) else {
+        return Ok(false);
+    };
+    if auth.provider.is_empty() {
+        auth.provider = provider_id.to_string();
+    }
+    refresh_oauth_with_token(&mut auth, &refresh)?;
+    map.insert(provider_id.to_string(), auth);
+    write_sessions_at(&path, &map)?;
+    Ok(true)
+}
+
+fn non_empty_access_token(auth: &Auth) -> Option<String> {
+    let token = auth.api_key.trim();
+    (!token.is_empty()).then(|| token.to_string())
 }
 
 pub fn save_auth(auth: &Auth) -> Result<()> {
@@ -497,10 +600,13 @@ pub fn save_oauth_session(
     expires_at: Option<u64>,
     meta: Option<OauthMeta>,
 ) -> Result<()> {
-    let auth = oauth_auth(provider, access_token, refresh_token, expires_at, meta)?;
+    let mut auth = oauth_auth(provider, access_token, refresh_token, expires_at, meta)?;
+    // Imported CLI sessions can already be near expiry. Canonicalize before
+    // either store is written so a newly created client never receives a token
+    // that this refresh immediately revokes.
+    refresh_oauth_in_place(&mut auth)?;
     save_auth(&auth)?;
-    // Best-effort dual-write for failover; active login already succeeded.
-    let _ = save_provider_session(&auth);
+    save_provider_session(&auth)?;
     Ok(())
 }
 
@@ -555,6 +661,9 @@ fn save_provider_session_at(path: &Path, auth: &Auth) -> Result<()> {
         ));
     }
     let mut map = read_sessions_at(path);
+    if map.get(id) == Some(auth) {
+        return Ok(());
+    }
     map.insert(id.to_string(), auth.clone());
     write_sessions_at(path, &map)
 }
@@ -569,7 +678,8 @@ pub fn save_provider_oauth(
     meta: Option<OauthMeta>,
 ) -> Result<()> {
     ensure_dirs()?;
-    let auth = oauth_auth(provider, access_token, refresh_token, expires_at, meta)?;
+    let mut auth = oauth_auth(provider, access_token, refresh_token, expires_at, meta)?;
+    refresh_oauth_in_place(&mut auth)?;
     save_provider_session(&auth)
 }
 
@@ -581,9 +691,10 @@ fn save_provider_session(auth: &Auth) -> Result<()> {
 /// Load a usable bearer for a failover provider from the per-provider OAuth
 /// store (refreshing if needed). `None` if no session or refresh failed hard.
 pub fn load_provider_oauth_token(provider_id: &str) -> Option<String> {
-    load_provider_oauth_token_at(&crate::config::provider_sessions_path(), provider_id)
+    resolve_oauth_access_token(provider_id).ok().flatten()
 }
 
+#[cfg(test)]
 fn load_provider_oauth_token_at(path: &Path, provider_id: &str) -> Option<String> {
     let mut map = read_sessions_at(path);
     let mut auth = map.get(provider_id)?.clone();
@@ -845,6 +956,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
                 Some("meta-or-model-key-leftover"),
             )
             .as_deref(),
@@ -857,6 +969,7 @@ mod tests {
                 None,
                 None,
                 Some("nur-global"),
+                None,
                 Some("model-api-key"),
             )
             .as_deref(),
@@ -870,6 +983,7 @@ mod tests {
                 Some("failover-key"),
                 Some("failover-oauth"),
                 Some("nur-global"),
+                None,
                 Some("model-api-key"),
             )
             .as_deref(),
@@ -883,15 +997,30 @@ mod tests {
                 None,
                 None,
                 Some("nur-global"),
+                None,
                 Some("model-api-key"),
             )
             .as_deref(),
             Some("nur-global")
         );
         assert_eq!(
-            pick_provider_credential(None, None, None, None, None, Some("model-api-key")),
+            pick_provider_credential(None, None, None, None, None, None, Some("model-api-key")),
             None,
             "META_/MODEL_/MUSE_ alone must not satisfy a provider-scoped resolve"
+        );
+        assert_eq!(
+            pick_provider_credential(
+                None,
+                None,
+                None,
+                Some("provider-oauth"),
+                None,
+                Some("legacy-providerless-key"),
+                None,
+            )
+            .as_deref(),
+            Some("provider-oauth"),
+            "provider-bound OAuth must beat a legacy providerless key"
         );
     }
 
@@ -954,6 +1083,19 @@ mod tests {
             load_provider_oauth_token_at(&path, "xai").as_deref(),
             Some("oauth-access-token-xxxxx")
         );
+        // A refreshed active session must replace the provider copy as one
+        // complete credential set; mixing rotated access/refresh tokens causes
+        // an immediate provider-side 401.
+        let refreshed = oauth_auth(
+            "xai",
+            "oauth-access-token-newxx",
+            Some("refresh-new-yyyy".into()),
+            Some(now_unix() + 7200),
+            None,
+        )
+        .unwrap();
+        save_provider_session_at(&path, &refreshed).unwrap();
+        assert_eq!(read_sessions_at(&path).get("xai"), Some(&refreshed));
         // Second provider coexists.
         let auth2 = oauth_auth("anthropic", "claude-token-zzzzzzzz", None, None, None).unwrap();
         save_provider_session_at(&path, &auth2).unwrap();

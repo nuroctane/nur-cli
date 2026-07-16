@@ -162,7 +162,7 @@ fn draw_login_method(f: &mut Frame, app: &App, area: Rect) {
     if m.can_import {
         options.push((
             "Use existing CLI session",
-            "import from Grok / Claude desktop login".into(),
+            "import from Codex / Grok / Kimi / Claude login".into(),
         ));
     }
     let mut lines: Vec<Line> = vec![
@@ -4035,4 +4035,3 @@ mod tests {
         assert_eq!(sticky_owner(&owner, &head, 4, 9), Some(0));
     }
 }
-

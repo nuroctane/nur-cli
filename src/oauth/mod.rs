@@ -15,6 +15,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub use browser::open_browser;
 pub use flows::{import_existing_session, login_browser, BrowserLoginProgress, OAuthTokens};
 
+/// Kimi managed-API device headers bound to the current OAuth device identity.
+pub fn kimi_request_headers() -> Result<Vec<(&'static str, String)>> {
+    flows::kimi::request_headers()
+}
+
 pub fn now_unix() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
