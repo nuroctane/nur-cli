@@ -1,14 +1,14 @@
 //! Live model discovery for the `/model` picker.
 //!
-//! Almost every provider in [`crate::providers`] is OpenAI-compatible and
-//! answers `GET {base_url}/models` with `{ "data": [ { "id": … } ] }`. This
-//! fetches that list (blocking — call from a background thread, same pattern as
-//! the OAuth flow) so the picker can show what a provider actually offers
-//! instead of making the user memorize model ids.
+//! Almost every provider answers `GET {base_url}/models` (OpenAI-shaped
+//! `{ "data": [ { "id": … } ] }` or a provider-specific catalog URL).
 //!
-//! Provider-specific quirks (Anthropic headers, GitHub catalog URL, Thinking
-//! Machines curated catalog merge) live here so every API key / OAuth session
-//! gets a full, usable list.
+//! **Only models returned by the live call for the current credentials are
+//! listed.** We do **not** merge hardcoded soft catalogs — those advertised
+//! models the account/plan cannot use (and caused Sonnet 404s when retired
+//! ids were padded into Anthropic's list). Works the same for API keys and
+//! OAuth: auth headers are built from the key string the caller already
+//! resolved via `auth::resolve_api_key_for`.
 
 use serde::Deserialize;
 
@@ -26,71 +26,49 @@ struct ModelEntry {
     name: String,
 }
 
-/// Known Thinking Machines / Tinker model ids (from their published catalog).
-/// Live `/models` can be sparse or incomplete; we merge these so a TINKER key
-/// can switch to any advertised model, not just the default Inkling.
-const THINKING_MACHINES_CATALOG: &[&str] = &[
-    "thinkingmachines/Inkling",
-    "thinkingmachines/Inkling:peft:262144",
-    "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16",
-    "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16:peft:262144",
-    "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16",
-    "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16:peft:262144",
-    "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
-    "moonshotai/Kimi-K2.6",
-    "moonshotai/Kimi-K2.6:peft:131072",
-    "Qwen/Qwen3.6-35B-A3B",
-    "Qwen/Qwen3.6-27B",
-    "Qwen/Qwen3.5-397B-A17B",
-    "Qwen/Qwen3.5-397B-A17B:peft:262144",
-    "Qwen/Qwen3.5-35B-A3B-Base",
-    "Qwen/Qwen3.5-9B",
-    "Qwen/Qwen3.5-9B-Base",
-    "Qwen/Qwen3.5-4B",
-    "Qwen/Qwen3-8B",
-    "openai/gpt-oss-120b",
-    "openai/gpt-oss-120b:peft:131072",
-    "openai/gpt-oss-20b",
-    "deepseek-ai/DeepSeek-V3.1",
-];
-
-/// Fetch the provider's model ids.
+/// Fetch the provider's model ids for **this** api_key / OAuth token.
 ///
 /// `base_url` is the catalog base (no trailing slash required).
-/// `provider_id` (optional) enables provider-specific auth headers / URL
-/// rewrites and catalog merges.
+/// `provider_id` enables provider-specific auth headers / URL rewrites only —
+/// never invents models the host did not return.
 pub fn fetch_model_ids(
     base_url: &str,
     api_key: &str,
     provider_id: Option<&str>,
 ) -> Result<Vec<String>, String> {
     let pid = provider_id.unwrap_or("");
+    if api_key.trim().is_empty() {
+        // key_optional local servers still answer /models without auth.
+        let p = crate::providers::by_id(pid);
+        if !p.map(|x| x.key_optional).unwrap_or(false) {
+            return Err(
+                "no credentials for this provider — /login (API key or browser) first, then /model"
+                    .into(),
+            );
+        }
+    }
+
     let urls = model_list_urls(base_url, pid);
     let mut last_err = String::from("no /models endpoint tried");
 
     for url in urls {
         match fetch_once(&url, api_key, pid) {
-            Ok(mut ids) => {
-                merge_catalog(pid, &mut ids);
+            Ok(ids) => {
                 if ids.is_empty() {
-                    last_err = "provider returned no models".into();
+                    last_err = "provider returned no models for this credential".into();
                     continue;
                 }
+                // Live list only — do not merge static catalogs.
                 return Ok(ids);
             }
             Err(e) => last_err = e,
         }
     }
 
-    // Soft fallback: curated catalog when the live list is unreachable.
-    if let Some(cat) = static_catalog(pid) {
-        let mut ids: Vec<String> = cat.iter().map(|s| (*s).to_string()).collect();
-        ids.sort_unstable();
-        ids.dedup();
-        return Ok(ids);
-    }
-
-    Err(last_err)
+    Err(format!(
+        "{last_err} · only live /models for your key or OAuth is shown — no offline catalog. \
+         Type a model id with /model <id> if you know one."
+    ))
 }
 
 fn model_list_urls(base_url: &str, provider_id: &str) -> Vec<String> {
@@ -129,7 +107,6 @@ fn fetch_once(url: &str, api_key: &str, provider_id: &str) -> Result<Vec<String>
         match provider_id {
             "anthropic" => {
                 // Console API keys → x-api-key. Claude OAuth (sk-ant-oat*) → Bearer + beta.
-                // Sending x-api-key for OAuth tokens causes 401 for some accounts.
                 req = req.header("anthropic-version", "2023-06-01");
                 if crate::api::anthropic::is_oauth_token(api_key) {
                     req = req
@@ -150,7 +127,6 @@ fn fetch_once(url: &str, api_key: &str, provider_id: &str) -> Result<Vec<String>
             }
         }
     }
-    // Prefer JSON; some hosts misbehave without Accept.
     req = req.header("Accept", "application/json");
 
     let res = req.send().map_err(|e| format!("request failed: {e}"))?;
@@ -159,10 +135,9 @@ fn fetch_once(url: &str, api_key: &str, provider_id: &str) -> Result<Vec<String>
     if !status.is_success() {
         let snippet: String = body.trim().chars().take(160).collect();
         let mut msg = format!("HTTP {} · {}", status.as_u16(), snippet);
-        // Multi-provider footgun: wrong credential type for this host.
         if matches!(status.as_u16(), 400 | 401 | 403) {
             msg.push_str(
-                " · tip: use this provider's /login or its env key (XAI_API_KEY, OPENAI_API_KEY, …) — a leftover MODEL_API_KEY must not be sent to other hosts",
+                " · tip: use this provider's /login (key or OAuth) — wrong host credentials hide the real plan list",
             );
         }
         return Err(msg);
@@ -171,74 +146,9 @@ fn fetch_once(url: &str, api_key: &str, provider_id: &str) -> Result<Vec<String>
     let mut ids = parse_model_ids(&body)?;
     ids.retain(|id| !id.trim().is_empty());
     if ids.is_empty() {
-        return Err("provider returned no models".to_string());
+        return Err("provider returned no models for this credential".to_string());
     }
     Ok(ids)
-}
-
-/// Common xAI chat ids — soft fallback if live list fails (wrong key, outage).
-const XAI_CATALOG: &[&str] = &[
-    "grok-4",
-    "grok-4.3",
-    "grok-4.5",
-    "grok-4.20-0309-reasoning",
-    "grok-4.20-0309-non-reasoning",
-    "grok-4.20-multi-agent-0309",
-    "grok-build-0.1",
-    "grok-code-fast-1",
-    "grok-3",
-    "grok-3-mini",
-    "grok-2-1212",
-    "grok-2-vision-1212",
-];
-
-/// Anthropic Claude model ids (soft fallback when `/v1/models` is unreachable).
-const ANTHROPIC_CATALOG: &[&str] = &[
-    "claude-opus-4-20250514",
-    "claude-sonnet-4-20250514",
-    "claude-3-7-sonnet-20250219",
-    "claude-3-5-sonnet-20241022",
-    "claude-3-5-haiku-20241022",
-    "claude-3-opus-20240229",
-    "claude-3-haiku-20240307",
-    "claude-sonnet-4-5",
-    "claude-haiku-4-5",
-    "claude-opus-4-1",
-];
-
-/// GitHub Models soft catalog (when catalog API is blocked).
-const GITHUB_MODELS_CATALOG: &[&str] = &[
-    "openai/gpt-4o",
-    "openai/gpt-4o-mini",
-    "openai/gpt-4.1",
-    "openai/o1",
-    "openai/o3-mini",
-    "meta/Llama-3.3-70B-Instruct",
-    "microsoft/Phi-4",
-    "deepseek/DeepSeek-R1",
-    "xai/grok-3",
-];
-
-fn static_catalog(provider_id: &str) -> Option<&'static [&'static str]> {
-    match provider_id {
-        "thinkingmachines" => Some(THINKING_MACHINES_CATALOG),
-        "xai" => Some(XAI_CATALOG),
-        "anthropic" => Some(ANTHROPIC_CATALOG),
-        "github-models" => Some(GITHUB_MODELS_CATALOG),
-        _ => None,
-    }
-}
-
-fn merge_catalog(provider_id: &str, ids: &mut Vec<String>) {
-    if let Some(cat) = static_catalog(provider_id) {
-        for m in cat {
-            if !ids.iter().any(|x| x == m) {
-                ids.push((*m).to_string());
-            }
-        }
-        ids.sort_unstable();
-        ids.dedup();
-    }
 }
 
 /// Parse a `/models` (or GitHub catalog) response body into sorted, de-duplicated ids.
@@ -349,28 +259,35 @@ mod tests {
 
     #[test]
     fn dedupes_and_drops_blanks() {
-        let body = r#"{"data":[{"id":"a"},{"id":"a"},{"id":" "}]}"#;
-        assert_eq!(parse_model_ids(body).unwrap(), vec!["a"]);
+        let body = r#"{"data":[{"id":"a"},{"id":""},{"id":"a"},{"id":"b"}]}"#;
+        assert_eq!(parse_model_ids(body).unwrap(), vec!["a", "b"]);
     }
 
     #[test]
-    fn rejects_garbage() {
-        assert!(parse_model_ids("not json").is_err());
+    fn empty_key_errors_for_non_local_providers() {
+        let err = fetch_model_ids("https://api.x.ai/v1", "", Some("xai")).unwrap_err();
+        assert!(
+            err.contains("no credentials") || err.contains("/login"),
+            "got: {err}"
+        );
     }
 
     #[test]
-    fn thinking_machines_catalog_has_more_than_inkling() {
-        let cat = static_catalog("thinkingmachines").unwrap();
-        assert!(cat.len() > 5);
-        assert!(cat.iter().any(|m| m.contains("Inkling")));
-        assert!(cat.iter().any(|m| m.contains("Kimi") || m.contains("Qwen")));
-    }
-
-    #[test]
-    fn merge_catalog_adds_missing() {
-        let mut ids = vec!["thinkingmachines/Inkling".to_string()];
-        merge_catalog("thinkingmachines", &mut ids);
-        assert!(ids.len() > 1);
-        assert!(ids.iter().any(|m| m.contains("gpt-oss")));
+    fn no_soft_catalog_when_network_unreachable() {
+        // Garbage host: must fail with live error, not invent a soft list.
+        let err = fetch_model_ids(
+            "https://127.0.0.1:1",
+            "sk-test-not-real",
+            Some("openai"),
+        )
+        .unwrap_err();
+        assert!(
+            !err.contains("grok-4"),
+            "must not inject xAI soft catalog: {err}"
+        );
+        assert!(
+            err.contains("live /models") || err.contains("request failed") || err.contains("HTTP"),
+            "got: {err}"
+        );
     }
 }

@@ -18,6 +18,48 @@ pub fn is_oauth_token(key: &str) -> bool {
 /// Anthropic beta header required for OAuth bearer tokens against the API.
 pub const OAUTH_BETA: &str = "oauth-2025-04-20";
 
+/// Default Sonnet on the Claude API (platform.claude.com, mid-2026).
+/// **Not** `claude-sonnet-4-20250514` — Sonnet 4 is retired on the first-party
+/// Claude API (still on some Bedrock/GCP endpoints only).
+pub const DEFAULT_SONNET: &str = "claude-sonnet-5";
+
+/// Map retired / short / product names → a Claude API id that still works.
+///
+/// Source of truth: https://platform.claude.com/docs/en/about-claude/models/overview
+/// (Claude Sonnet 5 = `claude-sonnet-5`, Opus 4.8 = `claude-opus-4-8`, …).
+/// Applies to **both** API keys and Claude OAuth — same Messages model ids.
+pub fn normalize_model_id(model: &str) -> String {
+    let m = model.trim();
+    if m.is_empty() {
+        return DEFAULT_SONNET.to_string();
+    }
+    // Exact retired Sonnet 4 snapshots → current Sonnet 5 (Claude API only).
+    match m {
+        "claude-sonnet-4"
+        | "claude-sonnet-4-20250514"
+        | "claude-4-sonnet"
+        | "sonnet-4"
+        | "sonnet4" => return DEFAULT_SONNET.to_string(),
+        // Product-ish shorts
+        "sonnet" | "sonnet-5" | "claude-sonnet" => return DEFAULT_SONNET.to_string(),
+        "opus" | "opus-4.8" | "opus-4-8" | "claude-opus" => {
+            return "claude-opus-4-8".to_string()
+        }
+        "haiku" | "haiku-4.5" | "haiku-4-5" => return "claude-haiku-4-5".to_string(),
+        // Incomplete aliases that 404 without the dated suffix / current id
+        "claude-opus-4" | "claude-opus-4-20250514" => {
+            // Opus 4 GA snapshot is also aging out; prefer current Opus 4.8.
+            return "claude-opus-4-8".to_string();
+        }
+        "claude-opus-4-1" => return "claude-opus-4-1-20250805".to_string(),
+        "claude-sonnet-4-5" => return "claude-sonnet-4-5-20250929".to_string(),
+        "claude-opus-4-5" => return "claude-opus-4-5-20251101".to_string(),
+        "claude-haiku-4-5" => return "claude-haiku-4-5".to_string(), // official alias
+        _ => {}
+    }
+    m.to_string()
+}
+
 /// Build a Messages API body from a Responses request.
 pub fn build_body(req: &ResponseRequest, stream: bool) -> Value {
     let mut system: Option<String> = req.instructions.clone().filter(|s| !s.is_empty());
@@ -31,8 +73,9 @@ pub fn build_body(req: &ResponseRequest, stream: bool) -> Value {
     // Anthropic requires alternating user/assistant; merge consecutive same roles.
     let messages = coalesce_roles(messages);
 
+    let model = normalize_model_id(&req.model);
     let mut body = json!({
-        "model": req.model,
+        "model": model,
         "max_tokens": 16_384,
         "messages": messages,
     });
@@ -479,9 +522,21 @@ mod tests {
     }
 
     #[test]
+    fn normalize_rewrites_retired_sonnet4() {
+        assert_eq!(
+            normalize_model_id("claude-sonnet-4-20250514"),
+            DEFAULT_SONNET
+        );
+        assert_eq!(normalize_model_id("claude-sonnet-4"), DEFAULT_SONNET);
+        assert_eq!(normalize_model_id("claude-sonnet-5"), "claude-sonnet-5");
+        assert_eq!(normalize_model_id("claude-opus-4-8"), "claude-opus-4-8");
+    }
+
+    #[test]
     fn body_is_messages_shape_not_chat_completions() {
         let b = build_body(&req(), false);
-        assert_eq!(b["model"], "claude-sonnet-4-20250514");
+        // Retired Sonnet 4 id must not be sent to the first-party Claude API.
+        assert_eq!(b["model"], DEFAULT_SONNET);
         assert!(b.get("max_tokens").is_some());
         assert!(b.get("system").is_some());
         assert!(b.get("messages").is_some());

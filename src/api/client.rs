@@ -442,9 +442,22 @@ impl ApiClient {
                         .await;
                     continue;
                 }
+                let mut msg = parse_error_message(&text).unwrap_or(text);
+                let code = status.as_u16();
+                if code == 404
+                    || msg.to_ascii_lowercase().contains("not_found")
+                    || msg.to_ascii_lowercase().contains("model:")
+                        && msg.to_ascii_lowercase().contains("not found")
+                {
+                    msg.push_str(&format!(
+                        " · tip: model id not available on your plan — /model for the live list \
+                         (current Sonnet is {})",
+                        super::anthropic::DEFAULT_SONNET
+                    ));
+                }
                 return Err(MuseError::Api {
-                    status: status.as_u16(),
-                    message: parse_error_message(&text).unwrap_or(text),
+                    status: code,
+                    message: msg,
                 });
             }
             let v: serde_json::Value = serde_json::from_str(&text)

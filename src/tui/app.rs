@@ -3738,10 +3738,19 @@ impl App {
         if id.is_empty() {
             return;
         }
-        self.cfg.model = id.to_string();
+        // Anthropic: rewrite retired/short ids so a saved `claude-sonnet-4-…`
+        // does not 404 on the first-party Claude API (key or OAuth).
+        let id = if self.cfg.provider == "anthropic"
+            || self.cfg.base_url.contains("api.anthropic.com")
+        {
+            crate::api::anthropic::normalize_model_id(id)
+        } else {
+            id.to_string()
+        };
+        self.cfg.model = id.clone();
         let _ = crate::config::save_config(&self.cfg);
         if let Some(s) = &mut self.session {
-            s.model = id.to_string();
+            s.model = id.clone();
         }
         if let Some(u) = &mut self.usage {
             u.set_model(id.to_string());
