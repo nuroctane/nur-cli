@@ -420,6 +420,7 @@ impl ApiClient {
             let mut stream = res.bytes_stream();
             let mut parser = super::sse::SseParser::new();
             let mut final_response: Option<ApiResponse> = None;
+            let mut streamed_items: Vec<super::types::OutputItem> = Vec::new();
             let mut saw_any_data = false;
             let mut buffered: Vec<u8> = Vec::new();
             // If CT was empty/ambiguous, accumulate first chunk to detect pure JSON.
@@ -469,7 +470,12 @@ impl ApiClient {
                         }
                         saw_any_data = true;
                         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
-                            if let Err(e) = handle_sse_json(&v, &mut on_event, &mut final_response) {
+                            if let Err(e) = handle_sse_json(
+                                &v,
+                                &mut on_event,
+                                &mut final_response,
+                                &mut streamed_items,
+                            ) {
                                 if attempt < 3 {
                                     last_err = Some(e);
                                     break;
@@ -492,7 +498,12 @@ impl ApiClient {
                     }
                     saw_any_data = true;
                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
-                        if let Err(e) = handle_sse_json(&v, &mut on_event, &mut final_response) {
+                        if let Err(e) = handle_sse_json(
+                            &v,
+                            &mut on_event,
+                            &mut final_response,
+                            &mut streamed_items,
+                        ) {
                             // If server signaled failure but we have partial response, retry
                             if attempt < 3 {
                                 last_err = Some(e);
@@ -510,6 +521,17 @@ impl ApiClient {
 
             if let Some(fr) = final_response {
                 return Ok(fr);
+            }
+            // Stream ended with items but no completed event — still usable.
+            if !streamed_items.is_empty() {
+                return Ok(ApiResponse {
+                    id: None,
+                    status: Some("completed".into()),
+                    model: None,
+                    output: streamed_items,
+                    usage: None,
+                    error: None,
+                });
             }
 
             // Fallback: stream ended without completed response — if we saw deltas, try one more time non-streaming?
@@ -835,6 +857,7 @@ fn handle_sse_json(
     v: &serde_json::Value,
     on_event: &mut impl FnMut(StreamEvent),
     final_response: &mut Option<ApiResponse>,
+    streamed_items: &mut Vec<super::types::OutputItem>,
 ) -> Result<()> {
     let type_ = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
     if type_.ends_with("output_text.delta") {
@@ -845,12 +868,41 @@ fn handle_sse_json(
         if let Some(d) = v.get("delta").and_then(|d| d.as_str()) {
             on_event(StreamEvent::ReasoningDelta(d.to_string()));
         }
+    } else if type_ == "response.output_item.done" {
+        // Codex / ChatGPT OAuth deliver the real output (messages + function_calls)
+        // as streaming output_item.done events. `response.completed` often has
+        // empty `output: []` and only carries id/usage — if we only parse
+        // completed, tools silently disappear and the agent "only plans".
+        if let Some(item_val) = v.get("item") {
+            match serde_json::from_value::<super::types::OutputItem>(item_val.clone()) {
+                Ok(super::types::OutputItem::Other) => {
+                    // Unknown shape — keep raw for debugging later if needed.
+                }
+                Ok(item) => {
+                    streamed_items.push(item);
+                }
+                Err(_) => {
+                    // Tolerate partial/unrecognized items; completed may still help.
+                }
+            }
+        }
     } else if type_ == "response.completed"
         || type_ == "response.done"
         || type_ == "response.incomplete"
     {
         if let Some(resp) = v.get("response") {
-            let parsed: ApiResponse = serde_json::from_value(resp.clone())?;
+            let mut parsed: ApiResponse = serde_json::from_value(resp.clone())?;
+            // Prefer streamed items when completed.output is empty or thinner
+            // (fewer tool calls) than what we already collected.
+            if !streamed_items.is_empty() {
+                let streamed_calls = count_tool_items(streamed_items);
+                let completed_calls = count_tool_items(&parsed.output);
+                if parsed.output.is_empty() || streamed_calls > completed_calls {
+                    parsed.output = std::mem::take(streamed_items);
+                } else {
+                    streamed_items.clear();
+                }
+            }
             on_event(StreamEvent::Completed(parsed.clone()));
             *final_response = Some(parsed);
         }
@@ -868,6 +920,19 @@ fn handle_sse_json(
         });
     }
     Ok(())
+}
+
+fn count_tool_items(items: &[super::types::OutputItem]) -> usize {
+    items
+        .iter()
+        .filter(|i| {
+            matches!(
+                i,
+                super::types::OutputItem::FunctionCall { .. }
+                    | super::types::OutputItem::CustomToolCall { .. }
+            )
+        })
+        .count()
 }
 
 /// ChatGPT/Codex (and some gateways) return SSE even when Content-Type is wrong.
@@ -898,13 +963,26 @@ fn consume_sse_text(
     // Flush trailing event if the body lacked a final blank line.
     events.extend(parser.push(b"\n\n"));
     let mut final_response: Option<ApiResponse> = None;
+    let mut streamed_items: Vec<super::types::OutputItem> = Vec::new();
     for data in events {
         if data.trim() == "[DONE]" {
             continue;
         }
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
-            handle_sse_json(&v, on_event, &mut final_response)?;
+            handle_sse_json(&v, on_event, &mut final_response, &mut streamed_items)?;
         }
+    }
+    // If the stream closed after output_item.done but without completed, still
+    // surface what we collected (rare, but better than total silence).
+    if final_response.is_none() && !streamed_items.is_empty() {
+        final_response = Some(ApiResponse {
+            id: None,
+            status: Some("completed".into()),
+            model: None,
+            output: streamed_items,
+            usage: None,
+            error: None,
+        });
     }
     final_response.ok_or_else(|| {
         MuseError::Other(
@@ -1010,6 +1088,28 @@ data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\
             .expect("parse codex-shaped sse");
         assert_eq!(resp.id.as_deref(), Some("resp_1"));
         assert_eq!(resp.status.as_deref(), Some("completed"));
+    }
+
+    #[test]
+    fn codex_output_item_done_tools_survive_empty_completed_output() {
+        // Real Codex/ChatGPT OAuth pattern: tools arrive as output_item.done;
+        // response.completed often has output: [].
+        let body = r#"event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"c1","name":"list_dir","arguments":"{\"path\":\".\"}"}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"looking around"}]}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_tools","status":"completed","output":[],"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}
+
+"#;
+        let resp = consume_sse_text(body, &mut |_ev| {}).expect("parse");
+        assert_eq!(resp.id.as_deref(), Some("resp_tools"));
+        let calls = resp.function_calls();
+        assert_eq!(calls.len(), 1, "function_call must not be dropped: {resp:?}");
+        assert_eq!(calls[0].name, "list_dir");
+        assert!(resp.output_text().contains("looking around"));
     }
 
     #[test]
