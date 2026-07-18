@@ -393,6 +393,11 @@ impl AgentRunner {
         let mut tool_seq: u64 = 0;
         // Prevent compact→still-hot→compact infinite loop within one user turn.
         let mut did_auto_compact = false;
+        // Codex/ChatGPT free (and some hosts) sometimes emit only a reasoning
+        // summary and zero tool calls / zero answer text. Retry once with a
+        // hard nudge + tool_choice=required before giving up.
+        let mut empty_tool_stalls: u8 = 0;
+        let mut force_tool_choice = false;
 
         loop {
             if cancel.is_cancelled() {
@@ -436,12 +441,20 @@ impl AgentRunner {
                 mode_now.label()
             )));
 
+            let tool_choice = if force_tool_choice {
+                // Reset after one attempt so later normal turns stay "auto".
+                force_tool_choice = false;
+                "required"
+            } else {
+                "auto"
+            };
+
             let req = ResponseRequest {
                 model: self.config.model.clone(),
                 input: Value::Array(session.input_items.clone()),
                 instructions: Some(instructions),
                 tools: Some(tools.clone()),
-                tool_choice: Some("auto".into()),
+                tool_choice: Some(tool_choice.into()),
                 store: Some(false),
                 include: Some(vec!["reasoning.encrypted_content".into()]),
                 reasoning: Some(ReasoningConfig {
@@ -495,12 +508,58 @@ impl AgentRunner {
 
             let calls = resp.function_calls();
             let text = resp.output_text();
+            let unknown_items = resp
+                .output
+                .iter()
+                .filter(|i| matches!(i, crate::api::types::OutputItem::Other))
+                .count();
 
             if text_deltas == 0 && !text.is_empty() {
                 let _ = tx.send(AgentEvent::AssistantMessage(text.clone()));
             }
 
             if calls.is_empty() {
+                // Reasoning-only / empty completion: model "planned" but never
+                // answered or called tools. Common on ChatGPT free + Codex OAuth
+                // with some gpt-5.* models. Retry once before surfacing a note.
+                let emptyish = text.trim().is_empty();
+                if emptyish && empty_tool_stalls < 1 {
+                    empty_tool_stalls += 1;
+                    force_tool_choice = true;
+                    let note = if unknown_items > 0 {
+                        format!(
+                            "model returned no usable tools (and {unknown_items} unparsed output item(s)) — \
+                             retrying with required tool use…"
+                        )
+                    } else {
+                        "model returned only a planning thought (no tools, no answer) — \
+                         retrying with required tool use…"
+                            .into()
+                    };
+                    let _ = tx.send(AgentEvent::Status(note));
+                    session.input_items.push(user_text_item(
+                        "[harness] You ended with only internal reasoning and zero tool calls \
+                         and zero user-visible text. That is not done.\n\
+                         Immediately call tools to inspect the workspace (list_dir on `.`, \
+                         grep, read_file on README/Cargo.toml/package.json). \
+                         Do not only plan. Do not reply with an empty message.",
+                    ));
+                    let _ = session.save();
+                    continue;
+                }
+
+                let text = if emptyish {
+                    let hint = empty_turn_hint(&self.config.provider, &self.config.model);
+                    let msg = format!(
+                        "I only produced a short planning thought and never called tools or \
+                         wrote an answer (nothing to show).\n\n{hint}"
+                    );
+                    let _ = tx.send(AgentEvent::AssistantMessage(msg.clone()));
+                    msg
+                } else {
+                    text
+                };
+
                 usage.set_state("idle");
                 session.push_assistant(&text);
                 let _ = session.save();
@@ -1320,6 +1379,31 @@ fn multimodal_user_item(text: &str, media: &[MediaAttach]) -> Value {
         .map(|m| (m.kind.api_type(), m.kind.url_field(), m.data_url.as_str()))
         .collect();
     user_multimodal_item(text, &parts)
+}
+
+/// User-facing hint when the model ends a turn with no tools and no text.
+fn empty_turn_hint(provider: &str, model: &str) -> String {
+    let openai_oauth = provider == "openai"
+        || std::env::var("NUR_PROVIDER")
+            .or_else(|_| std::env::var("META_PROVIDER"))
+            .map(|p| p.eq_ignore_ascii_case("openai"))
+            .unwrap_or(false);
+    // ChatGPT free OAuth often returns reasoning-only on Codex backend.
+    if openai_oauth || model.contains("sol") || model.starts_with("gpt-5") {
+        return format!(
+            "Likely causes:\n\
+             • **ChatGPT OAuth / free plan** on the Codex backend — some models emit only a \
+               reasoning summary and skip tool calls. Paid ChatGPT / an **OpenAI API key** \
+               (`/login` → OpenAI key) is more reliable for agent tools.\n\
+             • Model `{model}` may not be fully tool-capable on this endpoint — try \
+               `/model` and pick another, or switch provider (`/login`).\n\
+             • Retry the same prompt once; nur already auto-retried with required tool use."
+        );
+    }
+    format!(
+        "The model (`{model}` via `{provider}`) returned no tools and no answer after a \
+         forced retry. Try `/model`, another provider via `/login`, or rephrase the request."
+    )
 }
 
 fn should_auto_compact(usage: &UsageTracker, cfg: &Config) -> bool {

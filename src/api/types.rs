@@ -147,13 +147,43 @@ pub enum OutputItem {
         call_id: Option<String>,
         #[serde(default)]
         name: Option<String>,
-        #[serde(default)]
+        /// Codex/OpenAI usually send a JSON **string**; some gateways send an object.
+        #[serde(default, deserialize_with = "deserialize_args_string")]
         arguments: Option<String>,
+        #[serde(default)]
+        status: Option<String>,
+    },
+    /// Alternate name some Responses/Codex builds use for the same shape.
+    #[serde(rename = "custom_tool_call")]
+    CustomToolCall {
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        call_id: Option<String>,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_args_string")]
+        arguments: Option<String>,
+        #[serde(default)]
+        input: Option<String>,
         #[serde(default)]
         status: Option<String>,
     },
     #[serde(other)]
     Other,
+}
+
+/// Accept `arguments` as a JSON string or as a raw object/array (stringify it).
+fn deserialize_args_string<'de, D>(deserializer: D) -> std::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<Value>::deserialize(deserializer)?;
+    Ok(match v {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) => Some(s),
+        Some(other) => Some(other.to_string()),
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -208,18 +238,37 @@ impl ApiResponse {
     pub fn function_calls(&self) -> Vec<FunctionCallRef> {
         let mut calls = Vec::new();
         for item in &self.output {
-            if let OutputItem::FunctionCall {
-                call_id,
-                name,
-                arguments,
-                ..
-            } = item
-            {
-                calls.push(FunctionCallRef {
-                    call_id: call_id.clone().unwrap_or_default(),
-                    name: name.clone().unwrap_or_default(),
-                    arguments: arguments.clone().unwrap_or_else(|| "{}".into()),
-                });
+            match item {
+                OutputItem::FunctionCall {
+                    call_id,
+                    name,
+                    arguments,
+                    ..
+                } => {
+                    calls.push(FunctionCallRef {
+                        call_id: call_id.clone().unwrap_or_default(),
+                        name: name.clone().unwrap_or_default(),
+                        arguments: arguments.clone().unwrap_or_else(|| "{}".into()),
+                    });
+                }
+                OutputItem::CustomToolCall {
+                    call_id,
+                    name,
+                    arguments,
+                    input,
+                    ..
+                } => {
+                    let args = arguments
+                        .clone()
+                        .or_else(|| input.clone())
+                        .unwrap_or_else(|| "{}".into());
+                    calls.push(FunctionCallRef {
+                        call_id: call_id.clone().unwrap_or_default(),
+                        name: name.clone().unwrap_or_default(),
+                        arguments: args,
+                    });
+                }
+                _ => {}
             }
         }
         calls
@@ -341,8 +390,66 @@ pub fn replay_output_items(output: &[OutputItem]) -> Vec<Value> {
                     "arguments": arguments
                 }));
             }
+            OutputItem::CustomToolCall {
+                call_id,
+                name,
+                arguments,
+                input,
+                ..
+            } => {
+                let args = arguments.clone().or_else(|| input.clone());
+                items.push(serde_json::json!({
+                    "type": "function_call",
+                    "call_id": call_id,
+                    "name": name,
+                    "arguments": args
+                }));
+            }
             OutputItem::Other => {}
         }
     }
     items
+}
+
+#[cfg(test)]
+mod output_item_tests {
+    use super::*;
+
+    #[test]
+    fn function_call_arguments_accept_object() {
+        let raw = r#"{
+          "id": "r1",
+          "output": [
+            {
+              "type": "function_call",
+              "call_id": "c1",
+              "name": "list_dir",
+              "arguments": {"path": "."}
+            }
+          ]
+        }"#;
+        let resp: ApiResponse = serde_json::from_str(raw).expect("parse");
+        let calls = resp.function_calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "list_dir");
+        assert!(calls[0].arguments.contains("path"));
+    }
+
+    #[test]
+    fn custom_tool_call_is_collected() {
+        let raw = r#"{
+          "output": [
+            {
+              "type": "custom_tool_call",
+              "call_id": "c2",
+              "name": "grep",
+              "input": "{\"pattern\":\"x\"}"
+            }
+          ]
+        }"#;
+        let resp: ApiResponse = serde_json::from_str(raw).expect("parse");
+        let calls = resp.function_calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "grep");
+    }
 }

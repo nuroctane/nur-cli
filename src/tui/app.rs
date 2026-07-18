@@ -121,11 +121,22 @@ fn strip_frontmatter(s: &str) -> &str {
 pub fn scan_prompt(focus: &str) -> String {
     let body = strip_frontmatter(SCAN_SKILL_RAW).trim_end();
     let focus = focus.trim();
-    if focus.is_empty() {
-        body.to_string()
-    } else {
-        format!("{body}\n\n## Focus for this scan\nCenter the map on: {focus}\n")
+    // Hard preamble — models (esp. high-reasoning hosts) otherwise stall on
+    // "approval" without calling tools or writing the local JSON.
+    let mut s = String::from(
+        "# /scan — execute now\n\
+         Call tools this turn. Investigate the repo, then **write** \
+         `.foglamp/scan.json` (local only). Report the absolute path. \
+         Ask the user **only** before POSTing to foglamp.dev — not before \
+         exploring or writing the file. Do not end with only reasoning.\n\n",
+    );
+    s.push_str(body);
+    if !focus.is_empty() {
+        s.push_str("\n\n## Focus for this scan\nCenter the map on: ");
+        s.push_str(focus);
+        s.push('\n');
     }
+    s
 }
 
 pub const COMMANDS: &[(&str, &str)] = &[

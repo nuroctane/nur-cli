@@ -12,15 +12,35 @@ If the user gave a focus after `/scan`, center the map on that area (still show
 enough surrounding context to make it readable). With no focus, map the whole
 repository.
 
+## Critical — do not stall
+
+- **Start tools immediately.** List dirs, grep for agents/models/tools, read key
+  entrypoints. Do **not** end a turn with only reasoning.
+- **Local file first.** Write `.foglamp/scan.json` **before** any upload talk.
+  That file is the map. Path: `<cwd>/.foglamp/scan.json`.
+- **Ask only before upload.** Investigation + writing `scan.json` need no
+  special consent. Only the POST to foglamp.dev needs a clear yes from the user.
+- **Plan mode cannot write.** If writes are blocked, tell the user to
+  `Shift+Tab` to **manual** or **auto**, then continue. Do not pretend you
+  finished.
+- When the user asks "where is it" / "go ahead":
+  - If `.foglamp/scan.json` exists → print its absolute path + a short summary,
+    then upload only if they approved.
+  - If missing → investigate and write it now (do not re-ask for explore
+    permission).
+
 ## Steps
-1. Investigate the repo and build the JSON below. Write it to .foglamp/scan.json.
-2. Tell the user plainly: "This uploads a high-level summary of your architecture
-   (models, tools, integrations, and main flows — no code or secrets) to
-   foglamp.dev and creates a public, unlisted link." Continue only if they agree.
-3. Upload it (see "Publish") and capture the JSON response.
-4. Save the response to .foglamp/scan.lock.json (so a later run updates the same
-   URL). Make sure .foglamp/ is gitignored — the edit token is a secret.
-5. Open the returned url and give it to the user.
+1. **Investigate** the repo with tools (read/grep/list). Build the JSON below.
+2. **Write** it to `.foglamp/scan.json` (create `.foglamp/` if needed). Confirm
+   the path in your reply: `wrote .foglamp/scan.json (N nodes)`.
+3. **Ask once** before publish: "This uploads a high-level summary of your
+   architecture (models, tools, integrations, and main flows — no code or
+   secrets) to foglamp.dev and creates a public, unlisted link. Upload?"
+   Stop here until they say yes / go ahead / upload / publish.
+4. On yes: **Upload** (see "Publish"), capture the JSON response.
+5. Save the response to `.foglamp/scan.lock.json` (so a later run updates the
+   same URL). `.foglamp/` must stay gitignored — the edit token is a secret.
+6. Open the returned `url` and give it to the user.
 
 ## How to investigate
 - Find where AI runs: generateText / streamText / generateObject / streamObject,
@@ -112,6 +132,9 @@ Update run (a .foglamp/scan.lock.json exists) — keep the same URL:
         '{data: $d[0], editToken: $t}' \
   | curl -sS -X POST https://api.foglamp.dev/scan \
       -H 'content-type: application/json' --data @-
+
+On Windows PowerShell (no jq), first run is the same with curl.exe; for updates,
+compose JSON with the editToken from scan.lock.json yourself.
 
 The response is JSON: { "slug", "url", "editToken", "expiresAt" }. Save it to
 .foglamp/scan.lock.json, then open url. On a 422 error, fix .foglamp/scan.json

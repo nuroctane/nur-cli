@@ -1368,16 +1368,43 @@ impl App {
             self.push_error("busy — wait for the current turn to finish, then /scan".into());
             return;
         }
+        // Plan mode blocks write_file — scan must write `.foglamp/scan.json`.
+        // Lift to auto so the map is produced; upload still waits on user yes
+        // (skill step 3). Manual would also work but multi-file explore is noisy.
+        if self.permission_mode.get() == PermissionMode::Plan {
+            self.set_permission_mode(PermissionMode::Auto);
+            self.push_note(
+                Tone::Mode,
+                "scan needs writes — switched plan → auto for this map \
+                 (upload still asks first)"
+                    .into(),
+            );
+        }
         let focus = arg.trim();
         let display = if focus.is_empty() {
             "/scan · map this codebase → foglamp".to_string()
         } else {
             format!("/scan · {focus}")
         };
-        self.push_note(
-            Tone::Skill,
-            "scanning the codebase → foglamp map · you'll be asked before anything uploads".into(),
-        );
+        // If a prior local map exists, surface the path so "where is it" is obvious.
+        let local = self.cwd.join(".foglamp").join("scan.json");
+        if local.is_file() {
+            self.push_note(
+                Tone::Skill,
+                format!(
+                    "existing local map · {} · re-scan will refresh it · \
+                     upload only after you say yes",
+                    local.display()
+                ),
+            );
+        } else {
+            self.push_note(
+                Tone::Skill,
+                "scanning → local `.foglamp/scan.json` first · \
+                 you'll be asked before anything uploads to foglamp.dev"
+                    .into(),
+            );
+        }
         self.start_turn_labeled(&display, &scan_prompt(focus));
     }
 
