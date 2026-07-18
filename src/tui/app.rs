@@ -152,6 +152,9 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/manual", "switch to manual mode (approve tools)"),
     ("/auto", "switch to auto-approve mode"),
     ("/todos", "show session task list"),
+    ("/graph", "inline live execution-graph card for the current turn"),
+    ("/steer", "inject a message into the running turn (no cancel): /steer <text>"),
+    ("/draw", "tldraw offline boards: /draw <file.tldraw> · install · /draw <idea>"),
     ("/memory", "show ~/.nur/memory.md excerpt"),
     ("/skills", "list installed skills"),
     ("/graphify", "knowledge graph: status | query | path | explain | extract"),
@@ -159,6 +162,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/ruflo", "vector memory / swarm: status | search | store"),
     ("/ecosystem", "ecosystem readiness (graphify · plur · ruflo · excalidraw · …)"),
     ("/usage", "token usage + cost for this session  (/cost)"),
+    ("/cost", "token usage + cost for this session  (alias of /usage)"),
     ("/budget", "optional caps: /budget [cost|tokens|turns] <n> · clear · save  (0/off = ∞)"),
     ("/turns", "agent rounds per prompt: /turns [n]  (0 = unlimited · alias of /budget turns)"),
     ("/poor", "cost-saver prompt (skip PLUR/skills/memory) · shows budget status · /poor status"),
@@ -177,6 +181,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/model", "show and switch models  (/models)"),
     ("/models", "show and switch models  (alias of /model)"),
     ("/plugins", "browse · install · enable marketplace plugins"),
+    ("/plugin", "browse · install · enable marketplace plugins  (alias of /plugins)"),
     ("/effort", "reasoning effort: minimal|low|medium|high|xhigh"),
     ("/sessions", "browse & open past sessions  (same as /resume)"),
     ("/resume", "browse & open past sessions  (same as /sessions)"),
@@ -186,7 +191,9 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/bro", "chill mode: plain words, no jargon, no preamble (toggle)"),
     ("/btw", "add a one-off note to your next message"),
     ("/codesearch", "fast ripgrep over the workspace  (/cs)"),
+    ("/cs", "fast ripgrep over the workspace  (alias of /codesearch)"),
     ("/mc", "manage MCP servers via the executor gateway  (/mcp)"),
+    ("/mcp", "manage MCP servers via the executor gateway  (alias of /mc)"),
     ("/login", "provider · API key or browser sign-in"),
     ("/logout", "clear the stored API key"),
     ("/config", "show config + data paths"),
@@ -194,6 +201,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/tips", "mouse + keyboard interaction tips"),
     ("/bug", "how to report an issue"),
     ("/exit", "quit"),
+    ("/quit", "quit  (alias of /exit)"),
 ];
 
 pub enum Cell {
