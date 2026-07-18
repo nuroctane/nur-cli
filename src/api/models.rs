@@ -203,9 +203,24 @@ fn fetch_once(
         let snippet: String = body.trim().chars().take(160).collect();
         let mut msg = format!("HTTP {} · {}", status.as_u16(), snippet);
         if matches!(status.as_u16(), 400 | 401 | 403) {
-            msg.push_str(
-                " · tip: use this provider's /login (key or OAuth) — wrong host credentials hide the real plan list",
-            );
+            // Name the exact key and only mention browser sign-in where it still
+            // exists — after v0.16 the four first-party CLIs are API-key only.
+            let tip = crate::providers::by_id(provider_id)
+                .map(|p| {
+                    if p.browser_auth {
+                        format!(
+                            " · tip: run /login for {} (API key or browser sign-in)",
+                            p.name
+                        )
+                    } else {
+                        format!(
+                            " · tip: set {} or run /login with an API key for {}",
+                            p.env_key, p.name
+                        )
+                    }
+                })
+                .unwrap_or_else(|| " · tip: check this provider's API key".into());
+            msg.push_str(&tip);
         }
         return Err(ModelFetchError {
             message: msg,

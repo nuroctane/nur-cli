@@ -129,6 +129,10 @@ const MULTI_FILE_PACKS: &[(&str, &[(&str, &str)])] = &[
         &[("SKILL.md", include_str!("../../skills/bro/SKILL.md"))],
     ),
     (
+        "scan",
+        &[("SKILL.md", include_str!("../../skills/scan/SKILL.md"))],
+    ),
+    (
         "coding-standards",
         &[(
             "SKILL.md",

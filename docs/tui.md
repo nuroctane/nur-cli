@@ -152,6 +152,7 @@ The note is appended to your persistent memory file and recalled automatically i
 | `/cd <path>` | Change the working directory tools are sandboxed to (`~` and relative paths OK) |
 | `/pwd` | Print the current working directory |
 | `/init` | Initialise project instructions (`NUR.md`) |
+| `/scan` | Map this codebase and publish a shareable architecture scan to foglamp.dev. `/scan [focus]` centers the map on one area. Asks before anything uploads. |
 | `/config` | Show config + data paths |
 | `/permissions` | Show or reload allow/deny/ask rules (`permissions.toml`) |
 | `/hooks` | Local tool hook status (`hooks.toml`) |

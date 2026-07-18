@@ -162,7 +162,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 
 | Surface | What ships |
 |---------|------------|
-| **TUI** | Streaming · duration chips · thought/tool cards · peek · drag-select · scrollbar · sessions · multi-provider `/login` · **`/model` picker** · **`/plugins` marketplace** · `/goal` `/bro` `/btw` `/codesearch` `/mc` `/feedback` `/tips` · budgets · doctor |
+| **TUI** | Streaming · duration chips · thought/tool cards · peek · drag-select · scrollbar · sessions · multi-provider `/login` · **`/model` picker** · **`/plugins` marketplace** · `/goal` `/bro` `/scan` `/btw` `/codesearch` `/mc` `/feedback` `/tips` · budgets · doctor |
 | **Agent** | Manual / plan / auto · tools · subagents · todos · auto-compact · session $ / token budgets · Esc cancel · Shift+Tab mid-turn · **NL skill auto-activation** |
 | **Vision** | `look` · `extract_frames` · prompt auto-attach of media paths |
 | **Tools** | read · edit · bash · web · **browser** · git · knowledge · agent · **excalidraw** |
@@ -327,6 +327,7 @@ Launching from a drive root (`C:\`) auto-picks a safe workspace (git / last sess
 | `/plugins` | Browse and install marketplace plugins (provider-picker UX) |
 | `/goal` `/btw` | Session goal / one-off note |
 | `/bro` | Chill mode: plain words, straight answers (toggle) |
+| `/scan` | Map the codebase → shareable foglamp architecture scan |
 | `/codesearch` `/cs` | Workspace ripgrep |
 | `/mc` `/mcp` | MCP via Executor |
 | `/feedback` `/tips` | Issue / interaction tips |

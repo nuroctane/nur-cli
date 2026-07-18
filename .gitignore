@@ -41,3 +41,6 @@ Thumbs.db
 # MkDocs build output
 site/
 
+# foglamp codebase scan — scan.lock.json holds a secret edit token
+.foglamp/
+

@@ -72,6 +72,62 @@ pub fn compose_turn_prompt(
     out
 }
 
+/// When a turn error means the model isn't available for the active credential,
+/// append which model/provider failed and how to recover. Provider-agnostic —
+/// the trigger phrases cover OpenAI ("do not have access to"), NVIDIA NIM
+/// ("not found for account"), and the common OpenAI-compatible variants — so it
+/// helps every provider, not just the one that surfaced the bug.
+pub fn annotate_model_unavailable(err: &str, provider: &str, model: &str) -> String {
+    const PHRASES: &[&str] = &[
+        "not found for account",
+        "model_not_found",
+        "model not found",
+        "no such model",
+        "do not have access to",
+        "does not have access",
+        "not entitled",
+        "unknown model",
+        "invalid model",
+        "is not available for",
+        "not available in your",
+        "model does not exist",
+    ];
+    let low = err.to_lowercase();
+    if !PHRASES.iter().any(|p| low.contains(p)) {
+        return err.to_string();
+    }
+    format!(
+        "{err}\n\n↳ model '{model}' isn't available for your {provider} credential. \
+         Run /model to pick one your key can serve, or /login to switch provider or key."
+    )
+}
+
+/// The `/scan` instruction template — bundled skill body that tells the agent
+/// to map this repo and publish a shareable scan to foglamp.dev. Frontmatter is
+/// stripped at use so the model sees only the instructions.
+const SCAN_SKILL_RAW: &str = include_str!("../../skills/scan/SKILL.md");
+
+/// Strip leading `--- … ---` YAML frontmatter, returning the body.
+fn strip_frontmatter(s: &str) -> &str {
+    if let Some(rest) = s.strip_prefix("---") {
+        if let Some(end) = rest.find("\n---") {
+            return rest[end + 4..].trim_start_matches(['\n', '\r']);
+        }
+    }
+    s
+}
+
+/// Build the `/scan` turn prompt: the scan instructions plus an optional focus.
+pub fn scan_prompt(focus: &str) -> String {
+    let body = strip_frontmatter(SCAN_SKILL_RAW).trim_end();
+    let focus = focus.trim();
+    if focus.is_empty() {
+        body.to_string()
+    } else {
+        format!("{body}\n\n## Focus for this scan\nCenter the map on: {focus}\n")
+    }
+}
+
 pub const COMMANDS: &[(&str, &str)] = &[
     ("/help", "commands + keyboard shortcuts"),
     ("/commands", "commands + keyboard shortcuts"),
@@ -113,6 +169,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/sessions", "browse & open past sessions  (same as /resume)"),
     ("/resume", "browse & open past sessions  (same as /sessions)"),
     ("/init", "generate a NUR.md project guide"),
+    ("/scan", "map this codebase → shareable foglamp scan: /scan [focus]"),
     ("/goal", "set a standing session goal (context on every turn)"),
     ("/bro", "chill mode: plain words, no jargon, no preamble (toggle)"),
     ("/btw", "add a one-off note to your next message"),
@@ -4793,6 +4850,13 @@ impl App {
     }
 
     fn start_turn(&mut self, prompt: &str) {
+        self.start_turn_labeled(prompt, prompt);
+    }
+
+    /// Start a turn where the transcript shows `display` but the model receives
+    /// `model_prompt`. Used by commands like `/scan` whose real instructions are
+    /// a long template the user shouldn't have to read back in their transcript.
+    fn start_turn_labeled(&mut self, display: &str, model_prompt: &str) {
         if !self.authed {
             self.push_error(
                 "signed out — run /login to enter an API key before sending a message".into(),
@@ -4803,11 +4867,11 @@ impl App {
             self.push_error("internal: session busy".into());
             return;
         };
-        self.cells.push(Cell::User(prompt.to_string()));
+        self.cells.push(Cell::User(display.to_string()));
         // First user prompt of the session owns the window/tab title text; the
         // loop animates its marker orb while the turn runs.
         if !self.title_from_prompt {
-            self.window_base = prompt.to_string();
+            self.window_base = display.to_string();
             self.title_from_prompt = true;
         }
         // Sending always snaps you back to the live end of the conversation.
@@ -4835,7 +4899,7 @@ impl App {
             self.bro,
             self.session_goal.as_deref(),
             &notes,
-            prompt,
+            model_prompt,
         );
         agent::spawn_turn(
             runner,
@@ -5144,6 +5208,11 @@ impl App {
                         // Interrupted surfaces as Err("interrupted") sometimes.
                         let was_interrupt = e.contains("interrupted");
                         if !was_interrupt {
+                            let e = annotate_model_unavailable(
+                                &e,
+                                &self.cfg.provider,
+                                &self.cfg.model,
+                            );
                             self.push_error(e);
                         }
                         self.push_turn_done(turn_dur, was_interrupt);
@@ -6023,6 +6092,27 @@ fn extract_reasoning_summary(it: &serde_json::Value) -> String {
 mod tests {
     use super::*;
     use crate::tui::input::InputState;
+
+    #[test]
+    fn model_unavailable_errors_get_recovery_guidance() {
+        // NVIDIA NIM: exact shape the user hit.
+        let nim = "API error (404): {\"status\":404,\"title\":\"Not Found\",\
+                   \"detail\":\"Function '84bf12ff': Not found for account 'e6BB'\"}";
+        let out = annotate_model_unavailable(nim, "nvidia", "nvidia/llama-3.1-nemotron-ultra-253b-v1");
+        assert!(out.contains("/model"), "must point at recovery");
+        assert!(out.contains("nvidia/llama-3.1-nemotron-ultra-253b-v1"));
+        assert!(out.contains(nim), "original error is preserved");
+
+        // OpenAI-style access error also triggers.
+        let oai = "The model `gpt-x` does not exist or you do not have access to it.";
+        assert!(annotate_model_unavailable(oai, "openai", "gpt-x").contains("/model"));
+
+        // Unrelated errors are left untouched (no false positives).
+        let net = "API request failed: connection reset by peer";
+        assert_eq!(annotate_model_unavailable(net, "xai", "grok-4"), net);
+        let rate = "API error (429): rate limit exceeded";
+        assert_eq!(annotate_model_unavailable(rate, "openai", "gpt-5.5"), rate);
+    }
 
     #[test]
     fn bro_rider_leads_the_prompt_and_is_opt_in() {

@@ -4,7 +4,7 @@
 //! of `app`, so it retains access to `App`'s private fields and methods. The
 //! command table itself (`COMMANDS`) and the dispatch entry point live here.
 
-use super::{fmt_num, App, Cell, TurnMode, COMMANDS};
+use super::{fmt_num, scan_prompt, App, Cell, TurnMode, COMMANDS};
 use crate::agent::{self, AgentEvent, PermissionMode, Session};
 use crate::theme::Tone;
 use crate::tools::ToolHost;
@@ -151,6 +151,7 @@ impl App {
                      agent sessions can use as project instructions. Keep it under 120 lines.",
                 );
             }
+            "/scan" => self.cmd_scan(&arg),
             "/graphify" => self.cmd_graphify(&arg),
             "/plur" => self.cmd_plur(&arg),
             "/ruflo" => self.cmd_ruflo(&arg),
@@ -1352,6 +1353,32 @@ impl App {
                 );
             }
         }
+    }
+
+    /// Map this codebase and publish a shareable scan to foglamp.dev. Seeds an
+    /// agent turn with the bundled `scan` skill; an optional `/scan <focus>`
+    /// centers the map on one area. The transcript shows a short label while the
+    /// model receives the full instruction template.
+    fn cmd_scan(&mut self, arg: &str) {
+        if !self.authed {
+            self.push_error("signed out — run /login before /scan".into());
+            return;
+        }
+        if self.busy {
+            self.push_error("busy — wait for the current turn to finish, then /scan".into());
+            return;
+        }
+        let focus = arg.trim();
+        let display = if focus.is_empty() {
+            "/scan · map this codebase → foglamp".to_string()
+        } else {
+            format!("/scan · {focus}")
+        };
+        self.push_note(
+            Tone::Skill,
+            "scanning the codebase → foglamp map · you'll be asked before anything uploads".into(),
+        );
+        self.start_turn_labeled(&display, &scan_prompt(focus));
     }
 
     /// Toggle chill mode: every turn carries the `BRO_STYLE` rider so replies
