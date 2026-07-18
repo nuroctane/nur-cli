@@ -225,16 +225,22 @@ impl ApiClient {
                 .header("X-XAI-Token-Auth", "xai-grok-cli")
                 .header("User-Agent", format!("xai-grok-workspace/{ver}"));
         }
-        if self.provider_id == "github-models" || self.provider_id == "github-copilot" {
+        if self.provider_id == "github-models" {
             req = req
                 .header("Accept", "application/vnd.github+json")
-                .header("X-GitHub-Api-Version", "2026-03-10");
-            if self.provider_id == "github-copilot" {
-                // Copilot OpenAI-compatible proxy expects the editor product header.
-                req = req
-                    .header("Editor-Version", "nur-cli/1.0.0")
-                    .header("Copilot-Integration-Id", "vscode-chat");
-            }
+                .header("X-GitHub-Api-Version", "2022-11-28");
+        }
+        if self.provider_id == "github-copilot" {
+            // Do NOT send X-GitHub-Api-Version — Copilot returns "invalid apiVersion".
+            // Headers must look like VS Code Copilot Chat (see litellm / openclaw).
+            req = req
+                .header("Editor-Version", "vscode/1.104.1")
+                .header("Editor-Plugin-Version", "copilot-chat/0.26.7")
+                .header("Copilot-Integration-Id", "vscode-chat")
+                .header("User-Agent", "GitHubCopilotChat/0.26.7")
+                .header("Openai-Intent", "conversation-panel")
+                .header("Openai-Organization", "github-copilot")
+                .header("X-Request-Id", uuid_simple());
         }
         req
     }
@@ -973,6 +979,15 @@ fn rand_jitter() -> u64 {
         .unwrap_or(0)
 }
 
+fn uuid_simple() -> String {
+    // Enough uniqueness for X-Request-Id without pulling uuid into this module's hot path.
+    let n = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{n:x}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1160,7 +1175,36 @@ data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\
             .unwrap();
         assert_eq!(
             request.headers().get("X-GitHub-Api-Version").unwrap(),
-            "2026-03-10"
+            "2022-11-28"
+        );
+    }
+
+    #[test]
+    fn github_copilot_does_not_send_github_api_version() {
+        let mut client = ApiClient::new("https://api.githubcopilot.com", "token").unwrap();
+        client.provider_id = "github-copilot".to_string();
+        client.style = ApiStyle::ChatCompletions;
+        let request = client
+            .auth_headers(client.http.post("https://example.test/v1/chat/completions"))
+            .build()
+            .unwrap();
+        assert!(
+            request.headers().get("X-GitHub-Api-Version").is_none(),
+            "X-GitHub-Api-Version causes Copilot invalid apiVersion"
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get("Editor-Version")
+                .and_then(|v| v.to_str().ok()),
+            Some("vscode/1.104.1")
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get("Copilot-Integration-Id")
+                .and_then(|v| v.to_str().ok()),
+            Some("vscode-chat")
         );
     }
 }

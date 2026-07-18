@@ -126,6 +126,26 @@ pub fn fetch_model_ids(
         }
     }
 
+    // Kimi OAuth often returns HTTP 402 on GET /models even when inference works
+    // (plan gate). Fall back to the catalog default so /model is still usable.
+    if pid == "kimi"
+        && (last_err.contains("402")
+            || last_err.to_ascii_lowercase().contains("payment")
+            || last_err.to_ascii_lowercase().contains("quota"))
+    {
+        if let Some(p) = crate::providers::by_id("kimi") {
+            return Ok(vec![
+                p.default_model.to_string(),
+                "kimi-for-coding".into(),
+                "kimi-latest".into(),
+            ]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect());
+        }
+    }
+
     Err(format!(
         "{last_err} · only live /models for your key or OAuth is shown — no offline catalog. \
          Type a model id with /model <id> if you know one."
@@ -244,7 +264,15 @@ fn fetch_once(
                 req = req
                     .bearer_auth(api_key)
                     .header("Accept", "application/vnd.github+json")
-                    .header("X-GitHub-Api-Version", "2026-03-10");
+                    .header("X-GitHub-Api-Version", "2022-11-28");
+            }
+            "github-copilot" => {
+                req = req
+                    .bearer_auth(api_key)
+                    .header("Editor-Version", "vscode/1.104.1")
+                    .header("Editor-Plugin-Version", "copilot-chat/0.26.7")
+                    .header("Copilot-Integration-Id", "vscode-chat")
+                    .header("User-Agent", "GitHubCopilotChat/0.26.7");
             }
             "openai" if oauth.is_some() => {
                 req = req.bearer_auth(api_key);

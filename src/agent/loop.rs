@@ -367,12 +367,18 @@ impl AgentRunner {
         // per user turn, not once per model request. Pass user_text so natural
         // language (e.g. "think like fable") can auto-activate skills.
         let provider_label = crate::config::active_provider_label(&self.config);
+        // GitHub Models free tier caps request bodies (~8k tokens for gpt-4o).
+        // Force compact prompts so the full skill catalog does not 413.
+        let limited_ctx = matches!(
+            self.config.provider.as_str(),
+            "github-models" | "github-copilot"
+        );
         let prompt_ctx = PromptContext::build_with_opts(
             &self.cwd,
             self.is_subagent,
             &self.config.model,
             &provider_label,
-            self.config.poor_mode,
+            self.config.poor_mode || limited_ctx,
             Some(user_text),
         );
         if prompt_ctx.has_skill_activation() {

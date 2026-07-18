@@ -79,6 +79,7 @@ pub fn import_existing_session(provider_id: &str) -> Result<Option<OAuthTokens>>
         "xai" => xai::import_grok_cli(),
         "kimi" => kimi::import_kimi_cli(),
         "anthropic" => claude::import_claude_cli(),
+        "huggingface" => Ok(huggingface::import_hf_token()),
         _ => Ok(None),
     }
 }
@@ -105,6 +106,145 @@ fn http() -> Result<reqwest::blocking::Client> {
         .map_err(|e| MuseError::Other(e.to_string()))
 }
 
+/// Resolve a vendor CLI binary: PATH first, then common Windows/macOS install dirs.
+fn resolve_cli(name: &str, windows_names: &[&str], extra_dirs: &[PathBuf]) -> Option<PathBuf> {
+    // Explicit PATH lookup (Command::new also searches PATH, but we want a real path).
+    if let Some(path) = which_cli(name) {
+        return Some(path);
+    }
+    for alt in windows_names {
+        if let Some(path) = which_cli(alt) {
+            return Some(path);
+        }
+    }
+    for dir in extra_dirs {
+        for fname in std::iter::once(name).chain(windows_names.iter().copied()) {
+            let p = dir.join(fname);
+            if p.is_file() {
+                return Some(p);
+            }
+            #[cfg(windows)]
+            {
+                let cmd = dir.join(format!("{fname}.cmd"));
+                if cmd.is_file() {
+                    return Some(cmd);
+                }
+                let exe = dir.join(format!("{fname}.exe"));
+                if exe.is_file() {
+                    return Some(exe);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn which_cli(name: &str) -> Option<PathBuf> {
+    // Minimal which: scan PATH entries.
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        #[cfg(windows)]
+        {
+            for ext in ["cmd", "exe", "bat"] {
+                let p = dir.join(format!("{name}.{ext}"));
+                if p.is_file() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn gcloud_bin() -> Option<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        dirs.push(home.join("google-cloud-sdk").join("bin"));
+        dirs.push(
+            home.join("AppData")
+                .join("Local")
+                .join("Google")
+                .join("Cloud SDK")
+                .join("google-cloud-sdk")
+                .join("bin"),
+        );
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(pf) = std::env::var("ProgramFiles") {
+            dirs.push(
+                PathBuf::from(pf)
+                    .join("Google")
+                    .join("Cloud SDK")
+                    .join("google-cloud-sdk")
+                    .join("bin"),
+            );
+        }
+        if let Ok(pf) = std::env::var("ProgramFiles(x86)") {
+            dirs.push(
+                PathBuf::from(pf)
+                    .join("Google")
+                    .join("Cloud SDK")
+                    .join("google-cloud-sdk")
+                    .join("bin"),
+            );
+        }
+    }
+    resolve_cli("gcloud", &["gcloud.cmd"], &dirs)
+}
+
+fn az_bin() -> Option<PathBuf> {
+    let mut dirs = Vec::new();
+    #[cfg(windows)]
+    {
+        if let Ok(pf) = std::env::var("ProgramFiles") {
+            dirs.push(
+                PathBuf::from(&pf)
+                    .join("Microsoft SDKs")
+                    .join("Azure")
+                    .join("CLI2")
+                    .join("wbin"),
+            );
+            dirs.push(PathBuf::from(&pf).join("Azure").join("CLI2").join("wbin"));
+        }
+    }
+    resolve_cli("az", &["az.cmd"], &dirs)
+}
+
+fn aws_bin() -> Option<PathBuf> {
+    let mut dirs = Vec::new();
+    #[cfg(windows)]
+    {
+        if let Ok(pf) = std::env::var("ProgramFiles") {
+            dirs.push(PathBuf::from(pf).join("Amazon").join("AWSCLIV2"));
+        }
+    }
+    resolve_cli("aws", &["aws.cmd", "aws.exe"], &dirs)
+}
+
+fn gh_bin() -> Option<PathBuf> {
+    let mut dirs = Vec::new();
+    #[cfg(windows)]
+    {
+        if let Ok(pf) = std::env::var("ProgramFiles") {
+            dirs.push(PathBuf::from(pf).join("GitHub CLI"));
+        }
+        if let Some(local) = dirs::home_dir() {
+            dirs.push(
+                local
+                    .join("AppData")
+                    .join("Local")
+                    .join("Programs")
+                    .join("GitHub CLI"),
+            );
+        }
+    }
+    resolve_cli("gh", &["gh.cmd", "gh.exe"], &dirs)
+}
 /// Minimal localhost OAuth callback: waits for `?code=` (and optional state).
 fn wait_localhost_code_on(
     listener: TcpListener,
@@ -847,8 +987,16 @@ pub mod kimi {
                 .collect::<String>()
         };
         Ok(vec![
+            // Kimi's managed API fingerprints the first-party CLI; a bare nur
+            // semver can 402 model listing. Prefer a kimi_cli-shaped version.
             ("X-Msh-Platform", "kimi_cli".to_string()),
-            ("X-Msh-Version", env!("CARGO_PKG_VERSION").to_string()),
+            (
+                "X-Msh-Version",
+                std::env::var("NUR_KIMI_CLI_VERSION")
+                    .ok()
+                    .filter(|v| !v.trim().is_empty())
+                    .unwrap_or_else(|| "0.79.0".into()),
+            ),
             ("X-Msh-Device-Name", ascii(device_name)),
             ("X-Msh-Device-Model", ascii(device_model)),
             ("X-Msh-Os-Version", ascii(os_version)),
@@ -1479,7 +1627,13 @@ pub mod antigravity {
             tx,
             BrowserLoginProgress::OpenUrl("https://accounts.google.com/".into()),
         );
-        let mut child = Command::new("gcloud")
+        let gcloud = gcloud_bin().ok_or_else(|| {
+            MuseError::Other(
+                "gcloud not found on PATH (and not under common install dirs). Install Google Cloud SDK from https://cloud.google.com/sdk/docs/install, open a new terminal, then retry — or paste a Gemini API key via /login."
+                    .into(),
+            )
+        })?;
+        let mut child = Command::new(&gcloud)
             .args([
                 "auth",
                 "login",
@@ -1491,7 +1645,7 @@ pub mod antigravity {
             .spawn()
             .map_err(|e| {
                 MuseError::Other(format!(
-                    "gcloud not found ({e}). Install Google Cloud SDK, or choose “Enter API key” with a Gemini key."
+                    "failed to launch gcloud ({e}). Install Google Cloud SDK, or choose “Enter API key” with a Gemini key."
                 ))
             })?;
         // Surface any https URL from gcloud stderr (device / browser flow).
@@ -1540,7 +1694,13 @@ pub mod antigravity {
     }
 
     fn fetch_access_token() -> Result<OAuthTokens> {
-        let out = Command::new("gcloud")
+        let gcloud = gcloud_bin().ok_or_else(|| {
+            MuseError::Other(
+                "gcloud not found. Install Google Cloud SDK (https://cloud.google.com/sdk/docs/install) and ensure it is on PATH."
+                    .into(),
+            )
+        })?;
+        let out = Command::new(&gcloud)
             .args(["auth", "application-default", "print-access-token"])
             .output()
             .map_err(|e| MuseError::Other(format!("gcloud ADC print-access-token: {e}")))?;
@@ -1559,7 +1719,7 @@ pub mod antigravity {
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .or_else(|| {
-                let out = Command::new("gcloud")
+                let out = Command::new(&gcloud)
                     .args(["config", "get-value", "project"])
                     .output()
                     .ok()?;
@@ -1625,7 +1785,13 @@ pub mod github {
         );
         // `--web` opens the device flow; feed newlines so the "press Enter to
         // open the browser" prompt proceeds without a TTY.
-        let mut child = Command::new("gh")
+        let gh = gh_bin().ok_or_else(|| {
+            MuseError::Other(
+                "gh not found on PATH. Install GitHub CLI (https://cli.github.com/), open a new terminal, then retry — or paste a GitHub PAT (models:read) via /login."
+                    .into(),
+            )
+        })?;
+        let mut child = Command::new(&gh)
             .args([
                 "auth",
                 "login",
@@ -1641,10 +1807,9 @@ pub mod github {
             .spawn()
             .map_err(|e| {
                 MuseError::Other(format!(
-                    "gh not found ({e}). Install GitHub CLI, or choose “Enter API key” with a GitHub PAT (models:read)."
+                    "failed to launch gh ({e}). Install GitHub CLI, or paste a GitHub PAT (models:read)."
                 ))
-            })?;
-        if let Some(mut stdin) = child.stdin.take() {
+            })?;        if let Some(mut stdin) = child.stdin.take() {
             use std::io::Write;
             let _ = stdin.write_all(b"\n\n");
         }
@@ -1688,7 +1853,13 @@ pub mod github {
     }
 
     fn fetch_token() -> Result<OAuthTokens> {
-        let out = Command::new("gh")
+        let gh = gh_bin().ok_or_else(|| {
+            MuseError::Other(
+                "gh not found. Install GitHub CLI (https://cli.github.com/) and ensure it is on PATH."
+                    .into(),
+            )
+        })?;
+        let out = Command::new(&gh)
             .args(["auth", "token", "--hostname", "github.com"])
             .output()
             .map_err(|e| MuseError::Other(format!("gh auth token: {e}")))?;
@@ -1768,38 +1939,55 @@ pub mod huggingface {
         );
         let client = http()?;
 
-        // Try OAuth device flow; fall back to token page + poll is not available —
-        // fall back to opening token settings and asking user to paste is Key path.
-        let device_endpoints = [
-            "https://huggingface.co/oauth/device/code",
-            "https://huggingface.co/api/oauth/device/code",
-        ];
+        // Prefer an existing huggingface-cli / hub token (no OAuth app required).
+        if let Some(tokens) = import_hf_token() {
+            send(
+                tx,
+                BrowserLoginProgress::Status("using existing Hugging Face token from disk".into()),
+            );
+            return Ok(tokens);
+        }
+
+        // Official device endpoint is POST /oauth/device (not /oauth/device/code).
+        // Client id must be a registered OAuth app — set NUR_HF_OAUTH_CLIENT_ID, or
+        // paste a token via /login key path.
+        let client_id = std::env::var("NUR_HF_OAUTH_CLIENT_ID")
+            .or_else(|_| std::env::var("HF_OAUTH_CLIENT_ID"))
+            .unwrap_or_default();
+        let client_id = client_id.trim().to_string();
         let mut device: Option<DeviceCodeResp> = None;
         let mut last = String::new();
-        for url in device_endpoints {
-            // Public HF OAuth app client used by huggingface_hub (community-known).
-            let form = [
-                ("client_id", "85c97818-78c2-455a-9472-9a0f2e8a1b0d"),
-                ("scope", "openid profile email"),
+        if !client_id.is_empty() {
+            let device_endpoints = [
+                "https://huggingface.co/oauth/device",
+                "https://huggingface.co/oauth/device/code",
             ];
-            match client.post(url).form(&form).send() {
-                Ok(res) => {
-                    let status = res.status();
-                    let body = res.text().unwrap_or_default();
-                    if status.is_success() {
-                        if let Ok(d) = serde_json::from_str::<DeviceCodeResp>(&body) {
-                            if !d.user_code.is_empty() || !d.device_code.is_empty() {
-                                device = Some(d);
-                                break;
+            for url in device_endpoints {
+                let form = [
+                    ("client_id", client_id.as_str()),
+                    ("scope", "openid profile email"),
+                ];
+                match client.post(url).form(&form).send() {
+                    Ok(res) => {
+                        let status = res.status();
+                        let body = res.text().unwrap_or_default();
+                        if status.is_success() {
+                            if let Ok(d) = serde_json::from_str::<DeviceCodeResp>(&body) {
+                                if !d.user_code.is_empty() || !d.device_code.is_empty() {
+                                    device = Some(d);
+                                    break;
+                                }
                             }
+                            last = body;
+                        } else {
+                            last = format!("{status}: {body}");
                         }
-                        last = body;
-                    } else {
-                        last = format!("{status}: {body}");
                     }
+                    Err(e) => last = e.to_string(),
                 }
-                Err(e) => last = e.to_string(),
             }
+        } else {
+            last = "no NUR_HF_OAUTH_CLIENT_ID (register an OAuth app at huggingface.co/settings/applications)".into();
         }
 
         if let Some(device) = device {
@@ -1845,7 +2033,7 @@ pub mod huggingface {
                 let form = [
                     ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
                     ("device_code", device.device_code.as_str()),
-                    ("client_id", "85c97818-78c2-455a-9472-9a0f2e8a1b0d"),
+                    ("client_id", client_id.as_str()),
                 ];
                 for turl in [
                     "https://huggingface.co/oauth/token",
@@ -1879,7 +2067,7 @@ pub mod huggingface {
                             expires_at: expires_in_to_at(parsed.expires_in),
                             meta: Some(OauthMeta {
                                 issuer: "https://huggingface.co".into(),
-                                client_id: "huggingface".into(),
+                                client_id: client_id.clone(),
                                 extra: serde_json::json!({}),
                             }),
                         });
@@ -1897,11 +2085,57 @@ pub mod huggingface {
         let url = "https://huggingface.co/settings/tokens";
         send(tx, BrowserLoginProgress::OpenUrl(url.into()));
         Err(MuseError::Other(format!(
-            "HF device flow unavailable ({last}). Open {url}, create a token, and choose “Enter API key” in /login."
+            "HF device flow unavailable ({last}). Open {url}, create a token (or set HF_TOKEN), then choose “Enter API key” in /login. Optional: register an OAuth app and set NUR_HF_OAUTH_CLIENT_ID for browser device flow."
         )))
     }
 
+    /// Import token written by `huggingface-cli login` / hub cache.
+    pub fn import_hf_token() -> Option<OAuthTokens> {
+        let home = dirs::home_dir()?;
+        let candidates = [
+            home.join(".cache").join("huggingface").join("token"),
+            home.join(".huggingface").join("token"),
+        ];
+        for path in candidates {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                let token = text.trim().to_string();
+                if token.starts_with("hf_") && token.len() > 10 {
+                    return Some(OAuthTokens {
+                        access_token: token,
+                        refresh_token: None,
+                        expires_at: None,
+                        meta: Some(OauthMeta {
+                            issuer: "https://huggingface.co".into(),
+                            client_id: "hf-token-file".into(),
+                            extra: serde_json::json!({"imported_from": path.display().to_string()}),
+                        }),
+                    });
+                }
+            }
+        }
+        if let Ok(token) = std::env::var("HF_TOKEN").or_else(|_| std::env::var("HUGGING_FACE_HUB_TOKEN"))
+        {
+            let token = token.trim().to_string();
+            if token.starts_with("hf_") {
+                return Some(OAuthTokens {
+                    access_token: token,
+                    refresh_token: None,
+                    expires_at: None,
+                    meta: Some(OauthMeta {
+                        issuer: "https://huggingface.co".into(),
+                        client_id: "hf-token-env".into(),
+                        extra: serde_json::json!({}),
+                    }),
+                });
+            }
+        }
+        None
+    }
+
     pub fn refresh(_refresh: &str) -> Result<OAuthTokens> {
+        if let Some(t) = import_hf_token() {
+            return Ok(t);
+        }
         Err(MuseError::Other(
             "Hugging Face token refresh not available — re-run browser login or paste HF_TOKEN"
                 .into(),
@@ -1935,17 +2169,22 @@ pub mod azure {
             },
         );
         let _ = open_browser("https://microsoft.com/devicelogin");
-        let mut child = Command::new("az")
+        let az = az_bin().ok_or_else(|| {
+            MuseError::Other(
+                "Azure CLI (`az`) not found on PATH. Install from https://aka.ms/installazurecliwindows, open a new terminal, then retry — or paste AZURE_OPENAI_API_KEY via /login."
+                    .into(),
+            )
+        })?;
+        let mut child = Command::new(&az)
             .args(["login", "--use-device-code"])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| {
                 MuseError::Other(format!(
-                    "Azure CLI not found ({e}). Install `az` or paste AZURE_OPENAI_API_KEY."
+                    "failed to launch az ({e}). Install Azure CLI or paste AZURE_OPENAI_API_KEY."
                 ))
-            })?;
-        // Best-effort parse device code from az stderr/stdout while waiting.
+            })?;        // Best-effort parse device code from az stderr/stdout while waiting.
         let stderr = child.stderr.take();
         if let Some(mut err) = stderr {
             let tx2 = tx.clone();
@@ -2000,7 +2239,13 @@ pub mod azure {
     }
 
     fn fetch_token() -> Result<OAuthTokens> {
-        let out = Command::new("az")
+        let az = az_bin().ok_or_else(|| {
+            MuseError::Other(
+                "Azure CLI (`az`) not found. Install from https://aka.ms/installazurecliwindows or paste AZURE_OPENAI_API_KEY."
+                    .into(),
+            )
+        })?;
+        let out = Command::new(&az)
             .args([
                 "account",
                 "get-access-token",
@@ -2014,8 +2259,7 @@ pub mod azure {
                 MuseError::Other(format!(
                     "Azure CLI not available ({e}). Install `az`, run `az login`, or paste AZURE_OPENAI_API_KEY."
                 ))
-            })?;
-        if !out.status.success() {
+            })?;        if !out.status.success() {
             let err = String::from_utf8_lossy(&out.stderr);
             return Err(MuseError::Other(format!(
                 "az get-access-token failed: {err}. Fix: `az login` then retry, or paste AZURE_OPENAI_API_KEY in /login."
@@ -2096,8 +2340,17 @@ pub mod bedrock {
         // Prefer sso login; fall back to `aws login` if present.
         let mut ok = false;
         let mut last = String::new();
+        let aws = match aws_bin() {
+            Some(p) => p,
+            None => {
+                return Err(MuseError::Other(
+                    "AWS CLI (`aws`) not found on PATH. Install AWS CLI v2 (https://aws.amazon.com/cli/), configure SSO, then retry — or paste a Bedrock bearer/API key."
+                        .into(),
+                ));
+            }
+        };
         for args in [vec!["sso", "login"], vec!["login"]] {
-            let mut child = match Command::new("aws")
+            let mut child = match Command::new(&aws)
                 .args(&args)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -2105,11 +2358,10 @@ pub mod bedrock {
             {
                 Ok(c) => c,
                 Err(e) => {
-                    last = format!("aws not found: {e}");
+                    last = format!("aws spawn failed: {e}");
                     continue;
                 }
-            };
-            // AWS SSO prints a URL — try to surface it.
+            };            // AWS SSO prints a URL — try to surface it.
             if let Some(mut err) = child.stderr.take() {
                 let tx2 = tx.clone();
                 thread::spawn(move || {
