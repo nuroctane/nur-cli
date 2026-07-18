@@ -2761,57 +2761,25 @@ fn banner_lines(app: &App, out: &mut Vec<Line<'static>>) {
     ));
     out.push(Line::from(title_row));
 
-    // Row 2: model  ·  cwd  ·  session hash.
+    // Session facts only — model · provider · cwd · session. Feature maps,
+    // ecosystem packs, and mode tips live behind /help · /tips · /ecosystem.
     let session8 = &app.session_id[..8.min(app.session_id.len())];
     out.push(Line::from(vec![
         Span::raw("  ".to_string()),
         Span::styled("model  ".to_string(), theme::style_faint()),
-        Span::styled(app.cfg.model.clone(), Style::default().fg(theme::META_BLUE_SKY)),
-        Span::styled("    cwd  ".to_string(), theme::style_faint()),
-        Span::styled(app.cwd.display().to_string(), theme::style_status()),
-        Span::styled("    ·  ".to_string(), theme::style_faint()),
-        Span::styled(session8.to_string(), theme::style_faint()),
+        Span::styled(
+            app.cfg.model.clone(),
+            Style::default().fg(theme::META_BLUE_SKY),
+        ),
+        Span::styled("    provider  ".to_string(), theme::style_faint()),
+        Span::styled(provider.clone(), Style::default().fg(theme::SEAFOAM)),
     ]));
-    out.push(Line::default());
-
-    // Feature map — short, organized, matches what the product actually ships.
-    // Deeper interaction tips stay behind /tips; ecosystem detail behind /ecosystem.
-    let feat_rows: &[(&str, &str)] = &[
-        (
-            "agent",
-            "tools · sandbox · subagents · /undo · /receipt · Shift+Tab modes",
-        ),
-        (
-            "models",
-            "/model · /login · /failover (key or OAuth) · /fusion · /local · /bench",
-        ),
-        (
-            "memory",
-            "/skills · NL skill activation · /plur · /ruflo · /graphify · /plugins",
-        ),
-        (
-            "desktop",
-            "/cua · excalidraw · click links · paste chips · Ctrl+R history",
-        ),
-    ];
-    for (label, body) in feat_rows {
-        out.push(Line::from(vec![
-            Span::raw("  ".to_string()),
-            Span::styled(
-                format!("{label:<8}"),
-                Style::default()
-                    .fg(theme::META_BLUE)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled((*body).to_string(), theme::style_faint()),
-        ]));
-    }
     out.push(Line::from(vec![
         Span::raw("  ".to_string()),
-        Span::styled(
-            "/tips  ·  /help  ·  /ecosystem  ·  github.com/nuroctane/nur-cli".to_string(),
-            theme::style_faint(),
-        ),
+        Span::styled("cwd  ".to_string(), theme::style_faint()),
+        Span::styled(app.cwd.display().to_string(), theme::style_status()),
+        Span::styled("    session  ".to_string(), theme::style_faint()),
+        Span::styled(session8.to_string(), theme::style_faint()),
     ]));
     out.push(Line::default());
 }

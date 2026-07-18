@@ -1407,7 +1407,7 @@ pub async fn run_tui(
     session: Session,
     usage: UsageTracker,
     initial_prompt: Option<String>,
-    ecosystem_summary: String,
+    _ecosystem_summary: String,
     workspace_note: Option<String>,
 ) -> Result<()> {
     // Fail clearly if stdin isn't a real console (redirects / dead pipes).
@@ -1451,7 +1451,6 @@ pub async fn run_tui(
     let (tx, rx) = mpsc::unbounded_channel();
     let u_session = usage.session_usage().clone();
     let session_id = session.id.clone();
-    let mode_label = permission_mode.get().label().to_string();
 
     // Host tab title from first prompt (prefer CLI seed, else resume history).
     let seed_prompt = initial_prompt
@@ -1584,14 +1583,8 @@ pub async fn run_tui(
     if let Some(note) = workspace_note {
         app.push_note(Tone::Session, note);
     }
-    // Ecosystem snapshot (graphify / plur / …) then active mode — banner already
-    // lists feature groups; these notes stay short so the open screen is clean.
-    if !ecosystem_summary.is_empty() {
-        app.push_note(Tone::Skill, format!("ecosystem · {ecosystem_summary}"));
-    }
-    app.push_info(format!(
-        "mode · {mode_label}  ·  Shift+Tab  manual → plan → auto  ·  /mode"
-    ));
+    // Open screen is just the banner (splash · model · provider · cwd · session).
+    // Ecosystem / mode / feature maps: /ecosystem · /mode · /help.
 
     // Started without any API key → sign-in required before the first turn.
     if crate::auth::resolve_api_key().is_err() {
