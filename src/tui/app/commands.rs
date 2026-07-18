@@ -1503,17 +1503,24 @@ impl App {
     }
 
     fn cmd_config(&mut self) {
+        let turns = if self.cfg.max_turns == 0 {
+            "unlimited (0)".into()
+        } else {
+            self.cfg.max_turns.to_string()
+        };
         self.push_info(format!(
             "config ({})\n  model           {}\n  base_url        {}\n  effort          {}\n  \
-             max_turns       {}\n  stream          {}\n  context_window  {}\n\npaths\n  \
+             max_turns       {}\n  stream          {}\n  context_window  {}\n  \
+             budgets         {}\n\npaths\n  \
              home     {}\n  status   {}\n  usage    {}\n  sessions {}",
             crate::config::config_path().display(),
             self.cfg.model,
             self.cfg.base_url,
             self.cfg.reasoning_effort,
-            self.cfg.max_turns,
+            turns,
             self.cfg.stream,
             fmt_num(self.cfg.context_window),
+            self.budget_status_line(),
             crate::config::muse_home().display(),
             crate::config::status_path().display(),
             crate::config::usage_log_path().display(),

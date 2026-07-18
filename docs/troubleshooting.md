@@ -33,7 +33,7 @@ nur doctor
 nur doctor · v0.13.2
 
 binary  C:\Users\you\.local\bin\nur.exe
-config  model=muse-spark-1.1 effort=high max_turns=40 budget=∞$/∞tok  (C:\Users\you\.nur\config.toml)
+config  model=muse-spark-1.1 effort=high max_turns=∞ budget=∞$/∞tok  (C:\Users\you\.nur\config.toml)
 auth    key set (…abcd)
 home    C:\Users\you\.nur
 status  C:\Users\you\.nur\status.json

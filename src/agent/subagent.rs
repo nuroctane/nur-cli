@@ -36,8 +36,11 @@ pub async fn run_subagent(
     };
 
     let mut cfg = config;
-    // Cap subagent depth/cost
-    cfg.max_turns = cfg.max_turns.min(20);
+    // Soft cap subagent depth only when the parent has an explicit positive
+    // turn limit. Parent unlimited (0) must stay unlimited for nested work.
+    if cfg.max_turns > 0 {
+        cfg.max_turns = cfg.max_turns.min(20);
+    }
     if explore {
         cfg.reasoning_effort = "medium".into();
     }

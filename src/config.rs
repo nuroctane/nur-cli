@@ -44,8 +44,17 @@ pub fn model_display_name(model_id: &str) -> String {
 pub const PRICE_INPUT_PER_MTOK: f64 = 1.25;
 pub const PRICE_OUTPUT_PER_MTOK: f64 = 4.25;
 
+/// Bumped when defaults change in a way that must rewrite existing config.toml.
+/// Schema 0/1: stock default was `max_turns = 40`. Schema 2+: unlimited (`0`).
+pub const CONFIG_SCHEMA: u32 = 2;
+/// Old stock default written into every install before unlimited-by-default.
+const LEGACY_DEFAULT_MAX_TURNS: u32 = 40;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    /// Config format version. Used to lift obsolete stock defaults once.
+    #[serde(default)]
+    pub config_schema: u32,
     #[serde(default = "default_model")]
     pub model: String,
     /// Active provider id from the catalog (`crate::providers`). `/login` sets
@@ -189,6 +198,7 @@ fn default_true() -> bool {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            config_schema: CONFIG_SCHEMA,
             model: default_model(),
             provider: default_provider_id(),
             base_url: default_base_url(),
@@ -210,6 +220,26 @@ impl Default for Config {
             fusion_panel: Vec::new(),
         }
     }
+}
+
+/// Lift obsolete stock defaults so old installs cannot stay stuck on
+/// `max_turns = 40` forever. Returns true if the in-memory config changed
+/// (caller should persist).
+///
+/// After schema 2, an explicit `max_turns = 40` set by the user is respected.
+pub fn migrate_config(cfg: &mut Config) -> bool {
+    let mut changed = false;
+    if cfg.config_schema < CONFIG_SCHEMA {
+        // Only rewrite the historical *default* value, not intentional small caps
+        // like 5 or 10 that were never the stock default.
+        if cfg.max_turns == LEGACY_DEFAULT_MAX_TURNS {
+            cfg.max_turns = 0;
+            changed = true;
+        }
+        cfg.config_schema = CONFIG_SCHEMA;
+        changed = true;
+    }
+    changed
 }
 
 fn default_compact_keep_user_turns() -> u32 {
@@ -400,6 +430,10 @@ pub fn load_config() -> Result<Config> {
         let text = fs::read_to_string(&path)?;
         toml::from_str(&text).map_err(|e| MuseError::Config(e.to_string()))?
     };
+    // One-time lift of legacy stock max_turns=40 → unlimited.
+    if migrate_config(&mut cfg) {
+        let _ = save_config(&cfg);
+    }
     // Self-hosted OpenAI-compat (Ollama, vLLM, LiteLLM, custom gateways).
     apply_base_url_env(&mut cfg);
     cfg.validate()?;
@@ -466,6 +500,35 @@ mod tests {
             .unwrap_or_default()
             .as_nanos();
         std::env::temp_dir().join(format!("nur-cli-{label}-{n}"))
+    }
+
+    #[test]
+    fn migrate_lifts_legacy_max_turns_40_once() {
+        let mut cfg = Config::default();
+        cfg.config_schema = 0;
+        cfg.max_turns = 40;
+        assert!(migrate_config(&mut cfg));
+        assert_eq!(cfg.max_turns, 0, "legacy stock 40 must become unlimited");
+        assert_eq!(cfg.config_schema, CONFIG_SCHEMA);
+        // Second pass is a no-op — intentional max_turns=40 after schema 2 sticks.
+        cfg.max_turns = 40;
+        assert!(!migrate_config(&mut cfg));
+        assert_eq!(cfg.max_turns, 40);
+    }
+
+    #[test]
+    fn migrate_preserves_non_default_caps() {
+        let mut cfg = Config::default();
+        cfg.config_schema = 0;
+        cfg.max_turns = 12; // user-ish small cap, not the old stock default
+        assert!(migrate_config(&mut cfg)); // schema bumps
+        assert_eq!(cfg.max_turns, 12);
+    }
+
+    #[test]
+    fn default_max_turns_is_unlimited() {
+        assert_eq!(Config::default().max_turns, 0);
+        assert_eq!(default_max_turns(), 0);
     }
 
     #[test]
