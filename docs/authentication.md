@@ -15,7 +15,9 @@ The active provider, endpoint, and default model are stored in
 | **OpenAI** | `OPENAI_API_KEY` | ChatGPT browser OAuth (Codex backend) or import `~/.codex` |
 | **xAI Grok** | `XAI_API_KEY` | Device code / Grok CLI session (cli-chat-proxy) |
 | **Kimi Code (kimi.com)** | `KIMI_API_KEY` | Device code / Kimi CLI session |
-| **Anthropic Claude** | `ANTHROPIC_API_KEY` | Claude browser OAuth or import `~/.claude` |
+| **Anthropic Claude** | `ANTHROPIC_API_KEY` | Claude browser OAuth (`claude.com/cai/…`) or import `~/.claude` |
+| **Google Gemini** | `GEMINI_API_KEY` | `gcloud auth login` (same ADC path as Antigravity) |
+| **GitHub Copilot** | `GITHUB_TOKEN` | `gh auth login` (subscription token) |
 | **Google Antigravity** | Gemini key fallback | `gcloud auth login` browser SSO |
 | **Hugging Face** | `HF_TOKEN` | Device code (`hf auth login` style) |
 | **Azure OpenAI** | `AZURE_OPENAI_API_KEY` | `az login` / Entra device code |

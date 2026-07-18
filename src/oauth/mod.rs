@@ -94,11 +94,11 @@ pub fn refresh_tokens(provider: &str, auth: &Auth, refresh: &str) -> Result<OAut
         "xai" => flows::xai::refresh(auth, refresh),
         "kimi" => flows::kimi::refresh(auth, refresh),
         "anthropic" => flows::claude::refresh(refresh),
-        "antigravity" | "google-oauth" => flows::antigravity::refresh(auth, refresh),
+        "antigravity" | "google" | "google-oauth" => flows::antigravity::refresh(auth, refresh),
         "huggingface" => flows::huggingface::refresh(refresh),
         "azure" => flows::azure::refresh(),
         "bedrock" => flows::bedrock::refresh(),
-        "github-models" => flows::github::refresh(auth, refresh),
+        "github-models" | "github-copilot" => flows::github::refresh(auth, refresh),
         _ => Err(MuseError::Other(format!(
             "no OAuth refresh path for provider '{provider}'"
         ))),
@@ -123,6 +123,8 @@ mod tests {
         assert!(supports_browser("xai"));
         assert!(supports_browser("kimi"));
         assert!(supports_browser("anthropic"));
+        assert!(supports_browser("google"));
+        assert!(supports_browser("github-copilot"));
         assert!(!supports_browser("meta"));
     }
 
@@ -148,10 +150,12 @@ mod tests {
             "kimi",
             "anthropic",
             "antigravity",
+            "google",
             "huggingface",
             "azure",
             "bedrock",
             "github-models",
+            "github-copilot",
         ];
         const REFRESH: &[&str] = &[
             "openai",
@@ -159,11 +163,13 @@ mod tests {
             "kimi",
             "anthropic",
             "antigravity",
+            "google",
             "google-oauth", // alias used by some stored sessions
             "huggingface",
             "azure",
             "bedrock",
             "github-models",
+            "github-copilot",
         ];
         for id in crate::providers::oauth_browser_provider_ids() {
             assert!(
@@ -171,7 +177,9 @@ mod tests {
                 "provider '{id}' is browser_auth but missing from login_browser match"
             );
             assert!(
-                REFRESH.contains(id) || (*id == "antigravity" && REFRESH.contains(&"google-oauth")),
+                REFRESH.contains(id)
+                    || (*id == "antigravity" && REFRESH.contains(&"google-oauth"))
+                    || (*id == "google" && REFRESH.contains(&"google-oauth")),
                 "provider '{id}' is browser_auth but missing from refresh_tokens match"
             );
             assert!(supports_browser(id), "supports_browser({id}) false");

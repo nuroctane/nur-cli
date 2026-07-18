@@ -54,11 +54,12 @@ pub fn login_browser(provider_id: &str, tx: ProgressTx, cancel: CancelFlag) {
         "xai" => xai::login(&tx, &cancel),
         "kimi" => kimi::login(&tx, &cancel),
         "anthropic" => claude::login(&tx, &cancel),
-        "antigravity" => antigravity::login(&tx, &cancel),
+        // Google Gemini and Antigravity share Application Default Credentials via gcloud.
+        "antigravity" | "google" => antigravity::login(&tx, &cancel),
         "huggingface" => huggingface::login(&tx, &cancel),
         "azure" => azure::login(&tx, &cancel),
         "bedrock" => bedrock::login(&tx, &cancel),
-        "github-models" => github::login(&tx, &cancel),
+        "github-models" | "github-copilot" => github::login(&tx, &cancel),
         other => Err(MuseError::Other(format!(
             "browser login not supported for '{other}'"
         ))),
@@ -105,17 +106,6 @@ fn http() -> Result<reqwest::blocking::Client> {
 }
 
 /// Minimal localhost OAuth callback: waits for `?code=` (and optional state).
-fn wait_localhost_code(
-    port: u16,
-    expected_state: Option<&str>,
-    cancel: &CancelFlag,
-    timeout: Duration,
-) -> Result<String> {
-    let listener = TcpListener::bind(("127.0.0.1", port))
-        .map_err(|e| MuseError::Other(format!("cannot bind localhost:{port}: {e}")))?;
-    wait_localhost_code_on(listener, expected_state, cancel, timeout)
-}
-
 fn wait_localhost_code_on(
     listener: TcpListener,
     expected_state: Option<&str>,
@@ -1109,14 +1099,28 @@ pub mod kimi {
 }
 
 // ── Anthropic Claude (PKCE + Claude CLI import) ────────────────────────────
+//
+// Mirrors Claude Code's current OAuth endpoints (as of Code ≥2.1.x). The old
+// `https://claude.ai/oauth/authorize` host drops query params and surfaces
+// "Missing redirect_uri parameter"; Claude.ai login now uses
+// `https://claude.com/cai/oauth/authorize` with `code=true`.
 
 pub mod claude {
     use super::*;
 
     /// Public Claude Code OAuth client id.
     pub const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-    const REDIRECT: &str = "http://localhost:54545/callback";
-    const PORT: u16 = 54545;
+    /// Claude.ai subscription authorize (primary).
+    const AUTHORIZE_CLAUDE_AI: &str = "https://claude.com/cai/oauth/authorize";
+    /// Console / API-plan authorize (fallback).
+    const AUTHORIZE_CONSOLE: &str = "https://platform.claude.com/oauth/authorize";
+    const TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
+    /// Manual paste callback used by Claude Code for headless / fallback.
+    const MANUAL_REDIRECT: &str = "https://platform.claude.com/oauth/code/callback";
+    /// Full scope set from Claude Code (`Cdi` = console + claude.ai scopes).
+    const SCOPES: &str = "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
+    /// Prefer these loopback ports (Claude Code uses ephemeral; we pin a few).
+    const CALLBACK_PORTS: &[u16] = &[54545, 54546, 54547, 21865];
 
     #[derive(Deserialize)]
     struct TokenResp {
@@ -1127,52 +1131,46 @@ pub mod claude {
         error_description: Option<String>,
     }
 
-    pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
-        let verifier = random_urlsafe(32);
-        let challenge = pkce_challenge(&verifier);
-        let state = random_urlsafe(16);
-        // Prefer platform.claude.com / claude.ai authorize endpoints.
-        let auth_url = format!(
-            "https://claude.ai/oauth/authorize?client_id={CLIENT_ID}&response_type=code&redirect_uri={}&scope={}&state={state}&code_challenge={challenge}&code_challenge_method=S256",
-            urlencoding_encode(REDIRECT),
-            urlencoding_encode("org:create_api_key user:profile user:inference"),
-        );
-        // Fallback-friendly: also try console host if user has console login.
-        let _alt = format!(
-            "https://console.anthropic.com/oauth/authorize?client_id={CLIENT_ID}&response_type=code&redirect_uri={}&scope={}&state={state}&code_challenge={challenge}&code_challenge_method=S256",
-            urlencoding_encode(REDIRECT),
-            urlencoding_encode("org:create_api_key user:profile user:inference"),
-        );
+    fn build_auth_url(
+        authorize: &str,
+        redirect: &str,
+        state: &str,
+        challenge: &str,
+    ) -> String {
+        // Order and `code=true` match Claude Code's generateAuthUrl.
+        format!(
+            "{authorize}?code=true&client_id={CLIENT_ID}&response_type=code&redirect_uri={}&scope={}&code_challenge={challenge}&code_challenge_method=S256&state={state}",
+            urlencoding_encode(redirect),
+            urlencoding_encode(SCOPES),
+        )
+    }
 
-        send(tx, BrowserLoginProgress::OpenUrl(auth_url.clone()));
-        send(
-            tx,
-            BrowserLoginProgress::Status("complete sign-in in the browser…".into()),
-        );
-        let _ = open_browser(&auth_url);
-
-        let code = wait_localhost_code(PORT, Some(&state), cancel, Duration::from_secs(600))?;
-        send(
-            tx,
-            BrowserLoginProgress::Status("exchanging code for tokens…".into()),
-        );
-
+    fn exchange_code(
+        code: &str,
+        redirect: &str,
+        verifier: &str,
+        state: &str,
+    ) -> Result<OAuthTokens> {
         let client = http()?;
-        let token_urls = [
-            "https://platform.claude.com/v1/oauth/token",
-            "https://console.anthropic.com/v1/oauth/token",
-        ];
         let form = [
             ("grant_type", "authorization_code"),
-            ("code", code.as_str()),
-            ("redirect_uri", REDIRECT),
+            ("code", code),
+            ("redirect_uri", redirect),
             ("client_id", CLIENT_ID),
-            ("code_verifier", verifier.as_str()),
-            ("state", state.as_str()),
+            ("code_verifier", verifier),
+            ("state", state),
         ];
         let mut last = String::new();
-        for url in token_urls {
-            let res = match client.post(url).form(&form).send() {
+        for url in [TOKEN_URL, "https://api.anthropic.com/v1/oauth/token"] {
+            let res = match client
+                .post(url)
+                .header(
+                    "Content-Type",
+                    "application/x-www-form-urlencoded;charset=utf-8",
+                )
+                .form(&form)
+                .send()
+            {
                 Ok(r) => r,
                 Err(e) => {
                     last = e.to_string();
@@ -1210,6 +1208,112 @@ pub mod claude {
         )))
     }
 
+    pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
+        // Prefer an already-signed-in Claude Code session (no browser needed).
+        if let Ok(Some(imported)) = import_claude_cli() {
+            send(
+                tx,
+                BrowserLoginProgress::Status("using existing Claude Code session".into()),
+            );
+            return Ok(imported);
+        }
+
+        let verifier = random_urlsafe(32);
+        let challenge = pkce_challenge(&verifier);
+        let state = random_urlsafe(16);
+
+        // ── Prefer loopback (same as interactive Claude Code) ────────────
+        let bound = CALLBACK_PORTS.iter().find_map(|port| {
+            TcpListener::bind(("127.0.0.1", *port))
+                .ok()
+                .map(|listener| (listener, *port))
+        });
+
+        if let Some((listener, port)) = bound {
+            let redirect = format!("http://localhost:{port}/callback");
+            // Claude.ai subscription first; console as second open if user prefers.
+            let auth_url = build_auth_url(AUTHORIZE_CLAUDE_AI, &redirect, &state, &challenge);
+            let _console_url = build_auth_url(AUTHORIZE_CONSOLE, &redirect, &state, &challenge);
+
+            send(tx, BrowserLoginProgress::OpenUrl(auth_url.clone()));
+            send(
+                tx,
+                BrowserLoginProgress::Status(
+                    "complete Claude sign-in in the browser (Claude.ai subscription)…".into(),
+                ),
+            );
+            let _ = open_browser(&auth_url);
+
+            let code = wait_localhost_code_on(
+                listener,
+                Some(&state),
+                cancel,
+                Duration::from_secs(600),
+            )?;
+            send(
+                tx,
+                BrowserLoginProgress::Status("exchanging Claude authorization code…".into()),
+            );
+            return exchange_code(&code, &redirect, &verifier, &state);
+        }
+
+        // ── Manual paste fallback (Claude Code headless path) ────────────
+        // platform.claude.com shows the code on a page; user pastes it here.
+        let auth_url = build_auth_url(AUTHORIZE_CLAUDE_AI, MANUAL_REDIRECT, &state, &challenge);
+        send(tx, BrowserLoginProgress::OpenUrl(auth_url.clone()));
+        send(
+            tx,
+            BrowserLoginProgress::DeviceCode {
+                verification_url: auth_url.clone(),
+                user_code: "(paste the code from the browser after Authorize)".into(),
+            },
+        );
+        send(
+            tx,
+            BrowserLoginProgress::Status(
+                "localhost ports busy — open the URL, authorize, then paste the code and press Enter".into(),
+            ),
+        );
+        let _ = open_browser(&auth_url);
+
+        let code = wait_manual_code_paste(cancel, Duration::from_secs(600))?;
+        send(
+            tx,
+            BrowserLoginProgress::Status("exchanging Claude authorization code…".into()),
+        );
+        exchange_code(&code, MANUAL_REDIRECT, &verifier, &state)
+    }
+
+    /// Read a one-line authorization code from stdin (manual Claude flow).
+    /// The TUI also stores pastes into the login key buffer when we surface
+    /// DeviceCode; for the background thread we poll a small file drop zone
+    /// under ~/.nur so the TUI can write the pasted code without sharing stdin.
+    fn wait_manual_code_paste(cancel: &CancelFlag, timeout: Duration) -> Result<String> {
+        let path = crate::config::nur_home().join("oauth_paste_code.txt");
+        let _ = std::fs::remove_file(&path);
+        let start = std::time::Instant::now();
+        loop {
+            if cancel.is_cancelled() {
+                let _ = std::fs::remove_file(&path);
+                return Err(MuseError::Other("login cancelled".into()));
+            }
+            if start.elapsed() > timeout {
+                let _ = std::fs::remove_file(&path);
+                return Err(MuseError::Other(
+                    "Claude login timed out waiting for pasted code".into(),
+                ));
+            }
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                let code = text.trim().to_string();
+                let _ = std::fs::remove_file(&path);
+                if !code.is_empty() {
+                    return Ok(code);
+                }
+            }
+            thread::sleep(Duration::from_millis(200));
+        }
+    }
+
     pub fn refresh(refresh: &str) -> Result<OAuthTokens> {
         let client = http()?;
         let form = [
@@ -1217,11 +1321,16 @@ pub mod claude {
             ("refresh_token", refresh),
             ("client_id", CLIENT_ID),
         ];
-        for url in [
-            "https://platform.claude.com/v1/oauth/token",
-            "https://console.anthropic.com/v1/oauth/token",
-        ] {
-            let Ok(res) = client.post(url).form(&form).send() else {
+        for url in [TOKEN_URL, "https://api.anthropic.com/v1/oauth/token"] {
+            let Ok(res) = client
+                .post(url)
+                .header(
+                    "Content-Type",
+                    "application/x-www-form-urlencoded;charset=utf-8",
+                )
+                .form(&form)
+                .send()
+            else {
                 continue;
             };
             let body = res.text().unwrap_or_default();
@@ -1245,48 +1354,67 @@ pub mod claude {
 
     pub fn import_claude_cli() -> Result<Option<OAuthTokens>> {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        let path = home.join(".claude").join(".credentials.json");
-        if !path.exists() {
-            return Ok(None);
-        }
-        let text = std::fs::read_to_string(&path)?;
-        let v: serde_json::Value = serde_json::from_str(&text)?;
-        let oauth = v
-            .get("claudeAiOauth")
-            .ok_or_else(|| MuseError::Other("no claudeAiOauth".into()))
-            .ok();
-        let Some(oauth) = oauth else {
-            return Ok(None);
-        };
-        let access = oauth
-            .get("accessToken")
-            .and_then(|x| x.as_str())
-            .unwrap_or("");
-        if access.is_empty() {
-            return Ok(None);
-        }
-        let refresh = oauth
-            .get("refreshToken")
-            .and_then(|x| x.as_str())
-            .map(|s| s.to_string());
-        // Claude stores expiresAt as ms epoch sometimes.
-        let expires_at = oauth.get("expiresAt").and_then(|x| {
-            if let Some(n) = x.as_u64() {
-                Some(if n > 10_000_000_000 { n / 1000 } else { n })
-            } else {
-                None
+        let candidates = [
+            home.join(".claude").join(".credentials.json"),
+            home.join(".config")
+                .join("claude")
+                .join(".credentials.json"),
+        ];
+        for path in candidates {
+            if !path.exists() {
+                continue;
             }
-        });
-        Ok(Some(OAuthTokens {
-            access_token: access.to_string(),
-            refresh_token: refresh,
-            expires_at,
-            meta: Some(OauthMeta {
-                issuer: "https://claude.ai".into(),
-                client_id: CLIENT_ID.into(),
-                extra: serde_json::json!({"imported_from": "claude-code"}),
-            }),
-        }))
+            let text = match std::fs::read_to_string(&path) {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            let v: serde_json::Value = match serde_json::from_str(&text) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let oauth = v
+                .get("claudeAiOauth")
+                .or_else(|| v.get("claude_ai_oauth"))
+                .cloned();
+            let Some(oauth) = oauth else {
+                continue;
+            };
+            let access = oauth
+                .get("accessToken")
+                .or_else(|| oauth.get("access_token"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("");
+            if access.is_empty() {
+                continue;
+            }
+            let refresh = oauth
+                .get("refreshToken")
+                .or_else(|| oauth.get("refresh_token"))
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string());
+            // Claude stores expiresAt as ms epoch sometimes.
+            let expires_at = oauth
+                .get("expiresAt")
+                .or_else(|| oauth.get("expires_at"))
+                .and_then(|x| {
+                    if let Some(n) = x.as_u64() {
+                        Some(if n > 10_000_000_000 { n / 1000 } else { n })
+                    } else {
+                        None
+                    }
+                });
+            return Ok(Some(OAuthTokens {
+                access_token: access.to_string(),
+                refresh_token: refresh,
+                expires_at,
+                meta: Some(OauthMeta {
+                    issuer: "https://claude.ai".into(),
+                    client_id: CLIENT_ID.into(),
+                    extra: serde_json::json!({"imported_from": "claude-code"}),
+                }),
+            }));
+        }
+        Ok(None)
     }
 }
 

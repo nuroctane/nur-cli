@@ -149,11 +149,15 @@ fn model_list_urls(base_url: &str, provider_id: &str, is_oauth: bool) -> Vec<Str
         "kimi" if is_oauth => {
             urls.push(format!("{}/models", crate::providers::KIMI_CODE_BASE_URL));
         }
-        "antigravity" if is_oauth => {
+        "antigravity" | "google" if is_oauth => {
             // Google's OAuth quickstart documents this endpoint; the
             // OpenAI-compatible base does not consistently expose /models.
             urls.push("https://generativelanguage.googleapis.com/v1/models".into());
             urls.push(format!("{base}/models"));
+        }
+        "github-copilot" => {
+            urls.push(format!("{base}/models"));
+            urls.push("https://api.githubcopilot.com/models".into());
         }
         "github-models" => {
             // Catalog is the official list; inference base may 404 on /models.
@@ -246,7 +250,7 @@ fn fetch_once(
                     req = req.header("X-OpenAI-Fedramp", "true");
                 }
             }
-            "antigravity" if oauth.is_some() => {
+            "antigravity" | "google" if oauth.is_some() => {
                 req = req.bearer_auth(api_key);
                 if let Some(project_id) = oauth.and_then(|context| context.project_id.as_deref()) {
                     req = req.header("x-goog-user-project", project_id);

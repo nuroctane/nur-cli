@@ -245,7 +245,7 @@ fn draw_login_browser(f: &mut Frame, app: &App, area: Rect) {
         theme::INDIGO,
         &title,
         None,
-        "  esc cancel  ",
+        "  esc cancel  ·  paste code + ↵ if prompted  ",
     );
     let inner = modal_inner(rect);
     let col = (inner.width as usize).saturating_sub(4);
@@ -265,6 +265,22 @@ fn draw_login_browser(f: &mut Frame, app: &App, area: Rect) {
                     .fg(theme::BG)
                     .bg(theme::META_BLUE)
                     .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        lines.push(Line::default());
+    }
+    // Manual OAuth paste buffer (Claude headless / busy-port path).
+    if !m.buf.is_empty() || m.browser_user_code.contains("paste") {
+        let shown = if m.buf.is_empty() {
+            "…".to_string()
+        } else {
+            truncate(&m.buf, col.saturating_sub(10))
+        };
+        lines.push(Line::from(vec![
+            Span::styled("  paste  ".to_string(), theme::style_faint()),
+            Span::styled(
+                shown,
+                Style::default().fg(theme::FG).add_modifier(Modifier::BOLD),
             ),
         ]));
         lines.push(Line::default());
@@ -419,7 +435,10 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
         } else {
             theme::style_faint()
         };
-        let badge = if p.browser_auth { "  🌐" } else { "" };
+        // Browser/OAuth badge sits immediately after the name (not after the
+        // note) so truncate() never clips the 🌐 off narrow terminals.
+        let oauth_badge = if p.browser_auth { " 🌐" } else { "" };
+        let name_col = format!("{}{oauth_badge}", p.name);
         let priv_tag = crate::providers::effective_privacy(&app.cfg.provider_privacy, p.id).tag();
         let priv_badge = if priv_tag.is_empty() {
             String::new()
@@ -433,7 +452,8 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
             .position(|x| x == p.id)
             .map(|i| format!("  ↻#{}", i + 1))
             .unwrap_or_default();
-        let text = format!("{marker}{:<22}{}{badge}{priv_badge}{fb}", p.name, p.note);
+        // Pad name+badge as a unit so notes still align roughly.
+        let text = format!("{marker}{name_col:<25} {}{priv_badge}{fb}", p.note);
         let style = if selected { name_style } else { note_style };
         lines.push(Line::from(Span::styled(truncate(&text, col), style)));
 

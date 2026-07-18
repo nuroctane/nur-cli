@@ -109,7 +109,7 @@ pub const PROVIDERS: &[Provider] = &[
     Provider { id: "openai", name: "OpenAI", base_url: "https://api.openai.com/v1", default_model: "gpt-5.5", env_key: "OPENAI_API_KEY", style: R, note: "GPT · API key or ChatGPT OAuth", key_optional: false, browser_auth: true },
     Provider { id: "openai-cc", name: "OpenAI (Chat Completions)", base_url: "https://api.openai.com/v1", default_model: "gpt-5.5", env_key: "OPENAI_API_KEY", style: CC, note: "GPT · legacy chat endpoint", key_optional: false, browser_auth: false },
     Provider { id: "anthropic", name: "Anthropic", base_url: "https://api.anthropic.com/v1", default_model: "claude-sonnet-5", env_key: "ANTHROPIC_API_KEY", style: AM, note: "Claude Messages API · key or browser OAuth", key_optional: false, browser_auth: true },
-    Provider { id: "google", name: "Google Gemini", base_url: "https://generativelanguage.googleapis.com/v1beta/openai", default_model: "gemini-3-pro", env_key: "GEMINI_API_KEY", style: CC, note: "Gemini · OpenAI-compat", key_optional: false, browser_auth: false },
+    Provider { id: "google", name: "Google Gemini", base_url: "https://generativelanguage.googleapis.com/v1beta/openai", default_model: "gemini-3-pro", env_key: "GEMINI_API_KEY", style: CC, note: "Gemini · key or gcloud SSO", key_optional: false, browser_auth: true },
     Provider { id: "antigravity", name: "Google Antigravity", base_url: "https://generativelanguage.googleapis.com/v1beta/openai", default_model: "gemini-3-pro", env_key: "GEMINI_API_KEY", style: CC, note: "browser SSO · Code Assist", key_optional: false, browser_auth: true },
     Provider { id: "xai", name: "xAI Grok", base_url: "https://api.x.ai/v1", default_model: "grok-4", env_key: "XAI_API_KEY", style: CC, note: "Grok · key or browser", key_optional: false, browser_auth: true },
     Provider { id: "deepseek", name: "DeepSeek", base_url: "https://api.deepseek.com/v1", default_model: "deepseek-chat", env_key: "DEEPSEEK_API_KEY", style: CC, note: "V3 · R1", key_optional: false, browser_auth: false },
@@ -173,6 +173,7 @@ pub const PROVIDERS: &[Provider] = &[
     Provider { id: "nano-gpt", name: "NanoGPT", base_url: "https://nano-gpt.com/api/v1", default_model: "gpt-5.5", env_key: "NANOGPT_API_KEY", style: CC, note: "pay-per-prompt", key_optional: false, browser_auth: false },
     Provider { id: "opencode", name: "OpenCode Zen", base_url: "https://opencode.ai/zen/v1", default_model: "claude-sonnet-4", env_key: "OPENCODE_API_KEY", style: CC, note: "coding-model gateway", key_optional: false, browser_auth: false },
     Provider { id: "github-models", name: "GitHub Models", base_url: "https://models.github.ai/inference", default_model: "openai/gpt-4o", env_key: "GITHUB_TOKEN", style: CC, note: "gh CLI or PAT · free tier", key_optional: false, browser_auth: true },
+    Provider { id: "github-copilot", name: "GitHub Copilot", base_url: "https://api.githubcopilot.com", default_model: "gpt-4.1", env_key: "GITHUB_TOKEN", style: CC, note: "Copilot subscription · gh auth", key_optional: false, browser_auth: true },
     Provider { id: "helicone", name: "Helicone AI Gateway", base_url: "https://ai-gateway.helicone.ai/v1", default_model: "openai/gpt-5.5", env_key: "HELICONE_API_KEY", style: CC, note: "gateway + observability", key_optional: false, browser_auth: false },
     Provider { id: "aimlapi", name: "AI/ML API", base_url: "https://api.aimlapi.com/v1", default_model: "gpt-5.5", env_key: "AIMLAPI_KEY", style: CC, note: "300+ models, one key", key_optional: false, browser_auth: false },
 
@@ -459,10 +460,12 @@ pub fn oauth_browser_provider_ids() -> &'static [&'static str] {
         "xai",
         "kimi",
         "anthropic",
+        "google",
         "antigravity",
         "huggingface",
         "azure",
         "bedrock",
         "github-models",
+        "github-copilot",
     ]
 }

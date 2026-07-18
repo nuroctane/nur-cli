@@ -178,7 +178,7 @@ impl ApiClient {
                 }
             }
         }
-        if self.provider_id == "antigravity" {
+        if self.provider_id == "antigravity" || self.provider_id == "google" {
             if let Some(project_id) = self
                 .oauth
                 .as_ref()
@@ -203,10 +203,16 @@ impl ApiClient {
                 .header("X-XAI-Token-Auth", "xai-grok-cli")
                 .header("User-Agent", format!("xai-grok-workspace/{ver}"));
         }
-        if self.provider_id == "github-models" {
+        if self.provider_id == "github-models" || self.provider_id == "github-copilot" {
             req = req
                 .header("Accept", "application/vnd.github+json")
                 .header("X-GitHub-Api-Version", "2026-03-10");
+            if self.provider_id == "github-copilot" {
+                // Copilot OpenAI-compatible proxy expects the editor product header.
+                req = req
+                    .header("Editor-Version", "nur-cli/1.0.0")
+                    .header("Copilot-Integration-Id", "vscode-chat");
+            }
         }
         req
     }

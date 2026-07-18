@@ -4416,6 +4416,7 @@ impl App {
                     m.stage = LoginStage::Method;
                     m.error = None;
                     m.browser_status.clear();
+                    m.buf.clear();
                 }
             }
             KeyCode::Char('c')
@@ -4424,6 +4425,52 @@ impl App {
                 self.cancel_oauth();
                 if let Some(m) = &mut self.login {
                     m.stage = LoginStage::Method;
+                    m.buf.clear();
+                }
+            }
+            // Manual Claude OAuth (and similar): type/paste the auth code, Enter submits
+            // it to the background waiter via ~/.nur/oauth_paste_code.txt.
+            KeyCode::Enter => {
+                let code = self
+                    .login
+                    .as_ref()
+                    .map(|m| m.buf.trim().to_string())
+                    .unwrap_or_default();
+                if code.is_empty() {
+                    return;
+                }
+                let path = crate::config::nur_home().join("oauth_paste_code.txt");
+                if let Err(e) = std::fs::write(&path, format!("{code}\n")) {
+                    if let Some(m) = &mut self.login {
+                        m.error = Some(format!("could not write pasted code: {e}"));
+                    }
+                    return;
+                }
+                if let Some(m) = &mut self.login {
+                    m.buf.clear();
+                    m.browser_status = "code submitted — exchanging…".into();
+                    m.error = None;
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(m) = &mut self.login {
+                    m.buf.pop();
+                }
+            }
+            KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(t) = clipboard_get() {
+                    if let Some(m) = &mut self.login {
+                        m.buf.push_str(t.trim());
+                    }
+                }
+            }
+            KeyCode::Char(c)
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT)
+                    && !c.is_control() =>
+            {
+                if let Some(m) = &mut self.login {
+                    m.buf.push(c);
                 }
             }
             _ => {}
