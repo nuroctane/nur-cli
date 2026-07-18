@@ -22,7 +22,7 @@ pub fn render_markdown(text: &str, base: Style) -> Vec<Line<'static>> {
 
     let mut out: Vec<Line<'static>> = Vec::with_capacity(parsed.lines.len());
     for line in parsed.lines {
-        // Remap tui-markdown's default palette to the Meta palette at line level
+        // Remap tui-markdown's stock palette to Nur transcript hues at line level
         // (code blocks / quotes set the style on the line).
         let line_style = meta_palette(line.style);
         let line_has_fg = line_style.fg.is_some();
@@ -45,30 +45,32 @@ pub fn render_markdown(text: &str, base: Style) -> Vec<Line<'static>> {
     out
 }
 
-/// Translate tui-markdown's stock colours (cyan headings, white-on-black code,
-/// green quotes, blue links/markers) into the Meta blue palette, so rendered
-/// markdown matches the rest of the UI. Modifiers (bold/italic/strikethrough)
-/// are preserved as-is.
+/// Translate tui-markdown's stock colours into the Nur **transcript** palette.
+/// Goal: clear structure (headings / links / code / quotes / lists) without
+/// collapsing everything into white-or-gold. Modifiers stay as-is.
 fn meta_palette(mut style: Style) -> Style {
     use ratatui::style::Color;
-    // Inline code / code blocks: white-on-black → Meta code palette.
+    // Inline code / code blocks: mint-on-dark (not gold-on-dark).
     if style.bg == Some(Color::Black) {
         style.bg = Some(theme::CODE_BG);
         if matches!(style.fg, Some(Color::White) | None) {
-            style.fg = Some(theme::CODE_FG);
+            style.fg = Some(theme::MD_CODE);
         }
     }
-    // H1 banner uses a cyan background bar — drop it, emphasize in blue instead.
+    // H1 banner uses a cyan background bar — drop bg, use cool heading hue.
     if style.bg == Some(Color::Cyan) {
         style.bg = None;
-        style.fg = Some(theme::META_BLUE_SKY);
+        style.fg = Some(theme::MD_H1);
     }
     style.fg = match style.fg {
-        Some(Color::Cyan) => Some(theme::META_BLUE_SKY),     // H2 / H3 headings
-        Some(Color::LightCyan) => Some(theme::BLUE_200),     // H4–H6 headings
-        Some(Color::Green) => Some(theme::MUTED),            // blockquotes
-        Some(Color::Blue) => Some(theme::META_BLUE_BRIGHT),  // links
-        Some(Color::LightBlue) => Some(theme::META_BLUE_SKY), // ordered-list markers
+        Some(Color::Cyan) => Some(theme::MD_H2),           // H2 / H3
+        Some(Color::LightCyan) => Some(theme::MD_H3),      // H4–H6
+        Some(Color::Green) => Some(theme::MD_QUOTE),       // blockquotes
+        Some(Color::Blue) => Some(theme::MD_LINK),         // links
+        Some(Color::LightBlue) => Some(theme::MD_LIST),    // list markers
+        Some(Color::Yellow) | Some(Color::LightYellow) => Some(theme::AMBER),
+        Some(Color::Magenta) | Some(Color::LightMagenta) => Some(theme::LAVENDER),
+        Some(Color::Red) | Some(Color::LightRed) => Some(theme::ERROR),
         other => other,
     };
     style

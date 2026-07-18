@@ -38,8 +38,21 @@ pub const FAINT: Color = Color::Rgb(96, 90, 78);
 pub const BORDER: Color = Color::Rgb(48, 44, 36);
 /// Code / block background.
 pub const CODE_BG: Color = Color::Rgb(16, 18, 14);
-/// Inline code foreground (warm parchment).
+/// Inline code foreground (legacy warm parchment — prefer MD_CODE in transcript).
 pub const CODE_FG: Color = Color::Rgb(232, 210, 150);
+/// Cool mint code in assistant markdown (stands out from body + gold chrome).
+pub const MD_CODE: Color = Color::Rgb(160, 220, 195);
+/// Markdown structure hues — keep these *off* the gold spine for legibility.
+pub const MD_H1: Color = Color::Rgb(120, 210, 215); // aqua
+pub const MD_H2: Color = Color::Rgb(130, 175, 235); // soft sky blue
+pub const MD_H3: Color = Color::Rgb(165, 155, 235); // periwinkle
+pub const MD_LINK: Color = Color::Rgb(100, 195, 235); // bright sky
+pub const MD_QUOTE: Color = Color::Rgb(150, 165, 145); // sage
+pub const MD_LIST: Color = Color::Rgb(90, 185, 165); // teal-mint
+/// Assistant prose — cool off-white (not pure white, not warm parchment).
+pub const ASSISTANT_FG: Color = Color::Rgb(228, 232, 240);
+/// Soft secondary assistant labels (meta under answers).
+pub const ASSISTANT_DIM: Color = Color::Rgb(150, 160, 175);
 pub const SUCCESS: Color = Color::Rgb(52, 199, 123);
 pub const WARN: Color = Color::Rgb(255, 186, 73);
 pub const ERROR: Color = Color::Rgb(255, 99, 99);
@@ -440,11 +453,22 @@ pub fn style_user() -> Style {
 }
 
 pub fn style_assistant() -> Style {
-    Style::default().fg(FG)
+    Style::default().fg(ASSISTANT_FG)
+}
+
+/// Secondary lines under an answer (e.g. meta footnotes).
+#[allow(dead_code)]
+pub fn style_assistant_dim() -> Style {
+    Style::default().fg(ASSISTANT_DIM)
 }
 
 pub fn style_tool() -> Style {
-    Style::default().fg(META_BLUE_SKY)
+    Style::default().fg(TEAL)
+}
+
+/// Tool result body: soft tint from the tool family (not plain grey).
+pub fn style_tool_result(name: &str) -> Style {
+    Style::default().fg(dim(tool_color(name), 0.28))
 }
 
 pub fn style_success() -> Style {

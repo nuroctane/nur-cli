@@ -1799,26 +1799,21 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
         Cell::Assistant { text, streaming } => {
             out.push(Line::default());
             let md = markdown::render_markdown(text, theme::style_assistant());
+            // Cool teal/mint bullet — chrome stays gold; answers should not.
+            let bullet = theme::SEAFOAM;
             // render_markdown always yields ≥1 line, so gate on the source text.
             if text.trim().is_empty() && *streaming {
-                // Waiting for first token — quiet Meta pulse.
                 out.push(Line::from(vec![
-                    Span::styled(
-                        "● ".to_string(),
-                        Style::default().fg(theme::META_BLUE),
-                    ),
+                    Span::styled("● ".to_string(), Style::default().fg(bullet)),
                     Span::styled(
                         theme::pulse_frame(tick).to_string(),
-                        Style::default().fg(theme::META_BLUE_SKY),
+                        Style::default().fg(theme::CYAN),
                     ),
                 ]));
             }
             for (i, mut l) in md.into_iter().enumerate() {
                 let prefix = if i == 0 {
-                    Span::styled(
-                        "● ".to_string(),
-                        Style::default().fg(theme::META_BLUE),
-                    )
+                    Span::styled("● ".to_string(), Style::default().fg(bullet))
                 } else {
                     Span::raw("  ".to_string())
                 };
@@ -1826,14 +1821,19 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                 out.push(l);
             }
             if *streaming {
-                // Blinking Meta block caret at end of stream.
                 if let Some(last) = out.last_mut() {
                     if theme::blink_on(tick) {
-                        last.spans.push(Span::styled("█".to_string(), theme::style_cursor_on()));
+                        last.spans.push(Span::styled(
+                            "█".to_string(),
+                            Style::default()
+                                .fg(theme::BG)
+                                .bg(theme::SEAFOAM)
+                                .add_modifier(Modifier::BOLD),
+                        ));
                     } else {
                         last.spans.push(Span::styled(
                             "▏".to_string(),
-                            theme::style_cursor_off(),
+                            Style::default().fg(theme::SEAFOAM),
                         ));
                     }
                 }
@@ -2138,11 +2138,13 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                         Span::raw("  ".to_string()),
                         Span::styled(
                             format!("{} running", theme::pulse_frame(tick)),
-                            Style::default().fg(theme::META_BLUE_SKY),
+                            Style::default().fg(hue),
                         ),
                     ])),
                     Some(r) => {
                         let all: Vec<&str> = r.lines().filter(|l| !l.trim().is_empty()).collect();
+                        let body = theme::style_tool_result(name);
+                        let gutter = Style::default().fg(theme::dim(hue, 0.45));
                         if all.is_empty() {
                             out.push(Line::from(vec![
                                 Span::raw("  ".to_string()),
@@ -2156,11 +2158,11 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                                 let prefix = if i == 0 { "└ " } else { "  " };
                                 let mut spans = vec![
                                     Span::raw("  ".to_string()),
-                                    Span::styled(prefix.to_string(), theme::style_faint()),
+                                    Span::styled(prefix.to_string(), gutter),
                                 ];
                                 // Shell output keeps ANSI colours (cargo, git,
-                                // ls) — parsed to spans; plain_lines strips for copy.
-                                spans.extend(ansi::line_to_spans(l, theme::style_faint()));
+                                // ls); default base is family-tinted for non-ANSI.
+                                spans.extend(ansi::line_to_spans(l, body));
                                 out.push(Line::from(spans));
                             }
                         }
