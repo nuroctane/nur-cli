@@ -28,7 +28,7 @@ tool_result_max_chars = 12000
 compact_keep_user_turns = 4
 compact_tool_body_max_chars = 800
 
-# Cost-saver prompt: skip PLUR inject, skills catalog, long memory (tools stay full)
+# Cost-saver prompt: skip PLUR inject + long memory (tools + skill NL/slash stay full)
 poor_mode = false
 
 # Background TTL pack repair on later TUI opens (first install is foreground)
@@ -54,7 +54,7 @@ auto_update = true
 | `tool_result_max_chars` | integer | `12000` | Max inline tool output chars; larger results spill to disk (`0` = unlimited) |
 | `compact_keep_user_turns` | integer | `4` | Recent user turns kept after compaction |
 | `compact_tool_body_max_chars` | integer | `800` | When compacting, truncate older tool bodies to this many chars (`0` = leave intact) |
-| `poor_mode` | bool | `false` | Skip PLUR auto-inject, skills catalog, and long memory in the system prompt |
+| `poor_mode` | bool | `false` | Skip PLUR auto-inject and long memory (skill NL/slash activation still works) |
 | `ecosystem_auto_ensure` | bool | `true` | Background TTL **repair** of packs on later TUI opens (first install is foreground via one-liner / EXE / `nur install`); set `false` to skip repair |
 | `auto_update` | bool | `true` | On interactive launch, check [GitHub Releases](https://github.com/nuroctane/nur-cli/releases/latest) and install a newer binary when available (6h TTL when already current). Opt out with `false` or env `NUR_SKIP_AUTO_UPDATE=1`. `nur update` always runs the full update path |
 

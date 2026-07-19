@@ -94,7 +94,8 @@ pub struct Config {
     /// `0` = leave tool bodies intact for the summarizer.
     #[serde(default = "default_compact_tool_body_max")]
     pub compact_tool_body_max_chars: u64,
-    /// Cost-saver: skip PLUR auto-inject, skills catalog, and long memory in the system prompt.
+    /// Cost-saver: skip PLUR auto-inject and long memory in the system prompt.
+    /// Does not disable skill activation (NL / slash still work).
     #[serde(default)]
     pub poor_mode: bool,
     /// When true (default), TUI open background-repairs graphify/plur/ruflo/browser packs.

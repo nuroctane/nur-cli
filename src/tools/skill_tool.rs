@@ -1,8 +1,8 @@
 //! Skill tool — list installed skills and load a skill's full instructions
-//! on demand (the system prompt only inlines small skills).
+//! on demand. Skills are never bulk-injected into the system prompt.
 
 use super::{arg_str, Tool, ToolContext};
-use crate::agent::skills::load_skills;
+use crate::agent::skills::{load_skills, skills_prompt_section};
 use crate::error::{MuseError, Result};
 use serde_json::Value;
 
@@ -14,9 +14,9 @@ impl Tool for SkillTool {
     }
 
     fn description(&self) -> &str {
-        "Agent skills (SKILL.md packs). action=list shows installed skills; \
-         action=read loads a named skill's full instructions — invoke before \
-         doing a task a skill covers."
+        "Agent skills (SKILL.md packs). Skills are on-demand only (not pre-loaded). \
+         action=list shows installed skills; action=read loads a named skill's full \
+         instructions. Prefer when NL/slash did not already activate a skill."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -35,19 +35,13 @@ impl Tool for SkillTool {
 
         match action.as_str() {
             "list" => {
-                if skills.is_empty() {
-                    return Ok(
-                        "no skills installed — add <name>/SKILL.md under ~/.nur/skills/, \
-                         ~/.agents/skills/, or the workspace .meta/.agents skills dirs. \
-                         Graphify: uv tool install graphifyy && graphify install --platform agents"
-                            .into(),
+                let mut out = skills_prompt_section(&skills);
+                if !skills.is_empty() {
+                    out.push_str(
+                        "\nUse skill(action=read, name=<name>) for full instructions. \
+                         Users can also activate via /skill-name or natural-language intent.",
                     );
                 }
-                let mut out = String::from("installed skills\n");
-                for s in &skills {
-                    out.push_str(&format!("  {} — {}\n", s.name, s.description));
-                }
-                out.push_str("\nUse skill(action=read, name=<name>) for full instructions.");
                 Ok(out)
             }
             "read" => {
@@ -60,8 +54,7 @@ impl Tool for SkillTool {
                             "skill '{name}' not found — action=list to see installed skills"
                         ))
                     })?;
-                // Re-read the file so large packs (e.g. graphify) aren't truncated
-                // the way the system-prompt catalog is.
+                // Re-read the file so large packs aren't truncated.
                 let body = std::fs::read_to_string(&skill.path)
                     .map(|t| {
                         // Strip YAML frontmatter if present.

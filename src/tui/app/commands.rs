@@ -1065,8 +1065,8 @@ impl App {
             self.push_note(
                 Tone::Usage,
                 format!(
-                    "poor mode ON · skipping PLUR auto-inject, skills catalog, and long memory \
-                     (tools still full). budgets {}\n  \
+                    "poor mode ON · skipping PLUR auto-inject and long memory \
+                     (tools + skill NL/slash still full). budgets {}\n  \
                      /poor again to restore · /budget cost|tokens|turns for optional ceilings \
                      (all default unlimited) · set poor_mode=true in config.toml to persist",
                     self.budget_status_line()

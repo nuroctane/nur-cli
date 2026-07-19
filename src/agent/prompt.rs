@@ -1,12 +1,9 @@
 use super::memory::memory_prompt_excerpt;
 use super::mode::PermissionMode;
-use super::skills::{load_skills, skill_activation, skills_prompt_section};
+use super::skills::{load_skills, skill_activation};
 use crate::ecosystem;
 use crate::tools::shell_backend;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
 
 /// Project instruction files (first found wins). NUR.md preferred; META.md/MUSE.md legacy.
 pub const PROJECT_INSTRUCTION_FILES: &[&str] =
@@ -28,45 +25,14 @@ pub fn find_project_instructions(cwd: &Path) -> Option<(String, String)> {
     None
 }
 
-struct SkillCacheEntry {
-    loaded_at: Instant,
-    rendered: String,
-}
-
-static SKILL_CACHE: OnceLock<Mutex<HashMap<String, SkillCacheEntry>>> = OnceLock::new();
-fn skill_cache() -> &'static Mutex<HashMap<String, SkillCacheEntry>> {
-    SKILL_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn cached_skills(cwd: &Path) -> String {
-    let key = cwd.to_string_lossy().to_string();
-    let ttl = Duration::from_secs(30);
-    // Fast path: cache hit within TTL
-    if let Ok(cache) = skill_cache().lock() {
-        if let Some(entry) = cache.get(&key) {
-            if entry.loaded_at.elapsed() < ttl {
-                return entry.rendered.clone();
-            }
-        }
-    }
-    // Miss or expired: reload
-    let skills = load_skills(cwd);
-    let rendered = skills_prompt_section(&skills);
-    if let Ok(mut cache) = skill_cache().lock() {
-        cache.insert(
-            key,
-            SkillCacheEntry {
-                loaded_at: Instant::now(),
-                rendered: rendered.clone(),
-            },
-        );
-    }
-    rendered
-}
-
 /// The parts of the system prompt that come off disk (project instructions,
-/// memory, skills, shell probe). Built **once per user turn** — rebuilding it
-/// per model request re-read every SKILL.md and project instruction file on every API call.
+/// memory, shell probe) plus **on-demand** skill activation.
+///
+/// Skills are **not** catalogued into every prompt (that burned tokens on
+/// large installs). They activate only via natural-language intent matching
+/// or slash commands — works for every provider.
+///
+/// Built **once per user turn** so disk is not re-read on every model round.
 pub struct PromptContext {
     cwd: PathBuf,
     is_subagent: bool,
@@ -77,7 +43,6 @@ pub struct PromptContext {
     shell_label: String,
     project: Option<(String, String)>,
     memory: String,
-    skills: String,
     /// PLUR inject block — auto-loaded so the agent remembers past corrections.
     plur: String,
     /// Natural-language skill activation for this user turn (injected body).
@@ -91,8 +56,9 @@ impl PromptContext {
         Self::build_with_opts(cwd, is_subagent, model, provider, false, None)
     }
 
-    /// `poor_mode`: skip PLUR inject, skills catalog, and long memory excerpts
-    /// to cut background token spend (toggle via `/poor`).
+    /// `poor_mode`: skip PLUR inject and long memory excerpts to cut background
+    /// token spend (toggle via `/poor`). Does **not** disable skill activation —
+    /// NL and slash skills still fire.
     ///
     /// `user_text`: current user message — used for natural-language skill
     /// activation (e.g. "think like fable" → inject fable-method body).
@@ -121,12 +87,9 @@ impl PromptContext {
         } else {
             memory_prompt_excerpt(3000)
         };
-        let skills = if poor_mode {
-            String::new()
-        } else {
-            cached_skills(cwd)
-        };
-        let (activation, activation_label) = if poor_mode || is_subagent {
+        // Skills: on-demand only. NL activation runs for every provider (not
+        // gated by poor_mode). Subagents skip — they get a focused task prompt.
+        let (activation, activation_label) = if is_subagent {
             (String::new(), None)
         } else if let Some(text) = user_text {
             let loaded = load_skills(cwd);
@@ -145,7 +108,6 @@ impl PromptContext {
             shell_label: shell_backend().label.clone(),
             project: find_project_instructions(cwd),
             memory,
-            skills,
             plur,
             activation,
             activation_label,
@@ -252,13 +214,12 @@ plur, ruflo, skill, memory, todo_write, submit_plan, agent
   ruflo for pattern/embedding memory, graphify for code structure.
 - executor: MCP gateway (executor.sh) for external OpenAPI/GraphQL/MCP integrations — not for
   local repo edits. action=sources|search|call.
-- skill: action=list / action=read — packs pre-installed: design-eng (Emil), clone-website-meta,
-  cybersecurity (817 playbooks — load one by name, never all), context-pruning (DCP patterns),
-  opencode-awesome catalog, executor-gateway, akm-manager, plur, ruflo, graphify.
-- UI work → skill design-eng / emil-design-eng. Site clone → clone-website-meta. Security →
-  cybersecurity router then skill(read, name=<specific>). Long context → /compact + context-pruning.
-- Natural language skill requests (e.g. \"think like fable\", \"how fable would\") auto-activate
-  the matching skill for this turn — follow the injected body; slash commands are never required.
+- skill: action=list / action=read — load one skill by name when needed. Skills are **not**
+  pre-loaded into this prompt (catalog would waste tokens). Discover with skill(list) or
+  skill(read, name=…). Never load every playbook at once (e.g. cybersecurity: one by name).
+- Skills activate on demand only: natural-language intent (e.g. \"think like fable\") or
+  `/skill-name` slash. When a **SKILL ACTIVATED** block appears below, follow it for the turn.
+- UI polish → design-eng. Site clone → clone-website-meta. Security → cybersecurity then one playbook.
 - agent: spawn explore (read-only) or general subagent for parallel research
 - todo_write: maintain a live task list for multi-step work (always keep one in_progress)
 - submit_plan: formal plan artifact in plan mode
@@ -288,10 +249,10 @@ Direct technical markdown. Fence code with languages.
         }
 
         // Activation first so it outranks generic workflow defaults.
+        // (No full skills catalog — only the matched skill body, if any.)
         s.push_str(&self.activation);
         s.push_str(&self.memory);
         s.push_str(&self.plur);
-        s.push_str(&self.skills);
         s
     }
 }

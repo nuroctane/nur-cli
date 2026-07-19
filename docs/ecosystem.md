@@ -152,14 +152,21 @@ Only **installed** skills fire (marketplace plugin or skill pack). Unrelated cha
 
 ### Context discipline (why 800+ skills do not blow the prompt)
 
+Skills are **never** bulk-catalogued into the system prompt (that burned tokens
+and Claude/Anthropic usage on large installs). Activation is on-demand only:
+
 | Layer | What is injected | When |
 |-------|------------------|------|
-| **Catalog** | name + short description only | every turn (unless `poor_mode`) |
-| **NL activation** | full `SKILL.md` body for **one** matched skill | user wording hits an `INTENT_RULES` phrase |
+| **Default** | nothing skill-related | every normal turn |
+| **NL activation** | full `SKILL.md` body for **one** matched skill | built-in intent phrases, skill **name** in the query, or unique **description** intent |
 | **Slash one-shot** | full body + user prompt for **one** turn | `/skill-name <prompt>` |
 | **Slash sticky** | full body every turn until off | `/skill-name` / `on` / `off` |
-| **On demand** | `skill(action=read, name=…)` | model chooses to load more |
-| **`poor_mode`** | no catalog, no activation | limited-context hosts / cost saver |
+| **On demand** | `skill(action=list\|read, name=…)` | model loads more when needed |
+| **`poor_mode`** | skip PLUR + long memory only | cost saver — **skills still activate** |
+
+Works the same on every provider (Claude, Grok, OpenAI, …). Accidental discovery
+still works: saying a skill’s name (`grill-me`, `superpowers`) or a distinctive
+description phrase can activate that installed pack without a slash command.
 
 Pointer skills (e.g. **toolcraft**) stay short on purpose: they route to external docs instead of embedding a long guide. Prefer specific activation phrases so casual chat does not false-fire.
 

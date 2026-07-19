@@ -1,9 +1,13 @@
 //! Load agent skills (SKILL.md) — Claude Code-compatible shape.
 //!
-//! Large skills are listed by name/description only in the system prompt.
-//! Natural-language intents (e.g. "think like fable", "debug systematically",
-//! "TDD this") auto-activate matching skills for that turn by injecting their
-//! full body — no slash command required.
+//! Skills are **on-demand only** — never dumped into every system prompt.
+//! Activation paths (every provider):
+//! 1. Built-in `INTENT_RULES` phrase routes (high-signal workflows)
+//! 2. Installed skill **name** mentioned in the user message (accidental discovery)
+//! 3. Soft **description** intent match when the query clearly maps to one skill
+//! 4. Slash `/skill-name` (sticky or one-shot) from the TUI
+//!
+//! When activated, the full skill body is injected for that turn only.
 
 use std::path::{Path, PathBuf};
 
@@ -690,7 +694,18 @@ fn find_installed<'a>(skills: &'a [Skill], names: &[&str]) -> Option<&'a Skill> 
     None
 }
 
-/// Match user text to the first installed skill rule.
+/// Synthetic rule used when activation came from name/description discovery
+/// rather than a built-in `INTENT_RULES` phrase.
+const DISCOVERY_RULE: IntentRule = IntentRule {
+    skill_names: &[],
+    phrases: &[],
+    label: "skill",
+    why: "matched installed skill from your wording (name or description intent)",
+};
+
+/// Match user text to the first installed skill rule, then fall back to
+/// installed-skill name/description discovery so any pack can activate from
+/// natural language without being pre-loaded into the system prompt.
 pub fn detect_skill_activation<'a>(
     user_text: &str,
     skills: &'a [Skill],
@@ -735,6 +750,123 @@ pub fn detect_skill_activation<'a>(
         }
     }
 
+    // Accidental / free-form discovery against *installed* skills only.
+    // Prefer longest name match so `fable-method` wins over a short sibling.
+    if let Some(sk) = discover_by_skill_name(&t, skills) {
+        return Some((sk, &DISCOVERY_RULE));
+    }
+    if let Some(sk) = discover_by_description_intent(&t, skills) {
+        return Some((sk, &DISCOVERY_RULE));
+    }
+
+    None
+}
+
+/// True when the user message mentions this skill's name as whole tokens
+/// (hyphens and spaces interchangeable: `grill-me` ↔ `grill me`).
+fn skill_name_mentioned(user_norm: &str, skill_name: &str) -> bool {
+    let name = skill_name.trim();
+    if name.is_empty() {
+        return false;
+    }
+    let with_hyphen = normalize_intent_text(name);
+    let with_spaces = normalize_intent_text(&name.replace('-', " "));
+    // Very short names (≤3) are noisy ("ai", "sre") — require a skill cue.
+    let short = with_spaces.chars().count() <= 3;
+    let mentioned = (!with_hyphen.is_empty() && phrase_matches(user_norm, &with_hyphen))
+        || (!with_spaces.is_empty()
+            && with_spaces != with_hyphen
+            && phrase_matches(user_norm, &with_spaces));
+    if !mentioned {
+        return false;
+    }
+    if short {
+        return phrase_matches(user_norm, "skill")
+            || phrase_matches(user_norm, "use")
+            || phrase_matches(user_norm, "run")
+            || phrase_matches(user_norm, "with")
+            || phrase_matches(user_norm, "via")
+            || phrase_matches(user_norm, "mode")
+            || user_norm.starts_with(&with_spaces)
+            || user_norm.starts_with(&format!("/{with_spaces}"));
+    }
+    true
+}
+
+fn discover_by_skill_name<'a>(user_norm: &str, skills: &'a [Skill]) -> Option<&'a Skill> {
+    let mut best: Option<(&'a Skill, usize)> = None;
+    for sk in skills {
+        if !skill_name_mentioned(user_norm, &sk.name) {
+            continue;
+        }
+        let score = sk.name.chars().count();
+        match best {
+            Some((_, best_score)) if score <= best_score => {}
+            _ => best = Some((sk, score)),
+        }
+    }
+    best.map(|(sk, _)| sk)
+}
+
+/// Stopwords ignored when scoring description overlap (common English + agent fluff).
+const DESC_STOP: &[&str] = &[
+    "a", "an", "the", "and", "or", "to", "of", "for", "in", "on", "at", "by", "with",
+    "from", "this", "that", "these", "those", "is", "are", "was", "were", "be", "been",
+    "being", "have", "has", "had", "do", "does", "did", "will", "would", "can", "could",
+    "should", "may", "might", "must", "use", "using", "used", "when", "where", "what",
+    "which", "who", "how", "why", "into", "over", "under", "about", "after", "before",
+    "your", "you", "their", "them", "its", "it", "as", "if", "then", "than", "also",
+    "just", "only", "not", "no", "yes", "any", "all", "each", "other", "more", "most",
+    "some", "such", "via", "per", "between", "through", "during", "without", "within",
+    "skill", "skills", "agent", "agents", "help", "please", "like", "make", "need",
+    "needs", "want", "wants", "get", "set", "run", "work", "works", "working",
+];
+
+fn significant_tokens(text: &str) -> Vec<String> {
+    text.split_whitespace()
+        .map(|w| w.trim().to_ascii_lowercase())
+        .filter(|w| w.chars().count() >= 4)
+        .filter(|w| !DESC_STOP.contains(&w.as_str()))
+        .collect()
+}
+
+/// Soft intent match: user query shares enough distinctive description tokens
+/// with exactly one installed skill (or a clear winner). Avoids dumping the
+/// catalog while still letting "accidental" intent find the right pack.
+fn discover_by_description_intent<'a>(user_norm: &str, skills: &'a [Skill]) -> Option<&'a Skill> {
+    let user_tokens = significant_tokens(user_norm);
+    if user_tokens.len() < 3 {
+        return None;
+    }
+    let mut scored: Vec<(&'a Skill, usize)> = Vec::new();
+    for sk in skills {
+        let desc_norm = normalize_intent_text(&sk.description);
+        if desc_norm.is_empty() {
+            continue;
+        }
+        let desc_tokens = significant_tokens(&desc_norm);
+        if desc_tokens.len() < 3 {
+            continue;
+        }
+        let hits = user_tokens
+            .iter()
+            .filter(|t| desc_tokens.iter().any(|d| d == *t))
+            .count();
+        // Need a solid multi-token overlap so casual chat does not false-fire.
+        if hits >= 3 {
+            scored.push((sk, hits));
+        }
+    }
+    if scored.is_empty() {
+        return None;
+    }
+    scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.name.cmp(&b.0.name)));
+    let best = scored[0].1;
+    // Unique winner (or clear margin) only — ties mean ambiguous intent.
+    let contenders: Vec<_> = scored.into_iter().filter(|(_, h)| *h == best).collect();
+    if contenders.len() == 1 {
+        return Some(contenders[0].0);
+    }
     None
 }
 
@@ -744,6 +876,13 @@ pub fn skill_activation(user_text: &str, skills: &[Skill]) -> Option<SkillActiva
     let body = read_skill_body(sk);
     let body: String = body.chars().take(40_000).collect();
 
+    // Discovery fallback uses a generic label — surface the real skill name in UI.
+    let label = if rule.skill_names.is_empty() {
+        sk.name.as_str()
+    } else {
+        rule.label
+    };
+
     let mut section = format!(
         "\n# SKILL ACTIVATED (natural language — mandatory)\n\
          The user's wording matched **{label}** ({why}).\n\
@@ -752,7 +891,7 @@ pub fn skill_activation(user_text: &str, skills: &[Skill]) -> Option<SkillActiva
          Do **not** freestyle a shorter path. Load sibling `references/` under the skill \
          directory when the skill points there.\n\n\
          ## Active skill: {name} (`{path}`)\n\n{body}\n",
-        label = rule.label,
+        label = label,
         why = rule.why,
         name = sk.name,
         path = sk.path.display(),
@@ -964,62 +1103,20 @@ fn first_line(s: &str) -> String {
         .collect()
 }
 
-/// Compact catalog for the system prompt + optional full body for named skills.
+/// Human-readable catalog for `/skills` and `skill(action=list)` — **not**
+/// injected into the model system prompt (that burned tokens on large installs).
 pub fn skills_prompt_section(skills: &[Skill]) -> String {
     if skills.is_empty() {
-        return String::new();
-    }
-    let mut s = String::from("\n# Installed skills\n");
-    s.push_str(
-        "Use these when the user task matches a skill's description or natural-language cues. \
-         Prefer `skill(action=read, name=…)` (or the path below) for full instructions — \
-         slash commands are optional, never required.\n\
-         When the harness injects a **SKILL ACTIVATED** block for this turn, that skill is \
-         mandatory for the whole turn — follow it literally.\n",
-    );
-
-    // Document which NL routes are available for installed skills only.
-    let installed: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
-    let mut nl_lines = Vec::new();
-    for rule in INTENT_RULES {
-        if find_installed(skills, rule.skill_names).is_some() {
-            // Show 2–3 example phrases
-            let examples: Vec<&str> = rule.phrases.iter().copied().take(3).collect();
-            nl_lines.push(format!(
-                "- **{}** → `{}` — say: *{}*",
-                rule.label,
-                rule.skill_names[0],
-                examples.join("*, *")
-            ));
-        }
-    }
-    if !nl_lines.is_empty() {
-        s.push_str("\n## Natural-language auto-activation\n");
-        s.push_str(
-            "These phrases (and close variants) auto-inject the skill body for the turn:\n",
+        return String::from(
+            "No skills installed. Add packs under ~/.nur/skills or: nur plugins install <name>\n",
         );
-        for line in nl_lines {
-            s.push_str(&line);
-            s.push('\n');
-        }
-        let _ = installed; // silence if unused in some builds
     }
-
+    let mut s = format!(
+        "Installed skills ({}) — on-demand only (NL intent, /name, or skill tool):\n",
+        skills.len()
+    );
     for sk in skills {
-        s.push_str(&format!(
-            "- **{}**: {} (`{}`)\n",
-            sk.name,
-            sk.description,
-            sk.path.display()
-        ));
-    }
-    // Inline small skills fully
-    for sk in skills.iter().filter(|s| s.body.len() < 2500).take(6) {
-        s.push_str(&format!(
-            "\n## Skill: {}\n{}\n",
-            sk.name,
-            sk.body.chars().take(2500).collect::<String>()
-        ));
+        s.push_str(&format!("- **{}**: {}\n", sk.name, sk.description));
     }
     s
 }
@@ -1152,6 +1249,85 @@ mod intent_tests {
                 .unwrap_or_else(|| panic!("expected activation for: {q}"));
             assert_eq!(sk.name, want, "for: {q}");
         }
+    }
+
+    #[test]
+    fn discovers_installed_skill_by_name_without_builtin_rule() {
+        // Any installed skill name in the user message activates — no catalog needed.
+        let skills = vec![Skill {
+            name: "grill-me".into(),
+            description: "interview the user with hard questions".into(),
+            body: "ask tough questions".into(),
+            path: PathBuf::from("/tmp/grill-me/SKILL.md"),
+        }];
+        let (sk, _) = detect_skill_activation("please run grill-me on this design", &skills)
+            .expect("name mention should activate");
+        assert_eq!(sk.name, "grill-me");
+
+        let (sk, _) = detect_skill_activation("use grill me for the API review", &skills)
+            .expect("hyphen↔space name form");
+        assert_eq!(sk.name, "grill-me");
+    }
+
+    #[test]
+    fn longer_skill_name_wins_over_shorter_prefix() {
+        let skills = vec![
+            fake_skill("fable"),
+            fake_skill("fable-method"),
+        ];
+        // INTENT_RULES hit fable-method first for "fable method"; name discovery
+        // alone should prefer the longer token when both names appear.
+        let (sk, _) =
+            detect_skill_activation("please load fable-method now", &skills).unwrap();
+        assert_eq!(sk.name, "fable-method");
+    }
+
+    #[test]
+    fn discovers_by_unique_description_intent() {
+        let skills = vec![
+            Skill {
+                name: "pixel-clone".into(),
+                description: "pixel perfect website reverse engineering pipeline for cloning sites"
+                    .into(),
+                body: "clone".into(),
+                path: PathBuf::from("/tmp/pixel-clone/SKILL.md"),
+            },
+            Skill {
+                name: "other".into(),
+                description: "unrelated helper for database migrations".into(),
+                body: "db".into(),
+                path: PathBuf::from("/tmp/other/SKILL.md"),
+            },
+        ];
+        let (sk, _) = detect_skill_activation(
+            "need a pixel perfect website reverse engineering pipeline please",
+            &skills,
+        )
+        .expect("description intent");
+        assert_eq!(sk.name, "pixel-clone");
+    }
+
+    #[test]
+    fn description_intent_ignores_ambiguous_ties() {
+        let skills = vec![
+            Skill {
+                name: "a".into(),
+                description: "pixel perfect website reverse engineering pipeline".into(),
+                body: "x".into(),
+                path: PathBuf::from("/tmp/a/SKILL.md"),
+            },
+            Skill {
+                name: "b".into(),
+                description: "pixel perfect website reverse engineering pipeline".into(),
+                body: "y".into(),
+                path: PathBuf::from("/tmp/b/SKILL.md"),
+            },
+        ];
+        assert!(detect_skill_activation(
+            "pixel perfect website reverse engineering pipeline please",
+            &skills,
+        )
+        .is_none());
     }
 
 
