@@ -54,6 +54,31 @@ On install, skill packs are **mirrored in full** (including `references/`) into 
 
 ---
 
+## Slash skill invocation
+
+Every installed skill is addressable as a slash command — no per-skill hardcoding required.
+
+| Form | Behavior |
+|------|----------|
+| `/skill-name` | Toggle **sticky** mode for this session (skill body rides every turn) |
+| `/skill-name on` / `off` | Force sticky on or off |
+| `/skill-name <prompt>` | **One-shot** turn: activate the skill and run `<prompt>` immediately |
+
+Examples:
+
+```text
+/adhd
+/fable-method fix the flaky auth test
+/site-cli build a CLI for this restaurant site from capture.har
+/design-eng polish the settings modal
+```
+
+The slash palette lists built-in commands plus matching installed skills as you type
+(e.g. `/fab` → `/fable-method`). Up to 40 skill hits are shown so a large install
+(800+) does not drown the list — type more characters to narrow.
+
+Sticky skills appear on `/status` and `/skills`. Clear with `/skill-name off`.
+
 ## Natural-language skill activation
 
 Slash commands are **optional**. When your wording matches a high-signal workflow skill that is installed, Nur **auto-injects** that skill’s full body into the system prompt for the turn and shows a status chip:
@@ -79,6 +104,13 @@ fable-method · activated from your wording (no slash command needed)
 | *draw a diagram*, *excalidraw* | `excalidraw` |
 | *resume from Claude / Grok / Codex / Cursor / Nur* | matching `resume-*` skill |
 | *toolcraft*, *design app scaffold*, *craft tooling* | `toolcraft` (pointer → live docs) |
+| *site cli*, *HAR file*, *watch network requests*, *derive a client* | `site-cli` |
+| *adhd mode*, *i have adhd*, `/adhd` | `adhd` (also sticky slash) |
+| *write a tech spec*, *architecture handoff* | `tech-spec` |
+| *make a skill for…*, *fable domain* | `fable-domain` |
+| *next.js app router*, `/nextjs` | `nextjs` |
+| *shadcn/ui*, `/shadcn` | `shadcn` |
+| *vercel ai sdk*, `/ai-sdk` | `ai-sdk` |
 
 Only **installed** skills fire (marketplace plugin or skill pack). Unrelated chat does not activate anything. The injected skill is **mandatory for that turn** — the model must follow it, not freestyle a shorter path.
 
@@ -88,6 +120,8 @@ Only **installed** skills fire (marketplace plugin or skill pack). Unrelated cha
 |-------|------------------|------|
 | **Catalog** | name + short description only | every turn (unless `poor_mode`) |
 | **NL activation** | full `SKILL.md` body for **one** matched skill | user wording hits an `INTENT_RULES` phrase |
+| **Slash one-shot** | full body + user prompt for **one** turn | `/skill-name <prompt>` |
+| **Slash sticky** | full body every turn until off | `/skill-name` / `on` / `off` |
 | **On demand** | `skill(action=read, name=…)` | model chooses to load more |
 | **`poor_mode`** | no catalog, no activation | limited-context hosts / cost saver |
 

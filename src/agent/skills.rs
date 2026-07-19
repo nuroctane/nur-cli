@@ -449,6 +449,188 @@ const INTENT_RULES: &[IntentRule] = &[
         label: "toolcraft",
         why: "Toolcraft design-app scaffold (pointer — fetch live docs)",
     },
+    IntentRule {
+        skill_names: &["site-cli"],
+        phrases: &[
+            "site cli",
+            "site-cli",
+            "/site-cli",
+            "watch network requests",
+            "watching network requests",
+            "record network requests",
+            "recording network requests",
+            "network requests into a har",
+            "har file",
+            "har files",
+            "save as har",
+            "derive a client",
+            "derive a cli",
+            "build a site cli",
+            "uber eats cli",
+            "reverse-engineer the api",
+            "reverse engineer the api",
+        ],
+        label: "site-cli",
+        why: "HAR capture -> derived HTTP client/CLI (no browser every time)",
+    },
+    IntentRule {
+        skill_names: &["adhd"],
+        phrases: &[
+            "/adhd",
+            "adhd mode",
+            "i have adhd",
+            "adhd-friendly",
+            "adhd friendly",
+        ],
+        label: "adhd",
+        why: "ADHD-friendly output shape (action-first, no fluff)",
+    },
+    IntentRule {
+        skill_names: &["fable-domain"],
+        phrases: &[
+            "/fable-domain",
+            "fable-domain",
+            "fable domain",
+            "make a skill for",
+            "add a domain to the fable method",
+            "fable domain adapter",
+        ],
+        label: "fable-domain",
+        why: "generate a Fable domain skill bundle",
+    },
+    IntentRule {
+        skill_names: &["tech-spec"],
+        phrases: &[
+            "/tech-spec",
+            "tech-spec",
+            "tech spec",
+            "write a tech spec",
+            "call-stack architecture handoff",
+            "architecture handoff",
+        ],
+        label: "tech-spec",
+        why: "typed call-stack architecture handoff",
+    },
+    IntentRule {
+        skill_names: &["context-pruning"],
+        phrases: &[
+            "/context-pruning",
+            "context-pruning",
+            "context pruning",
+            "prune context",
+            "dcp patterns",
+        ],
+        label: "context-pruning",
+        why: "dynamic context pruning patterns",
+    },
+    IntentRule {
+        skill_names: &["nextjs"],
+        phrases: &[
+            "/nextjs",
+            "next.js app router",
+            "nextjs app router",
+            "next.js expert",
+        ],
+        label: "nextjs",
+        why: "Next.js App Router guidance",
+    },
+    IntentRule {
+        skill_names: &["shadcn"],
+        phrases: &[
+            "/shadcn",
+            "shadcn/ui",
+            "shadcn ui",
+            "add shadcn component",
+        ],
+        label: "shadcn",
+        why: "shadcn/ui component guidance",
+    },
+    IntentRule {
+        skill_names: &["ai-sdk"],
+        phrases: &[
+            "/ai-sdk",
+            "vercel ai sdk",
+            "ai sdk stream",
+            "use the ai sdk",
+        ],
+        label: "ai-sdk",
+        why: "Vercel AI SDK guidance",
+    },
+    IntentRule {
+        skill_names: &["vercel-cli"],
+        phrases: &[
+            "/vercel-cli",
+            "vercel cli deploy",
+            "use vercel cli",
+        ],
+        label: "vercel-cli",
+        why: "Vercel CLI guidance",
+    },
+    IntentRule {
+        skill_names: &["herdr"],
+        phrases: &[
+            "/herdr",
+            "herdr workspace",
+            "control herdr",
+        ],
+        label: "herdr",
+        why: "control herdr from inside it",
+    },
+    IntentRule {
+        skill_names: &["resume-session"],
+        phrases: &[
+            "/resume-session",
+            "resume-session",
+            "resume this session skill",
+        ],
+        label: "resume-session",
+        why: "resume session handoff skill",
+    },
+    IntentRule {
+        skill_names: &["akm-manager"],
+        phrases: &[
+            "/akm-manager",
+            "akm-manager",
+            "akm install",
+            "akm list skills",
+        ],
+        label: "akm-manager",
+        why: "AKM skill package manager",
+    },
+    IntentRule {
+        skill_names: &["opencode-awesome"],
+        phrases: &[
+            "/opencode-awesome",
+            "opencode-awesome",
+            "opencode plugins",
+            "opencode ecosystem",
+        ],
+        label: "opencode-awesome",
+        why: "OpenCode ecosystem index",
+    },
+    IntentRule {
+        skill_names: &["scan"],
+        phrases: &[
+            // /scan is a built-in command; NL phrases only
+            "foglamp scan",
+            "codebase scan map",
+            "publish a codebase scan",
+        ],
+        label: "scan",
+        why: "shareable foglamp codebase scan",
+    },
+    IntentRule {
+        skill_names: &["improve-animations"],
+        phrases: &[
+            "/improve-animations",
+            "improve the animations",
+            "improve animations",
+            "audit the motion",
+            "motion audit",
+        ],
+        label: "improve-animations",
+        why: "animation/motion audit and plan",
+    },
 ];
 
 /// Normalize user text for phrase matching (lowercase, collapse punctuation).
@@ -598,6 +780,33 @@ fn read_skill_body(sk: &Skill) -> String {
             t
         })
         .unwrap_or_else(|| sk.body.clone())
+}
+
+/// Look up an installed skill by its exact `name` (case-insensitive).
+/// Powers slash invocation of any skill: `/adhd`, `/scan`, etc.
+pub fn skill_by_name(cwd: &Path, name: &str) -> Option<Skill> {
+    let want = name.trim().trim_start_matches('/').to_ascii_lowercase();
+    load_skills(cwd)
+        .into_iter()
+        .find(|s| s.name.eq_ignore_ascii_case(&want))
+}
+
+/// Build the mandatory activation section for a skill invoked explicitly
+/// (e.g. via a slash command), mirroring `skill_activation` but without the
+/// natural-language matching.
+pub fn slash_activation_section(sk: &Skill) -> String {
+    let body: String = read_skill_body(sk).chars().take(40_000).collect();
+    format!(
+        "\n# SKILL ACTIVATED (invoked — mandatory)\n\
+         The user invoked **/{name}**. This is **not** optional flavor. For this \
+         entire turn (and until told otherwise for sticky skills) you MUST follow \
+         the skill below literally. Load sibling `references/` under the skill \
+         directory when the skill points there.\n\n\
+         ## Active skill: {name} (`{path}`)\n\n{body}\n",
+        name = sk.name,
+        path = sk.path.display(),
+        body = body,
+    )
 }
 
 /// Discover skills from (first match wins per name):

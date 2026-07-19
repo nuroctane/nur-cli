@@ -113,6 +113,19 @@ Pulls latest main (when a Laboratory checkout exists), rebuilds, reinstalls the 
 
 Or from the shell: `nur plugins install superpowers`. Skills land under `~/.nur/plugins` and mirror into `~/.nur/skills`. Details: **[Ecosystem → Plugin marketplace](ecosystem.md#plugin-marketplace)**.
 
+### Invoke skills with slash commands
+
+Every installed skill is also a slash command:
+
+```text
+/adhd                              # sticky ADHD-friendly output (toggle)
+/fable-method fix the auth flake   # one-shot: skill + prompt this turn
+/site-cli build a CLI from app.har
+/design-eng polish the settings modal
+```
+
+Type `/fab` in the TUI to filter the palette to matching skills. `/skills` lists them. Details: **[Ecosystem → Slash skill invocation](ecosystem.md#slash-skill-invocation)**.
+
 ### Talk to skills in plain language
 
 After `nur plugins install fable` (or Superpowers, etc.), you do **not** need `/fable-method`:

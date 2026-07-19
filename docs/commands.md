@@ -190,7 +190,7 @@ nur plugins disable <id>
 nur plugins uninstall <id>
 ```
 
-Natural-language skill activation (no slash): *think like fable*, *TDD this*, *debug systematically*, *resume from Claude* — see [Ecosystem](ecosystem.md#natural-language-skill-activation).
+**Skills as slash commands:** every installed skill is also `/skill-name` (sticky session mode) or `/skill-name <prompt>` (one-shot turn). Natural-language activation still works with no slash: *think like fable*, *TDD this*, *debug systematically*, *site cli*, *HAR file*, *resume from Claude* — see [Ecosystem](ecosystem.md#natural-language-skill-activation).
 
 
 In the TUI, bare **`/plugins`** opens the full marketplace picker (provider-picker UX).
@@ -386,6 +386,16 @@ Type these inside the `nur` TUI. Aliases are shown in the same row.
 | `/goal` | Set a standing session goal |
 | `/btw` | One-off note attached to the next message |
 | `/bro` | Chill mode: plain words, straight answers (toggle) |
+| `/adhd` | Sticky ADHD-friendly output for this session (toggle) |
+| `/site-cli` | Skill: HAR → derived site API client/CLI |
+| `/fable-method` | Skill: Fable think-act-prove loop |
+| `/fable-loop` | Skill: orchestrated Fable multi-step loop |
+| `/fable-judge` | Skill: adversarial verification of finished work |
+| `/tech-spec` | Skill: typed call-stack architecture handoff |
+| `/design-eng` | Skill: Emil design-eng UI/motion craft |
+| `/test-driven-development` | Skill: TDD red-green-refactor |
+| `/systematic-debugging` | Skill: root-cause-first debugging |
+| `/<skill>` | **Any installed skill** — sticky toggle, or `/<skill> <prompt>` one-shot |
 | `/codesearch` · `/cs` | Fast ripgrep over the workspace |
 | `/mc` · `/mcp` | Manage MCP servers via Executor |
 | `/skills` | List installed skills |

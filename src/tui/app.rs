@@ -49,10 +49,12 @@ piece of bad news exactly as accurate and complete as it would be otherwise. \
 Never soften a real problem or pad an answer to sound friendly.";
 
 /// Assemble the prompt the model actually receives: optional style rider,
-/// standing goal, and one-off notes prepended to the user's plain prompt (which
-/// is all the transcript shows). Pure so the ordering can be unit-tested.
+/// sticky skill sections (e.g. `/adhd`), standing goal, and one-off notes
+/// prepended to the user's plain prompt (which is all the transcript shows).
+/// Pure so the ordering can be unit-tested.
 pub fn compose_turn_prompt(
     bro: bool,
+    sticky_skills: &[String],
     goal: Option<&str>,
     notes: &[String],
     prompt: &str,
@@ -61,6 +63,16 @@ pub fn compose_turn_prompt(
     if bro {
         out.push_str(BRO_STYLE);
         out.push_str("\n\n");
+    }
+    for section in sticky_skills {
+        if section.trim().is_empty() {
+            continue;
+        }
+        out.push_str(section);
+        if !section.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push('\n');
     }
     if let Some(g) = goal {
         out.push_str(&format!("[session goal] {g}\n\n"));
@@ -71,6 +83,8 @@ pub fn compose_turn_prompt(
     out.push_str(prompt);
     out
 }
+
+
 
 /// When a turn error means the model isn't available for the active credential,
 /// append which model/provider failed and how to recover. Provider-agnostic —
@@ -157,6 +171,16 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/draw", "tldraw offline boards: /draw <file.tldraw> · install · /draw <idea>"),
     ("/memory", "show ~/.nur/memory.md excerpt"),
     ("/skills", "list installed skills"),
+    ("/adhd", "sticky ADHD-friendly output for this session (toggle)"),
+    ("/fable-method", "skill: Fable think-act-prove loop (sticky or /fable-method <task>)"),
+    ("/fable-loop", "skill: orchestrated Fable multi-step loop"),
+    ("/fable-judge", "skill: adversarial verification of finished work"),
+    ("/site-cli", "skill: HAR capture -> derived site API client/CLI"),
+    ("/tech-spec", "skill: typed call-stack architecture handoff"),
+    ("/design-eng", "skill: Emil design-eng UI/motion craft"),
+    ("/test-driven-development", "skill: TDD red-green-refactor"),
+    ("/systematic-debugging", "skill: root-cause-first debugging"),
+
     ("/graphify", "knowledge graph: status | query | path | explain | extract"),
     ("/plur", "shared engram memory: status | learn | recall | inject"),
     ("/ruflo", "vector memory / swarm: status | search | store"),
@@ -1228,6 +1252,10 @@ pub struct App {
     session_goal: Option<String>,
     /// `/bro` — restate everything in plain, low-jargon language for this session.
     bro: bool,
+    /// Sticky skill names (`/adhd`, `/skillname`) injected every turn until off.
+    sticky_skills: Vec<String>,
+    /// Cached `/skillname` palette rows (name without leading slash, short desc).
+    skill_palette_cache: Vec<(String, String)>,
     /// One-off side notes (`/btw`) folded into the next turn only.
     pending_btw: Vec<String>,
     /// Transcript body area (excluding sticky banner) for scrollbar hit-testing.
@@ -1503,6 +1531,8 @@ pub async fn run_tui(
         last_raw_text: String::new(),
         session_goal: None,
         bro: false,
+        sticky_skills: Vec::new(),
+        skill_palette_cache: Vec::new(),
         pending_btw: Vec::new(),
         transcript_body: ratatui::layout::Rect::default(),
         scrollbar_track: ratatui::layout::Rect::default(),
@@ -1580,6 +1610,7 @@ pub async fn run_tui(
     };
 
     app.replay_session_history();
+    app.refresh_skill_palette_cache();
     if let Some(note) = workspace_note {
         app.push_note(Tone::Session, note);
     }
@@ -1967,7 +1998,7 @@ pub async fn run_tui(
 
 impl App {
     // ── palette ────────────────────────────────────────────────────────
-    pub fn palette_matches(&self) -> Vec<(&'static str, &'static str)> {
+    pub fn palette_matches(&self) -> Vec<(String, String)> {
         let text = self.input.text();
         if !text.starts_with('/') || text.contains('\n') {
             return Vec::new();
@@ -1977,11 +2008,69 @@ impl App {
         if text.contains(' ') {
             return Vec::new();
         }
-        COMMANDS
+        let token_l = token.to_ascii_lowercase();
+        let mut out: Vec<(String, String)> = COMMANDS
             .iter()
-            .filter(|(name, _)| name.starts_with(token))
-            .copied()
-            .collect()
+            .filter(|(name, _)| name.starts_with(token) || name.to_ascii_lowercase().starts_with(&token_l))
+            .map(|(n, d)| ((*n).to_string(), (*d).to_string()))
+            .collect();
+
+        // Built-in command names (without slash) so skills don't shadow them.
+        let builtin: std::collections::HashSet<String> = COMMANDS
+            .iter()
+            .map(|(n, _)| n.trim_start_matches('/').to_ascii_lowercase())
+            .collect();
+
+        // Installed skills as /skillname — filter as the user types.
+        let skill_token = token_l.trim_start_matches('/');
+        let mut skill_hits: Vec<(String, String)> = self
+            .skill_palette_cache
+            .iter()
+            .filter(|(name, _)| {
+                let n = name.to_ascii_lowercase();
+                !builtin.contains(&n)
+                    // Only surface skills once the user has typed past bare `/`
+                    // so the default palette stays the built-in command list.
+                    && !skill_token.is_empty()
+                    && (n.starts_with(skill_token) || n.contains(skill_token))
+            })
+            .map(|(name, desc)| {
+                (
+                    format!("/{name}"),
+                    if desc.is_empty() {
+                        "skill (sticky / one-shot)".to_string()
+                    } else {
+                        format!("skill · {desc}")
+                    },
+                )
+            })
+            .collect();
+        // Prefer prefix matches, then name length.
+        skill_hits.sort_by(|a, b| {
+            let an = a.0.to_ascii_lowercase();
+            let bn = b.0.to_ascii_lowercase();
+            let ap = an.trim_start_matches('/').starts_with(skill_token) as i32;
+            let bp = bn.trim_start_matches('/').starts_with(skill_token) as i32;
+            bp.cmp(&ap)
+                .then_with(|| an.len().cmp(&bn.len()))
+                .then_with(|| an.cmp(&bn))
+        });
+        // Cap so a 500-skill install does not drown the palette.
+        const SKILL_CAP: usize = 40;
+        skill_hits.truncate(SKILL_CAP);
+        out.extend(skill_hits);
+        out
+    }
+
+    /// Refresh the skill palette cache from disk (cheap enough on demand).
+    pub fn refresh_skill_palette_cache(&mut self) {
+        self.skill_palette_cache = agent::skills::load_skills(&self.cwd)
+            .into_iter()
+            .map(|sk| {
+                let desc: String = sk.description.chars().take(72).collect();
+                (sk.name, desc)
+            })
+            .collect();
     }
 
     fn palette_visible(&self) -> bool {
@@ -2524,12 +2613,12 @@ impl App {
                 if self.palette_visible() {
                     let matches = self.palette_matches();
                     let idx = self.palette_idx.min(matches.len().saturating_sub(1));
-                    let (name, _) = matches[idx];
+                    let name = matches[idx].0.clone();
                     let text = self.input.text();
-                    // Exact match or unique completion → run it.
+                    // Exact match or unique completion -> run it.
                     if text.trim() == name || matches.len() == 1 || idx > 0 {
                         self.input.clear();
-                        let cmd = name.to_string();
+                        let cmd = name;
                         self.submit_text(&cmd);
                     } else {
                         self.input.set_text(&format!("{name} "));
@@ -5266,11 +5355,18 @@ impl App {
         let cancel = CancellationToken::new();
         self.cancel = Some(cancel.clone());
         let runner = Arc::new(self.make_runner());
-        // The model sees the standing goal + any one-off `/btw` notes prepended
-        // as context; the transcript above shows only the plain prompt.
+        // The model sees sticky skills + standing goal + one-off `/btw` notes
+        // prepended as context; the transcript above shows only the plain prompt.
         let notes: Vec<String> = self.pending_btw.drain(..).collect();
+        let sticky_sections: Vec<String> = self
+            .sticky_skills
+            .iter()
+            .filter_map(|name| agent::skills::skill_by_name(&self.cwd, name))
+            .map(|sk| agent::skills::slash_activation_section(&sk))
+            .collect();
         let effective = compose_turn_prompt(
             self.bro,
+            &sticky_sections,
             self.session_goal.as_deref(),
             &notes,
             model_prompt,
@@ -6505,20 +6601,28 @@ mod tests {
     #[test]
     fn bro_rider_leads_the_prompt_and_is_opt_in() {
         // Off by default: the model sees only the plain prompt.
-        let plain = compose_turn_prompt(false, None, &[], "fix the bug");
+        let plain = compose_turn_prompt(false, &[], None, &[], "fix the bug");
         assert_eq!(plain, "fix the bug");
 
-        // On: the style rider is prepended, ahead of goal and notes, and the
-        // user's actual words still come last.
+        // On: the style rider is prepended, ahead of sticky skills/goal/notes,
+        // and the user's actual words still come last.
         let notes = vec!["watch the auth path".to_string()];
+        let sticky = vec!["# SKILL ACTIVATED sticky
+body".to_string()];
         let composed =
-            compose_turn_prompt(true, Some("ship v1"), &notes, "fix the bug");
+            compose_turn_prompt(true, &sticky, Some("ship v1"), &notes, "fix the bug");
         assert!(composed.starts_with(BRO_STYLE), "rider must lead");
         let bro_at = composed.find(BRO_STYLE).unwrap();
+        let sticky_at = composed.find("# SKILL ACTIVATED sticky").unwrap();
         let goal_at = composed.find("[session goal] ship v1").unwrap();
         let note_at = composed.find("[note] watch the auth path").unwrap();
         let prompt_at = composed.find("fix the bug").unwrap();
-        assert!(bro_at < goal_at && goal_at < note_at && note_at < prompt_at);
+        assert!(
+            bro_at < sticky_at
+                && sticky_at < goal_at
+                && goal_at < note_at
+                && note_at < prompt_at
+        );
 
         // The rider is tone-only: it must not license softening the facts.
         assert!(BRO_STYLE.contains("never soften") || BRO_STYLE.contains("Never soften"));

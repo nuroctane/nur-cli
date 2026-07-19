@@ -96,19 +96,37 @@ impl App {
                 );
             }
             "/skills" => {
+                self.refresh_skill_palette_cache();
                 let skills = agent::skills::load_skills(&self.cwd);
                 if skills.is_empty() {
                     self.push_note(
                         Tone::Skill,
-                        "no skills found — add ~/.nur/skills/<name>/SKILL.md\n\
+                        "no skills found - add ~/.nur/skills/<name>/SKILL.md\n\
                          or ~/.agents/skills/<name>/SKILL.md  (graphify install --platform agents)\n\
                          the agent can also load them itself via the `skill` tool"
                             .into(),
                     );
                 } else {
-                    let mut s = String::from("skills (agent loads via `skill` tool)\n");
-                    for sk in skills {
-                        s.push_str(&format!("  · {} — {}\n", sk.name, sk.description));
+                    let mut s = String::from(
+                        "skills - invoke with /name (sticky) or /name <prompt> (one-shot)\n\
+                         natural-language phrases also activate many skills\n\
+                         agent can load via the `skill` tool\n",
+                    );
+                    for sk in skills.iter().take(80) {
+                        let desc: String = sk.description.chars().take(64).collect();
+                        s.push_str(&format!("  /{} - {}\n", sk.name, desc));
+                    }
+                    if skills.len() > 80 {
+                        s.push_str(&format!(
+                            "  ... +{} more (type /partial-name to filter in the palette)\n",
+                            skills.len() - 80
+                        ));
+                    }
+                    if !self.sticky_skills.is_empty() {
+                        s.push_str(&format!(
+                            "\nsticky this session: {}\n",
+                            self.sticky_skills.join(", ")
+                        ));
                     }
                     self.push_note(Tone::Skill, s);
                 }
@@ -187,9 +205,87 @@ impl App {
                  https://github.com/nuroctane/nur-cli/issues\n  \
                  or use  /feedback <what happened>  to file one from here".into(),
             ),
-            other => self.push_error(format!("unknown command: {other} — try /help")),
+            other => self.cmd_skill_or_unknown(other, &arg),
         }
     }
+
+    /// Unknown slash -> installed skill.
+    ///
+    /// - `/skillname` / `/skillname on|off` — sticky session mode (toggle)
+    /// - `/skillname <prompt>` — one-shot turn with that skill activated
+    fn cmd_skill_or_unknown(&mut self, cmd: &str, arg: &str) {
+        let name = cmd.trim().trim_start_matches('/').trim();
+        if name.is_empty() {
+            self.push_error(format!("unknown command: {cmd} - try /help"));
+            return;
+        }
+        let Some(sk) = agent::skills::skill_by_name(&self.cwd, name) else {
+            self.push_error(format!("unknown command: {cmd} - try /help"));
+            return;
+        };
+
+        let arg = arg.trim();
+        let force = match arg.to_ascii_lowercase().as_str() {
+            "on" | "yes" | "1" | "enable" => Some(true),
+            "off" | "no" | "0" | "disable" | "clear" => Some(false),
+            "" => None,
+            _ => None, // may be a prompt
+        };
+        let is_force_keyword = matches!(
+            arg.to_ascii_lowercase().as_str(),
+            "on" | "yes" | "1" | "enable" | "off" | "no" | "0" | "disable" | "clear" | ""
+        );
+
+        // One-shot: /skillname do the thing
+        if !is_force_keyword {
+            let section = agent::skills::slash_activation_section(&sk);
+            let display = format!("/{} {}", sk.name, arg);
+            let model_prompt = format!(
+                "{section}\n# User request (via /{name})\n{arg}\n",
+                name = sk.name,
+                section = section,
+                arg = arg
+            );
+            self.push_note(
+                Tone::Skill,
+                format!("/{} · one-shot activation for this turn", sk.name),
+            );
+            self.start_turn_labeled(&display, &model_prompt);
+            return;
+        }
+
+        let already = self
+            .sticky_skills
+            .iter()
+            .any(|n| n.eq_ignore_ascii_case(&sk.name));
+        let enable = force.unwrap_or(!already);
+        if enable {
+            if !already {
+                self.sticky_skills.push(sk.name.clone());
+            }
+            self.push_note(
+                Tone::Mode,
+                format!(
+                    "/{} on - sticky for this session\n  {}\n  /{} off to disable · /{} <prompt> for one-shot",
+                    sk.name,
+                    sk.description.chars().take(160).collect::<String>(),
+                    sk.name,
+                    sk.name
+                ),
+            );
+        } else if already {
+            self.sticky_skills
+                .retain(|n| !n.eq_ignore_ascii_case(&sk.name));
+            self.push_note(
+                Tone::Mode,
+                format!("/{} off - skill no longer sticky", sk.name),
+            );
+        } else {
+            self.push_note(Tone::Mode, format!("/{} already off", sk.name));
+        }
+    }
+
+
 
     fn cmd_plur(&mut self, arg: &str) {
         let arg = arg.trim();
@@ -1311,13 +1407,18 @@ impl App {
         } else {
             0.0
         };
-        let auth = if self.authed { "signed in" } else { "no key — /login" };
-        let bro = if self.bro { "\n  bro      on · chill delivery" } else { "" };
+        let auth = if self.authed { "signed in" } else { "no key - /login" };
+        let bro = if self.bro { "\n  bro      on - chill delivery" } else { "" };
+        let sticky = if self.sticky_skills.is_empty() {
+            String::new()
+        } else {
+            format!("\n  sticky   {}", self.sticky_skills.join(", "))
+        };
         self.push_note(
             Tone::Session,
             format!(
-                "status\n  version  nur v{}\n  model    {}  · effort {}\n  mode     {}  ({})\n  \
-                 session  {}\n  cwd      {}\n  auth     {}\n  tokens   {} session · ctx {ctx_pct:.0}%  · ~${:.4}{bro}",
+                "status\n  version  nur v{}\n  model    {}  - effort {}\n  mode     {}  ({})\n  \
+                 session  {}\n  cwd      {}\n  auth     {}\n  tokens   {} session - ctx {ctx_pct:.0}%  - ~${:.4}{bro}{sticky}",
                 env!("CARGO_PKG_VERSION"),
                 self.cfg.model,
                 self.cfg.reasoning_effort,

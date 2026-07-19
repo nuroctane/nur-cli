@@ -117,7 +117,7 @@ See [Permission modes](#permission-modes) below for exactly what each mode allow
 | `/graphify` | Query the code knowledge graph |
 | `/plur` | Search shared engram memory |
 | `/ruflo` | Search vector memory |
-| `/skills` | List available skills |
+| `/skills` | List installed skills (also shows sticky session skills) |
 | `/ecosystem` | Show ecosystem status |
 | `/memory` | Show session memory |
 
@@ -136,7 +136,7 @@ The note is appended to your persistent memory file and recalled automatically i
 | Command | Purpose |
 |---------|---------|
 | `/model` | Show and switch models. Run bare to open a picker that fetches your provider's live model list (`/models`) — filter, arrow, and ↵ to switch, or type any id. `/model <id>` switches directly (e.g. `/model muse-spark-1.1`) |
-| `/plugins` | Marketplace picker (same UX as provider/`/login` picker): filter, ↑↓/wheel, ↵ to install or enable/disable. Skills land in `~/.nur/plugins/<id>` and mirror **in full** (incl. `references/`) to `~/.nur/skills`. CLI: `nur plugins list\|install\|enable\|disable\|uninstall`. Natural-language phrases (e.g. *think like fable*) auto-activate skills for the turn — status chip `skill · activated from your wording…` |
+| `/plugins` | Marketplace picker (same UX as provider/`/login` picker): filter, ↑↓/wheel, ↵ to install or enable/disable. Skills land in `~/.nur/plugins/<id>` and mirror **in full** (incl. `references/`) to `~/.nur/skills`. CLI: `nur plugins list\|install\|enable\|disable\|uninstall`. Natural-language phrases (e.g. *think like fable*) **or** `/skill-name` auto-activate skills — status chip confirms activation |
 | `/effort` | Change reasoning effort |
 | `/compact` | Manually compact context (thins old tool bodies; keeps recent turns; writes `.precompact.bak`) |
 | `/usage` | Show token usage and cost (`/cost`) — includes budget caps when set |
@@ -163,6 +163,9 @@ The note is appended to your persistent memory file and recalled automatically i
 | `/logout` | Clear stored API key |
 | `/goal` | Standing session goal (see below) |
 | `/bro` | Chill mode: plain words, no jargon, no preamble — toggle (see below) |
+| `/adhd` | Sticky ADHD-friendly output (toggle) |
+| `/<skill>` | Any installed skill — sticky, or `/skill <prompt>` one-shot |
+| `/site-cli` · `/fable-method` · `/design-eng` · … | Popular skills also listed in the palette |
 | `/btw` | One-off note for the next message only |
 | `/codesearch` `/cs` | Fast workspace ripgrep |
 | `/mc` `/mcp` | MCP servers via the Executor gateway |
@@ -193,6 +196,8 @@ Full detail: [Authentication](authentication.md).
 | `/goal clear` | Drop the goal (`none` / `off` also work) |
 | `/btw <note>` | Queues a one-off note that rides along with your **next** message only (stackable) |
 | `/bro` | Toggle chill mode: every turn asks for plain, low-jargon, no-preamble replies. `/bro on` / `/bro off` force a state. Tone only — facts, caveats, and bad news stay complete and accurate. `/status` shows when it's on. |
+| `/adhd` | Sticky ADHD-friendly shape for every reply this session (action-first, numbered steps, no fluff). `/adhd off` clears it. |
+| `/<skill>` | **Any** skill under `~/.nur/skills` or `~/.agents/skills`: bare `/name` toggles sticky; `/name <prompt>` runs a one-shot turn with that skill activated. Palette filters as you type. |
 
 ### Code search
 
