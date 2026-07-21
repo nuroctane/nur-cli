@@ -1187,51 +1187,67 @@ def _cursor_cli_metadata(session_dir: Path) -> dict[str, Any]:
 
 
 def _discover_cursor_cli(cwd: str, within_min: int, all_cwds: bool = False) -> list[dict[str, Any]]:
-    workspace = _cursor_root() / "chats" / cursor_workspace_hash(cwd)
-    if not workspace.is_dir() or workspace.is_symlink():
-        return []
+    chats = _cursor_root() / "chats"
+    if all_cwds:
+        if not chats.is_dir() or chats.is_symlink():
+            return []
+        try:
+            workspaces = sorted(
+                path
+                for path in chats.iterdir()
+                if path.is_dir() and not path.is_symlink()
+            )
+        except OSError:
+            return []
+    else:
+        workspaces = [chats / cursor_workspace_hash(cwd)]
     sessions: list[dict[str, Any]] = []
-    try:
-        children = sorted(workspace.iterdir(), key=lambda path: path.name)
-    except OSError:
-        return []
-    for child in children:
-        if not UUID_RE.fullmatch(child.name) or not child.is_dir() or child.is_symlink():
+    for workspace in workspaces:
+        if not workspace.is_dir() or workspace.is_symlink():
             continue
-        metadata = _cursor_cli_metadata(child)
-        stored_cwd = metadata.get("cwd")
-        if (
-            not all_cwds
-            and stored_cwd
-            and os.path.normpath(stored_cwd) != os.path.normpath(cwd)
-        ):
+        try:
+            children = sorted(workspace.iterdir(), key=lambda path: path.name)
+        except OSError:
             continue
-        updated = int(metadata.get("updated_at_ms") or 0)
-        if not _within(updated, within_min):
-            continue
-        store = child / "store.db"
-        meta = child / "meta.json"
-        path = store if store.is_file() else meta
-        if not path.is_file():
-            continue
-        sessions.append(
-            {
-                "tool": "cursor",
-                "source": "cursor-cli",
-                "session_id": child.name,
-                "path": str(path),
-                "title": metadata.get("title") or "(untitled)",
-                "cwd": stored_cwd or cwd,
-                "branch": None,
-                "updated_at_ms": updated,
-                "updated_at": _iso_from_millis(updated),
-                "source_repo_root_path": metadata.get("source_repo_root_path"),
-            }
-        )
+        for child in children:
+            if not UUID_RE.fullmatch(child.name) or not child.is_dir() or child.is_symlink():
+                continue
+            metadata = _cursor_cli_metadata(child)
+            stored_cwd = metadata.get("cwd")
+            if (
+                not all_cwds
+                and stored_cwd
+                and os.path.normpath(stored_cwd) != os.path.normpath(cwd)
+            ):
+                continue
+            updated = int(metadata.get("updated_at_ms") or 0)
+            if not _within(updated, within_min):
+                continue
+            store = child / "store.db"
+            meta = child / "meta.json"
+            path = store if store.is_file() else meta
+            if not path.is_file():
+                continue
+            sessions.append(
+                {
+                    "tool": "cursor",
+                    "source": "cursor-cli",
+                    "session_id": child.name,
+                    "path": str(path),
+                    "title": metadata.get("title") or "(untitled)",
+                    "cwd": stored_cwd or cwd,
+                    "branch": None,
+                    "updated_at_ms": updated,
+                    "updated_at": _iso_from_millis(updated),
+                    "source_repo_root_path": metadata.get("source_repo_root_path"),
+                }
+            )
     return sessions
 
 
-def _discover_cursor_desktop(cwd: str, within_min: int) -> list[dict[str, Any]]:
+def _discover_cursor_desktop(
+    cwd: str, within_min: int, all_cwds: bool = False
+) -> list[dict[str, Any]]:
     sessions: list[dict[str, Any]] = []
     for path in _cursor_desktop_paths():
         if not path.is_file() or path.is_symlink():
@@ -1265,8 +1281,9 @@ def _discover_cursor_desktop(cwd: str, within_min: int) -> list[dict[str, Any]]:
                         "source_repo_root_path": None,
                     }
                     _merge_cursor_metadata(metadata, value)
-                    if not metadata.get("cwd") or os.path.normpath(metadata["cwd"]) != os.path.normpath(
-                        cwd
+                    if not all_cwds and (
+                        not metadata.get("cwd")
+                        or os.path.normpath(metadata["cwd"]) != os.path.normpath(cwd)
                     ):
                         continue
                     updated = int(metadata["updated_at_ms"])
@@ -1737,7 +1754,11 @@ def _existing_codex_rollout(home: Path, raw_path: Any, session_id: str) -> Path 
 
 
 def _discover_codex_database(
-    home: Path, database_path: Path, cwd: str, within_min: int
+    home: Path,
+    database_path: Path,
+    cwd: str,
+    within_min: int,
+    all_cwds: bool = False,
 ) -> list[dict[str, Any]] | None:
     try:
         with _open_sqlite_readonly(database_path) as database:
@@ -1757,12 +1778,16 @@ def _discover_codex_database(
             title = "title" if "title" in columns else "''"
             first = "first_user_message" if "first_user_message" in columns else "''"
             branch = "git_branch" if "git_branch" in columns else "NULL"
+            where = "WHERE archived = 0 AND source IN ('cli', 'vscode')"
+            params: tuple[str, ...] = ()
+            if not all_cwds:
+                where += " AND cwd = ?"
+                params = (cwd,)
             rows = database.execute(
                 f"SELECT id, rollout_path, {updated_column}, source, cwd, "
-                f"{title}, {first}, {branch} FROM threads "
-                "WHERE archived = 0 AND cwd = ? AND source IN ('cli', 'vscode') "
+                f"{title}, {first}, {branch} FROM threads {where} "
                 f"ORDER BY {updated_column} DESC, id ASC",
-                (cwd,),
+                params,
             )
             sessions: list[dict[str, Any]] = []
             for row in rows:
@@ -1824,7 +1849,9 @@ def _codex_rollout_head(path: Path) -> dict[str, Any] | None:
     return None
 
 
-def _discover_codex_files(home: Path, cwd: str, within_min: int) -> list[dict[str, Any]]:
+def _discover_codex_files(
+    home: Path, cwd: str, within_min: int, all_cwds: bool = False
+) -> list[dict[str, Any]]:
     sessions: list[dict[str, Any]] = []
     for path in _iter_codex_rollouts(home, include_archived=False):
         updated = _mtime_millis(path)
@@ -1833,7 +1860,8 @@ def _discover_codex_files(home: Path, cwd: str, within_min: int) -> list[dict[st
         metadata = _codex_rollout_head(path)
         if not metadata or metadata.get("source") not in {"cli", "vscode"}:
             continue
-        if metadata.get("cwd") != cwd:
+        stored_cwd = metadata.get("cwd")
+        if not all_cwds and stored_cwd != cwd:
             continue
         session_id = metadata.get("id") or _codex_id_from_path(path)
         if not isinstance(session_id, str) or not UUID_RE.fullmatch(session_id):
@@ -1845,7 +1873,7 @@ def _discover_codex_files(home: Path, cwd: str, within_min: int) -> list[dict[st
                 "session_id": session_id,
                 "path": str(path),
                 "title": "(untitled)",
-                "cwd": cwd,
+                "cwd": stored_cwd or cwd,
                 "branch": (
                     metadata.get("git", {}).get("branch")
                     if isinstance(metadata.get("git"), dict)
@@ -1859,14 +1887,18 @@ def _discover_codex_files(home: Path, cwd: str, within_min: int) -> list[dict[st
     return sessions
 
 
-def _discover_codex(cwd: str, within_min: int) -> list[dict[str, Any]]:
+def _discover_codex(
+    cwd: str, within_min: int, all_cwds: bool = False
+) -> list[dict[str, Any]]:
     home = _codex_home()
     database_path = _codex_state_database(home)
     if database_path is not None:
-        sessions = _discover_codex_database(home, database_path, cwd, within_min)
+        sessions = _discover_codex_database(
+            home, database_path, cwd, within_min, all_cwds
+        )
         if sessions is not None:
             return sessions
-    return _discover_codex_files(home, cwd, within_min)
+    return _discover_codex_files(home, cwd, within_min, all_cwds)
 
 
 def _sort_and_dedupe(sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2380,14 +2412,16 @@ def discover_sessions(
     if tool == "claude":
         sessions = _discover_claude(requested_cwd, within_min, all_cwds)
     elif tool == "codex":
-        sessions = _discover_codex(requested_cwd, within_min)
+        sessions = _discover_codex(requested_cwd, within_min, all_cwds)
     elif tool in ("nur", "meta"):
         sessions = _discover_nur(requested_cwd, within_min)
     elif tool == "grok":
         sessions = _discover_grok(requested_cwd, within_min, all_cwds)
     else:
         sessions = _discover_cursor_cli(requested_cwd, within_min, all_cwds)
-        sessions.extend(_discover_cursor_desktop(requested_cwd, within_min))
+        sessions.extend(
+            _discover_cursor_desktop(requested_cwd, within_min, all_cwds)
+        )
     return _sort_and_dedupe(sessions)
 
 

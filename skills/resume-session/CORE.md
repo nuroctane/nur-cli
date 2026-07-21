@@ -61,13 +61,17 @@ Apply these argument rules:
 python3 "${SHARED_DIR}/session_reader.py" "$TOOL" list --cwd "$PWD" --json
 ```
 
+Pass `--all-cwds` when the caller needs sessions from every workspace. Each
+returned session still carries its recorded `cwd`; the caller is responsible
+for applying any local-workspace filter.
+
 Supported optional flags are `--within-min N` and `--max-tool-chars N`. Use
 `python` or `py -3` only when `python3` is unavailable.
 
 The approved interface is:
 
 ```text
-session_reader.py <claude|codex|cursor|meta|grok> <list|show> [ref] [--cwd DIR] [--within-min N] [--json] [--max-tool-chars N]
+session_reader.py <claude|codex|cursor|meta|grok> <list|show> [ref] [--cwd DIR] [--within-min N] [--all-cwds] [--json] [--max-tool-chars N]
 ```
 
 ## Build the handoff

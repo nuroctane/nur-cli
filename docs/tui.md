@@ -105,7 +105,7 @@ See [Permission modes](#permission-modes) below for exactly what each mode allow
 | Command | Purpose |
 |---------|---------|
 | `/sessions` · `/resume` | Open the sessions window (same as Ctrl+R); press `c` to switch to takeover |
-| `/takeover` · `/hijack` | Open the takeover window: import a Claude/Codex/Cursor/Grok session and resume it; press `c` to switch back |
+| `/takeover` · `/hijack` | Open the takeover window: import a Claude/Codex/Cursor/Grok session and resume it; press `Tab` to scope to here, `c` to switch back |
 | `/todos` | Show current todos |
 | `/clear` | Clear current screen |
 | `/new` | Start a new session |

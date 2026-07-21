@@ -3792,7 +3792,15 @@ impl App {
                     messages: 0,
                     tokens: 0,
                     cost: 0.0,
-                    here: cwd_matches(&cwd, &row_cwd),
+                    // An absent source cwd is not evidence that the session
+                    // belongs here. Keep the fallback label for display, but
+                    // leave unknown-workspace rows out of the Tab-narrowed
+                    // view.
+                    here: fs
+                        .cwd
+                        .as_deref()
+                        .map(|source_cwd| cwd_matches(&cwd, source_cwd))
+                        .unwrap_or(false),
                     cwd: row_cwd,
                     preview: fs.preview(),
                     source: if fs.tool.is_empty() {
