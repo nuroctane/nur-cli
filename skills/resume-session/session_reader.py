@@ -1186,7 +1186,7 @@ def _cursor_cli_metadata(session_dir: Path) -> dict[str, Any]:
     return metadata
 
 
-def _discover_cursor_cli(cwd: str, within_min: int) -> list[dict[str, Any]]:
+def _discover_cursor_cli(cwd: str, within_min: int, all_cwds: bool = False) -> list[dict[str, Any]]:
     workspace = _cursor_root() / "chats" / cursor_workspace_hash(cwd)
     if not workspace.is_dir() or workspace.is_symlink():
         return []
@@ -1200,7 +1200,11 @@ def _discover_cursor_cli(cwd: str, within_min: int) -> list[dict[str, Any]]:
             continue
         metadata = _cursor_cli_metadata(child)
         stored_cwd = metadata.get("cwd")
-        if stored_cwd and os.path.normpath(stored_cwd) != os.path.normpath(cwd):
+        if (
+            not all_cwds
+            and stored_cwd
+            and os.path.normpath(stored_cwd) != os.path.normpath(cwd)
+        ):
             continue
         updated = int(metadata.get("updated_at_ms") or 0)
         if not _within(updated, within_min):
@@ -1633,7 +1637,7 @@ def read_cursor_session(
     return _finalize_result(result)
 
 
-def _discover_claude(cwd: str, within_min: int) -> list[dict[str, Any]]:
+def _discover_claude(cwd: str, within_min: int, all_cwds: bool = False) -> list[dict[str, Any]]:
     projects = _claude_config_dir() / "projects"
     if not projects.is_dir():
         return []
@@ -1672,9 +1676,13 @@ def _discover_claude(cwd: str, within_min: int) -> list[dict[str, Any]]:
                 result = read_claude_session(path, max_tool_chars=80)
             except ReaderError:
                 continue
-            if result.get("cwd") and os.path.normpath(result["cwd"]) != os.path.normpath(cwd):
+            if (
+                not all_cwds
+                and result.get("cwd")
+                and os.path.normpath(result["cwd"]) != os.path.normpath(cwd)
+            ):
                 continue
-            if not result.get("cwd") and project != expected:
+            if not all_cwds and not result.get("cwd") and project != expected:
                 continue
             seen.add(path.stem)
             sessions.append(
@@ -2111,7 +2119,7 @@ def _grok_home() -> Path:
     return Path(configured).expanduser() if configured else Path.home() / ".grok"
 
 
-def _discover_grok(cwd: str, within_min: int) -> list[dict[str, Any]]:
+def _discover_grok(cwd: str, within_min: int, all_cwds: bool = False) -> list[dict[str, Any]]:
     """List Grok Build / Grok CLI sessions under ~/.grok/sessions."""
     sessions: list[dict[str, Any]] = []
     root = _grok_home() / "sessions"
@@ -2140,9 +2148,9 @@ def _discover_grok(cwd: str, within_min: int) -> list[dict[str, Any]]:
         session_cwd = info.get("cwd") or summary.get("cwd") or ""
         # Match exact cwd, or parent prefix (Grok often roots at drive / home).
         sk = _normalize_cwd_key(str(session_cwd)) if session_cwd else ""
-        if sk and sk != want and not want.startswith(sk.rstrip("\\/")) and not sk.startswith(
-            want.rstrip("\\/")
-        ):
+        if not all_cwds and sk and sk != want and not want.startswith(
+            sk.rstrip("\\/")
+        ) and not sk.startswith(want.rstrip("\\/")):
             # Still include if path segment encodes the cwd (URL-encoded workspace dirs).
             encoded = "".join(c if c.isalnum() else "%" for c in want)
             if encoded not in str(session_dir).casefold() and slugify(want) not in str(
@@ -2357,20 +2365,28 @@ def _find_grok_id(session_id: str, cwd: str) -> dict[str, Any] | None:
     return None
 
 
-def discover_sessions(tool: str, cwd: str, within_min: int = 0) -> list[dict[str, Any]]:
+def discover_sessions(
+    tool: str, cwd: str, within_min: int = 0, all_cwds: bool = False
+) -> list[dict[str, Any]]:
+    """Discover sessions for `tool`.
+
+    `all_cwds=True` drops the per-tool workspace filter and returns sessions
+    from every workspace. Each result still carries its own `cwd`, so the
+    caller can group or narrow them itself.
+    """
     if tool not in TOOLS:
         raise ReaderError(f"unsupported tool: {tool}")
     requested_cwd = str(Path(cwd).expanduser())
     if tool == "claude":
-        sessions = _discover_claude(requested_cwd, within_min)
+        sessions = _discover_claude(requested_cwd, within_min, all_cwds)
     elif tool == "codex":
         sessions = _discover_codex(requested_cwd, within_min)
     elif tool in ("nur", "meta"):
         sessions = _discover_nur(requested_cwd, within_min)
     elif tool == "grok":
-        sessions = _discover_grok(requested_cwd, within_min)
+        sessions = _discover_grok(requested_cwd, within_min, all_cwds)
     else:
-        sessions = _discover_cursor_cli(requested_cwd, within_min)
+        sessions = _discover_cursor_cli(requested_cwd, within_min, all_cwds)
         sessions.extend(_discover_cursor_desktop(requested_cwd, within_min))
     return _sort_and_dedupe(sessions)
 
@@ -2650,6 +2666,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("ref", nargs="?")
     parser.add_argument("--cwd", default=os.getcwd())
     parser.add_argument("--within-min", type=int, default=0)
+    parser.add_argument(
+        "--all-cwds",
+        action="store_true",
+        help="list sessions from every workspace, not just --cwd",
+    )
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--max-tool-chars", type=int, default=300)
     return parser
@@ -2666,7 +2687,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.action == "list":
             if args.ref is not None:
                 raise ReaderError("list does not accept a session reference")
-            sessions = discover_sessions(args.tool, args.cwd, args.within_min)
+            sessions = discover_sessions(
+                args.tool, args.cwd, args.within_min, args.all_cwds
+            )
             if args.json:
                 print(
                     json.dumps(

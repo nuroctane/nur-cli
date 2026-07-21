@@ -335,8 +335,9 @@ Open with `Ctrl+R` or `/sessions` (alias `/resume`). Browse recent sessions with
 The same modal has a second window for foreign sessions. Press **`c`** (or `i`) in either one to switch; the footer always names the window you'd switch to.
 
 - `/takeover` (alias `/hijack`) opens it directly; `/sessions` → `c` gets there too.
-- Lists migratable **Claude Code · Codex · Cursor · Grok Build** sessions for this workspace. **↵** imports one into a native session and resumes it.
-- Imports are cwd-scoped, so open it from the project folder.
+- Lists migratable **Claude Code · Codex · Cursor · Grok Build** sessions. **↵** imports one into a native session and resumes it.
+- Defaults to **all** workspaces; **`Tab`** narrows to the current folder, same as the sessions window. Claude Code stores sessions per project directory, so a folder-scoped listing would hide every session outside that exact directory.
+- Foreign and native sessions never share a list — `c` switches windows rather than merging them.
 - Press **`c`** again to go back to the sessions window.
 
 ### Sticky prompt

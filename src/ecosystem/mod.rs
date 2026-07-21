@@ -25,7 +25,8 @@ const ECOSYSTEM_MARKER: &str = "ecosystem.json";
 /// Bump when spawn/install logic changes so markers re-run ensure.
 /// Bump to force `ensure_ecosystem` past a cached marker on upgrade.
 /// 10: retire the resume-* skills superseded by `/takeover`.
-const ECOSYSTEM_SCHEMA: u32 = 10;
+/// 11: session_reader.py gains `--all-cwds` (takeover lists every workspace).
+const ECOSYSTEM_SCHEMA: u32 = 11;
 /// Re-run ensure at most once per this many seconds unless forced.
 const ENSURE_TTL_SECS: u64 = 86_400;
 

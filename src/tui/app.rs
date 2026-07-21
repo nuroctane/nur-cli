@@ -1085,10 +1085,12 @@ pub struct PickerHit {
 
 impl SessionPicker {
     fn row_visible(&self, r: &SessionRow) -> bool {
-        if self.foreign_only {
-            return r.is_foreign();
+        // Foreign and native rows never share a window; `c` switches between
+        // them. Tab narrows either window to the current workspace.
+        if r.is_foreign() != self.foreign_only {
+            return false;
         }
-        (!self.this_cwd_only || r.here) && !r.is_foreign()
+        !self.this_cwd_only || r.here
     }
 
     pub fn visible(&self) -> Vec<&SessionRow> {
@@ -1200,6 +1202,24 @@ impl SessionPicker {
 }
 
 /// Compact relative timestamp for the sessions picker.
+/// True when a session recorded at `session_cwd` belongs to `here`.
+///
+/// Exact match, or `here` sits inside `session_cwd` — Grok roots many sessions
+/// at the drive or home directory, and those are still "this workspace" from a
+/// project folder. Case-insensitive and separator-agnostic for Windows.
+fn cwd_matches(here: &str, session_cwd: &str) -> bool {
+    fn norm(s: &str) -> String {
+        s.replace('\\', "/")
+            .trim_end_matches('/')
+            .to_ascii_lowercase()
+    }
+    let (here, sess) = (norm(here), norm(session_cwd));
+    if sess.is_empty() || here == sess {
+        return true;
+    }
+    here.starts_with(&format!("{sess}/"))
+}
+
 fn relative_when(dt: chrono::DateTime<chrono::Utc>) -> String {
     let secs = chrono::Utc::now()
         .signed_duration_since(dt)
@@ -3757,32 +3777,39 @@ impl App {
     fn foreign_session_rows(&self) -> (Vec<SessionRow>, Vec<String>) {
         let cwd = self.cwd.display().to_string();
         let mut errors = Vec::new();
-        let found = crate::agent::chagent::list_all(&cwd, 0, &mut errors);
+        // Ask for every workspace and tag each row instead of filtering in the
+        // reader: Claude's store is keyed by project dir, so a cwd-scoped read
+        // returns nothing outside that exact folder. Tab narrows to `here`.
+        let found = crate::agent::chagent::list_all(&cwd, 0, true, &mut errors);
         let rows = found
             .into_iter()
             .take(120)
-            .map(|fs| SessionRow {
-                id: fs.session_id.clone(),
-                when: relative_when(fs.updated()),
-                messages: 0,
-                tokens: 0,
-                cost: 0.0,
-                cwd: fs.cwd.clone().unwrap_or_else(|| cwd.clone()),
-                preview: fs.preview(),
-                here: true,
-                source: if fs.tool.is_empty() {
-                    "claude".into()
-                } else {
-                    fs.tool.clone()
-                },
+            .map(|fs| {
+                let row_cwd = fs.cwd.clone().unwrap_or_else(|| cwd.clone());
+                SessionRow {
+                    id: fs.session_id.clone(),
+                    when: relative_when(fs.updated()),
+                    messages: 0,
+                    tokens: 0,
+                    cost: 0.0,
+                    here: cwd_matches(&cwd, &row_cwd),
+                    cwd: row_cwd,
+                    preview: fs.preview(),
+                    source: if fs.tool.is_empty() {
+                        "claude".into()
+                    } else {
+                        fs.tool.clone()
+                    },
+                }
             })
             .collect();
         (rows, errors)
     }
 
-    /// Takeover picker — same chrome as `/sessions`, but populated only
-    /// with migratable foreign sessions (Claude/Codex/Cursor/Grok) for this
-    /// workspace. Enter imports the selected one and resumes it natively.
+    /// Takeover picker — same chrome as `/sessions`, but populated only with
+    /// migratable foreign sessions (Claude/Codex/Cursor/Grok). Defaults to
+    /// **all** workspaces (Tab narrows to here); Enter imports the selected one
+    /// and resumes it natively.
     pub(super) fn open_chagent_picker(&mut self) {
         if self.busy {
             self.push_error("wait for the current turn to finish".into());
@@ -3791,12 +3818,10 @@ impl App {
         let (rows, errors) = self.foreign_session_rows();
         if rows.is_empty() {
             let mut m =
-                "takeover · no migratable Claude/Codex/Cursor/Grok sessions for this workspace"
-                    .to_string();
+                "takeover · no migratable Claude/Codex/Cursor/Grok sessions found".to_string();
             if !errors.is_empty() {
                 m.push_str(&format!("\n  {}", errors.join("\n  ")));
             }
-            m.push_str("\n  (imports are cwd-scoped — open the picker from the project folder)");
             self.push_note(Tone::Session, m);
             return;
         }
@@ -6940,6 +6965,64 @@ body".to_string()];
         let _ = i.submit();
         i.history_prev();
         assert_eq!(i.text(), "first");
+    }
+
+    #[test]
+    fn cwd_matches_exact_and_ancestor_only() {
+        let here = r"C:\Users\david\Laboratory\nur-cli";
+        // Exact, and separator/case insensitive.
+        assert!(cwd_matches(here, here));
+        assert!(cwd_matches(here, "c:/users/david/laboratory/nur-cli"));
+        // Grok roots sessions at the drive or home — still this workspace.
+        assert!(cwd_matches(here, r"C:\Users\david"));
+        assert!(cwd_matches(here, r"C:\"));
+        // A sibling project is not.
+        assert!(!cwd_matches(here, r"C:\Users\david\Laboratory\ASTROSleep"));
+        // A *deeper* folder is not "here" either — only ancestors count.
+        assert!(!cwd_matches(here, r"C:\Users\david\Laboratory\nur-cli\src"));
+        // Prefix must land on a separator, not mid-name.
+        assert!(!cwd_matches(here, r"C:\Users\david\Laboratory\nur"));
+    }
+
+    /// The two windows must never show each other's rows — that separation is
+    /// the whole point of `c` switching rather than merging.
+    #[test]
+    fn foreign_and_native_rows_never_share_a_window() {
+        let row = |src: &str, here: bool| SessionRow {
+            id: format!("{src}-1"),
+            when: "now".into(),
+            messages: 1,
+            tokens: 0,
+            cost: 0.0,
+            cwd: "/x".into(),
+            preview: "p".into(),
+            here,
+            source: src.into(),
+        };
+        let mut p = test_picker(0, 6);
+        p.rows = vec![
+            row("nur", true),
+            row("claude", true),
+            row("grok", false),
+            row("nur", false),
+        ];
+
+        // Sessions window: native only, all workspaces.
+        p.foreign_only = false;
+        p.this_cwd_only = false;
+        assert_eq!(p.visible().len(), 2);
+        assert!(p.visible().iter().all(|r| !r.is_foreign()));
+
+        // Takeover window: foreign only, all workspaces (the default).
+        p.foreign_only = true;
+        assert_eq!(p.visible().len(), 2);
+        assert!(p.visible().iter().all(|r| r.is_foreign()));
+
+        // Tab narrows the takeover window to this workspace.
+        p.this_cwd_only = true;
+        let vis = p.visible();
+        assert_eq!(vis.len(), 1);
+        assert_eq!(vis[0].source, "claude");
     }
 
     fn test_picker(n: usize, page: usize) -> SessionPicker {

@@ -957,7 +957,7 @@ fn draw_session_picker(f: &mut Frame, app: &mut App, area: Rect) {
     let (title, footer) = if foreign_only {
         (
             format!(" {spin}  takeover · import  ·  {total} "),
-            " ↑↓/wheel  ·  ↵ import & resume  ·  c sessions  ·  esc/✕ ",
+            " ↑↓/wheel  ·  ↵ import & resume  ·  tab scope  ·  c sessions  ·  esc/✕ ",
         )
     } else {
         (
@@ -965,7 +965,8 @@ fn draw_session_picker(f: &mut Frame, app: &mut App, area: Rect) {
             " ↑↓/wheel  ·  ↵ open  ·  tab scope  ·  c takeover  ·  esc/✕ ",
         )
     };
-    let right = if foreign_only { None } else { Some(scope_label) };
+    // Both windows default to every workspace and narrow with Tab.
+    let right = Some(scope_label);
     draw_modal_frame(f, rect, phase, theme::META_BLUE, &title, right, footer);
 
     let pad = 2u16;
@@ -1001,8 +1002,8 @@ fn draw_session_picker(f: &mut Frame, app: &mut App, area: Rect) {
     if total == 0 {
         let (empty, hint) = if foreign_only {
             (
-                "  no Claude/Codex/Cursor/Grok sessions here  ·  ",
-                "c sessions",
+                "  no Claude/Codex/Cursor/Grok sessions  ·  ",
+                "tab scope · c sessions",
             )
         } else {
             ("  nothing here  ·  ", "tab scope · c takeover")

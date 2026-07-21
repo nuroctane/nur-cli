@@ -44,3 +44,7 @@ site/
 # foglamp codebase scan — scan.lock.json holds a secret edit token
 .foglamp/
 
+
+# Python bytecode (session_reader.py syntax checks)
+__pycache__/
+*.pyc

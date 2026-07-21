@@ -1748,17 +1748,18 @@ impl App {
         let cwd = self.cwd.display().to_string();
         let mut errors = Vec::new();
         let found = match tool {
-            Some(t) => match crate::agent::chagent::list_foreign(&t, &cwd, 0) {
+            // Matches the takeover window: every workspace, not just this cwd.
+            Some(t) => match crate::agent::chagent::list_foreign(&t, &cwd, 0, true) {
                 Ok(v) => v,
                 Err(e) => {
-                    self.push_error(format!("chagent: {e}"));
+                    self.push_error(format!("takeover: {e}"));
                     return;
                 }
             },
-            None => crate::agent::chagent::list_all(&cwd, 0, &mut errors),
+            None => crate::agent::chagent::list_all(&cwd, 0, true, &mut errors),
         };
         if found.is_empty() {
-            let mut m = "chagent · no migratable sessions found for this workspace".to_string();
+            let mut m = "takeover · no migratable sessions found".to_string();
             if !errors.is_empty() {
                 m.push_str(&format!("\n  {}", errors.join("\n  ")));
             }

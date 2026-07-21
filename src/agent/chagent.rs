@@ -214,7 +214,12 @@ fn run_reader(args: &[String]) -> Result<String> {
 
 /// List migratable sessions for one foreign tool in `cwd`.
 /// `within_min == 0` means no recency filter.
-pub fn list_foreign(tool: &str, cwd: &str, within_min: u32) -> Result<Vec<ForeignSession>> {
+pub fn list_foreign(
+    tool: &str,
+    cwd: &str,
+    within_min: u32,
+    all_cwds: bool,
+) -> Result<Vec<ForeignSession>> {
     if !is_foreign_tool(tool) {
         return Err(MuseError::Other(format!("chagent: unsupported agent '{tool}'")));
     }
@@ -228,6 +233,10 @@ pub fn list_foreign(tool: &str, cwd: &str, within_min: u32) -> Result<Vec<Foreig
     if within_min > 0 {
         args.push("--within-min".to_string());
         args.push(within_min.to_string());
+    }
+    // Return every workspace's sessions; the caller narrows to `cwd` itself.
+    if all_cwds {
+        args.push("--all-cwds".to_string());
     }
     let stdout = run_reader(&args)?;
     let parsed: ListOut = serde_json::from_str(&stdout)
@@ -244,10 +253,15 @@ pub fn list_foreign(tool: &str, cwd: &str, within_min: u32) -> Result<Vec<Foreig
 /// Discover foreign sessions across *all* supported tools for `cwd`, newest
 /// first. Best-effort: a tool whose store is absent or whose reader errors is
 /// skipped, and its error is collected in `errors` for optional display.
-pub fn list_all(cwd: &str, within_min: u32, errors: &mut Vec<String>) -> Vec<ForeignSession> {
+pub fn list_all(
+    cwd: &str,
+    within_min: u32,
+    all_cwds: bool,
+    errors: &mut Vec<String>,
+) -> Vec<ForeignSession> {
     let mut all = Vec::new();
     for (tool, label) in FOREIGN_TOOLS {
-        match list_foreign(tool, cwd, within_min) {
+        match list_foreign(tool, cwd, within_min, all_cwds) {
             Ok(mut v) => all.append(&mut v),
             Err(e) => errors.push(format!("{label}: {e}")),
         }

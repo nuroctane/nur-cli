@@ -147,13 +147,20 @@ There are exactly two session windows, and one key switches between them:
 | Command | Purpose |
 |---------|---------|
 | `/sessions` · `/resume` | Native nur sessions. Press **`c`** to switch to the takeover window. |
-| `/takeover` · `/hijack` | Migratable foreign sessions for this workspace. **↵ imports & resumes.** Press **`c`** to switch back. |
+| `/takeover` · `/hijack` | Migratable foreign sessions. **↵ imports & resumes.** Press **`c`** to switch back. |
 | `/takeover ls [agent]` | List migratable sessions (all agents, or just one) |
 | `/takeover <agent> [id\|latest]` | Import that session and resume it |
 
 Agents are `claude` · `codex` · `cursor` · `grok`. Imports are re-homed to the
-current workspace (tools stay sandboxed here) and are cwd-scoped, so open the
-window from the project folder.
+current workspace, so tools stay sandboxed here regardless of where the session
+came from.
+
+**Scope:** both windows default to **all** workspaces; **`Tab`** narrows either
+one to the current folder. This matters most for Claude Code, whose sessions are
+stored per project directory (`~/.claude/projects/<dir>/`) — a folder-scoped
+listing shows nothing outside that exact directory, so the takeover window asks
+the reader for every workspace (`session_reader.py … --all-cwds`) and tags each
+row instead.
 
 Requires Python 3 on `PATH` (`python3` / `python` / `py -3`) and the
 `resume-session` reader provisioned under `~/.nur/skills` (run `/ecosystem` if
@@ -387,7 +394,7 @@ Type these inside the `nur` TUI. Aliases are shown in the same row.
 | `/new` | Start a fresh session |
 | `/compact` | Summarize the conversation to free context |
 | `/sessions` · `/resume` | Browse & open past nur sessions (`/resume <id>` also works). Press **`c`** to switch to the takeover window |
-| `/takeover` · `/hijack` | Cross-agent session migration. Opens the takeover window (same chrome as `/sessions`) listing migratable **Claude Code · Codex · Cursor · Grok Build** sessions for this workspace; **↵** imports one and resumes it natively. Press **`c`** to switch back to sessions. `/takeover ls [agent]` lists them; `/takeover <agent> [id\|latest]` imports directly |
+| `/takeover` · `/hijack` | Cross-agent session migration. Opens the takeover window (same chrome as `/sessions`) listing migratable **Claude Code · Codex · Cursor · Grok Build** sessions from **all** workspaces (**`Tab`** narrows to here); **↵** imports one and resumes it natively. Press **`c`** to switch back to sessions. `/takeover ls [agent]` lists them; `/takeover <agent> [id\|latest]` imports directly |
 | `/login` | Provider + API key or browser sign-in |
 | `/logout` | Clear the stored API key |
 | `/model` · `/models` | Show and switch models for the active provider |
