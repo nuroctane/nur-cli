@@ -2,6 +2,7 @@
 
 use super::mode::{PermissionMode, SharedMode};
 use super::session::Session;
+use super::swarm::{self, RunState};
 use super::{AgentEvent, AgentRunner, ApprovalDecision};
 use crate::api::ApiClient;
 use crate::config::Config;
@@ -67,6 +68,7 @@ pub async fn run_subagent(
 
     let (tx, mut rx) = mpsc::unbounded_channel::<AgentEvent>();
     let cancel = cancel.clone();
+    let task = prompt.to_string();
     let prompt = format!(
         "[SUBAGENT:{subagent_type}] {prompt}\n\n\
          When finished, respond with a concise report: findings, files touched/read, next steps. \
@@ -75,14 +77,20 @@ pub async fn run_subagent(
 
     let handle = super::spawn_turn(runner, session, usage, prompt, tx, cancel);
 
+    // Publish this run to the shared table the inline `/swarm` card reads.
+    let run_id = swarm::begin(subagent_type, &task);
+
     let mut last_text = String::new();
     while let Some(ev) = rx.recv().await {
         match ev {
             AgentEvent::Status(status) => {
+                swarm::activity(run_id, &status);
                 let _ = parent_tx.send(AgentEvent::Status(format!(
                     "subagent · {status}"
                 )));
             }
+            AgentEvent::ToolStart { name, .. } => swarm::tool_start(run_id, &name),
+            AgentEvent::ToolEnd { ok, .. } => swarm::tool_end(run_id, ok),
             AgentEvent::ApprovalRequest {
                 name,
                 args,
@@ -90,7 +98,10 @@ pub async fn run_subagent(
             } => {
                 relay_approval(parent_tx, name, args, respond).await;
             }
-            AgentEvent::TextDelta(d) => last_text.push_str(&d),
+            AgentEvent::TextDelta(d) => {
+                swarm::thinking(run_id);
+                last_text.push_str(&d);
+            }
             AgentEvent::AssistantMessage(m) => {
                 if !m.is_empty() {
                     last_text = m;
@@ -104,15 +115,18 @@ pub async fn run_subagent(
             } => {
                 let _ = handle.await;
                 let spent = usage.session_usage().clone();
+                let tokens = spent.input_tokens + spent.output_tokens;
                 if interrupted {
+                    swarm::finish(run_id, RunState::Cancelled, tokens);
                     return Err(MuseError::Interrupted);
                 }
                 return match result {
-                    Ok(s) => Ok((
-                        if s.trim().is_empty() { last_text } else { s },
-                        spent,
-                    )),
+                    Ok(s) => {
+                        swarm::finish(run_id, RunState::Done, tokens);
+                        Ok((if s.trim().is_empty() { last_text } else { s }, spent))
+                    }
                     Err(e) => {
+                        swarm::finish(run_id, RunState::Failed, tokens);
                         if !last_text.trim().is_empty() {
                             Ok((format!("{last_text}\n\n(subagent ended: {e})"), spent))
                         } else {
@@ -126,8 +140,10 @@ pub async fn run_subagent(
     }
     let _ = handle.await;
     if last_text.is_empty() {
+        swarm::finish(run_id, RunState::Failed, 0);
         Err(MuseError::Other("subagent produced no output".into()))
     } else {
+        swarm::finish(run_id, RunState::Done, 0);
         Ok((last_text, TokenUsage::default()))
     }
 }

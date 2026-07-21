@@ -13,6 +13,7 @@ pub mod skill_cache;
 pub mod skill_intents;
 pub mod skills;
 pub mod subagent;
+pub mod swarm;
 pub mod todos;
 
 #[allow(unused_imports)]

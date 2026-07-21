@@ -1,7 +1,7 @@
 //! Rendering for the NurCLI TUI — Nur-gold surfaces, motion, cursors.
 
 use super::app::{fmt_num, line_to_plain, App, Cell, TextRange};
-use super::{ansi, markdown, scrollbar::ScrollMetrics, wrap};
+use super::{ansi, grid, markdown, scrollbar::ScrollMetrics, wrap};
 use crate::theme;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect, Size};
 use ratatui::style::{Color, Modifier, Style};
@@ -2355,6 +2355,7 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                 out.push(Line::from(Span::styled(l.clone(), theme::style_status())));
             }
         }
+        Cell::Swarm { live, detail } => swarm_card(width, *live, *detail, tick, out),
         Cell::Error(text) => {
             out.push(Line::default());
             for (i, l) in text.lines().enumerate() {
@@ -2365,6 +2366,415 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                 ]));
             }
         }
+    }
+}
+
+// ── subagent swarm card ──────────────────────────────────────────────────
+
+/// Sparkline ramp for the per-agent activity trace (index = intensity 0..8).
+const PULSE_RAMP: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+/// Smallest pane that still reads: glyph + kind + a few words of task.
+const MIN_PANE_W: u16 = 26;
+/// Rows per pane: top border, task, tool, trace + stats, bottom border.
+const PANE_H: u16 = 5;
+/// Detail mode adds one row for the status line under the tool.
+const PANE_H_DETAIL: u16 = 6;
+/// Panes drawn at once; the rest are summarised in the footer.
+const MAX_PANES: usize = 8;
+/// Canvas rows the grid may grow to. This is a *height budget*, not a pane
+/// count: a narrow terminal fits fewer columns, so it shows fewer panes rather
+/// than turning into a tall stack that swallows a short window.
+const MAX_CARD_ROWS: usize = 12;
+/// Below this the framed grid is dropped for a one-line-per-agent list — two
+/// columns of border chrome are not worth it on a very narrow terminal.
+const COMPACT_BELOW: usize = MIN_PANE_W as usize + 2;
+/// Agents listed in compact mode.
+const MAX_COMPACT: usize = 6;
+
+/// Colour + glyph for a run state. Running agents share the gold chrome hue;
+/// finished ones settle into the transcript's success/error palette so a wall
+/// of panes reads at a glance.
+fn run_look(state: crate::agent::swarm::RunState, tick: Duration) -> (Color, String) {
+    use crate::agent::swarm::RunState as S;
+    match state {
+        S::Running => (theme::NUR_GOLD, theme::spinner_frame(tick).to_string()),
+        S::Done => (theme::SUCCESS, "✓".into()),
+        S::Failed => (theme::ERROR, "✗".into()),
+        S::Cancelled => (theme::MUTED, "⊘".into()),
+    }
+}
+
+/// Compact token count: 4200 → `4.2k`.
+fn fmt_tokens(n: u64) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1_000 {
+        format!("{:.1}k", n as f64 / 1_000.0)
+    } else {
+        n.to_string()
+    }
+}
+
+/// Render the activity trace into `width` characters, newest at the right.
+/// A running agent's trace breathes: the newest sample pulses with the tick so
+/// a stalled pane is visibly different from a busy one.
+fn pulse_line(pulse: &[u8], width: usize, running: bool, tick: Duration) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let tail: Vec<u8> = pulse.iter().rev().take(width).rev().copied().collect();
+    let mut s: String = std::iter::repeat_n(' ', width.saturating_sub(tail.len()))
+        .chain(tail.iter().map(|v| PULSE_RAMP[(*v as usize).min(8)]))
+        .collect();
+    if running && !s.is_empty() {
+        // Replace the last cell with a breathing head.
+        let head = theme::pulse_frame(tick);
+        s.pop();
+        s.push_str(head);
+    }
+    s
+}
+
+/// `/swarm` — the subagent table as a tiled grid of live panes.
+///
+/// Layout comes from [`grid`]: zones in percent space, snapped to character
+/// rects that tile the card exactly, then each pane is painted into one shared
+/// [`grid::Canvas`] so borders stay aligned no matter how the terminal is
+/// sized.
+fn swarm_card(
+    width: usize,
+    live: bool,
+    detail: bool,
+    tick: Duration,
+    out: &mut Vec<Line<'static>>,
+) {
+    use crate::agent::swarm::{self, RunState};
+
+    let runs = swarm::snapshot();
+    // Never draw wider than the viewport: the card must shrink with the window,
+    // not spill and wrap. Below one legible pane it drops the frames entirely.
+    let w = width.max(4);
+    let compact = w < COMPACT_BELOW;
+
+    let running = runs.iter().filter(|r| r.state == RunState::Running).count();
+    let done = runs.iter().filter(|r| r.state == RunState::Done).count();
+    let failed = runs
+        .iter()
+        .filter(|r| matches!(r.state, RunState::Failed | RunState::Cancelled))
+        .count();
+    let tokens: u64 = runs.iter().map(|r| r.tokens).sum();
+
+    out.push(Line::default());
+
+    // Header strip: title + as many rollup chips as fit, widest-value first.
+    let mut chips: Vec<(String, Color)> = Vec::new();
+    if running > 0 {
+        chips.push((format!("{running} running"), theme::NUR_GOLD_SKY));
+    }
+    if done > 0 {
+        chips.push((format!("{done} done"), theme::SUCCESS));
+    }
+    if failed > 0 {
+        chips.push((format!("{failed} ended early"), theme::ERROR));
+    }
+    if tokens > 0 {
+        chips.push((format!("Σ {} tok", fmt_tokens(tokens)), theme::MUTED));
+    }
+    let title = clip_to(if live { "◈ swarm · live" } else { "◈ swarm" }, w);
+    let mut header = vec![Span::styled(
+        title.clone(),
+        Style::default()
+            .fg(theme::NUR_GOLD)
+            .add_modifier(Modifier::BOLD),
+    )];
+    let sep = if compact { " · " } else { "  ·  " };
+    let mut used = UnicodeWidthStr::width(title.as_str());
+    for (text, color) in chips {
+        let need = sep.len() + UnicodeWidthStr::width(text.as_str());
+        if used + need > w {
+            break;
+        }
+        used += need;
+        header.push(Span::styled(sep.to_string(), theme::style_faint()));
+        header.push(Span::styled(text, Style::default().fg(color)));
+    }
+    out.push(clip_line(Line::from(header), w));
+
+    if runs.is_empty() {
+        let hint = if compact {
+            "  no subagents yet"
+        } else {
+            "  no subagents yet — the agent tool populates this as it fans out"
+        };
+        out.push(Line::from(Span::styled(
+            clip_to(hint, w),
+            theme::style_faint(),
+        )));
+        return;
+    }
+
+    // Newest first: an in-flight agent should never be pushed off the grid by
+    // finished history.
+    let mut ordered = runs;
+    ordered.sort_by_key(|r| (r.state != RunState::Running, std::cmp::Reverse(r.id)));
+
+    if compact {
+        let overflow = ordered.len().saturating_sub(MAX_COMPACT);
+        ordered.truncate(MAX_COMPACT);
+        for run in &ordered {
+            out.push(compact_row(run, w, tick));
+        }
+        out.push(Line::from(Span::styled(
+            clip_to(&swarm_footer(overflow, live, true), w),
+            theme::style_faint(),
+        )));
+        return;
+    }
+
+    // A narrow window fits fewer columns, so it also shows fewer panes — the
+    // card stays a card instead of becoming a tall stack of one-wide boxes.
+    let pane_h = if detail { PANE_H_DETAIL } else { PANE_H };
+    let fit_columns = (w / MIN_PANE_W as usize).max(1);
+    let fit_rows = (MAX_CARD_ROWS / pane_h as usize).max(1);
+    let max_panes = MAX_PANES.min(fit_columns * fit_rows);
+    let overflow = ordered.len().saturating_sub(max_panes);
+    ordered.truncate(max_panes);
+
+    let layout = grid::layout_for(ordered.len(), w as u16, MIN_PANE_W);
+    let Some(zones) = grid::model_to_zones(&layout) else {
+        return;
+    };
+    let height = layout.rows as u16 * pane_h;
+    let area = Rect {
+        x: 0,
+        y: 0,
+        width: w as u16,
+        height,
+    };
+    let rects = grid::zones_to_rects(&zones, area);
+
+    let mut canvas = grid::Canvas::new(w, height as usize);
+    for (run, rect) in ordered.iter().zip(rects.iter()) {
+        draw_pane(&mut canvas, *rect, run, detail, tick);
+    }
+    out.extend(canvas.into_lines());
+
+    out.push(Line::from(Span::styled(
+        clip_to(&swarm_footer(overflow, live, false), w),
+        theme::style_faint(),
+    )));
+}
+
+/// Truncate to `width` display columns, marking the cut with an ellipsis.
+fn clip_to(text: &str, width: usize) -> String {
+    if UnicodeWidthStr::width(text) <= width {
+        return text.to_string();
+    }
+    let mut out = String::new();
+    let mut used = 0usize;
+    for ch in text.chars() {
+        let cw = UnicodeWidthStr::width(ch.to_string().as_str());
+        if used + cw + 1 > width {
+            break;
+        }
+        out.push(ch);
+        used += cw;
+    }
+    out.push('…');
+    out
+}
+
+/// Hard-clip a styled line to `width` columns, keeping styles intact. The last
+/// line of defence for the card's "never wider than the viewport" invariant —
+/// composed rows can only get shorter, never wrap.
+fn clip_line(line: Line<'static>, width: usize) -> Line<'static> {
+    let total: usize = line
+        .spans
+        .iter()
+        .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+        .sum();
+    if total <= width {
+        return line;
+    }
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let mut used = 0usize;
+    for span in line.spans {
+        let w = UnicodeWidthStr::width(span.content.as_ref());
+        if used + w <= width.saturating_sub(1) {
+            used += w;
+            out.push(span);
+            continue;
+        }
+        let room = width.saturating_sub(1).saturating_sub(used);
+        if room > 0 {
+            let text = clip_to(span.content.as_ref(), room + 1);
+            used += UnicodeWidthStr::width(text.as_str());
+            out.push(Span::styled(text, span.style));
+        }
+        break;
+    }
+    if used < width {
+        out.push(Span::styled("…".to_string(), theme::style_faint()));
+    }
+    Line::from(out)
+}
+
+fn swarm_footer(overflow: usize, live: bool, compact: bool) -> String {
+    let mut s = String::from("  ");
+    if overflow > 0 {
+        s.push_str(&format!("+{overflow} more · "));
+    }
+    s.push_str(match (live, compact) {
+        (true, true) => "live · /swarm off",
+        (true, false) => "updates live · /swarm off to freeze · /swarm clear to drop finished",
+        (false, true) => "frozen · /swarm",
+        (false, false) => "frozen · /swarm to resume",
+    });
+    s
+}
+
+/// One agent as a single dense row, for terminals too narrow to frame a pane.
+fn compact_row(
+    run: &crate::agent::swarm::AgentRun,
+    width: usize,
+    tick: Duration,
+) -> Line<'static> {
+    use crate::agent::swarm::RunState;
+    let running = run.state == RunState::Running;
+    let (hue, glyph) = run_look(run.state, tick);
+    let elapsed = if running {
+        theme::fmt_elapsed_live(run.elapsed())
+    } else {
+        theme::fmt_duration(run.elapsed())
+    };
+    let head = format!("{glyph} {}·{} ", run.id, run.kind);
+    // Shed the trailing stats before the body: knowing *what* an agent is doing
+    // beats knowing how long it has been at it once space runs out.
+    let budget = width
+        .saturating_sub(2)
+        .saturating_sub(UnicodeWidthStr::width(head.as_str()));
+    let tail = [
+        format!(" {elapsed} {}⚒", run.tools_done),
+        format!(" {elapsed}"),
+        String::new(),
+    ]
+    .into_iter()
+    .find(|t| budget.saturating_sub(UnicodeWidthStr::width(t.as_str())) >= 6)
+    .unwrap_or_default();
+    let room = budget.saturating_sub(UnicodeWidthStr::width(tail.as_str()));
+    let body = run.tool.as_deref().unwrap_or(&run.activity);
+    let body = clip_to(body, room);
+    let pad = room.saturating_sub(UnicodeWidthStr::width(body.as_str()));
+    clip_line(
+        Line::from(vec![
+            Span::styled("  ".to_string(), theme::style_faint()),
+            Span::styled(head, Style::default().fg(hue)),
+            Span::styled(body, theme::style_status()),
+            Span::styled(" ".repeat(pad), theme::style_faint()),
+            Span::styled(tail, theme::style_faint()),
+        ]),
+        width,
+    )
+}
+
+/// Paint one agent pane into the shared canvas.
+fn draw_pane(
+    canvas: &mut grid::Canvas,
+    rect: Rect,
+    run: &crate::agent::swarm::AgentRun,
+    detail: bool,
+    tick: Duration,
+) {
+    use crate::agent::swarm::RunState;
+    if rect.width < 8 || rect.height < 3 {
+        return;
+    }
+    let running = run.state == RunState::Running;
+    let (hue, glyph) = run_look(run.state, tick);
+    let border = Style::default().fg(if running {
+        theme::dim(hue, 0.55)
+    } else {
+        theme::BORDER
+    });
+
+    canvas.frame(rect, border, None);
+
+    let x = rect.x as usize + 2;
+    let inner_w = rect.width.saturating_sub(4) as usize;
+    let right = rect.x as usize + rect.width as usize - 2;
+    let top = rect.y as usize;
+    let last = rect.y as usize + rect.height as usize - 1;
+
+    // Title woven into the top border: "╭ ⠋ 3·explore ──── 12.4s ─╮". The id
+    // makes a pane referable ("what is #3 doing") when several are in flight.
+    let elapsed = if running {
+        theme::fmt_elapsed_live(run.elapsed())
+    } else {
+        theme::fmt_duration(run.elapsed())
+    };
+    let title = format!("{glyph} {}·{}", run.id, run.kind);
+    let title_room = inner_w.saturating_sub(elapsed.chars().count() + 3);
+    canvas.text(x - 1, top, " ", border, 1);
+    let used = canvas.text_clipped(
+        x,
+        top,
+        &title,
+        Style::default().fg(hue).add_modifier(Modifier::BOLD),
+        title_room,
+    );
+    canvas.text(x + used, top, " ", border, 1);
+    canvas.text_right(
+        right,
+        top,
+        &format!(" {elapsed} "),
+        theme::style_duration_chip(running),
+    );
+
+    // Body rows: task, current tool, (detail: status), then the trace pinned to
+    // the last inner row so panes of different heights still line up.
+    let mut y = rect.y as usize + 1;
+    if y < last {
+        canvas.text_clipped(x, y, &run.task, theme::style_assistant(), inner_w);
+        y += 1;
+    }
+    if y < last {
+        let (mark, style) = match (&run.tool, running) {
+            (Some(_), _) => ("▸ ", Style::default().fg(theme::CYAN)),
+            (None, true) => ("· ", theme::style_status()),
+            (None, false) => ("· ", theme::style_faint()),
+        };
+        let label = run.tool.as_deref().unwrap_or(&run.activity);
+        let used = canvas.text(x, y, mark, style, inner_w);
+        canvas.text_clipped(x + used, y, label, style, inner_w.saturating_sub(used));
+        y += 1;
+    }
+    if detail && y < last {
+        canvas.text_clipped(x, y, &run.activity, theme::style_faint(), inner_w);
+    }
+
+    let trace_y = last.saturating_sub(1);
+    if trace_y > rect.y as usize {
+        // Stats right-aligned; the activity trace flows into whatever is left.
+        let mut stats = format!("{}⚒", run.tools_done);
+        if run.tools_failed > 0 {
+            stats.push_str(&format!(" {}✗", run.tools_failed));
+        }
+        if run.tokens > 0 {
+            stats.push(' ');
+            stats.push_str(&fmt_tokens(run.tokens));
+        }
+        let stats_w = UnicodeWidthStr::width(stats.as_str());
+        canvas.text_right(right, trace_y, &stats, theme::style_faint());
+        let trace_w = inner_w.saturating_sub(stats_w + 2);
+        let trace = pulse_line(&run.pulse, trace_w, running, tick);
+        canvas.text(
+            x,
+            trace_y,
+            &trace,
+            Style::default().fg(if running { hue } else { theme::dim(hue, 0.5) }),
+            trace_w,
+        );
     }
 }
 
@@ -3820,6 +4230,23 @@ fn cell_wrap_key(cell: &Cell, spin_i: u64) -> u64 {
                 spin_i.hash(&mut h);
             }
         }
+        Cell::Swarm { live, detail } => {
+            11u8.hash(&mut h);
+            live.hash(&mut h);
+            detail.hash(&mut h);
+            if *live {
+                // Reads the registry every frame; the spinner tick is the clock.
+                spin_i.hash(&mut h);
+            } else {
+                // Frozen: fingerprint the table so a later run still repaints.
+                for run in crate::agent::swarm::snapshot() {
+                    run.id.hash(&mut h);
+                    format!("{:?}", run.state).hash(&mut h);
+                    run.tools_done.hash(&mut h);
+                    run.tokens.hash(&mut h);
+                }
+            }
+        }
         Cell::Error(t) => {
             8u8.hash(&mut h);
             t.hash(&mut h);
@@ -4022,6 +4449,234 @@ fn draw_ctx_menu(f: &mut Frame, app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── swarm card ───────────────────────────────────────────────────────
+
+    /// Render the card and return its plain-text rows.
+    fn swarm_rows(width: usize, live: bool, detail: bool) -> Vec<String> {
+        let mut out = Vec::new();
+        swarm_card(width, live, detail, Duration::from_millis(0), &mut out);
+        out.iter().map(line_to_plain).collect()
+    }
+
+    /// Seed the registry with a representative fan-out.
+    fn seed_swarm(n: usize) {
+        use crate::agent::swarm::{self, RunState};
+        swarm::reset();
+        let tasks = [
+            ("explore", "map every call site of run_subagent"),
+            ("general", "port the grid engine tests to the new API"),
+            ("plan", "design the /swarm card layout"),
+            ("explore", "find where images enter the chat body"),
+            ("general", "run the failing local-model repro"),
+            ("explore", "audit provider catalog for local entries"),
+        ];
+        for i in 0..n {
+            let (kind, task) = tasks[i % tasks.len()];
+            let id = swarm::begin(kind, task);
+            for t in 0..(i + 2) {
+                swarm::tool_start(id, ["grep", "read_file", "bash", "glob"][t % 4]);
+                swarm::tool_end(id, t % 5 != 4);
+            }
+            match i % 3 {
+                0 => {} // still running
+                1 => swarm::finish(id, RunState::Done, 4200 * (i as u64 + 1)),
+                _ => swarm::finish(id, RunState::Failed, 900),
+            }
+        }
+    }
+
+    /// Not an assertion — `cargo test swarm_preview -- --ignored --nocapture`
+    /// prints the card at a few sizes so the layout can be eyeballed.
+    #[test]
+    #[ignore]
+    fn swarm_preview() {
+        let _g = crate::agent::swarm::test_lock();
+        for (n, width) in [
+            (1usize, 96usize),
+            (3, 96),
+            (5, 120),
+            (8, 150),
+            (4, 60),
+            (5, 40),
+            (5, 26),
+            (5, 20),
+        ] {
+            seed_swarm(n);
+            println!("\n──── {n} agents @ {width} cols ────");
+            for row in swarm_rows(width, true, false) {
+                println!("{row}");
+            }
+        }
+    }
+
+    #[test]
+    fn swarm_card_is_empty_but_helpful_with_no_subagents() {
+        let _g = crate::agent::swarm::test_lock();
+        crate::agent::swarm::reset();
+        let rows = swarm_rows(100, true, false);
+        assert!(rows[1].contains("swarm"));
+        assert!(
+            rows.iter().any(|r| r.contains("no subagents yet")),
+            "empty state must explain itself: {rows:?}"
+        );
+    }
+
+    #[test]
+    fn swarm_panes_tile_to_the_full_card_width() {
+        let _g = crate::agent::swarm::test_lock();
+        for n in 1..=6 {
+            seed_swarm(n);
+            for width in [60usize, 97, 140] {
+                let rows = swarm_rows(width, true, false);
+                // Grid rows are the ones drawn by the canvas: every one of them
+                // is exactly `width` columns, which is what keeps borders aligned.
+                let grid_rows: Vec<&String> = rows
+                    .iter()
+                    .filter(|r| r.starts_with('╭') || r.starts_with('│') || r.starts_with('╰'))
+                    .collect();
+                assert!(!grid_rows.is_empty(), "n={n} w={width} drew no panes");
+                for row in grid_rows {
+                    assert_eq!(
+                        UnicodeWidthStr::width(row.as_str()),
+                        width,
+                        "n={n} w={width} row {row:?} must fill the card"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn swarm_rollup_counts_every_state() {
+        let _g = crate::agent::swarm::test_lock();
+        seed_swarm(6);
+        let rows = swarm_rows(120, true, false);
+        let header = &rows[1];
+        assert!(header.contains("2 running"), "header: {header}");
+        assert!(header.contains("2 done"), "header: {header}");
+        assert!(header.contains("2 ended early"), "header: {header}");
+        assert!(header.contains("tok"), "header: {header}");
+    }
+
+    #[test]
+    fn swarm_shows_running_agents_first_and_flags_overflow() {
+        let _g = crate::agent::swarm::test_lock();
+        seed_swarm(12);
+        let rows = swarm_rows(160, true, false);
+        let body = rows.join("\n");
+        assert!(body.contains("+4 more"), "overflow must be disclosed:\n{body}");
+        // Every still-running agent survives the truncation to MAX_PANES.
+        let running = crate::agent::swarm::running_count();
+        // Panes sit side by side on shared rows, so count glyphs, not rows.
+        let live_panes: usize = rows
+            .iter()
+            .map(|r| {
+                theme::SPINNER
+                    .iter()
+                    .map(|frame| r.matches(frame).count())
+                    .sum::<usize>()
+            })
+            .sum();
+        assert!(
+            live_panes >= running,
+            "expected ≥{running} live panes, found {live_panes}"
+        );
+    }
+
+    #[test]
+    fn swarm_detail_mode_adds_the_activity_row() {
+        let _g = crate::agent::swarm::test_lock();
+        seed_swarm(1);
+        let plain = swarm_rows(90, true, false);
+        let detailed = swarm_rows(90, true, true);
+        assert_eq!(
+            detailed.len(),
+            plain.len() + 1,
+            "detail adds exactly one row per grid row"
+        );
+        assert!(
+            detailed.iter().any(|r| r.contains("read_file"))
+                && detailed.iter().filter(|r| r.contains("read_file")).count() > plain
+                    .iter()
+                    .filter(|r| r.contains("read_file"))
+                    .count(),
+            "detail surfaces the status line as well as the tool"
+        );
+    }
+
+    /// Resizing must never produce a row wider than the viewport — that is what
+    /// wraps a card into visual garbage — and must never panic, at any width
+    /// the TUI will hand us (`draw` already refuses terminals under 20 cols).
+    #[test]
+    fn swarm_card_fits_every_width_from_tiny_to_wide() {
+        let _g = crate::agent::swarm::test_lock();
+        for agents in [1usize, 3, 7, 12] {
+            seed_swarm(agents);
+            for width in 4..=200usize {
+                for detail in [false, true] {
+                    let rows = swarm_rows(width, true, detail);
+                    assert!(!rows.is_empty(), "agents={agents} w={width} drew nothing");
+                    for row in &rows {
+                        assert!(
+                            UnicodeWidthStr::width(row.as_str()) <= width,
+                            "agents={agents} w={width} detail={detail} overflowed: {row:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn narrow_terminals_drop_the_frames_for_a_compact_list() {
+        let _g = crate::agent::swarm::test_lock();
+        seed_swarm(4);
+        let rows = swarm_rows(COMPACT_BELOW - 1, true, false);
+        assert!(
+            !rows.iter().any(|r| r.contains('╭')),
+            "no frames below the compact threshold: {rows:?}"
+        );
+        // One row per agent, still showing state + id.
+        assert!(rows.iter().filter(|r| r.contains('⚒')).count() >= 1);
+
+        // One column wider and the framed grid comes back.
+        seed_swarm(4);
+        let framed = swarm_rows(COMPACT_BELOW, true, false);
+        assert!(framed.iter().any(|r| r.starts_with('╭')));
+    }
+
+    #[test]
+    fn a_narrow_window_shows_fewer_panes_rather_than_a_tall_stack() {
+        let _g = crate::agent::swarm::test_lock();
+        seed_swarm(12);
+        let narrow = swarm_rows(30, true, false);
+        let wide = swarm_rows(180, true, false);
+        assert!(
+            narrow.len() <= wide.len(),
+            "narrow card ({} rows) must not be taller than the wide one ({} rows)",
+            narrow.len(),
+            wide.len()
+        );
+        let framed_rows = narrow.iter().filter(|r| r.starts_with('╭')).count();
+        assert!(
+            framed_rows * PANE_H as usize <= MAX_CARD_ROWS,
+            "the grid must respect its height budget"
+        );
+        assert!(
+            narrow.iter().any(|r| r.contains("more")),
+            "the panes it dropped must be disclosed: {narrow:?}"
+        );
+    }
+
+    #[test]
+    fn frozen_swarm_card_says_how_to_resume() {
+        let _g = crate::agent::swarm::test_lock();
+        seed_swarm(2);
+        let rows = swarm_rows(100, false, false);
+        assert!(rows[1].contains("swarm") && !rows[1].contains("live"));
+        assert!(rows.last().unwrap().contains("/swarm to resume"));
+    }
 
     #[test]
     fn strip_tool_error_prefix_cleans_double_prefix() {

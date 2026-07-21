@@ -167,6 +167,10 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/auto", "switch to auto-approve mode"),
     ("/todos", "show session task list"),
     ("/graph", "inline live execution-graph card for the current turn"),
+    (
+        "/swarm",
+        "inline subagent grid · live panes per agent · detail | off | clear | hide",
+    ),
     ("/steer", "inject a message into the running turn (no cancel): /steer <text>"),
     ("/draw", "tldraw offline boards: /draw <file.tldraw> · install · /draw <idea>"),
     ("/memory", "show ~/.nur/memory.md excerpt"),
@@ -279,6 +283,10 @@ pub enum Cell {
     /// tools / subagents / todos, refreshed on each tool transition while `live`.
     /// Ephemeral — not persisted to the session log.
     Graph { lines: Vec<String>, live: bool },
+    /// Inline subagent activity card (`/swarm`). Renders the live subagent
+    /// table as a tiled grid of panes; `live` keeps it animating and re-reading
+    /// the registry each frame. Ephemeral — not persisted to the session log.
+    Swarm { live: bool, detail: bool },
     Error(String),
 }
 
@@ -5434,6 +5442,76 @@ impl App {
         }
     }
 
+    /// Arm or freeze every inline swarm card. Live cards re-read the subagent
+    /// registry each frame; freezing them at end of turn keeps an idle TUI from
+    /// re-rendering a static grid forever.
+    fn set_swarm_live(&mut self, on: bool) {
+        for c in self.cells.iter_mut() {
+            if let Cell::Swarm { live, .. } = c {
+                *live = on;
+            }
+        }
+    }
+
+    /// `/swarm` — inline subagent activity grid.
+    ///
+    /// Blank toggles the card in (or resurfaces it); `detail` adds the status
+    /// line under the current tool, `off` freezes, `clear` forgets finished
+    /// runs.
+    pub(crate) fn cmd_swarm(&mut self, arg: &str) {
+        let arg = arg.trim().to_ascii_lowercase();
+        match arg.as_str() {
+            "off" | "freeze" | "stop" => {
+                self.set_swarm_live(false);
+                self.push_note(Tone::Neutral, "swarm · frozen".into());
+                return;
+            }
+            "clear" | "reset" => {
+                let dropped = crate::agent::swarm::clear_finished();
+                self.push_note(
+                    Tone::Neutral,
+                    format!("swarm · dropped {dropped} finished run(s)"),
+                );
+                return;
+            }
+            "hide" | "close" => {
+                self.cells.retain(|c| !matches!(c, Cell::Swarm { .. }));
+                self.push_note(Tone::Neutral, "swarm · card removed".into());
+                return;
+            }
+            _ => {}
+        }
+
+        let detail = matches!(arg.as_str(), "detail" | "full" | "verbose");
+        // Resurface an existing card instead of stacking duplicates.
+        if let Some(c) = self
+            .cells
+            .iter_mut()
+            .find(|c| matches!(c, Cell::Swarm { .. }))
+        {
+            if let Cell::Swarm { live, detail: d } = c {
+                *live = true;
+                *d = detail || *d;
+            }
+            self.push_note(Tone::Neutral, "swarm · refreshed".into());
+            self.scroll_to_bottom();
+            return;
+        }
+
+        self.cells.push(Cell::Swarm { live: true, detail });
+        self.scroll_to_bottom();
+        let running = crate::agent::swarm::running_count();
+        self.push_note(
+            Tone::Neutral,
+            if running > 0 {
+                format!("swarm · {running} subagent(s) in flight · /swarm off to freeze")
+            } else {
+                "swarm · tiles every subagent the agent tool spawns · /swarm detail for more"
+                    .to_string()
+            },
+        );
+    }
+
     /// `/graph` — drop (or refresh) an inline live execution-graph card.
     pub(crate) fn cmd_graph(&mut self) {
         let fresh = self.build_graph_lines();
@@ -5517,6 +5595,9 @@ impl App {
         self.cancelling = false;
         self.turn_kind = TurnMode::Chat;
         self.turn_started = Instant::now();
+        // Re-arm any swarm card the user left in the transcript so this turn's
+        // subagents animate in it without re-running `/swarm`.
+        self.set_swarm_live(true);
         self.thought_accum = Duration::ZERO;
         self.status = format!("thinking · {}", self.permission_mode.get().label());
         let cancel = CancellationToken::new();
@@ -5828,6 +5909,10 @@ impl App {
                         *live = false;
                     }
                 }
+                // No subagent can outlive its turn — settle any pane still
+                // spinning, then freeze the card at its final state.
+                crate::agent::swarm::cancel_running();
+                self.set_swarm_live(false);
                 // Turn done — restore mouse modes in case title OSC / host dropped them.
                 enable_mouse();
                 match (&self.turn_kind, result, interrupted) {
@@ -6563,6 +6648,7 @@ fn cells_to_ui_log(cells: &[Cell]) -> Vec<crate::agent::session::UiLogItem> {
             // Ephemeral — only meaningful while a turn is running.
             Cell::Queued { .. } => {}
             Cell::Graph { .. } => {}
+            Cell::Swarm { .. } => {}
             Cell::Error(text) => out.push(UiLogItem {
                 kind: "error".into(),
                 text: text.clone(),

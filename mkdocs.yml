@@ -60,5 +60,6 @@ nav:
   - Tools: tools.md
   - Vision: vision.md
   - Ecosystem: ecosystem.md
+  - "Evaluation: Ax & GraphJin": integrations-ax-graphjin.md
   - Security: security.md
   - Troubleshooting: troubleshooting.md

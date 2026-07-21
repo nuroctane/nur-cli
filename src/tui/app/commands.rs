@@ -195,6 +195,7 @@ impl App {
             "/logout" => self.cmd_logout(),
             "/goal" => self.cmd_goal(&arg),
             "/graph" => self.cmd_graph(),
+            "/swarm" | "/subagents" | "/agents" => self.cmd_swarm(&arg),
             "/draw" => self.cmd_draw(&arg),
             "/steer" => self.cmd_steer(&arg),
             "/bro" => self.cmd_bro(&arg),

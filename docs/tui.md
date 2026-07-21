@@ -107,8 +107,29 @@ See [Permission modes](#permission-modes) below for exactly what each mode allow
 | `/sessions` · `/resume` | Open the sessions window (same as Ctrl+R); press `c` to switch to takeover |
 | `/takeover` · `/hijack` | Open the takeover window: import a Claude/Codex/Cursor/Grok session and resume it; press `Tab` to scope to here, `c` to switch back |
 | `/todos` | Show current todos |
+| `/swarm` | Inline subagent grid — one live pane per subagent |
 | `/clear` | Clear current screen |
 | `/new` | Start a new session |
+
+### The swarm card
+
+`/swarm` drops a live card into the transcript that tiles every subagent the
+`agent` tool spawns: state glyph, id and type, the task, the tool in flight, an
+activity trace, elapsed time, tool count, and tokens.
+
+Layout is a zone grid — percent tracks snapped to character cells — so panes
+tile the card exactly at any width, and the card resizes with the window rather
+than wrapping:
+
+| Terminal width | Behaviour |
+|---|---|
+| Wide | Up to 8 panes across a multi-column grid |
+| Medium | Fewer columns; panes it dropped are disclosed as `+N more` |
+| Narrow (< 28 cols) | Frames are dropped for a one-line-per-agent list |
+
+The card re-arms itself on each new turn and freezes when the turn ends.
+`/swarm detail` adds a status row, `/swarm off` freezes it, `/swarm clear`
+forgets finished runs, `/swarm hide` removes the card.
 
 ### Knowledge stack
 

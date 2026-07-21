@@ -14,6 +14,40 @@ fn effective_base_url(base_url: &str, provider_id: &str, is_oauth: bool) -> Stri
     base_url.trim_end_matches('/').to_string()
 }
 
+/// Endpoints (`provider|model`) that have told us they cannot accept images.
+///
+/// Learned at runtime from the first rejected request and remembered for the
+/// process, so a session carrying an old screenshot keeps working after the
+/// user switches to a text-only local model instead of failing every turn.
+fn text_only_endpoints() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static SEEN: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    SEEN.get_or_init(Default::default)
+}
+
+fn endpoint_key(provider_id: &str, model: &str) -> String {
+    format!("{provider_id}|{model}")
+}
+
+/// Has this endpoint already refused images this process?
+pub fn endpoint_is_text_only(provider_id: &str, model: &str) -> bool {
+    text_only_endpoints()
+        .lock()
+        .map(|s| s.contains(&endpoint_key(provider_id, model)))
+        .unwrap_or(false)
+}
+
+fn mark_text_only(provider_id: &str, model: &str) {
+    if let Ok(mut s) = text_only_endpoints().lock() {
+        s.insert(endpoint_key(provider_id, model));
+    }
+    tracing::warn!(
+        provider = provider_id,
+        model,
+        "endpoint has no vision support — replaying attachments as text placeholders"
+    );
+}
+
 fn oauth_blocking<T: Send>(operation: impl FnOnce() -> T + Send) -> T {
     match tokio::runtime::Handle::try_current() {
         Ok(handle)
@@ -550,7 +584,10 @@ impl ApiClient {
     // ── OpenAI Chat Completions adapter ───────────────────────────────────
     async fn create_chat(&self, req: &ResponseRequest) -> Result<ApiResponse> {
         let url = format!("{}/chat/completions", self.base_url);
-        let body = super::chat::build_body_for_provider(req, false, &self.provider_id);
+        let has_media = super::chat::request_has_media(req);
+        let mut drop_media = has_media && endpoint_is_text_only(&self.provider_id, &req.model);
+        let mut body =
+            super::chat::build_body_opts(req, false, &self.provider_id, drop_media);
         let mut attempt = 0u32;
         let mut oauth_refreshed = false;
         loop {
@@ -583,13 +620,25 @@ impl ApiClient {
                     oauth_refreshed = true;
                     continue;
                 }
+                let message = parse_error_message(&text).unwrap_or(text);
+                // Text-only endpoint choking on a replayed attachment: strip the
+                // media and try once more before surfacing the failure.
+                if has_media
+                    && !drop_media
+                    && super::chat::is_media_unsupported_error(&message)
+                {
+                    mark_text_only(&self.provider_id, &req.model);
+                    drop_media = true;
+                    body = super::chat::build_body_opts(req, false, &self.provider_id, true);
+                    continue;
+                }
                 if Self::is_retryable_status(status.as_u16()) && attempt < 4 {
                     tokio::time::sleep(std::time::Duration::from_millis(400 * (1 << (attempt - 1)))).await;
                     continue;
                 }
                 return Err(MuseError::Api {
                     status: status.as_u16(),
-                    message: parse_error_message(&text).unwrap_or(text),
+                    message,
                 });
             }
             let v: serde_json::Value = serde_json::from_str(&text)
@@ -607,33 +656,51 @@ impl ApiClient {
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<ApiResponse> {
         let url = format!("{}/chat/completions", self.base_url);
-        let body = super::chat::build_body_for_provider(req, true, &self.provider_id);
-        let res = self
-            .send_with_oauth_retry(|| {
-                self.http
-                    .post(&url)
-                    .header("Content-Type", "application/json")
-                    .header("Accept", "text/event-stream")
-                    .json(&body)
-            })
-            .await
-            .map_err(|e| MuseError::Other(format!("stream connect failed: {e}")))?;
+        let has_media = super::chat::request_has_media(req);
+        let mut drop_media = has_media && endpoint_is_text_only(&self.provider_id, &req.model);
 
-        let status = res.status();
-        let content_type = res
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_string();
+        // Connect phase, retried once without attachments if the endpoint turns
+        // out to be text-only. Nothing has streamed yet at this point, so the
+        // retry cannot duplicate output.
+        let (res, content_type) = loop {
+            let body = super::chat::build_body_opts(req, true, &self.provider_id, drop_media);
+            let res = self
+                .send_with_oauth_retry(|| {
+                    self.http
+                        .post(&url)
+                        .header("Content-Type", "application/json")
+                        .header("Accept", "text/event-stream")
+                        .json(&body)
+                })
+                .await
+                .map_err(|e| MuseError::Other(format!("stream connect failed: {e}")))?;
 
-        if !status.is_success() {
-            let text = res.text().await.unwrap_or_default();
-            return Err(MuseError::Api {
-                status: status.as_u16(),
-                message: parse_error_message(&text).unwrap_or(text),
-            });
-        }
+            let status = res.status();
+            let content_type = res
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_string();
+
+            if !status.is_success() {
+                let text = res.text().await.unwrap_or_default();
+                let message = parse_error_message(&text).unwrap_or(text);
+                if has_media
+                    && !drop_media
+                    && super::chat::is_media_unsupported_error(&message)
+                {
+                    mark_text_only(&self.provider_id, &req.model);
+                    drop_media = true;
+                    continue;
+                }
+                return Err(MuseError::Api {
+                    status: status.as_u16(),
+                    message,
+                });
+            }
+            break (res, content_type);
+        };
 
         // Server ignored stream=true → plain JSON completion.
         if !content_type.contains("text/event-stream") {

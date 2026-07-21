@@ -18,7 +18,30 @@ pub fn build_body(req: &ResponseRequest, stream: bool) -> Value {
 /// Provider-aware Chat Completions body. Kimi's compatible API has two small
 /// extensions: an explicit thinking toggle and strict JSON-schema property
 /// types for tools.
+#[cfg(test)]
 pub fn build_body_for_provider(req: &ResponseRequest, stream: bool, provider_id: &str) -> Value {
+    build_body_opts(req, stream, provider_id, false)
+}
+
+/// Placeholder swapped in for an image/video part when the endpoint has no
+/// vision support. Keeps the turn's shape (and the model's awareness that
+/// something was attached) without tripping a text-only server.
+const MEDIA_DROPPED: &str = "[attachment omitted — this model/endpoint has no vision support]";
+
+/// Same as [`build_body_for_provider`], but `drop_media` replaces every image /
+/// video content part with a short text marker.
+///
+/// Text-only endpoints (a `llama-server` without an `mmproj`, most local
+/// runtimes) reject a request that carries `image_url` parts with a hard 500.
+/// A session that once attached a screenshot replays that image on *every*
+/// later turn, so switching to a local model would fail forever. The client
+/// retries such a request with `drop_media` set and remembers the endpoint.
+pub fn build_body_opts(
+    req: &ResponseRequest,
+    stream: bool,
+    provider_id: &str,
+    drop_media: bool,
+) -> Value {
     let mut messages: Vec<Value> = Vec::new();
     if let Some(instr) = &req.instructions {
         if !instr.is_empty() {
@@ -27,7 +50,7 @@ pub fn build_body_for_provider(req: &ResponseRequest, stream: bool, provider_id:
     }
     if let Value::Array(items) = &req.input {
         for item in items {
-            push_item_messages(item, &mut messages);
+            push_item_messages_opts(item, &mut messages, drop_media);
         }
     }
 
@@ -126,7 +149,7 @@ fn ensure_kimi_schema_types(schema: &mut Value) {
 }
 
 /// Translate one Responses `input` item into zero or more chat messages.
-fn push_item_messages(item: &Value, out: &mut Vec<Value>) {
+fn push_item_messages_opts(item: &Value, out: &mut Vec<Value>, drop_media: bool) {
     // function_call_output → a `tool` role message.
     if item.get("type").and_then(|t| t.as_str()) == Some("function_call_output") {
         out.push(json!({
@@ -161,7 +184,14 @@ fn push_item_messages(item: &Value, out: &mut Vec<Value>) {
     let role = item.get("role").and_then(|v| v.as_str()).unwrap_or("user");
     let text = collect_text(item.get("content"));
     let images = collect_images(item.get("content"));
-    if images.is_empty() {
+    if drop_media && !images.is_empty() {
+        let mut text = text;
+        for _ in 0..images.len() {
+            text.push('\n');
+            text.push_str(MEDIA_DROPPED);
+        }
+        out.push(json!({ "role": role, "content": text }));
+    } else if images.is_empty() {
         out.push(json!({ "role": role, "content": text }));
     } else {
         // Multimodal user message: OpenAI content-parts form.
@@ -192,6 +222,39 @@ fn collect_text(content: Option<&Value>) -> String {
         }
     }
     s
+}
+
+/// Does this Responses request carry any image/video part at all?
+///
+/// Cheap pre-check so the "endpoint has no vision" retry only fires when
+/// dropping media would actually change the body.
+pub fn request_has_media(req: &ResponseRequest) -> bool {
+    let Value::Array(items) = &req.input else {
+        return false;
+    };
+    items
+        .iter()
+        .any(|item| !collect_images(item.get("content")).is_empty())
+}
+
+/// Does this provider error mean "I can't accept images"?
+///
+/// llama.cpp/`llama-server` answers a request with an `image_url` part and no
+/// multimodal projector with a 500 whose message is
+/// `image input is not supported - hint: … provide the mmproj`; other runtimes
+/// word it differently, so match on the shape rather than one string.
+pub fn is_media_unsupported_error(message: &str) -> bool {
+    let m = message.to_ascii_lowercase();
+    if m.contains("mmproj") {
+        return true;
+    }
+    let mentions_media = m.contains("image") || m.contains("vision") || m.contains("multimodal");
+    let mentions_refusal = m.contains("not supported")
+        || m.contains("unsupported")
+        || m.contains("does not support")
+        || m.contains("doesn't support")
+        || m.contains("no support");
+    mentions_media && mentions_refusal
 }
 
 /// Pull image URLs (Meta `input_image` → OpenAI `image_url`).
@@ -407,6 +470,56 @@ mod tests {
         assert_eq!(msgs[4]["content"], "done");
         assert_eq!(b["tools"][0]["function"]["name"], "grep");
         assert_eq!(b["tool_choice"], "auto");
+    }
+
+    /// A request whose history carries a screenshot, as any session that once
+    /// used `look`/auto-attach replays on every later turn.
+    fn req_with_image() -> ResponseRequest {
+        let mut r = req();
+        r.input = json!([crate::api::types::user_multimodal_item(
+            "what is this",
+            &[("input_image", "image_url", "data:image/png;base64,AAAA")],
+        )]);
+        r
+    }
+
+    #[test]
+    fn image_parts_are_detected_and_mapped_when_the_endpoint_supports_them() {
+        let request = req_with_image();
+        assert!(request_has_media(&request));
+        assert!(!request_has_media(&req()));
+
+        let body = build_body_opts(&request, false, "", false);
+        let parts = body["messages"][1]["content"].as_array().unwrap();
+        assert_eq!(parts[0]["type"], "text");
+        assert_eq!(parts[1]["type"], "image_url");
+    }
+
+    #[test]
+    fn drop_media_replaces_images_with_a_text_marker() {
+        let body = build_body_opts(&req_with_image(), false, "", true);
+        let content = body["messages"][1]["content"].as_str().unwrap();
+        assert!(content.starts_with("what is this"));
+        assert!(content.contains(MEDIA_DROPPED));
+        // Crucially: no content-parts array survives for a text-only server.
+        assert!(body["messages"][1]["content"].is_string());
+        assert!(!body.to_string().contains("image_url"));
+    }
+
+    #[test]
+    fn media_unsupported_errors_are_recognised_across_runtimes() {
+        // llama.cpp / llama-server without an mmproj — the exact 500 body.
+        assert!(is_media_unsupported_error(
+            "image input is not supported - hint: if this is unexpected, you may need to provide the mmproj"
+        ));
+        assert!(is_media_unsupported_error(
+            "This model does not support image input."
+        ));
+        assert!(is_media_unsupported_error("multimodal input unsupported"));
+        // Unrelated failures must not trigger an attachment-stripping retry.
+        assert!(!is_media_unsupported_error("context length exceeded"));
+        assert!(!is_media_unsupported_error("rate limit reached"));
+        assert!(!is_media_unsupported_error("failed to load image"));
     }
 
     #[test]
