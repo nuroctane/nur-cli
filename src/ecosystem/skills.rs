@@ -128,10 +128,7 @@ const MULTI_FILE_PACKS: &[(&str, &[(&str, &str)])] = &[
     ),
     (
         "tech-spec",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/tech-spec/SKILL.md"),
-        )],
+        &[("SKILL.md", include_str!("../../skills/tech-spec/SKILL.md"))],
     ),
     (
         "herdr",
@@ -141,7 +138,10 @@ const MULTI_FILE_PACKS: &[(&str, &[(&str, &str)])] = &[
         "prelude",
         &[
             ("SKILL.md", include_str!("../../skills/prelude/SKILL.md")),
-            ("prelude.ts", include_str!("../../skills/prelude/prelude.ts")),
+            (
+                "prelude.ts",
+                include_str!("../../skills/prelude/prelude.ts"),
+            ),
         ],
     ),
     (
@@ -159,10 +159,7 @@ const MULTI_FILE_PACKS: &[(&str, &[(&str, &str)])] = &[
     ),
     (
         "toolcraft",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/toolcraft/SKILL.md"),
-        )],
+        &[("SKILL.md", include_str!("../../skills/toolcraft/SKILL.md"))],
     ),
     // Saurabh-2607/Skills — dark skeuomorphic UI component skill.
     (

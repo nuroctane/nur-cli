@@ -573,12 +573,7 @@ const INTENT_RULES: &[IntentRule] = &[
     },
     IntentRule {
         skill_names: &["shadcn"],
-        phrases: &[
-            "/shadcn",
-            "shadcn/ui",
-            "shadcn ui",
-            "add shadcn component",
-        ],
+        phrases: &["/shadcn", "shadcn/ui", "shadcn ui", "add shadcn component"],
         label: "shadcn",
         why: "shadcn/ui component guidance",
     },
@@ -595,21 +590,13 @@ const INTENT_RULES: &[IntentRule] = &[
     },
     IntentRule {
         skill_names: &["vercel-cli"],
-        phrases: &[
-            "/vercel-cli",
-            "vercel cli deploy",
-            "use vercel cli",
-        ],
+        phrases: &["/vercel-cli", "vercel cli deploy", "use vercel cli"],
         label: "vercel-cli",
         why: "Vercel CLI guidance",
     },
     IntentRule {
         skill_names: &["herdr"],
-        phrases: &[
-            "/herdr",
-            "herdr workspace",
-            "control herdr",
-        ],
+        phrases: &["/herdr", "herdr workspace", "control herdr"],
         label: "herdr",
         why: "control herdr from inside it",
     },
@@ -839,16 +826,15 @@ fn discover_by_skill_name<'a>(user_norm: &str, skills: &'a [Skill]) -> Option<&'
 
 /// Stopwords ignored when scoring description overlap (common English + agent fluff).
 const DESC_STOP: &[&str] = &[
-    "a", "an", "the", "and", "or", "to", "of", "for", "in", "on", "at", "by", "with",
-    "from", "this", "that", "these", "those", "is", "are", "was", "were", "be", "been",
-    "being", "have", "has", "had", "do", "does", "did", "will", "would", "can", "could",
-    "should", "may", "might", "must", "use", "using", "used", "when", "where", "what",
-    "which", "who", "how", "why", "into", "over", "under", "about", "after", "before",
-    "your", "you", "their", "them", "its", "it", "as", "if", "then", "than", "also",
-    "just", "only", "not", "no", "yes", "any", "all", "each", "other", "more", "most",
-    "some", "such", "via", "per", "between", "through", "during", "without", "within",
-    "skill", "skills", "agent", "agents", "help", "please", "like", "make", "need",
-    "needs", "want", "wants", "get", "set", "run", "work", "works", "working",
+    "a", "an", "the", "and", "or", "to", "of", "for", "in", "on", "at", "by", "with", "from",
+    "this", "that", "these", "those", "is", "are", "was", "were", "be", "been", "being", "have",
+    "has", "had", "do", "does", "did", "will", "would", "can", "could", "should", "may", "might",
+    "must", "use", "using", "used", "when", "where", "what", "which", "who", "how", "why", "into",
+    "over", "under", "about", "after", "before", "your", "you", "their", "them", "its", "it", "as",
+    "if", "then", "than", "also", "just", "only", "not", "no", "yes", "any", "all", "each",
+    "other", "more", "most", "some", "such", "via", "per", "between", "through", "during",
+    "without", "within", "skill", "skills", "agent", "agents", "help", "please", "like", "make",
+    "need", "needs", "want", "wants", "get", "set", "run", "work", "works", "working",
 ];
 
 fn significant_tokens(text: &str) -> Vec<String> {
@@ -1142,11 +1128,9 @@ mod intent_tests {
             fake_skill("fable-loop"),
             fake_skill("fable-judge"),
         ];
-        let (sk, rule) = detect_skill_activation(
-            "please think like fable and fix the login hang",
-            &skills,
-        )
-        .unwrap();
+        let (sk, rule) =
+            detect_skill_activation("please think like fable and fix the login hang", &skills)
+                .unwrap();
         assert_eq!(sk.name, "fable-method");
         assert_eq!(rule.label, "fable-method");
 
@@ -1169,21 +1153,20 @@ mod intent_tests {
             fake_skill("systematic-debugging"),
             fake_skill("design-eng"),
         ];
-        let (sk, rule) =
-            detect_skill_activation("please TDD this auth module", &skills).unwrap();
+        let (sk, rule) = detect_skill_activation("please TDD this auth module", &skills).unwrap();
         assert_eq!(sk.name, "test-driven-development");
         assert_eq!(rule.label, "tdd");
 
         let (sk, _) =
-            detect_skill_activation("debug systematically — find the root cause", &skills)
-                .unwrap();
+            detect_skill_activation("debug systematically — find the root cause", &skills).unwrap();
         assert_eq!(sk.name, "systematic-debugging");
 
         let (sk, _) = detect_skill_activation("polish the UI like emil", &skills).unwrap();
         assert_eq!(sk.name, "design-eng");
 
         let skills = vec![fake_skill("toolcraft")];
-        let (sk, rule) = detect_skill_activation("use toolcraft for this scaffold", &skills).unwrap();
+        let (sk, rule) =
+            detect_skill_activation("use toolcraft for this scaffold", &skills).unwrap();
         assert_eq!(sk.name, "toolcraft");
         assert_eq!(rule.label, "toolcraft");
     }
@@ -1289,14 +1272,10 @@ mod intent_tests {
 
     #[test]
     fn longer_skill_name_wins_over_shorter_prefix() {
-        let skills = vec![
-            fake_skill("fable"),
-            fake_skill("fable-method"),
-        ];
+        let skills = vec![fake_skill("fable"), fake_skill("fable-method")];
         // INTENT_RULES hit fable-method first for "fable method"; name discovery
         // alone should prefer the longer token when both names appear.
-        let (sk, _) =
-            detect_skill_activation("please load fable-method now", &skills).unwrap();
+        let (sk, _) = detect_skill_activation("please load fable-method now", &skills).unwrap();
         assert_eq!(sk.name, "fable-method");
     }
 
@@ -1347,7 +1326,6 @@ mod intent_tests {
         )
         .is_none());
     }
-
 
     #[test]
     fn finds_nested_skill_mds() {

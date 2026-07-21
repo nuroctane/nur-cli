@@ -85,9 +85,7 @@ pub async fn run_subagent(
         match ev {
             AgentEvent::Status(status) => {
                 swarm::activity(run_id, &status);
-                let _ = parent_tx.send(AgentEvent::Status(format!(
-                    "subagent · {status}"
-                )));
+                let _ = parent_tx.send(AgentEvent::Status(format!("subagent · {status}")));
             }
             AgentEvent::ToolStart { name, .. } => swarm::tool_start(run_id, &name),
             AgentEvent::ToolEnd { ok, .. } => swarm::tool_end(run_id, ok),

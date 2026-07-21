@@ -120,7 +120,17 @@ fn is_extractable_video(path: &Path) -> bool {
         .to_ascii_lowercase();
     matches!(
         ext.as_str(),
-        "mp4" | "m4v" | "webm" | "mov" | "mkv" | "avi" | "wmv" | "flv" | "mpeg" | "mpg" | "ts"
+        "mp4"
+            | "m4v"
+            | "webm"
+            | "mov"
+            | "mkv"
+            | "avi"
+            | "wmv"
+            | "flv"
+            | "mpeg"
+            | "mpg"
+            | "ts"
             | "3gp"
     )
 }
@@ -167,7 +177,10 @@ pub fn auto_attach_from_text(cwd: &Path, text: &str) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
     for token in text.split_whitespace() {
         let cleaned = token.trim_matches(|c: char| {
-            matches!(c, '"' | '\'' | '`' | ',' | ';' | ')' | '(' | '[' | ']' | '{' | '}')
+            matches!(
+                c,
+                '"' | '\'' | '`' | ',' | ';' | ')' | '(' | '[' | ']' | '{' | '}'
+            )
         });
         if cleaned.is_empty() {
             continue;
@@ -393,7 +406,10 @@ impl Tool for ExtractFrames {
         let path = arg_str(args, "path")?;
         let full = resolve_path(&ctx.cwd, &path)?;
         if !full.is_file() {
-            return Err(MuseError::Tool(format!("video not found: {}", full.display())));
+            return Err(MuseError::Tool(format!(
+                "video not found: {}",
+                full.display()
+            )));
         }
         if !is_extractable_video(&full) {
             return Err(MuseError::Tool(
@@ -421,13 +437,16 @@ impl Tool for ExtractFrames {
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
 
-        let stem = full
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("video");
+        let stem = full.file_stem().and_then(|s| s.to_str()).unwrap_or("video");
         let safe: String = stem
             .chars()
-            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .collect();
         let out_dir = ctx.cwd.join(".meta").join("frames").join(&safe);
         let _ = fs::remove_dir_all(&out_dir);
@@ -521,14 +540,8 @@ mod tests {
 
     #[test]
     fn mime_detects_common() {
-        assert_eq!(
-            mime_for(Path::new("x.PNG")).unwrap().1,
-            MediaKind::Image
-        );
-        assert_eq!(
-            mime_for(Path::new("a.mp4")).unwrap().1,
-            MediaKind::Video
-        );
+        assert_eq!(mime_for(Path::new("x.PNG")).unwrap().1, MediaKind::Image);
+        assert_eq!(mime_for(Path::new("a.mp4")).unwrap().1, MediaKind::Video);
         assert!(mime_for(Path::new("x.txt")).is_err());
     }
 
@@ -548,7 +561,14 @@ mod tests {
 
     #[test]
     fn extractable_video_is_broad() {
-        for v in ["clip.mp4", "clip.webm", "clip.mov", "clip.mkv", "clip.avi", "clip.mpg"] {
+        for v in [
+            "clip.mp4",
+            "clip.webm",
+            "clip.mov",
+            "clip.mkv",
+            "clip.avi",
+            "clip.mpg",
+        ] {
             assert!(is_extractable_video(Path::new(v)), "{v}");
         }
         assert!(!is_extractable_video(Path::new("photo.png")));

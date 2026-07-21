@@ -177,17 +177,25 @@ mod tests {
     fn should_failover_on_server_errors_only() {
         for status in [0u16, 429, 500, 502, 503, 504, 529] {
             assert!(
-                should_failover(&MuseError::Api { status, message: "x".into() }),
+                should_failover(&MuseError::Api {
+                    status,
+                    message: "x".into()
+                }),
                 "status {status} should fail over"
             );
         }
         for status in [400u16, 401, 403, 404, 422] {
             assert!(
-                !should_failover(&MuseError::Api { status, message: "x".into() }),
+                !should_failover(&MuseError::Api {
+                    status,
+                    message: "x".into()
+                }),
                 "status {status} should NOT fail over"
             );
         }
-        assert!(should_failover(&MuseError::Other("connection reset".into())));
+        assert!(should_failover(&MuseError::Other(
+            "connection reset".into()
+        )));
         assert!(!should_failover(&MuseError::Interrupted));
         assert!(!should_failover(&MuseError::NotAuthenticated));
     }
@@ -196,7 +204,10 @@ mod tests {
     fn should_failover_on_quota_and_usage_limit_bodies() {
         // Claude/OpenAI often return 400/403 when the account is out of usage.
         let cases = [
-            (400u16, "rate_limit_error: Your account has reached its usage limit"),
+            (
+                400u16,
+                "rate_limit_error: Your account has reached its usage limit",
+            ),
             (403, "insufficient_quota: You exceeded your current quota"),
             (400, "overloaded_error: The model is overloaded"),
             (401, "billing hard limit has been reached"),
@@ -245,11 +256,11 @@ mod tests {
     #[test]
     fn plan_targets_skips_primary_unknown_dupes_and_keyless() {
         let ids = vec![
-            "meta".to_string(),     // primary — skip
-            "nope".to_string(),     // not in catalog — skip
-            "openai".to_string(),   // keep
-            "openai".to_string(),   // dupe — skip
-            "anthropic".to_string(),// keyless in this resolver — skip
+            "meta".to_string(),      // primary — skip
+            "nope".to_string(),      // not in catalog — skip
+            "openai".to_string(),    // keep
+            "openai".to_string(),    // dupe — skip
+            "anthropic".to_string(), // keyless in this resolver — skip
         ];
         let targets = plan_targets("meta", &ids, |p| {
             if p.id == "anthropic" {
@@ -275,7 +286,7 @@ mod tests {
         assert!(privacy_allowed(1, 1, false));
         assert!(privacy_allowed(1, 2, false)); // Tee
         assert!(privacy_allowed(1, 3, false)); // Local
-        // Explicit opt-in lets a downgrade through.
+                                               // Explicit opt-in lets a downgrade through.
         assert!(privacy_allowed(1, 0, true));
         // Active at Standard (0) → everything is >= floor.
         assert!(privacy_allowed(0, 0, false));

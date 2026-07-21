@@ -14,45 +14,55 @@ fn effective_base_url(base_url: &str, provider_id: &str, is_oauth: bool) -> Stri
     base_url.trim_end_matches('/').to_string()
 }
 
-/// Endpoints (`provider|model`) that have told us they cannot accept images.
+/// Provider endpoints that have told us they cannot accept images.
 ///
 /// Learned at runtime from the first rejected request and remembered for the
 /// process, so a session carrying an old screenshot keeps working after the
 /// user switches to a text-only local model instead of failing every turn.
-fn text_only_endpoints() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
-    static SEEN: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct EndpointKey {
+    provider_id: String,
+    base_url: String,
+    model: String,
+}
+
+fn text_only_endpoints() -> &'static std::sync::Mutex<std::collections::HashSet<EndpointKey>> {
+    static SEEN: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<EndpointKey>>> =
         std::sync::OnceLock::new();
     SEEN.get_or_init(Default::default)
 }
 
-fn endpoint_key(provider_id: &str, model: &str) -> String {
-    format!("{provider_id}|{model}")
+fn endpoint_key(provider_id: &str, base_url: &str, model: &str) -> EndpointKey {
+    EndpointKey {
+        provider_id: provider_id.to_string(),
+        base_url: base_url.trim_end_matches('/').to_string(),
+        model: model.to_string(),
+    }
 }
 
 /// Has this endpoint already refused images this process?
-pub fn endpoint_is_text_only(provider_id: &str, model: &str) -> bool {
+pub fn endpoint_is_text_only(provider_id: &str, base_url: &str, model: &str) -> bool {
     text_only_endpoints()
         .lock()
-        .map(|s| s.contains(&endpoint_key(provider_id, model)))
+        .map(|s| s.contains(&endpoint_key(provider_id, base_url, model)))
         .unwrap_or(false)
 }
 
-fn mark_text_only(provider_id: &str, model: &str) {
+fn mark_text_only(provider_id: &str, base_url: &str, model: &str) {
     if let Ok(mut s) = text_only_endpoints().lock() {
-        s.insert(endpoint_key(provider_id, model));
+        s.insert(endpoint_key(provider_id, base_url, model));
     }
     tracing::warn!(
         provider = provider_id,
+        endpoint = base_url,
         model,
-        "endpoint has no vision support — replaying attachments as text placeholders"
+        "endpoint has no vision support - replaying attachments as text placeholders"
     );
 }
 
 fn oauth_blocking<T: Send>(operation: impl FnOnce() -> T + Send) -> T {
     match tokio::runtime::Handle::try_current() {
-        Ok(handle)
-            if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread =>
-        {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
             tokio::task::block_in_place(operation)
         }
         Ok(_) => std::thread::scope(|scope| {
@@ -155,9 +165,9 @@ impl ApiClient {
     fn api_key_for_request(&self) -> String {
         if self.refresh_oauth {
             let provider_id = self.provider_id.as_str();
-            if let Ok(Some(token)) = oauth_blocking(|| {
-                crate::auth::resolve_oauth_access_token(provider_id)
-            }) {
+            if let Ok(Some(token)) =
+                oauth_blocking(|| crate::auth::resolve_oauth_access_token(provider_id))
+            {
                 return token;
             }
         }
@@ -188,8 +198,7 @@ impl ApiClient {
     /// Anthropic as plain Bearer-only Chat Completions.
     fn auth_headers(&self, mut req: RequestBuilder) -> RequestBuilder {
         let api_key = self.api_key_for_request();
-        let is_claude_oauth =
-            self.oauth.is_some() || super::anthropic::is_oauth_token(&api_key);
+        let is_claude_oauth = self.oauth.is_some() || super::anthropic::is_oauth_token(&api_key);
         req = match self.style {
             ApiStyle::AnthropicMessages => {
                 req = req.header("anthropic-version", "2023-06-01");
@@ -234,7 +243,7 @@ impl ApiClient {
                 }
             }
         }
-        if self.provider_id == "antigravity" || self.provider_id == "google" {
+        if self.provider_id == "google" {
             if let Some(project_id) = self
                 .oauth
                 .as_ref()
@@ -305,11 +314,15 @@ impl ApiClient {
                 Ok(r) => r,
                 Err(e) => {
                     if attempt < 4 {
-                        let backoff = std::time::Duration::from_millis(200 * (1 << (attempt - 1)) + rand_jitter());
+                        let backoff = std::time::Duration::from_millis(
+                            200 * (1 << (attempt - 1)) + rand_jitter(),
+                        );
                         tokio::time::sleep(backoff).await;
                         continue;
                     }
-                    return Err(MuseError::Other(format!("request failed after {attempt} attempts: {e}")));
+                    return Err(MuseError::Other(format!(
+                        "request failed after {attempt} attempts: {e}"
+                    )));
                 }
             };
 
@@ -318,10 +331,7 @@ impl ApiClient {
             let body = res.text().await.unwrap_or_default();
 
             if !status.is_success() {
-                if status.as_u16() == 401
-                    && !oauth_refreshed
-                    && self.refresh_after_unauthorized()
-                {
+                if status.as_u16() == 401 && !oauth_refreshed && self.refresh_after_unauthorized() {
                     oauth_refreshed = true;
                     continue;
                 }
@@ -393,11 +403,14 @@ impl ApiClient {
                 Ok(r) => r,
                 Err(e) => {
                     if attempt < 3 {
-                        tokio::time::sleep(std::time::Duration::from_millis(400 * attempt as u64)).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(400 * attempt as u64))
+                            .await;
                         last_err = Some(MuseError::Other(e.to_string()));
                         continue;
                     }
-                    return Err(MuseError::Other(format!("stream connect failed after {attempt}: {e}")));
+                    return Err(MuseError::Other(format!(
+                        "stream connect failed after {attempt}: {e}"
+                    )));
                 }
             };
 
@@ -410,10 +423,7 @@ impl ApiClient {
                 .to_string();
 
             if !status.is_success() {
-                if status.as_u16() == 401
-                    && !oauth_refreshed
-                    && self.refresh_after_unauthorized()
-                {
+                if status.as_u16() == 401 && !oauth_refreshed && self.refresh_after_unauthorized() {
                     oauth_refreshed = true;
                     continue;
                 }
@@ -585,9 +595,9 @@ impl ApiClient {
     async fn create_chat(&self, req: &ResponseRequest) -> Result<ApiResponse> {
         let url = format!("{}/chat/completions", self.base_url);
         let has_media = super::chat::request_has_media(req);
-        let mut drop_media = has_media && endpoint_is_text_only(&self.provider_id, &req.model);
-        let mut body =
-            super::chat::build_body_opts(req, false, &self.provider_id, drop_media);
+        let mut drop_media =
+            has_media && endpoint_is_text_only(&self.provider_id, &self.base_url, &req.model);
+        let mut body = super::chat::build_body_opts(req, false, &self.provider_id, drop_media);
         let mut attempt = 0u32;
         let mut oauth_refreshed = false;
         loop {
@@ -604,7 +614,8 @@ impl ApiClient {
             let res = match res {
                 Ok(r) => r,
                 Err(e) if attempt < 4 => {
-                    tokio::time::sleep(std::time::Duration::from_millis(300 * attempt as u64)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(300 * attempt as u64))
+                        .await;
                     let _ = e;
                     continue;
                 }
@@ -613,27 +624,24 @@ impl ApiClient {
             let status = res.status();
             let text = res.text().await.unwrap_or_default();
             if !status.is_success() {
-                if status.as_u16() == 401
-                    && !oauth_refreshed
-                    && self.refresh_after_unauthorized()
-                {
+                if status.as_u16() == 401 && !oauth_refreshed && self.refresh_after_unauthorized() {
                     oauth_refreshed = true;
                     continue;
                 }
                 let message = parse_error_message(&text).unwrap_or(text);
                 // Text-only endpoint choking on a replayed attachment: strip the
                 // media and try once more before surfacing the failure.
-                if has_media
-                    && !drop_media
-                    && super::chat::is_media_unsupported_error(&message)
-                {
-                    mark_text_only(&self.provider_id, &req.model);
+                if has_media && !drop_media && super::chat::is_media_unsupported_error(&message) {
+                    mark_text_only(&self.provider_id, &self.base_url, &req.model);
                     drop_media = true;
                     body = super::chat::build_body_opts(req, false, &self.provider_id, true);
                     continue;
                 }
                 if Self::is_retryable_status(status.as_u16()) && attempt < 4 {
-                    tokio::time::sleep(std::time::Duration::from_millis(400 * (1 << (attempt - 1)))).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        400 * (1 << (attempt - 1)),
+                    ))
+                    .await;
                     continue;
                 }
                 return Err(MuseError::Api {
@@ -657,7 +665,8 @@ impl ApiClient {
     ) -> Result<ApiResponse> {
         let url = format!("{}/chat/completions", self.base_url);
         let has_media = super::chat::request_has_media(req);
-        let mut drop_media = has_media && endpoint_is_text_only(&self.provider_id, &req.model);
+        let mut drop_media =
+            has_media && endpoint_is_text_only(&self.provider_id, &self.base_url, &req.model);
 
         // Connect phase, retried once without attachments if the endpoint turns
         // out to be text-only. Nothing has streamed yet at this point, so the
@@ -686,11 +695,8 @@ impl ApiClient {
             if !status.is_success() {
                 let text = res.text().await.unwrap_or_default();
                 let message = parse_error_message(&text).unwrap_or(text);
-                if has_media
-                    && !drop_media
-                    && super::chat::is_media_unsupported_error(&message)
-                {
-                    mark_text_only(&self.provider_id, &req.model);
+                if has_media && !drop_media && super::chat::is_media_unsupported_error(&message) {
+                    mark_text_only(&self.provider_id, &self.base_url, &req.model);
                     drop_media = true;
                     continue;
                 }
@@ -730,14 +736,15 @@ impl ApiClient {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
                     // Surface provider-side errors mid-stream.
                     if let Some(msg) = v.pointer("/error/message").and_then(|m| m.as_str()) {
-                        return Err(MuseError::Api { status: 0, message: msg.to_string() });
+                        return Err(MuseError::Api {
+                            status: 0,
+                            message: msg.to_string(),
+                        });
                     }
                     for delta in acc.push(&v) {
                         on_event(match delta {
                             super::chat::ChatDelta::Text(t) => StreamEvent::TextDelta(t),
-                            super::chat::ChatDelta::Reasoning(t) => {
-                                StreamEvent::ReasoningDelta(t)
-                            }
+                            super::chat::ChatDelta::Reasoning(t) => StreamEvent::ReasoningDelta(t),
                         });
                     }
                 }
@@ -772,7 +779,8 @@ impl ApiClient {
             let res = match res {
                 Ok(r) => r,
                 Err(e) if attempt < 4 => {
-                    tokio::time::sleep(std::time::Duration::from_millis(300 * attempt as u64)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(300 * attempt as u64))
+                        .await;
                     let _ = e;
                     continue;
                 }
@@ -781,10 +789,7 @@ impl ApiClient {
             let status = res.status();
             let text = res.text().await.unwrap_or_default();
             if !status.is_success() {
-                if status.as_u16() == 401
-                    && !oauth_refreshed
-                    && self.refresh_after_unauthorized()
-                {
+                if status.as_u16() == 401 && !oauth_refreshed && self.refresh_after_unauthorized() {
                     oauth_refreshed = true;
                     continue;
                 }
@@ -792,8 +797,10 @@ impl ApiClient {
                 // temporary rate limit — don't thrash retries.
                 let is_oauth_429 = status.as_u16() == 429 && oauth;
                 if Self::is_retryable_status(status.as_u16()) && attempt < 4 && !is_oauth_429 {
-                    tokio::time::sleep(std::time::Duration::from_millis(400 * (1 << (attempt - 1))))
-                        .await;
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        400 * (1 << (attempt - 1)),
+                    ))
+                    .await;
                     continue;
                 }
                 let mut msg = parse_error_message(&text).unwrap_or(text);
@@ -820,8 +827,9 @@ impl ApiClient {
                     message: msg,
                 });
             }
-            let v: serde_json::Value = serde_json::from_str(&text)
-                .map_err(|e| MuseError::Other(format!("bad anthropic response: {e}; body={text}")))?;
+            let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+                MuseError::Other(format!("bad anthropic response: {e}; body={text}"))
+            })?;
             let shaped = super::anthropic::parse_message(&v);
             return super::chat::to_api_response(shaped)
                 .map_err(|e| MuseError::Other(format!("anthropic response map failed: {e}")));
@@ -867,8 +875,9 @@ impl ApiClient {
         // Server ignored stream=true → plain JSON message.
         if !content_type.contains("text/event-stream") {
             let text = res.text().await?;
-            let v: serde_json::Value = serde_json::from_str(&text)
-                .map_err(|e| MuseError::Other(format!("bad anthropic response: {e}; body={text}")))?;
+            let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+                MuseError::Other(format!("bad anthropic response: {e}; body={text}"))
+            })?;
             let shaped = super::anthropic::parse_message(&v);
             return super::chat::to_api_response(shaped)
                 .map_err(|e| MuseError::Other(format!("anthropic response map failed: {e}")));
@@ -1026,10 +1035,7 @@ fn parse_success_body(body: &str, status: u16) -> Result<ApiResponse> {
 }
 
 /// Drain a full SSE text body into text/reasoning deltas + final ApiResponse.
-fn consume_sse_text(
-    body: &str,
-    on_event: &mut impl FnMut(StreamEvent),
-) -> Result<ApiResponse> {
+fn consume_sse_text(body: &str, on_event: &mut impl FnMut(StreamEvent)) -> Result<ApiResponse> {
     let mut parser = super::sse::SseParser::new();
     let mut events = parser.push(body.as_bytes());
     // Flush trailing event if the body lacked a final blank line.
@@ -1058,8 +1064,7 @@ fn consume_sse_text(
     }
     final_response.ok_or_else(|| {
         MuseError::Other(
-            "Codex/Responses SSE ended without response.completed (check auth and model)"
-                .into(),
+            "Codex/Responses SSE ended without response.completed (check auth and model)".into(),
         )
     })
 }
@@ -1166,6 +1171,23 @@ fn uuid_simple() -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn text_only_capability_is_scoped_to_the_actual_base_url() {
+        let provider = "custom-endpoint-test";
+        let model = "same-model";
+        let text_only_url = "https://text-only.example.test/v1/";
+        let vision_url = "https://vision.example.test/v1";
+
+        mark_text_only(provider, text_only_url, model);
+
+        assert!(endpoint_is_text_only(
+            provider,
+            "https://text-only.example.test/v1",
+            model
+        ));
+        assert!(!endpoint_is_text_only(provider, vision_url, model));
+    }
+
     /// The shape Poolside's inference endpoint actually returns for a rejected
     /// key: `error` is a bare string, not the usual `{message: …}` object.
     #[test]
@@ -1243,8 +1265,7 @@ data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"status\":
 event: response.completed\n\
 data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"output\":[]}}\n\
 \n";
-        let resp = consume_sse_text(body, &mut |_ev| {})
-            .expect("parse codex-shaped sse");
+        let resp = consume_sse_text(body, &mut |_ev| {}).expect("parse codex-shaped sse");
         assert_eq!(resp.id.as_deref(), Some("resp_1"));
         assert_eq!(resp.status.as_deref(), Some("completed"));
     }
@@ -1266,7 +1287,11 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
         let resp = consume_sse_text(body, &mut |_ev| {}).expect("parse");
         assert_eq!(resp.id.as_deref(), Some("resp_tools"));
         let calls = resp.function_calls();
-        assert_eq!(calls.len(), 1, "function_call must not be dropped: {resp:?}");
+        assert_eq!(
+            calls.len(),
+            1,
+            "function_call must not be dropped: {resp:?}"
+        );
         assert_eq!(calls[0].name, "list_dir");
         assert!(resp.output_text().contains("looking around"));
     }
@@ -1315,16 +1340,16 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
             request.headers().get("ChatGPT-Account-ID").unwrap(),
             "acct_test"
         );
-        assert_eq!(
-            request.headers().get("X-OpenAI-Fedramp").unwrap(),
-            "true"
-        );
+        assert_eq!(request.headers().get("X-OpenAI-Fedramp").unwrap(), "true");
         assert_eq!(
             request.headers().get("Authorization").unwrap(),
             "Bearer oauth-token"
         );
         assert_eq!(
-            request.headers().get("originator").and_then(|v| v.to_str().ok()),
+            request
+                .headers()
+                .get("originator")
+                .and_then(|v| v.to_str().ok()),
             Some("codex_cli_rs"),
             "unknown originator makes authorize/API fail"
         );
@@ -1343,7 +1368,7 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
             http: Client::new(),
             base_url: "https://generativelanguage.googleapis.com/v1beta/openai".to_string(),
             api_key: "oauth-token".to_string(),
-            provider_id: "antigravity".to_string(),
+            provider_id: "google".to_string(),
             oauth: Some(crate::auth::OAuthRequestContext {
                 account_id: None,
                 is_fedramp: false,
@@ -1384,11 +1409,8 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
     #[test]
     fn xai_oauth_requests_send_cli_version_fingerprint() {
         // cli-chat-proxy returns 426 with version "(none)" without these headers.
-        let mut client = ApiClient::new(
-            crate::providers::XAI_OAUTH_BASE_URL,
-            "oauth-token",
-        )
-        .unwrap();
+        let mut client =
+            ApiClient::new(crate::providers::XAI_OAUTH_BASE_URL, "oauth-token").unwrap();
         client.provider_id = "xai".to_string();
         client.oauth = Some(crate::auth::OAuthRequestContext::default());
         client.style = ApiStyle::Responses;

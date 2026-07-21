@@ -1,6 +1,6 @@
 //! Browser / device-code / SSO login for selected providers.
 //!
-//! UX mirrors the industry pattern (Hugging Face, Azure CLI, AWS SSO, Grok, Claude):
+//! UX mirrors the industry pattern (Google Cloud, Azure, GitHub, Grok, Claude):
 //! open a browser (or print a URL + short code), user approves, CLI stores tokens.
 
 mod browser;
@@ -56,7 +56,7 @@ pub fn revoke_session(auth: &Auth) -> Result<String> {
             "AWS SSO session is managed by the AWS CLI; run `aws sso logout` if configured."
                 .into(),
         ),
-        "antigravity" => Ok(
+        "google" | "antigravity" => Ok(
             "Google session is managed by `gcloud`; run `gcloud auth revoke` to drop ADC tokens."
                 .into(),
         ),
@@ -94,7 +94,7 @@ pub fn refresh_tokens(provider: &str, auth: &Auth, refresh: &str) -> Result<OAut
         "xai" => flows::xai::refresh(auth, refresh),
         "kimi" => flows::kimi::refresh(auth, refresh),
         "anthropic" => flows::claude::refresh(refresh),
-        "antigravity" | "google" | "google-oauth" => flows::antigravity::refresh(auth, refresh),
+        "antigravity" | "google" | "google-oauth" => flows::google::refresh(auth, refresh),
         "huggingface" => flows::huggingface::refresh(refresh),
         "azure" => flows::azure::refresh(),
         "bedrock" => flows::bedrock::refresh(),
@@ -149,11 +149,8 @@ mod tests {
             "xai",
             "kimi",
             "anthropic",
-            "antigravity",
             "google",
-            "huggingface",
             "azure",
-            "bedrock",
             "github-models",
             "github-copilot",
         ];
@@ -162,7 +159,6 @@ mod tests {
             "xai",
             "kimi",
             "anthropic",
-            "antigravity",
             "google",
             "google-oauth", // alias used by some stored sessions
             "huggingface",

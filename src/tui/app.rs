@@ -5,11 +5,11 @@ use crate::agent::{
     self, AgentEvent, AgentRunner, ApprovalDecision, PermissionMode, Session, SharedMode,
     SharedPermissions, SharedTodos,
 };
-use crate::theme::{self, Tone};
-use crate::tools::ToolHost;
 use crate::api::ApiClient;
 use crate::config::Config;
 use crate::error::Result;
+use crate::theme::{self, Tone};
+use crate::tools::ToolHost;
 use crate::tui::input::InputState;
 use crate::tui::scrollbar::{Hit, ScrollMetrics};
 use crate::usage::{TokenUsage, UsageTracker};
@@ -83,8 +83,6 @@ pub fn compose_turn_prompt(
     out.push_str(prompt);
     out
 }
-
-
 
 /// When a turn error means the model isn't available for the active credential,
 /// append which model/provider failed and how to recover. Provider-agnostic —
@@ -248,7 +246,10 @@ pub const COMMANDS: &[(&str, &str)] = &[
 pub enum Cell {
     Banner,
     User(String),
-    Assistant { text: String, streaming: bool },
+    Assistant {
+        text: String,
+        streaming: bool,
+    },
     /// Model reasoning stream. Collapsed by default when finished — click or
     /// click to expand. `duration` set when the thought ends.
     Thinking {
@@ -278,19 +279,30 @@ pub enum Cell {
     },
     /// System notice. `tone` picks the colour + glyph so a mode switch, a plan,
     /// a todo update and a usage dump don't all read as the same blue blob.
-    Info { text: String, tone: Tone },
+    Info {
+        text: String,
+        tone: Tone,
+    },
     /// A follow-up the user typed while a turn was running. Shown in the
     /// transcript with clickable **send now** / **dismiss** so it can interject
     /// into context without retyping.
-    Queued { text: String },
+    Queued {
+        text: String,
+    },
     /// Inline execution-graph card (`/graph`). A live tree of the current turn's
     /// tools / subagents / todos, refreshed on each tool transition while `live`.
     /// Ephemeral — not persisted to the session log.
-    Graph { lines: Vec<String>, live: bool },
+    Graph {
+        lines: Vec<String>,
+        live: bool,
+    },
     /// Inline subagent activity card (`/swarm`). Renders the live subagent
     /// table as a tiled grid of panes; `live` keeps it animating and re-reading
     /// the registry each frame. Ephemeral — not persisted to the session log.
-    Swarm { live: bool, detail: bool },
+    Swarm {
+        live: bool,
+        detail: bool,
+    },
     Error(String),
 }
 
@@ -446,7 +458,11 @@ impl Cell {
                     name.as_str(),
                     "write_file" | "edit_file" | "multi_edit" | "apply_patch"
                 ) {
-                    return Some(super::ui::tool_file_peek_body(name, args, result.as_deref()));
+                    return Some(super::ui::tool_file_peek_body(
+                        name,
+                        args,
+                        result.as_deref(),
+                    ));
                 }
                 let mut s = String::new();
                 s.push_str(&format!("tool: {name}\n"));
@@ -1819,8 +1835,7 @@ pub async fn run_tui(
                 for ev in kb_events {
                     match ev {
                         Event::Key(key) => {
-                            if matches!(key.code, KeyCode::Enter)
-                                && key.kind != KeyEventKind::Press
+                            if matches!(key.code, KeyCode::Enter) && key.kind != KeyEventKind::Press
                             {
                                 continue;
                             }
@@ -1882,9 +1897,7 @@ pub async fn run_tui(
                                 // the pre-drained keyboard batch (order-preserving).
                                 while kb_i < kb_events.len() {
                                     match &kb_events[kb_i] {
-                                        Event::Key(k)
-                                            if key_as_paste_burst_char(k).is_some() =>
-                                        {
+                                        Event::Key(k) if key_as_paste_burst_char(k).is_some() => {
                                             if let Some(ch) = key_as_paste_burst_char(k) {
                                                 burst.push(ch);
                                             }
@@ -1912,9 +1925,7 @@ pub async fn run_tui(
                                             // Ignore release — keep draining the burst.
                                             continue;
                                         }
-                                        Event::Key(k)
-                                            if key_as_paste_burst_char(&k).is_some() =>
-                                        {
+                                        Event::Key(k) if key_as_paste_burst_char(&k).is_some() => {
                                             if let Some(ch) = key_as_paste_burst_char(&k) {
                                                 burst.push(ch);
                                             }
@@ -2078,7 +2089,9 @@ impl App {
         let token_l = token.to_ascii_lowercase();
         let mut out: Vec<(String, String)> = COMMANDS
             .iter()
-            .filter(|(name, _)| name.starts_with(token) || name.to_ascii_lowercase().starts_with(&token_l))
+            .filter(|(name, _)| {
+                name.starts_with(token) || name.to_ascii_lowercase().starts_with(&token_l)
+            })
             .map(|(n, d)| ((*n).to_string(), (*d).to_string()))
             .collect();
 
@@ -2274,7 +2287,9 @@ impl App {
     /// sessions picker — without this, OS multi-fire events jump Fork→Copy
     /// and land past Revert.
     fn ctx_wheel_step(&mut self, dir: i32) {
-        let Some(menu) = &mut self.ctx_menu else { return };
+        let Some(menu) = &mut self.ctx_menu else {
+            return;
+        };
         let now = Instant::now();
         if now.duration_since(menu.last_step_at) < Duration::from_millis(45) {
             return;
@@ -2351,14 +2366,15 @@ impl App {
     /// Edit: load the prompt into the input **without** rewinding history.
     /// Send interjects as a new user turn (full prior context stays in session).
     fn ctx_edit(&mut self) {
-        let Some((prompt, _)) = self.ctx_prompt() else { return };
+        let Some((prompt, _)) = self.ctx_prompt() else {
+            return;
+        };
         self.input.set_text(&prompt);
         self.ensure_input_caret_visible();
         self.input_scroll_top = 0;
         self.push_note(
             Tone::Neutral,
-            "edit — prompt loaded in input · send to interject as a new turn (history kept)"
-                .into(),
+            "edit — prompt loaded in input · send to interject as a new turn (history kept)".into(),
         );
     }
 
@@ -2401,7 +2417,9 @@ impl App {
             self.push_error("wait for the current turn to finish, then revert".into());
             return;
         }
-        let Some((prompt, from_end)) = self.ctx_prompt() else { return };
+        let Some((prompt, from_end)) = self.ctx_prompt() else {
+            return;
+        };
         let idx = self.ctx_menu.as_ref().map(|m| m.cell_idx).unwrap_or(0);
 
         self.cells.truncate(idx);
@@ -2426,7 +2444,9 @@ impl App {
             self.push_error("wait for the current turn to finish, then fork".into());
             return;
         }
-        let Some((prompt, from_end)) = self.ctx_prompt() else { return };
+        let Some((prompt, from_end)) = self.ctx_prompt() else {
+            return;
+        };
         let idx = self.ctx_menu.as_ref().map(|m| m.cell_idx).unwrap_or(0);
 
         // Persist the original before branching.
@@ -2446,11 +2466,8 @@ impl App {
         self.session_id = forked.id.clone();
         self.u_session = forked.usage.clone();
         self.u_last = TokenUsage::default();
-        let mut usage = UsageTracker::new(
-            forked.id.clone(),
-            self.cfg.model.clone(),
-            self.cwd.clone(),
-        );
+        let mut usage =
+            UsageTracker::new(forked.id.clone(), self.cfg.model.clone(), self.cwd.clone());
         usage.set_provider(self.cfg.provider.clone());
         usage.seed_session(forked.usage.clone());
         self.session = Some(Box::new(forked));
@@ -3341,9 +3358,7 @@ impl App {
         }
         let top = self.live_transcript_top();
         let max_line = self.plain_lines.len().saturating_sub(1);
-        let vis_last = (top + body.height as usize)
-            .saturating_sub(1)
-            .min(max_line);
+        let vis_last = (top + body.height as usize).saturating_sub(1).min(max_line);
         let max_scroll = self.max_scroll();
 
         let line = if row < body.y {
@@ -3569,7 +3584,9 @@ impl App {
         if m.max_offset() == 0 {
             return;
         }
-        let rel = row.clamp(t.y, t.bottom().saturating_sub(1)).saturating_sub(t.y);
+        let rel = row
+            .clamp(t.y, t.bottom().saturating_sub(1))
+            .saturating_sub(t.y);
         let pos = ScrollMetrics::subcell_at_row(rel);
         let thumb_start = pos.saturating_sub(self.scrollbar_grab);
         // `offset` counts lines from the top; scroll_from_bottom from the end.
@@ -3886,10 +3903,11 @@ impl App {
     }
 
     fn picker_confirm(&mut self) {
-        let selected = self
-            .picker
-            .as_ref()
-            .and_then(|p| p.visible().get(p.idx).map(|r| (r.id.clone(), r.source.clone())));
+        let selected = self.picker.as_ref().and_then(|p| {
+            p.visible()
+                .get(p.idx)
+                .map(|r| (r.id.clone(), r.source.clone()))
+        });
         self.picker = None;
         let Some((id, source)) = selected else { return };
         if source == "nur" {
@@ -4357,8 +4375,7 @@ impl App {
                             mp.set_idx(*i);
                         }
                         if same {
-                            let chosen =
-                                self.model_picker.as_ref().and_then(|mp| mp.chosen());
+                            let chosen = self.model_picker.as_ref().and_then(|mp| mp.chosen());
                             if let Some(id) = chosen {
                                 self.model_picker = None;
                                 self.apply_model_selection(&id);
@@ -4420,7 +4437,9 @@ impl App {
 
     /// Enter on a marketplace row: install if missing, else toggle enable.
     pub fn activate_plugin_selection(&mut self) {
-        let Some(pp) = &self.plugin_picker else { return };
+        let Some(pp) = &self.plugin_picker else {
+            return;
+        };
         if pp.busy {
             return;
         }
@@ -4452,9 +4471,8 @@ impl App {
                 crate::plugins::set_enabled(&id, false)
                     .map(|_| format!("disabled {name} (skills stay on disk; re-enable anytime)"))
             } else {
-                crate::plugins::set_enabled(&id, true).map(|_| {
-                    format!("enabled {name} — skills active on next agent turn")
-                })
+                crate::plugins::set_enabled(&id, true)
+                    .map(|_| format!("enabled {name} — skills active on next agent turn"))
             };
             let _ = tx.send(res);
         });
@@ -4686,31 +4704,10 @@ impl App {
                     m.error = None;
                 }
             }
-            2 if can_import => {
-                match crate::oauth::import_existing_session(&provider_id) {
-                    Ok(Some(tokens)) => {
-                        if is_fallback {
-                            if let Err(e) = crate::auth::save_provider_oauth(
-                                &provider_id,
-                                &tokens.access_token,
-                                tokens.refresh_token,
-                                tokens.expires_at,
-                                tokens.meta,
-                            ) {
-                                if let Some(m) = &mut self.login {
-                                    m.error = Some(e.to_string());
-                                }
-                                return;
-                            }
-                            let name = crate::providers::by_id(&provider_id)
-                                .map(|p| p.name)
-                                .unwrap_or(provider_id.as_str());
-                            self.finish_fallback_credential(format!(
-                                "failover · {name} · browser session saved"
-                            ));
-                            return;
-                        }
-                        if let Err(e) = crate::auth::save_oauth_session(
+            2 if can_import => match crate::oauth::import_existing_session(&provider_id) {
+                Ok(Some(tokens)) => {
+                    if is_fallback {
+                        if let Err(e) = crate::auth::save_provider_oauth(
                             &provider_id,
                             &tokens.access_token,
                             tokens.refresh_token,
@@ -4722,24 +4719,43 @@ impl App {
                             }
                             return;
                         }
-                        self.apply_provider_login(
-                            &provider_id,
-                            &{ crate::auth::resolve_api_key().unwrap_or_default() },
-                            true,
-                        );
+                        let name = crate::providers::by_id(&provider_id)
+                            .map(|p| p.name)
+                            .unwrap_or(provider_id.as_str());
+                        self.finish_fallback_credential(format!(
+                            "failover · {name} · browser session saved"
+                        ));
+                        return;
                     }
-                    Ok(None) => {
-                        if let Some(m) = &mut self.login {
-                            m.error = Some("no existing session found".into());
-                        }
-                    }
-                    Err(e) => {
+                    if let Err(e) = crate::auth::save_oauth_session(
+                        &provider_id,
+                        &tokens.access_token,
+                        tokens.refresh_token,
+                        tokens.expires_at,
+                        tokens.meta,
+                    ) {
                         if let Some(m) = &mut self.login {
                             m.error = Some(e.to_string());
                         }
+                        return;
+                    }
+                    self.apply_provider_login(
+                        &provider_id,
+                        &{ crate::auth::resolve_api_key().unwrap_or_default() },
+                        true,
+                    );
+                }
+                Ok(None) => {
+                    if let Some(m) = &mut self.login {
+                        m.error = Some("no existing session found".into());
                     }
                 }
-            }
+                Err(e) => {
+                    if let Some(m) = &mut self.login {
+                        m.error = Some(e.to_string());
+                    }
+                }
+            },
             _ => {}
         }
     }
@@ -4774,9 +4790,7 @@ impl App {
                     m.buf.clear();
                 }
             }
-            KeyCode::Char('c')
-                if key.modifiers.contains(KeyModifiers::CONTROL) =>
-            {
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.cancel_oauth();
                 if let Some(m) = &mut self.login {
                     m.stage = LoginStage::Method;
@@ -4987,7 +5001,11 @@ impl App {
     }
 
     fn on_login_picker_key(&mut self, key: event::KeyEvent, ctrl: bool) {
-        let manage = self.login.as_ref().map(|m| m.manage_failover).unwrap_or(false);
+        let manage = self
+            .login
+            .as_ref()
+            .map(|m| m.manage_failover)
+            .unwrap_or(false);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let Some(m) = &mut self.login else { return };
         match key.code {
@@ -5089,7 +5107,11 @@ impl App {
 
     fn submit_login(&mut self) {
         let (provider_id, key, is_fallback) = match &self.login {
-            Some(m) => (m.provider_id.clone(), m.buf.trim().to_string(), m.fallback_key),
+            Some(m) => (
+                m.provider_id.clone(),
+                m.buf.trim().to_string(),
+                m.fallback_key,
+            ),
             None => return,
         };
         let provider = crate::providers::by_id(&provider_id)
@@ -5146,9 +5168,7 @@ impl App {
         let fixed_oauth_base = via_oauth
             .then(|| crate::providers::oauth_base_url(provider.id))
             .flatten();
-        self.cfg.base_url = fixed_oauth_base
-            .unwrap_or(provider.base_url)
-            .to_string();
+        self.cfg.base_url = fixed_oauth_base.unwrap_or(provider.base_url).to_string();
         self.cfg.model = if via_oauth && provider.id == "xai" {
             "grok-4.5".to_string()
         } else {
@@ -5168,17 +5188,22 @@ impl App {
             key.to_string()
         };
         if via_oauth {
-            if let Ok(ids) = crate::api::models::fetch_model_ids(
-                &self.cfg.base_url,
-                &bearer,
-                Some(provider.id),
-            ) {
+            if let Ok(ids) =
+                crate::api::models::fetch_model_ids(&self.cfg.base_url, &bearer, Some(provider.id))
+            {
                 if !ids.iter().any(|id| id == &self.cfg.model) {
                     let usable = ids.iter().rev().find(|id| {
                         let id = id.to_ascii_lowercase();
-                        !["embedding", "image", "audio", "realtime", "transcribe", "tts"]
-                            .iter()
-                            .any(|kind| id.contains(kind))
+                        ![
+                            "embedding",
+                            "image",
+                            "audio",
+                            "realtime",
+                            "transcribe",
+                            "tts",
+                        ]
+                        .iter()
+                        .any(|kind| id.contains(kind))
                     });
                     if let Some(model) = usable.or_else(|| ids.last()) {
                         self.cfg.model = model.clone();
@@ -5233,9 +5258,7 @@ impl App {
                 Some(ApprovalDecision::Approve)
             }
             KeyCode::Char('a') | KeyCode::Char('A') => Some(ApprovalDecision::ApproveAlways),
-            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                Some(ApprovalDecision::Deny)
-            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Some(ApprovalDecision::Deny),
             _ => None,
         };
         if let Some(d) = decision {
@@ -5275,9 +5298,7 @@ impl App {
         if self.busy {
             self.queue.push_back(text.clone());
             // Transcript row with clickable send now / dismiss (not just a note).
-            self.cells.push(Cell::Queued {
-                text: text.clone(),
-            });
+            self.cells.push(Cell::Queued { text: text.clone() });
             self.scroll_to_bottom();
             self.push_note(
                 Tone::Mode,
@@ -5379,7 +5400,10 @@ impl App {
         for c in &self.cells[start..] {
             match c {
                 Cell::Thinking {
-                    active, duration, started, ..
+                    active,
+                    duration,
+                    started,
+                    ..
                 } => {
                     let d = if *active {
                         theme::fmt_elapsed_live(started.elapsed())
@@ -5390,7 +5414,12 @@ impl App {
                     nodes.push(format!("{mark} thinking  {d}"));
                 }
                 Cell::Tool {
-                    name, args, ok, duration, started, ..
+                    name,
+                    args,
+                    ok,
+                    duration,
+                    started,
+                    ..
                 } => {
                     tool_n += 1;
                     let label = graph_tool_label(name, args);
@@ -5435,7 +5464,11 @@ impl App {
 
     /// Refresh any live `/graph` card in place (called on tool transitions).
     fn refresh_graph(&mut self) {
-        if !self.cells.iter().any(|c| matches!(c, Cell::Graph { live: true, .. })) {
+        if !self
+            .cells
+            .iter()
+            .any(|c| matches!(c, Cell::Graph { live: true, .. }))
+        {
             return;
         }
         let fresh = self.build_graph_lines();
@@ -5623,14 +5656,7 @@ impl App {
             &notes,
             model_prompt,
         );
-        agent::spawn_turn(
-            runner,
-            *session,
-            *usage,
-            effective,
-            self.tx.clone(),
-            cancel,
-        );
+        agent::spawn_turn(runner, *session, *usage, effective, self.tx.clone(), cancel);
     }
 
     fn make_runner(&self) -> AgentRunner {
@@ -5773,9 +5799,7 @@ impl App {
                     return;
                 }
                 if let Some(Cell::Thinking {
-                    text,
-                    active: true,
-                    ..
+                    text, active: true, ..
                 }) = self.cells.last_mut()
                 {
                     text.push_str(&d);
@@ -5840,9 +5864,7 @@ impl App {
                 self.status = "running tool".into();
                 self.refresh_graph();
             }
-            AgentEvent::ToolEnd {
-                id, result, ok, ..
-            } => {
+            AgentEvent::ToolEnd { id, result, ok, .. } => {
                 if let Some(&idx) = self.tool_cells.get(&id) {
                     if let Some(Cell::Tool {
                         result: r,
@@ -5922,21 +5944,15 @@ impl App {
                 match (&self.turn_kind, result, interrupted) {
                     (_, _, true) => {
                         // Already pushed "cancelled" on Esc; keep a quiet final line.
-                        if !self
-                            .cells
-                            .iter()
-                            .rev()
-                            .take(3)
-                            .any(|c| matches!(c, Cell::Info { text, .. } if text.contains("cancelled")))
-                        {
+                        if !self.cells.iter().rev().take(3).any(
+                            |c| matches!(c, Cell::Info { text, .. } if text.contains("cancelled")),
+                        ) {
                             self.push_info("cancelled".into());
                         }
                         self.push_turn_done(turn_dur, true);
                     }
                     (TurnMode::Compact, Ok(summary), _) => {
-                        self.push_info(format!(
-                            "context compacted — summary:\n{summary}"
-                        ));
+                        self.push_info(format!("context compacted — summary:\n{summary}"));
                         self.push_turn_done(turn_dur, false);
                     }
                     (TurnMode::Compact, Err(e), _) => {
@@ -5946,11 +5962,8 @@ impl App {
                         // Interrupted surfaces as Err("interrupted") sometimes.
                         let was_interrupt = e.contains("interrupted");
                         if !was_interrupt {
-                            let e = annotate_model_unavailable(
-                                &e,
-                                &self.cfg.provider,
-                                &self.cfg.model,
-                            );
+                            let e =
+                                annotate_model_unavailable(&e, &self.cfg.provider, &self.cfg.model);
                             self.push_error(e);
                         }
                         self.push_turn_done(turn_dur, was_interrupt);
@@ -5965,8 +5978,7 @@ impl App {
                 // unless send-now asked to preserve the queue for interjection.
                 if interrupted && !self.preserve_queue_on_interrupt {
                     self.queue.clear();
-                    self.cells
-                        .retain(|c| !matches!(c, Cell::Queued { .. }));
+                    self.cells.retain(|c| !matches!(c, Cell::Queued { .. }));
                 } else if let Some(next) = self.queue.pop_front() {
                     self.preserve_queue_on_interrupt = false;
                     // Drop matching Queued cards for this text.
@@ -6571,7 +6583,6 @@ pub fn line_to_plain(line: &ratatui::text::Line<'_>) -> String {
     line.spans.iter().map(|s| s.content.as_ref()).collect()
 }
 
-
 fn cells_to_ui_log(cells: &[Cell]) -> Vec<crate::agent::session::UiLogItem> {
     use crate::agent::session::UiLogItem;
     let mut out = Vec::new();
@@ -6828,7 +6839,6 @@ fn extract_reasoning_summary(it: &serde_json::Value) -> String {
     parts.join("\n")
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6839,7 +6849,8 @@ mod tests {
         // NVIDIA NIM: exact shape the user hit.
         let nim = "API error (404): {\"status\":404,\"title\":\"Not Found\",\
                    \"detail\":\"Function '84bf12ff': Not found for account 'e6BB'\"}";
-        let out = annotate_model_unavailable(nim, "nvidia", "nvidia/llama-3.1-nemotron-ultra-253b-v1");
+        let out =
+            annotate_model_unavailable(nim, "nvidia", "nvidia/llama-3.1-nemotron-ultra-253b-v1");
         assert!(out.contains("/model"), "must point at recovery");
         assert!(out.contains("nvidia/llama-3.1-nemotron-ultra-253b-v1"));
         assert!(out.contains(nim), "original error is preserved");
@@ -6865,9 +6876,9 @@ mod tests {
         // and the user's actual words still come last.
         let notes = vec!["watch the auth path".to_string()];
         let sticky = vec!["# SKILL ACTIVATED sticky
-body".to_string()];
-        let composed =
-            compose_turn_prompt(true, &sticky, Some("ship v1"), &notes, "fix the bug");
+body"
+            .to_string()];
+        let composed = compose_turn_prompt(true, &sticky, Some("ship v1"), &notes, "fix the bug");
         assert!(composed.starts_with(BRO_STYLE), "rider must lead");
         let bro_at = composed.find(BRO_STYLE).unwrap();
         let sticky_at = composed.find("# SKILL ACTIVATED sticky").unwrap();
@@ -6875,10 +6886,7 @@ body".to_string()];
         let note_at = composed.find("[note] watch the auth path").unwrap();
         let prompt_at = composed.find("fix the bug").unwrap();
         assert!(
-            bro_at < sticky_at
-                && sticky_at < goal_at
-                && goal_at < note_at
-                && note_at < prompt_at
+            bro_at < sticky_at && sticky_at < goal_at && goal_at < note_at && note_at < prompt_at
         );
 
         // The rider is tone-only: it must not license softening the facts.
@@ -6893,8 +6901,7 @@ body".to_string()];
                 content: (*p).into(),
                 ts: chrono::Utc::now(),
             });
-            s.input_items
-                .push(crate::api::types::user_text_item(p));
+            s.input_items.push(crate::api::types::user_text_item(p));
             // assistant reply for the turn
             s.messages.push(crate::agent::session::SessionMessage {
                 role: "assistant".into(),
@@ -6991,10 +6998,16 @@ body".to_string()];
         let close = Rect::new(box_.x + box_.width - 4, box_.y, 3, 1);
         assert!(!peek_click_dismisses(close, box_, 20, 10));
         assert!(peek_click_dismisses(close, box_, 37, 5));
-        assert!(peek_click_dismisses(close, box_, 20, 20), "below must close");
+        assert!(
+            peek_click_dismisses(close, box_, 20, 20),
+            "below must close"
+        );
         assert!(peek_click_dismisses(close, box_, 20, 2), "above must close");
         assert!(peek_click_dismisses(close, box_, 2, 10), "left must close");
-        assert!(peek_click_dismisses(close, box_, 50, 10), "right must close");
+        assert!(
+            peek_click_dismisses(close, box_, 50, 10),
+            "right must close"
+        );
     }
 
     #[test]

@@ -129,9 +129,8 @@ pub fn set_enabled(id: &str, enabled: bool) -> Result<(), String> {
 
 /// Install (or update) a catalog plugin by id. Clones into `~/.nur/plugins/<id>`.
 pub fn install_plugin(id: &str) -> Result<String, String> {
-    let entry = by_id(id).ok_or_else(|| {
-        format!("unknown plugin '{id}' — open /plugins to browse the catalog")
-    })?;
+    let entry = by_id(id)
+        .ok_or_else(|| format!("unknown plugin '{id}' — open /plugins to browse the catalog"))?;
     install_entry(entry)
 }
 
@@ -249,7 +248,6 @@ pub fn uninstall_plugin(id: &str) -> Result<String, String> {
     Ok(format!("uninstalled plugin '{id}'"))
 }
 
-
 /// Plugins that should be present after a normal ecosystem ensure / install.
 /// Superpowers + Fable + the "real engineering" default set (mattpocock,
 /// addyosmani, builderio). Idempotent: skips when already on disk.
@@ -317,10 +315,7 @@ fn mirror_skills_to_nur_home(plugin_root: &Path) -> Result<(), String> {
     sources.dedup();
 
     for src in sources {
-        let name = src
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("skill");
+        let name = src.file_name().and_then(|n| n.to_str()).unwrap_or("skill");
         let dest = dest_root.join(name);
         // Full tree (SKILL.md + references/ etc.) so multi-file skills stay complete.
         let _ = fs::remove_dir_all(&dest);

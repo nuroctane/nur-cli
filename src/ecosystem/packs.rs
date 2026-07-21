@@ -134,15 +134,13 @@ pub fn ensure_executor(node_ok: bool) -> ComponentStatus {
     // Install if missing (use resolved npm path — bare "npm" fails on Windows).
     if find_bin("executor").is_none() {
         let npm = find_bin("npm").unwrap_or_else(|| "npm".into());
-        match run_capture(
-            &npm,
-            &["install", "-g", "executor@latest"],
-            None,
-            300_000,
-        ) {
+        match run_capture(&npm, &["install", "-g", "executor@latest"], None, 300_000) {
             Ok(_) => {}
             Err(e) => {
-                c.detail = format!("npm install failed: {}", e.chars().take(200).collect::<String>());
+                c.detail = format!(
+                    "npm install failed: {}",
+                    e.chars().take(200).collect::<String>()
+                );
                 // Still try to locate a partial install.
             }
         }
@@ -179,11 +177,12 @@ pub fn ensure_graphjin() -> ComponentStatus {
             c.available = true;
             c.version = super::cmd_version_pub(&bin, &["version"]);
             c.path = Some(bin);
-            c.detail = "governed data surface ready — point GRAPHJIN_CONFIG_PATH at a config".into();
+            c.detail =
+                "governed data surface ready — point GRAPHJIN_CONFIG_PATH at a config".into();
         }
         None => {
-            c.detail = "optional — npm i -g graphjin (needed only for the `graphjin` data tool)"
-                .into();
+            c.detail =
+                "optional — npm i -g graphjin (needed only for the `graphjin` data tool)".into();
         }
     }
     c
@@ -216,8 +215,7 @@ pub fn ensure_omp() -> ComponentStatus {
                 }
             }
         } else {
-            c.detail =
-                "needs Bun (bun.sh) — or: irm https://omp.sh/install.ps1 | iex".into();
+            c.detail = "needs Bun (bun.sh) — or: irm https://omp.sh/install.ps1 | iex".into();
             return c;
         }
     }
@@ -287,7 +285,8 @@ pub fn ensure_browser_cli(node_ok: bool) -> ComponentStatus {
             )
         };
     } else if c.detail.is_empty() {
-        c.detail = "not found after npm install — try: npm i -g @sleepinsummer/agent-browser-cli".into();
+        c.detail =
+            "not found after npm install — try: npm i -g @sleepinsummer/agent-browser-cli".into();
     }
     c
 }
@@ -392,7 +391,9 @@ fn mirror_agents_to_muse() {
     // Recursive: cyber is flat, mattpocock is skills/<cat>/<name>/SKILL.md when
     // installed under agents as nested trees.
     for skill_md in crate::agent::skills::find_skill_mds(&agents, 5) {
-        let Some(src_dir) = skill_md.parent() else { continue };
+        let Some(src_dir) = skill_md.parent() else {
+            continue;
+        };
         let name = src_dir
             .file_name()
             .and_then(|n| n.to_str())

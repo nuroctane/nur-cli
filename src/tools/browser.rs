@@ -130,7 +130,11 @@ impl Tool for BrowserTool {
             "exec" => vec!["exec".into(), arg_str(args, "js")?],
             "screenshot" => {
                 let mut a = vec!["screenshot".into()];
-                if args.get("full_page").and_then(|v| v.as_bool()).unwrap_or(false) {
+                if args
+                    .get("full_page")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                {
                     a.push("--full-page".into());
                 }
                 a

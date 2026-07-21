@@ -71,11 +71,9 @@ impl Tool for OmpTool {
 
         let action = arg_str(args, "action").unwrap_or_else(|_| "run".into());
         match action.as_str() {
-            "status" | "version" => {
-                ecosystem::run_capture(&bin, &["--version"], None, 30_000)
-                    .map(|v| format!("omp {v}"))
-                    .map_err(MuseError::Tool)
-            }
+            "status" | "version" => ecosystem::run_capture(&bin, &["--version"], None, 30_000)
+                .map(|v| format!("omp {v}"))
+                .map_err(MuseError::Tool),
             "run" => {
                 let prompt = arg_str(args, "prompt")?;
                 let mut argv: Vec<String> = vec!["-p".into(), prompt];

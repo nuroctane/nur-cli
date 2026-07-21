@@ -124,7 +124,10 @@ pub fn model_to_zones(model: &GridLayout) -> Option<Vec<Zone>> {
         return None;
     }
     if model.cell_child_map.len() != model.rows
-        || model.cell_child_map.iter().any(|r| r.len() != model.columns)
+        || model
+            .cell_child_map
+            .iter()
+            .any(|r| r.len() != model.columns)
         || model.row_percents.len() != model.rows
         || model.column_percents.len() != model.columns
     {
@@ -523,11 +526,41 @@ mod tests {
     fn pinwheel_is_not_guillotine_cuttable() {
         // Classic interlocking pinwheel: no full-length cut on either axis.
         let zones = vec![
-            Zone { index: 0, left: 0, top: 0, right: 6000, bottom: 4000 },
-            Zone { index: 1, left: 6000, top: 0, right: 10000, bottom: 6000 },
-            Zone { index: 2, left: 4000, top: 6000, right: 10000, bottom: 10000 },
-            Zone { index: 3, left: 0, top: 4000, right: 4000, bottom: 10000 },
-            Zone { index: 4, left: 4000, top: 4000, right: 6000, bottom: 6000 },
+            Zone {
+                index: 0,
+                left: 0,
+                top: 0,
+                right: 6000,
+                bottom: 4000,
+            },
+            Zone {
+                index: 1,
+                left: 6000,
+                top: 0,
+                right: 10000,
+                bottom: 6000,
+            },
+            Zone {
+                index: 2,
+                left: 4000,
+                top: 6000,
+                right: 10000,
+                bottom: 10000,
+            },
+            Zone {
+                index: 3,
+                left: 0,
+                top: 4000,
+                right: 4000,
+                bottom: 10000,
+            },
+            Zone {
+                index: 4,
+                left: 4000,
+                top: 4000,
+                right: 6000,
+                bottom: 6000,
+            },
         ];
         assert!(!is_guillotine(&zones));
     }
@@ -556,7 +589,12 @@ mod tests {
 
     #[test]
     fn rects_tile_the_area_with_no_gaps_or_overlaps() {
-        let area = Rect { x: 0, y: 0, width: 97, height: 13 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 97,
+            height: 13,
+        };
         for n in 1..=8 {
             let zones = zones_of(&layout_for(n, area.width, 24));
             let rects = zones_to_rects(&zones, area);
@@ -602,7 +640,12 @@ mod tests {
     fn frame_draws_a_closed_border_with_a_title() {
         let mut c = Canvas::new(12, 3);
         c.frame(
-            Rect { x: 0, y: 0, width: 12, height: 3 },
+            Rect {
+                x: 0,
+                y: 0,
+                width: 12,
+                height: 3,
+            },
             Style::default(),
             Some(("hi", Style::default())),
         );

@@ -213,17 +213,11 @@ pub enum PluginsCmd {
         id: String,
     },
     /// Enable an installed plugin
-    Enable {
-        id: String,
-    },
+    Enable { id: String },
     /// Disable an installed plugin (keeps files on disk)
-    Disable {
-        id: String,
-    },
+    Disable { id: String },
     /// Remove plugin files + registry entry
-    Uninstall {
-        id: String,
-    },
+    Uninstall { id: String },
 }
 
 #[derive(Subcommand, Debug)]

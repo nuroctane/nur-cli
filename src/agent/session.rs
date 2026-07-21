@@ -1,6 +1,4 @@
-use crate::config::{
-    atomic_write, ensure_dirs, legacy_muse_home, muse_home, sessions_dir,
-};
+use crate::config::{atomic_write, ensure_dirs, legacy_muse_home, muse_home, sessions_dir};
 use crate::error::{MuseError, Result};
 use crate::usage::TokenUsage;
 use chrono::{DateTime, Utc};
@@ -130,11 +128,8 @@ impl Session {
             "usage": self.usage,
             "estimated_cost_usd": self.usage.estimated_cost_usd(),
         });
-        atomic_write(
-            &latest,
-            serde_json::to_string_pretty(&ptr)?.as_bytes(),
-        )
-        .map_err(|e| MuseError::Other(format!("latest_session atomic write failed: {e}")))?;
+        atomic_write(&latest, serde_json::to_string_pretty(&ptr)?.as_bytes())
+            .map_err(|e| MuseError::Other(format!("latest_session atomic write failed: {e}")))?;
 
         // Per-cwd last session map (for continue in same project)
         let map_path = muse_home().join("cwd_sessions.json");

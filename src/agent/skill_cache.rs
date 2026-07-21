@@ -216,11 +216,19 @@ mod tests {
         let start2 = Instant::now();
         let cached = load_skills_cached(&cwd);
         let cached_elapsed = start2.elapsed();
-        println!("CACHED load {} skills in {:?}", cached.len(), cached_elapsed);
+        println!(
+            "CACHED load {} skills in {:?}",
+            cached.len(),
+            cached_elapsed
+        );
 
         assert!(cached.len() > 0);
         // cached should be significantly faster than cold (at least 2x faster, ideally 5x)
         // cold was ~1-2s with read, cached should be <100ms
-        assert!(cached_elapsed.as_millis() < 200, "cached should be <200ms, got {:?}", cached_elapsed);
+        assert!(
+            cached_elapsed.as_millis() < 200,
+            "cached should be <200ms, got {:?}",
+            cached_elapsed
+        );
     }
 }

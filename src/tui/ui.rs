@@ -14,18 +14,12 @@ use unicode_width::UnicodeWidthStr;
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
     // Solid Meta-dark canvas so empty regions never flash terminal default.
-    f.render_widget(
-        Block::default().style(theme::style_canvas()),
-        area,
-    );
+    f.render_widget(Block::default().style(theme::style_canvas()), area);
 
     // Too-small terminal: show a terse message instead of crashing.
     if area.width < 20 || area.height < 5 {
         let msg = "terminal too small — resize to ≥ 20×5";
-        let p = Paragraph::new(Line::from(Span::styled(
-            msg,
-            theme::style_faint(),
-        )));
+        let p = Paragraph::new(Line::from(Span::styled(msg, theme::style_faint())));
         f.render_widget(p, area);
         // Overlays must remain visible even when the base prompt is too small
         // to lay out. Their geometry is fitted independently below.
@@ -147,7 +141,10 @@ fn draw_login_method(f: &mut Frame, app: &App, area: Rect) {
     let want: u16 = if m.error.is_some() { 14 } else { 13 };
     let rect = fit_modal_rect(area, 64, want, 44, 8);
     f.render_widget(Clear, rect);
-    f.render_widget(Block::default().style(Style::default().bg(theme::SURFACE_2)), rect);
+    f.render_widget(
+        Block::default().style(Style::default().bg(theme::SURFACE_2)),
+        rect,
+    );
     let phase = modal_phase(app);
     let failover = m.fallback_key;
     let title = if failover {
@@ -205,10 +202,7 @@ fn draw_login_method(f: &mut Frame, app: &App, area: Rect) {
             format!("{marker}{title}"),
             title_style,
         )));
-        lines.push(Line::from(Span::styled(
-            format!("    {sub}"),
-            sub_style,
-        )));
+        lines.push(Line::from(Span::styled(format!("    {sub}"), sub_style)));
         lines.push(Line::default());
     }
     if let Some(e) = &m.error {
@@ -232,7 +226,10 @@ fn draw_login_browser(f: &mut Frame, app: &App, area: Rect) {
     let want: u16 = if m.error.is_some() { 14 } else { 13 };
     let rect = fit_modal_rect(area, 72, want, 48, 8);
     f.render_widget(Clear, rect);
-    f.render_widget(Block::default().style(Style::default().bg(theme::SURFACE_2)), rect);
+    f.render_widget(
+        Block::default().style(Style::default().bg(theme::SURFACE_2)),
+        rect,
+    );
     let phase = modal_phase(app);
     let spin = if theme::blink_on(app.spinner_epoch.elapsed()) {
         "◐"
@@ -305,8 +302,7 @@ fn draw_login_browser(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::default());
     }
     lines.push(Line::from(Span::styled(
-        "  Complete sign-in in the browser. This window updates when you're done."
-            .to_string(),
+        "  Complete sign-in in the browser. This window updates when you're done.".to_string(),
         theme::style_faint(),
     )));
     if let Some(e) = &m.error {
@@ -328,13 +324,23 @@ fn draw_login_browser(f: &mut Frame, app: &App, area: Rect) {
 fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
     let rect = fit_modal_rect(area, 74, 28, 48, 12);
     f.render_widget(Clear, rect);
-    f.render_widget(Block::default().style(Style::default().bg(theme::SURFACE_2)), rect);
+    f.render_widget(
+        Block::default().style(Style::default().bg(theme::SURFACE_2)),
+        rect,
+    );
     let phase = modal_phase(app);
 
     let total = app.login.as_ref().map(|m| m.count()).unwrap_or(0);
-    let manage = app.login.as_ref().map(|m| m.manage_failover).unwrap_or(false);
+    let manage = app
+        .login
+        .as_ref()
+        .map(|m| m.manage_failover)
+        .unwrap_or(false);
     let title = if manage {
-        format!(" ↻ manage failover  ·  {} in chain ", app.cfg.fallback_providers.len())
+        format!(
+            " ↻ manage failover  ·  {} in chain ",
+            app.cfg.fallback_providers.len()
+        )
     } else {
         format!(" 🔑 choose a provider  ·  {total} ")
     };
@@ -396,11 +402,7 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
         Line::default(),
     ];
 
-    let picks = app
-        .login
-        .as_ref()
-        .map(|m| m.filtered())
-        .unwrap_or_default();
+    let picks = app.login.as_ref().map(|m| m.filtered()).unwrap_or_default();
     let col = (inner.width as usize).saturating_sub(4);
 
     if total == 0 {
@@ -489,7 +491,10 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
 fn draw_model_picker(f: &mut Frame, app: &mut App, area: Rect) {
     let rect = fit_modal_rect(area, 74, 28, 48, 12);
     f.render_widget(Clear, rect);
-    f.render_widget(Block::default().style(Style::default().bg(theme::SURFACE_2)), rect);
+    f.render_widget(
+        Block::default().style(Style::default().bg(theme::SURFACE_2)),
+        rect,
+    );
     let phase = modal_phase(app);
 
     let (provider_name, total, loading) = app
@@ -584,7 +589,10 @@ fn draw_model_picker(f: &mut Frame, app: &mut App, area: Rect) {
         } else {
             "  no models match — type an id + ↵ to switch".to_string()
         };
-        lines.push(Line::from(Span::styled(truncate(&msg, col), theme::style_faint())));
+        lines.push(Line::from(Span::styled(
+            truncate(&msg, col),
+            theme::style_faint(),
+        )));
         if error.is_some() && !filter.trim().is_empty() {
             lines.push(Line::from(Span::styled(
                 truncate(&format!("  ↵ switch to \"{}\"", filter.trim()), col),
@@ -651,7 +659,10 @@ fn draw_model_picker(f: &mut Frame, app: &mut App, area: Rect) {
 fn draw_plugin_picker(f: &mut Frame, app: &mut App, area: Rect) {
     let rect = fit_modal_rect(area, 78, 28, 52, 12);
     f.render_widget(Clear, rect);
-    f.render_widget(Block::default().style(Style::default().bg(theme::SURFACE_2)), rect);
+    f.render_widget(
+        Block::default().style(Style::default().bg(theme::SURFACE_2)),
+        rect,
+    );
     let phase = modal_phase(app);
 
     let (total, busy, installed_n) = app
@@ -697,17 +708,14 @@ fn draw_plugin_picker(f: &mut Frame, app: &mut App, area: Rect) {
     };
 
     const FILTER_ROWS: usize = 2;
-    let list_h = (inner.height as usize).saturating_sub(FILTER_ROWS + 1).max(1);
+    let list_h = (inner.height as usize)
+        .saturating_sub(FILTER_ROWS + 1)
+        .max(1);
     let vis_rows = list_h.max(1);
 
     let (filter, status, mut sel, mut start) = {
         let m = app.plugin_picker.as_ref().unwrap();
-        (
-            m.filter.clone(),
-            m.status.clone(),
-            m.sel,
-            m.scroll,
-        )
+        (m.filter.clone(), m.status.clone(), m.sel, m.scroll)
     };
 
     if let Some(m) = &mut app.plugin_picker {
@@ -789,7 +797,11 @@ fn draw_plugin_picker(f: &mut Frame, app: &mut App, area: Rect) {
 
     // Footer: description of selection + status
     if let Some(p) = picks.get(sel) {
-        let hint = format!("  {}  ·  {}", p.action_hint(), truncate(&p.description, col.saturating_sub(16)));
+        let hint = format!(
+            "  {}  ·  {}",
+            p.action_hint(),
+            truncate(&p.description, col.saturating_sub(16))
+        );
         // Pad to bottom-ish by letting Paragraph clip — push after a blank.
         lines.push(Line::default());
         lines.push(Line::from(Span::styled(
@@ -826,7 +838,10 @@ fn draw_login_key(f: &mut Frame, app: &App, area: Rect) {
     let want: u16 = if m.error.is_some() { 12 } else { 11 };
     let rect = fit_modal_rect(area, 64, want, 44, 8);
     f.render_widget(Clear, rect);
-    f.render_widget(Block::default().style(Style::default().bg(theme::SURFACE_2)), rect);
+    f.render_widget(
+        Block::default().style(Style::default().bg(theme::SURFACE_2)),
+        rect,
+    );
     let phase = modal_phase(app);
     let title = if m.fallback_key {
         format!(" ↻ {} · failover key ", provider.name)
@@ -862,13 +877,19 @@ fn draw_login_key(f: &mut Frame, app: &App, area: Rect) {
             Span::raw("  ".to_string()),
             Span::styled(
                 format!("{field:<field_w$}"),
-                Style::default().fg(theme::BLUE_100).bg(theme::SURFACE).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme::BLUE_100)
+                    .bg(theme::SURFACE)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::default(),
         Line::from(vec![
             Span::raw("  ".to_string()),
-            Span::styled(format!("{} chars", m.buf.chars().count()), theme::style_faint()),
+            Span::styled(
+                format!("{} chars", m.buf.chars().count()),
+                theme::style_faint(),
+            ),
             Span::styled(
                 if m.fallback_key {
                     "   ·   stored in ~/.nur/provider_keys.json".to_string()
@@ -1019,12 +1040,7 @@ fn draw_session_picker(f: &mut Frame, app: &mut App, area: Rect) {
 
     let mut lines: Vec<Line> = Vec::new();
     let mut drawn = 0usize;
-    for (i, r) in rows_snapshot
-        .iter()
-        .enumerate()
-        .skip(start)
-        .take(vis_rows)
-    {
+    for (i, r) in rows_snapshot.iter().enumerate().skip(start).take(vis_rows) {
         let selected = i == sel;
         let bg = if selected {
             theme::META_BLUE
@@ -1055,7 +1071,11 @@ fn draw_session_picker(f: &mut Frame, app: &mut App, area: Rect) {
         let mut prow: Vec<Span> = vec![Span::styled(
             marker.to_string(),
             Style::default()
-                .fg(if selected { theme::BG } else { theme::META_BLUE })
+                .fg(if selected {
+                    theme::BG
+                } else {
+                    theme::META_BLUE
+                })
                 .bg(bg)
                 .add_modifier(Modifier::BOLD),
         )];
@@ -1311,14 +1331,8 @@ fn constrain_rect(area: Rect, rect: Rect) -> Rect {
     let width = rect.width.min(max_w);
     let height = rect.height.min(max_h);
     Rect {
-        x: rect
-            .x
-            .max(area.x)
-            .min(area.right().saturating_sub(width)),
-        y: rect
-            .y
-            .max(area.y)
-            .min(area.bottom().saturating_sub(height)),
+        x: rect.x.max(area.x).min(area.right().saturating_sub(width)),
+        y: rect.y.max(area.y).min(area.bottom().saturating_sub(height)),
         width,
         height,
     }
@@ -1366,8 +1380,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
         app.wrap_cache_keys.clear();
         app.wrap_cache_parts.clear();
         app.wrap_cache_keys.resize(app.cells.len(), 0);
-        app.wrap_cache_parts
-            .resize_with(app.cells.len(), Vec::new);
+        app.wrap_cache_parts.resize_with(app.cells.len(), Vec::new);
     }
     // Grow if cells were appended without len mismatch (shouldn't happen).
     while app.wrap_cache_keys.len() < app.cells.len() {
@@ -1464,12 +1477,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
             };
             // Expand / collapse phrase on header (and "… · ▸ expands" body hint).
             let exp = {
-                let phrases = [
-                    "▸ expands",
-                    "▾ collapse",
-                    "click ▾ to collapse",
-                    "▸ expand",
-                ];
+                let phrases = ["▸ expands", "▾ collapse", "click ▾ to collapse", "▸ expand"];
                 let mut found = None;
                 for p in phrases {
                     if let Some(byte_i) = plain.find(p) {
@@ -1608,7 +1616,10 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
         height: body_h,
     };
     app.transcript_body = body_rect;
-    f.render_widget(Paragraph::new(visible).style(theme::style_canvas()), body_rect);
+    f.render_widget(
+        Paragraph::new(visible).style(theme::style_canvas()),
+        body_rect,
+    );
 
     if let Some(prompt) = sticky {
         let banner = Rect {
@@ -1793,7 +1804,12 @@ fn draw_scrollbar(f: &mut Frame, app: &App, track: Rect, top: u16, total: u16, v
     if track.height == 0 || track.width == 0 {
         return;
     }
-    let m = ScrollMetrics::new(total as usize, viewport as usize, top as usize, track.height);
+    let m = ScrollMetrics::new(
+        total as usize,
+        viewport as usize,
+        top as usize,
+        track.height,
+    );
     let scrollable = m.max_offset() > 0;
 
     // Thumb hue steps up as you interact: idle → hover → drag.
@@ -2155,17 +2171,13 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                 match ok {
                     Some(false) => {
                         if let Some(r) = result {
-                            let first =
-                                r.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+                            let first = r.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
                             let clean = strip_tool_error_prefix(first);
                             out.push(Line::from(vec![
                                 Span::raw("  ".to_string()),
                                 Span::styled("✗ ".to_string(), theme::style_error()),
                                 Span::styled(
-                                    truncate(
-                                        &format!("failed · {clean}"),
-                                        width.saturating_sub(6),
-                                    ),
+                                    truncate(&format!("failed · {clean}"), width.saturating_sub(6)),
                                     theme::style_error(),
                                 ),
                             ]));
@@ -2173,8 +2185,7 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                     }
                     Some(true) if *expanded => {
                         if let Some(r) = result {
-                            let first =
-                                r.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+                            let first = r.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
                             if !first.is_empty() {
                                 out.push(Line::from(vec![
                                     Span::raw("  ".to_string()),
@@ -2253,10 +2264,7 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                 ),
                 Span::styled(label.to_string(), Style::default().fg(theme::MUTED)),
                 Span::raw(" ".to_string()),
-                Span::styled(
-                    format!(" took {d} "),
-                    theme::style_turn_chip(*interrupted),
-                ),
+                Span::styled(format!(" took {d} "), theme::style_turn_chip(*interrupted)),
             ];
             // Always post thought timer at end of finished output.
             spans.push(Span::raw(" ".to_string()));
@@ -2304,10 +2312,7 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                     "queued follow-up  ".to_string(),
                     Style::default().fg(hue).add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(
-                    format!("{preview}{ellip}"),
-                    theme::style_status(),
-                ),
+                Span::styled(format!("{preview}{ellip}"), theme::style_status()),
             ]));
             out.push(Line::from(vec![
                 Span::raw("  ".to_string()),
@@ -2329,7 +2334,9 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                 Span::styled("  ·  ".to_string(), theme::style_faint()),
                 Span::styled(
                     "dismiss".to_string(),
-                    Style::default().fg(theme::MUTED).add_modifier(Modifier::UNDERLINED),
+                    Style::default()
+                        .fg(theme::MUTED)
+                        .add_modifier(Modifier::UNDERLINED),
                 ),
                 Span::styled(
                     "  ·  inject mid-turn, or cancel + restart".to_string(),
@@ -2481,7 +2488,14 @@ fn swarm_card(
     if tokens > 0 {
         chips.push((format!("Σ {} tok", fmt_tokens(tokens)), theme::MUTED));
     }
-    let title = clip_to(if live { "◈ swarm · live" } else { "◈ swarm" }, w);
+    let title = clip_to(
+        if live {
+            "◈ swarm · live"
+        } else {
+            "◈ swarm"
+        },
+        w,
+    );
     let mut header = vec![Span::styled(
         title.clone(),
         Style::default()
@@ -2635,11 +2649,7 @@ fn swarm_footer(overflow: usize, live: bool, compact: bool) -> String {
 }
 
 /// One agent as a single dense row, for terminals too narrow to frame a pane.
-fn compact_row(
-    run: &crate::agent::swarm::AgentRun,
-    width: usize,
-    tick: Duration,
-) -> Line<'static> {
+fn compact_row(run: &crate::agent::swarm::AgentRun, width: usize, tick: Duration) -> Line<'static> {
     use crate::agent::swarm::RunState;
     let running = run.state == RunState::Running;
     let (hue, glyph) = run_look(run.state, tick);
@@ -3001,11 +3011,7 @@ fn draw_hover_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
     #[cfg(feature = "image-peek")]
     if let Some(path) = &p.image {
         if let Some(proto) = app.image_protocol(path) {
-            f.render_stateful_widget(
-                ratatui_image::StatefulImage::default(),
-                inner,
-                proto,
-            );
+            f.render_stateful_widget(ratatui_image::StatefulImage::default(), inner, proto);
             app.peek_rows = inner.height;
             return Some((rect, close));
         }
@@ -3024,7 +3030,10 @@ fn draw_hover_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
         }
         if diff.len() > PEEK_MAX_ROWS {
             lines.push(Line::from(Span::styled(
-                format!("… +{} more · e expands in place", diff.len() - PEEK_MAX_ROWS),
+                format!(
+                    "… +{} more · e expands in place",
+                    diff.len() - PEEK_MAX_ROWS
+                ),
                 theme::style_faint(),
             )));
         }
@@ -3085,9 +3094,7 @@ fn draw_hover_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
         // and the wheel (over the box) drives the offset; it draws its own
         // scrollbar on the right edge.
         use ratatui::widgets::StatefulWidget;
-        let scroll = app
-            .peek_scroll
-            .min(total_rows.saturating_sub(inner.height));
+        let scroll = app.peek_scroll.min(total_rows.saturating_sub(inner.height));
         app.peek_scroll = scroll;
         let size = Size::new(inner.width.saturating_sub(1).max(1), total_rows);
         let mut sv = tui_scrollview::ScrollView::new(size);
@@ -3095,8 +3102,7 @@ fn draw_hover_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
             Paragraph::new(lines).style(bg),
             Rect::new(0, 0, size.width, size.height),
         );
-        let mut st =
-            tui_scrollview::ScrollViewState::with_offset(Position::new(0, scroll));
+        let mut st = tui_scrollview::ScrollViewState::with_offset(Position::new(0, scroll));
         StatefulWidget::render(sv, inner, f.buffer_mut(), &mut st);
     }
     Some((rect, close))
@@ -3110,7 +3116,10 @@ fn image_arg_path(args: &str) -> Option<String> {
         .extension()?
         .to_str()?
         .to_lowercase();
-    if matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp") {
+    if matches!(
+        ext.as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp"
+    ) {
         Some(p.to_string())
     } else {
         None
@@ -3119,7 +3128,12 @@ fn image_arg_path(args: &str) -> Option<String> {
 
 /// Per-character aurora shimmer for a run of text — a colour wave travels
 /// through it over time. `row_offset` phases successive rows into a diagonal.
-fn shimmer_spans(text: &str, elapsed: Duration, row_offset: usize, period_ms: u128) -> Vec<Span<'static>> {
+fn shimmer_spans(
+    text: &str,
+    elapsed: Duration,
+    row_offset: usize,
+    period_ms: u128,
+) -> Vec<Span<'static>> {
     let chars: Vec<char> = text.chars().collect();
     let span = chars.len().max(1);
     chars
@@ -3168,7 +3182,10 @@ fn turn_separator(width: usize, elapsed: Duration) -> Line<'static> {
         let d = i.abs_diff(head);
         let (ch, col) = match d {
             0 => ('◆', theme::aurora_cell(elapsed, i, inner, 1600)),
-            1 => ('◇', theme::dim(theme::aurora_cell(elapsed, i, inner, 1600), 0.35)),
+            1 => (
+                '◇',
+                theme::dim(theme::aurora_cell(elapsed, i, inner, 1600), 0.35),
+            ),
             _ => ('·', theme::BORDER),
         };
         spans.push(Span::styled(ch.to_string(), Style::default().fg(col)));
@@ -3207,7 +3224,12 @@ fn banner_lines(app: &App, out: &mut Vec<Line<'static>>) {
             Style::default().fg(theme::aurora_cell(elapsed, 0, 1, 1500)),
         ),
     ];
-    title_row.extend(shimmer_spans(&format!("{provider} loaded"), elapsed, 0, 2000));
+    title_row.extend(shimmer_spans(
+        &format!("{provider} loaded"),
+        elapsed,
+        0,
+        2000,
+    ));
     title_row.push(Span::styled("   ·   ".to_string(), theme::style_faint()));
     title_row.push(Span::styled(
         format!("v{}", env!("CARGO_PKG_VERSION")),
@@ -3249,7 +3271,9 @@ fn draw_busy_line(f: &mut Frame, app: &App, area: Rect) {
         // Distinct "stopping" chrome — not a happy thinking spinner.
         spans.push(Span::styled(
             "◼ ".to_string(),
-            Style::default().fg(theme::WARN).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::WARN)
+                .add_modifier(Modifier::BOLD),
         ));
         spans.push(Span::styled(
             format!("cancelling…  {live}  "),
@@ -3353,14 +3377,12 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
         let t = theme::ease_out((tick.as_millis() % cycle) as f64 / cycle as f64);
         let hx = ((t * inner_w as f64) as usize).min(inner_w.saturating_sub(1)) as u16;
         let buf = f.buffer_mut();
-        buf[(area.x + 1 + hx, area.y)]
-            .set_char('━')
-            .set_style(
-                Style::default()
-                    .fg(theme::BLUE_050)
-                    .bg(theme::SURFACE)
-                    .add_modifier(Modifier::BOLD),
-            );
+        buf[(area.x + 1 + hx, area.y)].set_char('━').set_style(
+            Style::default()
+                .fg(theme::BLUE_050)
+                .bg(theme::SURFACE)
+                .add_modifier(Modifier::BOLD),
+        );
     }
 
     let focused = app.approval.is_none() && app.picker.is_none() && app.login.is_none();
@@ -3561,10 +3583,7 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
         }
     }
 
-    f.render_widget(
-        Paragraph::new(lines).style(theme::style_surface()),
-        inner,
-    );
+    f.render_widget(Paragraph::new(lines).style(theme::style_surface()), inner);
 
     if focused && !app.input.is_empty() {
         let (vr, vc) = app.input.cursor_visual_pos(usable);
@@ -3720,9 +3739,8 @@ fn draw_statusline(f: &mut Frame, app: &App, area: Rect) {
     spans.push(Span::raw(" ".repeat(pad)));
     spans.extend(right);
     f.render_widget(
-        Paragraph::new(Line::from(spans)).style(
-            Style::default().bg(theme::SURFACE).fg(theme::MUTED),
-        ),
+        Paragraph::new(Line::from(spans))
+            .style(Style::default().bg(theme::SURFACE).fg(theme::MUTED)),
         area,
     );
 }
@@ -3751,10 +3769,7 @@ fn draw_palette(f: &mut Frame, app: &App, input_area: Rect) {
         .x
         .saturating_add(1)
         .min(area.right().saturating_sub(rect.width));
-    rect.y = input_area
-        .y
-        .saturating_sub(rect.height)
-        .max(area.y);
+    rect.y = input_area.y.saturating_sub(rect.height).max(area.y);
     f.render_widget(Clear, rect);
     f.render_widget(
         Block::default().style(Style::default().bg(theme::SURFACE_2)),
@@ -3927,11 +3942,7 @@ fn approval_preview(tool: &str, args: &str) -> Vec<String> {
                 .or_else(|| v.get("input"))
                 .and_then(|x| x.as_str())
                 .unwrap_or(args);
-            patch
-                .lines()
-                .take(16)
-                .map(|s| s.to_string())
-                .collect()
+            patch.lines().take(16).map(|s| s.to_string()).collect()
         }
         "bash" => {
             let cmd = v.get("command").and_then(|x| x.as_str()).unwrap_or(args);
@@ -3950,11 +3961,7 @@ fn mini_unified_diff(old: &str, new: &str, max_lines: usize) -> Vec<String> {
     let old_lines: Vec<&str> = old.lines().collect();
     let new_lines: Vec<&str> = new.lines().collect();
     let mut out = Vec::new();
-    out.push(format!(
-        "@@ -{} +{} @@",
-        old_lines.len(),
-        new_lines.len()
-    ));
+    out.push(format!("@@ -{} +{} @@", old_lines.len(), new_lines.len()));
     // Prefer showing the change region: first differing line onward.
     let mut i = 0usize;
     while i < old_lines.len() && i < new_lines.len() && old_lines[i] == new_lines[i] {
@@ -3977,7 +3984,10 @@ fn mini_unified_diff(old: &str, new: &str, max_lines: usize) -> Vec<String> {
 
 /// Tools whose transcript card renders a green/red diff.
 fn is_edit_tool(name: &str) -> bool {
-    matches!(name, "write_file" | "edit_file" | "multi_edit" | "apply_patch")
+    matches!(
+        name,
+        "write_file" | "edit_file" | "multi_edit" | "apply_patch"
+    )
 }
 
 /// Full edit/write content for an **expanded** transcript card (vs short
@@ -4101,7 +4111,9 @@ fn diff_line(l: &str, indent: usize, width: usize) -> Line<'static> {
                 Span::styled("▎".to_string(), Style::default().fg(theme::SUCCESS)),
                 Span::styled(
                     format!("+{text}"),
-                    Style::default().fg(theme::DIFF_ADD_FG).bg(theme::DIFF_ADD_BG),
+                    Style::default()
+                        .fg(theme::DIFF_ADD_FG)
+                        .bg(theme::DIFF_ADD_BG),
                 ),
             ])
         }
@@ -4113,7 +4125,9 @@ fn diff_line(l: &str, indent: usize, width: usize) -> Line<'static> {
                 Span::styled("▎".to_string(), Style::default().fg(theme::ERROR)),
                 Span::styled(
                     format!("-{text}"),
-                    Style::default().fg(theme::DIFF_DEL_FG).bg(theme::DIFF_DEL_BG),
+                    Style::default()
+                        .fg(theme::DIFF_DEL_FG)
+                        .bg(theme::DIFF_DEL_BG),
                 ),
             ])
         }
@@ -4121,13 +4135,18 @@ fn diff_line(l: &str, indent: usize, width: usize) -> Line<'static> {
             Span::raw(pad),
             Span::styled(
                 truncate(l, width.saturating_sub(indent)),
-                Style::default().fg(theme::DIFF_META).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme::DIFF_META)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]),
         DiffKind::Context => Line::from(vec![
             Span::raw(pad),
             Span::styled("  ".to_string(), Style::default()),
-            Span::styled(truncate(l, width.saturating_sub(indent + 2)), theme::style_faint()),
+            Span::styled(
+                truncate(l, width.saturating_sub(indent + 2)),
+                theme::style_faint(),
+            ),
         ]),
     }
 }
@@ -4277,7 +4296,9 @@ pub fn tool_file_peek_body(name: &str, args: &str, result: Option<&str>) -> Stri
             let path = v.get("path").and_then(|x| x.as_str()).unwrap_or("?");
             let old = v.get("old_string").and_then(|x| x.as_str()).unwrap_or("");
             let new = v.get("new_string").and_then(|x| x.as_str()).unwrap_or("");
-            s.push_str(&format!("path: {path}\n--- old ---\n{old}\n--- new ---\n{new}\n"));
+            s.push_str(&format!(
+                "path: {path}\n--- old ---\n{old}\n--- new ---\n{new}\n"
+            ));
         }
         "multi_edit" => {
             let path = v.get("path").and_then(|x| x.as_str()).unwrap_or("?");
@@ -4287,7 +4308,10 @@ pub fn tool_file_peek_body(name: &str, args: &str, result: Option<&str>) -> Stri
                 for (i, e) in edits.iter().enumerate() {
                     let old = e.get("old_string").and_then(|x| x.as_str()).unwrap_or("");
                     let new = e.get("new_string").and_then(|x| x.as_str()).unwrap_or("");
-                    s.push_str(&format!("\n── edit {} ──\n- old:\n{old}\n+ new:\n{new}\n", i + 1));
+                    s.push_str(&format!(
+                        "\n── edit {} ──\n- old:\n{old}\n+ new:\n{new}\n",
+                        i + 1
+                    ));
                 }
             }
         }
@@ -4345,10 +4369,7 @@ fn summarize_args(tool: &str, args: &str) -> String {
 
 /// Last two path components — enough to recognize a repo without eating the row.
 fn short_path(p: &str) -> String {
-    let parts: Vec<&str> = p
-        .split(['\\', '/'])
-        .filter(|s| !s.is_empty())
-        .collect();
+    let parts: Vec<&str> = p.split(['\\', '/']).filter(|s| !s.is_empty()).collect();
     match parts.len() {
         0 => p.to_string(),
         1 => parts[0].to_string(),
@@ -4429,14 +4450,14 @@ fn draw_ctx_menu(f: &mut Frame, app: &mut App) {
                 Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!("{label:<width$}", width = inner.width.saturating_sub(6) as usize),
+                format!(
+                    "{label:<width$}",
+                    width = inner.width.saturating_sub(6) as usize
+                ),
                 Style::default().fg(fg).bg(bg),
             ),
         ]);
-        f.render_widget(
-            Paragraph::new(line).style(Style::default().bg(bg)),
-            ar,
-        );
+        f.render_widget(Paragraph::new(line).style(Style::default().bg(bg)), ar);
         actions.push((i, ar));
     }
 
@@ -4565,7 +4586,10 @@ mod tests {
         seed_swarm(12);
         let rows = swarm_rows(160, true, false);
         let body = rows.join("\n");
-        assert!(body.contains("+4 more"), "overflow must be disclosed:\n{body}");
+        assert!(
+            body.contains("+4 more"),
+            "overflow must be disclosed:\n{body}"
+        );
         // Every still-running agent survives the truncation to MAX_PANES.
         let running = crate::agent::swarm::running_count();
         // Panes sit side by side on shared rows, so count glyphs, not rows.
@@ -4597,10 +4621,8 @@ mod tests {
         );
         assert!(
             detailed.iter().any(|r| r.contains("read_file"))
-                && detailed.iter().filter(|r| r.contains("read_file")).count() > plain
-                    .iter()
-                    .filter(|r| r.contains("read_file"))
-                    .count(),
+                && detailed.iter().filter(|r| r.contains("read_file")).count()
+                    > plain.iter().filter(|r| r.contains("read_file")).count(),
             "detail surfaces the status line as well as the tool"
         );
     }
@@ -4714,8 +4736,14 @@ mod tests {
         assert!(matches!(diff_kind("+add"), DiffKind::Add));
         assert!(matches!(diff_kind("-del"), DiffKind::Del));
         // Unified-diff file markers are NOT add/del rows.
-        assert!(matches!(diff_kind("+++ b/x"), DiffKind::Meta | DiffKind::Context));
-        assert!(matches!(diff_kind("--- a/x"), DiffKind::Meta | DiffKind::Context));
+        assert!(matches!(
+            diff_kind("+++ b/x"),
+            DiffKind::Meta | DiffKind::Context
+        ));
+        assert!(matches!(
+            diff_kind("--- a/x"),
+            DiffKind::Meta | DiffKind::Context
+        ));
         assert!(matches!(diff_kind("@@ -1 +1 @@"), DiffKind::Meta));
     }
 

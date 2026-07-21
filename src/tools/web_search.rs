@@ -74,9 +74,10 @@ struct SearchResult {
 
 /// Parse DuckDuckGo html endpoint results (`result__a` links, `result__snippet`).
 fn parse_ddg_html(html: &str, max: usize) -> Vec<SearchResult> {
-    let link_re =
-        regex::Regex::new(r#"<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>"#)
-            .unwrap();
+    let link_re = regex::Regex::new(
+        r#"<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>"#,
+    )
+    .unwrap();
     let snip_re =
         regex::Regex::new(r#"class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>|class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</td>"#)
             .unwrap();

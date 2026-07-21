@@ -30,6 +30,13 @@ pub fn memory_prompt_excerpt(max_chars: usize) -> String {
     if m.trim().is_empty() || m.contains("(empty memory)") {
         return String::new();
     }
-    let excerpt: String = m.chars().rev().take(max_chars).collect::<String>().chars().rev().collect();
+    let excerpt: String = m
+        .chars()
+        .rev()
+        .take(max_chars)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
     format!("\n# Persistent memory (excerpt from ~/.nur/memory.md)\n{excerpt}\n")
 }

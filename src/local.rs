@@ -106,7 +106,14 @@ pub fn resolve_selector(selector: Option<&str>, ram_gb: u64) -> (String, String)
 pub fn pick_release_asset(assets: &[String], os: &str, arch: &str) -> Option<String> {
     let (os_tag, arch_tag): (&[&str], &[&str]) = match os {
         "windows" => (&["win"], &["x64", "amd64"]),
-        "macos" => (&["macos", "osx"], if arch == "aarch64" { &["arm64"] } else { &["x64"] }),
+        "macos" => (
+            &["macos", "osx"],
+            if arch == "aarch64" {
+                &["arm64"]
+            } else {
+                &["x64"]
+            },
+        ),
         _ => (&["ubuntu", "linux"], &["x64", "amd64"]),
     };
     let matches = |name: &str| -> bool {
@@ -119,7 +126,11 @@ pub fn pick_release_asset(assets: &[String], os: &str, arch: &str) -> Option<Str
     assets
         .iter()
         .find(|a| matches(a) && a.to_ascii_lowercase().contains("cpu"))
-        .or_else(|| assets.iter().find(|a| matches(a) && a.to_ascii_lowercase().contains("bin")))
+        .or_else(|| {
+            assets
+                .iter()
+                .find(|a| matches(a) && a.to_ascii_lowercase().contains("bin"))
+        })
         .or_else(|| assets.iter().find(|a| matches(a)))
         .cloned()
 }
@@ -161,10 +172,16 @@ fn server_exe_name() -> &'static str {
 fn detect_ram_gb() -> u64 {
     #[cfg(windows)]
     let out = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-Command", "(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory"])
+        .args([
+            "-NoProfile",
+            "-Command",
+            "(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory",
+        ])
         .output();
     #[cfg(target_os = "macos")]
-    let out = std::process::Command::new("sysctl").args(["-n", "hw.memsize"]).output();
+    let out = std::process::Command::new("sysctl")
+        .args(["-n", "hw.memsize"])
+        .output();
     #[cfg(all(unix, not(target_os = "macos")))]
     let out = std::process::Command::new("sh")
         .args(["-c", "awk '/MemTotal/ {print $2 * 1024}' /proc/meminfo"])
@@ -420,7 +437,11 @@ fn extract_zip(zip: &Path, into: &Path) -> Result<()> {
     let status = std::process::Command::new("unzip")
         .args(["-o", &z, "-d", &d])
         .status()
-        .or_else(|_| std::process::Command::new("tar").args(["-xf", &z, "-C", &d]).status());
+        .or_else(|_| {
+            std::process::Command::new("tar")
+                .args(["-xf", &z, "-C", &d])
+                .status()
+        });
 
     match status {
         Ok(s) if s.success() => Ok(()),
@@ -480,7 +501,9 @@ async fn download_to(url: &str, dest: &Path) -> Result<()> {
             .await
             .map_err(|e| MuseError::Other(e.to_string()))?;
     }
-    f.flush().await.map_err(|e| MuseError::Other(e.to_string()))?;
+    f.flush()
+        .await
+        .map_err(|e| MuseError::Other(e.to_string()))?;
     drop(f);
     tokio::fs::rename(&tmp, dest)
         .await
@@ -623,7 +646,11 @@ mod tests {
 
     #[test]
     fn server_state_round_trips() {
-        let st = ServerState { pid: 42, port: 8080, model_file: "m.gguf".into() };
+        let st = ServerState {
+            pid: 42,
+            port: 8080,
+            model_file: "m.gguf".into(),
+        };
         let json = serde_json::to_string(&st).unwrap();
         let back: ServerState = serde_json::from_str(&json).unwrap();
         assert_eq!(back.pid, 42);

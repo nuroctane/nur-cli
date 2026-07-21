@@ -63,11 +63,11 @@ fn meta_palette(mut style: Style) -> Style {
         style.fg = Some(theme::MD_H1);
     }
     style.fg = match style.fg {
-        Some(Color::Cyan) => Some(theme::MD_H2),           // H2 / H3
-        Some(Color::LightCyan) => Some(theme::MD_H3),      // H4–H6
-        Some(Color::Green) => Some(theme::MD_QUOTE),       // blockquotes
-        Some(Color::Blue) => Some(theme::MD_LINK),         // links
-        Some(Color::LightBlue) => Some(theme::MD_LIST),    // list markers
+        Some(Color::Cyan) => Some(theme::MD_H2),        // H2 / H3
+        Some(Color::LightCyan) => Some(theme::MD_H3),   // H4–H6
+        Some(Color::Green) => Some(theme::MD_QUOTE),    // blockquotes
+        Some(Color::Blue) => Some(theme::MD_LINK),      // links
+        Some(Color::LightBlue) => Some(theme::MD_LIST), // list markers
         Some(Color::Yellow) | Some(Color::LightYellow) => Some(theme::AMBER),
         Some(Color::Magenta) | Some(Color::LightMagenta) => Some(theme::LAVENDER),
         Some(Color::Red) | Some(Color::LightRed) => Some(theme::ERROR),

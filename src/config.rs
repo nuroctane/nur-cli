@@ -24,7 +24,11 @@ pub fn model_display_name(model_id: &str) -> String {
         .map(|p| {
             // Keep version-like tokens (1.1, v2, 70b) mostly as-is.
             let first = p.chars().next().unwrap_or(' ');
-            if first.is_ascii_digit() || (p.len() > 1 && first == 'v' && p[1..].chars().all(|c| c.is_ascii_digit() || c == '.')) {
+            if first.is_ascii_digit()
+                || (p.len() > 1
+                    && first == 'v'
+                    && p[1..].chars().all(|c| c.is_ascii_digit() || c == '.'))
+            {
                 p.to_string()
             } else {
                 let mut chars = p.chars();
@@ -47,7 +51,21 @@ pub const PRICE_OUTPUT_PER_MTOK: f64 = 4.25;
 /// Bumped when defaults change in a way that must rewrite existing config.toml.
 /// Schema ≥3: agent rounds are unlimited (`max_turns = 0`) until the user sets
 /// a ceiling via `/budget` / `/turns` (or config).
-pub const CONFIG_SCHEMA: u32 = 3;
+pub const CONFIG_SCHEMA: u32 = 5;
+
+const RETIRED_PROVIDER_IDS: &[&str] = &[
+    "anyscale",
+    "kluster",
+    "lepton",
+    "octoai",
+    "omniroute",
+    "targon",
+    "unify",
+];
+
+fn is_retired_provider(id: &str) -> bool {
+    RETIRED_PROVIDER_IDS.contains(&id)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -230,7 +248,38 @@ pub fn migrate_config(cfg: &mut Config) -> bool {
     if cfg.config_schema >= CONFIG_SCHEMA {
         return false;
     }
-    cfg.max_turns = 0;
+    if cfg.config_schema < 3 {
+        cfg.max_turns = 0;
+    }
+    if cfg.config_schema < 4 {
+        if cfg.provider == "antigravity" {
+            cfg.provider = "google".into();
+        }
+        for id in &mut cfg.fallback_providers {
+            if id == "antigravity" {
+                *id = "google".into();
+            }
+        }
+        for id in &mut cfg.fusion_panel {
+            if id == "antigravity" {
+                *id = "google".into();
+            }
+        }
+        if let Some(value) = cfg.provider_privacy.remove("antigravity") {
+            cfg.provider_privacy.entry("google".into()).or_insert(value);
+        }
+    }
+    if cfg.config_schema < 5 {
+        if is_retired_provider(&cfg.provider) {
+            cfg.provider = default_provider_id();
+            cfg.base_url = default_base_url();
+            cfg.model = default_model();
+        }
+        cfg.fallback_providers.retain(|id| !is_retired_provider(id));
+        cfg.fusion_panel.retain(|id| !is_retired_provider(id));
+        cfg.provider_privacy
+            .retain(|id, _| !is_retired_provider(id));
+    }
     cfg.config_schema = CONFIG_SCHEMA;
     true
 }
@@ -517,6 +566,50 @@ mod tests {
     }
 
     #[test]
+    fn migrate_normalizes_the_legacy_antigravity_alias_without_resetting_limits() {
+        let mut cfg = Config::default();
+        cfg.config_schema = 3;
+        cfg.provider = "antigravity".into();
+        cfg.max_turns = 12;
+        cfg.fallback_providers = vec!["openai".into(), "antigravity".into()];
+        cfg.fusion_panel = vec!["antigravity".into()];
+        cfg.provider_privacy
+            .insert("antigravity".into(), "standard".into());
+
+        assert!(migrate_config(&mut cfg));
+        assert_eq!(cfg.provider, "google");
+        assert_eq!(cfg.max_turns, 12, "a user-set limit must survive schema 4");
+        assert_eq!(cfg.fallback_providers, ["openai", "google"]);
+        assert_eq!(cfg.fusion_panel, ["google"]);
+        assert_eq!(
+            cfg.provider_privacy.get("google").map(String::as_str),
+            Some("standard")
+        );
+        assert!(!cfg.provider_privacy.contains_key("antigravity"));
+    }
+
+    #[test]
+    fn migrate_removes_retired_catalog_providers() {
+        let mut cfg = Config::default();
+        cfg.config_schema = 4;
+        cfg.provider = "anyscale".into();
+        cfg.base_url = "https://api.endpoints.anyscale.com/v1".into();
+        cfg.model = "obsolete-model".into();
+        cfg.fallback_providers = vec!["openai".into(), "octoai".into(), "unify".into()];
+        cfg.fusion_panel = vec!["kluster".into(), "google".into()];
+        cfg.provider_privacy
+            .insert("omniroute".into(), "standard".into());
+
+        assert!(migrate_config(&mut cfg));
+        assert_eq!(cfg.provider, "meta");
+        assert_eq!(cfg.base_url, DEFAULT_BASE_URL);
+        assert_eq!(cfg.model, DEFAULT_MODEL);
+        assert_eq!(cfg.fallback_providers, ["openai"]);
+        assert_eq!(cfg.fusion_panel, ["google"]);
+        assert!(!cfg.provider_privacy.contains_key("omniroute"));
+    }
+
+    #[test]
     fn migrate_fills_missing_files_without_overwrite() {
         let root = unique_tmp("migrate");
         let legacy_muse = root.join(".muse");
@@ -525,7 +618,11 @@ mod tests {
         fs::create_dir_all(legacy_muse.join("sessions")).unwrap();
         fs::create_dir_all(&legacy_meta).unwrap();
         fs::create_dir_all(&nur).unwrap();
-        fs::write(legacy_muse.join("auth.json"), r#"{"api_key":"k","source":"t"}"#).unwrap();
+        fs::write(
+            legacy_muse.join("auth.json"),
+            r#"{"api_key":"k","source":"t"}"#,
+        )
+        .unwrap();
         fs::write(legacy_meta.join("memory.md"), "from-meta\n").unwrap();
         fs::write(legacy_muse.join("sessions").join("abc.json"), "{}").unwrap();
         // Pre-existing config in nur must not be overwritten
@@ -534,11 +631,9 @@ mod tests {
         gap_fill_from(&legacy_meta, &nur);
         gap_fill_from(&legacy_muse, &nur);
 
-        assert!(
-            fs::read_to_string(nur.join("config.toml"))
-                .unwrap()
-                .contains("keep-me")
-        );
+        assert!(fs::read_to_string(nur.join("config.toml"))
+            .unwrap()
+            .contains("keep-me"));
         assert!(nur.join("auth.json").is_file());
         assert!(nur.join("memory.md").is_file());
         assert!(nur.join("sessions").join("abc.json").is_file());
@@ -576,8 +671,13 @@ impl Config {
                 self.context_window
             )));
         }
-        if self.base_url.is_empty() || !(self.base_url.starts_with("http://") || self.base_url.starts_with("https://")) {
-            return Err(MuseError::Config(format!("invalid base_url '{}'", self.base_url)));
+        if self.base_url.is_empty()
+            || !(self.base_url.starts_with("http://") || self.base_url.starts_with("https://"))
+        {
+            return Err(MuseError::Config(format!(
+                "invalid base_url '{}'",
+                self.base_url
+            )));
         }
         if let Some(c) = self.max_session_cost_usd {
             if !c.is_finite() || c < 0.0 {

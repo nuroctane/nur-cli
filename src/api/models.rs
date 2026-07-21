@@ -90,7 +90,7 @@ pub fn fetch_model_ids(
                         last_err = "provider returned no models for this credential".into();
                         break;
                     }
-                    if matches!(pid, "google" | "antigravity") {
+                    if pid == "google" {
                         for id in &mut ids {
                             if let Some(stripped) = id.strip_prefix("models/") {
                                 *id = stripped.to_string();
@@ -102,11 +102,7 @@ pub fn fetch_model_ids(
                     // Live list only — do not merge static catalogs.
                     return Ok(ids);
                 }
-                Err(error)
-                    if error.status == Some(401)
-                        && oauth.is_some()
-                        && !oauth_refreshed =>
-                {
+                Err(error) if error.status == Some(401) && oauth.is_some() && !oauth_refreshed => {
                     oauth_refreshed = true;
                     if crate::auth::force_refresh_oauth(pid).unwrap_or(false) {
                         if let Ok(Some(token)) = crate::auth::resolve_oauth_access_token(pid) {
@@ -169,7 +165,7 @@ fn model_list_urls(base_url: &str, provider_id: &str, is_oauth: bool) -> Vec<Str
         "kimi" if is_oauth => {
             urls.push(format!("{}/models", crate::providers::KIMI_CODE_BASE_URL));
         }
-        "antigravity" | "google" if is_oauth => {
+        "google" if is_oauth => {
             // Google's OAuth quickstart documents this endpoint; the
             // OpenAI-compatible base does not consistently expose /models.
             urls.push("https://generativelanguage.googleapis.com/v1/models".into());
@@ -292,7 +288,7 @@ fn fetch_once(
                     req = req.header("X-OpenAI-Fedramp", "true");
                 }
             }
-            "antigravity" | "google" if oauth.is_some() => {
+            "google" if oauth.is_some() => {
                 req = req.bearer_auth(api_key);
                 if let Some(project_id) = oauth.and_then(|context| context.project_id.as_deref()) {
                     req = req.header("x-goog-user-project", project_id);
@@ -438,7 +434,10 @@ pub fn parse_model_ids(body: &str) -> std::result::Result<Vec<String>, String> {
             let mut ids = Vec::new();
             for (key, item) in models {
                 let info = item.get("info").unwrap_or(item);
-                if info.get("supported_in_api").and_then(|value| value.as_bool()) == Some(false)
+                if info
+                    .get("supported_in_api")
+                    .and_then(|value| value.as_bool())
+                    == Some(false)
                     || info.get("hidden").and_then(|value| value.as_bool()) == Some(true)
                 {
                     continue;
@@ -531,10 +530,7 @@ mod tests {
         assert_eq!(urls.len(), 1);
         assert!(urls[0].starts_with(crate::providers::OPENAI_OAUTH_BASE_URL));
         assert!(urls[0].contains("client_version="));
-        assert!(!urls[0].contains(&format!(
-            "client_version={}",
-            env!("CARGO_PKG_VERSION")
-        )));
+        assert!(!urls[0].contains(&format!("client_version={}", env!("CARGO_PKG_VERSION"))));
     }
 
     #[test]
@@ -577,12 +573,8 @@ mod tests {
     #[test]
     fn no_soft_catalog_when_network_unreachable() {
         // Garbage host: must fail with live error, not invent a soft list.
-        let err = fetch_model_ids(
-            "https://127.0.0.1:1",
-            "sk-test-not-real",
-            Some("openai"),
-        )
-        .unwrap_err();
+        let err =
+            fetch_model_ids("https://127.0.0.1:1", "sk-test-not-real", Some("openai")).unwrap_err();
         assert!(
             !err.contains("grok-4"),
             "must not inject xAI soft catalog: {err}"

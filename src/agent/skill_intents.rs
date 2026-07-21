@@ -112,7 +112,6 @@ pub fn stats() -> (usize, usize) {
 mod tests {
     use super::*;
     use crate::agent::skills::{load_skills, normalize_intent_text};
-    use std::path::PathBuf;
 
     #[test]
     fn expanded_triggers_cover_fable() {
@@ -121,7 +120,10 @@ mod tests {
         // Should find fable-method from expanded triggers
         let user = normalize_intent_text("please use the fable method for this refactor");
         let found = find_by_expanded_triggers(&user, &skills);
-        assert!(found.is_some(), "should find fable-method via expanded triggers");
+        assert!(
+            found.is_some(),
+            "should find fable-method via expanded triggers"
+        );
         assert_eq!(found.unwrap().name, "fable-method");
     }
 
@@ -138,13 +140,20 @@ mod tests {
         // So we test with more specific phrase
         let user2 = normalize_intent_text("codebase scan this repo");
         let found2 = find_by_expanded_triggers(&user2, &skills);
-        assert!(found2.is_some() || found.is_some(), "should find scan via expanded");
+        assert!(
+            found2.is_some() || found.is_some(),
+            "should find scan via expanded"
+        );
     }
 
     #[test]
     fn expanded_index_comprehensive() {
         let (total, triggers) = stats();
         assert!(total >= 700, "should have 700+ skills, got {}", total);
-        assert!(triggers >= 1000, "should have 1000+ triggers, got {}", triggers);
+        assert!(
+            triggers >= 1000,
+            "should have 1000+ triggers, got {}",
+            triggers
+        );
     }
 }

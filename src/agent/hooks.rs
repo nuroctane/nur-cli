@@ -41,13 +41,25 @@ impl HooksConfig {
     }
 
     pub fn is_active(&self) -> bool {
-        self.pre_tool.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false)
-            || self.post_tool.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false)
+        self.pre_tool
+            .as_ref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false)
+            || self
+                .post_tool
+                .as_ref()
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false)
     }
 
     /// Run pre-tool hook. Ok(()) to proceed; Err blocks the tool.
     pub fn run_pre(&self, tool: &str, args_json: &str, cwd: &Path, session_id: &str) -> Result<()> {
-        let Some(cmd) = self.pre_tool.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) else {
+        let Some(cmd) = self
+            .pre_tool
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        else {
             return Ok(());
         };
         match run_hook(cmd, tool, args_json, cwd, session_id, self.timeout_ms) {
@@ -60,7 +72,12 @@ impl HooksConfig {
     }
 
     pub fn run_post(&self, tool: &str, args_json: &str, cwd: &Path, session_id: &str) {
-        let Some(cmd) = self.post_tool.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) else {
+        let Some(cmd) = self
+            .post_tool
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        else {
             return;
         };
         let _ = run_hook(cmd, tool, args_json, cwd, session_id, self.timeout_ms);

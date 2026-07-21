@@ -93,10 +93,7 @@ impl Tool for Plur {
         })?;
 
         let action = arg_str(args, "action").unwrap_or_else(|_| "status".into());
-        let fast = args
-            .get("fast")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
+        let fast = args.get("fast").and_then(|v| v.as_bool()).unwrap_or(true);
 
         let mut argv: Vec<String> = Vec::new();
         match action.as_str() {
@@ -137,8 +134,7 @@ impl Tool for Plur {
                 argv.push("--json".into());
             }
             "capture" => {
-                let summary = arg_str(args, "summary")
-                    .or_else(|_| arg_str(args, "statement"))?;
+                let summary = arg_str(args, "summary").or_else(|_| arg_str(args, "statement"))?;
                 argv.push("capture".into());
                 argv.push(summary);
             }
@@ -161,8 +157,7 @@ impl Tool for Plur {
                 argv.push(id);
             }
             "ingest" => {
-                let content = arg_str(args, "content")
-                    .or_else(|_| arg_str(args, "statement"))?;
+                let content = arg_str(args, "content").or_else(|_| arg_str(args, "statement"))?;
                 argv.push("ingest".into());
                 argv.push(content);
             }
@@ -187,8 +182,12 @@ mod tests {
         assert!(is_read_only_action(r#"{"action":"status"}"#));
         assert!(is_read_only_action(r#"{"action":"recall","query":"x"}"#));
         assert!(is_read_only_action(r#"{"action":"inject","task":"x"}"#));
-        assert!(!is_read_only_action(r#"{"action":"learn","statement":"x"}"#));
-        assert!(!is_read_only_action(r#"{"action":"capture","summary":"x"}"#));
+        assert!(!is_read_only_action(
+            r#"{"action":"learn","statement":"x"}"#
+        ));
+        assert!(!is_read_only_action(
+            r#"{"action":"capture","summary":"x"}"#
+        ));
         assert!(!is_read_only_action(r#"{"action":"forget","id":"ENG-1"}"#));
     }
 }

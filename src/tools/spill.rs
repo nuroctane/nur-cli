@@ -41,10 +41,7 @@ pub fn maybe_spill(session_id: &str, tool: &str, body: String, max_chars: usize)
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect();
-    let sid: String = session_id
-        .chars()
-        .take(8)
-        .collect();
+    let sid: String = session_id.chars().take(8).collect();
     let path = dir.join(format!("{sid}_{safe_tool}_{ts}.txt"));
     if atomic_write(&path, body.as_bytes()).is_err() {
         return truncate_only(&body, max_chars);
@@ -67,9 +64,7 @@ fn truncate_only(body: &str, max_chars: usize) -> String {
     let total = body.chars().count();
     let keep = max_chars.saturating_sub(80).max(200);
     let preview: String = body.chars().take(keep).collect();
-    format!(
-        "{preview}\n\n… [truncated {total} → {keep} chars; spill failed or disabled]"
-    )
+    format!("{preview}\n\n… [truncated {total} → {keep} chars; spill failed or disabled]")
 }
 
 #[cfg(test)]

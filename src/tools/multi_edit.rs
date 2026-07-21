@@ -66,9 +66,7 @@ impl Tool for MultiEdit {
                 .unwrap_or(false);
             let count = content.matches(old).count();
             if count == 0 {
-                return Err(MuseError::Tool(format!(
-                    "edits[{i}]: old_string not found"
-                )));
+                return Err(MuseError::Tool(format!("edits[{i}]: old_string not found")));
             }
             if count > 1 && !replace_all {
                 return Err(MuseError::Tool(format!(

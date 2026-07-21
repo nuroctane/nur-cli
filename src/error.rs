@@ -11,10 +11,10 @@ fn api_message(status: u16, message: &str) -> String {
         return message.to_string();
     }
     match status {
-        401 | 403 => "no details returned — the key was rejected. Check it with /login (or the provider's dashboard); an expired or wrong-scope key looks like this.".into(),
-        404 => "no details returned — endpoint or model not found. Check the base URL and model id with /model.".into(),
-        429 => "no details returned — rate limited. Wait and retry, or switch model/provider.".into(),
-        s if s >= 500 => "no details returned — the provider failed on its side. Retry shortly.".into(),
+        401 | 403 => "no details returned - the key was rejected. Check it with /login (or the provider's dashboard); an expired or wrong-scope key looks like this.".into(),
+        404 => "no details returned - endpoint or model not found. Check the base URL and model id with /model.".into(),
+        429 => "no details returned - rate limited. Wait and retry, or switch model/provider.".into(),
+        s if s >= 500 => "no details returned - the provider failed on its side. Retry shortly.".into(),
         _ => "no details returned by the provider".into(),
     }
 }
@@ -78,14 +78,20 @@ mod tests {
     #[test]
     fn a_bodyless_failure_still_says_something_useful() {
         // Poolside's platform answers a bad key with 403 and no body.
-        let e = MuseError::Api { status: 403, message: String::new() };
+        let e = MuseError::Api {
+            status: 403,
+            message: String::new(),
+        };
         let s = e.to_string();
         assert!(s.starts_with("API error (403):"));
         assert!(s.contains("key was rejected"), "got: {s}");
         assert!(s.contains("/login"), "must say how to fix it: {s}");
 
         // Whitespace is as empty as empty.
-        let e = MuseError::Api { status: 429, message: "   \n".into() };
+        let e = MuseError::Api {
+            status: 429,
+            message: "   \n".into(),
+        };
         assert!(e.to_string().contains("rate limited"));
 
         assert!(api_message(503, "").contains("provider failed on its side"));

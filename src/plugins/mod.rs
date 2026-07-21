@@ -9,9 +9,8 @@ mod registry;
 
 pub use catalog::{by_id, catalog, category_rank, CATEGORIES};
 pub use registry::{
-    ensure_default_plugins, install_plugin, is_enabled, is_installed, list_installed, plugins_home, set_enabled,
-    DEFAULT_PLUGINS,
-    uninstall_plugin, Registry,
+    ensure_default_plugins, install_plugin, is_enabled, is_installed, list_installed, plugins_home,
+    set_enabled, uninstall_plugin, Registry, DEFAULT_PLUGINS,
 };
 
 use catalog::PluginEntry as Entry;
@@ -117,7 +116,9 @@ pub fn enabled_skill_roots() -> Vec<std::path::PathBuf> {
 pub fn quick_status() -> String {
     let rows = marketplace_rows();
     let on_disk = list_installed();
-    let installed = on_disk.len().max(rows.iter().filter(|r| r.installed).count());
+    let installed = on_disk
+        .len()
+        .max(rows.iter().filter(|r| r.installed).count());
     let enabled = on_disk
         .iter()
         .filter(|p| p.enabled)

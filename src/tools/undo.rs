@@ -21,7 +21,13 @@ struct Checkpoint {
 fn session_dir(session_id: &str) -> PathBuf {
     let safe: String = session_id
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     muse_home().join("undo").join(safe)
 }
@@ -73,7 +79,11 @@ fn record_in(dir: &Path, abs_path: &Path) {
         path: abs_path.to_string_lossy().to_string(),
         prior,
     };
-    let n = read_indices(dir).into_iter().max().map(|m| m + 1).unwrap_or(1);
+    let n = read_indices(dir)
+        .into_iter()
+        .max()
+        .map(|m| m + 1)
+        .unwrap_or(1);
     if let Ok(json) = serde_json::to_string(&cp) {
         let _ = atomic_write(&dir.join(format!("{n:06}.json")), json.as_bytes());
     }

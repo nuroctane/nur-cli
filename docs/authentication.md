@@ -16,12 +16,11 @@ The active provider, endpoint, and default model are stored in
 | **xAI Grok** | `XAI_API_KEY` | Device code / Grok CLI session (cli-chat-proxy) |
 | **Kimi Code (kimi.com)** | `KIMI_API_KEY` | Device code / Kimi CLI session |
 | **Anthropic Claude** | `ANTHROPIC_API_KEY` | Claude browser OAuth (`claude.com/cai/…`) or import `~/.claude` |
-| **Google Gemini** | `GEMINI_API_KEY` | `gcloud auth login` (same ADC path as Antigravity) |
-| **GitHub Copilot** | `GITHUB_TOKEN` | `gh auth login` (subscription token) |
-| **Google Antigravity** | Gemini key fallback | `gcloud auth login` browser SSO |
-| **Hugging Face** | `HF_TOKEN` | Device code (`hf auth login` style) |
+| **Google Gemini** | `GEMINI_API_KEY` | Google Cloud ADC via `gcloud auth login --update-adc` |
+| **GitHub Copilot** | `COPILOT_GITHUB_TOKEN` (fine-grained PAT with Copilot Requests) | `gh auth login` (subscription token) |
+| **Hugging Face** | `HF_TOKEN` | - |
 | **Azure OpenAI** | `AZURE_OPENAI_API_KEY` | `az login` / Entra device code |
-| **AWS Bedrock** | gateway / bearer | `aws sso login` |
+| **Amazon Bedrock** | `AWS_BEARER_TOKEN_BEDROCK` | - (AWS SSO credentials require SigV4, which this route does not implement) |
 | **GitHub Models** | GitHub PAT (`models:read`) | `gh auth login` browser SSO |
 | Gemini, Groq, … | Vendor dashboard | - |
 | **Poolside** | `POOLSIDE_API_KEY` | Free developer key at [platform.poolside.ai](https://platform.poolside.ai/) → API Keys |
@@ -38,7 +37,7 @@ The active provider, endpoint, and default model are stored in
 What happens:
 
 1. Prior credentials are cleared so you start from a clean slate.
-2. A **scrollable, type-to-filter** picker lists **68 providers** (frontier APIs,
+2. A **scrollable, type-to-filter** picker lists **61 providers** (frontier APIs,
    inference clouds, Chinese labs, OpenAI-compatible routers, local servers).
    Providers with browser sign-in show a 🌐 hint.
 3. If the provider supports browser auth, choose:
@@ -54,9 +53,10 @@ NurCLI resolves the current OAuth token before every model or inference request,
 the active and per-provider session stores synchronized after token rotation, and
 forces one refresh/retry if a provider rejects an access token early.
 
-## OpenAI, Anthropic, xAI, and Kimi browser sign-in
+## Supported browser and official-CLI sign-in
 
-These providers support **browser / device-code OAuth** in addition to API keys:
+NurCLI offers an end-to-end browser or official-CLI credential flow for exactly
+these providers:
 
 | Provider | Browser flow | Import existing CLI session | OAuth inference host |
 |----------|--------------|-----------------------------|----------------------|
@@ -64,13 +64,17 @@ These providers support **browser / device-code OAuth** in addition to API keys:
 | **xAI** | Device code | `~/.grok` | `cli-chat-proxy.grok.com` (+ Grok CLI version headers) |
 | **Anthropic** | Loopback PKCE (Claude Code client) | `~/.claude` | `api.anthropic.com` (Bearer + `oauth-2025-04-20` beta) |
 | **Kimi** | Device code | `~/.kimi` | `api.kimi.com/coding/v1` |
+| **Google Gemini** | Google Cloud ADC via `gcloud` | ADC store | `generativelanguage.googleapis.com` |
+| **Azure OpenAI** | Entra device login via `az` | Azure CLI session | Configured Azure resource |
+| **GitHub Models** | GitHub login via `gh` (`models` scope) | GitHub CLI session | `models.github.ai/inference` |
+| **GitHub Copilot** | GitHub login via `gh` | GitHub CLI session | `api.githubcopilot.com` |
 
 In `/login`, pick the provider → **Sign in with browser**, or **Use existing CLI
 session** when a local first-party login is detected. API keys remain available as a
 fallback for every one of them.
 
 Kimi Code API keys work against `https://api.kimi.com/coding/v1`. The separate Moonshot
-Open Platform catalog entry remains available for `https://api.moonshot.ai/v1` keys.
+AI catalog entry remains available for `https://api.moonshot.ai/v1` keys.
 
 `/logout` clears the stored key/tokens and blocks further turns until you `/login`
 again (environment-variable keys still apply on the next launch).
@@ -78,15 +82,14 @@ again (environment-variable keys still apply on the next launch).
 No key on launch → the login modal opens automatically.
 
 !!! note "Browser / SSO notes"
-    Azure, AWS, and Antigravity browser paths shell out to official CLIs (`az`, `aws`, `gcloud`) when installed.
-    Set your Azure resource URL or Bedrock region/endpoint in config after login if the
-    catalog default is a placeholder. Subscription OAuth is a convenience path; API keys
-    always remain available.
+    Google, Azure, and GitHub sign-in shell out to official CLIs (`gcloud`, `az`,
+    and `gh`) when installed. Set your Azure resource URL in config after login
+    because the catalog default is a placeholder. API keys remain available.
 
-    AWS SSO credentials use SigV4 and are not bearer tokens. NurCLI never stores them as
-    if they were. Its OpenAI-compatible Bedrock transport needs a Bedrock API key in
-    `AWS_BEARER_TOKEN_BEDROCK` (short-term keys can be generated from an SSO-backed AWS
-    session) or a pasted gateway/API key.
+    AWS SSO credentials use SigV4 and are not bearer tokens. NurCLI's
+    OpenAI-compatible Amazon Bedrock route therefore accepts a Bedrock API key in
+    `AWS_BEARER_TOKEN_BEDROCK` or a pasted gateway/API key; it does not advertise
+    browser sign-in.
 
     Google OAuth uses Application Default Credentials and sends the configured Cloud
     project as `x-goog-user-project`. Set it with `gcloud config set project PROJECT_ID`
@@ -173,9 +176,9 @@ The catalog lives in code (`src/providers.rs`). Categories include:
 | Category | Examples |
 |----------|----------|
 | Frontier | OpenAI, Anthropic, Google Gemini, xAI Grok, DeepSeek, Mistral, Cohere, Meta Model API, Inception (Mercury), Writer, Upstage, Poolside (Laguna), … |
-| Inference clouds | Groq, Cerebras, Together, Fireworks, DeepInfra, Perplexity, NVIDIA NIM, Baseten, Friendli, Chutes, Venice, … |
-| Chinese labs | Kimi Code (kimi.com), Moonshot Open Platform, Zhipu GLM, Qwen (DashScope), MiniMax, … |
-| Aggregators / routers | OpenRouter, OmniRoute, Requesty, Vercel / Cloudflare AI gateways, OpenCode, GitHub Models, Helicone, AI/ML API, … |
+| Inference clouds | Groq, Cerebras, Together AI, Fireworks AI, DeepInfra, Perplexity, NVIDIA NIM, Baseten, Friendli, Chutes, Venice AI, … |
+| Chinese labs | Kimi Code (kimi.com), Moonshot AI, Z.AI, Qwen (DashScope), MiniMax (minimaxi.com), StepFun (China), … |
+| Aggregators / routers | OpenRouter, Requesty, Vercel / Cloudflare AI gateways, OpenCode, GitHub Models, Helicone, AI/ML API, … |
 | Local | Ollama, LM Studio, llama.cpp, vLLM (key often optional) |
 
 Each entry declares:
@@ -195,24 +198,24 @@ use `x-api-key`.
 ### Poolside
 
 Poolside serves its own **Laguna** models (M.1 and XS 2.1, both 256K context)
-over an OpenAI-compatible Chat Completions API — streaming, tool calling, and
+over an OpenAI-compatible Chat Completions API - streaming, tool calling, and
 structured output all work through the standard adapter.
 
 | | |
 |---|---|
 | Base URL | `https://inference.poolside.ai/v1` |
-| Default model | `poolside/laguna-m.1` — `/model` lists what your key can reach |
+| Default model | `poolside/laguna-m.1` - `/model` lists what your key can reach |
 | Key | `POOLSIDE_API_KEY`, or `/login` → **Poolside**. Free developer keys at [platform.poolside.ai](https://platform.poolside.ai/) → API Keys |
 | Auth | `Authorization: Bearer <key>` |
 
 **Self-hosted deployments** serve the same API under
-`https://<your-domain>/openai/v1` — pick Poolside in `/login` and set that as
+`https://<your-domain>/openai/v1` - pick Poolside in `/login` and set that as
 the base URL. Laguna is also reachable through OpenRouter
 (`poolside/laguna-m.1`) if you would rather bill there.
 
 Privacy tier is **Standard**: Poolside publishes no ZDR or no-training
 commitment for API traffic, and nur does not award a tier that is not
-documented. If your deployment contract says otherwise, override it — see
+documented. If your deployment contract says otherwise, override it - see
 [Provider privacy](security.md#provider-privacy--cross-provider-failover) or
 `/failover`.
 

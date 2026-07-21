@@ -319,7 +319,8 @@ mod tests {
         }
         let runs = snapshot();
         assert!(
-            runs.iter().any(|r| r.id == live && r.state == RunState::Running),
+            runs.iter()
+                .any(|r| r.id == live && r.state == RunState::Running),
             "an in-flight run must never be evicted"
         );
         assert!(
@@ -344,7 +345,10 @@ mod tests {
         let runs = snapshot();
         let run = runs.iter().find(|r| r.id == live).unwrap();
         assert_eq!(run.state, RunState::Cancelled);
-        assert!(run.ended.is_some(), "a cancelled run stops accumulating time");
+        assert!(
+            run.ended.is_some(),
+            "a cancelled run stops accumulating time"
+        );
     }
 
     #[test]

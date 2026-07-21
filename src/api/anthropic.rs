@@ -24,8 +24,7 @@ pub const OAUTH_BETA: &str = "oauth-2025-04-20";
 pub const CLAUDE_CODE_BETA: &str = "claude-code-20250219";
 /// Combined beta list for Claude OAuth / Claude Code sessions.
 /// Mirrors Claude Code: oauth + product beta (+ oidc federation used by Code ≥2.1).
-pub const OAUTH_BETAS: &str =
-    "oauth-2025-04-20,claude-code-20250219,oidc-federation-2026-04-01";
+pub const OAUTH_BETAS: &str = "oauth-2025-04-20,claude-code-20250219,oidc-federation-2026-04-01";
 
 /// Required system identity for Claude Code OAuth (`sk-ant-oat…`) rate-limit pool.
 ///
@@ -60,9 +59,7 @@ pub fn normalize_model_id(model: &str) -> String {
         | "sonnet4" => return DEFAULT_SONNET.to_string(),
         // Product-ish shorts
         "sonnet" | "sonnet-5" | "claude-sonnet" => return DEFAULT_SONNET.to_string(),
-        "opus" | "opus-4.8" | "opus-4-8" | "claude-opus" => {
-            return "claude-opus-4-8".to_string()
-        }
+        "opus" | "opus-4.8" | "opus-4-8" | "claude-opus" => return "claude-opus-4-8".to_string(),
         "haiku" | "haiku-4.5" | "haiku-4-5" => return "claude-haiku-4-5".to_string(),
         // Incomplete aliases that 404 without the dated suffix / current id
         "claude-opus-4" | "claude-opus-4-20250514" => {
@@ -241,7 +238,10 @@ fn push_item(item: &Value, messages: &mut Vec<Value>, system: &mut Option<String
     if item.get("type").and_then(|t| t.as_str()) == Some("function_call") {
         let call_id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
         let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
-        let args_str = item.get("arguments").and_then(|v| v.as_str()).unwrap_or("{}");
+        let args_str = item
+            .get("arguments")
+            .and_then(|v| v.as_str())
+            .unwrap_or("{}");
         let input: Value = serde_json::from_str(args_str).unwrap_or_else(|_| json!({}));
         messages.push(json!({
             "role": "assistant",
@@ -272,7 +272,11 @@ fn push_item(item: &Value, messages: &mut Vec<Value>, system: &mut Option<String
         }
         return;
     }
-    let role = if role == "assistant" { "assistant" } else { "user" };
+    let role = if role == "assistant" {
+        "assistant"
+    } else {
+        "user"
+    };
     let text = collect_text(item.get("content"));
     let images = collect_images(item.get("content"));
     if images.is_empty() {
@@ -381,10 +385,7 @@ fn coalesce_roles(msgs: Vec<Value>) -> Vec<Value> {
         .and_then(|r| r.as_str())
         == Some("assistant")
     {
-        out.insert(
-            0,
-            json!({ "role": "user", "content": "(continue)" }),
-        );
+        out.insert(0, json!({ "role": "user", "content": "(continue)" }));
     }
     out
 }
@@ -540,10 +541,9 @@ impl StreamAccumulator {
             "message_delta" => {
                 if let Some(u) = v.get("usage") {
                     // message_delta usage often only has output_tokens
-                    let mut base = self
-                        .usage
-                        .clone()
-                        .unwrap_or_else(|| json!({"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}));
+                    let mut base = self.usage.clone().unwrap_or_else(
+                        || json!({"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}),
+                    );
                     if let Some(o) = u.get("output_tokens").and_then(|x| x.as_u64()) {
                         base["completion_tokens"] = json!(o);
                     }
@@ -750,7 +750,9 @@ mod tests {
         assert_eq!(shaped["id"], "msg_1");
         let out = shaped["output"].as_array().unwrap();
         assert!(out.iter().any(|o| o["type"] == "message"));
-        assert!(out.iter().any(|o| o["type"] == "function_call" && o["name"] == "bash"));
+        assert!(out
+            .iter()
+            .any(|o| o["type"] == "function_call" && o["name"] == "bash"));
         assert_eq!(shaped["usage"]["input_tokens"], 10);
     }
 

@@ -34,10 +34,7 @@ impl Tool for SubmitPlan {
 
     fn execute(&self, args: &Value, ctx: &ToolContext) -> Result<String> {
         let plan = arg_str(args, "plan")?;
-        let title = args
-            .get("title")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Plan");
+        let title = args.get("title").and_then(|v| v.as_str()).unwrap_or("Plan");
         let text = format!("# {title}\n\n{plan}\n");
         if let Ok(mut g) = self.plan.lock() {
             *g = Some(text.clone());

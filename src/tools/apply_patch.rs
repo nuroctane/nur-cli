@@ -95,10 +95,19 @@ fn apply_unified_diff(original: &str, patch: &str) -> Result<String> {
 
             while i < patch_lines.len() {
                 let l = patch_lines[i];
-                if l.starts_with("@@") || l.starts_with("diff ") || l.starts_with("---") && i + 1 < patch_lines.len() && patch_lines[i + 1].starts_with("+++") {
+                if l.starts_with("@@")
+                    || l.starts_with("diff ")
+                    || l.starts_with("---")
+                        && i + 1 < patch_lines.len()
+                        && patch_lines[i + 1].starts_with("+++")
+                {
                     break;
                 }
-                if l.starts_with("---") || l.starts_with("+++") || l.starts_with("index ") || l.starts_with("diff ") {
+                if l.starts_with("---")
+                    || l.starts_with("+++")
+                    || l.starts_with("index ")
+                    || l.starts_with("diff ")
+                {
                     i += 1;
                     continue;
                 }
@@ -145,10 +154,17 @@ fn apply_unified_diff(original: &str, patch: &str) -> Result<String> {
 
             // Verify old lines match (fuzzy: allow if file empty and old is empty)
             if !old_lines_in_hunk.is_empty() {
-                if start + old_lines_in_hunk.len() > lines.len() && !(lines.is_empty() && old_start <= 1) {
+                if start + old_lines_in_hunk.len() > lines.len()
+                    && !(lines.is_empty() && old_start <= 1)
+                {
                     // Fall back to a search — but only accept a UNIQUE match.
                     let found = find_slice_unique(&lines, &old_lines_in_hunk, old_start)?;
-                    apply_at(&mut lines, found, old_lines_in_hunk.len(), &new_lines_in_hunk);
+                    apply_at(
+                        &mut lines,
+                        found,
+                        old_lines_in_hunk.len(),
+                        &new_lines_in_hunk,
+                    );
                 } else if lines.is_empty() && old_lines_in_hunk.iter().all(|l| l.is_empty()) {
                     lines = new_lines_in_hunk;
                 } else {
@@ -159,9 +175,19 @@ fn apply_unified_diff(original: &str, patch: &str) -> Result<String> {
                         .all(|(a, b)| a.as_str() == *b);
                     if !matches {
                         let found = find_slice_unique(&lines, &old_lines_in_hunk, old_start)?;
-                        apply_at(&mut lines, found, old_lines_in_hunk.len(), &new_lines_in_hunk);
+                        apply_at(
+                            &mut lines,
+                            found,
+                            old_lines_in_hunk.len(),
+                            &new_lines_in_hunk,
+                        );
                     } else {
-                        apply_at(&mut lines, start, old_lines_in_hunk.len(), &new_lines_in_hunk);
+                        apply_at(
+                            &mut lines,
+                            start,
+                            old_lines_in_hunk.len(),
+                            &new_lines_in_hunk,
+                        );
                     }
                 }
             } else {

@@ -135,7 +135,11 @@ impl Tool for GraphJin {
             "status" => status(),
             "catalog" => {
                 let search = arg_str(args, "search")?;
-                call_tool("query_catalog", &serde_json::json!({ "search": search }), 60_000)
+                call_tool(
+                    "query_catalog",
+                    &serde_json::json!({ "search": search }),
+                    60_000,
+                )
             }
             "schema" => {
                 let id = arg_str(args, "id")?;
@@ -377,7 +381,9 @@ mod tests {
     #[test]
     fn documents_and_saved_query_names_are_told_apart() {
         assert!(looks_like_graphql("{ users { id email } }"));
-        assert!(looks_like_graphql("query Q($id: ID!) { user(id: $id) { id } }"));
+        assert!(looks_like_graphql(
+            "query Q($id: ID!) { user(id: $id) { id } }"
+        ));
         assert!(!looks_like_graphql("orders_by_region"));
         assert!(!looks_like_graphql("getUser"));
     }
@@ -394,7 +400,10 @@ mod tests {
     #[test]
     fn variables_are_forwarded_as_json_only_when_present() {
         assert_eq!(variables_json(&serde_json::json!({})), None);
-        assert_eq!(variables_json(&serde_json::json!({"variables": null})), None);
+        assert_eq!(
+            variables_json(&serde_json::json!({"variables": null})),
+            None
+        );
         assert_eq!(
             variables_json(&serde_json::json!({"variables": {"id": 7}})).as_deref(),
             Some(r#"{"id":7}"#)

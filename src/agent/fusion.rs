@@ -115,7 +115,11 @@ async fn run(
                 });
             }
             Ok((label, Err(e))) => {
-                answers.push(PanelAnswer { label, text: e.to_string(), ok: false });
+                answers.push(PanelAnswer {
+                    label,
+                    text: e.to_string(),
+                    ok: false,
+                });
             }
             // Task join failure (panic/cancel) — drop that member.
             Err(_) => {}

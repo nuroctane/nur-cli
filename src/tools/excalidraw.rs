@@ -15,10 +15,7 @@ pub struct Excalidraw;
 /// Actions that only inspect CLI / format (or list checkpoints).
 pub fn is_read_only_action(args: &str) -> bool {
     let v: Value = serde_json::from_str(args).unwrap_or_else(|_| Value::Object(Default::default()));
-    let action = v
-        .get("action")
-        .and_then(|a| a.as_str())
-        .unwrap_or("status");
+    let action = v.get("action").and_then(|a| a.as_str()).unwrap_or("status");
     match action {
         "status" | "reference" | "ref" => true,
         "checkpoint" => {
@@ -110,15 +107,12 @@ fn want_open(args: &Value) -> bool {
 
 fn create(args: &Value, cwd: &Path) -> Result<String> {
     let output = arg_str(args, "output").map_err(|_| {
-        MuseError::Tool(
-            "create requires output= path (e.g. docs/arch.excalidraw)".into(),
-        )
+        MuseError::Tool("create requires output= path (e.g. docs/arch.excalidraw)".into())
     })?;
     let abs_out = resolve_path(&cwd.to_path_buf(), &output)?;
     if let Some(parent) = abs_out.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            MuseError::Tool(format!("create parent dir {}: {e}", parent.display()))
-        })?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| MuseError::Tool(format!("create parent dir {}: {e}", parent.display())))?;
     }
 
     let elements_json = elements_to_json_string(args)?;
@@ -225,9 +219,9 @@ fn extract_excalidraw_url(text: &str) -> Option<String> {
 }
 
 fn elements_to_json_string(args: &Value) -> Result<String> {
-    let el = args
-        .get("elements")
-        .ok_or_else(|| MuseError::Tool("create requires elements= (JSON array of shapes/arrows)".into()))?;
+    let el = args.get("elements").ok_or_else(|| {
+        MuseError::Tool("create requires elements= (JSON array of shapes/arrows)".into())
+    })?;
     match el {
         Value::String(s) => {
             // Allow either raw array string or already-stringified JSON.
@@ -272,9 +266,8 @@ fn checkpoint(args: &Value, cwd: &Path) -> Result<String> {
         }
         "load" => {
             let name = arg_str(args, "name")?;
-            let output = arg_str(args, "output").map_err(|_| {
-                MuseError::Tool("checkpoint load requires output= path".into())
-            })?;
+            let output = arg_str(args, "output")
+                .map_err(|_| MuseError::Tool("checkpoint load requires output= path".into()))?;
             let abs = resolve_path(&cwd.to_path_buf(), &output)?;
             if let Some(parent) = abs.parent() {
                 let _ = std::fs::create_dir_all(parent);

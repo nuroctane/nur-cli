@@ -214,11 +214,7 @@ fn status(cwd: &Path) -> Result<String> {
     s.push_str(&format!("workspace: {}\n", cwd.display()));
     if gj.is_file() {
         let size = std::fs::metadata(&gj).map(|m| m.len()).unwrap_or(0);
-        s.push_str(&format!(
-            "graph: {} ({} bytes)\n",
-            gj.display(),
-            size
-        ));
+        s.push_str(&format!("graph: {} ({} bytes)\n", gj.display(), size));
         // Quick node/edge count if JSON is reasonable size.
         if size < 50_000_000 {
             if let Ok(text) = std::fs::read_to_string(&gj) {
@@ -449,7 +445,9 @@ mod tests {
     #[test]
     fn read_only_actions() {
         assert!(is_read_only_action(r#"{"action":"query","question":"x"}"#));
-        assert!(is_read_only_action(r#"{"action":"path","from":"a","to":"b"}"#));
+        assert!(is_read_only_action(
+            r#"{"action":"path","from":"a","to":"b"}"#
+        ));
         assert!(is_read_only_action(r#"{"action":"explain","node":"x"}"#));
         assert!(is_read_only_action(r#"{"action":"status"}"#));
         assert!(is_read_only_action(r#"{"action":"report"}"#));

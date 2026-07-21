@@ -31,7 +31,8 @@ impl ToolCaps {
 
 /// Classify a tool invocation by name + raw JSON args string.
 pub fn classify(name: &str, args_json: &str) -> ToolCaps {
-    let args: Value = serde_json::from_str(args_json).unwrap_or_else(|_| Value::Object(Default::default()));
+    let args: Value =
+        serde_json::from_str(args_json).unwrap_or_else(|_| Value::Object(Default::default()));
     classify_value(name, &args)
 }
 
@@ -154,10 +155,32 @@ mod tests {
     #[test]
     fn concurrency_implies_read_only() {
         for name in [
-            "read_file", "list_dir", "grep", "glob", "web_fetch", "web_search", "look",
-            "extract_frames", "git_status", "git_diff", "skill", "write_file", "edit_file",
-            "multi_edit", "apply_patch", "bash", "agent", "memory", "todo_write", "submit_plan",
-            "browser", "omp", "graphify", "graphjin", "plur", "ruflo",
+            "read_file",
+            "list_dir",
+            "grep",
+            "glob",
+            "web_fetch",
+            "web_search",
+            "look",
+            "extract_frames",
+            "git_status",
+            "git_diff",
+            "skill",
+            "write_file",
+            "edit_file",
+            "multi_edit",
+            "apply_patch",
+            "bash",
+            "agent",
+            "memory",
+            "todo_write",
+            "submit_plan",
+            "browser",
+            "omp",
+            "graphify",
+            "graphjin",
+            "plur",
+            "ruflo",
         ] {
             let c = classify(name, "{}");
             if c.concurrency_safe {
@@ -168,7 +191,14 @@ mod tests {
 
     #[test]
     fn writers_are_destructive_and_not_parallel() {
-        for name in ["write_file", "edit_file", "multi_edit", "apply_patch", "bash", "agent"] {
+        for name in [
+            "write_file",
+            "edit_file",
+            "multi_edit",
+            "apply_patch",
+            "bash",
+            "agent",
+        ] {
             let c = classify(name, "{}");
             assert!(c.destructive, "{name}");
             assert!(!c.concurrency_safe, "{name}");

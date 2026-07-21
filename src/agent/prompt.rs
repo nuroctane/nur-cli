@@ -128,7 +128,8 @@ impl PromptContext {
     /// which can change between requests within a turn.
     pub fn render(&self, mode: PermissionMode, todos_render: &str) -> String {
         let mode_block = match mode {
-            PermissionMode::Plan => r#"
+            PermissionMode::Plan => {
+                r#"
 # Permission mode: PLAN  (explore + analyze, no repo changes)
 You may read, parse, and understand the workspace freely, AND run shell for
 analysis and scratch/media work — reading files, grep/ripgrep, running tests or
@@ -153,15 +154,20 @@ BLOCKED in plan mode (do NOT attempt — they need manual/auto via Shift+Tab):
 
 Do your investigation, then deliver the plan via submit_plan. Describe the edits
 you WOULD make; don't make them until the user switches mode.
-"#,
-            PermissionMode::Manual => r#"
+"#
+            }
+            PermissionMode::Manual => {
+                r#"
 # Permission mode: MANUAL
 Mutating tools need user approval. Prefer apply_patch/multi_edit for structured edits.
-"#,
-            PermissionMode::Auto => r#"
+"#
+            }
+            PermissionMode::Auto => {
+                r#"
 # Permission mode: AUTO
 Tools auto-approved. Prefer minimal safe diffs; avoid destructive shell.
-"#,
+"#
+            }
         };
 
         // Product identity is always Nur. Backend provider/model are facts only.

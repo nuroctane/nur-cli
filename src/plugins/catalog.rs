@@ -20,24 +20,24 @@ pub struct PluginEntry {
 /// Category order for the `/plugins` picker (unknown categories sort last).
 /// Type any of these labels in the filter to focus the list.
 pub const CATEGORIES: &[&str] = &[
-    "workflow",       // agent methodology / loops
-    "engineering",    // production software craft
-    "specs",          // SDD / planning / tickets
-    "design",         // UI taste, motion, craft
-    "design-system",  // tokens, FSD, brand extraction
-    "browser",        // chrome / scrape / e2e
-    "deploy",         // ship platforms
-    "cloud",          // vendor product skills
-    "data",           // databases
-    "observability",  // logs / errors / metrics
-    "marketing",      // growth / SEO / content
-    "finance",        // markets / valuation / CRE
-    "trading",        // brokers / live trading APIs
-    "crypto",         // web3 / defi / on-chain (when skill-shaped)
-    "security",       // red/blue / offensive / hardening
-    "science",        // research / journals / labs
-    "robotics",       // robot software agents
-    "catalog",        // mega packs / awesome indexes
+    "workflow",      // agent methodology / loops
+    "engineering",   // production software craft
+    "specs",         // SDD / planning / tickets
+    "design",        // UI taste, motion, craft
+    "design-system", // tokens, FSD, brand extraction
+    "browser",       // chrome / scrape / e2e
+    "deploy",        // ship platforms
+    "cloud",         // vendor product skills
+    "data",          // databases
+    "observability", // logs / errors / metrics
+    "marketing",     // growth / SEO / content
+    "finance",       // markets / valuation / CRE
+    "trading",       // brokers / live trading APIs
+    "crypto",        // web3 / defi / on-chain (when skill-shaped)
+    "security",      // red/blue / offensive / hardening
+    "science",       // research / journals / labs
+    "robotics",      // robot software agents
+    "catalog",       // mega packs / awesome indexes
 ];
 
 /// Full catalog shown in `/plugins`.

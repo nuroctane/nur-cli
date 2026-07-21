@@ -80,7 +80,11 @@ pub fn question_request(model: &str, question: &str) -> ResponseRequest {
 
 /// Request fed to the judge `model` to synthesize the final answer from the
 /// panel. Only successful answers should be passed in `answers`.
-pub fn synthesis_request(judge_model: &str, question: &str, answers: &[PanelAnswer]) -> ResponseRequest {
+pub fn synthesis_request(
+    judge_model: &str,
+    question: &str,
+    answers: &[PanelAnswer],
+) -> ResponseRequest {
     let mut body = String::new();
     body.push_str("# Question\n");
     body.push_str(question.trim());
@@ -120,7 +124,10 @@ mod tests {
         assert_eq!(req.model, "grok-4");
         assert_eq!(req.stream, Some(false));
         // Must be an array (so the chat adapter picks it up), and the text round-trips.
-        assert!(req.input.is_array(), "input must be a message array, not a bare string");
+        assert!(
+            req.input.is_array(),
+            "input must be a message array, not a bare string"
+        );
         assert_eq!(input_text(&req), "why is the sky blue?");
         assert_eq!(req.instructions.as_deref(), Some(PANELIST_INSTRUCTIONS));
     }
@@ -128,24 +135,49 @@ mod tests {
     #[test]
     fn synthesis_request_includes_question_and_every_answer() {
         let answers = vec![
-            PanelAnswer { label: "openai · gpt-5.5".into(), text: "Rayleigh scattering.".into(), ok: true },
-            PanelAnswer { label: "anthropic · claude-sonnet-5".into(), text: "Blue light scatters more.".into(), ok: true },
+            PanelAnswer {
+                label: "openai · gpt-5.5".into(),
+                text: "Rayleigh scattering.".into(),
+                ok: true,
+            },
+            PanelAnswer {
+                label: "anthropic · claude-sonnet-5".into(),
+                text: "Blue light scatters more.".into(),
+                ok: true,
+            },
         ];
         let req = synthesis_request("gpt-5.5", "why is the sky blue?", &answers);
         let body = input_text(&req);
         assert_eq!(req.instructions.as_deref(), Some(SYNTHESIS_INSTRUCTIONS));
         assert!(body.contains("why is the sky blue?"), "question missing");
         assert!(body.contains("openai · gpt-5.5"), "member 1 label missing");
-        assert!(body.contains("Rayleigh scattering."), "member 1 answer missing");
-        assert!(body.contains("anthropic · claude-sonnet-5"), "member 2 label missing");
-        assert!(body.contains("Blue light scatters more."), "member 2 answer missing");
+        assert!(
+            body.contains("Rayleigh scattering."),
+            "member 1 answer missing"
+        );
+        assert!(
+            body.contains("anthropic · claude-sonnet-5"),
+            "member 2 label missing"
+        );
+        assert!(
+            body.contains("Blue light scatters more."),
+            "member 2 answer missing"
+        );
     }
 
     #[test]
     fn synthesis_request_numbers_panelists_in_order() {
         let answers = vec![
-            PanelAnswer { label: "a".into(), text: "one".into(), ok: true },
-            PanelAnswer { label: "b".into(), text: "two".into(), ok: true },
+            PanelAnswer {
+                label: "a".into(),
+                text: "one".into(),
+                ok: true,
+            },
+            PanelAnswer {
+                label: "b".into(),
+                text: "two".into(),
+                ok: true,
+            },
         ];
         let body = input_text(&synthesis_request("m", "q", &answers));
         let p1 = body.find("Panelist 1").expect("panelist 1");

@@ -120,8 +120,16 @@ pub fn best_index(scores: &[Score]) -> Option<usize> {
         y.pass_rate
             .partial_cmp(&x.pass_rate)
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then(x.tokens.partial_cmp(&y.tokens).unwrap_or(std::cmp::Ordering::Equal))
-            .then(x.secs.partial_cmp(&y.secs).unwrap_or(std::cmp::Ordering::Equal))
+            .then(
+                x.tokens
+                    .partial_cmp(&y.tokens)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+            .then(
+                x.secs
+                    .partial_cmp(&y.secs)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
     })
 }
 
@@ -178,7 +186,11 @@ pub fn mutation_prompt(
 }
 
 fn first_line(s: &str) -> String {
-    let line = s.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+    let line = s
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim();
     if line.chars().count() <= 200 {
         line.to_string()
     } else {
@@ -192,7 +204,10 @@ pub fn clean_instruction(raw: &str) -> String {
     // Fenced block → take the inside.
     if text.starts_with("```") {
         if let Some(rest) = text.split_once('\n').map(|(_, r)| r) {
-            text = rest.rsplit_once("```").map(|(head, _)| head).unwrap_or(rest);
+            text = rest
+                .rsplit_once("```")
+                .map(|(head, _)| head)
+                .unwrap_or(rest);
         }
     }
     let text = text.trim();
@@ -270,8 +285,9 @@ pub async fn run_optimize(
     let tasks: Vec<Task> = if name == "all" {
         bench::list_tasks_pub()
     } else {
-        vec![bench::load_task(name)
-            .ok_or_else(|| MuseError::Other(format!("no bench task `{name}` — see nur bench list")))?]
+        vec![bench::load_task(name).ok_or_else(|| {
+            MuseError::Other(format!("no bench task `{name}` — see nur bench list"))
+        })?]
     };
     if tasks.is_empty() {
         return Err(MuseError::Other(
@@ -365,9 +381,7 @@ pub async fn run_optimize(
                     continue;
                 }
             };
-            if proposal.is_empty()
-                || candidates.iter().any(|c| c.instruction == proposal)
-            {
+            if proposal.is_empty() || candidates.iter().any(|c| c.instruction == proposal) {
                 continue; // empty or already tried
             }
             candidates.push(Candidate {
@@ -382,7 +396,9 @@ pub async fn run_optimize(
 
     let front = pareto_front(&scores);
     let Some(best) = best_index(&scores) else {
-        return Err(MuseError::Other("gepa produced no scored candidates".into()));
+        return Err(MuseError::Other(
+            "gepa produced no scored candidates".into(),
+        ));
     };
     let winner = &candidates[best];
     print!("{}", optimize_report(name, &candidates, &scores, &front));
@@ -443,8 +459,20 @@ mod tests {
     #[test]
     fn score_averages_over_the_task_set() {
         let results = vec![
-            BenchResult { model: "m".into(), passed: true, secs: 10.0, tokens: 100, error: None },
-            BenchResult { model: "m".into(), passed: false, secs: 20.0, tokens: 300, error: None },
+            BenchResult {
+                model: "m".into(),
+                passed: true,
+                secs: 10.0,
+                tokens: 100,
+                error: None,
+            },
+            BenchResult {
+                model: "m".into(),
+                passed: false,
+                secs: 20.0,
+                tokens: 300,
+                error: None,
+            },
         ];
         let s = Score::from_results(&results);
         assert_eq!(s.pass_rate, 0.5);
@@ -533,8 +561,14 @@ mod tests {
         assert!(p.contains("Read tests before editing."), "current text");
         assert!(p.contains("50%"), "measured pass rate");
         assert!(p.contains("assertion left != right"), "the actual failure");
-        assert!(p.contains("fix the failing auth test"), "what it must handle");
-        assert!(p.contains("ONLY the replacement instruction"), "output contract");
+        assert!(
+            p.contains("fix the failing auth test"),
+            "what it must handle"
+        );
+        assert!(
+            p.contains("ONLY the replacement instruction"),
+            "output contract"
+        );
 
         // Baseline is labelled, not left blank and confusing.
         let base = mutation_prompt(&cand(0, ""), &s, &[], &["t".into()]);

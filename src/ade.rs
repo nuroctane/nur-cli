@@ -49,10 +49,7 @@ fn title_with_marker(marker: &str, prompt: &str) -> String {
 
 /// Collapse whitespace and truncate for a compact window/tab label.
 pub fn abbreviate_for_title(prompt: &str, max_chars: usize) -> String {
-    let collapsed: String = prompt
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    let collapsed: String = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
     let collapsed = collapsed.trim();
     if collapsed.is_empty() {
         return String::new();
@@ -77,7 +74,13 @@ pub fn abbreviate_for_title(prompt: &str, max_chars: usize) -> String {
 /// `state` is the live agent state (`idle`, `thinking (turn N)`, `tool:<name>`,
 /// …). Poll-based ADEs that read `ade.json` (rather than the push hook) rely on
 /// this field + `updated_at` to know when a turn has finished.
-pub fn write_ade_manifest(session_id: &str, model: &str, cwd: &str, usage: &TokenUsage, state: &str) {
+pub fn write_ade_manifest(
+    session_id: &str,
+    model: &str,
+    cwd: &str,
+    usage: &TokenUsage,
+    state: &str,
+) {
     let _ = crate::config::ensure_dirs();
     let body = json!({
         "schema_version": 1,
@@ -128,7 +131,10 @@ pub fn write_ade_manifest(session_id: &str, model: &str, cwd: &str, usage: &Toke
         "note": "Poll status_path (or this file's `state`/`updated_at`) for live agent state + token usage. state=='idle' means the turn finished. Prefer NUR_* env keys; META_*/MUSE_* are legacy aliases."
     });
     let path = meta_home().join("ade.json");
-    let _ = fs::write(path, serde_json::to_string_pretty(&body).unwrap_or_default());
+    let _ = fs::write(
+        path,
+        serde_json::to_string_pretty(&body).unwrap_or_default(),
+    );
 }
 
 /// Best-effort notify Orca agent hook (if running inside Orca terminal).
@@ -231,10 +237,7 @@ fn notify_orca_hook_blocking(payload_json: &str) {
             "--data-urlencode",
             &format!("paneKey={pane}"),
             "--data-urlencode",
-            &format!(
-                "tabId={}",
-                std::env::var("ORCA_TAB_ID").unwrap_or_default()
-            ),
+            &format!("tabId={}", std::env::var("ORCA_TAB_ID").unwrap_or_default()),
             "--data-urlencode",
             &format!(
                 "launchToken={}",

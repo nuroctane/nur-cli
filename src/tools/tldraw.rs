@@ -25,10 +25,7 @@ pub struct Tldraw;
 /// Actions that only inspect state (approval-free in manual mode).
 pub fn is_read_only_action(args: &str) -> bool {
     let v: Value = serde_json::from_str(args).unwrap_or_else(|_| Value::Object(Default::default()));
-    let action = v
-        .get("action")
-        .and_then(|a| a.as_str())
-        .unwrap_or("status");
+    let action = v.get("action").and_then(|a| a.as_str()).unwrap_or("status");
     matches!(action, "status" | "detect")
     // open/create/enable_scripts/api mutate desktop or canvas
 }
@@ -401,9 +398,7 @@ fn slug_filename(title: &str) -> String {
 ///   `cmd start file.tldraw` alone is unreliable.
 /// - Reliable path: `cmd /c start "" "app.exe" [valid-file]` (or bare app).
 pub fn launch_on_file(abs: &Path) -> Result<String> {
-    let abs = abs
-        .canonicalize()
-        .unwrap_or_else(|_| abs.to_path_buf());
+    let abs = abs.canonicalize().unwrap_or_else(|_| abs.to_path_buf());
     let notes = validate_or_hint(&abs);
     let file_is_valid = notes.is_empty();
 
@@ -522,7 +517,14 @@ fn spawn_via_powershell_start(app: &Path, file: Option<&Path>) -> std::result::R
         ),
     };
     let status = std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &script])
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            &script,
+        ])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -706,10 +708,7 @@ fn build_tldraw_document(title: &str, shapes: &[Value]) -> Value {
             .unwrap_or_else(|| "blue".into());
         // High-contrast under dark theme (pastel solid fills + white text = invisible).
         let (color, label_color, fill) = contrast_style(&color);
-        let geo = s
-            .get("geo")
-            .and_then(|v| v.as_str())
-            .unwrap_or("rectangle");
+        let geo = s.get("geo").and_then(|v| v.as_str()).unwrap_or("rectangle");
         // Must be a valid tldraw IndexKey. "a10" is REJECTED and blanks the
         // whole canvas with ValidationError — use a1..a9, aA..aZ, b1…
         let index = fractional_index(i);
@@ -936,9 +935,7 @@ fn contrast_style(color: &str) -> (String, String, &'static str) {
         // Mid greys: black label is safer on pastel solid
         "grey" => ("grey".into(), "black".into(), "solid"),
         // Strong accents — white label under dark theme
-        "black" | "blue" | "green" | "red" | "orange" | "violet" => {
-            (c, "white".into(), "solid")
-        }
+        "black" | "blue" | "green" | "red" | "orange" | "violet" => (c, "white".into(), "solid"),
         other => (other.to_string(), "white".into(), "solid"),
     }
 }
@@ -1082,7 +1079,10 @@ fn canvas_api_get(server: &ServerInfo, path: &str) -> Result<Value> {
 }
 
 fn path_matches_doc(doc: &Value, abs: &Path) -> bool {
-    let abs_s = abs.to_string_lossy().replace('/', "\\").to_ascii_lowercase();
+    let abs_s = abs
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
     let name = abs
         .file_stem()
         .and_then(|s| s.to_str())
@@ -1155,8 +1155,8 @@ pub fn enable_scripts_for_path(abs: &Path, timeout: Duration) -> Result<String> 
     })?;
     let doc_id = find_doc_id(&server, abs)?;
     // Status before
-    let before = canvas_api_get(&server, &format!("/api/doc/{doc_id}/script-status"))
-        .unwrap_or(json!({}));
+    let before =
+        canvas_api_get(&server, &format!("/api/doc/{doc_id}/script-status")).unwrap_or(json!({}));
     let before_state = before
         .pointer("/result/state")
         .and_then(|x| x.as_str())
@@ -1191,7 +1191,9 @@ pub fn enable_scripts_for_path(abs: &Path, timeout: Duration) -> Result<String> 
                 .pointer("/result/watching")
                 .and_then(|x| x.as_bool())
                 .unwrap_or(false);
-            if final_state == "applied" || final_state == "error" || (watching && final_state != "not-watching")
+            if final_state == "applied"
+                || final_state == "error"
+                || (watching && final_state != "not-watching")
             {
                 break;
             }
@@ -1233,9 +1235,8 @@ fn enable_scripts_action(args: &Value, cwd: &Path) -> Result<String> {
         return Ok("open+enable_scripts already ran via open\n".into());
     }
     if path.is_empty() {
-        let server = wait_for_server(Duration::from_secs(10)).ok_or_else(|| {
-            MuseError::Tool("canvas API down — open a board first".into())
-        })?;
+        let server = wait_for_server(Duration::from_secs(10))
+            .ok_or_else(|| MuseError::Tool("canvas API down — open a board first".into()))?;
         let docs = canvas_api_post(
             &server,
             "/api/search",
@@ -1263,9 +1264,8 @@ fn enable_scripts_action(args: &Value, cwd: &Path) -> Result<String> {
 fn api_action(args: &Value, cwd: &Path) -> Result<String> {
     let code = arg_str(args, "code")
         .map_err(|_| MuseError::Tool("api requires code= JavaScript with await api.…".into()))?;
-    let server = wait_for_server(Duration::from_secs(15)).ok_or_else(|| {
-        MuseError::Tool("canvas API not running — open a .tldraw first".into())
-    })?;
+    let server = wait_for_server(Duration::from_secs(15))
+        .ok_or_else(|| MuseError::Tool("canvas API not running — open a .tldraw first".into()))?;
     // optional path just to ensure scripts if given
     if let Ok(path) = arg_str(args, "path") {
         if !path.is_empty() {
@@ -1274,11 +1274,7 @@ fn api_action(args: &Value, cwd: &Path) -> Result<String> {
             }
         }
     }
-    let resp = canvas_api_post(
-        &server,
-        "/api/search",
-        &json!({ "code": code }),
-    )?;
+    let resp = canvas_api_post(&server, "/api/search", &json!({ "code": code }))?;
     Ok(format!(
         "canvas api ok\n{}\n",
         serde_json::to_string_pretty(&resp).unwrap_or_else(|_| resp.to_string())
@@ -1290,7 +1286,10 @@ fn status_report() -> String {
     match app_path() {
         Some(app) => {
             s.push_str(&format!("tldraw offline: INSTALLED\n  {}\n", app.display()));
-            s.push_str(&format!("output dir (create): {}\n", desktop_dir().display()));
+            s.push_str(&format!(
+                "output dir (create): {}\n",
+                desktop_dir().display()
+            ));
             s.push_str(
                 "open:    tldraw(action=open, path=board.tldraw)  # auto-enables document scripts\n",
             );
@@ -1303,9 +1302,7 @@ fn status_report() -> String {
         }
         None => {
             s.push_str("tldraw offline: NOT INSTALLED\n");
-            s.push_str(
-                "install: tldraw(action=install) — github.com/tldraw/tldraw-offline\n",
-            );
+            s.push_str("install: tldraw(action=install) — github.com/tldraw/tldraw-offline\n");
         }
     }
     match read_server_info() {
@@ -1323,7 +1320,10 @@ fn status_report() -> String {
                     s.push_str(&format!("open docs: {}\n", arr.len()));
                     for d in arr.iter().take(6) {
                         let name = d.get("name").and_then(|x| x.as_str()).unwrap_or("?");
-                        let hs = d.get("hasScript").and_then(|x| x.as_bool()).unwrap_or(false);
+                        let hs = d
+                            .get("hasScript")
+                            .and_then(|x| x.as_bool())
+                            .unwrap_or(false);
                         s.push_str(&format!("  - {name}  hasScript={hs}\n"));
                     }
                 }
@@ -1344,7 +1344,8 @@ mod tests {
 
     #[test]
     fn build_document_has_format_version_and_shapes() {
-        let shapes = vec![json!({"x": 10, "y": 20, "w": 100, "h": 50, "text": "A", "color": "blue"})];
+        let shapes =
+            vec![json!({"x": 10, "y": 20, "w": 100, "h": 50, "text": "A", "color": "blue"})];
         let doc = build_tldraw_document("Test", &shapes);
         assert_eq!(doc["tldrawFileFormatVersion"], 1);
         let records = doc["records"].as_array().unwrap();

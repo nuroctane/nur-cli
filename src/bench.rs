@@ -72,7 +72,11 @@ pub fn scoreboard(task: &str, results: &[BenchResult]) -> String {
     ranked.sort_by(|a, b| {
         b.passed
             .cmp(&a.passed)
-            .then(a.secs.partial_cmp(&b.secs).unwrap_or(std::cmp::Ordering::Equal))
+            .then(
+                a.secs
+                    .partial_cmp(&b.secs)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
             .then(a.tokens.cmp(&b.tokens))
     });
     for (i, r) in ranked.iter().enumerate() {
@@ -117,7 +121,10 @@ pub fn load_task(name: &str) -> Option<Task> {
 
 fn save_task(t: &Task) -> Result<()> {
     std::fs::create_dir_all(bench_dir())?;
-    std::fs::write(task_path(&t.name), serde_json::to_string_pretty(t).unwrap_or_default())?;
+    std::fs::write(
+        task_path(&t.name),
+        serde_json::to_string_pretty(t).unwrap_or_default(),
+    )?;
     Ok(())
 }
 
@@ -141,9 +148,18 @@ fn list_tasks() -> Vec<Task> {
 
 // ── driver ───────────────────────────────────────────────────────────────
 
-pub async fn run_bench(action: &BenchCmd, client: ApiClient, cfg: Config, cwd: PathBuf) -> Result<()> {
+pub async fn run_bench(
+    action: &BenchCmd,
+    client: ApiClient,
+    cfg: Config,
+    cwd: PathBuf,
+) -> Result<()> {
     match action {
-        BenchCmd::Add { name, prompt, check } => {
+        BenchCmd::Add {
+            name,
+            prompt,
+            check,
+        } => {
             print!("{}", add_task(name, &prompt.join(" "), check.as_deref())?);
             Ok(())
         }
@@ -155,7 +171,9 @@ pub async fn run_bench(action: &BenchCmd, client: ApiClient, cfg: Config, cwd: P
             println!("{}", remove_report(name));
             Ok(())
         }
-        BenchCmd::Run { name, models } => run_tasks(name, models.as_deref(), client, cfg, cwd).await,
+        BenchCmd::Run { name, models } => {
+            run_tasks(name, models.as_deref(), client, cfg, cwd).await
+        }
         BenchCmd::Optimize { name, gens, pop } => {
             crate::gepa::run_optimize(name, *gens, *pop, client, cfg, cwd).await
         }
@@ -217,7 +235,9 @@ async fn run_tasks(
     let tasks: Vec<Task> = if name == "all" {
         list_tasks()
     } else {
-        vec![load_task(name).ok_or_else(|| MuseError::Other(format!("no bench task `{name}` — see nur bench list")))?]
+        vec![load_task(name).ok_or_else(|| {
+            MuseError::Other(format!("no bench task `{name}` — see nur bench list"))
+        })?]
     };
     if tasks.is_empty() {
         return Err(MuseError::Other("no bench tasks recorded".into()));
@@ -227,7 +247,9 @@ async fn run_tasks(
         None => vec![cfg.model.clone()],
     };
     if model_list.is_empty() {
-        return Err(MuseError::Other("no models to compare (--models a,b)".into()));
+        return Err(MuseError::Other(
+            "no models to compare (--models a,b)".into(),
+        ));
     }
 
     theme::print_info(&format!(
@@ -311,9 +333,13 @@ pub(crate) async fn run_one(
     let prompt = if prefix.trim().is_empty() {
         task.prompt.clone()
     } else {
-        format!("{}
+        format!(
+            "{}
 
-{}", prefix.trim(), task.prompt)
+{}",
+            prefix.trim(),
+            task.prompt
+        )
     };
     let (_s, u, result, _interrupted) =
         agent::run_collect(runner, session, usage, prompt, cancel).await;
@@ -407,9 +433,27 @@ mod tests {
     #[test]
     fn scoreboard_ranks_passing_fastest_first() {
         let results = vec![
-            BenchResult { model: "slow-pass".into(), passed: true, secs: 20.0, tokens: 900, error: None },
-            BenchResult { model: "fail".into(), passed: false, secs: 3.0, tokens: 100, error: None },
-            BenchResult { model: "fast-pass".into(), passed: true, secs: 5.0, tokens: 800, error: None },
+            BenchResult {
+                model: "slow-pass".into(),
+                passed: true,
+                secs: 20.0,
+                tokens: 900,
+                error: None,
+            },
+            BenchResult {
+                model: "fail".into(),
+                passed: false,
+                secs: 3.0,
+                tokens: 100,
+                error: None,
+            },
+            BenchResult {
+                model: "fast-pass".into(),
+                passed: true,
+                secs: 5.0,
+                tokens: 800,
+                error: None,
+            },
         ];
         let board = scoreboard("t", &results);
         let fast = board.find("fast-pass").unwrap();

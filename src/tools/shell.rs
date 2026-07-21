@@ -18,7 +18,6 @@ fn read_all(pipe: Option<impl Read>) -> Vec<u8> {
     buf
 }
 
-
 #[derive(Debug, Clone)]
 pub struct ShellBackend {
     pub kind: ShellKind,

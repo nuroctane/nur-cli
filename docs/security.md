@@ -50,7 +50,7 @@ Each provider in the picker carries a **privacy tier**, shown as a badge:
 
 - `LOCAL` — runs on your machine (Ollama, LM Studio, llama.cpp, vLLM, Jan); prompts never leave localhost.
 - `TEE` — hardware-enclave inference with remote attestation (e.g. Venice).
-- `ZDR` — the provider's default policy does not train on your data and offers/defaults to zero data retention (OpenAI, Anthropic, Google paid, Groq, Together, Fireworks, Azure, Bedrock, …).
+- `ZDR` - the provider's default policy does not train on your data and offers/defaults to zero data retention (OpenAI, Anthropic, Google paid, Groq, Together AI, Fireworks AI, Azure OpenAI, Amazon Bedrock, …).
 - *(no badge)* `STANDARD` — standard API terms; assume retention unless you know otherwise (DeepSeek and other train-by-default providers, logging gateways, unclear policies).
 
 Tiers are built in from a review of each provider's public policy, and you can override any of them for your own account/endpoint with **Alt+P** in the provider picker (saved as a `provider_privacy` override — no config file).

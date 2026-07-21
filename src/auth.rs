@@ -258,7 +258,12 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
     }
 
     // No expected provider: generic env first (scripts / headless), then auth.json.
-    for var in ["NUR_API_KEY", "META_API_KEY", "MODEL_API_KEY", "MUSE_API_KEY"] {
+    for var in [
+        "NUR_API_KEY",
+        "META_API_KEY",
+        "MODEL_API_KEY",
+        "MUSE_API_KEY",
+    ] {
         if let Ok(k) = std::env::var(var) {
             let k = k.trim().to_string();
             if !k.is_empty() {
@@ -312,7 +317,10 @@ pub fn load_auth() -> Result<Option<Auth>> {
         return Ok(None);
     }
     let text = fs::read_to_string(&path)?;
-    let auth: Auth = serde_json::from_str(&text)?;
+    let mut auth: Auth = serde_json::from_str(&text)?;
+    if auth.provider == "antigravity" {
+        auth.provider = "google".into();
+    }
     // A stored OAuth login for a provider that no longer has a login flow is a
     // leftover from an older build; treat it as signed out so `/login` asks for
     // an API key instead of sending a token the vendor will reject.
@@ -324,10 +332,7 @@ pub fn load_auth() -> Result<Option<Auth>> {
 
 /// Return OAuth request metadata when `access_token` belongs to a stored OAuth
 /// session for `provider_id`. API keys deliberately return `None`.
-pub fn oauth_request_context(
-    provider_id: &str,
-    access_token: &str,
-) -> Option<OAuthRequestContext> {
+pub fn oauth_request_context(provider_id: &str, access_token: &str) -> Option<OAuthRequestContext> {
     let matches_session = |auth: &Auth| {
         matches!(auth.auth_method, AuthMethod::Oauth)
             && auth.provider == provider_id
@@ -460,7 +465,10 @@ pub fn force_refresh_oauth(provider_id: &str) -> Result<bool> {
     let _guard = oauth_store_guard();
     if let Some(mut auth) = load_auth()? {
         if matches!(auth.auth_method, AuthMethod::Oauth) && auth.provider == provider_id {
-            let Some(refresh) = auth.refresh_token.clone().filter(|value| !value.trim().is_empty())
+            let Some(refresh) = auth
+                .refresh_token
+                .clone()
+                .filter(|value| !value.trim().is_empty())
             else {
                 return Ok(false);
             };
@@ -479,7 +487,11 @@ pub fn force_refresh_oauth(provider_id: &str) -> Result<bool> {
     if !matches!(auth.auth_method, AuthMethod::Oauth) {
         return Ok(false);
     }
-    let Some(refresh) = auth.refresh_token.clone().filter(|value| !value.trim().is_empty()) else {
+    let Some(refresh) = auth
+        .refresh_token
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+    else {
         return Ok(false);
     };
     if auth.provider.is_empty() {
@@ -655,6 +667,10 @@ fn read_sessions_at(path: &Path) -> BTreeMap<String, Auth> {
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or_default();
+    if let Some(mut legacy) = map.remove("antigravity") {
+        legacy.provider = "google".into();
+        map.entry("google".into()).or_insert(legacy);
+    }
     map.retain(|id, auth| {
         !matches!(auth.auth_method, AuthMethod::Oauth) || oauth_session_supported(id)
     });
@@ -747,9 +763,7 @@ fn load_provider_oauth_token_at(path: &Path, provider_id: &str) -> Option<String
 pub fn has_provider_oauth(provider_id: &str) -> bool {
     read_sessions_at(&crate::config::provider_sessions_path())
         .get(provider_id)
-        .map(|a| {
-            matches!(a.auth_method, AuthMethod::Oauth) && !a.api_key.trim().is_empty()
-        })
+        .map(|a| matches!(a.auth_method, AuthMethod::Oauth) && !a.api_key.trim().is_empty())
         .unwrap_or(false)
 }
 
@@ -790,7 +804,9 @@ pub fn key_fingerprint(key: &str) -> String {
 
 pub fn auth_status() -> Result<()> {
     // Status should report mismatch without hard-failing the command.
-    let env_source = if std::env::var("NUR_API_KEY").map(|k| !k.trim().is_empty()).unwrap_or(false)
+    let env_source = if std::env::var("NUR_API_KEY")
+        .map(|k| !k.trim().is_empty())
+        .unwrap_or(false)
     {
         Some("NUR_API_KEY env")
     } else if std::env::var("META_API_KEY")
@@ -941,19 +957,13 @@ mod tests {
     #[test]
     fn expires_relative_future_and_past() {
         let now = 1_000_000u64;
-        assert_eq!(
-            format_expires_relative_at(Some(now + 120), now),
-            "in 2m"
-        );
+        assert_eq!(format_expires_relative_at(Some(now + 120), now), "in 2m");
         assert_eq!(
             format_expires_relative_at(Some(now - 90), now),
             "expired 1m ago"
         );
         assert_eq!(format_expires_relative_at(None, now), "no expiry");
-        assert_eq!(
-            format_expires_relative_at(Some(now + 3700), now),
-            "in 1h1m"
-        );
+        assert_eq!(format_expires_relative_at(Some(now + 3700), now), "in 1h1m");
     }
 
     #[test]
@@ -1062,11 +1072,17 @@ mod tests {
         assert!(read_keys_at(&path).is_empty());
         save_key_at(&path, "openai", "sk-abcdefgh").unwrap();
         save_key_at(&path, "anthropic", "sk-ant-xxxxxxxx").unwrap();
-        assert_eq!(read_keys_at(&path).get("openai").map(String::as_str), Some("sk-abcdefgh"));
+        assert_eq!(
+            read_keys_at(&path).get("openai").map(String::as_str),
+            Some("sk-abcdefgh")
+        );
         assert_eq!(read_keys_at(&path).len(), 2);
         // Re-saving the same provider overwrites, doesn't duplicate.
         save_key_at(&path, "openai", "sk-newnewnew").unwrap();
-        assert_eq!(read_keys_at(&path).get("openai").map(String::as_str), Some("sk-newnewnew"));
+        assert_eq!(
+            read_keys_at(&path).get("openai").map(String::as_str),
+            Some("sk-newnewnew")
+        );
         assert_eq!(read_keys_at(&path).len(), 2);
         // Too-short keys are rejected.
         assert!(save_key_at(&path, "openai", "short").is_err());

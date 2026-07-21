@@ -42,9 +42,7 @@ impl Tool for EditFile {
 
         let count = content.matches(&old).count();
         if count == 0 {
-            return Err(MuseError::Tool(
-                "old_string not found in file".into(),
-            ));
+            return Err(MuseError::Tool("old_string not found in file".into()));
         }
         if count > 1 && !replace_all {
             return Err(MuseError::Tool(format!(

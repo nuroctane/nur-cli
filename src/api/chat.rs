@@ -26,7 +26,7 @@ pub fn build_body_for_provider(req: &ResponseRequest, stream: bool, provider_id:
 /// Placeholder swapped in for an image/video part when the endpoint has no
 /// vision support. Keeps the turn's shape (and the model's awareness that
 /// something was attached) without tripping a text-only server.
-const MEDIA_DROPPED: &str = "[attachment omitted — this model/endpoint has no vision support]";
+const MEDIA_DROPPED: &str = "[attachment omitted - this model/endpoint has no vision support]";
 
 /// Same as [`build_body_for_provider`], but `drop_media` replaces every image /
 /// video content part with a short text marker.
@@ -274,7 +274,10 @@ fn collect_images(content: Option<&Value>) -> Vec<String> {
 
 /// Reconstruct a Responses `ApiResponse` from a non-streamed chat completion.
 pub fn parse_completion(v: &Value) -> Value {
-    let msg = v.pointer("/choices/0/message").cloned().unwrap_or(json!({}));
+    let msg = v
+        .pointer("/choices/0/message")
+        .cloned()
+        .unwrap_or(json!({}));
     let raw = msg.get("content").and_then(|c| c.as_str()).unwrap_or("");
     // Local reasoning models fold their scratchpad into `content`; keep it out
     // of the answer. (The dedicated field, when present, is already separate.)
@@ -367,7 +370,11 @@ impl ThinkSplitter {
         self.pending.push_str(chunk);
         let mut out = Vec::new();
         loop {
-            let marker = if self.in_think { THINK_CLOSE } else { THINK_OPEN };
+            let marker = if self.in_think {
+                THINK_CLOSE
+            } else {
+                THINK_OPEN
+            };
             match self.pending.find(marker) {
                 Some(at) => {
                     let head: String = self.pending[..at].to_string();
@@ -505,7 +512,8 @@ impl StreamAccumulator {
                 for tc in tcs {
                     let idx = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
                     while self.calls.len() <= idx {
-                        self.calls.push((String::new(), String::new(), String::new()));
+                        self.calls
+                            .push((String::new(), String::new(), String::new()));
                     }
                     let slot = &mut self.calls[idx];
                     if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
@@ -756,7 +764,11 @@ mod tests {
         let mut acc = StreamAccumulator::default();
         let (text, reasoning) = drain(
             &mut acc,
-            &["<think>let me check", " the tests</think>", "The answer is 42."],
+            &[
+                "<think>let me check",
+                " the tests</think>",
+                "The answer is 42.",
+            ],
         );
         assert_eq!(reasoning, "let me check the tests");
         assert_eq!(text, "The answer is 42.");
@@ -793,7 +805,11 @@ mod tests {
         assert_eq!(text, "");
         assert_eq!(reasoning, "cut off mid-thou");
         let resp = to_api_response(acc.finish()).unwrap();
-        assert_eq!(resp.output_text(), "", "truncated thinking is not an answer");
+        assert_eq!(
+            resp.output_text(),
+            "",
+            "truncated thinking is not an answer"
+        );
         assert!(acc.reasoning.contains("cut off"));
     }
 
@@ -829,6 +845,9 @@ mod tests {
         assert_eq!(answer, "bd");
 
         // Content with no markers is returned untouched.
-        assert_eq!(split_think("just an answer"), (String::new(), "just an answer".into()));
+        assert_eq!(
+            split_think("just an answer"),
+            (String::new(), "just an answer".into())
+        );
     }
 }

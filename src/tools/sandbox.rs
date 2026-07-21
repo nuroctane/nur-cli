@@ -209,7 +209,9 @@ pub fn resolve_safe_workspace(
     let git = prefer_git_root(requested);
     if !is_dangerous_workspace(&git) {
         return Ok((
-            git.canonicalize().map(|p| strip_verbatim(&p)).unwrap_or(git),
+            git.canonicalize()
+                .map(|p| strip_verbatim(&p))
+                .unwrap_or(git),
             Some("using nearest git repository (not drive root)".into()),
         ));
     }
@@ -239,7 +241,15 @@ pub fn resolve_safe_workspace(
 
     // 4) Common project folders under home
     if let Some(home) = dirs::home_dir() {
-        for name in ["laboratory", "Laboratory", "projects", "Projects", "code", "src", "dev"] {
+        for name in [
+            "laboratory",
+            "Laboratory",
+            "projects",
+            "Projects",
+            "code",
+            "src",
+            "dev",
+        ] {
             let p = home.join(name);
             if p.is_dir() && !is_dangerous_workspace(&p) {
                 // Prefer nur-cli inside laboratory if present
@@ -250,7 +260,9 @@ pub fn resolve_safe_workspace(
                             .canonicalize()
                             .map(|c| strip_verbatim(&c))
                             .unwrap_or(nur_cli),
-                        Some(format!("using ~\\{name}\\nur-cli (started from drive root)")),
+                        Some(format!(
+                            "using ~\\{name}\\nur-cli (started from drive root)"
+                        )),
                     ));
                 }
                 return Ok((

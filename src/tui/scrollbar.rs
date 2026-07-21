@@ -183,7 +183,10 @@ mod tests {
         assert!(m.thumb_travel() > 0);
         let tiny = ScrollMetrics::new(100_000, 10, 0, 10);
         // Never smaller than one cell.
-        assert!(matches!(tiny.cell_fill(0), CellFill::Full | CellFill::Partial { .. }));
+        assert!(matches!(
+            tiny.cell_fill(0),
+            CellFill::Full | CellFill::Partial { .. }
+        ));
     }
 
     #[test]

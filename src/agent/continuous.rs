@@ -35,7 +35,9 @@ pub fn is_done(answer: &str) -> bool {
     if t.eq_ignore_ascii_case("done") {
         return true;
     }
-    answer.lines().any(|l| l.trim().eq_ignore_ascii_case("done"))
+    answer
+        .lines()
+        .any(|l| l.trim().eq_ignore_ascii_case("done"))
 }
 
 #[cfg(test)]
@@ -46,13 +48,19 @@ mod tests {
     fn first_prompt_states_goal_and_protocol() {
         let p = continuous_prompt("ship the release", 1);
         assert!(p.contains("ship the release"));
-        assert!(p.contains("DONE"), "must explain the DONE completion signal");
+        assert!(
+            p.contains("DONE"),
+            "must explain the DONE completion signal"
+        );
     }
 
     #[test]
     fn later_prompts_ask_to_continue_without_restating_goal() {
         let p = continuous_prompt("ship the release", 5);
-        assert!(!p.contains("ship the release"), "later steps rely on retained context");
+        assert!(
+            !p.contains("ship the release"),
+            "later steps rely on retained context"
+        );
         assert!(p.contains("DONE"));
     }
 

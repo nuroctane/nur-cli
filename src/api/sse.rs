@@ -123,6 +123,9 @@ mod tests {
     fn chunk_boundary_between_the_two_newlines() {
         let mut p = SseParser::new();
         assert!(p.push(b"data: x\n").is_empty());
-        assert_eq!(p.push(b"\ndata: y\n\n"), vec!["x".to_string(), "y".to_string()]);
+        assert_eq!(
+            p.push(b"\ndata: y\n\n"),
+            vec!["x".to_string(), "y".to_string()]
+        );
     }
 }

@@ -55,7 +55,10 @@ pub struct VerifyResult {
 }
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 fn now_unix() -> u64 {
@@ -84,7 +87,13 @@ fn receipts_dir() -> PathBuf {
 pub fn path(session_id: &str) -> PathBuf {
     let safe: String = session_id
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     receipts_dir().join(format!("{safe}.jsonl"))
 }
@@ -119,10 +128,20 @@ fn record_at(p: &Path, event: Event) {
     let (prev, seq) = tail_hash_and_seq(p);
     let ts = now_unix();
     let hash = entry_hash(&prev, seq, ts, &event);
-    let entry = Entry { seq, ts, event, prev, hash };
+    let entry = Entry {
+        seq,
+        ts,
+        event,
+        prev,
+        hash,
+    };
     if let Ok(line) = serde_json::to_string(&entry) {
         use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(p)
+        {
             let _ = writeln!(f, "{line}");
         }
     }
@@ -142,16 +161,28 @@ fn verify_at(p: &Path) -> VerifyResult {
             continue;
         }
         let Ok(e) = serde_json::from_str::<Entry>(line) else {
-            return VerifyResult { entries: count, ok: false, first_bad: Some(count as u64 + 1) };
+            return VerifyResult {
+                entries: count,
+                ok: false,
+                first_bad: Some(count as u64 + 1),
+            };
         };
         let expect = entry_hash(&prev, e.seq, e.ts, &e.event);
         if e.prev != prev || e.hash != expect {
-            return VerifyResult { entries: count, ok: false, first_bad: Some(e.seq) };
+            return VerifyResult {
+                entries: count,
+                ok: false,
+                first_bad: Some(e.seq),
+            };
         }
         prev = e.hash;
         count += 1;
     }
-    VerifyResult { entries: count, ok: true, first_bad: None }
+    VerifyResult {
+        entries: count,
+        ok: true,
+        first_bad: None,
+    }
 }
 
 /// Human-readable receipt with an integrity check line.
@@ -168,7 +199,14 @@ pub fn render(session_id: &str) -> String {
             continue;
         };
         match &e.event {
-            Event::Model { provider, model, privacy, failover, input_tokens, output_tokens } => {
+            Event::Model {
+                provider,
+                model,
+                privacy,
+                failover,
+                input_tokens,
+                output_tokens,
+            } => {
                 models += 1;
                 if *failover {
                     failovers += 1;
@@ -198,7 +236,10 @@ pub fn render(session_id: &str) -> String {
     let integrity = if v.ok {
         format!("integrity ✓ verified · {} entries hash-chained", v.entries)
     } else {
-        format!("integrity ✗ TAMPERED at entry #{}", v.first_bad.unwrap_or(0))
+        format!(
+            "integrity ✗ TAMPERED at entry #{}",
+            v.first_bad.unwrap_or(0)
+        )
     };
     let mut out = format!(
         "session receipt · {models} model calls · {tools} tool calls · {failovers} failover(s)\n{integrity}\n{}\n",

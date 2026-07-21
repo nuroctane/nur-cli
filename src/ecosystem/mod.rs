@@ -223,7 +223,7 @@ pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
             status.skills_installed = names;
             // Invalidate skill cache so next TUI gets fresh index (was 263ms cold, now 17ms cached)
             crate::agent::skill_cache::invalidate_cache();
-        },
+        }
         Err(e) => status.notes.push(format!("bundled skills: {e}")),
     }
 
@@ -243,7 +243,10 @@ pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
     // tldraw offline desktop app (official) — best-effort auto-install so `/draw`
     // works out of the box. No-ops when already present; skips quietly offline.
     match crate::tools::tldraw::ensure_installed() {
-        Ok(note) => status.notes.push(format!("tldraw offline: {}", note.lines().next().unwrap_or("ok"))),
+        Ok(note) => status.notes.push(format!(
+            "tldraw offline: {}",
+            note.lines().next().unwrap_or("ok")
+        )),
         Err(e) => status.notes.push(format!("tldraw offline: {e}")),
     }
 
@@ -328,12 +331,7 @@ fn ensure_excalidraw(node_ok: bool) -> ComponentStatus {
         return c;
     }
     let npm = find_bin("npm").unwrap_or_else(|| "npm".into());
-    match run_capture(
-        &npm,
-        &["install", "-g", "excalidraw-cli"],
-        None,
-        300_000,
-    ) {
+    match run_capture(&npm, &["install", "-g", "excalidraw-cli"], None, 300_000) {
         Ok(_) => {}
         Err(e) => {
             c.detail = format!(
@@ -371,7 +369,8 @@ fn ensure_akarso(node_ok: bool) -> ComponentStatus {
         c.available = true;
         c.path = Some(bin.clone());
         c.version = cmd_version(&bin, &["--version"]);
-        c.detail = "CLI ready · social posting via the akarso tool (run `akarso auth login`)".into();
+        c.detail =
+            "CLI ready · social posting via the akarso tool (run `akarso auth login`)".into();
         return c;
     }
     if !node_ok {
@@ -523,7 +522,12 @@ fn ensure_plur(node_ok: bool) -> ComponentStatus {
     if find_bin("plur").is_none() {
         let _ = run_quiet(
             "npm",
-            &["install", "-g", "@plur-ai/cli@latest", "@plur-ai/mcp@latest"],
+            &[
+                "install",
+                "-g",
+                "@plur-ai/cli@latest",
+                "@plur-ai/mcp@latest",
+            ],
             None,
             600_000,
         );
@@ -647,10 +651,7 @@ pub fn find_bin(name: &str) -> Option<String> {
             .join("Roaming")
             .join("npm")
             .join(format!("{name}.exe")),
-        home.join("AppData")
-            .join("Roaming")
-            .join("npm")
-            .join(name),
+        home.join("AppData").join("Roaming").join("npm").join(name),
         PathBuf::from(r"C:\Program Files\nodejs").join(format!("{name}.cmd")),
         PathBuf::from(r"C:\Program Files\nodejs").join(format!("{name}.exe")),
         PathBuf::from(r"C:\Program Files\nodejs").join(name),
@@ -716,10 +717,7 @@ fn find_file_only(name: &str) -> Option<String> {
 fn resolve_where(name: &str) -> Option<String> {
     #[cfg(windows)]
     {
-        let out = Command::new("where.exe")
-            .arg(name)
-            .output()
-            .ok()?;
+        let out = Command::new("where.exe").arg(name).output().ok()?;
         if !out.status.success() {
             return None;
         }
@@ -747,7 +745,11 @@ fn resolve_where(name: &str) -> Option<String> {
         if !out.status.success() {
             return None;
         }
-        let p = String::from_utf8_lossy(&out.stdout).lines().next()?.trim().to_string();
+        let p = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .next()?
+            .trim()
+            .to_string();
         if p.is_empty() {
             None
         } else {
@@ -864,7 +866,8 @@ pub fn run_capture(
         buf
     });
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms.max(1_000));
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms.max(1_000));
     let status = loop {
         match child.try_wait() {
             Ok(Some(s)) => break s,
@@ -898,10 +901,7 @@ pub fn run_capture(
         if !out.is_empty() {
             out.push_str("\n\n");
         }
-        let filtered: Vec<&str> = err
-            .lines()
-            .filter(|l| !l.starts_with("[DEBUG]"))
-            .collect();
+        let filtered: Vec<&str> = err.lines().filter(|l| !l.starts_with("[DEBUG]")).collect();
         if !filtered.is_empty() {
             out.push_str(&filtered.join("\n"));
         }
@@ -937,14 +937,9 @@ pub(crate) fn cmd_version_pub(bin: &str, args: &[&str]) -> Option<String> {
 pub fn plur_inject(task: &str) -> Option<String> {
     let bin = find_bin("plur")?;
     // Prefer --fast so cold start does not stall on ONNX download.
-    let out = run_capture(
-        &bin,
-        &["inject", task, "--fast", "--json"],
-        None,
-        45_000,
-    )
-    .or_else(|_| run_capture(&bin, &["inject", task, "--fast"], None, 45_000))
-    .ok()?;
+    let out = run_capture(&bin, &["inject", task, "--fast", "--json"], None, 45_000)
+        .or_else(|_| run_capture(&bin, &["inject", task, "--fast"], None, 45_000))
+        .ok()?;
     if out.trim().is_empty() || out.contains("\"count\":0") {
         return None;
     }

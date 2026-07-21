@@ -9,13 +9,11 @@ use crate::api::types::{
     function_call_output_item, replay_output_items, user_multimodal_item, user_text_item,
     FunctionCallRef, ReasoningConfig, ResponseRequest,
 };
-use crate::api::{ApiResponse, ApiClient, StreamEvent};
+use crate::api::{ApiClient, ApiResponse, StreamEvent};
 use crate::config::Config;
 use crate::error::{MuseError, Result};
 use crate::tools::media::{self, MediaAttach};
-use crate::tools::{
-    is_parallel_safe, is_read_only_call, spill, ToolContext, ToolHost,
-};
+use crate::tools::{is_parallel_safe, is_read_only_call, spill, ToolContext, ToolHost};
 use crate::usage::{TokenUsage, UsageTracker};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -30,7 +28,11 @@ pub enum AgentEvent {
     ReasoningDelta(String),
     TextDelta(String),
     AssistantMessage(String),
-    ToolStart { id: u64, name: String, args: String },
+    ToolStart {
+        id: u64,
+        name: String,
+        args: String,
+    },
     ToolEnd {
         id: u64,
         name: String,
@@ -46,7 +48,10 @@ pub enum AgentEvent {
         args: String,
         respond: oneshot::Sender<ApprovalDecision>,
     },
-    Usage { session: TokenUsage, last: TokenUsage },
+    Usage {
+        session: TokenUsage,
+        last: TokenUsage,
+    },
     Done {
         session: Box<Session>,
         usage: Box<UsageTracker>,
@@ -150,8 +155,7 @@ pub async fn run_collect(
                 result,
                 interrupted,
             } => {
-                let result =
-                    result.map(|t| if t.trim().is_empty() { acc.clone() } else { t });
+                let result = result.map(|t| if t.trim().is_empty() { acc.clone() } else { t });
                 return (session, usage, result, interrupted);
             }
             _ => {}
@@ -253,14 +257,17 @@ impl AgentRunner {
 
         // Privacy floor: never fail over to a weaker data-privacy tier than the
         // active provider unless explicitly allowed (see `providers::Privacy`).
-        let active_privacy =
-            crate::providers::effective_privacy(&self.config.provider_privacy, &self.config.provider);
+        let active_privacy = crate::providers::effective_privacy(
+            &self.config.provider_privacy,
+            &self.config.provider,
+        );
         let allowed: Vec<String> = self
             .config
             .fallback_providers
             .iter()
             .filter(|id| {
-                let r = crate::providers::effective_privacy(&self.config.provider_privacy, id).rank();
+                let r =
+                    crate::providers::effective_privacy(&self.config.provider_privacy, id).rank();
                 crate::api::failover::privacy_allowed(
                     active_privacy.rank(),
                     r,
@@ -390,9 +397,7 @@ impl AgentRunner {
             Some(user_text),
         );
         if prompt_ctx.has_skill_activation() {
-            let label = prompt_ctx
-                .skill_activation_label()
-                .unwrap_or("skill");
+            let label = prompt_ctx.skill_activation_label().unwrap_or("skill");
             let _ = tx.send(AgentEvent::Status(format!(
                 "{label} · activated from your wording (no slash command needed)"
             )));
@@ -427,15 +432,12 @@ impl AgentRunner {
                 match compact_session(self, session, usage).await {
                     Ok(_) => {
                         did_auto_compact = true;
-                        let _ = tx.send(AgentEvent::Status(
-                            "context compacted — continuing".into(),
-                        ));
+                        let _ =
+                            tx.send(AgentEvent::Status("context compacted — continuing".into()));
                     }
                     Err(e) => {
                         did_auto_compact = true; // don't spin on repeated failures
-                        let _ = tx.send(AgentEvent::Status(format!(
-                            "auto-compact skipped: {e}"
-                        )));
+                        let _ = tx.send(AgentEvent::Status(format!("auto-compact skipped: {e}")));
                     }
                 }
             }
@@ -461,8 +463,7 @@ impl AgentRunner {
             }
 
             let mode_now = self.permission_mode.get();
-            let instructions =
-                prompt_ctx.render(mode_now, &self.tools.todos_snapshot().render());
+            let instructions = prompt_ctx.render(mode_now, &self.tools.todos_snapshot().render());
 
             usage.set_state(format!("thinking (turn {turns})"));
             let _ = tx.send(AgentEvent::Status(format!(
@@ -651,9 +652,7 @@ impl AgentRunner {
                     }
 
                     // Collect in submission order (handles order matches meta)
-                    for (handle, (id, call_id, name)) in
-                        handles.into_iter().zip(meta.into_iter())
-                    {
+                    for (handle, (id, call_id, name)) in handles.into_iter().zip(meta.into_iter()) {
                         let (_, _, res) = tokio::select! {
                             _ = cancel.cancelled() => {
                                 // Fills this call, the rest of the batch, and every
@@ -763,10 +762,7 @@ impl AgentRunner {
                             "blocked · plan mode".into(),
                         )
                     } else {
-                        (
-                            "user denied this tool call".into(),
-                            "denied by user".into(),
-                        )
+                        ("user denied this tool call".into(), "denied by user".into())
                     };
                     let _ = tx.send(AgentEvent::ToolEnd {
                         id,
@@ -812,12 +808,10 @@ impl AgentRunner {
                     }
                 } else {
                     // Pre-tool hook (optional) — blocks on non-zero exit.
-                    if let Err(e) = self.hooks.run_pre(
-                        &call.name,
-                        &call.arguments,
-                        &self.cwd,
-                        &session.id,
-                    ) {
+                    if let Err(e) =
+                        self.hooks
+                            .run_pre(&call.name, &call.arguments, &self.cwd, &session.id)
+                    {
                         let msg = format!("error: {e}");
                         let _ = tx.send(AgentEvent::ToolEnd {
                             id,
@@ -833,7 +827,10 @@ impl AgentRunner {
                     }
                     // Snapshot the target before a single-file mutating tool so
                     // `/undo` can restore it. Best-effort; never blocks the tool.
-                    if matches!(call.name.as_str(), "write_file" | "edit_file" | "multi_edit") {
+                    if matches!(
+                        call.name.as_str(),
+                        "write_file" | "edit_file" | "multi_edit"
+                    ) {
                         if let Ok(v) = serde_json::from_str::<Value>(&call.arguments) {
                             if let Some(p) = v.get("path").and_then(|p| p.as_str()) {
                                 if let Ok(abs) = crate::tools::resolve_path(&self.cwd, p) {
@@ -895,12 +892,8 @@ impl AgentRunner {
                         ok,
                     },
                 );
-                self.hooks.run_post(
-                    &call.name,
-                    &call.arguments,
-                    &self.cwd,
-                    &session.id,
-                );
+                self.hooks
+                    .run_post(&call.name, &call.arguments, &self.cwd, &session.id);
                 emit_side_effects(tx, &call.name, &body);
                 let _ = tx.send(AgentEvent::ToolEnd {
                     id,
@@ -951,7 +944,10 @@ impl AgentRunner {
             } else if mode_at_gate.is_read_only_enforced()
                 && !is_read_only_call(&call.name, &call.arguments)
             {
-                Some("blocked in plan mode — subagents may edit; switch to manual/auto (Shift+Tab)".to_string())
+                Some(
+                    "blocked in plan mode — subagents may edit; switch to manual/auto (Shift+Tab)"
+                        .to_string(),
+                )
             } else {
                 Some("user denied this tool call".to_string())
             };
@@ -1005,9 +1001,7 @@ impl AgentRunner {
         }
 
         // Phase 3 — collect in submission order so `call_id` pairing holds.
-        for (call, ((id, denial), handle)) in
-            batch.iter().zip(gated.into_iter().zip(handles))
-        {
+        for (call, ((id, denial), handle)) in batch.iter().zip(gated.into_iter().zip(handles)) {
             let (body, ok) = match (denial, handle) {
                 (Some(msg), _) => {
                     let _ = tx.send(AgentEvent::ToolEnd {
@@ -1217,7 +1211,11 @@ mod tests {
                         && v.get("call_id").and_then(|i| i.as_str()) == Some(c.call_id.as_str())
                 })
                 .count();
-            assert_eq!(n, 1, "call {} has {n} outputs, expected exactly 1", c.call_id);
+            assert_eq!(
+                n, 1,
+                "call {} has {n} outputs, expected exactly 1",
+                c.call_id
+            );
         }
     }
 
@@ -1257,7 +1255,11 @@ mod tests {
         let calls = vec![call("a", "bash")];
         let mut items: Vec<Value> = Vec::new();
         pair_interrupted(&mut items, &calls);
-        assert_eq!(pair_interrupted(&mut items, &calls), 0, "must not duplicate");
+        assert_eq!(
+            pair_interrupted(&mut items, &calls),
+            0,
+            "must not duplicate"
+        );
         assert_fully_paired(&items, &calls);
     }
 
@@ -1271,14 +1273,19 @@ mod tests {
 
     #[test]
     fn agent_calls_parse_into_prompt_kind_and_label() {
-        let (prompt, kind, desc) = parse_agent_call(&FunctionCallRef {
-            call_id: "a".into(),
-            name: "agent".into(),
-            arguments: r#"{"prompt":"map auth","subagent_type":"general","description":"auth map"}"#
-                .into(),
-        })
-        .expect("valid call");
-        assert_eq!((prompt.as_str(), kind.as_str(), desc.as_str()), ("map auth", "general", "auth map"));
+        let (prompt, kind, desc) =
+            parse_agent_call(&FunctionCallRef {
+                call_id: "a".into(),
+                name: "agent".into(),
+                arguments:
+                    r#"{"prompt":"map auth","subagent_type":"general","description":"auth map"}"#
+                        .into(),
+            })
+            .expect("valid call");
+        assert_eq!(
+            (prompt.as_str(), kind.as_str(), desc.as_str()),
+            ("map auth", "general", "auth map")
+        );
 
         // Defaults: explore, and the label falls back to the kind.
         let (_, kind, desc) = parse_agent_call(&agent_call("b", "look around", "explore")).unwrap();
@@ -1349,10 +1356,7 @@ mod tests {
                 let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
                 peak.fetch_max(now, Ordering::SeqCst);
                 // Later jobs finish sooner, so ordering cannot come for free.
-                tokio::time::sleep(std::time::Duration::from_millis(
-                    (JOBS - i) as u64 * 8,
-                ))
-                .await;
+                tokio::time::sleep(std::time::Duration::from_millis((JOBS - i) as u64 * 8)).await;
                 in_flight.fetch_sub(1, Ordering::SeqCst);
                 i
             }));
@@ -1408,8 +1412,13 @@ mod tests {
             children.push(tokio::spawn(async move {
                 let (child_tx, child_rx) = tokio::sync::oneshot::channel();
                 let ask = tokio::spawn(async move {
-                    super::subagent::relay_approval_for_test(&tx, "bash".into(), "{}".into(), child_tx)
-                        .await;
+                    super::subagent::relay_approval_for_test(
+                        &tx,
+                        "bash".into(),
+                        "{}".into(),
+                        child_tx,
+                    )
+                    .await;
                 });
                 let decision = child_rx.await;
                 let n = concurrent.fetch_add(1, Ordering::SeqCst) + 1;
@@ -1425,7 +1434,11 @@ mod tests {
         drop(parent_tx);
         let _ = parent.await;
 
-        assert_eq!(seen.load(Ordering::SeqCst), 4, "every child must get an answer");
+        assert_eq!(
+            seen.load(Ordering::SeqCst),
+            4,
+            "every child must get an answer"
+        );
     }
 
     /// Parallel batches skip the approval gate, so anything parallel-safe MUST
@@ -1433,9 +1446,26 @@ mod tests {
     #[test]
     fn parallel_safe_implies_approval_free() {
         for name in [
-            "read_file", "list_dir", "grep", "glob", "web_fetch", "web_search", "look",
-            "extract_frames", "git_status", "git_diff", "skill", "write_file", "edit_file",
-            "multi_edit", "apply_patch", "bash", "agent", "memory", "todo_write", "submit_plan",
+            "read_file",
+            "list_dir",
+            "grep",
+            "glob",
+            "web_fetch",
+            "web_search",
+            "look",
+            "extract_frames",
+            "git_status",
+            "git_diff",
+            "skill",
+            "write_file",
+            "edit_file",
+            "multi_edit",
+            "apply_patch",
+            "bash",
+            "agent",
+            "memory",
+            "todo_write",
+            "submit_plan",
         ] {
             if is_parallel_safe(name, "{}") {
                 assert!(
@@ -1457,7 +1487,10 @@ mod tests {
             "agent",
             "extract_frames",
         ] {
-            assert!(!is_parallel_safe(name, "{}"), "{name} must run sequentially");
+            assert!(
+                !is_parallel_safe(name, "{}"),
+                "{name} must run sequentially"
+            );
             assert!(!is_read_only_call(name, "{}"), "{name} must need approval");
         }
         assert!(is_read_only_call("look", r#"{"path":"x.png"}"#));
@@ -1467,8 +1500,14 @@ mod tests {
     #[test]
     fn memory_read_is_free_but_append_needs_approval() {
         assert!(is_read_only_call("memory", r#"{"action":"read"}"#));
-        assert!(!is_read_only_call("memory", r#"{"action":"append","text":"x"}"#));
-        assert!(!is_read_only_call("memory", "{}"), "unspecified action must not be free");
+        assert!(!is_read_only_call(
+            "memory",
+            r#"{"action":"append","text":"x"}"#
+        ));
+        assert!(
+            !is_read_only_call("memory", "{}"),
+            "unspecified action must not be free"
+        );
         // …and memory never rides a parallel batch (it can mutate).
         assert!(!is_parallel_safe("memory", r#"{"action":"read"}"#));
     }
@@ -1564,7 +1603,10 @@ mod tests {
 
     #[test]
     fn plur_and_ruflo_gates() {
-        assert!(is_read_only_call("plur", r#"{"action":"recall","query":"x"}"#));
+        assert!(is_read_only_call(
+            "plur",
+            r#"{"action":"recall","query":"x"}"#
+        ));
         assert!(is_read_only_call("plur", r#"{"action":"status"}"#));
         assert!(!is_read_only_call(
             "plur",
@@ -1586,7 +1628,10 @@ mod tests {
         // status/version probes are free; a run drives a full coding agent.
         assert!(is_read_only_call("omp", r#"{"action":"status"}"#));
         assert!(is_read_only_call("omp", r#"{"action":"version"}"#));
-        assert!(!is_read_only_call("omp", r#"{"action":"run","prompt":"x"}"#));
+        assert!(!is_read_only_call(
+            "omp",
+            r#"{"action":"run","prompt":"x"}"#
+        ));
         assert!(
             !is_read_only_call("omp", "{}"),
             "default action=run must not be free"
@@ -1616,13 +1661,26 @@ mod tests {
 
     #[test]
     fn browser_perception_is_free_control_is_gated() {
-        for free in ["tabs", "scan", "snapshot", "tabtree", "status", "console", "network"] {
+        for free in [
+            "tabs", "scan", "snapshot", "tabtree", "status", "console", "network",
+        ] {
             let a = format!(r#"{{"action":"{free}"}}"#);
             assert!(is_read_only_call("browser", &a), "{free} should be free");
         }
-        for gated in ["open", "click", "fill", "send_keys", "exec", "close", "screenshot"] {
+        for gated in [
+            "open",
+            "click",
+            "fill",
+            "send_keys",
+            "exec",
+            "close",
+            "screenshot",
+        ] {
             let a = format!(r#"{{"action":"{gated}"}}"#);
-            assert!(!is_read_only_call("browser", &a), "{gated} must need approval");
+            assert!(
+                !is_read_only_call("browser", &a),
+                "{gated} must need approval"
+            );
         }
         // Screenshot is plan-safe perception (writes an image, like extract_frames).
         assert!(crate::tools::browser::is_plan_safe_action(
@@ -1692,35 +1750,94 @@ pub fn session_budget_exceeded(cfg: &Config, usage: &UsageTracker) -> Option<Str
 /// install dependencies — i.e. "no submitting changes / no code input", while
 /// non-mutating compute stays free. Returns a short reason when blocked.
 pub fn plan_blocks_shell(command: &str) -> Option<&'static str> {
-    let c = format!(" {} ", command.to_ascii_lowercase().replace(['\t', '\n'], " "));
+    let c = format!(
+        " {} ",
+        command.to_ascii_lowercase().replace(['\t', '\n'], " ")
+    );
     // Git working-tree / index / publish mutations (fetch is read-only, allowed).
     const GIT_MUT: &[&str] = &[
-        "git commit", "git push", "git add", "git reset", "git checkout", "git restore",
-        "git stash", "git merge", "git rebase", "git cherry-pick", "git revert", "git rm",
-        "git mv", "git clean", "git apply", "git tag ", "git pull", "git switch",
+        "git commit",
+        "git push",
+        "git add",
+        "git reset",
+        "git checkout",
+        "git restore",
+        "git stash",
+        "git merge",
+        "git rebase",
+        "git cherry-pick",
+        "git revert",
+        "git rm",
+        "git mv",
+        "git clean",
+        "git apply",
+        "git tag ",
+        "git pull",
+        "git switch",
     ];
     if GIT_MUT.iter().any(|p| c.contains(p)) {
         return Some("git repo/VCS mutation is blocked in plan mode — Shift+Tab to manual/auto to commit or change tracked files");
     }
     // PR / release publishing via gh.
     const GH_MUT: &[&str] = &[
-        "gh pr create", "gh pr merge", "gh pr close", "gh pr edit", "gh pr ready",
-        "gh pr comment", "gh pr reopen", "gh release create", "gh release edit",
-        "gh release delete", "gh repo create", "gh repo delete", "gh repo edit",
-        "gh issue create", "gh issue edit", "gh issue close",
+        "gh pr create",
+        "gh pr merge",
+        "gh pr close",
+        "gh pr edit",
+        "gh pr ready",
+        "gh pr comment",
+        "gh pr reopen",
+        "gh release create",
+        "gh release edit",
+        "gh release delete",
+        "gh repo create",
+        "gh repo delete",
+        "gh repo edit",
+        "gh issue create",
+        "gh issue edit",
+        "gh issue close",
     ];
     if GH_MUT.iter().any(|p| c.contains(p)) {
         return Some("publishing (gh) is blocked in plan mode");
     }
     // Dependency installs mutate lockfiles / the environment.
     const DEP_MUT: &[&str] = &[
-        "npm install", "npm i ", "npm ci", "npm add", "npm uninstall", "npm remove",
-        "pnpm add", "pnpm install", "pnpm remove", "yarn add", "yarn install", "yarn remove",
-        "bun add", "bun install", "pip install", "pip uninstall", "pip3 install",
-        "pip3 uninstall", "poetry add", "poetry install", "poetry remove", "cargo add",
-        "cargo install", "cargo remove", "cargo publish", "cargo update", "gem install",
-        "bundle install", "bundle update", "go get ", "go install", "apt install",
-        "apt-get install", "brew install", "dnf install", "yum install",
+        "npm install",
+        "npm i ",
+        "npm ci",
+        "npm add",
+        "npm uninstall",
+        "npm remove",
+        "pnpm add",
+        "pnpm install",
+        "pnpm remove",
+        "yarn add",
+        "yarn install",
+        "yarn remove",
+        "bun add",
+        "bun install",
+        "pip install",
+        "pip uninstall",
+        "pip3 install",
+        "pip3 uninstall",
+        "poetry add",
+        "poetry install",
+        "poetry remove",
+        "cargo add",
+        "cargo install",
+        "cargo remove",
+        "cargo publish",
+        "cargo update",
+        "gem install",
+        "bundle install",
+        "bundle update",
+        "go get ",
+        "go install",
+        "apt install",
+        "apt-get install",
+        "brew install",
+        "dnf install",
+        "yum install",
     ];
     if DEP_MUT.iter().any(|p| c.contains(p)) {
         return Some("dependency install/mutation is blocked in plan mode");
@@ -1757,7 +1874,9 @@ fn flush_pending_media(items: &mut Vec<Value>, tx: &mpsc::UnboundedSender<AgentE
         ),
         &pending,
     ));
-    let _ = tx.send(AgentEvent::Status(format!("vision · {n} attachment(s) ready")));
+    let _ = tx.send(AgentEvent::Status(format!(
+        "vision · {n} attachment(s) ready"
+    )));
 }
 
 fn multimodal_user_item(text: &str, media: &[MediaAttach]) -> Value {
@@ -1945,7 +2064,11 @@ pub async fn compact_session(
 
 /// Truncate oversized `function_call_output` bodies outside the last `keep_user_turns`
 /// user messages. Returns how many bodies were thinned.
-fn thin_tool_bodies_for_compact(items: &mut [Value], max_chars: usize, keep_user_turns: usize) -> usize {
+fn thin_tool_bodies_for_compact(
+    items: &mut [Value],
+    max_chars: usize,
+    keep_user_turns: usize,
+) -> usize {
     if max_chars == 0 {
         return 0;
     }

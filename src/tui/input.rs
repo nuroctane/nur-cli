@@ -207,11 +207,8 @@ impl InputState {
     }
 
     fn gc_pastes(&mut self) {
-        let live: std::collections::HashSet<u32> = self
-            .buffer
-            .iter()
-            .filter_map(|c| paste_id_of(*c))
-            .collect();
+        let live: std::collections::HashSet<u32> =
+            self.buffer.iter().filter_map(|c| paste_id_of(*c)).collect();
         self.pastes.retain(|id, _| live.contains(id));
     }
 
@@ -222,13 +219,7 @@ impl InputState {
             if !self.pastes.contains_key(&id)
                 && !self.buffer.iter().any(|c| paste_id_of(*c) == Some(id))
             {
-                self.pastes.insert(
-                    id,
-                    PasteBlock {
-                        id,
-                        content,
-                    },
-                );
+                self.pastes.insert(id, PasteBlock { id, content });
                 return Some(id);
             }
         }
@@ -1097,7 +1088,11 @@ mod tests {
         let mut i = InputState::empty_for_test();
         let body = "x".repeat(80);
         i.insert_paste(&body);
-        assert_eq!(i.buffer.len(), 1, "long single-line paste must be one chip, not raw text");
+        assert_eq!(
+            i.buffer.len(),
+            1,
+            "long single-line paste must be one chip, not raw text"
+        );
         assert!(is_paste_sentinel(i.buffer[0]));
         assert_eq!(i.text_expanded(), body);
         assert_eq!(i.chip_label_at(0).as_deref(), Some("[pasted 1-1 lines]"));
@@ -1112,7 +1107,11 @@ mod tests {
         }
         i.insert_paste(&body);
         assert_eq!(i.buffer.len(), 1);
-        assert_eq!(i.line_count(), 1, "chip is a single buffer glyph / one hard line");
+        assert_eq!(
+            i.line_count(),
+            1,
+            "chip is a single buffer glyph / one hard line"
+        );
         assert!(i.text_expanded().starts_with("line 1"));
         assert!(i.text_expanded().contains("line 50"));
         assert_eq!(i.chip_label_at(0).as_deref(), Some("[pasted 1-50 lines]"));
@@ -1124,7 +1123,10 @@ mod tests {
         i.insert_paste("a\nb\nc");
         i.insert_str(" mid ");
         i.insert_paste("d\ne\nf");
-        assert_eq!(i.buffer.iter().filter(|c| is_paste_sentinel(**c)).count(), 2);
+        assert_eq!(
+            i.buffer.iter().filter(|c| is_paste_sentinel(**c)).count(),
+            2
+        );
         assert_eq!(i.text_expanded(), "a\nb\nc mid d\ne\nf");
     }
 
@@ -1252,8 +1254,11 @@ line two
         assert_eq!(i.buffer.len(), 1);
         assert_eq!(i.paste_id_at(0), Some(id));
         for _ in 0..100 {
-            let ok = i.append_to_paste(id, "more line
-");
+            let ok = i.append_to_paste(
+                id,
+                "more line
+",
+            );
             assert!(ok);
         }
         assert_eq!(i.buffer.len(), 1, "must stay ONE chip, not 100");
@@ -1281,10 +1286,15 @@ line two
 
     #[test]
     fn reverse_search_match_picks_most_recent() {
-        let hist: Vec<String> = ["git status", "cargo build", "git commit -m wip", "cargo test"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let hist: Vec<String> = [
+            "git status",
+            "cargo build",
+            "git commit -m wip",
+            "cargo test",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         assert_eq!(reverse_search_match(&hist, "git", None), Some(2));
         assert_eq!(reverse_search_match(&hist, "git", Some(2)), Some(0));
         assert_eq!(reverse_search_match(&hist, "git", Some(0)), None);
@@ -1356,8 +1366,13 @@ line two
     fn thousand_small_pastes_merged_via_append() {
         let mut i = InputState::empty_for_test();
         let big = (0..1000)
-            .map(|n| format!("line {}
-", n))
+            .map(|n| {
+                format!(
+                    "line {}
+",
+                    n
+                )
+            })
             .collect::<String>();
         let id = i.start_paste_chip(&big).unwrap();
         for _ in 0..999 {

@@ -151,7 +151,10 @@ impl Tool for Akarso {
                     argv.push("--media".into());
                     argv.push(media);
                 }
-                let publish = args.get("publish").and_then(|v| v.as_bool()).unwrap_or(false);
+                let publish = args
+                    .get("publish")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 if let Ok(when) = arg_str(args, "scheduled_at") {
                     argv.push("--scheduled-at".into());
                     argv.push(when);
@@ -188,8 +191,14 @@ mod tests {
         assert!(is_read_only_action(r#"{"action":"posts_list"}"#));
         assert!(is_read_only_action(r#"{"action":"posts_get","id":"p1"}"#));
         // Outward-facing / mutating → must NOT be free.
-        assert!(!is_read_only_action(r#"{"action":"posts_create","text":"hi","platforms":"x"}"#));
-        assert!(!is_read_only_action(r#"{"action":"posts_delete","id":"p1"}"#));
-        assert!(!is_read_only_action(r#"{"action":"accounts_connect","platform":"x"}"#));
+        assert!(!is_read_only_action(
+            r#"{"action":"posts_create","text":"hi","platforms":"x"}"#
+        ));
+        assert!(!is_read_only_action(
+            r#"{"action":"posts_delete","id":"p1"}"#
+        ));
+        assert!(!is_read_only_action(
+            r#"{"action":"accounts_connect","platform":"x"}"#
+        ));
     }
 }

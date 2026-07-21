@@ -368,8 +368,8 @@ impl UsageTracker {
             let _ = atomic_write(&status_path(), json.as_bytes());
         }
         // Session-scoped status for multi-agent ADE layouts
-        let sess_status = crate::config::sessions_dir()
-            .join(format!("{}.status.json", self.session_id));
+        let sess_status =
+            crate::config::sessions_dir().join(format!("{}.status.json", self.session_id));
         let _ = atomic_write(&sess_status, json.as_bytes());
         Ok(())
     }

@@ -51,7 +51,9 @@ pub fn tool_label(tool: &str) -> String {
 
 /// True when `tool` is a supported foreign harness token.
 pub fn is_foreign_tool(tool: &str) -> bool {
-    FOREIGN_TOOLS.iter().any(|(id, _)| id.eq_ignore_ascii_case(tool))
+    FOREIGN_TOOLS
+        .iter()
+        .any(|(id, _)| id.eq_ignore_ascii_case(tool))
 }
 
 /// One discoverable foreign session (from the reader's `list --json`).
@@ -211,7 +213,9 @@ fn run_reader(args: &[String]) -> Result<String> {
         )
     })?;
     let py = python_argv().ok_or_else(|| {
-        MuseError::Other("Python 3 not found on PATH (need python3 / python / py -3) for chagent".into())
+        MuseError::Other(
+            "Python 3 not found on PATH (need python3 / python / py -3) for chagent".into(),
+        )
     })?;
     let (prog, rest) = py.split_first().unwrap();
     let out = Command::new(prog)
@@ -238,7 +242,9 @@ pub fn list_foreign(
     all_cwds: bool,
 ) -> Result<Vec<ForeignSession>> {
     if !is_foreign_tool(tool) {
-        return Err(MuseError::Other(format!("chagent: unsupported agent '{tool}'")));
+        return Err(MuseError::Other(format!(
+            "chagent: unsupported agent '{tool}'"
+        )));
     }
     let mut args = vec![
         tool.to_string(),
@@ -290,7 +296,9 @@ pub fn list_all(
 /// Read one foreign session's normalised IR (`show`).
 fn show_foreign(tool: &str, reference: &str, cwd: &str) -> Result<ShowOut> {
     if !is_foreign_tool(tool) {
-        return Err(MuseError::Other(format!("chagent: unsupported agent '{tool}'")));
+        return Err(MuseError::Other(format!(
+            "chagent: unsupported agent '{tool}'"
+        )));
     }
     let args = vec![
         tool.to_string(),
@@ -354,9 +362,7 @@ pub fn migrate(tool: &str, reference: &str, home_cwd: &str, model: &str) -> Resu
         if role == "user" {
             session.input_items.push(user_text_item(&text));
         } else {
-            session
-                .input_items
-                .push(assistant_text_item(&text));
+            session.input_items.push(assistant_text_item(&text));
         }
         session.ui_log.push(UiLogItem {
             kind: role.to_string(),
@@ -457,8 +463,9 @@ mod tests {
             "warnings":[{"code":"malformed-record","message":"skipped one record"}]
         }"#;
         let out: ShowOut = serde_json::from_str(raw).unwrap();
-        assert_eq!(out.warnings.iter().map(warning_text).collect::<Vec<_>>(), [
-            "malformed-record: skipped one record"
-        ]);
+        assert_eq!(
+            out.warnings.iter().map(warning_text).collect::<Vec<_>>(),
+            ["malformed-record: skipped one record"]
+        );
     }
 }

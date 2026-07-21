@@ -83,15 +83,15 @@ impl App {
                 self.push_note(
                     Tone::Memory,
                     format!(
-                    "memory\n{}",
-                    agent::memory::read_memory()
-                        .chars()
-                        .rev()
-                        .take(2000)
-                        .collect::<String>()
-                        .chars()
-                        .rev()
-                        .collect::<String>()
+                        "memory\n{}",
+                        agent::memory::read_memory()
+                            .chars()
+                            .rev()
+                            .take(2000)
+                            .collect::<String>()
+                            .chars()
+                            .rev()
+                            .collect::<String>()
                     ),
                 );
             }
@@ -147,10 +147,7 @@ impl App {
             "/receipt" => self.cmd_receipt(),
             "/cua" => self.cmd_cua(&arg),
             "/permissions" => self.cmd_permissions(&arg),
-            "/hooks" => self.push_note(
-                Tone::Skill,
-                agent::hooks::HooksConfig::load().summary(),
-            ),
+            "/hooks" => self.push_note(Tone::Skill, agent::hooks::HooksConfig::load().summary()),
             "/context" => self.cmd_context(),
             "/status" => self.cmd_status(),
             "/doctor" => self.cmd_doctor(),
@@ -185,10 +182,7 @@ impl App {
             "/openseo" => self.cmd_openseo(),
             "/ecosystem" => {
                 // Heals missing pieces (excalidraw, etc.) — same as one-shot ensure.
-                self.push_note(
-                    Tone::Skill,
-                    "checking / provisioning ecosystem…".into(),
-                );
+                self.push_note(Tone::Skill, "checking / provisioning ecosystem…".into());
                 let st = crate::ecosystem::ensure_ecosystem(false);
                 self.push_note(Tone::Skill, st.report());
             }
@@ -213,7 +207,8 @@ impl App {
                 Tone::Neutral,
                 "report an issue (unofficial community project)\n  \
                  https://github.com/nuroctane/nur-cli/issues\n  \
-                 or use  /feedback <what happened>  to file one from here".into(),
+                 or use  /feedback <what happened>  to file one from here"
+                    .into(),
             ),
             other => self.cmd_skill_or_unknown(other, &arg),
         }
@@ -294,8 +289,6 @@ impl App {
             self.push_note(Tone::Mode, format!("/{} already off", sk.name));
         }
     }
-
-
 
     fn cmd_plur(&mut self, arg: &str) {
         let arg = arg.trim();
@@ -643,9 +636,7 @@ impl App {
         }
         match PermissionMode::parse(arg) {
             Some(m) => self.set_permission_mode(m),
-            None => self.push_error(format!(
-                "unknown mode '{arg}' — use manual, plan, or auto"
-            )),
+            None => self.push_error(format!("unknown mode '{arg}' — use manual, plan, or auto")),
         }
     }
 
@@ -677,7 +668,10 @@ impl App {
         s.push_str("keyboard\n");
         // Two-column: shortcut (left, fixed) · action
         let keys: &[(&str, &str)] = &[
-            ("↑ ↓  ·  wheel", "scroll transcript (wheel on input scrolls prompt)"),
+            (
+                "↑ ↓  ·  wheel",
+                "scroll transcript (wheel on input scrolls prompt)",
+            ),
             ("drag in input", "select prompt  ·  large paste → chip"),
             ("drag scrollbar", "scrub history"),
             ("drag text", "select transcript + auto-copy"),
@@ -690,7 +684,10 @@ impl App {
             ("Ctrl+P / N", "prompt history  (also Alt+↑/↓)"),
             ("Enter  ·  Shift+Enter", "send  ·  newline"),
             ("Shift+Tab", "cycle permission mode"),
-            ("Ctrl+R", "reverse-search prompt history  (type · Ctrl+R older · Esc cancel)"),
+            (
+                "Ctrl+R",
+                "reverse-search prompt history  (type · Ctrl+R older · Esc cancel)",
+            ),
             ("Esc", "close peek  →  cancel turn  →  clear input"),
             ("Ctrl+L", "clear transcript view"),
             ("y  ·  a  ·  n", "approve once  ·  always  ·  deny"),
@@ -738,11 +735,8 @@ impl App {
         }
         let session = Session::new(&self.cfg.model, &self.cwd.display().to_string());
         self.session_id = session.id.clone();
-        let mut usage = UsageTracker::new(
-            session.id.clone(),
-            self.cfg.model.clone(),
-            self.cwd.clone(),
-        );
+        let mut usage =
+            UsageTracker::new(session.id.clone(), self.cfg.model.clone(), self.cwd.clone());
         usage.set_provider(self.cfg.provider.clone());
         self.session = Some(Box::new(session));
         self.usage = Some(Box::new(usage));
@@ -813,9 +807,7 @@ impl App {
             .usage
             .as_ref()
             .map(|t| t.active_rates())
-            .unwrap_or_else(|| {
-                crate::pricing::rates_for(&self.cfg.provider, &self.cfg.model)
-            });
+            .unwrap_or_else(|| crate::pricing::rates_for(&self.cfg.provider, &self.cfg.model));
         let cost_tag = if rates.is_estimate() {
             "list-price estimate"
         } else {
@@ -845,7 +837,8 @@ impl App {
             rates.model_id,
             rates.note,
             crate::config::status_path().display(),
-        ));
+        ),
+        );
     }
 
     /// One-line summary of optional stop valves (all unlimited by default).
@@ -1089,9 +1082,7 @@ impl App {
                 }
                 self.launch_console(args);
             }
-            _ => self.push_error(
-                "usage: /local [status | models | up [tier|url] | down]".into(),
-            ),
+            _ => self.push_error("usage: /local [status | models | up [tier|url] | down]".into()),
         }
     }
 
@@ -1150,8 +1141,11 @@ impl App {
                     );
                     return;
                 }
-                let mut args =
-                    vec!["bench".to_string(), "optimize".to_string(), name.to_string()];
+                let mut args = vec![
+                    "bench".to_string(),
+                    "optimize".to_string(),
+                    name.to_string(),
+                ];
                 if let Some(gens) = p.next() {
                     args.push("--gens".into());
                     args.push(gens.to_string());
@@ -1256,10 +1250,7 @@ impl App {
             self.permissions.reload(&self.cwd);
             self.push_note(
                 Tone::Skill,
-                format!(
-                    "permissions reloaded\n{}",
-                    self.permissions.summary()
-                ),
+                format!("permissions reloaded\n{}", self.permissions.summary()),
             );
             return;
         }
@@ -1340,9 +1331,7 @@ impl App {
             },
             "cost" => {
                 let Some(v) = parts.next() else {
-                    self.push_error(
-                        "usage: /budget cost <usd|unlimited|0|off>".into(),
-                    );
+                    self.push_error("usage: /budget cost <usd|unlimited|0|off>".into());
                     return;
                 };
                 if is_unlimited_token(v) {
@@ -1367,28 +1356,24 @@ impl App {
                         self.cfg.max_session_cost_usd = None;
                         self.push_note(
                             Tone::Usage,
-                            "budget cost unlimited (this process · /budget save to persist)"
-                                .into(),
+                            "budget cost unlimited (this process · /budget save to persist)".into(),
                         );
                     }
-                    _ => self.push_error(
-                        "cost must be a positive number, or unlimited|0|off".into(),
-                    ),
+                    _ => {
+                        self.push_error("cost must be a positive number, or unlimited|0|off".into())
+                    }
                 }
             }
             "tokens" => {
                 let Some(v) = parts.next() else {
-                    self.push_error(
-                        "usage: /budget tokens <n|unlimited|0|off>".into(),
-                    );
+                    self.push_error("usage: /budget tokens <n|unlimited|0|off>".into());
                     return;
                 };
                 if is_unlimited_token(v) {
                     self.cfg.max_session_tokens = None;
                     self.push_note(
                         Tone::Usage,
-                        "budget tokens unlimited (this process · /budget save to persist)"
-                            .into(),
+                        "budget tokens unlimited (this process · /budget save to persist)".into(),
                     );
                     return;
                 }
@@ -1411,9 +1396,8 @@ impl App {
                             ),
                         );
                     }
-                    _ => self.push_error(
-                        "tokens must be a positive integer, or unlimited|0|off".into(),
-                    ),
+                    _ => self
+                        .push_error("tokens must be a positive integer, or unlimited|0|off".into()),
                 }
             }
             "turns" => {
@@ -1460,14 +1444,12 @@ impl App {
                         );
                     }
                     _ => self.push_error(
-                        "turns must be a positive integer ≤ 1000000, or unlimited|0|off"
-                            .into(),
+                        "turns must be a positive integer ≤ 1000000, or unlimited|0|off".into(),
                     ),
                 }
             }
             _ => self.push_error(
-                "usage: /budget [cost|tokens|turns] <n|unlimited|0|off> · clear · save"
-                    .into(),
+                "usage: /budget [cost|tokens|turns] <n|unlimited|0|off> · clear · save".into(),
             ),
         }
     }
@@ -1574,8 +1556,16 @@ impl App {
         } else {
             0.0
         };
-        let auth = if self.authed { "signed in" } else { "no key - /login" };
-        let bro = if self.bro { "\n  bro      on - chill delivery" } else { "" };
+        let auth = if self.authed {
+            "signed in"
+        } else {
+            "no key - /login"
+        };
+        let bro = if self.bro {
+            "\n  bro      on - chill delivery"
+        } else {
+            ""
+        };
         let sticky = if self.sticky_skills.is_empty() {
             String::new()
         } else {
@@ -1603,7 +1593,11 @@ impl App {
     /// Inline health check — the interactive cousin of `nur doctor`.
     fn cmd_doctor(&mut self) {
         let sh = crate::tools::shell_backend();
-        let auth = if self.authed { "signed in" } else { "no key — /login" };
+        let auth = if self.authed {
+            "signed in"
+        } else {
+            "no key — /login"
+        };
         let mut lines = format!(
             "doctor · nur v{}\n  model    {}\n  cwd      {}\n  auth     {}\n  shell    {}\n",
             env!("CARGO_PKG_VERSION"),
@@ -1750,11 +1744,8 @@ impl App {
                 };
                 loaded.cwd = self.cwd.display().to_string();
                 self.session_id = loaded.id.clone();
-                let mut tracker = UsageTracker::new(
-                    loaded.id.clone(),
-                    self.cfg.model.clone(),
-                    self.cwd.clone(),
-                );
+                let mut tracker =
+                    UsageTracker::new(loaded.id.clone(), self.cfg.model.clone(), self.cwd.clone());
                 tracker.set_provider(self.cfg.provider.clone());
                 tracker.seed_session(loaded.usage.clone());
                 self.u_session = loaded.usage.clone();
@@ -1887,9 +1878,8 @@ impl App {
                 let warnings = mig.warnings.clone();
                 // Resume the freshly-saved native session (re-homes + replays).
                 self.cmd_resume(&id);
-                let mut note = format!(
-                    "chagent · imported from {label} ({src_short})  ·  {turns} turns"
-                );
+                let mut note =
+                    format!("chagent · imported from {label} ({src_short})  ·  {turns} turns");
                 if let Some(oc) = src_cwd {
                     if !oc.eq_ignore_ascii_case(&cwd) {
                         note.push_str(&format!("\n  was  {oc}  ·  tools sandboxed here"));
@@ -1939,7 +1929,9 @@ impl App {
         let arg = arg.trim();
         match arg {
             "" => match &self.session_goal {
-                Some(g) => self.push_note(Tone::Plan, format!("goal · {g}\n  /goal clear to drop it")),
+                Some(g) => {
+                    self.push_note(Tone::Plan, format!("goal · {g}\n  /goal clear to drop it"))
+                }
                 None => self.push_info(
                     "no session goal set  ·  /goal <what you're trying to achieve>".into(),
                 ),
@@ -2158,7 +2150,8 @@ impl App {
             self.push_note(
                 Tone::Mode,
                 "bro mode on · plain words, straight answers — same facts, chill delivery\n  \
-                 /bro again (or /bro off) to switch back".into(),
+                 /bro again (or /bro off) to switch back"
+                    .into(),
             );
         } else {
             self.push_note(Tone::Mode, "bro mode off · back to normal".into());
@@ -2175,7 +2168,10 @@ impl App {
         self.pending_btw.push(arg.to_string());
         self.push_note(
             Tone::Neutral,
-            format!("noted · will ride along with your next message ({})", self.pending_btw.len()),
+            format!(
+                "noted · will ride along with your next message ({})",
+                self.pending_btw.len()
+            ),
         );
     }
 
@@ -2223,7 +2219,9 @@ impl App {
         );
         if crate::ecosystem::find_bin("gh").is_some() {
             let out = std::process::Command::new("gh")
-                .args(["issue", "create", "--repo", REPO, "--title", &title, "--body", &body])
+                .args([
+                    "issue", "create", "--repo", REPO, "--title", &title, "--body", &body,
+                ])
                 .output();
             match out {
                 Ok(o) if o.status.success() => {
@@ -2234,7 +2232,10 @@ impl App {
                 Ok(o) => {
                     let err = String::from_utf8_lossy(&o.stderr);
                     // gh present but not authed/failed → fall through to browser.
-                    self.push_info(format!("gh couldn't file it ({}); opening the browser…", err.trim()));
+                    self.push_info(format!(
+                        "gh couldn't file it ({}); opening the browser…",
+                        err.trim()
+                    ));
                 }
                 Err(_) => {}
             }
@@ -2246,7 +2247,10 @@ impl App {
             urlencode(&body)
         );
         if open_in_browser(&url) {
-            self.push_note(Tone::Session, "opened a prefilled issue in your browser".into());
+            self.push_note(
+                Tone::Session,
+                "opened a prefilled issue in your browser".into(),
+            );
         } else {
             self.push_info(format!("file it here:\n  {url}"));
         }
@@ -2260,7 +2264,9 @@ impl App {
             "sources" | "list" | "ls" => r#"{"action":"sources"}"#.to_string(),
             "status" => r#"{"action":"status"}"#.to_string(),
             "search" | "find" => {
-                self.push_error("usage: /mc search <query>  — use the executor tool for calls".into());
+                self.push_error(
+                    "usage: /mc search <query>  — use the executor tool for calls".into(),
+                );
                 return;
             }
             _ if action.starts_with("search ") => {
@@ -2332,7 +2338,9 @@ fn urlencode(s: &str) -> String {
 /// Open a URL in the OS default browser (best-effort).
 fn open_in_browser(url: &str) -> bool {
     #[cfg(windows)]
-    let r = std::process::Command::new("cmd").args(["/C", "start", "", url]).spawn();
+    let r = std::process::Command::new("cmd")
+        .args(["/C", "start", "", url])
+        .spawn();
     #[cfg(target_os = "macos")]
     let r = std::process::Command::new("open").arg(url).spawn();
     #[cfg(all(unix, not(target_os = "macos")))]

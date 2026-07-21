@@ -89,11 +89,7 @@ pub fn is_running_from_install() -> bool {
 }
 
 fn paths_equal_loose(a: &Path, b: &Path) -> bool {
-    let norm = |p: &Path| {
-        p.to_string_lossy()
-            .replace('/', "\\")
-            .to_ascii_lowercase()
-    };
+    let norm = |p: &Path| p.to_string_lossy().replace('/', "\\").to_ascii_lowercase();
     norm(a) == norm(b)
 }
 
@@ -216,7 +212,12 @@ pub fn run_full_install() -> Result<()> {
     #[cfg(windows)]
     {
         if let Ok(local) = env::var("LOCALAPPDATA") {
-            prepend_path(&Path::new(&local).join("Microsoft").join("WinGet").join("Links"));
+            prepend_path(
+                &Path::new(&local)
+                    .join("Microsoft")
+                    .join("WinGet")
+                    .join("Links"),
+            );
         }
         if let Ok(pf) = env::var("ProgramFiles") {
             prepend_path(&Path::new(&pf).join("nodejs"));
@@ -234,8 +235,7 @@ pub fn run_full_install() -> Result<()> {
         || st.browser.available
         || st.excalidraw.available
         || st.skills_cli.available;
-    if st.graphify.available && st.plur.available && st.ruflo.available && st.excalidraw.available
-    {
+    if st.graphify.available && st.plur.available && st.ruflo.available && st.excalidraw.available {
         theme::print_ok("ecosystem ready (incl. excalidraw)");
     } else if st.graphify.available && st.plur.available && st.ruflo.available {
         theme::print_ok("ecosystem core ready");
@@ -422,8 +422,7 @@ fn finish_update_stack(version: &str) -> Result<()> {
 
 // ── Auto-update on launch (GitHub Releases) ───────────────────────────────
 
-const GH_RELEASES_LATEST: &str =
-    "https://api.github.com/repos/nuroctane/nur-cli/releases/latest";
+const GH_RELEASES_LATEST: &str = "https://api.github.com/repos/nuroctane/nur-cli/releases/latest";
 /// Min seconds between network checks when already current (rate-limit friendly).
 const AUTO_UPDATE_TTL_SECS: u64 = 6 * 60 * 60; // 6 hours
 
@@ -753,9 +752,7 @@ pub fn reexec_installed_tui() -> Result<()> {
         .env("NUR_SKIP_BOOTSTRAP", "1")
         .env("META_SKIP_BOOTSTRAP", "1")
         .status()
-        .map_err(|e| {
-            MuseError::Other(format!("failed to launch {}: {e}", dest.display()))
-        })?;
+        .map_err(|e| MuseError::Other(format!("failed to launch {}: {e}", dest.display())))?;
     if status.success() {
         Ok(())
     } else {
@@ -777,7 +774,12 @@ fn now_secs() -> u64 {
 }
 
 fn env_api_key() -> Option<String> {
-    for k in ["NUR_API_KEY", "META_API_KEY", "MODEL_API_KEY", "MUSE_API_KEY"] {
+    for k in [
+        "NUR_API_KEY",
+        "META_API_KEY",
+        "MODEL_API_KEY",
+        "MUSE_API_KEY",
+    ] {
         if let Ok(v) = env::var(k) {
             let t = v.trim().to_string();
             if !t.is_empty() {
@@ -939,7 +941,12 @@ fn file_sha256(path: &Path) -> Option<String> {
         let out = Command::new("sha256sum")
             .arg(path)
             .output()
-            .or_else(|_| Command::new("shasum").args(["-a", "256"]).arg(path).output())
+            .or_else(|_| {
+                Command::new("shasum")
+                    .args(["-a", "256"])
+                    .arg(path)
+                    .output()
+            })
             .ok()?;
         if !out.status.success() {
             return None;
@@ -1018,7 +1025,11 @@ fn ensure_prereqs_best_effort() {
     // node / bun / uv / rg / ffmpeg — mirror install scripts, never fail hard.
     #[cfg(windows)]
     {
-        try_winget_or_note("node", "OpenJS.NodeJS.LTS", "plur · ruflo · executor · browser");
+        try_winget_or_note(
+            "node",
+            "OpenJS.NodeJS.LTS",
+            "plur · ruflo · executor · browser",
+        );
         if !which("bun") && !which("bun.exe") {
             theme::print_info("installing bun…");
             let _ = Command::new("powershell")
@@ -1056,7 +1067,11 @@ fn ensure_prereqs_best_effort() {
             theme::print_ok("uv already installed");
         }
         try_winget_or_note("rg", "BurntSushi.ripgrep.MSVC", "fast grep / glob");
-        try_winget_or_note("ffmpeg", "Gyan.FFmpeg", "extract_frames / design-from-video");
+        try_winget_or_note(
+            "ffmpeg",
+            "Gyan.FFmpeg",
+            "extract_frames / design-from-video",
+        );
     }
     #[cfg(not(windows))]
     {
@@ -1077,10 +1092,7 @@ fn ensure_prereqs_best_effort() {
         if !which("uv") {
             theme::print_info("trying official uv installer…");
             let _ = Command::new("sh")
-                .args([
-                    "-c",
-                    "curl -LsSf https://astral.sh/uv/install.sh | sh",
-                ])
+                .args(["-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"])
                 .status();
         }
         if !which("bun") {
@@ -1110,8 +1122,7 @@ fn try_winget_or_note(cmd: &str, winget_id: &str, note: &str) {
             "--accept-source-agreements",
         ])
         .status();
-    if status.map(|s| s.success()).unwrap_or(false)
-        && (which(cmd) || which(&format!("{cmd}.exe")))
+    if status.map(|s| s.success()).unwrap_or(false) && (which(cmd) || which(&format!("{cmd}.exe")))
     {
         theme::print_ok(&format!("{cmd} installed"));
     } else {

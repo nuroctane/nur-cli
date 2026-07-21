@@ -73,9 +73,7 @@ fn init_tracing() {
             let _ = tracing_subscriber::fmt()
                 .with_env_filter(
                     tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                        tracing_subscriber::EnvFilter::new(
-                            "error,syntect=error,tui_markdown=error",
-                        )
+                        tracing_subscriber::EnvFilter::new("error,syntect=error,tui_markdown=error")
                     }),
                 )
                 .with_target(false)
@@ -195,8 +193,7 @@ async fn real_main() -> Result<()> {
             if bootstrap::should_bootstrap_on_launch() {
                 bootstrap::run_full_install()?;
                 // Release artifact → re-exec the installed `nur` for a clean TUI.
-                if bootstrap::looks_like_release_artifact()
-                    && !bootstrap::is_running_from_install()
+                if bootstrap::looks_like_release_artifact() && !bootstrap::is_running_from_install()
                 {
                     bootstrap::reexec_installed_tui()?;
                     return Ok(());
@@ -204,9 +201,7 @@ async fn real_main() -> Result<()> {
             }
             // Existing installs: check GitHub Releases and self-update when a
             // newer version is available (TTL-throttled; soft-fails offline).
-            let auto = load_config()
-                .map(|c| c.auto_update)
-                .unwrap_or(true);
+            let auto = load_config().map(|c| c.auto_update).unwrap_or(true);
             if bootstrap::maybe_auto_update_on_launch(auto) {
                 // Child process took over the TUI with the new binary.
                 return Ok(());
@@ -374,7 +369,13 @@ async fn real_main() -> Result<()> {
         ecosystem::ruflo_home().display().to_string(),
     );
 
-    ade::write_ade_manifest(&session.id, &cfg.model, &cwd_str, usage.session_usage(), "idle");
+    ade::write_ade_manifest(
+        &session.id,
+        &cfg.model,
+        &cwd_str,
+        usage.session_usage(),
+        "idle",
+    );
     let _ = session.save();
 
     // First open already ran a full foreground install when needed. Background
@@ -500,12 +501,7 @@ fn run_plugins_cli(action: Option<&cli::PluginsCmd>) -> Result<()> {
             theme::print_info("plugin marketplace");
             println!("{}", plugins::quick_status());
             for r in plugins::marketplace_rows() {
-                println!(
-                    "  {:<16}  {:<14}  {}",
-                    r.id,
-                    r.status_badge(),
-                    r.name
-                );
+                println!("  {:<16}  {:<14}  {}", r.id, r.status_badge(), r.name);
             }
             println!("\n  nur plugins install <id>");
             println!("  /plugins  in the TUI for the full picker");
@@ -592,7 +588,11 @@ fn run_browser_setup(open: bool) -> Result<()> {
             // only resolve inside a Chromium browser, so hand it to the OS
             // opener which routes to the default browser.
             let _ = crate::open_uri::open(browser.extensions_url());
-            theme::print_ok(&format!("opened {} in {}", browser.extensions_url(), browser.label()));
+            theme::print_ok(&format!(
+                "opened {} in {}",
+                browser.extensions_url(),
+                browser.label()
+            ));
         }
     }
     println!();
@@ -643,7 +643,14 @@ fn run_doctor() -> Result<()> {
     // Auth (never print key)
     match resolve_api_key() {
         Ok(k) => {
-            let tip: String = k.chars().rev().take(4).collect::<String>().chars().rev().collect();
+            let tip: String = k
+                .chars()
+                .rev()
+                .take(4)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect();
             theme::print_ok(&format!("auth    key set (…{tip})"));
         }
         Err(_) => theme::print_err("auth    not set — run: nur auth login"),
@@ -676,7 +683,9 @@ fn run_doctor() -> Result<()> {
         if let Some(p) = found {
             theme::print_ok(&format!("{name:<7} {p}"));
         } else if name == "ffmpeg" {
-            theme::print_info("ffmpeg  not on PATH (optional — extract_frames / design-from-video)");
+            theme::print_info(
+                "ffmpeg  not on PATH (optional — extract_frames / design-from-video)",
+            );
         } else if name == "bun" {
             theme::print_info("bun     not on PATH (optional — omp coding-agent backend)");
         } else {
@@ -693,10 +702,9 @@ fn run_doctor() -> Result<()> {
         .join("bin")
         .join("nur.sha256");
     if hash_path.is_file() {
-        if let (Ok(expected_line), Ok(exe)) = (
-            std::fs::read_to_string(&hash_path),
-            std::env::current_exe(),
-        ) {
+        if let (Ok(expected_line), Ok(exe)) =
+            (std::fs::read_to_string(&hash_path), std::env::current_exe())
+        {
             let expected = expected_line
                 .split_whitespace()
                 .next()
@@ -749,15 +757,9 @@ fn file_sha256(path: &std::path::Path) -> std::io::Result<String> {
             .args(["-a", "256"])
             .arg(path)
             .output()
-            .or_else(|_| {
-                std::process::Command::new("sha256sum").arg(path).output()
-            })?;
+            .or_else(|_| std::process::Command::new("sha256sum").arg(path).output())?;
         let text = String::from_utf8_lossy(&out.stdout);
-        let hash = text
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_lowercase();
+        let hash = text.split_whitespace().next().unwrap_or("").to_lowercase();
         if hash.len() == 64 {
             Ok(hash)
         } else {
@@ -1036,7 +1038,10 @@ async fn run_continuous(
                 } => {
                     if verbose {
                         let tag = if ok { "done" } else { "failed" };
-                        theme::print_info(&format!("{name} {tag}: {}", truncate_line(&result, 160)));
+                        theme::print_info(&format!(
+                            "{name} {tag}: {}",
+                            truncate_line(&result, 160)
+                        ));
                     }
                 }
                 AgentEvent::Done {
@@ -1077,7 +1082,8 @@ async fn run_continuous(
                     theme::print_info("continuous · 3 errors in a row — stopping");
                     break;
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(2 * errors_in_a_row as u64)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(2 * errors_in_a_row as u64))
+                    .await;
             }
         }
     }

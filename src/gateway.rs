@@ -299,15 +299,37 @@ mod tests {
         });
         let ups = parse_updates(&body);
         assert_eq!(ups.len(), 2);
-        assert_eq!(ups[0], Update { update_id: 1, chat_id: 99, text: "hi".into() });
-        assert_eq!(ups[1], Update { update_id: 4, chat_id: 7, text: "yo".into() });
+        assert_eq!(
+            ups[0],
+            Update {
+                update_id: 1,
+                chat_id: 99,
+                text: "hi".into()
+            }
+        );
+        assert_eq!(
+            ups[1],
+            Update {
+                update_id: 4,
+                chat_id: 7,
+                text: "yo".into()
+            }
+        );
     }
 
     #[test]
     fn next_offset_is_max_plus_one() {
         let ups = vec![
-            Update { update_id: 5, chat_id: 1, text: "a".into() },
-            Update { update_id: 9, chat_id: 1, text: "b".into() },
+            Update {
+                update_id: 5,
+                chat_id: 1,
+                text: "a".into(),
+            },
+            Update {
+                update_id: 9,
+                chat_id: 1,
+                text: "b".into(),
+            },
         ];
         assert_eq!(next_offset(&ups, 0), 10);
         assert_eq!(next_offset(&[], 3), 3); // no updates → unchanged

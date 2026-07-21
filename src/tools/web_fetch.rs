@@ -52,7 +52,9 @@ impl Tool for WebFetch {
             if let Some((host, addr)) = &pin {
                 builder = builder.resolve(host, *addr);
             }
-            let client = builder.build().map_err(|e| MuseError::Tool(e.to_string()))?;
+            let client = builder
+                .build()
+                .map_err(|e| MuseError::Tool(e.to_string()))?;
 
             let resp = client
                 .get(parsed)
@@ -110,8 +112,7 @@ impl Tool for WebFetch {
 fn validate_public_url(
     url: &str,
 ) -> Result<(reqwest::Url, Option<(String, std::net::SocketAddr)>)> {
-    let parsed =
-        reqwest::Url::parse(url).map_err(|e| MuseError::Tool(format!("bad url: {e}")))?;
+    let parsed = reqwest::Url::parse(url).map_err(|e| MuseError::Tool(format!("bad url: {e}")))?;
     match parsed.scheme() {
         "http" | "https" => {}
         s => return Err(MuseError::Tool(format!("refused scheme: {s}"))),
@@ -130,7 +131,9 @@ fn validate_public_url(
         || hl.ends_with(".internal")
         || hl.contains("metadata")
     {
-        return Err(MuseError::Tool(format!("refused local/metadata host: {host}")));
+        return Err(MuseError::Tool(format!(
+            "refused local/metadata host: {host}"
+        )));
     }
 
     // Literal IP → check directly (no pin needed); hostname → resolve, check
@@ -153,7 +156,9 @@ fn validate_public_url(
         }
         // Extra: block 0.0.0.0 explicitly even though is_unspecified covers it
         if ip.is_unspecified() {
-            return Err(MuseError::Tool(format!("refused unspecified address: {host}")));
+            return Err(MuseError::Tool(format!(
+                "refused unspecified address: {host}"
+            )));
         }
         return Ok((parsed, None));
     }
@@ -202,8 +207,12 @@ fn parse_obfuscated_ip(host: &str) -> Option<IpAddr> {
                     return None;
                 }
                 let val = if p.to_ascii_lowercase().starts_with("0x") {
-                    u32::from_str_radix(p.trim_start_matches("0x").trim_start_matches("0X"), 16).ok()?
-                } else if p.len() > 1 && p.starts_with('0') && p.chars().skip(1).all(|c| c.is_ascii_digit()) {
+                    u32::from_str_radix(p.trim_start_matches("0x").trim_start_matches("0X"), 16)
+                        .ok()?
+                } else if p.len() > 1
+                    && p.starts_with('0')
+                    && p.chars().skip(1).all(|c| c.is_ascii_digit())
+                {
                     // octal: 0177 -> 127
                     // Ensure all chars are octal digits
                     if p.chars().all(|c| ('0'..='7').contains(&c)) || p.starts_with("0") {

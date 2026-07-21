@@ -54,12 +54,9 @@ pub fn login_browser(provider_id: &str, tx: ProgressTx, cancel: CancelFlag) {
         "xai" => xai::login(&tx, &cancel),
         "kimi" => kimi::login(&tx, &cancel),
         "anthropic" => claude::login(&tx, &cancel),
-        // Google Gemini and Antigravity share Application Default Credentials via gcloud.
-        "antigravity" | "google" => antigravity::login(&tx, &cancel),
-        "huggingface" => huggingface::login(&tx, &cancel),
+        "google" => google::login(&tx, &cancel),
         "azure" => azure::login(&tx, &cancel),
-        "bedrock" => bedrock::login(&tx, &cancel),
-        "github-models" | "github-copilot" => github::login(&tx, &cancel),
+        "github-models" | "github-copilot" => github::login(provider_id, &tx, &cancel),
         other => Err(MuseError::Other(format!(
             "browser login not supported for '{other}'"
         ))),
@@ -215,6 +212,7 @@ fn az_bin() -> Option<PathBuf> {
     resolve_cli("az", &["az.cmd"], &dirs)
 }
 
+#[allow(dead_code)] // legacy Bedrock SSO helper; bearer-only catalog path is advertised
 fn aws_bin() -> Option<PathBuf> {
     let mut dirs = Vec::new();
     #[cfg(windows)]
@@ -431,8 +429,7 @@ pub mod openai {
         let verifier = random_urlsafe(64);
         let challenge = pkce_challenge(&verifier);
         let state = random_urlsafe(32);
-        let scope =
-            "openid profile email offline_access api.connectors.read api.connectors.invoke";
+        let scope = "openid profile email offline_access api.connectors.read api.connectors.invoke";
         // Param set mirrors codex-rs login (originator must be a known Codex client).
         let auth_url = format!(
             "{ISSUER}/oauth/authorize?response_type=code&client_id={CLIENT_ID}&redirect_uri={}&scope={}&code_challenge={challenge}&code_challenge_method=S256&id_token_add_organizations=true&codex_cli_simplified_flow=true&state={state}&originator={ORIGINATOR}",
@@ -448,12 +445,8 @@ pub mod openai {
             ),
         );
         let _ = open_browser(&auth_url);
-        let code = wait_localhost_code_on(
-            listener,
-            Some(&state),
-            cancel,
-            Duration::from_secs(600),
-        )?;
+        let code =
+            wait_localhost_code_on(listener, Some(&state), cancel, Duration::from_secs(600))?;
         send(
             tx,
             BrowserLoginProgress::Status("exchanging OpenAI authorization code…".into()),
@@ -474,9 +467,7 @@ pub mod openai {
             )
             .form(&form)
             .send()
-            .map_err(|error| {
-                MuseError::Other(format!("OpenAI token exchange failed: {error}"))
-            })?;
+            .map_err(|error| MuseError::Other(format!("OpenAI token exchange failed: {error}")))?;
         parse_token_response(response, None, None)
     }
 
@@ -700,7 +691,12 @@ pub mod xai {
                     .clone()
                     .map(|u| format!("{u}?user_code={}", device.user_code))
             })
-            .unwrap_or_else(|| format!("https://accounts.x.ai/connect?user_code={}", device.user_code));
+            .unwrap_or_else(|| {
+                format!(
+                    "https://accounts.x.ai/connect?user_code={}",
+                    device.user_code
+                )
+            });
 
         send(
             tx,
@@ -730,7 +726,11 @@ pub mod xai {
             if cancel.is_cancelled() {
                 return Err(MuseError::Other("login cancelled".into()));
             }
-            thread::sleep(crate::oauth::device_poll_sleep(base_interval, slow, attempt));
+            thread::sleep(crate::oauth::device_poll_sleep(
+                base_interval,
+                slow,
+                attempt,
+            ));
             attempt = attempt.saturating_add(1);
             slow = false;
             for turl in &token_urls {
@@ -1300,12 +1300,7 @@ pub mod claude {
         error_description: Option<String>,
     }
 
-    fn build_auth_url(
-        authorize: &str,
-        redirect: &str,
-        state: &str,
-        challenge: &str,
-    ) -> String {
+    fn build_auth_url(authorize: &str, redirect: &str, state: &str, challenge: &str) -> String {
         // Order and `code=true` match Claude Code's generateAuthUrl.
         format!(
             "{authorize}?code=true&client_id={CLIENT_ID}&response_type=code&redirect_uri={}&scope={}&code_challenge={challenge}&code_challenge_method=S256&state={state}",
@@ -1413,12 +1408,8 @@ pub mod claude {
             );
             let _ = open_browser(&auth_url);
 
-            let code = wait_localhost_code_on(
-                listener,
-                Some(&state),
-                cancel,
-                Duration::from_secs(600),
-            )?;
+            let code =
+                wait_localhost_code_on(listener, Some(&state), cancel, Duration::from_secs(600))?;
             send(
                 tx,
                 BrowserLoginProgress::Status("exchanging Claude authorization code…".into()),
@@ -1600,9 +1591,9 @@ fn urlencoding_encode(s: &str) -> String {
     out
 }
 
-// ── Google Antigravity (browser SSO via gcloud — no embedded OAuth secrets) ─
+// ── Google Gemini (browser SSO via gcloud - no embedded OAuth secrets) ─────
 
-pub mod antigravity {
+pub mod google {
     use super::*;
 
     /// Browser sign-in through the official Google Cloud SDK (`gcloud auth login`),
@@ -1678,9 +1669,10 @@ pub mod antigravity {
             match child.try_wait() {
                 Ok(Some(status)) if status.success() => break,
                 Ok(Some(status)) => {
-                    return Err(MuseError::Other(format!(
+                    let message = format!(
                         "gcloud auth login failed (exit {status}). Paste a Gemini API key as fallback."
-                    )))
+                    );
+                    return Err(MuseError::Other(message));
                 }
                 Ok(None) => thread::sleep(Duration::from_millis(200)),
                 Err(e) => return Err(MuseError::Other(e.to_string())),
@@ -1744,7 +1736,7 @@ pub mod antigravity {
                 issuer: "https://accounts.google.com".into(),
                 client_id: "gcloud".into(),
                 extra: serde_json::json!({
-                    "product": "antigravity",
+                    "product": "gemini-api",
                     "via": "gcloud application-default login",
                     "project_id": project_id,
                 }),
@@ -1766,14 +1758,18 @@ pub mod github {
     /// a token for GitHub Models. No OAuth client secrets ship in-repo. If `gh`
     /// is already authenticated, the existing session is reused. Users without
     /// `gh` can still paste a GitHub PAT (with `models:read`) via "Enter API key".
-    pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
-        // Already signed in? Reuse the existing gh token.
-        if let Ok(t) = fetch_token() {
+    pub fn login(provider_id: &str, tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
+        // Already signed in? Reuse the existing gh token when it carries the
+        // permission required by the selected product.
+        let existing = fetch_token(provider_id).ok();
+        if let Some(t) = existing.as_ref().filter(|tokens| {
+            provider_id != "github-models" || models_scope_available(&tokens.access_token)
+        }) {
             send(
                 tx,
                 BrowserLoginProgress::Status("using existing GitHub CLI session".into()),
             );
-            return Ok(t);
+            return Ok(t.clone());
         }
         send(
             tx,
@@ -1791,8 +1787,17 @@ pub mod github {
                     .into(),
             )
         })?;
-        let mut child = Command::new(&gh)
-            .args([
+        let args = if provider_id == "github-models" && existing.is_some() {
+            vec![
+                "auth",
+                "refresh",
+                "--hostname",
+                "github.com",
+                "--scopes",
+                "models",
+            ]
+        } else {
+            let mut args = vec![
                 "auth",
                 "login",
                 "--web",
@@ -1800,7 +1805,14 @@ pub mod github {
                 "github.com",
                 "--git-protocol",
                 "https",
-            ])
+            ];
+            if provider_id == "github-models" {
+                args.extend(["--scopes", "models"]);
+            }
+            args
+        };
+        let mut child = Command::new(&gh)
+            .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -1809,7 +1821,8 @@ pub mod github {
                 MuseError::Other(format!(
                     "failed to launch gh ({e}). Install GitHub CLI, or paste a GitHub PAT (models:read)."
                 ))
-            })?;        if let Some(mut stdin) = child.stdin.take() {
+            })?;
+        if let Some(mut stdin) = child.stdin.take() {
             use std::io::Write;
             let _ = stdin.write_all(b"\n\n");
         }
@@ -1848,11 +1861,14 @@ pub mod github {
                 Err(e) => return Err(MuseError::Other(e.to_string())),
             }
         }
-        send(tx, BrowserLoginProgress::Status("fetching GitHub token…".into()));
-        fetch_token()
+        send(
+            tx,
+            BrowserLoginProgress::Status("fetching GitHub token…".into()),
+        );
+        fetch_token(provider_id)
     }
 
-    fn fetch_token() -> Result<OAuthTokens> {
+    fn fetch_token(provider_id: &str) -> Result<OAuthTokens> {
         let gh = gh_bin().ok_or_else(|| {
             MuseError::Other(
                 "gh not found. Install GitHub CLI (https://cli.github.com/) and ensure it is on PATH."
@@ -1882,18 +1898,32 @@ pub mod github {
             meta: Some(OauthMeta {
                 issuer: "https://github.com".into(),
                 client_id: "gh".into(),
-                extra: serde_json::json!({"product": "github-models", "via": "gh auth login"}),
+                extra: serde_json::json!({"product": provider_id, "via": "gh auth login"}),
             }),
         })
     }
 
-    pub fn refresh(_auth: &Auth, _refresh: &str) -> Result<OAuthTokens> {
-        fetch_token()
+    fn models_scope_available(token: &str) -> bool {
+        http()
+            .and_then(|client| {
+                client
+                    .get("https://models.github.ai/catalog/models")
+                    .bearer_auth(token)
+                    .header("Accept", "application/vnd.github+json")
+                    .send()
+                    .map_err(|error| MuseError::Other(error.to_string()))
+            })
+            .is_ok_and(|response| response.status().is_success())
+    }
+
+    pub fn refresh(auth: &Auth, _refresh: &str) -> Result<OAuthTokens> {
+        fetch_token(&auth.provider)
     }
 }
 
 // ── Hugging Face (device code — same spirit as `hf auth login`) ────────────
 
+#[allow(dead_code)] // optional custom-client OAuth remains import-compatible but is not advertised
 pub mod huggingface {
     use super::*;
 
@@ -2027,7 +2057,11 @@ pub mod huggingface {
                 if cancel.is_cancelled() {
                     return Err(MuseError::Other("login cancelled".into()));
                 }
-                thread::sleep(crate::oauth::device_poll_sleep(base_interval, slow, attempt));
+                thread::sleep(crate::oauth::device_poll_sleep(
+                    base_interval,
+                    slow,
+                    attempt,
+                ));
                 attempt = attempt.saturating_add(1);
                 slow = false;
                 let form = [
@@ -2113,7 +2147,8 @@ pub mod huggingface {
                 }
             }
         }
-        if let Ok(token) = std::env::var("HF_TOKEN").or_else(|_| std::env::var("HUGGING_FACE_HUB_TOKEN"))
+        if let Ok(token) =
+            std::env::var("HF_TOKEN").or_else(|_| std::env::var("HUGGING_FACE_HUB_TOKEN"))
         {
             let token = token.trim().to_string();
             if token.starts_with("hf_") {
@@ -2184,7 +2219,7 @@ pub mod azure {
                 MuseError::Other(format!(
                     "failed to launch az ({e}). Install Azure CLI or paste AZURE_OPENAI_API_KEY."
                 ))
-            })?;        // Best-effort parse device code from az stderr/stdout while waiting.
+            })?; // Best-effort parse device code from az stderr/stdout while waiting.
         let stderr = child.stderr.take();
         if let Some(mut err) = stderr {
             let tx2 = tx.clone();
@@ -2259,7 +2294,8 @@ pub mod azure {
                 MuseError::Other(format!(
                     "Azure CLI not available ({e}). Install `az`, run `az login`, or paste AZURE_OPENAI_API_KEY."
                 ))
-            })?;        if !out.status.success() {
+            })?;
+        if !out.status.success() {
             let err = String::from_utf8_lossy(&out.stderr);
             return Err(MuseError::Other(format!(
                 "az get-access-token failed: {err}. Fix: `az login` then retry, or paste AZURE_OPENAI_API_KEY in /login."
@@ -2298,12 +2334,7 @@ pub mod azure {
                     .ok()
             })
             .map(|ndt| ndt.and_utc().timestamp() as u64)
-            .or_else(|| {
-                parsed
-                    .expires_on_ts
-                    .as_deref()
-                    .and_then(|s| s.parse().ok())
-            });
+            .or_else(|| parsed.expires_on_ts.as_deref().and_then(|s| s.parse().ok()));
         Ok(OAuthTokens {
             access_token: access,
             refresh_token: Some("az-cli".into()),
@@ -2323,6 +2354,7 @@ pub mod azure {
 
 // ── AWS Bedrock (IAM Identity Center via `aws sso login`) ──────────────────
 
+#[allow(dead_code)] // legacy sessions only; SigV4 is not supported by Nur's bearer transport
 pub mod bedrock {
     use super::*;
 
@@ -2361,7 +2393,7 @@ pub mod bedrock {
                     last = format!("aws spawn failed: {e}");
                     continue;
                 }
-            };            // AWS SSO prints a URL — try to surface it.
+            }; // AWS SSO prints a URL — try to surface it.
             if let Some(mut err) = child.stderr.take() {
                 let tx2 = tx.clone();
                 thread::spawn(move || {
@@ -2374,8 +2406,7 @@ pub mod bedrock {
                             break;
                         }
                     }
-                    if buf.to_lowercase().contains("user code") || buf.contains("enter the code")
-                    {
+                    if buf.to_lowercase().contains("user code") || buf.contains("enter the code") {
                         send(
                             &tx2,
                             BrowserLoginProgress::Status(buf.chars().take(200).collect()),

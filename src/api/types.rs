@@ -298,7 +298,11 @@ pub fn user_text_item(text: &str) -> Value {
 /// (public URL or `data:` URL). See https://dev.meta.ai/docs/features/image-understanding
 pub fn user_multimodal_item(
     text: &str,
-    media: &[(/*api type*/ &str, /*url field*/ &str, /*data url*/ &str)],
+    media: &[(
+        /*api type*/ &str,
+        /*url field*/ &str,
+        /*data url*/ &str,
+    )],
 ) -> Value {
     let mut content = vec![serde_json::json!({
         "type": "input_text",

@@ -1,22 +1,22 @@
-mod apply_patch;
 pub mod akarso;
+mod apply_patch;
 mod bash;
 pub mod browser;
 pub use browser::is_read_only_action as browser_is_read_only;
 pub mod capabilities;
 mod edit_file;
+pub mod executor_tool;
 mod git_diff;
 mod git_status;
 mod glob;
-pub mod executor_tool;
 pub use executor_tool::is_read_only_action as executor_is_read_only;
+pub mod excalidraw;
 pub mod graphify;
 pub mod graphjin;
-pub mod excalidraw;
 mod grep;
 mod list_dir;
-mod memory_tool;
 pub mod media;
+mod memory_tool;
 mod multi_edit;
 pub mod omp;
 pub use omp::is_read_only_action as omp_is_read_only;
@@ -26,12 +26,12 @@ pub mod ruflo;
 mod sandbox;
 mod search_util;
 mod shell;
-pub mod spill;
-pub mod tldraw;
 mod skill_tool;
-pub mod undo;
+pub mod spill;
 mod submit_plan;
+pub mod tldraw;
 mod todo_write;
+pub mod undo;
 mod web_fetch;
 mod web_search;
 mod write_file;
@@ -321,17 +321,41 @@ mod tests {
         got.sort();
 
         let mut want = vec![
-            "read_file", "list_dir", "write_file", "edit_file", "multi_edit", "apply_patch",
-            "bash", "grep", "glob", "web_fetch", "web_search", "browser", "look",
-            "extract_frames", "git_status", "git_diff", "graphify", "graphjin", "excalidraw", "tldraw",
-            "plur", "ruflo", "akarso", "executor", "omp", "skill", "memory", "todo_write",
-            "submit_plan", "agent",
+            "read_file",
+            "list_dir",
+            "write_file",
+            "edit_file",
+            "multi_edit",
+            "apply_patch",
+            "bash",
+            "grep",
+            "glob",
+            "web_fetch",
+            "web_search",
+            "browser",
+            "look",
+            "extract_frames",
+            "git_status",
+            "git_diff",
+            "graphify",
+            "graphjin",
+            "excalidraw",
+            "tldraw",
+            "plur",
+            "ruflo",
+            "akarso",
+            "executor",
+            "omp",
+            "skill",
+            "memory",
+            "todo_write",
+            "submit_plan",
+            "agent",
         ];
         want.sort();
 
         assert_eq!(
-            got,
-            want,
+            got, want,
             "tool roster drift: update BOTH boxed_tools() and the dispatch match \
              (and this list) when adding/removing a tool"
         );

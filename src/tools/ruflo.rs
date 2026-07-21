@@ -188,8 +188,8 @@ impl Tool for Ruflo {
         }
 
         let refs: Vec<&str> = argv.iter().map(|s| s.as_str()).collect();
-        let out = ecosystem::run_capture(&bin, &refs, Some(&cwd), 180_000)
-            .map_err(MuseError::Tool)?;
+        let out =
+            ecosystem::run_capture(&bin, &refs, Some(&cwd), 180_000).map_err(MuseError::Tool)?;
         // Cap verbose ruflo tables.
         if out.chars().count() > 30_000 {
             Ok(out.chars().take(30_000).collect::<String>() + "\n… (truncated)")
@@ -206,7 +206,9 @@ mod tests {
     #[test]
     fn read_only_gate() {
         assert!(is_read_only_action(r#"{"action":"status"}"#));
-        assert!(is_read_only_action(r#"{"action":"memory_search","query":"x"}"#));
+        assert!(is_read_only_action(
+            r#"{"action":"memory_search","query":"x"}"#
+        ));
         assert!(!is_read_only_action(
             r#"{"action":"memory_store","key":"k","value":"v"}"#
         ));

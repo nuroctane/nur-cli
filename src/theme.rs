@@ -117,7 +117,7 @@ pub const MINT: Color = Color::Rgb(80, 190, 170); // deep-teal bridge
 pub const SEAFOAM: Color = Color::Rgb(56, 170, 160);
 pub const TEAL: Color = Color::Rgb(32, 150, 148); // deep teal — network
 pub const CYAN: Color = Color::Rgb(64, 170, 160); // git (teal-shifted, not Meta sky)
-// Green lives in SUCCESS — status, not a family hue.
+                                                  // Green lives in SUCCESS — status, not a family hue.
 
 // ── Color math + animated gradients ─────────────────────────────────────────
 /// Decompose a color to RGB (non-RGB variants fall back to the canvas).
@@ -435,9 +435,7 @@ pub fn activity_bar(elapsed: Duration, width: usize) -> String {
 // ── ratatui styles ─────────────────────────────────────────────────────────
 #[allow(dead_code)]
 pub fn style_title() -> Style {
-    Style::default()
-        .fg(META_BLUE)
-        .add_modifier(Modifier::BOLD)
+    Style::default().fg(META_BLUE).add_modifier(Modifier::BOLD)
 }
 
 pub fn style_status() -> Style {
@@ -539,8 +537,7 @@ pub fn banner() {
     );
     println!(
         "  {}\n",
-        "fully loaded  ·  TUI · tools · Graphify/PLUR/Ruflo · 800+ skills"
-            .truecolor(120, 112, 96)
+        "fully loaded  ·  TUI · tools · Graphify/PLUR/Ruflo · 800+ skills".truecolor(120, 112, 96)
     );
 }
 

@@ -10,9 +10,7 @@
 //! Cache is refreshed in the background on launch (24h TTL). Opt out with
 //! `NUR_PRICING_OFF=1` or `NUR_MODELS_DEV_OFF=1`.
 
-use crate::config::{
-    nur_home, PRICE_INPUT_PER_MTOK, PRICE_OUTPUT_PER_MTOK,
-};
+use crate::config::{nur_home, PRICE_INPUT_PER_MTOK, PRICE_OUTPUT_PER_MTOK};
 use crate::usage::TokenUsage;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -213,8 +211,8 @@ fn rates_from_model_json(
     let cache_read = parse_cost_field(cost, "cache_read")
         .or_else(|| parse_cost_field(cost, "cacheRead"))
         .unwrap_or(input);
-    let cache_write = parse_cost_field(cost, "cache_write")
-        .or_else(|| parse_cost_field(cost, "cacheWrite"));
+    let cache_write =
+        parse_cost_field(cost, "cache_write").or_else(|| parse_cost_field(cost, "cacheWrite"));
     let context = model
         .get("limit")
         .and_then(|l| l.get("context"))
