@@ -49,8 +49,29 @@ pub fn build_body_opts(
         }
     }
     if let Value::Array(items) = &req.input {
-        for item in items {
-            push_item_messages_opts(item, &mut messages, drop_media);
+        let mut index = 0;
+        while index < items.len() {
+            if items[index].get("type").and_then(|t| t.as_str()) == Some("function_call") {
+                // A response can contain multiple tool calls. OpenAI-compatible
+                // providers expect them in one assistant turn, followed by the
+                // corresponding tool results. Zen tolerated split turns, but
+                // OpenCode Go forwards the stricter upstream protocol.
+                let mut tool_calls = Vec::new();
+                while index < items.len()
+                    && items[index].get("type").and_then(|t| t.as_str()) == Some("function_call")
+                {
+                    tool_calls.push(chat_tool_call(&items[index]));
+                    index += 1;
+                }
+                messages.push(json!({
+                    "role": "assistant",
+                    "content": Value::Null,
+                    "tool_calls": tool_calls,
+                }));
+                continue;
+            }
+            push_item_messages_opts(&items[index], &mut messages, drop_media);
+            index += 1;
         }
     }
 
@@ -201,6 +222,17 @@ fn push_item_messages_opts(item: &Value, out: &mut Vec<Value>, drop_media: bool)
         }
         out.push(json!({ "role": role, "content": parts }));
     }
+}
+
+fn chat_tool_call(item: &Value) -> Value {
+    json!({
+        "id": item.get("call_id").and_then(|v| v.as_str()).unwrap_or(""),
+        "type": "function",
+        "function": {
+            "name": item.get("name").and_then(|v| v.as_str()).unwrap_or(""),
+            "arguments": item.get("arguments").and_then(|v| v.as_str()).unwrap_or("{}"),
+        }
+    })
 }
 
 /// Concatenate the text of a Responses content array (input_text / output_text).
@@ -624,6 +656,24 @@ mod tests {
         assert_eq!(msgs[4]["content"], "done");
         assert_eq!(b["tools"][0]["function"]["name"], "grep");
         assert_eq!(b["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn consecutive_tool_calls_share_one_assistant_message() {
+        let mut request = req();
+        request.input = json!([
+            {"role":"user","content":[{"type":"input_text","text":"inspect"}]},
+            {"type":"function_call","call_id":"a","name":"git_status","arguments":"{}"},
+            {"type":"function_call","call_id":"b","name":"list_dir","arguments":"{}"},
+            {"type":"function_call_output","call_id":"a","output":"clean"},
+            {"type":"function_call_output","call_id":"b","output":"src"}
+        ]);
+        let body = build_body(&request, false);
+        let messages = body["messages"].as_array().unwrap();
+        assert_eq!(messages[2]["tool_calls"].as_array().unwrap().len(), 2);
+        assert!(messages[2]["content"].is_null());
+        assert_eq!(messages[3]["tool_call_id"], "a");
+        assert_eq!(messages[4]["tool_call_id"], "b");
     }
 
     /// A request whose history carries a screenshot, as any session that once
