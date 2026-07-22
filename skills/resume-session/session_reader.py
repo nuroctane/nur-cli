@@ -1214,11 +1214,7 @@ def _discover_cursor_cli(cwd: str, within_min: int, all_cwds: bool = False) -> l
                 continue
             metadata = _cursor_cli_metadata(child)
             stored_cwd = metadata.get("cwd")
-            if (
-                not all_cwds
-                and stored_cwd
-                and os.path.normpath(stored_cwd) != os.path.normpath(cwd)
-            ):
+            if not all_cwds and stored_cwd and not _cwd_matches(cwd, stored_cwd):
                 continue
             updated = int(metadata.get("updated_at_ms") or 0)
             if not _within(updated, within_min):
@@ -1282,8 +1278,7 @@ def _discover_cursor_desktop(
                     }
                     _merge_cursor_metadata(metadata, value)
                     if not all_cwds and (
-                        not metadata.get("cwd")
-                        or os.path.normpath(metadata["cwd"]) != os.path.normpath(cwd)
+                        not metadata.get("cwd") or not _cwd_matches(cwd, metadata.get("cwd") or "")
                     ):
                         continue
                     updated = int(metadata["updated_at_ms"])
@@ -1693,11 +1688,7 @@ def _discover_claude(cwd: str, within_min: int, all_cwds: bool = False) -> list[
                 result = read_claude_session(path, max_tool_chars=80)
             except ReaderError:
                 continue
-            if (
-                not all_cwds
-                and result.get("cwd")
-                and os.path.normpath(result["cwd"]) != os.path.normpath(cwd)
-            ):
+            if not all_cwds and result.get("cwd") and not _cwd_matches(cwd, result["cwd"]):
                 continue
             if not all_cwds and not result.get("cwd") and project != expected:
                 continue
@@ -1779,15 +1770,10 @@ def _discover_codex_database(
             first = "first_user_message" if "first_user_message" in columns else "''"
             branch = "git_branch" if "git_branch" in columns else "NULL"
             where = "WHERE archived = 0 AND source IN ('cli', 'vscode')"
-            params: tuple[str, ...] = ()
-            if not all_cwds:
-                where += " AND cwd = ?"
-                params = (cwd,)
             rows = database.execute(
                 f"SELECT id, rollout_path, {updated_column}, source, cwd, "
                 f"{title}, {first}, {branch} FROM threads {where} "
                 f"ORDER BY {updated_column} DESC, id ASC",
-                params,
             )
             sessions: list[dict[str, Any]] = []
             for row in rows:
@@ -1799,6 +1785,8 @@ def _discover_codex_database(
                     continue
                 updated = _timestamp_to_millis(raw_updated) or _mtime_millis(rollout)
                 if not _within(updated, within_min):
+                    continue
+                if not all_cwds and not _cwd_matches(cwd, stored_cwd or ""):
                     continue
                 title_value = raw_title if isinstance(raw_title, str) and raw_title.strip() else first_user
                 sessions.append(
@@ -1861,7 +1849,7 @@ def _discover_codex_files(
         if not metadata or metadata.get("source") not in {"cli", "vscode"}:
             continue
         stored_cwd = metadata.get("cwd")
-        if not all_cwds and stored_cwd != cwd:
+        if not all_cwds and not _cwd_matches(cwd, stored_cwd or ""):
             continue
         session_id = metadata.get("id") or _codex_id_from_path(path)
         if not isinstance(session_id, str) or not UUID_RE.fullmatch(session_id):
@@ -1954,11 +1942,49 @@ def _nur_sessions_dir() -> Path:
     return _nur_home() / "sessions"
 
 
+def _strip_long_path_prefix(p: str) -> str:
+    if not isinstance(p, str) or not p:
+        return ""
+    s = p.strip()
+    low = s.lower()
+    bs = chr(92)
+    pref_unc = bs + bs + "?" + bs + "unc" + bs
+    if low.startswith(pref_unc):
+        return bs + bs + s[8:]
+    if low.startswith("//?/unc/"):
+        return "//" + s[8:]
+    pref1 = bs + bs + "?" + bs
+    pref2 = "//?/"
+    pref3 = bs + "?" + "?" + bs
+    for pref in (pref1, pref2, pref3):
+        if low.startswith(pref):
+            return s[len(pref):]
+    return s
+
+
 def _normalize_cwd_key(cwd: str) -> str:
-    path = str(Path(cwd).expanduser())
+    raw = str(Path(cwd).expanduser())
+    stripped = _strip_long_path_prefix(raw)
     if os.name == "nt":
-        return path.replace("/", "\\").casefold()
-    return path
+        return stripped.replace("/", chr(92)).casefold()
+    return stripped
+
+
+def _norm_cwd_for_match(pp: str) -> str:
+    if not isinstance(pp, str) or not pp:
+        return ""
+    s = _strip_long_path_prefix(pp)
+    return s.replace(chr(92), "/").rstrip("/").lower()
+
+
+def _cwd_matches(here: str, stored: str) -> bool:
+    h = _norm_cwd_for_match(here)
+    sess = _norm_cwd_for_match(stored)
+    if not sess:
+        return False
+    if h == sess:
+        return True
+    return h.startswith(sess + "/")
 
 
 def _discover_nur(cwd: str, within_min: int) -> list[dict[str, Any]]:
