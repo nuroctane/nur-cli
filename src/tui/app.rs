@@ -480,6 +480,16 @@ pub struct SideGraphHit {
     pub h: usize,
 }
 
+/// Hit-box for a sidegraph kid (swarm subagent) that maps to a swarm run id.
+#[derive(Debug, Clone, Default)]
+pub struct SwarmHit {
+    pub run_id: u64,
+    pub x: usize,
+    pub y: usize,
+    pub w: usize,
+    pub h: usize,
+}
+
 /// The whole current (or most recent) query as a flow graph: root prompt +
 /// every step beneath it. Rebuilt from the transcript cells on each turn
 /// event, so it can never drift from what actually happened.
