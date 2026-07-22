@@ -662,16 +662,32 @@ impl App {
         }
     }
 
+    /// `/logout` — the one place credentials are cleared.
+    ///
+    /// `/login` deliberately clears nothing: you may be switching providers
+    /// while keeping the old key for failover, or for a subagent running on a
+    /// different provider's model. So signing out has to be explicit, and it
+    /// clears the active credential *and* this provider's saved copies —
+    /// otherwise "cleared" would leave a working key behind in the per-provider
+    /// store. Other providers' keys are untouched.
     fn cmd_logout(&mut self) {
+        let provider = self.cfg.provider.clone();
         match crate::auth::logout(false) {
             Ok(()) => {
+                let also_stored = crate::auth::forget_provider(&provider);
                 self.authed = false;
-                self.push_note(
-                    Tone::Mode,
-                    "signed out — cleared the stored API key.\n  \
-                     /login to enter a new key. (env keys like META_API_KEY still apply on restart)"
-                        .into(),
+                let label = crate::providers::by_id(&provider)
+                    .map(|p| p.name)
+                    .unwrap_or(provider.as_str());
+                let mut msg = format!("signed out of {label} — cleared its stored credential");
+                if also_stored {
+                    msg.push_str(" and its saved failover key/session");
+                }
+                msg.push_str(
+                    ".\n  other providers' saved keys are untouched — /login to switch or sign \
+                     in again. (env keys still apply on restart)",
                 );
+                self.push_note(Tone::Mode, msg);
             }
             Err(e) => self.push_error(format!("logout failed: {e}")),
         }

@@ -36,7 +36,9 @@ The active provider, endpoint, and default model are stored in
 
 What happens:
 
-1. Prior credentials are cleared so you start from a clean slate.
+1. **Nothing is cleared.** Opening the picker — and backing out of it with `Esc`
+   — leaves your current credential exactly as it was. Credentials are replaced
+   only at the moment a new one is committed.
 2. A **scrollable, type-to-filter** picker lists **61 providers** (frontier APIs,
    inference clouds, Chinese labs, OpenAI-compatible routers, local servers).
    Providers with browser sign-in show a 🌐 hint.
@@ -76,8 +78,24 @@ fallback for every one of them.
 Kimi Code API keys work against `https://api.kimi.com/coding/v1`. The separate Moonshot
 AI catalog entry remains available for `https://api.moonshot.ai/v1` keys.
 
-`/logout` clears the stored key/tokens and blocks further turns until you `/login`
-again (environment-variable keys still apply on the next launch).
+### Keys are kept per provider
+
+Every key you enter is saved twice: as the **active** credential (`auth.json`)
+and under its provider in the per-provider store (`provider_keys.json`; browser
+sign-ins land in `provider_sessions.json`). Switching provider with `/login`
+therefore never strands the one you switched away from — it stays available for
+[cross-provider failover](security.md#provider-privacy--cross-provider-failover)
+and for **subagents running on a different provider's model**, which need their
+own credential to authenticate.
+
+That is why `/login` does not sign you out: signing out is `/logout`'s job, and
+only yours to ask for.
+
+`/logout` signs you out of the **active provider**: it clears that provider's
+active credential *and* its saved per-provider copies, so "cleared" does not
+leave a working key behind. Other providers' saved keys are untouched. Further
+turns are blocked until you `/login` again (environment-variable keys still
+apply on the next launch).
 
 No key on launch → the login modal opens automatically.
 

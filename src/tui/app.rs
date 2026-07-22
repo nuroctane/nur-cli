@@ -4050,31 +4050,26 @@ impl App {
     }
 
     // ── secure login ───────────────────────────────────────────────────
-    /// Close `/login` without a credential, saying what that leaves behind.
+    /// Close `/login` without committing a credential.
     ///
-    /// `open_login` clears the stored key up front so the picker starts from a
-    /// clean slate. Backing out therefore leaves the user signed OUT - and
-    /// previously said nothing at all, so the next message failed with a
-    /// "signed out" error they had no way to connect to pressing Esc.
+    /// A true no-op for auth: nothing was cleared on open, so backing out leaves
+    /// the session exactly as it was. Any in-flight browser/device flow is
+    /// abandoned, since its modal is going away.
     fn close_login_cancelled(&mut self) {
         self.cancel_oauth();
         self.login = None;
-        if !self.authed {
-            self.push_note(
-                Tone::Mode,
-                "/login cancelled - the previous credential was already cleared, so you are                  signed out. Run /login again to enter a key or sign in."
-                    .into(),
-            );
-            self.scroll_to_bottom();
-        }
     }
 
     fn open_login(&mut self) {
-        // /login clears the prior key/auth up front — a clean slate to pick a
-        // provider and enter a fresh key / browser session.
+        // Opening the picker changes nothing. The previous credential is
+        // replaced only when a new one is actually committed (see
+        // `apply_provider_login`), so browsing providers - or backing out with
+        // Esc - can never leave the user signed out.
+        //
+        // This matters beyond the Esc case: keys are per provider, and a
+        // subagent may run on a different provider than the parent. Clearing on
+        // open threw away the credential those runs depend on.
         self.cancel_oauth();
-        let _ = crate::auth::logout(false);
-        self.authed = false;
         self.login = Some(LoginModal {
             stage: LoginStage::Provider,
             filter: String::new(),
@@ -5214,6 +5209,9 @@ impl App {
         }
 
         // Persist the key tagged to this provider (prevents cross-provider reuse).
+        // This is the commit point: writing `auth.json` replaces whatever
+        // credential was active before, which is the only place a sign-out
+        // should happen.
         if !key.is_empty() {
             if let Err(e) = crate::auth::save_api_key_for(&key, Some(&provider_id)) {
                 if let Some(m) = &mut self.login {
@@ -5221,6 +5219,11 @@ impl App {
                 }
                 return;
             }
+            // Also keep it in the per-provider store. The active slot holds one
+            // credential at a time, so without this, switching provider stranded
+            // the previous one - breaking failover and any subagent pointed at
+            // that provider. `/logout` is what removes it.
+            let _ = crate::auth::save_provider_key(&provider_id, &key);
         }
 
         self.apply_provider_login(&provider_id, &key, false);

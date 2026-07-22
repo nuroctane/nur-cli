@@ -608,6 +608,44 @@ pub fn save_provider_key(provider_id: &str, key: &str) -> Result<()> {
     save_key_at(&crate::config::provider_keys_path(), provider_id, key)
 }
 
+fn forget_provider_at(keys_path: &Path, sessions_path: &Path, provider_id: &str) -> bool {
+    let id = provider_id.trim();
+    if id.is_empty() {
+        return false;
+    }
+    let mut removed = false;
+
+    let mut keys = read_keys_at(keys_path);
+    if keys.remove(id).is_some() {
+        removed = true;
+        let text = serde_json::to_string_pretty(&keys).unwrap_or_else(|_| "{}".into());
+        let _ = crate::config::atomic_write(keys_path, text.as_bytes());
+    }
+
+    let mut sessions = read_sessions_at(sessions_path);
+    if sessions.remove(id).is_some() {
+        removed = true;
+        let _ = write_sessions_at(sessions_path, &sessions);
+    }
+    removed
+}
+
+/// Drop every stored credential for one provider: its failover API key and its
+/// saved OAuth session.
+///
+/// `logout` only removes the *active* credential (`auth.json`). Those two
+/// side stores exist so other providers stay usable for failover and for
+/// subagents running on a different model - which is exactly why signing out of
+/// an account has to clear that account's copies too, or "cleared" would leave
+/// a working key behind. Returns whether anything was actually removed.
+pub fn forget_provider(provider_id: &str) -> bool {
+    forget_provider_at(
+        &crate::config::provider_keys_path(),
+        &crate::config::provider_sessions_path(),
+        provider_id,
+    )
+}
+
 /// Persist an OAuth session as the **active** login (`auth.json`), and also
 /// stash it in the per-provider session store so the same provider can later
 /// be used as a failover target without re-signing-in.
@@ -1052,6 +1090,63 @@ mod tests {
             Some("provider-oauth"),
             "provider-bound OAuth must beat a legacy providerless key"
         );
+    }
+
+    /// Signing out of one provider must clear that provider's saved copies and
+    /// leave every other provider's alone - `/login` no longer clears anything,
+    /// so this is the only thing that removes a stored credential.
+    #[test]
+    fn forget_provider_clears_one_account_and_spares_the_rest() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "nur_forget_{nanos}_{}",
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let keys = dir.join("provider_keys.json");
+        let sessions = dir.join("provider_sessions.json");
+
+        save_key_at(&keys, "openai", "sk-abcdefgh").unwrap();
+        save_key_at(&keys, "anthropic", "sk-ant-xxxxxxxx").unwrap();
+        save_provider_session_at(
+            &sessions,
+            &Auth {
+                api_key: "sk-ant-oat-token".into(),
+                source: "oauth".into(),
+                auth_method: AuthMethod::Oauth,
+                provider: "anthropic".into(),
+                refresh_token: Some("r".into()),
+                expires_at: None,
+                oauth_meta: None,
+            },
+        )
+        .unwrap();
+
+        assert!(forget_provider_at(&keys, &sessions, "anthropic"));
+        assert!(
+            !read_keys_at(&keys).contains_key("anthropic"),
+            "the key must be gone"
+        );
+        assert!(
+            !read_sessions_at(&sessions).contains_key("anthropic"),
+            "the OAuth session must be gone too, or the account is still usable"
+        );
+        assert_eq!(
+            read_keys_at(&keys).get("openai").map(String::as_str),
+            Some("sk-abcdefgh"),
+            "signing out of one provider must not touch another"
+        );
+
+        // Nothing stored for that provider - reports no-op rather than lying.
+        assert!(!forget_provider_at(&keys, &sessions, "groq"));
+        assert!(!forget_provider_at(&keys, &sessions, "   "));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

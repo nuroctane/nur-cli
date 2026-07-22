@@ -191,7 +191,7 @@ The note is appended to your persistent memory file and recalled automatically i
 | `/doctor` | Inline health check: version · auth · ecosystem · shell · budgets |
 | `/help` | Show keys + commands reference |
 | `/login` | Multi-provider sign-in (see below) |
-| `/logout` | Clear stored API key |
+| `/logout` | Sign out of the active provider (clears its credential and saved copies; other providers keep theirs) |
 | `/goal` | Standing session goal (see below) |
 | `/bro` | Chill mode: plain words, no jargon, no preamble — toggle (see below) |
 | `/adhd` | Sticky ADHD-friendly output (toggle) |
@@ -216,6 +216,13 @@ The note is appended to your persistent memory file and recalled automatically i
 
 Scrollable, **type-to-filter** catalog of 61 providers → masked key → writes
 `provider` / `base_url` / `model` to config and hot-swaps the HTTP client.
+
+Opening `/login` clears nothing, and `Esc` out of it changes nothing — your
+credential is replaced only when a new one is committed. Keys are kept per
+provider, so switching does not strand the provider you left: it stays usable
+for failover and for subagents running on another provider's model. Use
+`/logout` when you actually want an account's credentials gone.
+
 Full detail: [Authentication](authentication.md).
 
 ### Session goal & side notes
