@@ -1253,8 +1253,22 @@ impl SessionPicker {
 /// at the drive or home directory, and those are still "this workspace" from a
 /// project folder. Case-insensitive and separator-agnostic for Windows.
 fn cwd_matches(here: &str, session_cwd: &str) -> bool {
+    fn strip_long_path(s: &str) -> &str {
+        let low = s.to_ascii_lowercase();
+        if low.starts_with("\\\\?\\unc\\") || low.starts_with("//?/unc/") {
+            return &s[8..];
+        }
+        for pref in ["\\\\?\\", "//?/", "\\??\\"] {
+            if low.starts_with(&pref.to_ascii_lowercase()) {
+                return &s[pref.len()..];
+            }
+        }
+        s
+    }
     fn norm(s: &str) -> String {
-        s.replace('\\', "/")
+        let stripped = strip_long_path(s.trim());
+        stripped
+            .replace('\\', "/")
             .trim_end_matches('/')
             .to_ascii_lowercase()
     }
@@ -4259,8 +4273,7 @@ impl App {
             provider_name: provider.name.to_string(),
             models: Vec::new(),
             current: if provider.id == "opencode"
-                && self.cfg.base_url.trim_end_matches('/')
-                    == crate::providers::OPENCODE_GO_BASE_URL
+                && self.cfg.base_url.trim_end_matches('/') == crate::providers::OPENCODE_GO_BASE_URL
             {
                 format!("opencode-go/{}", self.cfg.model)
             } else {
@@ -4303,6 +4316,11 @@ impl App {
             || self.cfg.base_url.contains("api.anthropic.com")
         {
             crate::api::anthropic::normalize_model_id(id)
+        } else if !self.cfg.provider.is_empty() {
+            // Same story elsewhere: xAI dropped the Grok 4 line, Google dropped
+            // `gemini-3-pro`, DeepSeek drops `deepseek-chat`. Providers without
+            // a confirmed retirement pass through untouched.
+            crate::providers::normalize_model_for(&self.cfg.provider, id)
         } else {
             id.to_string()
         };
@@ -4316,11 +4334,9 @@ impl App {
             .copied()
             .unwrap_or(*crate::providers::default_provider());
         let bearer = crate::auth::resolve_api_key_for(Some(provider.id)).unwrap_or_default();
-        if let Ok(client) = crate::api::ApiClient::for_provider(
-            &self.cfg.base_url,
-            &bearer,
-            provider.id,
-        ) {
+        if let Ok(client) =
+            crate::api::ApiClient::for_provider(&self.cfg.base_url, &bearer, provider.id)
+        {
             self.client = client.with_style(provider.style);
             self.authed = !bearer.is_empty() || provider.key_optional;
         }
@@ -5290,7 +5306,7 @@ impl App {
             .flatten();
         self.cfg.base_url = fixed_oauth_base.unwrap_or(provider.base_url).to_string();
         self.cfg.model = if via_oauth && provider.id == "xai" {
-            "grok-4.5".to_string()
+            crate::providers::XAI_DEFAULT_MODEL.to_string()
         } else {
             provider.default_model.to_string()
         };
@@ -7014,7 +7030,10 @@ mod tests {
     /// typed, and finishing the sentence must not run the tool.
     #[test]
     fn enter_is_not_an_approval_but_esc_denies() {
-        assert_eq!(approval_decision(key(KeyCode::Enter, KeyModifiers::NONE)), None);
+        assert_eq!(
+            approval_decision(key(KeyCode::Enter, KeyModifiers::NONE)),
+            None
+        );
         assert_eq!(
             approval_decision(key(KeyCode::Esc, KeyModifiers::NONE)),
             Some(ApprovalDecision::Deny)
@@ -7028,7 +7047,10 @@ mod tests {
             Some(ApprovalDecision::Deny)
         );
         // Anything else leaves the modal open rather than guessing.
-        assert_eq!(approval_decision(key(KeyCode::Char('q'), KeyModifiers::NONE)), None);
+        assert_eq!(
+            approval_decision(key(KeyCode::Char('q'), KeyModifiers::NONE)),
+            None
+        );
     }
 
     #[test]
@@ -7123,9 +7145,15 @@ body"
     fn the_implicit_log_sync_cannot_delete_history() {
         let full = vec![
             Cell::User("first".into()),
-            Cell::Assistant { text: "reply".into(), streaming: false },
+            Cell::Assistant {
+                text: "reply".into(),
+                streaming: false,
+            },
             Cell::User("second".into()),
-            Cell::Assistant { text: "reply 2".into(), streaming: false },
+            Cell::Assistant {
+                text: "reply 2".into(),
+                streaming: false,
+            },
         ];
         let history = cells_to_ui_log(&full);
         assert_eq!(history.len(), 4);

@@ -162,6 +162,18 @@ impl ApiClient {
         matches!(status, 429 | 500 | 502 | 503 | 504)
     }
 
+    /// Is this client pointed at an OpenCode gateway (Zen or Go)?
+    ///
+    /// Only that route opts into the message-based retries below: OpenCode
+    /// reports a failing *upstream* provider as a client error
+    /// (`400 {"error":{"message":"Error from provider (Console Go): Upstream
+    /// request failed"}}`) even though the request itself was valid. Every
+    /// other provider keeps plain status-based retries — a 400 there is a real
+    /// bad request and retrying it just burns the turn.
+    fn is_opencode_route(&self) -> bool {
+        self.provider_id == "opencode" || self.base_url.contains("opencode.ai")
+    }
+
     fn api_key_for_request(&self) -> String {
         if self.refresh_oauth {
             let provider_id = self.provider_id.as_str();
@@ -335,7 +347,12 @@ impl ApiClient {
                     oauth_refreshed = true;
                     continue;
                 }
-                if Self::is_retryable_status(status.as_u16()) && attempt < 4 {
+                // Retry on transient upstream failures from gateways like OpenCode (Console Go)
+                // which surface as 400 with "Upstream request failed".
+                let message = parse_error_message(&body).unwrap_or_else(|| body.clone());
+                let retryable =
+                    is_retryable_error(status.as_u16(), &message, self.is_opencode_route());
+                if retryable && attempt < 4 {
                     let retry_after = headers
                         .get("retry-after")
                         .and_then(|v| v.to_str().ok())
@@ -427,18 +444,21 @@ impl ApiClient {
                     oauth_refreshed = true;
                     continue;
                 }
-                if Self::is_retryable_status(status.as_u16()) && attempt < 3 {
-                    let body = res.text().await.unwrap_or_default();
+                // Need the body to spot an OpenCode gateway's upstream failure,
+                // which arrives as a 400 with a transient message.
+                let body_text = res.text().await.unwrap_or_default();
+                let msg = parse_error_message(&body_text).unwrap_or(body_text);
+                if is_retryable_error(status.as_u16(), &msg, self.is_opencode_route())
+                    && attempt < 3
+                {
                     last_err = Some(MuseError::Api {
                         status: status.as_u16(),
-                        message: parse_error_message(&body).unwrap_or(body),
+                        message: msg,
                     });
                     let backoff = std::time::Duration::from_millis(500 * (1 << (attempt - 1)));
                     tokio::time::sleep(backoff).await;
                     continue;
                 }
-                let body = res.text().await?;
-                let msg = parse_error_message(&body).unwrap_or(body.clone());
                 return Err(MuseError::Api {
                     status: status.as_u16(),
                     message: msg,
@@ -475,7 +495,45 @@ impl ApiClient {
                     _ = cancel.cancelled() => return Err(MuseError::Interrupted),
                     c = stream.next() => c,
                 };
-                let Some(chunk) = chunk else { break };
+                let Some(chunk) = chunk else {
+                    // Body ended. Two things can still be sitting unflushed: a
+                    // body so short it never reached the SSE-vs-JSON sniff
+                    // threshold, and a final SSE event the server never
+                    // terminated with a blank line. Neither can reach the
+                    // handler below, so drain both before leaving the loop.
+                    let mut tail: Vec<String> = Vec::new();
+                    if maybe_json_only && !buffered.is_empty() {
+                        let body = String::from_utf8_lossy(&buffered).into_owned();
+                        if !body_looks_like_sse(&body) && body.trim_start().starts_with('{') {
+                            return parse_success_body(&body, status.as_u16());
+                        }
+                        tail.extend(parser.push(&buffered));
+                        buffered.clear();
+                    }
+                    tail.extend(parser.finish());
+                    for data in tail {
+                        if data.trim() == "[DONE]" {
+                            continue;
+                        }
+                        saw_any_data = true;
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
+                            if let Err(e) = handle_sse_json(
+                                &v,
+                                &mut on_event,
+                                &mut final_response,
+                                &mut streamed_items,
+                            ) {
+                                if attempt < 3 {
+                                    last_err = Some(e);
+                                    break;
+                                } else {
+                                    return Err(e);
+                                }
+                            }
+                        }
+                    }
+                    break;
+                };
                 let chunk = match chunk {
                     Ok(c) => c,
                     Err(e) => {
@@ -637,7 +695,9 @@ impl ApiClient {
                     body = super::chat::build_body_opts(req, false, &self.provider_id, true);
                     continue;
                 }
-                if Self::is_retryable_status(status.as_u16()) && attempt < 4 {
+                if is_retryable_error(status.as_u16(), &message, self.is_opencode_route())
+                    && attempt < 4
+                {
                     tokio::time::sleep(std::time::Duration::from_millis(
                         400 * (1 << (attempt - 1)),
                     ))
@@ -671,7 +731,9 @@ impl ApiClient {
         // Connect phase, retried once without attachments if the endpoint turns
         // out to be text-only. Nothing has streamed yet at this point, so the
         // retry cannot duplicate output.
+        let mut attempt = 0u32;
         let (res, content_type) = loop {
+            attempt += 1;
             let body = super::chat::build_body_opts(req, true, &self.provider_id, drop_media);
             let res = self
                 .send_with_oauth_retry(|| {
@@ -698,6 +760,22 @@ impl ApiClient {
                 if has_media && !drop_media && super::chat::is_media_unsupported_error(&message) {
                     mark_text_only(&self.provider_id, &self.base_url, &req.model);
                     drop_media = true;
+                    continue;
+                }
+                // Streaming chat completions is the path OpenCode actually uses,
+                // and it had no retry at all: a single `400 Upstream request
+                // failed` (or a 429/502 from the gateway) killed the turn even
+                // though nothing had streamed yet. Retry is confined to the
+                // OpenCode route by `is_retryable_error`; other providers keep
+                // failing fast exactly as before.
+                if self.is_opencode_route()
+                    && is_retryable_error(status.as_u16(), &message, true)
+                    && attempt < 3
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        400 * (1 << (attempt - 1)),
+                    ))
+                    .await;
                     continue;
                 }
                 return Err(MuseError::Api {
@@ -727,15 +805,39 @@ impl ApiClient {
                 _ = cancel.cancelled() => return Err(MuseError::Interrupted),
                 c = stream.next() => c,
             };
-            let Some(chunk) = chunk else { break };
-            let chunk = chunk.map_err(|e| MuseError::Other(format!("stream chunk error: {e}")))?;
-            for data in parser.push(&chunk) {
+            // A body that ends without a final blank line still has one whole
+            // event sitting in the parser — often the `finish_reason` or the
+            // error frame. Flush it instead of letting the stream end silently.
+            let end_of_body = chunk.is_none();
+            let events = match chunk {
+                Some(chunk) => {
+                    let chunk =
+                        chunk.map_err(|e| MuseError::Other(format!("stream chunk error: {e}")))?;
+                    parser.push(&chunk)
+                }
+                None => parser.finish().into_iter().collect(),
+            };
+            for data in events {
                 if data.trim() == "[DONE]" {
                     continue;
                 }
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
                     // Surface provider-side errors mid-stream.
-                    if let Some(msg) = v.pointer("/error/message").and_then(|m| m.as_str()) {
+                    let error_message = v
+                        .pointer("/error/message")
+                        .and_then(|m| m.as_str())
+                        // OpenCode also emits the bare-string form
+                        // (`{"error":"Upstream request failed"}`), which was
+                        // silently dropped here — the stream then ended with no
+                        // content and the turn looked like it just hung.
+                        .or_else(|| {
+                            if self.is_opencode_route() {
+                                v.get("error").and_then(|e| e.as_str())
+                            } else {
+                                None
+                            }
+                        });
+                    if let Some(msg) = error_message {
                         return Err(MuseError::Api {
                             status: 0,
                             message: msg.to_string(),
@@ -749,11 +851,28 @@ impl ApiClient {
                     }
                 }
             }
+            if end_of_body {
+                break;
+            }
         }
 
+        let saw_reasoning = !acc.reasoning.is_empty();
         let shaped = acc.finish();
         let resp = super::chat::to_api_response(shaped)
             .map_err(|e| MuseError::Other(format!("chat stream map failed: {e}")))?;
+        // An OpenCode gateway that loses its upstream mid-turn can close a 200
+        // stream having sent nothing usable. Reporting that as a completed
+        // (empty) turn looked like a hang; as an error the agent loop can retry
+        // or fail over. Scoped to OpenCode so no other provider's empty reply
+        // changes meaning.
+        if self.is_opencode_route() && resp.output.is_empty() && !saw_reasoning {
+            return Err(MuseError::Api {
+                status: 0,
+                message: "OpenCode returned an empty stream (upstream request failed \
+                          before any content) — retry or /model to another route"
+                    .into(),
+            });
+        }
         on_event(StreamEvent::Completed(resp.clone()));
         Ok(resp)
     }
@@ -796,7 +915,13 @@ impl ApiClient {
                 // Opaque OAuth 429 is usually wrong client identity, not a real
                 // temporary rate limit — don't thrash retries.
                 let is_oauth_429 = status.as_u16() == 429 && oauth;
-                if Self::is_retryable_status(status.as_u16()) && attempt < 4 && !is_oauth_429 {
+                // Also retry 4xx-wrapped upstream failures, but only when this
+                // client is actually talking to an OpenCode gateway — a real
+                // Anthropic 4xx must still fail fast.
+                let retry_msg = parse_error_message(&text).unwrap_or_else(|| text.clone());
+                let retryable =
+                    is_retryable_error(status.as_u16(), &retry_msg, self.is_opencode_route());
+                if retryable && attempt < 4 && !is_oauth_429 {
                     tokio::time::sleep(std::time::Duration::from_millis(
                         400 * (1 << (attempt - 1)),
                     ))
@@ -822,6 +947,9 @@ impl ApiClient {
                          upgrade to latest nur, or use ANTHROPIC_API_KEY if usage is exhausted",
                     );
                 }
+                // (No second transient-upstream retry here: `retryable` above
+                // already covers it, and re-checking the same needles after the
+                // attempt budget is spent only delayed the error.)
                 return Err(MuseError::Api {
                     status: code,
                     message: msg,
@@ -892,9 +1020,19 @@ impl ApiClient {
                 _ = cancel.cancelled() => return Err(MuseError::Interrupted),
                 c = stream.next() => c,
             };
-            let Some(chunk) = chunk else { break };
-            let chunk = chunk.map_err(|e| MuseError::Other(format!("stream chunk error: {e}")))?;
-            for data in parser.push(&chunk) {
+            // Flush the parser once the body ends — Anthropic's terminal
+            // `message_stop`, and any `type: error` frame, is exactly the event
+            // that arrives last and so is the one a missing blank line drops.
+            let end_of_body = chunk.is_none();
+            let events = match chunk {
+                Some(chunk) => {
+                    let chunk =
+                        chunk.map_err(|e| MuseError::Other(format!("stream chunk error: {e}")))?;
+                    parser.push(&chunk)
+                }
+                None => parser.finish().into_iter().collect(),
+            };
+            for data in events {
                 if data.trim().is_empty() {
                     continue;
                 }
@@ -923,6 +1061,9 @@ impl ApiClient {
                         on_event(StreamEvent::TextDelta(delta));
                     }
                 }
+            }
+            if end_of_body {
+                break;
             }
         }
 
@@ -1039,7 +1180,7 @@ fn consume_sse_text(body: &str, on_event: &mut impl FnMut(StreamEvent)) -> Resul
     let mut parser = super::sse::SseParser::new();
     let mut events = parser.push(body.as_bytes());
     // Flush trailing event if the body lacked a final blank line.
-    events.extend(parser.push(b"\n\n"));
+    events.extend(parser.finish());
     let mut final_response: Option<ApiResponse> = None;
     let mut streamed_items: Vec<super::types::OutputItem> = Vec::new();
     for data in events {
@@ -1067,6 +1208,38 @@ fn consume_sse_text(body: &str, on_event: &mut impl FnMut(StreamEvent)) -> Resul
             "Codex/Responses SSE ended without response.completed (check auth and model)".into(),
         )
     })
+}
+
+/// Does this error text describe a *gateway-side* upstream failure rather than
+/// a problem with the request we sent?
+///
+/// OpenCode Zen/Go proxy other vendors and surface their outages verbatim —
+/// `Error from provider (Console Go): Upstream request failed` — usually with a
+/// 400, which is otherwise a permanent "your request is wrong" status.
+fn is_transient_upstream_message(message: &str) -> bool {
+    let m = message.to_ascii_lowercase();
+    const NEEDLES: &[&str] = &[
+        "upstream request failed",
+        "error from provider",
+        "upstream error",
+        "console go",
+        "provider error",
+        "upstream failed",
+        "upstream timeout",
+        "upstream unavailable",
+    ];
+    NEEDLES.iter().any(|n| m.contains(n))
+}
+
+/// Retry decision for one failed HTTP attempt.
+///
+/// `opencode_route` widens it to OpenCode's 4xx-wrapped upstream failures; for
+/// every other provider the decision is exactly `is_retryable_status`.
+fn is_retryable_error(status: u16, message: &str, opencode_route: bool) -> bool {
+    ApiClient::is_retryable_status(status)
+        || (opencode_route
+            && matches!(status, 400 | 408 | 409 | 502 | 503 | 504)
+            && is_transient_upstream_message(message))
 }
 
 fn parse_response_body(body: &str, status: u16) -> Result<ApiResponse> {
@@ -1133,7 +1306,7 @@ fn parse_error_message(body: &str) -> Option<String> {
     if body_looks_like_sse(body) {
         let mut parser = super::sse::SseParser::new();
         let mut events = parser.push(body.as_bytes());
-        events.extend(parser.push(b"\n\n"));
+        events.extend(parser.finish());
         for data in events.into_iter().rev() {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
                 if let Some(msg) = v
@@ -1170,6 +1343,60 @@ fn uuid_simple() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opencode_route_is_detected_by_provider_or_base_url() {
+        let zen = ApiClient::for_provider("https://opencode.ai/zen/v1", "k", "opencode").unwrap();
+        assert!(zen.is_opencode_route());
+        let go = ApiClient::for_provider(crate::providers::OPENCODE_GO_BASE_URL, "k", "opencode")
+            .unwrap();
+        assert!(go.is_opencode_route());
+        // A custom endpoint pointed at OpenCode still counts…
+        let custom =
+            ApiClient::for_provider("https://opencode.ai/zen/go/v1", "k", "custom").unwrap();
+        assert!(custom.is_opencode_route());
+        // …and an unrelated provider never does.
+        let other = ApiClient::for_provider("https://api.openai.com/v1", "k", "openai").unwrap();
+        assert!(!other.is_opencode_route());
+    }
+
+    #[test]
+    fn upstream_gateway_failures_are_retryable_only_on_the_opencode_route() {
+        // The exact shape OpenCode Go returns when the vendor behind it fails.
+        let msg = "Error from provider (Console Go): Upstream request failed";
+        assert!(is_retryable_error(400, msg, true));
+        assert!(
+            !is_retryable_error(400, msg, false),
+            "must not widen 400 retries for other providers"
+        );
+        // A genuine bad request never retries, on any route.
+        for route in [true, false] {
+            assert!(!is_retryable_error(
+                400,
+                "invalid_request_error: unknown model",
+                route
+            ));
+            assert!(!is_retryable_error(404, "not found", route));
+            assert!(!is_retryable_error(401, "invalid api key", route));
+        }
+        // Status-based retries are identical on both routes.
+        for status in [429u16, 500, 502, 503, 504] {
+            assert!(is_retryable_error(status, "whatever", false));
+            assert!(is_retryable_error(status, "whatever", true));
+        }
+    }
+
+    #[test]
+    fn transient_upstream_message_matching_is_case_insensitive_and_narrow() {
+        assert!(is_transient_upstream_message(
+            "ERROR FROM PROVIDER (Console Go): UPSTREAM REQUEST FAILED"
+        ));
+        assert!(is_transient_upstream_message("upstream timeout"));
+        assert!(!is_transient_upstream_message(
+            "messages: text content blocks must be non-empty"
+        ));
+        assert!(!is_transient_upstream_message("model not found"));
+    }
 
     #[test]
     fn text_only_capability_is_scoped_to_the_actual_base_url() {

@@ -57,6 +57,143 @@ pub const OPENCODE_GO_BASE_URL: &str = "https://opencode.ai/zen/go/v1";
 /// Poolside Platform inference. Self-hosted deployments use `https://<domain>/openai/v1`.
 pub const POOLSIDE_BASE_URL: &str = "https://inference.poolside.ai/v1";
 
+/// Current xAI flagship on `api.x.ai`.
+///
+/// Source of truth: <https://docs.x.ai/docs/models>. The whole Grok 4 line was
+/// withdrawn — `grok-4` is **not** served any more — so this is also what
+/// [`normalize_xai_model_id`] rewrites retired ids onto. The OAuth proxy
+/// (`cli-chat-proxy`) serves the same id, so key and browser sessions agree.
+pub const XAI_DEFAULT_MODEL: &str = "grok-4.5";
+
+/// Rewrite a retired / short Grok id onto one `api.x.ai` still serves.
+///
+/// Grok 4 and everything older were withdrawn, so a config saved back when
+/// `grok-4` was the default now 404s on the next turn — the user changed
+/// nothing, the model went away underneath them. Only **exact** retired ids are
+/// rewritten: current ids (`grok-4.3`, `grok-4.20-*`, `grok-build-0.1`) and the
+/// `grok-imagine-*` image/video families must pass through untouched, which is
+/// why this is an explicit list and not a `grok-4` prefix match.
+pub fn normalize_xai_model_id(model: &str) -> String {
+    let m = model.trim();
+    if m.is_empty() {
+        return XAI_DEFAULT_MODEL.to_string();
+    }
+    const RETIRED: &[&str] = &[
+        "grok",
+        "grok-latest",
+        "grok-beta",
+        "grok-2",
+        "grok-2-latest",
+        "grok-2-1212",
+        "grok-2-vision-1212",
+        "grok-3",
+        "grok-3-latest",
+        "grok-3-fast",
+        "grok-3-mini",
+        "grok-3-mini-fast",
+        "grok-4",
+        "grok-4-latest",
+        "grok-4-0709",
+        "grok-4-fast",
+        "grok-4-fast-reasoning",
+        "grok-4-fast-non-reasoning",
+        "grok-code-fast-1",
+    ];
+    if RETIRED.contains(&m) {
+        return XAI_DEFAULT_MODEL.to_string();
+    }
+    m.to_string()
+}
+
+/// Current Gemini Pro id on the first-party Gemini API.
+///
+/// Gateways (OpenCode Zen, OpenRouter) expose a bare `gemini-3.1-pro`, but
+/// `generativelanguage.googleapis.com` only accepts the `-preview` suffix.
+pub const GOOGLE_DEFAULT_MODEL: &str = "gemini-3.1-pro-preview";
+
+/// Rewrite a retired Gemini id onto one the Gemini API still serves.
+///
+/// `gemini-3-pro` appears in neither Google's model list nor its deprecation
+/// table, and `gemini-3-pro-preview` was shut down on 2026-03-09. Matching is
+/// exact and never by prefix: `gemini-3-pro-image`, `gemini-3.6-flash`,
+/// `gemini-3.5-flash*` and every `gemini-3.1-*` are current and must survive.
+pub fn normalize_google_model_id(model: &str) -> String {
+    let m = model.trim();
+    if m.is_empty() {
+        return GOOGLE_DEFAULT_MODEL.to_string();
+    }
+    const RETIRED: &[&str] = &[
+        "gemini-3-pro",
+        "gemini-3-pro-preview",
+        "gemini-2.5-pro",
+        "gemini-2.5-pro-preview-03-25",
+        "gemini-2.5-pro-preview-05-06",
+        "gemini-2.5-pro-preview-06-05",
+        "gemini-1.5-pro",
+        "gemini-1.5-pro-latest",
+        "gemini-1.0-pro",
+        "gemini-pro",
+    ];
+    if RETIRED.contains(&m) {
+        return GOOGLE_DEFAULT_MODEL.to_string();
+    }
+    m.to_string()
+}
+
+/// Current general-purpose DeepSeek id.
+pub const DEEPSEEK_DEFAULT_MODEL: &str = "deepseek-v4-flash";
+
+/// Rewrite the retired DeepSeek aliases.
+///
+/// DeepSeek removes `deepseek-chat` and `deepseek-reasoner` on
+/// **2026-07-24 15:59 UTC**. They were the non-thinking and thinking modes of
+/// `deepseek-v4-flash`, so the id swap is behaviour-neutral — nur drives
+/// reasoning depth through its own effort setting, not the model id.
+pub fn normalize_deepseek_model_id(model: &str) -> String {
+    let m = model.trim();
+    if m.is_empty() {
+        return DEEPSEEK_DEFAULT_MODEL.to_string();
+    }
+    const RETIRED: &[&str] = &["deepseek-chat", "deepseek-reasoner", "deepseek-coder"];
+    if RETIRED.contains(&m) {
+        return DEEPSEEK_DEFAULT_MODEL.to_string();
+    }
+    m.to_string()
+}
+
+/// Current Inception id — their catalog returns exactly this one model.
+pub const INCEPTION_DEFAULT_MODEL: &str = "mercury-2";
+
+/// Rewrite retired Inception ids; `mercury-coder` is gone from the catalog.
+pub fn normalize_inception_model_id(model: &str) -> String {
+    let m = model.trim();
+    if m.is_empty() {
+        return INCEPTION_DEFAULT_MODEL.to_string();
+    }
+    const RETIRED: &[&str] = &["mercury-coder", "mercury", "mercury-coder-small"];
+    if RETIRED.contains(&m) {
+        return INCEPTION_DEFAULT_MODEL.to_string();
+    }
+    m.to_string()
+}
+
+/// Rewrite a saved model id that its provider has since retired.
+///
+/// Providers withdraw ids out from under a config that has one pinned: the user
+/// changed nothing, and their next turn 404s with no hint why. Only providers
+/// with a *confirmed* retirement get an arm here — everything else passes
+/// through untouched, because a wrong rewrite breaks a working setup, which is
+/// strictly worse than a stale-but-serving id.
+pub fn normalize_model_for(provider_id: &str, model: &str) -> String {
+    match provider_id {
+        "xai" => normalize_xai_model_id(model),
+        "google" => normalize_google_model_id(model),
+        "deepseek" => normalize_deepseek_model_id(model),
+        "inception" => normalize_inception_model_id(model),
+        _ => model.trim().to_string(),
+    }
+}
+
 /// Floor version xAI enforces on `cli-chat-proxy` (HTTP 426 if missing → "none").
 #[allow(dead_code)] // documented floor; asserted in tests
 pub const XAI_GROK_CLI_MIN_VERSION: &str = "0.1.202";
@@ -156,7 +293,11 @@ pub const PROVIDERS: &[Provider] = &[
         id: "google",
         name: "Google Gemini",
         base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
-        default_model: "gemini-3-pro",
+        // `gemini-3-pro` appears in neither Google's model list nor its
+        // deprecation table; `gemini-3-pro-preview` shut down 2026-03-09 naming
+        // this as the replacement. Note gateways expose a bare `gemini-3.1-pro`,
+        // but the first-party API requires the `-preview` suffix.
+        default_model: GOOGLE_DEFAULT_MODEL,
         env_key: "GEMINI_API_KEY",
         style: CC,
         note: "Gemini · key or gcloud SSO",
@@ -167,7 +308,7 @@ pub const PROVIDERS: &[Provider] = &[
         id: "xai",
         name: "xAI Grok",
         base_url: "https://api.x.ai/v1",
-        default_model: "grok-4",
+        default_model: XAI_DEFAULT_MODEL,
         env_key: "XAI_API_KEY",
         style: CC,
         note: "Grok · key or browser",
@@ -178,7 +319,10 @@ pub const PROVIDERS: &[Provider] = &[
         id: "deepseek",
         name: "DeepSeek",
         base_url: "https://api.deepseek.com/v1",
-        default_model: "deepseek-chat",
+        // DeepSeek retires the `deepseek-chat` / `deepseek-reasoner` aliases on
+        // 2026-07-24 15:59 UTC. `deepseek-chat` was exactly the non-thinking
+        // mode of this model, so the swap is behaviour-neutral.
+        default_model: DEEPSEEK_DEFAULT_MODEL,
         env_key: "DEEPSEEK_API_KEY",
         style: CC,
         note: "V3 · R1",
@@ -233,7 +377,9 @@ pub const PROVIDERS: &[Provider] = &[
         id: "inception",
         name: "Inception (Mercury)",
         base_url: "https://api.inceptionlabs.ai/v1",
-        default_model: "mercury-coder",
+        // Inception's catalog now returns exactly one model; `mercury-coder`
+        // is gone.
+        default_model: INCEPTION_DEFAULT_MODEL,
         env_key: "INCEPTION_API_KEY",
         style: CC,
         note: "Mercury · diffusion LLM",
@@ -337,7 +483,10 @@ pub const PROVIDERS: &[Provider] = &[
         id: "cerebras",
         name: "Cerebras",
         base_url: "https://api.cerebras.ai/v1",
-        default_model: "llama-3.3-70b",
+        // Cerebras shut `llama-3.3-70b` down on 2026-02-16 and names GPT OSS
+        // 120B as the replacement; it is their only Production-tier model
+        // (`gemma-4-31b` / `zai-glm-4.7` are preview-only).
+        default_model: "gpt-oss-120b",
         env_key: "CEREBRAS_API_KEY",
         style: CC,
         note: "wafer-scale · fastest",
@@ -370,7 +519,9 @@ pub const PROVIDERS: &[Provider] = &[
         id: "deepinfra",
         name: "DeepInfra",
         base_url: "https://api.deepinfra.com/v1/openai",
-        default_model: "meta-llama/Llama-3.3-70B-Instruct",
+        // DeepInfra serves this model only under the `-Turbo` spelling; the bare
+        // id is absent from its catalog. Same model, host-specific name.
+        default_model: "meta-llama/Llama-3.3-70B-Instruct-Turbo",
         env_key: "DEEPINFRA_API_KEY",
         style: CC,
         note: "cheap open models",
@@ -458,7 +609,10 @@ pub const PROVIDERS: &[Provider] = &[
         id: "friendli",
         name: "Friendli",
         base_url: "https://api.friendli.ai/serverless/v1",
-        default_model: "meta-llama-3.3-70b-instruct",
+        // Friendli's serverless catalog is down to 7 models and no longer
+        // carries any Meta/Llama entry; this is the general-purpose instruct
+        // model among the survivors.
+        default_model: "Qwen/Qwen3-235B-A22B-Instruct-2507",
         env_key: "FRIENDLI_TOKEN",
         style: CC,
         note: "serverless endpoints",
@@ -469,7 +623,9 @@ pub const PROVIDERS: &[Provider] = &[
         id: "chutes",
         name: "Chutes",
         base_url: "https://llm.chutes.ai/v1",
-        default_model: "deepseek-ai/DeepSeek-V3",
+        // Every id in Chutes' catalog now carries a `-TEE` suffix (trusted
+        // execution), so the bare id cannot resolve at all.
+        default_model: "deepseek-ai/DeepSeek-V3.2-TEE",
         env_key: "CHUTES_API_TOKEN",
         style: CC,
         note: "decentralized inference",
@@ -514,7 +670,9 @@ pub const PROVIDERS: &[Provider] = &[
         id: "zhipu",
         name: "Z.AI",
         base_url: "https://api.z.ai/api/paas/v4",
-        default_model: "glm-4.6",
+        // `glm-4.6` still resolves but is four generations behind; Z.AI documents
+        // `glm-5.2` against this exact base.
+        default_model: "glm-5.2",
         env_key: "ZAI_API_KEY",
         style: CC,
         note: "GLM",
@@ -536,7 +694,8 @@ pub const PROVIDERS: &[Provider] = &[
         id: "minimax",
         name: "MiniMax (minimaxi.com)",
         base_url: "https://api.minimaxi.com/anthropic/v1",
-        default_model: "MiniMax-M2.7",
+        // Casing is verbatim from MiniMax's Anthropic-API reference for this base.
+        default_model: "MiniMax-M3",
         env_key: "MINIMAX_API_KEY",
         style: AM,
         note: "China API · Anthropic-compatible",
@@ -603,7 +762,9 @@ pub const PROVIDERS: &[Provider] = &[
         id: "glama",
         name: "Glama",
         base_url: "https://glama.ai/api/gateway/openai/v1",
-        default_model: "openai/gpt-5.5",
+        // Glama date-pins OpenAI ids (`openai/gpt-5.5-2026-04-23`); the 5.6 tier
+        // is the only undated OpenAI family, so it will not re-rot.
+        default_model: "openai/gpt-5.6-terra",
         env_key: "GLAMA_API_KEY",
         style: CC,
         note: "gateway + MCP",
@@ -669,7 +830,8 @@ pub const PROVIDERS: &[Provider] = &[
         id: "nano-gpt",
         name: "NanoGPT",
         base_url: "https://nano-gpt.com/api/v1",
-        default_model: "gpt-5.5",
+        // NanoGPT namespaces modern models; the bare id is not in its catalog.
+        default_model: "openai/gpt-5.6-terra",
         env_key: "NANOGPT_API_KEY",
         style: CC,
         note: "pay-per-prompt",
@@ -680,7 +842,12 @@ pub const PROVIDERS: &[Provider] = &[
         id: "opencode",
         name: "OpenCode",
         base_url: "https://opencode.ai/zen/v1",
-        default_model: "claude-sonnet-4",
+        // Zen still serves `claude-sonnet-4`, so this was never a 404 — just a
+        // two-generation-old default that failover also aimed at (`plan_targets`
+        // seeds from `default_model`). Verified present in the live Zen catalog
+        // (`GET https://opencode.ai/zen/v1/models`) and matches the id
+        // `anthropic::DEFAULT_SONNET` normalises to, so the two agree.
+        default_model: "claude-sonnet-5",
         env_key: "OPENCODE_API_KEY",
         style: CC,
         note: "coding-model gateway",
@@ -691,7 +858,9 @@ pub const PROVIDERS: &[Provider] = &[
         id: "github-models",
         name: "GitHub Models",
         base_url: "https://models.github.ai/inference",
-        default_model: "openai/gpt-4o",
+        // `openai/gpt-4o` still resolves but is long superseded; `openai/gpt-5`
+        // is the newest OpenAI tier GitHub Models offers.
+        default_model: "openai/gpt-5",
         env_key: "GITHUB_TOKEN",
         style: CC,
         note: "gh CLI or PAT · free tier",
@@ -702,7 +871,9 @@ pub const PROVIDERS: &[Provider] = &[
         id: "github-copilot",
         name: "GitHub Copilot",
         base_url: "https://api.githubcopilot.com",
-        default_model: "gpt-4.1",
+        // GitHub retired GPT-4.1 for Copilot on 2026-06-01 and names GPT-5.5 as
+        // the replacement. Copilot uses bare ids, not `publisher/model`.
+        default_model: "gpt-5.5",
         env_key: "COPILOT_GITHUB_TOKEN",
         style: CC,
         note: "Copilot subscription · gh OAuth or fine-grained PAT",
@@ -713,7 +884,10 @@ pub const PROVIDERS: &[Provider] = &[
         id: "helicone",
         name: "Helicone AI Gateway",
         base_url: "https://ai-gateway.helicone.ai/v1",
-        default_model: "openai/gpt-5.5",
+        // Helicone is the inverted case: every id on the `/v1` gateway is BARE
+        // (0 of 111 contain a slash), so a namespaced id cannot route here.
+        // Its newest OpenAI tier is 5.4 - this gateway lags the others.
+        default_model: "gpt-5.4",
         env_key: "HELICONE_API_KEY",
         style: CC,
         note: "gateway + observability",
@@ -724,7 +898,8 @@ pub const PROVIDERS: &[Provider] = &[
         id: "aimlapi",
         name: "AI/ML API",
         base_url: "https://api.aimlapi.com/v1",
-        default_model: "gpt-5.5",
+        // AI/ML API namespaces its catalog; the bare id does not resolve.
+        default_model: "openai/gpt-5.6-terra",
         env_key: "AIMLAPI_KEY",
         style: CC,
         note: "300+ models, one key",
@@ -996,7 +1171,164 @@ mod tests {
         // Only the display name changed — routing must be untouched.
         assert_eq!(p.base_url, "https://opencode.ai/zen/v1");
         assert_eq!(p.env_key, "OPENCODE_API_KEY");
-        assert_eq!(p.default_model, "claude-sonnet-4");
+        assert_eq!(p.default_model, "claude-sonnet-5");
+    }
+
+    /// A default model that the gateway does not serve strands every new
+    /// OpenCode session on a 404, and `plan_targets` seeds failover from the
+    /// same field — so it must be an id the Zen catalog actually lists.
+    #[test]
+    fn opencode_default_model_is_a_current_zen_id() {
+        let p = by_id("opencode").expect("opencode");
+        // Ids observed in `GET https://opencode.ai/zen/v1/models`.
+        const ZEN_CLAUDE: &[&str] = &[
+            "claude-fable-5",
+            "claude-opus-4-8",
+            "claude-sonnet-5",
+            "claude-sonnet-4-5",
+            "claude-haiku-4-5",
+        ];
+        assert!(
+            ZEN_CLAUDE.contains(&p.default_model),
+            "{} is not a current Zen id",
+            p.default_model
+        );
+    }
+
+    /// Every id nur can put on the wire for xAI must be one `api.x.ai` still
+    /// serves — the Grok 4 line is gone, and both the key path (`default_model`)
+    /// and the OAuth path pinned it independently, so they must agree.
+    #[test]
+    fn xai_default_model_is_current_and_shared_by_both_auth_paths() {
+        let p = by_id("xai").expect("xai");
+        assert_eq!(p.default_model, XAI_DEFAULT_MODEL);
+        assert_eq!(XAI_DEFAULT_MODEL, "grok-4.5");
+        assert_eq!(
+            normalize_xai_model_id(p.default_model),
+            p.default_model,
+            "the default must survive its own normaliser"
+        );
+    }
+
+    #[test]
+    fn retired_grok_ids_are_rewritten_to_the_current_flagship() {
+        for id in [
+            "grok-4",
+            "grok-4-latest",
+            "grok-4-0709",
+            "grok-4-fast",
+            "grok-4-fast-reasoning",
+            "grok-3",
+            "grok-3-mini",
+            "grok-2",
+            "grok-beta",
+            "grok-code-fast-1",
+            "grok",
+            "",
+            "  grok-4  ",
+        ] {
+            assert_eq!(
+                normalize_xai_model_id(id),
+                XAI_DEFAULT_MODEL,
+                "{id:?} should have been rewritten"
+            );
+        }
+    }
+
+    /// The normaliser must not touch ids the API still serves — a prefix match
+    /// on `grok-4` would eat `grok-4.5` and `grok-4.20-*` and break every one.
+    #[test]
+    fn current_grok_ids_pass_through_untouched() {
+        for id in [
+            "grok-4.5",
+            "grok-4.3",
+            "grok-4.20-0309-reasoning",
+            "grok-4.20-0309-non-reasoning",
+            "grok-4.20-multi-agent-0309",
+            "grok-build-0.1",
+            "grok-imagine-image",
+            "grok-imagine-video-1.5",
+        ] {
+            assert_eq!(normalize_xai_model_id(id), id, "{id} must pass through");
+        }
+    }
+
+    /// A default that its own normaliser would rewrite means the two disagree
+    /// about what is current — one of them is wrong, and users get whichever
+    /// path they happen to hit.
+    #[test]
+    fn no_default_model_is_itself_a_retired_id() {
+        for p in PROVIDERS {
+            assert_eq!(
+                normalize_model_for(p.id, p.default_model),
+                p.default_model,
+                "{}'s default is on its own retired list",
+                p.id
+            );
+        }
+    }
+
+    #[test]
+    fn retired_gemini_ids_are_rewritten_but_current_ones_survive() {
+        for id in [
+            "gemini-3-pro",
+            "gemini-3-pro-preview",
+            "gemini-2.5-pro",
+            "gemini-1.5-pro",
+            "gemini-pro",
+        ] {
+            assert_eq!(normalize_google_model_id(id), GOOGLE_DEFAULT_MODEL, "{id}");
+        }
+        // A prefix match on `gemini-3-pro` would eat the image model; a prefix
+        // match on `gemini-3` would eat the entire current flash line.
+        for id in [
+            "gemini-3-pro-image",
+            "gemini-3.6-flash",
+            "gemini-3.5-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-3.1-pro-preview",
+            "gemini-3-flash-preview",
+        ] {
+            assert_eq!(normalize_google_model_id(id), id, "{id} must pass through");
+        }
+    }
+
+    #[test]
+    fn retired_deepseek_aliases_are_rewritten() {
+        for id in ["deepseek-chat", "deepseek-reasoner", "deepseek-coder"] {
+            assert_eq!(normalize_deepseek_model_id(id), DEEPSEEK_DEFAULT_MODEL);
+        }
+        for id in ["deepseek-v4-flash", "deepseek-v4-pro"] {
+            assert_eq!(normalize_deepseek_model_id(id), id);
+        }
+    }
+
+    #[test]
+    fn retired_inception_ids_are_rewritten() {
+        assert_eq!(
+            normalize_inception_model_id("mercury-coder"),
+            INCEPTION_DEFAULT_MODEL
+        );
+        assert_eq!(normalize_inception_model_id("mercury-2"), "mercury-2");
+    }
+
+    /// The dispatch must be inert for providers with no confirmed retirement —
+    /// rewriting a working id is strictly worse than leaving a stale one.
+    #[test]
+    fn normalize_model_for_is_a_passthrough_for_unlisted_providers() {
+        for (provider, model) in [
+            ("openai", "gpt-5.5"),
+            ("anthropic", "claude-sonnet-4"),
+            ("opencode", "grok-4"),
+            ("ollama", "llama3.3"),
+            ("", "anything"),
+        ] {
+            assert_eq!(
+                normalize_model_for(provider, model),
+                model,
+                "{provider} must not be rewritten"
+            );
+        }
     }
 
     #[test]

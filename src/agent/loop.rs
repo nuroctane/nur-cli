@@ -248,7 +248,9 @@ impl AgentRunner {
                 ))
             }
             Err((e, emitted)) => {
-                if emitted > 0 || !crate::api::failover::should_failover(&e) {
+                if emitted > 0
+                    || !crate::api::failover::should_failover_for(&e, &self.config.provider)
+                {
                     return Err(e);
                 }
                 e
@@ -334,7 +336,8 @@ impl AgentRunner {
                     ))
                 }
                 Err((e, emitted)) => {
-                    if emitted > 0 || !crate::api::failover::should_failover(&e) {
+                    if emitted > 0 || !crate::api::failover::should_failover_for(&e, &t.provider_id)
+                    {
                         return Err(e);
                     }
                     last = e;
@@ -533,10 +536,22 @@ impl AgentRunner {
                 },
             );
 
-            let replayed = replay_output_items(&resp.output);
+            let mut replayed = replay_output_items(&resp.output);
+            let mut calls = resp.function_calls();
+            // Some gateways number tool calls per *response* (`read_file_5`), so
+            // an id can repeat in a later turn. A repeat makes the older
+            // `function_call_output` look like this call's answer — the pairing
+            // scan then skips it and the request goes out with a `function_call`
+            // that has no output, which strict providers reject outright.
+            // Rewrite collisions (and blank ids) before anything is appended.
+            let renamed = normalize_call_ids(&session.input_items, &mut replayed, &mut calls);
             session.input_items.extend(replayed);
+            if renamed > 0 {
+                let _ = tx.send(AgentEvent::Status(format!(
+                    "history · {renamed} duplicate tool-call id(s) renamed to keep results paired"
+                )));
+            }
 
-            let calls = resp.function_calls();
             let text = resp.output_text();
             let unknown_items = resp
                 .output
@@ -596,249 +611,72 @@ impl AgentRunner {
                 return Ok(text);
             }
 
-            // Execute tools **in original model order** (required for call_id pairing).
-            // Contiguous parallel-safe reads may run concurrently, results emitted in order.
-            let mut idx = 0usize;
-            while idx < calls.len() {
-                if cancel.is_cancelled() {
-                    pair_interrupted(&mut session.input_items, &calls);
-                    self.persist_session(session);
-                    return Err(MuseError::Interrupted);
+            // Every `function_call` just appended must leave this turn with a
+            // matching `function_call_output`, whatever happens inside — cancel,
+            // a panicking tool task, a subagent error. `execute_calls` owns the
+            // happy path; this guard backstops *every* way out of it, so no
+            // early return can strand a call in the persisted history.
+            if let Err(e) = self
+                .execute_calls(&calls, &mut tool_seq, session, usage, tx, cancel)
+                .await
+            {
+                let filled = pair_unanswered(&mut session.input_items, &calls, &abort_output(&e));
+                if filled > 0 && !matches!(e, MuseError::Interrupted) {
+                    let _ = tx.send(AgentEvent::Status(format!(
+                        "history · {filled} tool call(s) closed out after: {e}"
+                    )));
                 }
+                self.persist_session(session);
+                return Err(e);
+            }
 
-                // Contiguous parallel-safe batch
-                if is_parallel_safe(&calls[idx].name, &calls[idx].arguments) {
-                    let mut batch_end = idx + 1;
-                    while batch_end < calls.len()
-                        && is_parallel_safe(&calls[batch_end].name, &calls[batch_end].arguments)
-                    {
-                        batch_end += 1;
-                    }
-                    let batch = &calls[idx..batch_end];
-                    let mut handles = Vec::new();
-                    let mut meta: Vec<(u64, String, String)> = Vec::new(); // id, call_id, name
+            self.persist_session(session);
+        }
+    }
 
-                    for call in batch {
-                        // Parallel-safe tools are always free — no approval (keeps output order simple).
-                        tool_seq += 1;
-                        let id = tool_seq;
-                        let _ = tx.send(AgentEvent::ToolStart {
-                            id,
-                            name: call.name.clone(),
-                            args: call.arguments.clone(),
-                        });
-                        let host = ToolHost {
-                            todos: self.tools.todos.clone(),
-                            plan: self.tools.plan.clone(),
-                            steer: self.tools.steer.clone(),
-                        };
-                        let cwd = self.cwd.clone();
-                        let name = call.name.clone();
-                        let args = call.arguments.clone();
-                        let call_id = call.call_id.clone();
-                        let cancel_t = cancel.clone();
-                        meta.push((id, call_id.clone(), name.clone()));
-                        handles.push(tokio::task::spawn_blocking(move || {
-                            let res = host.dispatch(
-                                &name,
-                                &args,
-                                &ToolContext {
-                                    cwd,
-                                    cancel: cancel_t,
-                                },
-                            );
-                            (call_id, name, res)
-                        }));
-                    }
+    /// Execute one response's tool calls **in the model's original order**
+    /// (required for `call_id` pairing), appending a `function_call_output` for
+    /// each. Contiguous parallel-safe reads run concurrently, results emitted in
+    /// order.
+    ///
+    /// Callers must treat any `Err` as "pairing unknown" and close out the
+    /// remaining calls — see the guard in `run_turn_events`.
+    async fn execute_calls(
+        &self,
+        calls: &[FunctionCallRef],
+        tool_seq: &mut u64,
+        session: &mut Session,
+        usage: &mut UsageTracker,
+        tx: &mpsc::UnboundedSender<AgentEvent>,
+        cancel: &CancellationToken,
+    ) -> Result<()> {
+        let mut idx = 0usize;
+        while idx < calls.len() {
+            if cancel.is_cancelled() {
+                return Err(MuseError::Interrupted);
+            }
 
-                    // Collect in submission order (handles order matches meta)
-                    for (handle, (id, call_id, name)) in handles.into_iter().zip(meta.into_iter()) {
-                        let (_, _, res) = tokio::select! {
-                            _ = cancel.cancelled() => {
-                                // Fills this call, the rest of the batch, and every
-                                // post-batch call — whatever has not answered yet.
-                                pair_interrupted(&mut session.input_items, &calls);
-                                // Note: other in-flight blocking tasks keep running until drop
-                                self.persist_session(session);
-                                return Err(MuseError::Interrupted);
-                            }
-                            r = handle => r.map_err(|e| MuseError::Other(e.to_string()))?,
-                        };
-                        let (body, ok) = match res {
-                            Ok(s) => (s, true),
-                            Err(e) => (format!("error: {e}"), false),
-                        };
-                        let body = spill::maybe_spill(
-                            &session.id,
-                            &name,
-                            body,
-                            self.config.tool_result_max_chars as usize,
-                        );
-                        receipt::record(
-                            &session.id,
-                            receipt::Event::Tool {
-                                name: name.clone(),
-                                args_sha256: None,
-                                result_sha256: receipt::sha256_hex(body.as_bytes()),
-                                ok,
-                            },
-                        );
-                        emit_side_effects(tx, &name, &body);
-                        let _ = tx.send(AgentEvent::ToolEnd {
-                            id,
-                            name,
-                            result: body.clone(),
-                            ok,
-                        });
-                        session
-                            .input_items
-                            .push(function_call_output_item(&call_id, &body));
-                    }
-                    flush_pending_media(&mut session.input_items, tx);
-                    idx = batch_end;
-                    continue;
+            // Contiguous parallel-safe batch
+            if is_parallel_safe(&calls[idx].name, &calls[idx].arguments) {
+                let mut batch_end = idx + 1;
+                while batch_end < calls.len()
+                    && is_parallel_safe(&calls[batch_end].name, &calls[batch_end].arguments)
+                {
+                    batch_end += 1;
                 }
+                let batch = &calls[idx..batch_end];
+                let mut handles = Vec::new();
+                let mut meta: Vec<(u64, String, String)> = Vec::new(); // id, call_id, name
 
-                // Contiguous `agent` calls fan out concurrently. Subagents are
-                // whole agent turns — running them one after another wastes the
-                // wall time that made the model ask for several in the first
-                // place. Approval is still collected up front, one prompt at a
-                // time, so the user is never raced by parallel children.
-                if calls[idx].name == "agent" && !self.is_subagent {
-                    let mut batch_end = idx + 1;
-                    while batch_end < calls.len() && calls[batch_end].name == "agent" {
-                        batch_end += 1;
-                    }
-                    if batch_end - idx > 1 {
-                        let outcome = self
-                            .run_agent_fanout(
-                                &calls[idx..batch_end],
-                                &mut tool_seq,
-                                session,
-                                usage,
-                                tx,
-                                cancel,
-                            )
-                            .await;
-                        match outcome {
-                            Ok(()) => {
-                                idx = batch_end;
-                                continue;
-                            }
-                            Err(MuseError::Interrupted) => {
-                                pair_interrupted(&mut session.input_items, &calls);
-                                self.persist_session(session);
-                                return Err(MuseError::Interrupted);
-                            }
-                            Err(e) => return Err(e),
-                        }
-                    }
-                }
-
-                // Single sequential tool (mutating / agent / memory append)
-                let call = &calls[idx];
-                tool_seq += 1;
-                let id = tool_seq;
-                let _ = tx.send(AgentEvent::ToolStart {
-                    id,
-                    name: call.name.clone(),
-                    args: call.arguments.clone(),
-                });
-
-                let mode_at_gate = self.permission_mode.get();
-                let approved = self.check_approval(&call.name, &call.arguments, tx).await;
-                if !approved {
-                    let plan_block = mode_at_gate.is_read_only_enforced()
-                        && !is_read_only_call(&call.name, &call.arguments);
-                    let (msg, result_label) = if plan_block {
-                        (
-                            format!(
-                                "blocked in plan mode — {} needs manual/auto (Shift+Tab). \
-                                 Plan allows reads, analysis, and non-mutating shell (incl. \
-                                 ffmpeg/scratch work); it blocks code edits and repo/VCS commits. \
-                                 Describe the change instead, or ask the user to switch mode.",
-                                call.name
-                            ),
-                            "blocked · plan mode".into(),
-                        )
-                    } else {
-                        ("user denied this tool call".into(), "denied by user".into())
-                    };
-                    let _ = tx.send(AgentEvent::ToolEnd {
+                for call in batch {
+                    // Parallel-safe tools are always free — no approval (keeps output order simple).
+                    *tool_seq += 1;
+                    let id = *tool_seq;
+                    let _ = tx.send(AgentEvent::ToolStart {
                         id,
                         name: call.name.clone(),
-                        result: result_label,
-                        ok: false,
+                        args: call.arguments.clone(),
                     });
-                    session
-                        .input_items
-                        .push(function_call_output_item(&call.call_id, &msg));
-                    idx += 1;
-                    continue;
-                }
-
-                usage.set_state(format!("tool:{}", call.name));
-
-                let (body, ok) = if call.name == "agent" {
-                    if self.is_subagent {
-                        (
-                            "error: nested subagents are not allowed (depth limit)".into(),
-                            false,
-                        )
-                    } else {
-                        match run_agent_tool(self, call, cancel, tx).await {
-                            Ok((s, spent)) => {
-                                // Roll subagent tokens into the parent session so
-                                // totals + the Orca status stay honest.
-                                usage.add_external(&spent);
-                                session.usage.add(&spent);
-                                let _ = tx.send(AgentEvent::Usage {
-                                    session: usage.session_usage().clone(),
-                                    last: spent,
-                                });
-                                (s, true)
-                            }
-                            Err(MuseError::Interrupted) => {
-                                pair_interrupted(&mut session.input_items, &calls);
-                                self.persist_session(session);
-                                return Err(MuseError::Interrupted);
-                            }
-                            Err(e) => (format!("error: {e}"), false),
-                        }
-                    }
-                } else {
-                    // Pre-tool hook (optional) — blocks on non-zero exit.
-                    if let Err(e) =
-                        self.hooks
-                            .run_pre(&call.name, &call.arguments, &self.cwd, &session.id)
-                    {
-                        let msg = format!("error: {e}");
-                        let _ = tx.send(AgentEvent::ToolEnd {
-                            id,
-                            name: call.name.clone(),
-                            result: msg.clone(),
-                            ok: false,
-                        });
-                        session
-                            .input_items
-                            .push(function_call_output_item(&call.call_id, &msg));
-                        idx += 1;
-                        continue;
-                    }
-                    // Snapshot the target before a single-file mutating tool so
-                    // `/undo` can restore it. Best-effort; never blocks the tool.
-                    if matches!(
-                        call.name.as_str(),
-                        "write_file" | "edit_file" | "multi_edit"
-                    ) {
-                        if let Ok(v) = serde_json::from_str::<Value>(&call.arguments) {
-                            if let Some(p) = v.get("path").and_then(|p| p.as_str()) {
-                                if let Ok(abs) = crate::tools::resolve_path(&self.cwd, p) {
-                                    crate::tools::undo::record(&session.id, &abs);
-                                }
-                            }
-                        }
-                    }
                     let host = ToolHost {
                         todos: self.tools.todos.clone(),
                         plan: self.tools.plan.clone(),
@@ -847,80 +685,275 @@ impl AgentRunner {
                     let cwd = self.cwd.clone();
                     let name = call.name.clone();
                     let args = call.arguments.clone();
+                    let call_id = call.call_id.clone();
                     let cancel_t = cancel.clone();
-                    let exec = tokio::task::spawn_blocking(move || {
-                        host.dispatch(
+                    meta.push((id, call_id.clone(), name.clone()));
+                    handles.push(tokio::task::spawn_blocking(move || {
+                        let res = host.dispatch(
                             &name,
                             &args,
                             &ToolContext {
                                 cwd,
                                 cancel: cancel_t,
                             },
-                        )
-                    });
-                    tokio::select! {
-                        _ = cancel.cancelled() => {
-                            pair_interrupted(&mut session.input_items, &calls);
-                            self.persist_session(session);
-                            return Err(MuseError::Interrupted);
-                        }
-                        r = exec => match r {
-                            Ok(Ok(s)) => (s, true),
-                            Ok(Err(e)) => (format!("error: {e}"), false),
-                            Err(e) => (format!("error: tool panicked: {e}"), false),
-                        },
-                    }
-                };
-
-                if ok && call.name == "omp" {
-                    if let Some(spent) = crate::tools::omp::delegated_usage(&body) {
-                        usage.add_external(&spent);
-                        session.usage.add(&spent);
-                        let _ = tx.send(AgentEvent::Usage {
-                            session: usage.session_usage().clone(),
-                            last: spent,
-                        });
-                    }
+                        );
+                        (call_id, name, res)
+                    }));
                 }
 
-                let body = if ok {
-                    spill::maybe_spill(
+                // Collect in submission order (handles order matches meta)
+                for (handle, (id, call_id, name)) in handles.into_iter().zip(meta.into_iter()) {
+                    let joined = tokio::select! {
+                        // The caller's guard fills this call, the rest of the
+                        // batch, and every post-batch call.
+                        // Note: other in-flight blocking tasks keep running until drop
+                        _ = cancel.cancelled() => return Err(MuseError::Interrupted),
+                        r = handle => r,
+                    };
+                    // A panicking tool must not abort the turn mid-batch —
+                    // that would strand every remaining call. Report it as
+                    // this call's result and keep going.
+                    let (body, ok) = match joined {
+                        Ok((_, _, Ok(s))) => (s, true),
+                        Ok((_, _, Err(e))) => (format!("error: {e}"), false),
+                        Err(e) => (format!("error: tool panicked: {e}"), false),
+                    };
+                    let body = spill::maybe_spill(
                         &session.id,
-                        &call.name,
+                        &name,
                         body,
                         self.config.tool_result_max_chars as usize,
+                    );
+                    receipt::record(
+                        &session.id,
+                        receipt::Event::Tool {
+                            name: name.clone(),
+                            args_sha256: None,
+                            result_sha256: receipt::sha256_hex(body.as_bytes()),
+                            ok,
+                        },
+                    );
+                    emit_side_effects(tx, &name, &body);
+                    let _ = tx.send(AgentEvent::ToolEnd {
+                        id,
+                        name,
+                        result: body.clone(),
+                        ok,
+                    });
+                    session
+                        .input_items
+                        .push(function_call_output_item(&call_id, &body));
+                }
+                idx = batch_end;
+                continue;
+            }
+
+            // Contiguous `agent` calls fan out concurrently. Subagents are
+            // whole agent turns — running them one after another wastes the
+            // wall time that made the model ask for several in the first
+            // place. Approval is still collected up front, one prompt at a
+            // time, so the user is never raced by parallel children.
+            if calls[idx].name == "agent" && !self.is_subagent {
+                let mut batch_end = idx + 1;
+                while batch_end < calls.len() && calls[batch_end].name == "agent" {
+                    batch_end += 1;
+                }
+                if batch_end - idx > 1 {
+                    // Any error here (including cancel) leaves part of the
+                    // fan-out unanswered — the caller's guard closes it out.
+                    self.run_agent_fanout(
+                        &calls[idx..batch_end],
+                        tool_seq,
+                        session,
+                        usage,
+                        tx,
+                        cancel,
+                    )
+                    .await?;
+                    idx = batch_end;
+                    continue;
+                }
+            }
+
+            // Single sequential tool (mutating / agent / memory append)
+            let call = &calls[idx];
+            *tool_seq += 1;
+            let id = *tool_seq;
+            let _ = tx.send(AgentEvent::ToolStart {
+                id,
+                name: call.name.clone(),
+                args: call.arguments.clone(),
+            });
+
+            let mode_at_gate = self.permission_mode.get();
+            let approved = self.check_approval(&call.name, &call.arguments, tx).await;
+            if !approved {
+                let plan_block = mode_at_gate.is_read_only_enforced()
+                    && !is_read_only_call(&call.name, &call.arguments);
+                let (msg, result_label) = if plan_block {
+                    (
+                        format!(
+                            "blocked in plan mode — {} needs manual/auto (Shift+Tab). \
+                                 Plan allows reads, analysis, and non-mutating shell (incl. \
+                                 ffmpeg/scratch work); it blocks code edits and repo/VCS commits. \
+                                 Describe the change instead, or ask the user to switch mode.",
+                            call.name
+                        ),
+                        "blocked · plan mode".into(),
                     )
                 } else {
-                    // Keep error messages intact (usually short).
-                    body
+                    ("user denied this tool call".into(), "denied by user".into())
                 };
-                receipt::record(
-                    &session.id,
-                    receipt::Event::Tool {
-                        name: call.name.clone(),
-                        args_sha256: Some(receipt::sha256_hex(call.arguments.as_bytes())),
-                        result_sha256: receipt::sha256_hex(body.as_bytes()),
-                        ok,
-                    },
-                );
-                self.hooks
-                    .run_post(&call.name, &call.arguments, &self.cwd, &session.id);
-                emit_side_effects(tx, &call.name, &body);
                 let _ = tx.send(AgentEvent::ToolEnd {
                     id,
                     name: call.name.clone(),
-                    result: body.clone(),
-                    ok,
+                    result: result_label,
+                    ok: false,
                 });
                 session
                     .input_items
-                    .push(function_call_output_item(&call.call_id, &body));
-                flush_pending_media(&mut session.input_items, tx);
+                    .push(function_call_output_item(&call.call_id, &msg));
                 idx += 1;
+                continue;
             }
 
-            self.persist_session(session);
+            usage.set_state(format!("tool:{}", call.name));
+
+            let (body, ok) = if call.name == "agent" {
+                if self.is_subagent {
+                    (
+                        "error: nested subagents are not allowed (depth limit)".into(),
+                        false,
+                    )
+                } else {
+                    match run_agent_tool(self, call, cancel, tx).await {
+                        Ok((s, spent)) => {
+                            // Roll subagent tokens into the parent session so
+                            // totals + the Orca status stay honest.
+                            usage.add_external(&spent);
+                            session.usage.add(&spent);
+                            let _ = tx.send(AgentEvent::Usage {
+                                session: usage.session_usage().clone(),
+                                last: spent,
+                            });
+                            (s, true)
+                        }
+                        Err(MuseError::Interrupted) => return Err(MuseError::Interrupted),
+                        Err(e) => (format!("error: {e}"), false),
+                    }
+                }
+            } else {
+                // Pre-tool hook (optional) — blocks on non-zero exit.
+                if let Err(e) =
+                    self.hooks
+                        .run_pre(&call.name, &call.arguments, &self.cwd, &session.id)
+                {
+                    let msg = format!("error: {e}");
+                    let _ = tx.send(AgentEvent::ToolEnd {
+                        id,
+                        name: call.name.clone(),
+                        result: msg.clone(),
+                        ok: false,
+                    });
+                    session
+                        .input_items
+                        .push(function_call_output_item(&call.call_id, &msg));
+                    idx += 1;
+                    continue;
+                }
+                // Snapshot the target before a single-file mutating tool so
+                // `/undo` can restore it. Best-effort; never blocks the tool.
+                if matches!(
+                    call.name.as_str(),
+                    "write_file" | "edit_file" | "multi_edit"
+                ) {
+                    if let Ok(v) = serde_json::from_str::<Value>(&call.arguments) {
+                        if let Some(p) = v.get("path").and_then(|p| p.as_str()) {
+                            if let Ok(abs) = crate::tools::resolve_path(&self.cwd, p) {
+                                crate::tools::undo::record(&session.id, &abs);
+                            }
+                        }
+                    }
+                }
+                let host = ToolHost {
+                    todos: self.tools.todos.clone(),
+                    plan: self.tools.plan.clone(),
+                    steer: self.tools.steer.clone(),
+                };
+                let cwd = self.cwd.clone();
+                let name = call.name.clone();
+                let args = call.arguments.clone();
+                let cancel_t = cancel.clone();
+                let exec = tokio::task::spawn_blocking(move || {
+                    host.dispatch(
+                        &name,
+                        &args,
+                        &ToolContext {
+                            cwd,
+                            cancel: cancel_t,
+                        },
+                    )
+                });
+                tokio::select! {
+                    _ = cancel.cancelled() => return Err(MuseError::Interrupted),
+                    r = exec => match r {
+                        Ok(Ok(s)) => (s, true),
+                        Ok(Err(e)) => (format!("error: {e}"), false),
+                        Err(e) => (format!("error: tool panicked: {e}"), false),
+                    },
+                }
+            };
+
+            if ok && call.name == "omp" {
+                if let Some(spent) = crate::tools::omp::delegated_usage(&body) {
+                    usage.add_external(&spent);
+                    session.usage.add(&spent);
+                    let _ = tx.send(AgentEvent::Usage {
+                        session: usage.session_usage().clone(),
+                        last: spent,
+                    });
+                }
+            }
+
+            let body = if ok {
+                spill::maybe_spill(
+                    &session.id,
+                    &call.name,
+                    body,
+                    self.config.tool_result_max_chars as usize,
+                )
+            } else {
+                // Keep error messages intact (usually short).
+                body
+            };
+            receipt::record(
+                &session.id,
+                receipt::Event::Tool {
+                    name: call.name.clone(),
+                    args_sha256: Some(receipt::sha256_hex(call.arguments.as_bytes())),
+                    result_sha256: receipt::sha256_hex(body.as_bytes()),
+                    ok,
+                },
+            );
+            self.hooks
+                .run_post(&call.name, &call.arguments, &self.cwd, &session.id);
+            emit_side_effects(tx, &call.name, &body);
+            let _ = tx.send(AgentEvent::ToolEnd {
+                id,
+                name: call.name.clone(),
+                result: body.clone(),
+                ok,
+            });
+            session
+                .input_items
+                .push(function_call_output_item(&call.call_id, &body));
+            idx += 1;
         }
+        // Media rides a *user* item, so it can only be appended once every call
+        // in this response is answered — slipping it between a call and its
+        // output splits the pair and strict providers reject the history.
+        flush_pending_media(&mut session.input_items, tx);
+        Ok(())
     }
 
     /// Run a contiguous run of `agent` calls concurrently, emitting their
@@ -1073,7 +1106,8 @@ impl AgentRunner {
                 .input_items
                 .push(function_call_output_item(&call.call_id, &body));
         }
-        flush_pending_media(&mut session.input_items, tx);
+        // Media is flushed by `execute_calls` once *all* calls are answered —
+        // a user item here would land between a later call and its output.
         Ok(())
     }
 
@@ -1230,11 +1264,16 @@ mod tests {
         }
     }
 
+    /// The guard `run_turn_events` runs on every non-Ok exit from `execute_calls`.
+    fn close_out(items: &mut Vec<Value>, calls: &[FunctionCallRef], err: &MuseError) -> usize {
+        pair_unanswered(items, calls, &abort_output(err))
+    }
+
     #[test]
     fn cancel_before_any_tool_pairs_every_call() {
         let calls = vec![call("a", "read_file"), call("b", "bash"), call("c", "grep")];
         let mut items: Vec<Value> = Vec::new();
-        assert_eq!(pair_interrupted(&mut items, &calls), 3);
+        assert_eq!(pair_unanswered(&mut items, &calls, INTERRUPT_OUTPUT), 3);
         assert_fully_paired(&items, &calls);
     }
 
@@ -1251,7 +1290,12 @@ mod tests {
             function_call_output_item("a", "contents"),
             function_call_output_item("b", "matches"),
         ];
-        assert_eq!(pair_interrupted(&mut items, &calls), 2); // only c and d
+        // only c and d
+        assert_eq!(
+            close_out(&mut items, &calls, &MuseError::Interrupted),
+            2,
+            "cancel mid-batch must close out the unanswered calls"
+        );
         assert_fully_paired(&items, &calls);
         // Answered calls keep their real results — not overwritten by the interrupt.
         let a = items
@@ -1259,19 +1303,148 @@ mod tests {
             .find(|v| v.get("call_id").and_then(|i| i.as_str()) == Some("a"))
             .unwrap();
         assert_eq!(a.get("output").and_then(|o| o.as_str()), Some("contents"));
+        let c = items
+            .iter()
+            .find(|v| v.get("call_id").and_then(|i| i.as_str()) == Some("c"))
+            .unwrap();
+        assert_eq!(
+            c.get("output").and_then(|o| o.as_str()),
+            Some(INTERRUPT_OUTPUT)
+        );
+    }
+
+    #[test]
+    fn errored_tool_run_still_leaves_history_paired() {
+        // A tool task panicked (JoinError) after the first call answered: the
+        // turn bails with a non-Interrupted error and the rest must still close.
+        let calls = vec![call("a", "read_file"), call("b", "bash"), call("c", "grep")];
+        let mut items = vec![
+            serde_json::json!({"type":"function_call","call_id":"a","name":"read_file","arguments":"{}"}),
+            serde_json::json!({"type":"function_call","call_id":"b","name":"bash","arguments":"{}"}),
+            serde_json::json!({"type":"function_call","call_id":"c","name":"grep","arguments":"{}"}),
+            function_call_output_item("a", "contents"),
+        ];
+        let err = MuseError::Other("tool task panicked".into());
+        assert_eq!(close_out(&mut items, &calls, &err), 2);
+        assert_fully_paired(&items, &calls);
+        let b = items
+            .iter()
+            .find(|v| {
+                v.get("type").and_then(|t| t.as_str()) == Some("function_call_output")
+                    && v.get("call_id").and_then(|i| i.as_str()) == Some("b")
+            })
+            .unwrap();
+        assert!(
+            b.get("output")
+                .and_then(|o| o.as_str())
+                .unwrap_or_default()
+                .contains("panicked"),
+            "the synthetic output should say why the call never ran"
+        );
+    }
+
+    #[test]
+    fn denied_and_errored_calls_in_one_batch_stay_paired() {
+        // Mixed batch: one real result, one permission denial, one never run.
+        let calls = vec![
+            call("a", "read_file"),
+            call("b", "write_file"),
+            call("c", "bash"),
+        ];
+        let mut items = vec![
+            function_call_output_item("a", "contents"),
+            function_call_output_item("b", "user denied this tool call"),
+        ];
+        assert_eq!(close_out(&mut items, &calls, &MuseError::Interrupted), 1);
+        assert_fully_paired(&items, &calls);
     }
 
     #[test]
     fn pairing_is_idempotent() {
         let calls = vec![call("a", "bash")];
         let mut items: Vec<Value> = Vec::new();
-        pair_interrupted(&mut items, &calls);
+        pair_unanswered(&mut items, &calls, INTERRUPT_OUTPUT);
         assert_eq!(
-            pair_interrupted(&mut items, &calls),
+            pair_unanswered(&mut items, &calls, INTERRUPT_OUTPUT),
             0,
             "must not duplicate"
         );
         assert_fully_paired(&items, &calls);
+    }
+
+    fn fc_item(id: &str, name: &str) -> Value {
+        serde_json::json!({
+            "type": "function_call", "call_id": id, "name": name, "arguments": "{}"
+        })
+    }
+
+    #[test]
+    fn call_id_reused_from_an_earlier_turn_is_renamed() {
+        // Gateways that number calls per response (`read_file_5`) repeat ids
+        // across turns; the old output would otherwise "answer" the new call.
+        let history = vec![
+            fc_item("read_file_5", "read_file"),
+            function_call_output_item("read_file_5", "old contents"),
+        ];
+        let mut replayed = vec![fc_item("read_file_5", "read_file")];
+        let mut calls = vec![call("read_file_5", "read_file")];
+        assert_eq!(normalize_call_ids(&history, &mut replayed, &mut calls), 1);
+        assert_ne!(calls[0].call_id, "read_file_5");
+        assert_eq!(
+            replayed[0].get("call_id").and_then(|c| c.as_str()),
+            Some(calls[0].call_id.as_str()),
+            "the replayed item and the call must agree on the new id"
+        );
+
+        // With the rename, the stale output no longer counts as an answer.
+        let mut items = history;
+        items.extend(replayed);
+        assert_eq!(pair_unanswered(&mut items, &calls, INTERRUPT_OUTPUT), 1);
+        assert_fully_paired(&items, &calls);
+    }
+
+    #[test]
+    fn duplicate_and_blank_ids_within_one_response_are_made_unique() {
+        let mut replayed = vec![
+            fc_item("dup", "read_file"),
+            serde_json::json!({"type":"reasoning","summary":[]}),
+            fc_item("dup", "grep"),
+            fc_item("", "glob"),
+        ];
+        let mut calls = vec![
+            call("dup", "read_file"),
+            call("dup", "grep"),
+            call("", "glob"),
+        ];
+        assert_eq!(normalize_call_ids(&[], &mut replayed, &mut calls), 2);
+        let ids: Vec<&str> = calls.iter().map(|c| c.call_id.as_str()).collect();
+        assert_eq!(ids[0], "dup");
+        assert_ne!(ids[1], "dup");
+        assert!(!ids[2].is_empty());
+        let unique: std::collections::HashSet<&&str> = ids.iter().collect();
+        assert_eq!(unique.len(), 3, "every call needs its own id: {ids:?}");
+        // Items were rewritten in lockstep (skipping the reasoning item).
+        assert_eq!(
+            replayed[2].get("call_id").and_then(|c| c.as_str()),
+            Some(ids[1])
+        );
+        assert_eq!(
+            replayed[3].get("call_id").and_then(|c| c.as_str()),
+            Some(ids[2])
+        );
+    }
+
+    #[test]
+    fn unique_call_ids_are_left_alone() {
+        let history = vec![
+            fc_item("c1", "read_file"),
+            function_call_output_item("c1", "x"),
+        ];
+        let mut replayed = vec![fc_item("c2", "grep"), fc_item("c3", "bash")];
+        let mut calls = vec![call("c2", "grep"), call("c3", "bash")];
+        assert_eq!(normalize_call_ids(&history, &mut replayed, &mut calls), 0);
+        assert_eq!(calls[0].call_id, "c2");
+        assert_eq!(calls[1].call_id, "c3");
     }
 
     fn agent_call(id: &str, prompt: &str, kind: &str) -> FunctionCallRef {
@@ -1707,14 +1880,19 @@ mod tests {
 pub(crate) const INTERRUPT_OUTPUT: &str = "[interrupted by user]";
 
 /// Pair every function_call in `calls` that has no `function_call_output` yet
-/// with an interrupt output.
+/// with `output` (an interrupt or error note).
 ///
-/// Invariant: the Responses API rejects a request in which a `function_call`
-/// has no matching `function_call_output`, so a cancel must never leave a gap —
-/// including mid-parallel-batch, where some calls have already answered.
-/// Idempotent and order-independent: safe to call at any cancel site with the
+/// Invariant: providers reject a request in which a `function_call` has no
+/// matching `function_call_output` — Anthropic hardest ("`tool_use` ids were
+/// found without `tool_result` blocks") — so an aborted turn must never leave a
+/// gap, including mid-parallel-batch, where some calls have already answered.
+/// Idempotent and order-independent: safe to call at any bail-out site with the
 /// full call list. Returns how many were filled.
-pub(crate) fn pair_interrupted(items: &mut Vec<Value>, calls: &[FunctionCallRef]) -> usize {
+pub(crate) fn pair_unanswered(
+    items: &mut Vec<Value>,
+    calls: &[FunctionCallRef],
+    output: &str,
+) -> usize {
     let answered: std::collections::HashSet<&str> = items
         .iter()
         .filter(|v| v.get("type").and_then(|t| t.as_str()) == Some("function_call_output"))
@@ -1727,9 +1905,79 @@ pub(crate) fn pair_interrupted(items: &mut Vec<Value>, calls: &[FunctionCallRef]
         .collect();
     let n = missing.len();
     for call_id in missing {
-        items.push(function_call_output_item(&call_id, INTERRUPT_OUTPUT));
+        items.push(function_call_output_item(&call_id, output));
     }
     n
+}
+
+/// Synthetic result recorded for calls that never ran because the turn aborted.
+fn abort_output(err: &MuseError) -> String {
+    match err {
+        MuseError::Interrupted => INTERRUPT_OUTPUT.to_string(),
+        e => format!("[error: {e}]"),
+    }
+}
+
+/// Make every `function_call` id in `replayed` unique — across `history` and
+/// within the response itself — rewriting `calls` in lockstep. Returns how many
+/// ids were replaced.
+///
+/// `replayed` and `calls` come from the same response in the same order, so the
+/// n-th `function_call` item describes the n-th call. Blank ids (providers that
+/// omit `call_id`) and ids that collide with something already in history both
+/// break pairing: the *older* output answers the *newer* call, leaving a
+/// `function_call` with nothing after it. Rewriting is safe because the id only
+/// ever has to match inside the history we send back.
+fn normalize_call_ids(
+    history: &[Value],
+    replayed: &mut [Value],
+    calls: &mut [FunctionCallRef],
+) -> usize {
+    let mut used: HashSet<String> = history
+        .iter()
+        .filter(|v| {
+            matches!(
+                v.get("type").and_then(|t| t.as_str()),
+                Some("function_call") | Some("function_call_output")
+            )
+        })
+        .filter_map(|v| v.get("call_id").and_then(|c| c.as_str()))
+        .map(str::to_string)
+        .collect();
+
+    let mut renamed = 0usize;
+    let mut calls = calls.iter_mut();
+    for item in replayed.iter_mut() {
+        if item.get("type").and_then(|t| t.as_str()) != Some("function_call") {
+            continue;
+        }
+        let Some(call) = calls.next() else { break };
+        let id = item
+            .get("call_id")
+            .and_then(|c| c.as_str())
+            .unwrap_or_default()
+            .to_string();
+        if !id.is_empty() && used.insert(id) {
+            continue; // fresh and unique — the normal case
+        }
+        let base = if call.call_id.is_empty() {
+            format!("call_{}", call.name)
+        } else {
+            call.call_id.clone()
+        };
+        let mut n = 2usize;
+        let mut fresh = format!("{base}-{n}");
+        while !used.insert(fresh.clone()) {
+            n += 1;
+            fresh = format!("{base}-{n}");
+        }
+        if let Some(obj) = item.as_object_mut() {
+            obj.insert("call_id".into(), Value::String(fresh.clone()));
+        }
+        call.call_id = fresh;
+        renamed += 1;
+    }
+    renamed
 }
 
 /// Returns a human-readable reason when the session has hit a configured

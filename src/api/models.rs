@@ -202,7 +202,15 @@ fn model_list_urls(base_url: &str, provider_id: &str, is_oauth: bool) -> Vec<Str
         }
         "opencode" => {
             // Zen and Go are separate live catalogs under one OpenCode key.
-            urls.push(format!("{base}/models"));
+            // Always ask *both*, anchored on the catalog's Zen base rather than
+            // the configured one: after picking a Go model the active base_url
+            // IS the Go endpoint, and using it here listed Go twice and hid Zen
+            // entirely — plus the second, unprefixed copy of the Go ids routed
+            // back to Zen on selection and 404'd.
+            let zen = crate::providers::by_id("opencode")
+                .map(|p| p.base_url)
+                .unwrap_or("https://opencode.ai/zen/v1");
+            urls.push(format!("{}/models", zen.trim_end_matches('/')));
             urls.push(format!("{}/models", crate::providers::OPENCODE_GO_BASE_URL));
         }
         "anthropic" => {
@@ -216,6 +224,13 @@ fn model_list_urls(base_url: &str, provider_id: &str, is_oauth: bool) -> Vec<Str
             urls.push(format!("{base}/models"));
         }
     }
+    // Several arms hard-code a URL that the generic `{base}/models` form also
+    // produces for the shipped base (both GitHub providers did exactly this),
+    // and every duplicate costs a full request timeout on the failure path.
+    // `Vec::dedup` only collapses *adjacent* repeats, so filter to first
+    // occurrence instead — the probe order still matters.
+    let mut seen = std::collections::HashSet::new();
+    urls.retain(|u| seen.insert(u.clone()));
     urls
 }
 
@@ -576,6 +591,47 @@ mod tests {
                 format!("{}/models", crate::providers::OPENCODE_GO_BASE_URL),
             ]
         );
+    }
+
+    /// Once a Go model is selected the active base_url *is* the Go endpoint.
+    /// The picker must still show both catalogs, and must not list the Go ids a
+    /// second time without their `opencode-go/` route prefix.
+    #[test]
+    fn opencode_lists_both_catalogs_even_when_already_on_the_go_route() {
+        let urls = model_list_urls(crate::providers::OPENCODE_GO_BASE_URL, "opencode", false);
+        assert_eq!(
+            urls,
+            vec![
+                "https://opencode.ai/zen/v1/models".into(),
+                format!("{}/models", crate::providers::OPENCODE_GO_BASE_URL),
+            ]
+        );
+        // Exactly one request per catalog — no duplicate Go fetch.
+        assert_eq!(
+            urls.iter()
+                .filter(|u| u.starts_with(crate::providers::OPENCODE_GO_BASE_URL))
+                .count(),
+            1
+        );
+    }
+
+    /// A repeated URL burns a full request timeout on every failure path. Both
+    /// GitHub providers hard-coded a URL that `{base}/models` already yields.
+    #[test]
+    fn no_provider_probes_the_same_catalog_url_twice() {
+        for p in crate::providers::PROVIDERS {
+            for oauth in [false, true] {
+                let urls = model_list_urls(p.base_url, p.id, oauth);
+                let mut seen = std::collections::HashSet::new();
+                for u in &urls {
+                    assert!(
+                        seen.insert(u.clone()),
+                        "{} (oauth={oauth}) probes {u} more than once",
+                        p.id
+                    );
+                }
+            }
+        }
     }
 
     #[test]

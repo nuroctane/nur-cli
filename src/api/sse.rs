@@ -32,6 +32,29 @@ impl SseParser {
         }
         out
     }
+
+    /// Flush whatever is still buffered once the body is over.
+    ///
+    /// A well-behaved server terminates the last event with a blank line, but
+    /// plenty do not: the final `data:` frame arrives and the connection simply
+    /// closes. [`push`](Self::push) can never yield that frame — it only emits
+    /// on a boundary — so without this the last event of a stream is silently
+    /// dropped. That loses the final content delta, and worse, an error frame
+    /// or `finish_reason` that arrives last, which is why a failing stream could
+    /// present as a turn that just stopped with no explanation.
+    ///
+    /// Returns `None` when the buffer holds nothing, or only a partial frame
+    /// with no `data:` line (a truncated comment or half-written field), so a
+    /// genuinely cut-off stream does not fabricate an event.
+    pub fn finish(&mut self) -> Option<String> {
+        if self.buf.is_empty() {
+            return None;
+        }
+        let rest: Vec<u8> = std::mem::take(&mut self.buf);
+        // Whatever is left is all we will ever get, so decoding it now cannot
+        // split a character that a later chunk would have completed.
+        extract_data(&String::from_utf8_lossy(&rest))
+    }
 }
 
 /// Locate the end of the first event: a blank line (`\n\n` or `\r\n\r\n`).
@@ -117,6 +140,50 @@ mod tests {
         assert!(p.push(b"data: incomp").is_empty());
         assert!(p.push(b"lete").is_empty());
         assert_eq!(p.push(b"\n\n"), vec!["incomplete".to_string()]);
+    }
+
+    #[test]
+    fn finish_flushes_a_last_event_with_no_trailing_blank_line() {
+        let mut p = SseParser::new();
+        let evs = p.push(b"data: one\n\ndata: two\n");
+        assert_eq!(evs, vec!["one".to_string()]);
+        // `two` never got its blank line — the connection just closed.
+        assert_eq!(p.finish(), Some("two".to_string()));
+        assert_eq!(p.finish(), None, "flushing twice must not repeat the event");
+    }
+
+    #[test]
+    fn finish_flushes_an_event_with_no_newline_at_all() {
+        let mut p = SseParser::new();
+        assert!(p.push(b"data: {\"error\":\"boom\"}").is_empty());
+        assert_eq!(p.finish(), Some("{\"error\":\"boom\"}".to_string()));
+    }
+
+    #[test]
+    fn finish_on_a_clean_stream_yields_nothing() {
+        let mut p = SseParser::new();
+        assert_eq!(p.push(b"data: one\n\n"), vec!["one".to_string()]);
+        assert_eq!(p.finish(), None);
+    }
+
+    #[test]
+    fn finish_does_not_invent_an_event_from_a_partial_frame() {
+        // A truncated comment / half-written field has no `data:` line.
+        let mut p = SseParser::new();
+        assert!(p.push(b": keep-ali").is_empty());
+        assert_eq!(p.finish(), None);
+        let mut p = SseParser::new();
+        assert!(p.push(b"eve").is_empty());
+        assert_eq!(p.finish(), None);
+    }
+
+    #[test]
+    fn finish_preserves_multibyte_in_the_trailing_event() {
+        let mut p = SseParser::new();
+        assert!(p.push("data: héllo 日本 🚀".as_bytes()).is_empty());
+        let last = p.finish().expect("trailing event");
+        assert!(last.contains("héllo 日本 🚀"), "corrupted: {last}");
+        assert!(!last.contains('\u{FFFD}'), "replacement char leaked");
     }
 
     #[test]

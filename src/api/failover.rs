@@ -34,7 +34,17 @@ pub struct FailoverTarget {
 /// return 400/403 with `rate_limit` / `usage limit` / `overloaded` when the
 /// account is out of quota — not only HTTP 429). Another provider *can* fix
 /// that. Wrong keys, bad models, and validation errors still do **not** fail over.
-pub fn should_failover(err: &MuseError) -> bool {
+///
+/// Aware of which provider produced `err`.
+///
+/// Gateway providers (OpenCode Zen/Go) wrap a failing *upstream vendor* as a
+/// **400** whose body describes the upstream, not our request — e.g.
+/// `Error from provider (Console Go): Upstream request failed`. That is
+/// transient and another provider can serve the turn, so it must fail over.
+/// A plain 400 from a first-party provider is a validation error and must not,
+/// which is why this branch is gated on the provider rather than the message
+/// alone: the needles are generic enough to appear in a genuine bad request.
+pub fn should_failover_for(err: &MuseError, provider_id: &str) -> bool {
     match err {
         MuseError::Api { status, message } => {
             if matches!(status, 0 | 429 | 500 | 502 | 503 | 504 | 529) {
@@ -42,6 +52,12 @@ pub fn should_failover(err: &MuseError) -> bool {
             }
             // Quota / overload often arrives as 400/401/402/403 with a clear body.
             if matches!(status, 400 | 401 | 402 | 403) && is_capacity_or_quota_message(message) {
+                return true;
+            }
+            if *status == 400
+                && is_gateway_provider(provider_id)
+                && is_transient_upstream_message(message)
+            {
                 return true;
             }
             false
@@ -77,6 +93,28 @@ fn is_capacity_or_quota_message(message: &str) -> bool {
         "resource exhausted",
         "tokens per day",
         "requests per",
+    ];
+    NEEDLES.iter().any(|n| m.contains(n))
+}
+
+/// Providers that are *gateways* in front of third-party vendors, and so report
+/// someone else's outage as their own 400. Keep this list tight — every entry
+/// relaxes what a 400 means for that provider.
+fn is_gateway_provider(provider_id: &str) -> bool {
+    matches!(provider_id.trim().to_ascii_lowercase().as_str(), "opencode")
+}
+
+fn is_transient_upstream_message(message: &str) -> bool {
+    let m = message.to_ascii_lowercase();
+    const NEEDLES: &[&str] = &[
+        "upstream request failed",
+        "error from provider",
+        "upstream error",
+        "console go",
+        "provider error",
+        "upstream failed",
+        "upstream timeout",
+        "upstream unavailable",
     ];
     NEEDLES.iter().any(|n| m.contains(n))
 }
@@ -123,7 +161,7 @@ pub fn plan_targets(
             p.style
         };
         let model = if is_oauth && p.id == "xai" {
-            "grok-4.5"
+            crate::providers::XAI_DEFAULT_MODEL
         } else {
             p.default_model
         };
@@ -172,6 +210,12 @@ pub fn resolve_target_key(p: &Provider) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The provider-agnostic rules — asserted against a provider that gets no
+    /// gateway relaxation, so these cases pin the baseline for everyone.
+    fn should_failover(err: &MuseError) -> bool {
+        should_failover_for(err, "")
+    }
 
     #[test]
     fn should_failover_on_server_errors_only() {
@@ -236,6 +280,79 @@ mod tests {
                 }),
                 "status {status} msg={message:?} must NOT fail over"
             );
+        }
+    }
+
+    /// OpenCode Zen/Go answer a failing upstream vendor with a 400 whose body
+    /// names the upstream, not our request. Another provider can serve that
+    /// turn, so it must fail over — while ordinary 400s still must not.
+    #[test]
+    fn should_failover_on_gateway_upstream_failures() {
+        for (status, message) in [
+            (
+                400u16,
+                "Error from provider (Console Go): Upstream request failed",
+            ),
+            (400, "upstream error"),
+            (502, "upstream timeout"),
+            (503, "upstream unavailable"),
+        ] {
+            assert!(
+                should_failover_for(
+                    &MuseError::Api {
+                        status,
+                        message: message.into()
+                    },
+                    "opencode"
+                ),
+                "status {status} msg={message:?} should fail over on the gateway"
+            );
+        }
+        for (status, message) in [
+            (400u16, "tool call ids must be unique"),
+            (400, "unsupported parameter: reasoning"),
+            (404, "Error from provider: model not available"), // 404 stays fatal
+        ] {
+            assert!(
+                !should_failover_for(
+                    &MuseError::Api {
+                        status,
+                        message: message.into()
+                    },
+                    "opencode"
+                ),
+                "status {status} msg={message:?} must NOT fail over"
+            );
+        }
+    }
+
+    /// The gateway relaxation must not leak: a plain 400 from a first-party
+    /// provider is a validation error, and retrying it elsewhere just burns a
+    /// second provider on the same bad request.
+    #[test]
+    fn gateway_upstream_relaxation_does_not_apply_to_other_providers() {
+        let err = MuseError::Api {
+            status: 400,
+            message: "Error from provider (Console Go): Upstream request failed".into(),
+        };
+        assert!(should_failover_for(&err, "opencode"));
+        for provider in ["anthropic", "openai", "gemini", "ollama", ""] {
+            assert!(
+                !should_failover_for(&err, provider),
+                "{provider} must keep treating a 400 as fatal"
+            );
+        }
+        // Statuses that always failed over are unchanged for every provider.
+        for provider in ["anthropic", "openai", "opencode", ""] {
+            for status in [0u16, 429, 500, 502, 503, 504, 529] {
+                assert!(should_failover_for(
+                    &MuseError::Api {
+                        status,
+                        message: "upstream error".into()
+                    },
+                    provider
+                ));
+            }
         }
     }
 

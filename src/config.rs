@@ -51,7 +51,10 @@ pub const PRICE_OUTPUT_PER_MTOK: f64 = 4.25;
 /// Bumped when defaults change in a way that must rewrite existing config.toml.
 /// Schema ≥3: agent rounds are unlimited (`max_turns = 0`) until the user sets
 /// a ceiling via `/budget` / `/turns` (or config).
-pub const CONFIG_SCHEMA: u32 = 5;
+/// Schema ≥6: retired Grok ids (`grok-4` and older) rewritten to the current
+/// xAI flagship — the Grok 4 line left `api.x.ai`, so those configs 404.
+/// Schema ≥7: same treatment for retired Google / DeepSeek / Inception ids.
+pub const CONFIG_SCHEMA: u32 = 7;
 
 const RETIRED_PROVIDER_IDS: &[&str] = &[
     "anyscale",
@@ -279,6 +282,14 @@ pub fn migrate_config(cfg: &mut Config) -> bool {
         cfg.fusion_panel.retain(|id| !is_retired_provider(id));
         cfg.provider_privacy
             .retain(|id, _| !is_retired_provider(id));
+    }
+    if cfg.config_schema < 7 {
+        // Providers retire ids out from under a pinned config: xAI withdrew the
+        // Grok 4 line, Google's `gemini-3-pro` is gone, DeepSeek drops the
+        // `deepseek-chat` alias on 2026-07-24, Inception dropped
+        // `mercury-coder`. Anyone who onboarded on those defaults would 404 on
+        // their next turn without having changed a thing.
+        cfg.model = crate::providers::normalize_model_for(&cfg.provider, &cfg.model);
     }
     cfg.config_schema = CONFIG_SCHEMA;
     true
@@ -556,6 +567,37 @@ mod tests {
         cfg.max_turns = 12;
         assert!(!migrate_config(&mut cfg));
         assert_eq!(cfg.max_turns, 12);
+    }
+
+    /// A config saved when `grok-4` was the default must heal itself on load,
+    /// not 404 on the user's next turn.
+    #[test]
+    fn migrate_rewrites_a_retired_grok_id_on_upgrade() {
+        let mut cfg = Config::default();
+        cfg.config_schema = 5;
+        cfg.provider = "xai".into();
+        cfg.model = "grok-4".into();
+        assert!(migrate_config(&mut cfg));
+        assert_eq!(cfg.model, crate::providers::XAI_DEFAULT_MODEL);
+        assert_eq!(cfg.config_schema, CONFIG_SCHEMA);
+    }
+
+    #[test]
+    fn migrate_leaves_a_current_grok_id_and_other_providers_alone() {
+        let mut cfg = Config::default();
+        cfg.config_schema = 5;
+        cfg.provider = "xai".into();
+        cfg.model = "grok-4.20-0309-reasoning".into();
+        assert!(migrate_config(&mut cfg));
+        assert_eq!(cfg.model, "grok-4.20-0309-reasoning");
+
+        // The rewrite is scoped to xAI — a same-named model elsewhere is safe.
+        let mut other = Config::default();
+        other.config_schema = 5;
+        other.provider = "opencode".into();
+        other.model = "grok-4".into();
+        assert!(migrate_config(&mut other));
+        assert_eq!(other.model, "grok-4");
     }
 
     #[test]

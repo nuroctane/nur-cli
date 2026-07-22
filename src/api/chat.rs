@@ -49,19 +49,32 @@ pub fn build_body_opts(
         }
     }
     if let Value::Array(items) = &req.input {
+        // A run of tool calls must reach the server as ONE assistant turn whose
+        // `tool_calls` list every following `tool` message can point back at.
+        // Reasoning items have no chat-completions equivalent and are dropped
+        // below — but on the OpenCode route they must not *split* such a run
+        // either, or the tool results that follow reference call ids the last
+        // assistant message never declared and the gateway rejects the turn.
+        // Histories interleaved that way come from a Responses/Anthropic
+        // session replayed after switching provider to OpenCode.
+        let merge_across_reasoning = provider_id == "opencode";
         let mut index = 0;
         while index < items.len() {
-            if items[index].get("type").and_then(|t| t.as_str()) == Some("function_call") {
+            if item_type(&items[index]) == Some("function_call") {
                 // A response can contain multiple tool calls. OpenAI-compatible
                 // providers expect them in one assistant turn, followed by the
                 // corresponding tool results. Zen tolerated split turns, but
                 // OpenCode Go forwards the stricter upstream protocol.
                 let mut tool_calls = Vec::new();
-                while index < items.len()
-                    && items[index].get("type").and_then(|t| t.as_str()) == Some("function_call")
-                {
-                    tool_calls.push(chat_tool_call(&items[index]));
-                    index += 1;
+                while index < items.len() {
+                    match item_type(&items[index]) {
+                        Some("function_call") => {
+                            tool_calls.push(chat_tool_call(&items[index]));
+                            index += 1;
+                        }
+                        Some("reasoning") if merge_across_reasoning => index += 1,
+                        _ => break,
+                    }
                 }
                 messages.push(json!({
                     "role": "assistant",
@@ -222,6 +235,11 @@ fn push_item_messages_opts(item: &Value, out: &mut Vec<Value>, drop_media: bool)
         }
         out.push(json!({ "role": role, "content": parts }));
     }
+}
+
+/// The Responses `type` discriminator of one input item, if it has one.
+fn item_type(item: &Value) -> Option<&str> {
+    item.get("type").and_then(|t| t.as_str())
 }
 
 fn chat_tool_call(item: &Value) -> Value {
@@ -542,7 +560,22 @@ impl StreamAccumulator {
             }
             if let Some(tcs) = delta.get("tool_calls").and_then(|t| t.as_array()) {
                 for tc in tcs {
-                    let idx = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                    let id = tc.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                    let idx = match tc.get("index").and_then(|v| v.as_u64()) {
+                        Some(i) => i as usize,
+                        // No `index` field: every parallel call used to collapse
+                        // into slot 0, concatenating their argument fragments
+                        // into one unparseable blob and losing all but one call
+                        // id. Open a new slot when a fragment introduces a
+                        // different id; id-less fragments continue the current
+                        // call. Streams that do send `index` are unaffected.
+                        None if !id.is_empty()
+                            && self.calls.last().map(|c| c.0.as_str()) != Some(id) =>
+                        {
+                            self.calls.len()
+                        }
+                        None => self.calls.len().saturating_sub(1),
+                    };
                     while self.calls.len() <= idx {
                         self.calls
                             .push((String::new(), String::new(), String::new()));
@@ -676,6 +709,99 @@ mod tests {
         assert_eq!(messages[4]["tool_call_id"], "b");
     }
 
+    /// Every `tool` message must be reachable from the assistant turn right
+    /// before the run of results — otherwise OpenCode Go rejects the request.
+    fn tool_call_ids_are_declared_before_use(body: &Value) {
+        let messages = body["messages"].as_array().unwrap();
+        let mut declared: std::collections::HashSet<String> = Default::default();
+        for message in messages {
+            match message["role"].as_str() {
+                Some("assistant") => {
+                    if let Some(calls) = message["tool_calls"].as_array() {
+                        // A new assistant turn replaces what the model can
+                        // answer for; results may only follow their own turn.
+                        declared = calls
+                            .iter()
+                            .filter_map(|c| c["id"].as_str().map(String::from))
+                            .collect();
+                    }
+                }
+                Some("tool") => {
+                    let id = message["tool_call_id"].as_str().unwrap_or("");
+                    assert!(
+                        declared.contains(id),
+                        "tool result {id:?} has no matching tool_call in the preceding assistant turn: {body:#}"
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Reasoning items are dropped for chat completions, so on the OpenCode
+    /// route they must not split a run of tool calls into two assistant turns —
+    /// that is exactly what leaves a `tool` message orphaned.
+    #[test]
+    fn reasoning_between_tool_calls_does_not_split_the_opencode_turn() {
+        let mut request = req();
+        request.input = json!([
+            {"role":"user","content":[{"type":"input_text","text":"inspect"}]},
+            {"type":"reasoning","summary":[],"encrypted_content":"x"},
+            {"type":"function_call","call_id":"a","name":"git_status","arguments":"{}"},
+            {"type":"reasoning","summary":[],"encrypted_content":"y"},
+            {"type":"function_call","call_id":"b","name":"list_dir","arguments":"{}"},
+            {"type":"function_call_output","call_id":"a","output":"clean"},
+            {"type":"function_call_output","call_id":"b","output":"src"}
+        ]);
+        let body = build_body_for_provider(&request, false, "opencode");
+        let messages = body["messages"].as_array().unwrap();
+        assert_eq!(messages[2]["tool_calls"].as_array().unwrap().len(), 2);
+        assert_eq!(messages[2]["tool_calls"][0]["id"], "a");
+        assert_eq!(messages[2]["tool_calls"][1]["id"], "b");
+        tool_call_ids_are_declared_before_use(&body);
+
+        // Other providers keep the previous grouping exactly.
+        let other = build_body_for_provider(&request, false, "");
+        let messages = other["messages"].as_array().unwrap();
+        assert_eq!(messages[2]["tool_calls"].as_array().unwrap().len(), 1);
+        assert_eq!(messages[3]["tool_calls"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn tool_calls_and_results_stay_paired_for_zero_one_and_sequential_calls() {
+        // Zero tool calls: nothing but the plain turns.
+        let mut request = req();
+        request.input = json!([
+            {"role":"user","content":[{"type":"input_text","text":"hi"}]},
+            {"role":"assistant","content":[{"type":"output_text","text":"hello"}]}
+        ]);
+        let body = build_body_for_provider(&request, false, "opencode");
+        let messages = body["messages"].as_array().unwrap();
+        assert!(messages.iter().all(|m| m["tool_calls"].is_null()));
+        tool_call_ids_are_declared_before_use(&body);
+
+        // One call, and separately a sequential call/result/call/result run —
+        // each result must still follow the turn that declared its id.
+        request.input = json!([
+            {"role":"user","content":[{"type":"input_text","text":"go"}]},
+            {"type":"function_call","call_id":"a","name":"read","arguments":"{}"},
+            {"type":"function_call_output","call_id":"a","output":"1"},
+            {"type":"function_call","call_id":"b","name":"read","arguments":"{}"},
+            {"type":"function_call_output","call_id":"b","output":"2"}
+        ]);
+        let body = build_body_for_provider(&request, false, "opencode");
+        tool_call_ids_are_declared_before_use(&body);
+        // [0]=system, [1]=user, [2]=assistant(a), [3]=tool a, [4]=assistant(b), [5]=tool b
+        assert_eq!(
+            body["messages"][2]["tool_calls"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(
+            body["messages"][4]["tool_calls"].as_array().unwrap().len(),
+            1
+        );
+    }
+
     /// A request whose history carries a screenshot, as any session that once
     /// used `look`/auto-attach replays on every later turn.
     fn req_with_image() -> ResponseRequest {
@@ -792,6 +918,29 @@ mod tests {
         assert_eq!(calls[0].name, "grep");
         assert_eq!(calls[0].arguments, "{\"p\":\"x\"}");
         assert_eq!(resp.usage.as_ref().unwrap().output_tokens, 4);
+    }
+
+    /// Parallel tool calls streamed without an `index` field (some gateways,
+    /// OpenCode among them, omit it): each new call id must open its own slot
+    /// instead of concatenating every argument fragment into call #1.
+    #[test]
+    fn streaming_tool_calls_split_by_id_when_index_is_missing() {
+        let mut acc = StreamAccumulator::default();
+        acc.push(&json!({"choices":[{"delta":{"tool_calls":[
+            {"id":"c1","function":{"name":"grep","arguments":"{\"p\":"}}]}}]}));
+        acc.push(&json!({"choices":[{"delta":{"tool_calls":[
+            {"function":{"arguments":"\"x\"}"}}]}}]}));
+        acc.push(&json!({"choices":[{"delta":{"tool_calls":[
+            {"id":"c2","function":{"name":"read","arguments":"{\"f\":"}}]}}]}));
+        acc.push(&json!({"choices":[{"delta":{"tool_calls":[
+            {"function":{"arguments":"\"a\"}"}}]}}]}));
+        let resp = to_api_response(acc.finish()).unwrap();
+        let calls = resp.function_calls();
+        assert_eq!(calls.len(), 2, "each call id needs its own slot");
+        assert_eq!(calls[0].call_id, "c1");
+        assert_eq!(calls[0].arguments, "{\"p\":\"x\"}");
+        assert_eq!(calls[1].call_id, "c2");
+        assert_eq!(calls[1].arguments, "{\"f\":\"a\"}");
     }
 
     // ── local reasoning models ───────────────────────────────────────────

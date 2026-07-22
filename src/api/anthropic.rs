@@ -8,6 +8,7 @@
 use super::chat::build_response_value;
 use super::types::ResponseRequest;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 
 /// True for Claude Code / claude.ai OAuth access tokens (`sk-ant-oat…`).
 pub fn is_oauth_token(key: &str) -> bool {
@@ -97,6 +98,8 @@ pub fn build_body_with_oauth(req: &ResponseRequest, stream: bool, oauth: bool) -
     }
     // Anthropic requires alternating user/assistant; merge consecutive same roles.
     let messages = coalesce_roles(messages);
+    // …and then that every tool_use is answered in the very next message.
+    let messages = normalize_tool_pairs(messages);
 
     let model = normalize_model_id(&req.model);
     let mut body = json!({
@@ -413,6 +416,162 @@ fn normalize_blocks(c: Option<&Value>) -> Vec<Value> {
     }
 }
 
+/// Stand-in body for a `tool_use` that never produced a `function_call_output`.
+const MISSING_TOOL_RESULT: &str = "[no result: tool call was interrupted]";
+/// Stand-in body for a tool that succeeded but returned nothing — Anthropic
+/// rejects a `tool_result` whose content is an empty string.
+const EMPTY_TOOL_RESULT: &str = "(no output)";
+
+fn block_type(b: &Value) -> &str {
+    b.get("type").and_then(|t| t.as_str()).unwrap_or("")
+}
+
+/// Anthropic rejects empty text blocks. They appear whenever a turn produced
+/// only a tool call (nur still records a `message` item with empty text) or
+/// only reasoning, so strip them before the pairing pass counts content.
+fn prune_empty_blocks(blocks: Vec<Value>) -> Vec<Value> {
+    blocks
+        .into_iter()
+        .filter(|b| {
+            block_type(b) != "text"
+                || !b
+                    .get("text")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("")
+                    .is_empty()
+        })
+        .collect()
+}
+
+/// Ordered `tool_use` ids of an assistant message (empty for every other role —
+/// Anthropic only accepts `tool_use` from the assistant).
+fn tool_use_ids(msg: &Value) -> Vec<String> {
+    if msg.get("role").and_then(|r| r.as_str()) != Some("assistant") {
+        return Vec::new();
+    }
+    let Some(Value::Array(blocks)) = msg.get("content") else {
+        return Vec::new();
+    };
+    blocks
+        .iter()
+        .filter(|b| block_type(b) == "tool_use")
+        .filter_map(|b| b.get("id").and_then(|v| v.as_str()))
+        .filter(|id| !id.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+/// Rebuild `tool_use` ↔ `tool_result` pairing so the transcript is *always*
+/// valid for the Messages API.
+///
+/// Anthropic is far stricter here than the Responses shape nur's agent loop
+/// records: **every** `tool_use` block in an assistant message must be answered
+/// by a `tool_result` carrying the same id in the *immediately following* user
+/// message, and a `tool_result` may never appear without its call. The recorded
+/// Responses transcript can break both rules — an interrupted turn (Esc during
+/// a tool, a cancelled `agent` fan-out, an error raised between recording the
+/// `function_call` and recording its `function_call_output`) persists a call
+/// with no output, and history carried over from another provider/route or
+/// across a compaction can hold a result whose call is gone. Either one is a
+/// hard `400 … tool_use ids were found without tool_result blocks immediately
+/// after: <id>`, which is why the pairing is rebuilt here instead of trusted.
+///
+/// The pass:
+/// 1. lifts every `tool_result` out of wherever it landed, keyed by call id;
+/// 2. re-emits them, in call order, in a single user message placed directly
+///    after their assistant turn — this also fixes out-of-order parallel
+///    results and assistant text interleaved between a call and its result;
+/// 3. synthesizes an `is_error` placeholder for a `tool_use` with no result
+///    anywhere. We synthesize rather than drop the `tool_use`, because dropping
+///    it would also strand any assistant text sharing that message and would
+///    silently rewrite what the model actually said;
+/// 4. drops a `tool_result` whose id is never called — Anthropic 400s on those
+///    too and there is nothing left to attach it to;
+/// 5. drops messages left with empty content (Anthropic rejects both `""` and
+///    `[]`) and re-runs [`coalesce_roles`], which restores strict alternation
+///    and the "first message must be user" rule after the shuffle.
+fn normalize_tool_pairs(msgs: Vec<Value>) -> Vec<Value> {
+    let had_messages = !msgs.is_empty();
+
+    // 1) Lift every tool_result out, keyed by call id. Content is normalised to
+    //    block arrays throughout so later steps have one shape to reason about.
+    let mut results: HashMap<String, Value> = HashMap::new();
+    let mut stripped: Vec<Value> = Vec::new();
+    for msg in msgs {
+        let role = msg
+            .get("role")
+            .and_then(|r| r.as_str())
+            .unwrap_or("user")
+            .to_string();
+        let mut kept: Vec<Value> = Vec::new();
+        for b in normalize_blocks(msg.get("content")) {
+            if block_type(&b) != "tool_result" {
+                kept.push(b);
+                continue;
+            }
+            let id = match b.get("tool_use_id").and_then(|v| v.as_str()) {
+                Some(s) if !s.is_empty() => s.to_string(),
+                // A result with no id can never be paired — drop it.
+                _ => continue,
+            };
+            results.entry(id).or_insert_with(|| fill_empty_result(b));
+        }
+        let kept = prune_empty_blocks(kept);
+        // A message that existed only to carry results (the common case) leaves
+        // no shell behind — its results are re-emitted in step 2.
+        if kept.is_empty() {
+            continue;
+        }
+        stripped.push(json!({ "role": role, "content": kept }));
+    }
+
+    // 2) Re-emit each assistant turn's results immediately after it.
+    let mut out: Vec<Value> = Vec::new();
+    for msg in stripped {
+        let ids = tool_use_ids(&msg);
+        out.push(msg);
+        if ids.is_empty() {
+            continue;
+        }
+        let blocks: Vec<Value> = ids
+            .iter()
+            .map(|id| {
+                results.remove(id).unwrap_or_else(|| {
+                    json!({
+                        "type": "tool_result",
+                        "tool_use_id": id,
+                        "content": MISSING_TOOL_RESULT,
+                        "is_error": true,
+                    })
+                })
+            })
+            .collect();
+        out.push(json!({ "role": "user", "content": blocks }));
+    }
+    // Whatever is left in `results` is an orphan result — intentionally dropped.
+
+    if out.is_empty() && had_messages {
+        // Everything was empty shells; still send something Anthropic accepts.
+        out.push(json!({ "role": "user", "content": [{ "type": "text", "text": "(continue)" }] }));
+    }
+    coalesce_roles(out)
+}
+
+/// Anthropic rejects a `tool_result` with empty content, which is exactly what a
+/// tool that succeeded silently (a write, a no-match grep) produces.
+fn fill_empty_result(mut block: Value) -> Value {
+    let empty = match block.get("content") {
+        None => true,
+        Some(Value::String(s)) => s.is_empty(),
+        Some(Value::Array(a)) => a.is_empty(),
+        _ => false,
+    };
+    if empty {
+        block["content"] = json!(EMPTY_TOOL_RESULT);
+    }
+    block
+}
+
 /// Non-stream Messages response → Responses-shaped value.
 pub fn parse_message(v: &Value) -> Value {
     let id = v.get("id").and_then(|x| x.as_str());
@@ -624,6 +783,195 @@ mod tests {
             parallel_tool_calls: None,
             prompt_cache_key: None,
         }
+    }
+
+    /// Same fixture as [`req`] but with a caller-supplied Responses transcript.
+    fn req_with(input: Value) -> ResponseRequest {
+        ResponseRequest { input, ..req() }
+    }
+
+    fn messages_of(input: Value) -> Vec<Value> {
+        build_body_with_oauth(&req_with(input), false, false)["messages"]
+            .as_array()
+            .expect("messages present")
+            .clone()
+    }
+
+    fn blocks(msg: &Value) -> Vec<Value> {
+        match &msg["content"] {
+            Value::Array(b) => b.clone(),
+            Value::String(s) => vec![json!({ "type": "text", "text": s })],
+            _ => Vec::new(),
+        }
+    }
+
+    /// The exact contract Anthropic enforces (and 400s on): no empty content,
+    /// alternating roles, every `tool_use` answered by a same-id `tool_result`
+    /// in the very next message, and no `tool_result` without a call.
+    fn assert_valid_pairing(msgs: &[Value]) {
+        let mut called: Vec<String> = Vec::new();
+        for (i, m) in msgs.iter().enumerate() {
+            let role = m["role"].as_str().unwrap_or("");
+            let bs = blocks(m);
+            assert!(!bs.is_empty(), "message {i} has empty content: {m}");
+            if i > 0 {
+                assert_ne!(
+                    role,
+                    msgs[i - 1]["role"].as_str().unwrap_or(""),
+                    "messages {} and {i} share a role",
+                    i - 1
+                );
+            }
+            for b in &bs {
+                if block_type(b) == "tool_result" {
+                    let id = b["tool_use_id"].as_str().unwrap_or("").to_string();
+                    assert!(called.contains(&id), "orphan tool_result {id} at msg {i}");
+                }
+            }
+            let ids = tool_use_ids(m);
+            if ids.is_empty() {
+                continue;
+            }
+            called.extend(ids.clone());
+            let next = msgs.get(i + 1).unwrap_or_else(|| {
+                panic!("tool_use at msg {i} is the last message — nothing can answer it")
+            });
+            assert_eq!(next["role"], "user", "results must come back as user");
+            let answered: Vec<String> = blocks(next)
+                .iter()
+                .filter(|b| block_type(b) == "tool_result")
+                .map(|b| b["tool_use_id"].as_str().unwrap_or("").to_string())
+                .collect();
+            assert!(
+                answered.len() >= ids.len(),
+                "msg {i} has {} tool_use but only {} results follow",
+                ids.len(),
+                answered.len()
+            );
+            assert_eq!(
+                answered[..ids.len()],
+                ids[..],
+                "msg {i} results must answer every id, in call order"
+            );
+        }
+        assert_eq!(
+            msgs.first().map(|m| m["role"].clone()),
+            Some(json!("user")),
+            "first message must be user"
+        );
+    }
+
+    #[test]
+    fn orphan_tool_use_gets_a_synthesized_result() {
+        // Interrupted turn: the call was recorded, the output never was, and the
+        // next thing in the transcript is the user's follow-up prompt. This is
+        // the shape that produced `400 … without tool_result blocks … read_file_5`.
+        let msgs = messages_of(json!([
+            {"role":"user","content":[{"type":"input_text","text":"read it"}]},
+            {"type":"function_call","call_id":"read_file_5","name":"read_file","arguments":"{}"},
+            {"role":"user","content":[{"type":"input_text","text":"actually, never mind"}]},
+        ]));
+        assert_valid_pairing(&msgs);
+        let answer = &msgs[2];
+        assert_eq!(answer["role"], "user");
+        let bs = blocks(answer);
+        assert_eq!(bs[0]["type"], "tool_result");
+        assert_eq!(bs[0]["tool_use_id"], "read_file_5");
+        assert_eq!(bs[0]["is_error"], true);
+        assert_eq!(bs[0]["content"], MISSING_TOOL_RESULT);
+        // The tool_use itself survives, and so does the follow-up text.
+        assert_eq!(tool_use_ids(&msgs[1]), vec!["read_file_5".to_string()]);
+        assert!(bs
+            .iter()
+            .any(|b| b["text"].as_str() == Some("actually, never mind")));
+    }
+
+    #[test]
+    fn parallel_tool_calls_keep_both_results_in_call_order() {
+        let msgs = messages_of(json!([
+            {"role":"user","content":[{"type":"input_text","text":"go"}]},
+            {"type":"function_call","call_id":"a","name":"git_status","arguments":"{}"},
+            {"type":"function_call","call_id":"b","name":"list_dir","arguments":"{}"},
+            // Results can land out of order when the batch runs concurrently.
+            {"type":"function_call_output","call_id":"b","output":"src"},
+            {"type":"function_call_output","call_id":"a","output":"clean"},
+        ]));
+        assert_valid_pairing(&msgs);
+        assert_eq!(msgs.len(), 3);
+        assert_eq!(tool_use_ids(&msgs[1]), vec!["a".to_string(), "b".into()]);
+        let bs = blocks(&msgs[2]);
+        assert_eq!(bs.len(), 2);
+        assert_eq!(bs[0]["tool_use_id"], "a");
+        assert_eq!(bs[0]["content"], "clean");
+        assert_eq!(bs[1]["tool_use_id"], "b");
+        assert_eq!(bs[1]["content"], "src");
+    }
+
+    #[test]
+    fn assistant_text_between_call_and_result_does_not_split_the_pair() {
+        let msgs = messages_of(json!([
+            {"role":"user","content":[{"type":"input_text","text":"go"}]},
+            {"type":"function_call","call_id":"c1","name":"grep","arguments":"{}"},
+            {"role":"assistant","content":[{"type":"output_text","text":"searching…"}]},
+            {"type":"function_call_output","call_id":"c1","output":"match"},
+        ]));
+        assert_valid_pairing(&msgs);
+        // Assistant turn keeps its narration *and* its call; the result follows.
+        let bs = blocks(&msgs[1]);
+        assert!(bs.iter().any(|b| block_type(b) == "tool_use"));
+        assert!(bs.iter().any(|b| b["text"].as_str() == Some("searching…")));
+        assert_eq!(blocks(&msgs[2])[0]["content"], "match");
+    }
+
+    #[test]
+    fn orphan_tool_result_is_dropped() {
+        // Compaction / a provider switch can leave a result whose call is gone.
+        let msgs = messages_of(json!([
+            {"role":"user","content":[{"type":"input_text","text":"go"}]},
+            {"type":"function_call_output","call_id":"ghost","output":"stale"},
+            {"role":"assistant","content":[{"type":"output_text","text":"ok"}]},
+        ]));
+        assert_valid_pairing(&msgs);
+        let json = serde_json::to_string(&msgs).unwrap();
+        assert!(!json.contains("ghost"), "orphan result must not be sent");
+        assert!(!json.contains("stale"));
+    }
+
+    #[test]
+    fn empty_content_never_reaches_the_wire() {
+        // An assistant turn that was pure tool call records an empty message
+        // item; Anthropic rejects both `""` and `[]` content.
+        let msgs = messages_of(json!([
+            {"role":"user","content":[{"type":"input_text","text":"go"}]},
+            {"role":"assistant","content":[{"type":"output_text","text":""}]},
+            {"type":"function_call","call_id":"c1","name":"write","arguments":"{}"},
+            {"type":"function_call_output","call_id":"c1","output":""},
+        ]));
+        assert_valid_pairing(&msgs);
+        // Empty tool output is substituted, not sent as "".
+        assert_eq!(blocks(&msgs[2])[0]["content"], EMPTY_TOOL_RESULT);
+    }
+
+    #[test]
+    fn caching_breakpoint_on_a_tool_result_message_stays_valid() {
+        // The rolling breakpoint lands on the last 2 messages, which after
+        // normalization is often assistant[tool_use] + user[tool_result].
+        let b = build_body_with_oauth(
+            &req_with(json!([
+                {"role":"user","content":[{"type":"input_text","text":"go"}]},
+                {"type":"function_call","call_id":"c1","name":"grep","arguments":"{}"},
+                {"type":"function_call_output","call_id":"c1","output":"match"},
+            ])),
+            false,
+            false,
+        );
+        let msgs = b["messages"].as_array().unwrap();
+        let last = blocks(msgs.last().unwrap());
+        assert_eq!(last[0]["type"], "tool_result");
+        assert_eq!(last[0]["cache_control"]["type"], "ephemeral");
+        // cache_control must decorate the block, never replace its payload.
+        assert_eq!(last[0]["tool_use_id"], "c1");
+        assert_eq!(last[0]["content"], "match");
     }
 
     #[test]

@@ -120,8 +120,8 @@ mod tests {
 
     #[test]
     fn question_request_carries_prompt_as_array_not_string() {
-        let req = question_request("grok-4", "why is the sky blue?");
-        assert_eq!(req.model, "grok-4");
+        let req = question_request("grok-4.5", "why is the sky blue?");
+        assert_eq!(req.model, "grok-4.5");
         assert_eq!(req.stream, Some(false));
         // Must be an array (so the chat adapter picks it up), and the text round-trips.
         assert!(
