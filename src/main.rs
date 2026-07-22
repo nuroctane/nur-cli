@@ -11,6 +11,8 @@ mod error;
 mod gateway;
 mod gepa;
 mod local;
+mod t3code;
+mod penecho;
 mod oauth;
 mod open_uri;
 mod plugins;

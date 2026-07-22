@@ -77,7 +77,117 @@ pub fn import_existing_session(provider_id: &str) -> Result<Option<OAuthTokens>>
         "kimi" => kimi::import_kimi_cli(),
         "anthropic" => claude::import_claude_cli(),
         "huggingface" => Ok(huggingface::import_hf_token()),
+        "cursor" => cursor::import_cursor_cli(),
+        "opencode" => opencode::import_opencode_cli(),
         _ => Ok(None),
+    }
+}
+
+pub mod cursor {
+    use super::*;
+    use std::path::PathBuf;
+
+    pub fn import_cursor_cli() -> Result<Option<OAuthTokens>> {
+        // t3code-style probing: respect CURSOR_AGENT_HOME, then ~/.cursor, then ~/.config/cursor
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let candidates = [
+            std::env::var("CURSOR_AGENT_HOME")
+                .ok()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home.join(".cursor")),
+            home.join(".cursor"),
+            home.join(".config").join("cursor"),
+        ];
+        for dir in candidates {
+            if !dir.exists() {
+                continue;
+            }
+            // Cursor stores auth in various files — probe without reading secrets if possible
+            for file in ["auth.json", "config.json", "mcp.json"] {
+                let p = dir.join(file);
+                if p.exists() {
+                    if let Ok(text) = std::fs::read_to_string(&p) {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                            // Try to find api key or token
+                            if let Some(key) = v
+                                .get("api_key")
+                                .or_else(|| v.get("apiKey"))
+                                .or_else(|| v.get("token"))
+                                .or_else(|| v.get("access_token"))
+                                .and_then(|x| x.as_str())
+                            {
+                                if !key.trim().is_empty() {
+                                    return Ok(Some(OAuthTokens {
+                                        access_token: key.to_string(),
+                                        refresh_token: None,
+                                        expires_at: None,
+                                        meta: Some(OauthMeta {
+                                            issuer: "cursor".into(),
+                                            client_id: "cursor-cli".into(),
+                                            extra: serde_json::json!({"imported_from": "cursor-cli", "path": p.display().to_string()}),
+                                        }),
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+}
+
+pub mod opencode {
+    use super::*;
+    use std::path::PathBuf;
+
+    pub fn import_opencode_cli() -> Result<Option<OAuthTokens>> {
+        // t3code-style: OPENCODE_HOME, then ~/.config/opencode
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let candidates = [
+            std::env::var("OPENCODE_HOME")
+                .ok()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home.join(".config").join("opencode")),
+            home.join(".config").join("opencode"),
+            home.join(".opencode"),
+        ];
+        for dir in candidates {
+            if !dir.exists() {
+                continue;
+            }
+            for file in ["auth.json", "config.json", "opencode.json"] {
+                let p = dir.join(file);
+                if p.exists() {
+                    if let Ok(text) = std::fs::read_to_string(&p) {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                            if let Some(key) = v
+                                .get("api_key")
+                                .or_else(|| v.get("apiKey"))
+                                .or_else(|| v.get("token"))
+                                .or_else(|| v.get("access_token"))
+                                .and_then(|x| x.as_str())
+                            {
+                                if !key.trim().is_empty() {
+                                    return Ok(Some(OAuthTokens {
+                                        access_token: key.to_string(),
+                                        refresh_token: None,
+                                        expires_at: None,
+                                        meta: Some(OauthMeta {
+                                            issuer: "opencode".into(),
+                                            client_id: "opencode-cli".into(),
+                                            extra: serde_json::json!({"imported_from": "opencode-cli", "path": p.display().to_string()}),
+                                        }),
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(None)
     }
 }
 

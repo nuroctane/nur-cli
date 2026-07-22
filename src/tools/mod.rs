@@ -1,4 +1,6 @@
 pub mod akarso;
+pub mod t3code_tool;
+pub mod penecho_tool;
 mod apply_patch;
 mod bash;
 pub mod browser;
@@ -143,6 +145,8 @@ impl ToolHost {
             Box::new(plur::Plur),
             Box::new(ruflo::Ruflo),
             Box::new(akarso::Akarso),
+            Box::new(t3code_tool::T3Code),
+            Box::new(penecho_tool::Penecho),
             Box::new(executor_tool::ExecutorTool),
             Box::new(omp::OmpTool),
             Box::new(skill_tool::SkillTool),
@@ -222,6 +226,8 @@ impl ToolHost {
             "plur" => plur::Plur.execute(&args, ctx),
             "ruflo" => ruflo::Ruflo.execute(&args, ctx),
             "akarso" => akarso::Akarso.execute(&args, ctx),
+            "t3code" => t3code_tool::T3Code.execute(&args, ctx),
+            "penecho" => penecho_tool::Penecho.execute(&args, ctx),
             "executor" => executor_tool::ExecutorTool.execute(&args, ctx),
             "omp" => omp::OmpTool.execute(&args, ctx),
             "skill" => skill_tool::SkillTool.execute(&args, ctx),
@@ -343,6 +349,8 @@ mod tests {
             "plur",
             "ruflo",
             "akarso",
+            "t3code",
+            "penecho",
             "executor",
             "omp",
             "skill",
