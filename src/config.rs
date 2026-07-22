@@ -54,7 +54,8 @@ pub const PRICE_OUTPUT_PER_MTOK: f64 = 4.25;
 /// Schema ≥6: retired Grok ids (`grok-4` and older) rewritten to the current
 /// xAI flagship — the Grok 4 line left `api.x.ai`, so those configs 404.
 /// Schema ≥7: same treatment for retired Google / DeepSeek / Inception ids.
-pub const CONFIG_SCHEMA: u32 = 7;
+/// Schema ≥8: Yi vendor exited LLM work (Mar 2025) — provider removed.
+pub const CONFIG_SCHEMA: u32 = 8;
 
 const RETIRED_PROVIDER_IDS: &[&str] = &[
     "anyscale",
@@ -64,6 +65,7 @@ const RETIRED_PROVIDER_IDS: &[&str] = &[
     "omniroute",
     "targon",
     "unify",
+    "yi",
 ];
 
 fn is_retired_provider(id: &str) -> bool {
@@ -290,6 +292,18 @@ pub fn migrate_config(cfg: &mut Config) -> bool {
         // `mercury-coder`. Anyone who onboarded on those defaults would 404 on
         // their next turn without having changed a thing.
         cfg.model = crate::providers::normalize_model_for(&cfg.provider, &cfg.model);
+    }
+    if cfg.config_schema < 8 {
+        // Yi (01.AI) exited LLM work Mar 2025 — provider removed. Migrate any
+        // leftover `yi` config back to the default so it doesn't 404.
+        if is_retired_provider(&cfg.provider) {
+            cfg.provider = default_provider_id();
+            cfg.base_url = default_base_url();
+            cfg.model = default_model();
+        }
+        cfg.fallback_providers.retain(|id| !is_retired_provider(id));
+        cfg.fusion_panel.retain(|id| !is_retired_provider(id));
+        cfg.provider_privacy.retain(|id, _| !is_retired_provider(id));
     }
     cfg.config_schema = CONFIG_SCHEMA;
     true

@@ -197,17 +197,25 @@ read_file, list_dir, write_file, edit_file, multi_edit, apply_patch, bash, grep,
 web_fetch, web_search, look, extract_frames, git_status, git_diff, graphify, excalidraw,
 plur, ruflo, skill, memory, todo_write, submit_plan, agent
 
-## Tool policy
-- grep/glob: ripgrep-backed; pass narrow paths — never scan drive roots
-- list_dir for directory shape; read_file for contents — cheaper than shell ls/cat
-- Paths are sandboxed to the workspace
-- bash: real shell when available (Git Bash/pwsh); output header labels the backend
-- git_status/git_diff (diff|staged|log|show): approval-free repo inspection — prefer over bash git
-- web_search → find docs/errors; web_fetch → read a result url (text only — not video)
+## Tool policy — search and failure handling (critical for all backends including Meta)
+- SEARCH — ripgrep only: ALWAYS use `grep` and `glob` tools for any code/content search. NEVER use bash commands like `grep`, `rg`, `ag`, `find`, `ls`, `Get-ChildItem`, etc. for searching. The `grep`/`glob` tools are ripgrep-backed, sandboxed, respect .gitignore, and are the only reliable search path. This applies to ALL models including Meta Llama / Muse Spark — no exceptions.
+- FILE IO — dedicated tools only: `list_dir` for directory shape, `read_file` for contents. NEVER use bash `cat`, `type`, `ls`, `dir`, `head`, `tail` to read workspace. Cheaper, faster, and never hangs.
+- GIT — use `git_status` / `git_diff` tools, not `bash git ...` — they are approval-free and structured. Reserve bash git only when the tool does not cover the needed flag.
+- BASH: real shell when available (Git Bash/pwsh); output reports `shell: <backend>` + `exit_code` + stdout/stderr. Prefer non-interactive commands. Captures are truncated at 80k/40k.
+- FAILURE RECOVERY — mandatory: If ANY tool returns error, `exit_code != 0`, timeout, or cancellation:
+  1) STOP — read exit_code/stdout/stderr.
+  2) Do NOT retry the identical failing command more than once.
+  3) SWITCH to the canonical tool: failed `ls` -> `list_dir`, failed `cat` -> `read_file`, failed `grep` via bash -> `grep` tool, failed `find` -> `glob`/`grep`.
+  4) If a base command repeatedly fails (e.g. command not found on Windows), immediately use the dedicated tool and never hang the turn.
+  5) If you hit a timeout, the process tree was killed — try a narrower path or a different tool, not the same command with longer timeout.
+  Meta models were observed to hang when a base command failed (no self-correction) — you MUST self-correct now.
+- HANG PREVENTION: Never run interactive or watch-mode commands. Set narrow paths. If a tool times out after 120s, it is killed — explain the failure and try `grep`/`list_dir`/`read_file` instead.
+- Paths are sandboxed to the workspace — never scan drive roots (`/`, `C:\`, `~`).
+- web_search -> find docs/errors; web_fetch -> read a result url (text only — not video)
 - look: attach image(s) or a short video for **vision**. Prefer look over guessing from filenames.
 - extract_frames: sparse keyframes via ffmpeg (default ~1fps, max ~8). Writes `.nur/frames/…`
   and auto-queues look. Use for design-from-video — never frame-by-frame every pixel.
-- Design-from-short-video (efficient): extract_frames → inspect stills → design tokens →
+- Design-from-short-video (efficient): extract_frames -> inspect stills -> design tokens ->
   skill design-eng / implement. User paths to .png/.mp4 in the prompt auto-attach when present.
 - graphify: code knowledge graph (graphify-out/). Prefer query/path/explain over broad grep when
   the graph exists. extract defaults to code-only AST (local, free).
@@ -218,19 +226,20 @@ plur, ruflo, skill, memory, todo_write, submit_plan, agent
   sessions. Auto-injected at session start. Never store secrets.
 - ruflo: vector memory + swarm harness. Global DB at ~/.nur/ruflo/. Prefer plur for preferences,
   ruflo for pattern/embedding memory, graphify for code structure.
-- executor: MCP gateway (executor.sh) for external OpenAPI/GraphQL/MCP integrations — not for
+- executor: MCP gateway (executor.sh) for external OpenAI/GraphQL/MCP integrations — not for
   local repo edits. action=sources|search|call.
 - skill: action=list / action=read — load one skill by name when needed. Skills are **not**
   pre-loaded into this prompt (catalog would waste tokens). Discover with skill(list) or
   skill(read, name=…). Never load every playbook at once (e.g. cybersecurity: one by name).
-- Skills activate on demand only: natural-language intent (e.g. \"think like fable\") or
+- Skills activate on demand only: natural-language intent (e.g. "think like fable") or
   `/skill-name` slash. When a **SKILL ACTIVATED** block appears below, follow it for the turn.
-- UI polish → design-eng. Site clone → clone-website-meta. Security → cybersecurity then one playbook.
+- UI polish -> design-eng. Site clone -> clone-website-meta. Security -> cybersecurity then one playbook.
 - agent: spawn explore (read-only) or general subagent for parallel research
 - todo_write: maintain a live task list for multi-step work (always keep one in_progress)
 - submit_plan: formal plan artifact in plan mode
 - memory: local markdown journal ~/.nur/memory.md (never store secrets) — complementary to plur
 - Prefer edit_file / multi_edit / apply_patch over full rewrites
+
 
 # Workflow
 1. Orient — git_status + targeted grep/read

@@ -3806,10 +3806,16 @@ fn draw_palette(f: &mut Frame, app: &App, input_area: Rect) {
     if matches.is_empty() {
         return;
     }
-    // content rows + 2 border + 2 inner padding, so the ornate frame has room.
-    let content = (matches.len() as u16).min(10);
     let area = f.area();
-    let mut rect = fit_modal_rect(area, 60, content + 4, 34, 4);
+    // Responsive sizing: use available room when fullscreen, shrink when small.
+    // Width: 66% of terminal, clamped 42..96 — old 60 was too narrow to read
+    // slash-command tips even on a 200-column fullscreen session.
+    // Height: up to half the terminal (clamped 6..26) — old fixed 10 hid tips.
+    let desired_w = ((area.width * 2) / 3).clamp(42, 96);
+    let max_rows = (area.height / 2).clamp(6, 26);
+    let visible_rows = (matches.len() as u16).min(max_rows);
+    let desired_h = visible_rows + 4; // 2 border + 2 inner padding
+    let mut rect = fit_modal_rect(area, desired_w, desired_h, 36, 6);
     rect.x = input_area
         .x
         .saturating_add(1)

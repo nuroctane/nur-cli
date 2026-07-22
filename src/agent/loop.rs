@@ -482,8 +482,24 @@ impl AgentRunner {
                 "auto"
             };
 
+            // Lazy /models resolution for local placeholder (llama.cpp proof).
+            // If cfg still holds `local-model`, attempt to resolve to a real id
+            // from the live local server before we POST.
+            let effective_model = if crate::providers::is_placeholder_local_model(&self.config.model)
+            {
+                let resolved = self.client.resolve_local_model(&self.config.model).await;
+                if resolved != self.config.model {
+                    let _ = tx.send(AgentEvent::Status(format!(
+                        "local model placeholder → resolved to `{resolved}` via /models"
+                    )));
+                }
+                resolved
+            } else {
+                self.config.model.clone()
+            };
+
             let req = ResponseRequest {
-                model: self.config.model.clone(),
+                model: effective_model,
                 input: Value::Array(session.input_items.clone()),
                 instructions: Some(instructions),
                 tools: Some(tools.clone()),

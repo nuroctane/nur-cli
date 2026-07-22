@@ -167,6 +167,38 @@ pub fn fetch_model_ids(
     ))
 }
 
+/// For local inference servers (`ollama`, `lmstudio`, `llamacpp`, `vllm`, `jan`),
+/// the shipped `local-model` placeholder provably 400s on real servers
+/// (Group C observed `POST {"model":"local-model"}` → 400 on a live llama.cpp
+/// instance, while a real id from `GET /v1/models` → 200). The fix is lazy
+/// `/models` resolution, not a better placeholder.
+///
+/// This helper is the blocking, synchronous path used at config load / CLI
+/// startup. For the async streaming path see `ApiClient::resolve_model_async`.
+pub fn resolve_local_model_if_needed(
+    base_url: &str,
+    provider_id: &str,
+    api_key: &str,
+    model: &str,
+) -> String {
+    if !crate::providers::is_placeholder_local_model(model) {
+        return model.to_string();
+    }
+    if !crate::providers::is_local_provider(provider_id) {
+        return model.to_string();
+    }
+    // Attempt live list; on any failure keep the placeholder — the later
+    // request will surface the real error and the user can `/model <id>`.
+    if let Ok(ids) = fetch_model_ids(base_url, api_key, Some(provider_id)) {
+        if let Some(first) = ids.into_iter().next() {
+            if !first.trim().is_empty() {
+                return first;
+            }
+        }
+    }
+    model.to_string()
+}
+
 fn model_list_urls(base_url: &str, provider_id: &str, is_oauth: bool) -> Vec<String> {
     let base = base_url.trim_end_matches('/').to_string();
     let mut urls = Vec::new();

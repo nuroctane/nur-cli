@@ -162,6 +162,60 @@ impl ApiClient {
         matches!(status, 429 | 500 | 502 | 503 | 504)
     }
 
+    /// For local providers, `local-model` is a 400 on real servers. Group C
+    /// proved `POST {"model":"local-model"}` → 400 on a live llama.cpp instance
+    /// while a real id from `GET /v1/models` → 200. Lazily resolve by hitting
+    /// `/models` first; on failure keep the original so the error is still
+    /// surfaced.
+    pub async fn resolve_local_model(&self, model: &str) -> String {
+        if !crate::providers::is_placeholder_local_model(model) {
+            return model.to_string();
+        }
+        if !crate::providers::is_local_provider(&self.provider_id) {
+            // Also allow localhost base_urls even when provider_id is custom
+            let is_localhost = self.base_url.contains("localhost")
+                || self.base_url.contains("127.0.0.1")
+                || self.base_url.contains("::1");
+            if !is_localhost {
+                return model.to_string();
+            }
+        }
+        let url = format!("{}/models", self.base_url.trim_end_matches('/'));
+        // Local servers are expected to answer quickly; keep it short.
+        let req = self.http.get(&url).timeout(std::time::Duration::from_secs(5));
+        // Apply auth if any — most local servers allow empty bearer.
+        let req = if self.api_key.trim().is_empty() {
+            req
+        } else {
+            self.auth_headers(req)
+        };
+        let res = match req.send().await {
+            Ok(r) => r,
+            Err(_) => return model.to_string(),
+        };
+        if !res.status().is_success() {
+            return model.to_string();
+        }
+        let body = match res.text().await {
+            Ok(b) => b,
+            Err(_) => return model.to_string(),
+        };
+        if let Ok(ids) = crate::api::models::parse_model_ids(&body) {
+            if let Some(first) = ids.into_iter().next() {
+                if !first.trim().is_empty() && first != "local-model" {
+                    tracing::info!(
+                        provider = %self.provider_id,
+                        placeholder = %model,
+                        resolved = %first,
+                        "resolved local placeholder model via /models"
+                    );
+                    return first;
+                }
+            }
+        }
+        model.to_string()
+    }
+
     /// Is this client pointed at an OpenCode gateway (Zen or Go)?
     ///
     /// Only that route opts into the message-based retries below: OpenCode

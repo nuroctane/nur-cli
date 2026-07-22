@@ -294,6 +294,24 @@ async fn real_main() -> Result<()> {
     let _ = std::env::set_current_dir(&cwd);
     let cwd_str = cwd.display().to_string();
 
+    // Lazy /models resolution for local placeholders: `local-model` provably 400s
+    // on a real llama.cpp server (Group C). Try to pick a real id at startup
+    // so the first turn doesn't die before the TUI can show `/model`.
+    if providers::is_placeholder_local_model(&cfg.model) {
+        let resolved = crate::api::models::resolve_local_model_if_needed(
+            &cfg.base_url,
+            &cfg.provider,
+            &api_key,
+            &cfg.model,
+        );
+        if resolved != cfg.model {
+            theme::print_info(&format!(
+                "local model placeholder → resolved to `{resolved}` via /models"
+            ));
+            cfg.model = resolved;
+        }
+    }
+
     // Honor the saved provider's API shape (Responses / Chat / Anthropic Messages).
     let style = providers::by_id(&cfg.provider)
         .map(|p| p.style)

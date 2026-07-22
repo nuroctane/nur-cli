@@ -459,11 +459,19 @@ pub const PROVIDERS: &[Provider] = &[
     Provider {
         id: "bedrock",
         name: "Amazon Bedrock",
-        base_url: "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1",
-        default_model: "amazon.nova-pro-v1:0",
+        // Bedrock is per-region and its OpenAI-compatible endpoint requires the
+        // region in the host. Hard-coding us-east-1 hides that. We ship a
+        // templated host so `/login` makes the placeholder obvious.
+        // Also: the previous default `amazon.nova-pro-v1:0` has no region prefix
+        // and its console card marks Chat Completions unsupported, while our
+        // catalog declared CC. `us.amazon.nova-lite-v1:0` is cross-region
+        // prefixed and does list Chat Completions as supported. Users wanting
+        // Nova Pro or Claude should `/model` to their accessible id.
+        base_url: "https://bedrock-runtime.YOUR_REGION.amazonaws.com/openai/v1",
+        default_model: "us.amazon.nova-lite-v1:0",
         env_key: "AWS_BEARER_TOKEN_BEDROCK",
         style: CC,
-        note: "Bedrock API key · bearer auth",
+        note: "Bedrock API key · set YOUR_REGION in base URL · /model for your id",
         key_optional: false,
         browser_auth: false,
     },
@@ -724,17 +732,6 @@ pub const PROVIDERS: &[Provider] = &[
         key_optional: false,
         browser_auth: false,
     },
-    Provider {
-        id: "yi",
-        name: "01.AI (Yi)",
-        base_url: "https://api.lingyiwanwu.com/v1",
-        default_model: "yi-large",
-        env_key: "YI_API_KEY",
-        style: CC,
-        note: "Yi",
-        key_optional: false,
-        browser_auth: false,
-    },
     // ── aggregators / routers (OpenAI-compatible) ────────────────────────
     Provider {
         id: "openrouter",
@@ -775,10 +772,15 @@ pub const PROVIDERS: &[Provider] = &[
         id: "portkey",
         name: "Portkey",
         base_url: "https://api.portkey.ai/v1",
-        default_model: "gpt-5.5",
+        // Portkey routes via virtual-key slugs: model ids are `@<slug>/<model>`.
+        // The slug is per-user (defined when you create a virtual key), so no
+        // single hard-coded id is universally right. We ship the canonical form
+        // `@openai/gpt-5.5` as an example; users must set their real slug via
+        // `/model @<your-slug>/...`. Previous bare `gpt-5.5` was a silent mismatch.
+        default_model: "@openai/gpt-5.5",
         env_key: "PORTKEY_API_KEY",
         style: CC,
-        note: "AI gateway",
+        note: "AI gateway · model is @<virtual-key-slug>/<model> — set your slug in /model",
         key_optional: false,
         browser_auth: false,
     },
@@ -807,11 +809,15 @@ pub const PROVIDERS: &[Provider] = &[
     Provider {
         id: "cloudflare",
         name: "Cloudflare AI Gateway",
-        base_url: "https://gateway.ai.cloudflare.com/v1",
+        // Cloudflare's gateway is structurally per-user: /v1/{accountTag}/{gatewayId}.
+        // No static constant can be correct — every account needs its own path.
+        // We ship the templated form so `/login` makes the placeholder obvious
+        // and a plain `https://gateway.ai.cloudflare.com/v1` 400 is never hidden.
+        base_url: "https://gateway.ai.cloudflare.com/v1/YOUR_ACCOUNT_TAG/YOUR_GATEWAY_ID",
         default_model: "openai/gpt-5.5",
         env_key: "CF_AIG_TOKEN",
         style: CC,
-        note: "gateway + caching",
+        note: "gateway + caching · set ACCOUNT_TAG + GATEWAY_ID in base URL via /login",
         key_optional: false,
         browser_auth: false,
     },
@@ -974,6 +980,22 @@ pub fn default_provider() -> &'static Provider {
     &PROVIDERS[0]
 }
 
+/// True for the localhost inference servers whose catalog `local-model` placeholder
+/// provably 400s. `POST {"model":"local-model"}` was observed to 400 on a live
+/// llama.cpp server on this machine, while a real id from `GET /v1/models` 200'd.
+/// Those providers must lazy-resolve via `/models` instead of shipping a constant.
+pub fn is_local_provider(id: &str) -> bool {
+    matches!(
+        id,
+        "ollama" | "lmstudio" | "llamacpp" | "vllm" | "jan" | "litellm"
+    )
+}
+
+/// Is this model id the placeholder that never resolves on a real local server?
+pub fn is_placeholder_local_model(model: &str) -> bool {
+    model.trim() == "local-model"
+}
+
 /// Providers that offer browser / device-code / SSO sign-in.
 #[allow(dead_code)]
 pub fn browser_auth_ids() -> impl Iterator<Item = &'static str> {
@@ -1106,7 +1128,7 @@ mod tests {
         ids.dedup();
         assert_eq!(ids.len(), n, "duplicate provider id");
         assert_eq!(default_provider().id, "meta");
-        assert_eq!(PROVIDERS.len(), 61, "update user-facing provider counts");
+        assert_eq!(PROVIDERS.len(), 60, "update user-facing provider counts");
     }
 
     #[test]
