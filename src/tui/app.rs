@@ -2423,6 +2423,9 @@ impl App {
         let idx = self.ctx_menu.as_ref().map(|m| m.cell_idx).unwrap_or(0);
 
         self.cells.truncate(idx);
+        self.tool_cells.retain(|_, i| *i < idx);
+        // Dropping history is the point here, so the replay log shrinks with it.
+        self.replace_ui_log();
         if let Some(session) = &mut self.session {
             truncate_session_before_prompt(session, from_end);
             let _ = session.save();
@@ -2475,6 +2478,9 @@ impl App {
 
         // Transcript shows the shared history up to the fork point.
         self.cells.truncate(idx);
+        self.tool_cells.retain(|_, i| *i < idx);
+        // The fork starts from a shorter transcript; its replay log follows.
+        self.replace_ui_log();
         self.reset_transcript_interaction();
         self.input.set_text(&prompt);
         self.scroll_to_bottom();
@@ -2516,7 +2522,45 @@ impl App {
     }
 
     /// Persist expandable transcript cards so reloads keep thought/tool bodies.
+    /// Remove a transcript cell and keep `tool_cells` pointing at the right rows.
+    ///
+    /// `tool_cells` maps a tool id to an ABSOLUTE index into `cells`. A queued
+    /// follow-up card can be dismissed while a turn is still running and pushing
+    /// tool cards after it, so removing it shifted every later tool's card down
+    /// by one - `ToolEnd` then wrote its result into the neighbouring card and
+    /// left the real one spinning.
+    fn remove_cell(&mut self, cell_idx: usize) {
+        if cell_idx >= self.cells.len() {
+            return;
+        }
+        self.cells.remove(cell_idx);
+        self.tool_cells.retain(|_, i| *i != cell_idx);
+        for i in self.tool_cells.values_mut() {
+            if *i > cell_idx {
+                *i -= 1;
+            }
+        }
+    }
+
+    /// Mirror the visible transcript into the session's replay log.
+    ///
+    /// This runs implicitly at the end of every turn, so it must never SHRINK
+    /// the log: `/clear` empties `cells` for display only, and letting that
+    /// overwrite the log deleted the session's history from disk on the next
+    /// turn. Deliberate truncation (revert / fork) calls
+    /// [`Self::replace_ui_log`] instead, which is allowed to shrink.
     fn sync_ui_log_to_session(&mut self) {
+        let log = cells_to_ui_log(&self.cells);
+        if let Some(session) = self.session.as_mut() {
+            if log.len() >= session.ui_log.len() {
+                session.ui_log = log;
+            }
+        }
+    }
+
+    /// Force the replay log to match the visible transcript, shrinking it if
+    /// needed. Only for actions whose whole point is dropping history.
+    fn replace_ui_log(&mut self) {
         let log = cells_to_ui_log(&self.cells);
         if let Some(session) = self.session.as_mut() {
             session.ui_log = log;
@@ -2549,7 +2593,7 @@ impl App {
         }
         // Approval modal swallows all keys.
         if self.approval.is_some() {
-            self.on_approval_key(key.code);
+            self.on_approval_key(key);
             return;
         }
         // Session picker swallows all keys while open.
@@ -4006,6 +4050,25 @@ impl App {
     }
 
     // ── secure login ───────────────────────────────────────────────────
+    /// Close `/login` without a credential, saying what that leaves behind.
+    ///
+    /// `open_login` clears the stored key up front so the picker starts from a
+    /// clean slate. Backing out therefore leaves the user signed OUT - and
+    /// previously said nothing at all, so the next message failed with a
+    /// "signed out" error they had no way to connect to pressing Esc.
+    fn close_login_cancelled(&mut self) {
+        self.cancel_oauth();
+        self.login = None;
+        if !self.authed {
+            self.push_note(
+                Tone::Mode,
+                "/login cancelled - the previous credential was already cleared, so you are                  signed out. Run /login again to enter a key or sign in."
+                    .into(),
+            );
+            self.scroll_to_bottom();
+        }
+    }
+
     fn open_login(&mut self) {
         // /login clears the prior key/auth up front — a clean slate to pick a
         // provider and enter a fresh key / browser session.
@@ -5009,7 +5072,7 @@ impl App {
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let Some(m) = &mut self.login else { return };
         match key.code {
-            KeyCode::Esc => self.login = None,
+            KeyCode::Esc => self.close_login_cancelled(),
             // One entry per key — same `step` path the wheel uses (sessions picker).
             // Arrows only: j/k stay available for type-to-filter.
             KeyCode::Up => m.step(-1),
@@ -5044,8 +5107,13 @@ impl App {
                     self.login_picker_confirm();
                 }
             }
-            // Space / Tab toggle the selected provider in the failover chain.
-            KeyCode::Char(' ') | KeyCode::Tab => self.toggle_fallback_selected(),
+            // Space / Tab toggle the selected provider in the failover chain -
+            // but only in `/failover`. In `/login` this arm sat above the
+            // type-to-filter arm, so typing a provider name with a space in it
+            // ("together ai") silently rewrote the failover config instead of
+            // filtering. Tab still toggles; Space stays a filter character.
+            KeyCode::Tab if manage => self.toggle_fallback_selected(),
+            KeyCode::Char(' ') if manage => self.toggle_fallback_selected(),
             // Alt+P cycles the asserted privacy tier of the selected provider
             // (Standard → ZDR → TEE → Local → …), saved as an override. Alt, not
             // Ctrl — Ctrl+P is taken by many terminals/ADEs.
@@ -5252,15 +5320,8 @@ impl App {
         }
     }
 
-    fn on_approval_key(&mut self, code: KeyCode) {
-        let decision = match code {
-            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
-                Some(ApprovalDecision::Approve)
-            }
-            KeyCode::Char('a') | KeyCode::Char('A') => Some(ApprovalDecision::ApproveAlways),
-            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Some(ApprovalDecision::Deny),
-            _ => None,
-        };
+    fn on_approval_key(&mut self, key: KeyEvent) {
+        let decision = approval_decision(key);
         if let Some(d) = decision {
             if let Some(mut a) = self.approval.take() {
                 if let Some(respond) = a.respond.take() {
@@ -5325,9 +5386,7 @@ impl App {
             self.queue.remove(i);
         }
         // Drop the Queued card from the transcript.
-        if cell_idx < self.cells.len() {
-            self.cells.remove(cell_idx);
-        }
+        self.remove_cell(cell_idx);
         if self.busy {
             // Interrupt current turn; keep this follow-up at the front so Done
             // starts it next (full session context already on disk).
@@ -5355,9 +5414,7 @@ impl App {
         if let Some(i) = self.queue.iter().position(|t| t == &text) {
             self.queue.remove(i);
         }
-        if cell_idx < self.cells.len() {
-            self.cells.remove(cell_idx);
-        }
+        self.remove_cell(cell_idx);
         if self.busy {
             self.steer_now(&text);
         } else {
@@ -5585,9 +5642,7 @@ impl App {
         if let Some(i) = self.queue.iter().position(|t| t == &text) {
             self.queue.remove(i);
         }
-        if cell_idx < self.cells.len() {
-            self.cells.remove(cell_idx);
-        }
+        self.remove_cell(cell_idx);
         self.push_note(
             Tone::Neutral,
             format!("dismissed follow-up · {} still queued", self.queue.len()),
@@ -5632,6 +5687,9 @@ impl App {
         self.cancelling = false;
         self.turn_kind = TurnMode::Chat;
         self.turn_started = Instant::now();
+        // Tool ids restart at 1 each turn, so last turn's map would alias this
+        // turn's ids onto finished cards sitting in the scrollback.
+        self.tool_cells.clear();
         // Re-arm any swarm card the user left in the transcript so this turn's
         // subagents animate in it without re-running `/swarm`.
         self.set_swarm_live(true);
@@ -6578,6 +6636,33 @@ pub fn display_col_to_char_idx(plain: &str, target_col: usize) -> usize {
     plain.chars().count()
 }
 
+/// Decide an approval from a keypress in the approval modal.
+///
+/// Two deliberate exclusions, both because this modal swallows *every* key
+/// while it is open:
+///
+/// - **Modified keys are ignored.** Bare `a` grants a tool standing permission
+///   for the rest of the session. Ctrl+A is "select all" everywhere else in the
+///   TUI, so letting the modifier through meant a reflex silently handed over
+///   that permission, with no card and no note.
+/// - **Enter is not an approval.** It is the send key, and the modal can appear
+///   while the user is mid-sentence in the composer; finishing the sentence
+///   should not run a shell command. Deny stays on `n`/Esc.
+pub fn approval_decision(key: KeyEvent) -> Option<ApprovalDecision> {
+    if key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+    {
+        return None;
+    }
+    match key.code {
+        KeyCode::Char('y') | KeyCode::Char('Y') => Some(ApprovalDecision::Approve),
+        KeyCode::Char('a') | KeyCode::Char('A') => Some(ApprovalDecision::ApproveAlways),
+        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Some(ApprovalDecision::Deny),
+        _ => None,
+    }
+}
+
 /// Flatten a ratatui Line to plain text.
 pub fn line_to_plain(line: &ratatui::text::Line<'_>) -> String {
     line.spans.iter().map(|s| s.content.as_ref()).collect()
@@ -6844,6 +6929,56 @@ mod tests {
     use super::*;
     use crate::tui::input::InputState;
 
+    fn key(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
+        KeyEvent::new(code, mods)
+    }
+
+    /// The approval modal swallows every key, so a modified keypress must never
+    /// be read as a decision. Ctrl+A ("select all" everywhere else) used to
+    /// grant the tool standing permission for the session, silently.
+    #[test]
+    fn modified_keys_never_approve() {
+        for m in [
+            KeyModifiers::CONTROL,
+            KeyModifiers::ALT,
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ] {
+            for c in ['a', 'y', 'n'] {
+                assert_eq!(
+                    approval_decision(key(KeyCode::Char(c), m)),
+                    None,
+                    "{m:?}+{c} must not decide"
+                );
+            }
+        }
+        // Shift alone is just capitals - those are real presses.
+        assert_eq!(
+            approval_decision(key(KeyCode::Char('A'), KeyModifiers::SHIFT)),
+            Some(ApprovalDecision::ApproveAlways)
+        );
+    }
+
+    /// Enter is the send key; the modal can open while a follow-up is being
+    /// typed, and finishing the sentence must not run the tool.
+    #[test]
+    fn enter_is_not_an_approval_but_esc_denies() {
+        assert_eq!(approval_decision(key(KeyCode::Enter, KeyModifiers::NONE)), None);
+        assert_eq!(
+            approval_decision(key(KeyCode::Esc, KeyModifiers::NONE)),
+            Some(ApprovalDecision::Deny)
+        );
+        assert_eq!(
+            approval_decision(key(KeyCode::Char('y'), KeyModifiers::NONE)),
+            Some(ApprovalDecision::Approve)
+        );
+        assert_eq!(
+            approval_decision(key(KeyCode::Char('n'), KeyModifiers::NONE)),
+            Some(ApprovalDecision::Deny)
+        );
+        // Anything else leaves the modal open rather than guessing.
+        assert_eq!(approval_decision(key(KeyCode::Char('q'), KeyModifiers::NONE)), None);
+    }
+
     #[test]
     fn model_unavailable_errors_get_recovery_guidance() {
         // NVIDIA NIM: exact shape the user hit.
@@ -6914,6 +7049,39 @@ body"
             }));
         }
         s
+    }
+
+    /// `/clear` is display-only, but the end-of-turn sync used to overwrite the
+    /// session's replay log with the cleared screen — deleting the conversation
+    /// from disk. The implicit sync must never shrink; deliberate truncation
+    /// goes through the explicit replace instead.
+    #[test]
+    fn the_implicit_log_sync_cannot_delete_history() {
+        let full = vec![
+            Cell::User("first".into()),
+            Cell::Assistant { text: "reply".into(), streaming: false },
+            Cell::User("second".into()),
+            Cell::Assistant { text: "reply 2".into(), streaming: false },
+        ];
+        let history = cells_to_ui_log(&full);
+        assert_eq!(history.len(), 4);
+
+        // What `/clear` leaves behind: banner only.
+        let cleared = cells_to_ui_log(&[Cell::Banner]);
+        assert!(
+            cleared.len() < history.len(),
+            "precondition: clearing really does yield a shorter log"
+        );
+
+        // The implicit sync's guard — this is the rule that saves the history.
+        assert!(
+            !(cleared.len() >= history.len()),
+            "a cleared screen must not overwrite a longer saved log"
+        );
+        // A grown transcript still writes through.
+        let mut grown = full;
+        grown.push(Cell::User("third".into()));
+        assert!(cells_to_ui_log(&grown).len() >= history.len());
     }
 
     #[test]

@@ -1299,6 +1299,25 @@ fn draw_modal_frame(
 }
 
 /// The content rect inside a `draw_modal_frame` (2-cell padding, matching the picker).
+/// Row rects for the prompt context menu, clamped to what actually fits.
+///
+/// `Frame::render_widget` does not clip — a rect below the buffer panics inside
+/// `Paragraph`'s renderer. On a short terminal `modal_inner` collapses to zero
+/// height while its `y` still sits near the bottom of the frame, so the row loop
+/// has to be bounded by the available height rather than by the number of
+/// actions. Dropping rows that do not fit is right: the menu is unusable at that
+/// size anyway, and a truncated menu beats a crash.
+fn ctx_menu_row_rects(frame: Rect) -> Vec<Rect> {
+    let inner = modal_inner(frame);
+    if inner.width == 0 {
+        return Vec::new();
+    }
+    let rows = (inner.height as usize).min(super::app::CTX_ACTIONS.len());
+    (0..rows)
+        .map(|i| Rect::new(inner.x, inner.y + i as u16, inner.width, 1))
+        .collect()
+}
+
 fn modal_inner(rect: Rect) -> Rect {
     let pad = 2u16;
     Rect {
@@ -1362,6 +1381,33 @@ fn picker_separator_line(width: usize, phase: usize, row_i: usize) -> Line<'stat
     ))
 }
 
+/// Size the per-cell wrap cache to the transcript, keeping what is still valid.
+///
+/// Only a **width** change invalidates everything - wrapping is width-bound. A
+/// length change must not: cells are appended several times a second during a
+/// turn (every tool start/end, thought, message, note), and clearing on length
+/// meant the entire transcript was re-wrapped and re-rendered each time, a
+/// hitch that grew with session length rather than staying flat.
+///
+/// Growing in place is safe because the per-cell key check downstream forces a
+/// recompute for any index whose content no longer matches - including every
+/// index that shifted after a removal.
+fn fit_wrap_cache(
+    cached_width: &mut u16,
+    keys: &mut Vec<u64>,
+    parts: &mut Vec<Vec<Line<'static>>>,
+    inner_w: u16,
+    cells_len: usize,
+) {
+    if *cached_width != inner_w {
+        *cached_width = inner_w;
+        keys.clear();
+        parts.clear();
+    }
+    keys.resize(cells_len, 0);
+    parts.resize_with(cells_len, Vec::new);
+}
+
 // ── transcript ─────────────────────────────────────────────────────────────
 fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     // Wide scrollbar rail (2 cols) so drag is easy to grab.
@@ -1375,18 +1421,13 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
 
     // Per-cell wrap cache: finished rows are stable; live thinking/tools/stream
     // only recompute when content or spinner frame changes.
-    if app.wrap_cache_width != inner_w || app.wrap_cache_keys.len() != app.cells.len() {
-        app.wrap_cache_width = inner_w;
-        app.wrap_cache_keys.clear();
-        app.wrap_cache_parts.clear();
-        app.wrap_cache_keys.resize(app.cells.len(), 0);
-        app.wrap_cache_parts.resize_with(app.cells.len(), Vec::new);
-    }
-    // Grow if cells were appended without len mismatch (shouldn't happen).
-    while app.wrap_cache_keys.len() < app.cells.len() {
-        app.wrap_cache_keys.push(0);
-        app.wrap_cache_parts.push(Vec::new());
-    }
+    fit_wrap_cache(
+        &mut app.wrap_cache_width,
+        &mut app.wrap_cache_keys,
+        &mut app.wrap_cache_parts,
+        inner_w,
+        app.cells.len(),
+    );
 
     let mut wrapped: Vec<Line<'static>> = Vec::new();
     let mut owner: Vec<Option<usize>> = Vec::new(); // index into `prompts`
@@ -1466,8 +1507,8 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
             // Exact hitbox for the words "click to peek" (display columns).
             let ctp = if is_header {
                 if let Some(byte_i) = plain.find("click to peek") {
-                    let start = plain[..byte_i].chars().count();
-                    let end = start + "click to peek".chars().count();
+                    let start = UnicodeWidthStr::width(&plain[..byte_i]);
+                    let end = start + UnicodeWidthStr::width("click to peek");
                     Some((cell_idx, start, end))
                 } else {
                     None
@@ -1481,8 +1522,8 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
                 let mut found = None;
                 for p in phrases {
                     if let Some(byte_i) = plain.find(p) {
-                        let start = plain[..byte_i].chars().count();
-                        let end = start + p.chars().count();
+                        let start = UnicodeWidthStr::width(&plain[..byte_i]);
+                        let end = start + UnicodeWidthStr::width(p);
                         found = Some((cell_idx, start, end));
                         break;
                     }
@@ -1493,18 +1534,18 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
             let mut qa: Vec<(usize, usize, usize, u8)> = Vec::new();
             if matches!(cell, Cell::Queued { .. }) {
                 if let Some(byte_i) = plain.find("steer") {
-                    let start = plain[..byte_i].chars().count();
-                    let end = start + "steer".chars().count();
+                    let start = UnicodeWidthStr::width(&plain[..byte_i]);
+                    let end = start + UnicodeWidthStr::width("steer");
                     qa.push((cell_idx, start, end, 2u8));
                 }
                 if let Some(byte_i) = plain.find("send now") {
-                    let start = plain[..byte_i].chars().count();
-                    let end = start + "send now".chars().count();
+                    let start = UnicodeWidthStr::width(&plain[..byte_i]);
+                    let end = start + UnicodeWidthStr::width("send now");
                     qa.push((cell_idx, start, end, 0u8));
                 }
                 if let Some(byte_i) = plain.find("dismiss") {
-                    let start = plain[..byte_i].chars().count();
-                    let end = start + "dismiss".chars().count();
+                    let start = UnicodeWidthStr::width(&plain[..byte_i]);
+                    let end = start + UnicodeWidthStr::width("dismiss");
                     qa.push((cell_idx, start, end, 1u8));
                 }
             }
@@ -2270,7 +2311,7 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
             spans.push(Span::raw(" ".to_string()));
             spans.push(Span::styled(
                 format!(" thought {th} "),
-                theme::style_duration_chip(false),
+                theme::style_thought_chip(),
             ));
             spans.push(Span::styled(
                 "  ·  click to peek".to_string(),
@@ -2408,7 +2449,7 @@ fn run_look(state: crate::agent::swarm::RunState, tick: Duration) -> (Color, Str
         S::Running => (theme::NUR_GOLD, theme::spinner_frame(tick).to_string()),
         S::Done => (theme::SUCCESS, "✓".into()),
         S::Failed => (theme::ERROR, "✗".into()),
-        S::Cancelled => (theme::MUTED, "⊘".into()),
+        S::Cancelled => (theme::WARN, "◼".into()),
     }
 }
 
@@ -2750,7 +2791,7 @@ fn draw_pane(
     }
     if y < last {
         let (mark, style) = match (&run.tool, running) {
-            (Some(_), _) => ("▸ ", Style::default().fg(theme::CYAN)),
+            (Some(_), _) => ("⚒ ", Style::default().fg(hue)),
             (None, true) => ("· ", theme::style_status()),
             (None, false) => ("· ", theme::style_faint()),
         };
@@ -3211,8 +3252,11 @@ fn banner_lines(app: &App, out: &mut Vec<Line<'static>>) {
         spans.extend(shimmer_spans(row, elapsed, i * 3, 2400));
         out.push(Line::from(spans));
     }
-    // Shimmering underline beneath the logotype.
-    out.push(aurora_rule(40, elapsed, '─', 2200));
+    // Shimmering underline, matched to the logotype's own extent (27 cols at
+    // indent 2) so it reads as an underline rather than a stray rule.
+    let mut rule = vec![Span::raw("  ".to_string())];
+    rule.extend(aurora_rule(27, elapsed, '─', 2200).spans);
+    out.push(Line::from(rule));
 
     // Row 1: "<active provider> loaded  ·  v<cli>".
     let provider = crate::config::active_provider_label(&app.cfg);
@@ -3387,9 +3431,10 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
 
     let focused = app.approval.is_none() && app.picker.is_none() && app.login.is_none();
     let sel = app.input.selection_range();
+    // Same wash as the transcript's drag-select - one gesture, one colour.
     let sel_style = Style::default()
         .fg(theme::BG)
-        .bg(theme::META_BLUE_SKY)
+        .bg(theme::META_BLUE)
         .add_modifier(Modifier::BOLD);
     let normal = Style::default().fg(theme::FG);
     let chip_style = Style::default()
@@ -3856,7 +3901,7 @@ fn draw_approval(f: &mut Frame, app: &App, area: Rect) {
         hue,
         &format!(" ⚠ approve · {} · {family} ", a.name),
         None,
-        "  y once   ·   a always   ·   n deny  ",
+        "  y once   ·   a always   ·   n/esc deny  ",
     );
     let inner = modal_inner(rect);
 
@@ -4435,8 +4480,11 @@ fn draw_ctx_menu(f: &mut Frame, app: &mut App) {
 
     let sel = app.ctx_menu.as_ref().map(|m| m.selected).unwrap_or(0);
     let mut actions = Vec::new();
-    for (i, (glyph, label)) in CTX_ACTIONS.iter().enumerate() {
-        let ar = Rect::new(inner.x, inner.y + i as u16, inner.width, 1);
+    for ((i, (glyph, label)), ar) in CTX_ACTIONS
+        .iter()
+        .enumerate()
+        .zip(ctx_menu_row_rects(frame))
+    {
         let selected = i == sel;
         let (fg, bg) = if selected {
             (theme::BG, theme::META_BLUE)
@@ -4782,6 +4830,73 @@ mod tests {
         assert!(rect.bottom() <= tiny.bottom());
         assert_eq!(rect.width, 16);
         assert_eq!(rect.height, 3);
+    }
+
+    /// Appending a cell used to clear the whole wrap cache, so every tool card,
+    /// thought, and note re-wrapped the entire transcript - a hitch that grew
+    /// with session length. Only a width change may invalidate everything.
+    #[test]
+    fn appending_a_cell_keeps_the_rest_of_the_wrap_cache() {
+        let mut width = 0u16;
+        let mut keys: Vec<u64> = Vec::new();
+        let mut parts: Vec<Vec<Line<'static>>> = Vec::new();
+
+        fit_wrap_cache(&mut width, &mut keys, &mut parts, 100, 3);
+        // Pretend all three wrapped.
+        for (i, k) in keys.iter_mut().enumerate() {
+            *k = 1000 + i as u64;
+        }
+        for p in parts.iter_mut() {
+            *p = vec![Line::from("cached")];
+        }
+
+        // A new cell arrives: the existing three must survive untouched.
+        fit_wrap_cache(&mut width, &mut keys, &mut parts, 100, 4);
+        assert_eq!(keys.len(), 4);
+        assert_eq!(&keys[..3], &[1000, 1001, 1002]);
+        assert!(parts[..3].iter().all(|p| p.len() == 1), "cached rows kept");
+        assert_eq!(keys[3], 0, "the new cell starts uncached");
+        assert!(parts[3].is_empty());
+
+        // Truncation (revert/fork) keeps the surviving prefix.
+        fit_wrap_cache(&mut width, &mut keys, &mut parts, 100, 2);
+        assert_eq!(&keys[..], &[1000, 1001]);
+
+        // A width change is the one thing that does invalidate everything.
+        fit_wrap_cache(&mut width, &mut keys, &mut parts, 80, 2);
+        assert_eq!(&keys[..], &[0, 0]);
+        assert!(parts.iter().all(|p| p.is_empty()));
+        assert_eq!(width, 80);
+    }
+
+    /// The prompt context menu used to emit one row rect per action regardless
+    /// of the space available. `render_widget` does not clip, so opening the
+    /// menu and shrinking the terminal to <= 6 rows panicked inside `Paragraph`.
+    #[test]
+    fn ctx_menu_rows_never_escape_the_frame() {
+        // `draw` refuses to render below 20x5, so that is the floor that has to
+        // hold; the height sweep starts at 0 because that is where it crashed.
+        for h in 0..=40u16 {
+            for w in [20u16, 24, 40, 120] {
+                let area = Rect::new(0, 0, w, h);
+                let frame =
+                    fit_modal_rect(area, 46, 12, 34, crate::tui::app::CTX_ACTIONS.len() as u16 + 4);
+                for r in ctx_menu_row_rects(frame) {
+                    assert!(
+                        r.bottom() <= area.bottom() && r.right() <= area.right(),
+                        "{w}x{h}: row {r:?} escapes {area:?}"
+                    );
+                }
+            }
+        }
+        // Roomy terminal still draws every action.
+        let area = Rect::new(0, 0, 100, 30);
+        let frame =
+            fit_modal_rect(area, 46, 12, 34, crate::tui::app::CTX_ACTIONS.len() as u16 + 4);
+        assert_eq!(
+            ctx_menu_row_rects(frame).len(),
+            crate::tui::app::CTX_ACTIONS.len()
+        );
     }
 
     #[test]

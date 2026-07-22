@@ -70,7 +70,7 @@ Mouse/keyboard interaction tips that used to live under the art are behind
 | Key | Action |
 |-----|--------|
 | `Shift+Tab` | Cycle permission mode (manual → plan → auto → manual) |
-| `Ctrl+R` | Open sessions browser |
+| `Ctrl+R` | Reverse-search prompt history (`Ctrl+R` again steps older · `Esc` cancels) |
 | `Esc` | Close peek, then cancel current turn |
 
 ### Approval
@@ -81,7 +81,12 @@ When the agent requests permission to run a write/shell tool:
 |-----|--------|
 | `y` | Approve this one time |
 | `a` | Always approve this tool (for this session) |
-| `n` | Deny |
+| `n` · `Esc` | Deny |
+
+`Enter` deliberately does **not** approve — the modal can open while you are
+mid-sentence in the composer, and finishing that sentence should not run a tool.
+Keys held with `Ctrl` or `Alt` are ignored here for the same reason: `Ctrl+A` is
+"select all" everywhere else, and must never be read as "always approve".
 
 ---
 
@@ -104,11 +109,11 @@ See [Permission modes](#permission-modes) below for exactly what each mode allow
 
 | Command | Purpose |
 |---------|---------|
-| `/sessions` · `/resume` | Open the sessions window (same as Ctrl+R); press `c` to switch to takeover |
+| `/sessions` · `/resume` | Open the sessions window; press `c` to switch to takeover |
 | `/takeover` · `/hijack` | Open the takeover window: import a Claude/Codex/Cursor/Grok session and resume it; press `Tab` to scope to here, `c` to switch back |
 | `/todos` | Show current todos |
 | `/swarm` | Inline subagent grid — one live pane per subagent |
-| `/clear` | Clear current screen |
+| `/clear` | Clear the screen only — the model keeps full context and the session history is untouched (`/compact` shrinks context, `/new` starts fresh) |
 | `/new` | Start a new session |
 
 ### The swarm card
@@ -349,7 +354,7 @@ No keyboard shortcuts — move the highlight with the wheel or `↑`/`↓`, choo
 
 ### Sessions browser
 
-Open with `Ctrl+R` or `/sessions` (alias `/resume`). Browse recent sessions with a prompt-first picker — see the first user message of each session to find the one you want.
+Open with `/sessions` (alias `/resume`). Browse recent sessions with a prompt-first picker — see the first user message of each session to find the one you want.
 
 - Defaults to **all** workspaces (not only the current cwd). Toggle **here** / **all** with Tab or the scope chip.
 - Scans both `~/.nur/sessions` and legacy `~/.muse/sessions`; when the same id exists twice, the **richer** copy wins.

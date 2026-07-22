@@ -390,7 +390,7 @@ Type these inside the `nur` TUI. Aliases are shown in the same row.
 |---------|---------|
 | `/help` · `/commands` | Keys + command list |
 | `/exit` · `/quit` | Quit |
-| `/clear` | Clear the transcript display |
+| `/clear` | Clear the transcript display only — context and saved session history are untouched |
 | `/new` | Start a fresh session |
 | `/compact` | Summarize the conversation to free context |
 | `/sessions` · `/resume` | Browse & open past nur sessions (`/resume <id>` also works). Press **`c`** to switch to the takeover window |

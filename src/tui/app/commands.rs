@@ -62,6 +62,13 @@ impl App {
             "/clear" => {
                 self.cells.retain(|c| matches!(c, Cell::Banner));
                 self.scroll_from_bottom = 0;
+                // Say what this did NOT do: the model still has the full
+                // conversation, and the session's replay log is untouched.
+                self.push_note(
+                    Tone::Neutral,
+                    "screen cleared - the model still has the full context, and the session                      history is intact (/compact to actually shrink context, /new for a                      fresh session)"
+                        .into(),
+                );
             }
             "/new" => self.cmd_new(),
             "/compact" => self.cmd_compact(),
@@ -212,6 +219,11 @@ impl App {
             ),
             other => self.cmd_skill_or_unknown(other, &arg),
         }
+        // Slash commands answer inline, and their card is appended at the end of
+        // the transcript. If the user had scrolled up to re-read something, that
+        // card landed below the viewport and the screen appeared not to react at
+        // all - including for errors like "unknown command".
+        self.scroll_to_bottom();
     }
 
     /// Unknown slash -> installed skill.
@@ -225,7 +237,17 @@ impl App {
             return;
         }
         let Some(sk) = agent::skills::skill_by_name(&self.cwd, name) else {
-            self.push_error(format!("unknown command: {cmd} - try /help"));
+            // `/help` and the palette list skill commands that ship as plugins,
+            // so a name can be advertised here and still not be installed -
+            // "unknown command, try /help" then sends the user back to the list
+            // that suggested it. Say which case this is.
+            if COMMANDS.iter().any(|(c, _)| *c == cmd) {
+                self.push_error(format!(
+                    "{cmd} is a skill that isn't installed here - /plugins to install it,                      or /skills to see what is available"
+                ));
+            } else {
+                self.push_error(format!("unknown command: {cmd} - try /help"));
+            }
             return;
         };
 

@@ -30,7 +30,7 @@ pub const FG: Color = Color::Rgb(245, 242, 232);
 /// Dimmed foreground.
 pub const MUTED: Color = Color::Rgb(148, 142, 128);
 /// Extra-dim (hints, separators).
-pub const FAINT: Color = Color::Rgb(96, 90, 78);
+pub const FAINT: Color = Color::Rgb(126, 119, 104);
 /// Hairline / border idle.
 pub const BORDER: Color = Color::Rgb(48, 44, 36);
 /// Code / block background.
@@ -101,7 +101,7 @@ pub const PINK: Color = Color::Rgb(220, 140, 180);
 pub const ROSE: Color = Color::Rgb(255, 143, 168);
 #[allow(dead_code)]
 pub const CORAL: Color = Color::Rgb(255, 138, 120);
-pub const AMBER: Color = Color::Rgb(255, 186, 73); // shell == WARN
+pub const AMBER: Color = Color::Rgb(236, 162, 44); // shell - deliberately NOT WARN
 #[allow(dead_code)] // brand palette reserved for future chrome
 pub const GOLD: Color = Color::Rgb(255, 208, 110);
 pub const ORANGE: Color = Color::Rgb(255, 150, 89); // memory
@@ -111,7 +111,7 @@ pub const LIME: Color = Color::Rgb(160, 224, 122);
 pub const MINT: Color = Color::Rgb(80, 190, 170); // deep-teal bridge
 pub const SEAFOAM: Color = Color::Rgb(56, 170, 160);
 pub const TEAL: Color = Color::Rgb(32, 150, 148); // deep teal — network
-pub const CYAN: Color = Color::Rgb(64, 170, 160); // git (teal-shifted, not Meta sky)
+pub const CYAN: Color = Color::Rgb(72, 196, 208); // git - clear of SEAFOAM's answer teal
                                                   // Green lives in SUCCESS — status, not a family hue.
 
 // ── Color math + animated gradients ─────────────────────────────────────────
@@ -249,7 +249,7 @@ impl Tone {
             Tone::Todos => CYAN,
             Tone::Usage => TEAL,
             Tone::Session => BLUE_200,
-            Tone::Skill => INDIGO,
+            Tone::Skill => PERIWINKLE,
             Tone::Memory => ORANGE,
         }
     }
@@ -378,17 +378,20 @@ pub fn fmt_elapsed_live(d: Duration) -> String {
 /// Accent for duration chips (steps slightly out of the blue spine on purpose —
 /// timing should be impossible to miss).
 pub fn style_duration_chip(live: bool) -> Style {
-    if live {
-        Style::default()
-            .fg(BG)
-            .bg(VIOLET)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
-            .fg(BG)
-            .bg(META_BLUE_SKY)
-            .add_modifier(Modifier::BOLD)
-    }
+    // Both stay on the gold chrome spine, live carrying the stronger tint so a
+    // running card outranks a finished one. Violet is deliberately absent: it
+    // means model thought and nothing else, and a running `bash` is not a
+    // thought. See `style_thought_chip`.
+    let bg = if live { NUR_GOLD } else { META_BLUE_SKY };
+    Style::default().fg(BG).bg(bg).add_modifier(Modifier::BOLD)
+}
+
+/// Chip for the model's thinking time - the one duration that is violet.
+pub fn style_thought_chip() -> Style {
+    Style::default()
+        .fg(BG)
+        .bg(VIOLET)
+        .add_modifier(Modifier::BOLD)
 }
 
 /// Style for turn-complete duration chip.
@@ -551,4 +554,132 @@ pub fn print_tool(name: &str, detail: &str) {
         name.truecolor(232, 185, 35).bold(),
         detail.truecolor(148, 142, 128)
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rgb(c: Color) -> (f64, f64, f64) {
+        match c {
+            Color::Rgb(r, g, b) => (r as f64, g as f64, b as f64),
+            other => panic!("expected an Rgb colour, got {other:?}"),
+        }
+    }
+
+    /// WCAG relative luminance.
+    fn luminance(c: Color) -> f64 {
+        let (r, g, b) = rgb(c);
+        let lin = |v: f64| {
+            let v = v / 255.0;
+            if v <= 0.03928 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+    }
+
+    fn contrast(a: Color, b: Color) -> f64 {
+        let (x, y) = (luminance(a), luminance(b));
+        let (hi, lo) = if x > y { (x, y) } else { (y, x) };
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    fn distance(a: Color, b: Color) -> f64 {
+        let (ar, ag, ab) = rgb(a);
+        let (br, bg, bb) = rgb(b);
+        ((ar - br).powi(2) + (ag - bg).powi(2) + (ab - bb).powi(2)).sqrt()
+    }
+
+    /// FAINT is not decoration - it carries every affordance hint in the TUI
+    /// ("click to peek", "▸ expands", modal key hints, diff context). It was
+    /// 2.83:1 on BG, below the 3:1 floor for legible text.
+    #[test]
+    fn hint_and_secondary_text_clear_the_contrast_floor() {
+        assert!(
+            contrast(FAINT, BG) >= 3.0,
+            "FAINT on BG is {:.2}:1",
+            contrast(FAINT, BG)
+        );
+        assert!(
+            contrast(FAINT, SURFACE_2) >= 3.0,
+            "FAINT on SURFACE_2 is {:.2}:1",
+            contrast(FAINT, SURFACE_2)
+        );
+        // MUTED outranks FAINT - the hierarchy has to survive any retune.
+        assert!(contrast(MUTED, BG) > contrast(FAINT, BG));
+        assert!(contrast(FG, BG) >= 7.0);
+    }
+
+    /// Colours that mean different things must look different. Each of these
+    /// pairs was close enough to be indistinguishable in a terminal.
+    #[test]
+    fn distinct_roles_use_distinguishable_colours() {
+        // "assistant is answering" vs "git tool".
+        assert!(
+            distance(SEAFOAM, CYAN) > 40.0,
+            "SEAFOAM/CYAN distance {:.0}",
+            distance(SEAFOAM, CYAN)
+        );
+        // Shell-tool family vs warning status. Status colours are never family hues.
+        assert!(
+            distance(AMBER, WARN) > 20.0,
+            "AMBER/WARN distance {:.0}",
+            distance(AMBER, WARN)
+        );
+        assert_ne!(AMBER, WARN, "a shell card must not read as a warning");
+    }
+
+    /// `Tone` exists so system notices are each visually distinct rather than
+    /// all reading as "blue info" - so no two tones may share a colour, and the
+    /// glyph is the colour-blind fallback, so no two may share that either.
+    #[test]
+    fn every_tone_is_visually_distinct() {
+        let tones = [
+            Tone::Neutral,
+            Tone::Mode,
+            Tone::Plan,
+            Tone::Todos,
+            Tone::Usage,
+            Tone::Memory,
+            Tone::Session,
+            Tone::Skill,
+        ];
+        for (i, a) in tones.iter().enumerate() {
+            for b in &tones[i + 1..] {
+                assert!(
+                    distance(a.color(), b.color()) > 20.0,
+                    "{a:?} and {b:?} share a colour"
+                );
+                assert_ne!(a.glyph(), b.glyph(), "{a:?} and {b:?} share a glyph");
+            }
+            assert!(
+                contrast(a.color(), BG) >= 4.5,
+                "{a:?} is unreadable on BG: {:.2}:1",
+                contrast(a.color(), BG)
+            );
+        }
+    }
+
+    /// Violet means model thought and only that. Duration chips sit on the gold
+    /// chrome spine; the thought chip is the single violet one.
+    #[test]
+    fn violet_is_reserved_for_thought() {
+        let bg_of = |s: Style| s.bg.expect("chips set a background");
+        assert_eq!(bg_of(style_thought_chip()), VIOLET);
+        assert_ne!(bg_of(style_duration_chip(true)), VIOLET, "a running tool is not a thought");
+        assert_ne!(bg_of(style_duration_chip(false)), VIOLET);
+        // Live still outranks finished.
+        assert_ne!(
+            bg_of(style_duration_chip(true)),
+            bg_of(style_duration_chip(false)),
+            "live and settled chips must be tellable apart"
+        );
+        // Chips are dark-on-light: the text has to survive the background.
+        for s in [style_thought_chip(), style_duration_chip(true), style_duration_chip(false)] {
+            assert!(contrast(bg_of(s), BG) >= 4.5);
+        }
+    }
 }

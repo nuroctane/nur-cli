@@ -3,6 +3,7 @@
 //! Used by the TUI (click links), browser setup, and tools (excalidraw export).
 
 use std::path::Path;
+use unicode_width::UnicodeWidthStr;
 use std::process::Command;
 
 /// Open a URL or path with the system default application (best-effort).
@@ -103,8 +104,11 @@ pub fn find_url_spans(plain: &str) -> Vec<(usize, usize, String)> {
         }
         if end_byte > start_byte + scheme_len {
             let url = plain[start_byte..end_byte].to_string();
-            let start_col = plain[..start_byte].chars().count();
-            let end_col = start_col + url.chars().count();
+            // DISPLAY columns, not char counts: the caller compares these
+            // against a mouse column, so any wide glyph (CJK, emoji) earlier in
+            // the line shifted the clickable region left of the painted link.
+            let start_col = UnicodeWidthStr::width(&plain[..start_byte]);
+            let end_col = start_col + UnicodeWidthStr::width(url.as_str());
             out.push((start_col, end_col, url));
         }
         i = end_byte.max(start_byte + 1);
@@ -121,6 +125,27 @@ mod tests {
         let spans = find_url_spans("see https://excalidraw.com/#json=abc,key please");
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].2, "https://excalidraw.com/#json=abc,key");
+        assert_eq!(spans[0].0, 4);
+    }
+
+    /// The returned span is compared against a mouse column, so it has to be in
+    /// display columns. With char counts, any wide glyph earlier in the line
+    /// shifted the clickable region left of where the link was painted - so
+    /// clicking the link did nothing and clicking beside it opened a browser.
+    #[test]
+    fn spans_are_display_columns_not_char_counts() {
+        // "日本語 " is 3 wide glyphs + a space = 7 columns, but only 4 chars.
+        let spans = find_url_spans("日本語 https://example.com ok");
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].0, 7, "start column must clear the wide glyphs");
+        assert_eq!(spans[0].1, 7 + "https://example.com".len());
+
+        // Emoji are width 2 as well.
+        let spans = find_url_spans("🌕 https://a.test");
+        assert_eq!(spans[0].0, 3);
+
+        // Pure ASCII is unchanged - char count and column agree there.
+        let spans = find_url_spans("see https://a.test");
         assert_eq!(spans[0].0, 4);
     }
 
