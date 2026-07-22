@@ -13,6 +13,7 @@ mod gepa;
 mod local;
 mod t3code;
 mod penecho;
+mod fractal;
 mod oauth;
 mod open_uri;
 mod plugins;

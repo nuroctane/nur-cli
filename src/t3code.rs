@@ -225,6 +225,7 @@ pub fn probe_all() -> Vec<ProbeStatus> {
 ///
 /// Writes to `<path>.tmp.<rand>` then renames. Uses std::fs::write + rename which
 /// is atomic on most platforms when same filesystem.
+#[allow(dead_code)]
 pub fn atomic_write(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
@@ -272,6 +273,7 @@ pub fn delegate_check(driver: DriverId) -> Result<()> {
 /// This is intentionally simpler than t3code's full DPoP implementation but
 /// keeps the same semantics: one-time use, TTL, label, scopes.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct PairingToken {
     pub token: String,
     pub label: String,

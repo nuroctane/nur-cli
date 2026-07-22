@@ -38,6 +38,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         if app.plugin_picker.is_some() {
             draw_plugin_picker(f, app, area);
         }
+        if app.update_modal.is_some() {
+            draw_update_modal(f, app, area);
+        }
         if app.ctx_menu.is_some() {
             draw_ctx_menu(f, app);
         }
@@ -91,6 +94,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.plugin_picker.is_some() {
         draw_plugin_picker(f, app, area);
     }
+    if app.update_modal.is_some() {
+        draw_update_modal(f, app, area);
+    }
     // Grok-style hover dialogue over thoughts / tools / turns (above everything
     // except approval/picker, which already short-circuit interaction).
     if app.approval.is_none()
@@ -98,6 +104,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         && app.login.is_none()
         && app.model_picker.is_none()
         && app.plugin_picker.is_none()
+        && app.update_modal.is_none()
         && app.ctx_menu.is_none()
     {
         match draw_hover_peek(f, app, area) {
@@ -1152,6 +1159,120 @@ fn draw_session_picker(f: &mut Frame, app: &mut App, area: Rect) {
 
     if let Some(p) = &mut app.picker {
         p.hit = hit;
+    }
+}
+
+// ── update-available modal (parity with session/login/model pickers + click-to-peek) ──
+fn draw_update_modal(f: &mut Frame, app: &mut App, area: Rect) {
+    let Some(modal) = &app.update_modal else { return };
+    let phase = modal_phase(app);
+    let current = modal.current.clone();
+    let remote = modal.remote.clone();
+
+    // Modal size: similar to login picker, with parity chrome
+    let rect = fit_modal_rect(area, 64, 14, 48, 10);
+    f.render_widget(Clear, rect);
+    f.render_widget(
+        Block::default().style(Style::default().bg(theme::SURFACE_2)),
+        rect,
+    );
+
+    let title = " Update available ";
+    let right = Some(remote.as_str());
+    let footer = " ↵ update now · esc dismiss · outside/✕ close ";
+    draw_modal_frame(f, rect, phase, theme::NUR_GOLD, title, right, footer);
+
+    let pad = 2u16;
+    let inner = Rect {
+        x: rect.x.saturating_add(pad),
+        y: rect.y.saturating_add(pad),
+        width: rect.width.saturating_sub(pad * 2),
+        height: rect.height.saturating_sub(pad * 2),
+    };
+
+    let close = Rect {
+        x: rect.x + rect.width.saturating_sub(5),
+        y: rect.y,
+        width: 3,
+        height: 1,
+    };
+
+    let update_btn = Rect {
+        x: inner.x,
+        y: inner.y + inner.height.saturating_sub(2),
+        width: 18,
+        height: 1,
+    };
+
+    // Save hit-test geometry
+    if let Some(u) = &mut app.update_modal {
+        u.hit = super::app::UpdateHit {
+            frame: rect,
+            close,
+            body: inner,
+            update_btn,
+        };
+    }
+
+    // Content
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::default());
+    lines.push(Line::from(vec![
+        Span::styled("  Current: ".to_string(), theme::style_faint()),
+        Span::styled(
+            format!("v{current}"),
+            Style::default().fg(theme::FG).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  →  ".to_string(), theme::style_faint()),
+        Span::styled(
+            format!("v{remote}"),
+            Style::default().fg(theme::NUR_GOLD).add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        "  A new version was installed in the background.".to_string(),
+        theme::style_status(),
+    )));
+    lines.push(Line::from(Span::styled(
+        "  Restart to apply, or press Enter to update now.".to_string(),
+        theme::style_faint(),
+    )));
+    lines.push(Line::default());
+    lines.push(Line::from(vec![
+        Span::styled("  ".to_string(), theme::style_faint()),
+        Span::styled(
+            "▶ Update now".to_string(),
+            Style::default()
+                .fg(theme::NUR_GOLD)
+                .bg(theme::SURFACE_2)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        ),
+        Span::styled("  ".to_string(), theme::style_faint()),
+        Span::styled("(runs in new window)".to_string(), theme::style_faint()),
+    ]));
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        "  Tip: /doctor shows update status · NUR_SKIP_AUTO_UPDATE=1 to disable".to_string(),
+        theme::style_faint(),
+    )));
+
+    // Render inner
+    f.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2)),
+        inner,
+    );
+
+    // Clickable ✕ (parity with hover peek / session picker)
+    {
+        let cx = rect.x + rect.width.saturating_sub(3);
+        let buf = f.buffer_mut();
+        buf[(cx, rect.y)].set_char('✕').set_style(
+            Style::default()
+                .fg(theme::ERROR)
+                .bg(theme::SURFACE_2)
+                .add_modifier(Modifier::BOLD),
+        );
     }
 }
 
@@ -2403,6 +2524,7 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                 out.push(Line::from(Span::styled(l.clone(), theme::style_status())));
             }
         }
+        Cell::SideGraph { model, live } => sidegraph_card(width, *live, model, tick, out),
         Cell::Swarm { live, detail } => swarm_card(width, *live, *detail, tick, out),
         Cell::Error(text) => {
             out.push(Line::default());
@@ -2620,6 +2742,268 @@ fn swarm_card(
         theme::style_faint(),
     )));
 }
+
+// ── sidegraph card ───────────────────────────────────────────────────────
+// Inline query-flow graph: root prompt + thinking / tool / subagent fan-out.
+// The model is cheap (derived from transcript cells); the renderer re-reads
+// the swarm registry each frame so agent children animate live.
+fn sidegraph_card(
+    width: usize,
+    live: bool,
+    model: &crate::tui::app::SideGraphModel,
+    tick: Duration,
+    out: &mut Vec<Line<'static>>,
+) {
+    use crate::tui::app::{SgNode, SgState};
+
+    let w = width.max(4);
+    out.push(Line::default());
+
+    // Header: always gold, with live chip when armed.
+    let title = if live {
+        "◈ sidegraph · live"
+    } else {
+        "◈ sidegraph"
+    };
+    let mut head = vec![Span::styled(
+        clip_to(title, w),
+        Style::default()
+            .fg(theme::NUR_GOLD)
+            .add_modifier(Modifier::BOLD),
+    )];
+    if model.running {
+        head.push(Span::styled(
+            format!("  {} running", theme::spinner_frame(tick)),
+            Style::default().fg(theme::NUR_GOLD_SKY),
+        ));
+    }
+    if !model.nodes.is_empty() {
+        head.push(Span::styled(
+            format!("  ·  {} step(s)", model.nodes.len()),
+            theme::style_faint(),
+        ));
+    }
+    out.push(clip_line(Line::from(head), w));
+
+    // Root query
+    if model.query.is_empty() {
+        out.push(Line::from(Span::styled(
+            clip_to("  ● (no query yet — send a prompt first)", w),
+            theme::style_faint(),
+        )));
+    } else {
+        let q = clip_to(&model.query, w.saturating_sub(6));
+        out.push(Line::from(vec![
+            Span::styled("  ".to_string(), theme::style_faint()),
+            Span::styled(
+                "● ".to_string(),
+                Style::default().fg(theme::META_BLUE).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(q, theme::style_status()),
+        ]));
+    }
+
+    if model.nodes.is_empty() {
+        out.push(Line::from(Span::styled(
+            clip_to("    └─ (waiting for first step…)", w),
+            theme::style_faint(),
+        )));
+        return;
+    }
+
+    let runs = crate::agent::swarm::snapshot();
+    let this_turn: Vec<_> = runs
+        .iter()
+        .filter(|r| r.started.checked_duration_since(model.turn_started).is_some())
+        .cloned()
+        .collect();
+
+    let n = model.nodes.len();
+    for (i, node) in model.nodes.iter().enumerate() {
+        let is_last = i + 1 == n;
+        let branch = if is_last { "└─" } else { "├─" };
+
+        let (glyph, hue, label, dur): (String, Color, String, String) = match node {
+            SgNode::Thinking {
+                live: l,
+                started,
+                duration,
+            } => {
+                if *l {
+                    (
+                        theme::spinner_frame(tick).to_string(),
+                        theme::NUR_GOLD,
+                        "thinking".to_string(),
+                        theme::fmt_elapsed_live(started.elapsed()),
+                    )
+                } else {
+                    (
+                        "○".to_string(),
+                        theme::VIOLET,
+                        "thinking".to_string(),
+                        duration.map(theme::fmt_duration).unwrap_or_default(),
+                    )
+                }
+            }
+            SgNode::Tool {
+                label,
+                state,
+                started,
+                duration,
+                ..
+            } => match state {
+                SgState::Running => (
+                    theme::spinner_frame(tick).to_string(),
+                    theme::NUR_GOLD,
+                    label.clone(),
+                    theme::fmt_elapsed_live(started.elapsed()),
+                ),
+                SgState::Ok => (
+                    "✓".to_string(),
+                    theme::SUCCESS,
+                    label.clone(),
+                    duration.map(theme::fmt_duration).unwrap_or_default(),
+                ),
+                SgState::Failed => (
+                    "✗".to_string(),
+                    theme::ERROR,
+                    label.clone(),
+                    duration.map(theme::fmt_duration).unwrap_or_default(),
+                ),
+            },
+            SgNode::Answering => (
+                "✎".to_string(),
+                theme::CYAN,
+                "answering…".to_string(),
+                String::new(),
+            ),
+            SgNode::Steer { text } => (
+                "↻".to_string(),
+                theme::WARN,
+                format!("steer: {text}"),
+                String::new(),
+            ),
+            SgNode::Queued { text } => (
+                "↗".to_string(),
+                theme::WARN,
+                format!("queued: {text}"),
+                String::new(),
+            ),
+            SgNode::Done {
+                duration,
+                interrupted,
+            } => {
+                if *interrupted {
+                    (
+                        "◼".to_string(),
+                        theme::WARN,
+                        "interrupted".to_string(),
+                        theme::fmt_duration(*duration),
+                    )
+                } else {
+                    (
+                        "✓".to_string(),
+                        theme::SUCCESS,
+                        "done".to_string(),
+                        theme::fmt_duration(*duration),
+                    )
+                }
+            }
+        };
+
+        let remaining = w.saturating_sub(8 + UnicodeWidthStr::width(glyph.as_str()));
+        let clipped_label = clip_to(&label, remaining.max(10));
+        let mut spans = vec![
+            Span::styled("    ".to_string(), theme::style_faint()),
+            Span::styled(format!("{branch} "), theme::style_faint()),
+            Span::styled(
+                format!("{glyph} "),
+                Style::default().fg(hue).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(clipped_label, Style::default().fg(hue)),
+        ];
+        if !dur.is_empty() {
+            spans.push(Span::styled(format!("  {dur}"), theme::style_faint()));
+        }
+        out.push(clip_line(Line::from(spans), w));
+
+        let is_agent = matches!(node, SgNode::Tool { agent: true, .. });
+        if is_agent && !this_turn.is_empty() {
+            let show_children = if is_last {
+                true
+            } else {
+                matches!(node, SgNode::Tool { state: SgState::Running, .. })
+            };
+            if show_children {
+                let mut children = this_turn.clone();
+                children.sort_by_key(|r| {
+                    (
+                        r.state != crate::agent::swarm::RunState::Running,
+                        std::cmp::Reverse(r.id),
+                    )
+                });
+                let display = 6usize.min(children.len());
+                for (ci, run) in children.iter().take(display).enumerate() {
+                    let last_child = ci + 1 == display && children.len() <= display;
+                    let child_branch = if last_child { "└─" } else { "├─" };
+                    let (chue, cglyph) = run_look(run.state, tick);
+                    let indent = if is_last { "        " } else { "    │   " };
+                    let elapsed = if run.state == crate::agent::swarm::RunState::Running {
+                        theme::fmt_elapsed_live(run.elapsed())
+                    } else {
+                        theme::fmt_duration(run.elapsed())
+                    };
+                    let task = clip_to(
+                        &run.task,
+                        w.saturating_sub(indent.len() + 12).max(8),
+                    );
+                    out.push(clip_line(
+                        Line::from(vec![
+                            Span::styled(indent.to_string(), theme::style_faint()),
+                            Span::styled(
+                                format!("{child_branch} "),
+                                theme::style_faint(),
+                            ),
+                            Span::styled(
+                                format!("{cglyph} "),
+                                Style::default().fg(chue).add_modifier(Modifier::BOLD),
+                            ),
+                            Span::styled(
+                                format!("{}·{} ", run.id, run.kind),
+                                Style::default().fg(chue),
+                            ),
+                            Span::styled(task, theme::style_status()),
+                            Span::styled(format!("  {elapsed}"), theme::style_faint()),
+                        ]),
+                        w,
+                    ));
+                }
+                if children.len() > display {
+                    out.push(Line::from(Span::styled(
+                        clip_to(
+                            &format!("        … +{} more subagent(s)", children.len() - display),
+                            w,
+                        ),
+                        theme::style_faint(),
+                    )));
+                }
+            }
+        }
+    }
+
+    let footer = if live {
+        "  updates live · /sidegraph off to freeze · /sidegraph hide to remove"
+    } else {
+        "  frozen · /sidegraph to refresh"
+    };
+    out.push(Line::from(Span::styled(
+        clip_to(footer, w),
+        theme::style_faint(),
+    )));
+}
+
+
+
 
 /// Truncate to `width` display columns, marking the cut with an ellipsis.
 fn clip_to(text: &str, width: usize) -> String {
@@ -4314,6 +4698,43 @@ fn cell_wrap_key(cell: &Cell, spin_i: u64) -> u64 {
                     format!("{:?}", run.state).hash(&mut h);
                     run.tools_done.hash(&mut h);
                     run.tokens.hash(&mut h);
+                }
+            }
+        }
+        Cell::SideGraph { model, live } => {
+            12u8.hash(&mut h);
+            model.query.hash(&mut h);
+            model.running.hash(&mut h);
+            live.hash(&mut h);
+            model.nodes.len().hash(&mut h);
+            for n in &model.nodes {
+                match n {
+                    crate::tui::app::SgNode::Thinking { live, duration, .. } => {
+                        live.hash(&mut h);
+                        duration.map(|d| d.as_millis()).hash(&mut h);
+                    }
+                    crate::tui::app::SgNode::Tool { label, state, duration, .. } => {
+                        label.hash(&mut h);
+                        format!("{:?}", state).hash(&mut h);
+                        duration.map(|d| d.as_millis()).hash(&mut h);
+                    }
+                    crate::tui::app::SgNode::Steer { text } | crate::tui::app::SgNode::Queued { text } => {
+                        text.hash(&mut h);
+                    }
+                    crate::tui::app::SgNode::Done { duration, interrupted } => {
+                        duration.as_millis().hash(&mut h);
+                        interrupted.hash(&mut h);
+                    }
+                    crate::tui::app::SgNode::Answering => {
+                        13u8.hash(&mut h);
+                    }
+                }
+            }
+            if *live {
+                spin_i.hash(&mut h);
+                for run in crate::agent::swarm::snapshot() {
+                    run.id.hash(&mut h);
+                    format!("{:?}", run.state).hash(&mut h);
                 }
             }
         }

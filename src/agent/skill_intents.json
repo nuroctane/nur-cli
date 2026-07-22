@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-07-21T16:25:36.253259",
-  "total_skills": 709,
+  "generated_at": "2026-07-22T11:37:05.617543",
+  "total_skills": 718,
   "note": "Comprehensive skill intent index - 700+ skills, expanded NL triggers. Must be updated when adding skills per AGENTS.md. Run: python scripts/generate_skill_intents.py",
   "skills": [
     {
@@ -12685,6 +12685,24 @@
       ]
     },
     {
+      "name": "fractal",
+      "description": "Hierarchical agent loops with recursive self-organization.",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\fractal\\SKILL.md",
+      "triggers": [
+        "hierarchical loops",
+        "/fractal",
+        "fractal"
+      ],
+      "keywords": [
+        "fractal",
+        "hierarchical",
+        "loops",
+        "recursive",
+        "self",
+        "organization"
+      ]
+    },
+    {
       "name": "friendly",
       "description": "Approachable, intuitive design with rounded elements, ample whitespace, and soft pastel color palettes.",
       "path": "C:\\Users\\david\\.nur\\skills\\friendly\\SKILL.md",
@@ -16833,6 +16851,20 @@
       ]
     },
     {
+      "name": "penecho",
+      "description": "penecho Integration",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\penecho\\SKILL.md",
+      "triggers": [
+        "penecho integration",
+        "/penecho",
+        "penecho"
+      ],
+      "keywords": [
+        "penecho",
+        "integration"
+      ]
+    },
+    {
       "name": "performance-optimization",
       "description": "Optimizes application performance across frontend, backend, queries, and databases. Use when performance requirements exist, when you suspect performance regressions, when Core Web Vitals or load times need improvement, when N+1 query patterns need fixing, or when profiling reveals bottlenecks.",
       "path": "C:\\Users\\david\\.nur\\skills\\performance-optimization\\SKILL.md",
@@ -17479,6 +17511,96 @@
         "progress",
         "rebase",
         "conflict"
+      ]
+    },
+    {
+      "name": "resume-claude",
+      "description": ">",
+      "path": "C:\\Users\\david\\.nur\\skills\\resume-claude\\SKILL.md",
+      "triggers": [
+        "/resume claude",
+        "/resume-claude",
+        "resume claude",
+        "resume-claude"
+      ],
+      "keywords": [
+        "resume",
+        "claude"
+      ]
+    },
+    {
+      "name": "resume-codex",
+      "description": ">",
+      "path": "C:\\Users\\david\\.nur\\skills\\resume-codex\\SKILL.md",
+      "triggers": [
+        "/resume codex",
+        "/resume-codex",
+        "resume codex",
+        "resume-codex"
+      ],
+      "keywords": [
+        "resume",
+        "codex"
+      ]
+    },
+    {
+      "name": "resume-cursor",
+      "description": ">",
+      "path": "C:\\Users\\david\\.nur\\skills\\resume-cursor\\SKILL.md",
+      "triggers": [
+        "/resume cursor",
+        "/resume-cursor",
+        "resume cursor",
+        "resume-cursor"
+      ],
+      "keywords": [
+        "resume",
+        "cursor"
+      ]
+    },
+    {
+      "name": "resume-grok",
+      "description": ">",
+      "path": "C:\\Users\\david\\.nur\\skills\\resume-grok\\SKILL.md",
+      "triggers": [
+        "/resume grok",
+        "/resume-grok",
+        "resume grok",
+        "resume-grok"
+      ],
+      "keywords": [
+        "resume",
+        "grok"
+      ]
+    },
+    {
+      "name": "resume-meta",
+      "description": ">",
+      "path": "C:\\Users\\david\\.nur\\skills\\resume-meta\\SKILL.md",
+      "triggers": [
+        "/resume meta",
+        "/resume-meta",
+        "resume meta",
+        "resume-meta"
+      ],
+      "keywords": [
+        "resume",
+        "meta"
+      ]
+    },
+    {
+      "name": "resume-session",
+      "description": ">",
+      "path": "C:\\Users\\david\\.nur\\skills\\resume-session\\SKILL.md",
+      "triggers": [
+        "/resume session",
+        "/resume-session",
+        "resume session",
+        "resume-session"
+      ],
+      "keywords": [
+        "resume",
+        "session"
       ]
     },
     {
@@ -18381,6 +18503,20 @@
         "behavior",
         "proposing",
         "fixes"
+      ]
+    },
+    {
+      "name": "t3code",
+      "description": "t3code Integration",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\t3code\\SKILL.md",
+      "triggers": [
+        "t3code integration",
+        "/t3code",
+        "t3code"
+      ],
+      "keywords": [
+        "t3code",
+        "integration"
       ]
     },
     {

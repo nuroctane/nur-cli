@@ -28,7 +28,6 @@
 //! not linking code, to stay compliant.
 
 use crate::error::{MuseError, Result};
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -71,6 +70,7 @@ impl Effort {
     }
 
     /// Map to anthropic thinking + token budget, like penecho's `anthropicEffortParameters()`.
+    #[allow(dead_code)]
     pub fn to_anthropic_params(self) -> (Option<&'static str>, u32) {
         match self {
             Effort::None => (Some("disabled"), 8192),
@@ -84,6 +84,7 @@ impl Effort {
     }
 
     /// Map to OpenAI reasoning_effort.
+    #[allow(dead_code)]
     pub fn to_openai_reasoning(self) -> Option<&'static str> {
         match self {
             Effort::None => None,
@@ -99,12 +100,14 @@ impl Effort {
 
 /// penecho provider abstraction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum PenProvider {
     Api,
     CodexCli,
     ClaudeCli,
 }
 
+#[allow(dead_code)]
 impl PenProvider {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -126,6 +129,7 @@ impl PenProvider {
 /// Resolve API config like penecho's `resolveApiConfig()` — auto-detect openai vs anthropic
 /// from URL suffix, normalize endpoint, validate.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ApiConfig {
     pub url: String,
     pub key: String,
@@ -332,6 +336,7 @@ pub fn export_to_penecho_env(
 }
 
 /// Write penecho config.env atomically (mirrors t3code atomicWrite)
+#[allow(dead_code)]
 pub fn write_config_env(contents: &str) -> Result<PathBuf> {
     let dir = penecho_state_dir();
     let file = dir.join("config.env");
@@ -342,6 +347,7 @@ pub fn write_config_env(contents: &str) -> Result<PathBuf> {
 
 /// Launch penecho server as sidecar — returns child handle.
 /// Does not link AGPL code, spawns via process (compliant).
+#[allow(dead_code)]
 pub fn launch(extra_args: &[String]) -> Result<std::process::Child> {
     let bin = find_on_path("penecho").ok_or_else(|| {
         MuseError::Other(

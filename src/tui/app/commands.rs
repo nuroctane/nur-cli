@@ -16,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 /// Launch `nur <args>` in a **new console window** so a long job (a multi-GB
 /// `local up` download, a `bench run`) shows its own live progress without
 /// freezing or corrupting the TUI. Non-Windows: detached background process.
-fn spawn_console(exe: &std::path::Path, args: &[String]) -> std::io::Result<()> {
+pub(crate) fn spawn_console(exe: &std::path::Path, args: &[String]) -> std::io::Result<()> {
     let mut cmd = std::process::Command::new(exe);
     cmd.args(args);
     #[cfg(windows)]
@@ -31,6 +31,10 @@ fn spawn_console(exe: &std::path::Path, args: &[String]) -> std::io::Result<()> 
             .stderr(std::process::Stdio::null());
     }
     cmd.spawn().map(|_| ())
+}
+
+pub(crate) fn spawn_console_for_update(exe: &std::path::Path, args: &[String]) -> std::io::Result<()> {
+    spawn_console(exe, args)
 }
 
 /// Spawn a command detached (null stdio, don't wait). Used for `cua autostart
@@ -197,7 +201,11 @@ impl App {
             "/logout" => self.cmd_logout(),
             "/goal" => self.cmd_goal(&arg),
             "/graph" => self.cmd_graph(),
+            "/sidegraph" => self.cmd_sidegraph(&arg),
             "/swarm" | "/subagents" | "/agents" => self.cmd_swarm(&arg),
+            "/fractal" => self.cmd_fractal(&arg),
+            // penecho canvas aliases → canonical /penecho skill.
+            "/pen" | "/drawings" | "/penecho" => self.cmd_skill_or_unknown("/penecho", &arg),
             "/draw" => self.cmd_draw(&arg),
             "/steer" => self.cmd_steer(&arg),
             "/bro" => self.cmd_bro(&arg),

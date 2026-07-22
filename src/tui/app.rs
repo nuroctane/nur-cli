@@ -187,11 +187,31 @@ pub const COMMANDS: &[(&str, &str)] = &[
         "governed live data: catalog | schema | explain | query | code | security | ask",
     ),
     (
+        "/sidegraph",
+        "live node-graph of the current query: tools · subagents · steers · interrupts",
+    ),
+    (
         "/swarm",
         "inline subagent grid · live panes per agent · detail | off | clear | hide",
     ),
+    (
+        "/subagents",
+        "inline subagent grid · live panes per agent  (alias of /swarm)",
+    ),
+    (
+        "/fractal",
+        "recursive agent tree: node list | status | start | attach | init · hierarchical loops in git worktrees",
+    ),
     ("/steer", "inject a message into the running turn (no cancel): /steer <text>"),
-    ("/draw", "tldraw offline boards: /draw <file.tldraw> · install · /draw <idea>"),
+    (
+        "/draw",
+        "tldraw offline boards: /draw <file.tldraw> · install · /draw <idea>  (also: /excalidraw · /pen)",
+    ),
+    (
+        "/pen",
+        "penecho canvas: ink · MathJax · plots · animations  (/drawings · /penecho)",
+    ),
+    ("/drawings", "penecho canvas: ink · MathJax · plots  (alias of /pen)"),
     ("/memory", "show ~/.nur/memory.md excerpt"),
     ("/skills", "list installed skills"),
     ("/adhd", "sticky ADHD-friendly output for this session (toggle)"),
@@ -320,7 +340,75 @@ pub enum Cell {
         live: bool,
         detail: bool,
     },
+    /// Inline query-flow node graph (`/sidegraph`): the current query as a
+    /// root node, then thinking / tool / subagent fan-out / steer / interrupt
+    /// nodes in chronological order — the whole turn as a flow diagram with
+    /// the swarm card's liveness language. Refreshed on turn events; the
+    /// renderer re-reads the swarm registry each frame for live subagents.
+    /// Ephemeral — not persisted to the session log.
+    SideGraph {
+        model: Box<SideGraphModel>,
+        live: bool,
+    },
     Error(String),
+}
+
+/// State of a `/sidegraph` node (mirrors the swarm run states).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SgState {
+    Running,
+    Ok,
+    Failed,
+}
+
+/// One node in the `/sidegraph` flow, chronological under the root query.
+#[derive(Debug, Clone)]
+pub enum SgNode {
+    /// Model reasoning span.
+    Thinking {
+        live: bool,
+        started: Instant,
+        duration: Option<Duration>,
+    },
+    /// A tool call. `agent` marks the `agent` tool — the renderer fans its
+    /// live subagent runs out underneath as parallel children.
+    Tool {
+        label: String,
+        state: SgState,
+        started: Instant,
+        duration: Option<Duration>,
+        agent: bool,
+    },
+    /// The assistant is streaming an answer right now.
+    Answering,
+    /// A mid-turn user steer (`/steer` or an injected follow-up).
+    Steer {
+        text: String,
+    },
+    /// A follow-up queued while the turn runs.
+    Queued {
+        text: String,
+    },
+    /// The turn settled — completed or interrupted.
+    Done {
+        duration: Duration,
+        interrupted: bool,
+    },
+}
+
+/// The whole current (or most recent) query as a flow graph: root prompt +
+/// every step beneath it. Rebuilt from the transcript cells on each turn
+/// event, so it can never drift from what actually happened.
+#[derive(Debug, Clone)]
+pub struct SideGraphModel {
+    /// Root node text — the prompt that started this turn (clipped).
+    pub query: String,
+    /// The turn is still running.
+    pub running: bool,
+    /// When the rooted turn began — the renderer filters swarm runs started
+    /// after this into the fan-out, so children animate live.
+    pub turn_started: Instant,
+    pub nodes: Vec<SgNode>,
 }
 
 /// Concise node label for a tool in the execution graph (`name · <hint>`).
@@ -604,10 +692,19 @@ impl TextRange {
 ///
 /// Reading the chat is the common case, so arrows scroll. They only move the
 /// caret when you are genuinely mid-draft on a multi-line prompt.
-pub fn decide_arrow_action(input_empty: bool, on_edge: bool, palette_open: bool) -> ArrowAction {
-    if palette_open {
-        ArrowAction::Palette
-    } else if input_empty || on_edge {
+pub fn decide_arrow_action(input: &InputState, palette_visible: bool, up: bool) -> ArrowAction {
+    if palette_visible {
+        return ArrowAction::Palette;
+    }
+    if input.is_empty() {
+        return ArrowAction::Scroll;
+    }
+    let at_edge = if up {
+        input.on_first_line()
+    } else {
+        input.on_last_line()
+    };
+    if at_edge {
         ArrowAction::Scroll
     } else {
         ArrowAction::Caret
@@ -1109,6 +1206,36 @@ pub struct SessionPicker {
     pub last_step_at: Instant,
 }
 
+/// Update-available modal — opencode-style UX with parity to other pickers (session, model, login, peek).
+#[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
+pub struct UpdateHit {
+    pub frame: ratatui::layout::Rect,
+    pub close: ratatui::layout::Rect,
+    pub body: ratatui::layout::Rect,
+    pub update_btn: ratatui::layout::Rect,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct UpdateModal {
+    pub current: String,
+    pub remote: String,
+    pub hit: UpdateHit,
+    pub announced_at: std::time::Instant,
+}
+
+impl UpdateModal {
+    pub fn new(current: String, remote: String) -> Self {
+        Self {
+            current,
+            remote,
+            hit: UpdateHit::default(),
+            announced_at: std::time::Instant::now(),
+        }
+    }
+}
+
 /// Click targets for the sessions modal (updated each frame while open).
 #[derive(Debug, Clone, Default)]
 pub struct PickerHit {
@@ -1497,6 +1624,12 @@ pub struct App {
     /// Whether an API key is available. `/logout` flips this false and blocks
     /// turns until `/login` provides a new key.
     authed: bool,
+    /// Background auto-update polling (opencode-style UX).
+    /// `auto_update.json` is written by a background thread on launch; TUI polls.
+    auto_update_last_poll: std::time::Instant,
+    auto_update_last_seen_at: u64,
+    auto_update_announced_version: String,
+    pub update_modal: Option<UpdateModal>,
 }
 
 struct TermGuard;
@@ -1721,10 +1854,44 @@ pub async fn run_tui(
         model_picker: None,
         plugin_picker: None,
         authed: true,
+        auto_update_last_poll: std::time::Instant::now(),
+        auto_update_last_seen_at: 0,
+        auto_update_announced_version: String::new(),
+        update_modal: None,
     };
 
     app.replay_session_history();
     app.refresh_skill_palette_cache();
+    // Seed auto-update seen timestamp from existing file so we only announce
+    // *new* background results that happen during this TUI session (opencode-style).
+    {
+        let st = crate::bootstrap::load_auto_update_state();
+        if st.last_check_at > 0 {
+            app.auto_update_last_seen_at = st.last_check_at;
+            // Also remember announced version to avoid duplicate if file already says updated
+            // but remote == current (already handled) or stale.
+            if !st.last_remote_version.is_empty() && st.last_result == "updated" {
+                let cur = env!("CARGO_PKG_VERSION");
+                if st.last_remote_version != cur {
+                    // If this looks like a fresh update that landed right before TUI start
+                    // (within last 5 min), announce immediately instead of waiting for poll.
+                    // Otherwise treat as already-seen stale state.
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    if now.saturating_sub(st.last_check_at) < 300 {
+                        let msg = format!(
+                            "update installed: v{cur} → v{} · restart to apply (/quit)",
+                            st.last_remote_version
+                        );
+                        app.push_note(Tone::Mode, msg);
+                        app.auto_update_announced_version = st.last_remote_version.clone();
+                    }
+                }
+            }
+        }
+    }
     if let Some(note) = workspace_note {
         app.push_note(Tone::Session, note);
     }
@@ -1763,6 +1930,7 @@ pub async fn run_tui(
         app.poll_oauth_login();
         app.poll_model_picker();
         app.poll_plugin_picker();
+        app.poll_auto_update();
         while let Ok(ev) = app.rx.try_recv() {
             app.on_agent_event(ev);
             dirty = true;
@@ -2234,12 +2402,7 @@ impl App {
 
     // ── arrow-key policy ───────────────────────────────────────────────
     fn arrow_action(&self, up: bool) -> ArrowAction {
-        let on_edge = if up {
-            self.input.on_first_line()
-        } else {
-            self.input.on_last_line()
-        };
-        decide_arrow_action(self.input.is_empty(), on_edge, self.palette_visible())
+        decide_arrow_action(&self.input, self.palette_visible(), up)
     }
 
     // ── transcript scrolling ───────────────────────────────────────────
@@ -2607,6 +2770,11 @@ impl App {
 
     // ── keys ───────────────────────────────────────────────────────────
     fn on_key(&mut self, key: event::KeyEvent) {
+        // Update-available modal (parity with other pickers)
+        if self.update_modal.is_some() {
+            self.on_update_modal_key(key.code);
+            return;
+        }
         // Secure login modal swallows all keys (masked key entry).
         if self.login.is_some() {
             self.on_login_key(key);
@@ -2986,6 +3154,14 @@ impl App {
     /// Works while a turn is streaming. Approval/login modals no longer kill
     /// an in-progress scrollbar drag or wheel scroll.
     fn on_mouse(&mut self, m: event::MouseEvent) {
+        if self.update_modal.is_some() {
+            self.scrollbar_drag = false;
+            self.selecting = false;
+            self.select_anchor = None;
+            self.mouse_left_down = false;
+            self.on_update_modal_mouse(m);
+            return;
+        }
         if self.picker.is_some() {
             // Don't clear left-down state for the main transcript — picker is modal.
             self.scrollbar_drag = false;
@@ -3975,6 +4151,62 @@ impl App {
 
     fn close_picker(&mut self) {
         self.picker = None;
+    }
+
+    // ── update modal (opencode-style UX parity with other pickers) ──────────
+    fn open_update_modal(&mut self, current: String, remote: String) {
+        self.update_modal = Some(UpdateModal::new(current, remote));
+    }
+
+    fn close_update_modal(&mut self) {
+        self.update_modal = None;
+    }
+
+    fn on_update_modal_key(&mut self, code: crossterm::event::KeyCode) {
+        use crossterm::event::KeyCode;
+        match code {
+            KeyCode::Esc | KeyCode::Char('q') => self.close_update_modal(),
+            KeyCode::Enter => {
+                // Trigger update in new console (same as `nur update` / `spawn_console`)
+                let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("nur"));
+                let args = vec!["update".to_string()];
+                let _ = crate::tui::app::commands::spawn_console_for_update(&exe, &args);
+                self.close_update_modal();
+                self.push_note(crate::theme::Tone::Mode, "update started in new window · restart after it finishes".into());
+            }
+            _ => {}
+        }
+    }
+
+    fn on_update_modal_mouse(&mut self, m: crossterm::event::MouseEvent) {
+        use crossterm::event::{MouseButton, MouseEventKind};
+        self.mouse_col = m.column;
+        self.mouse_row = m.row;
+        let Some(u) = &self.update_modal else { return };
+        let hit = u.hit.clone();
+        match m.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                let col = m.column;
+                let row = m.row;
+                if rect_contains(hit.close, col, row) {
+                    self.close_update_modal();
+                    return;
+                }
+                if rect_contains(hit.update_btn, col, row) {
+                    let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("nur"));
+                    let args = vec!["update".to_string()];
+                    let _ = crate::tui::app::commands::spawn_console_for_update(&exe, &args);
+                    self.close_update_modal();
+                    self.push_note(crate::theme::Tone::Mode, "update started in new window · restart after it finishes".into());
+                    return;
+                }
+                if !rect_contains(hit.frame, col, row) {
+                    // Click outside → close (parity with peek / session picker)
+                    self.close_update_modal();
+                }
+            }
+            _ => {}
+        }
     }
 
     fn picker_confirm(&mut self) {
@@ -5073,6 +5305,64 @@ impl App {
         }
     }
 
+    /// opencode-style background update announcement: poll `~/.nur/auto_update.json`
+    /// written by the background thread in `bootstrap::maybe_auto_update_on_launch`.
+    /// If an update was installed during this TUI session, push a note so the user
+    /// knows to restart. Throttled to avoid FS churn.
+    pub fn poll_auto_update(&mut self) {
+        const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+        const INITIAL_DELAY: std::time::Duration = std::time::Duration::from_secs(4);
+        // Don't poll too often; first poll is slightly delayed to give bg thread time.
+        let elapsed = self.auto_update_last_poll.elapsed();
+        if self.auto_update_last_seen_at == 0 {
+            if elapsed < INITIAL_DELAY {
+                return;
+            }
+        } else if elapsed < POLL_INTERVAL {
+            return;
+        }
+        self.auto_update_last_poll = std::time::Instant::now();
+
+        // Load state via bootstrap (already handles missing file gracefully).
+        let st = crate::bootstrap::load_auto_update_state();
+        if st.last_check_at == 0 || st.last_check_at == self.auto_update_last_seen_at {
+            return;
+        }
+        // We've seen a new check result.
+        self.auto_update_last_seen_at = st.last_check_at;
+
+        // Only announce successful updates.
+        if st.last_result != "updated" {
+            return;
+        }
+        let remote = st.last_remote_version.trim().to_string();
+        if remote.is_empty() {
+            return;
+        }
+        // Deduplicate same version announcement within this session.
+        if self.auto_update_announced_version == remote {
+            return;
+        }
+        self.auto_update_announced_version = remote.clone();
+
+        let current = env!("CARGO_PKG_VERSION");
+        // If remote is same as current, no need to announce (already running it).
+        if remote == current {
+            return;
+        }
+        // Build opencode-style message + open modal with parity to other pickers.
+        let msg = if current.is_empty() {
+            format!("update installed: v{remote} · restart to apply (/quit)")
+        } else {
+            format!("update installed: v{current} → v{remote} · restart to apply (/quit)")
+        };
+        self.push_note(crate::theme::Tone::Mode, msg.clone());
+        // Open proper modal window (peek/session picker parity) if not already open.
+        if self.update_modal.is_none() {
+            self.open_update_modal(current.to_string(), remote);
+        }
+    }
+
     /// Mouse while the provider picker is open — same contract as `on_picker_mouse`:
     /// one-entry wheel, click row to select, second click / Enter confirms.
     fn on_login_mouse(&mut self, m: event::MouseEvent) {
@@ -5505,19 +5795,41 @@ impl App {
             "steered · injected into the running turn (no cancel) — lands on the next model round"
                 .into(),
         );
+        // Keep live graphs in sync immediately (was previously only on agent events).
+        self.refresh_graph();
+        self.refresh_sidegraph();
     }
 
     /// Render the current (or most recent) turn as an execution tree: the
     /// tools/subagents that ran, their status + timing, and a rollup. Fed to the
     /// inline `/graph` card and refreshed as tools transition.
     fn build_graph_lines(&self) -> Vec<String> {
-        // Start after the last user prompt = the current turn's work.
-        let start = self
+        // Adversarial fix: anchor on TurnDone boundaries, not last User, so steers don't re-root (parity with sidegraph fix).
+        let last_done_pos = self
             .cells
             .iter()
-            .rposition(|c| matches!(c, Cell::User(_)))
-            .map(|i| i + 1)
-            .unwrap_or(0);
+            .rposition(|c| matches!(c, Cell::TurnDone { .. }));
+        let root_idx: Option<usize> = if let Some(ld) = last_done_pos {
+            let after = self.cells[ld + 1..]
+                .iter()
+                .position(|c| matches!(c, Cell::User(_)))
+                .map(|p| ld + 1 + p);
+            if let Some(idx) = after {
+                Some(idx)
+            } else {
+                let prev_done = self.cells[..ld]
+                    .iter()
+                    .rposition(|c| matches!(c, Cell::TurnDone { .. }));
+                let search_start = prev_done.map(|p| p + 1).unwrap_or(0);
+                self.cells[search_start..ld]
+                    .iter()
+                    .position(|c| matches!(c, Cell::User(_)))
+                    .map(|p| search_start + p)
+            }
+        } else {
+            self.cells.iter().position(|c| matches!(c, Cell::User(_)))
+        };
+        let start = root_idx.map(|i| i + 1).unwrap_or(0);
         let mut nodes: Vec<String> = Vec::new();
         let mut tool_n = 0usize;
         let mut ok_n = 0usize;
@@ -5608,9 +5920,28 @@ impl App {
     /// registry each frame; freezing them at end of turn keeps an idle TUI from
     /// re-rendering a static grid forever.
     fn set_swarm_live(&mut self, on: bool) {
+        if on {
+            // Re-arm: bring the card to the bottom so new turn's subagents are visible without scrolling up.
+            let mut merged_detail = false;
+            let mut had = false;
+            for c in &self.cells {
+                if let Cell::Swarm { detail, .. } = c {
+                    merged_detail |= *detail;
+                    had = true;
+                }
+            }
+            if had {
+                self.cells.retain(|c| !matches!(c, Cell::Swarm { .. }));
+                self.cells.push(Cell::Swarm {
+                    live: true,
+                    detail: merged_detail,
+                });
+            }
+            return;
+        }
         for c in self.cells.iter_mut() {
             if let Cell::Swarm { live, .. } = c {
-                *live = on;
+                *live = false;
             }
         }
     }
@@ -5645,22 +5976,30 @@ impl App {
         }
 
         let detail = matches!(arg.as_str(), "detail" | "full" | "verbose");
-        // Resurface an existing card instead of stacking duplicates.
-        if let Some(c) = self
-            .cells
-            .iter_mut()
-            .find(|c| matches!(c, Cell::Swarm { .. }))
-        {
-            if let Cell::Swarm { live, detail: d } = c {
-                *live = true;
-                *d = detail || *d;
+        // Resurface an existing card at the bottom (UX fix: previously refreshed in place, forcing scroll-up to see).
+        let mut existing_detail = detail;
+        let mut found = false;
+        for c in &self.cells {
+            if let Cell::Swarm { detail: d, .. } = c {
+                existing_detail |= *d;
+                found = true;
             }
-            self.push_note(Tone::Neutral, "swarm · refreshed".into());
+        }
+        if found {
+            self.cells.retain(|c| !matches!(c, Cell::Swarm { .. }));
+            self.cells.push(Cell::Swarm {
+                live: true,
+                detail: existing_detail,
+            });
+            self.push_note(Tone::Neutral, "swarm · refreshed · moved to bottom".into());
             self.scroll_to_bottom();
             return;
         }
 
-        self.cells.push(Cell::Swarm { live: true, detail });
+        self.cells.push(Cell::Swarm {
+            live: true,
+            detail,
+        });
         self.scroll_to_bottom();
         let running = crate::agent::swarm::running_count();
         self.push_note(
@@ -5674,19 +6013,145 @@ impl App {
         );
     }
 
-    /// `/graph` — drop (or refresh) an inline live execution-graph card.
+    /// `/fractal` — recursive agent tree: node list | status | start | attach | init
+    /// Mirrors the upstream `fractal` CLI (https://github.com/plasma-ai/fractal) with worktree safety.
+    /// Empty arg -> status + node list, otherwise forwards to skill or direct CLI when possible.
+    pub(crate) fn cmd_fractal(&mut self, arg: &str) {
+        let arg_trim = arg.trim();
+        if arg_trim.is_empty() {
+            // Show probe + node list without spawning a turn
+            let probe = crate::fractal::probe_at(&self.cwd);
+            let mut lines = Vec::new();
+            lines.push(format!(
+                "fractal · binary={} version={:?} git={} fractal_repo={} worktrees={}",
+                if probe.binary.is_some() { "found" } else { "missing" },
+                probe.version.as_deref().unwrap_or("-"),
+                probe.is_git_repo,
+                probe.is_fractal_repo,
+                probe.worktrees_exist
+            ));
+            if !probe.binary.is_some() {
+                lines.push("install: pipx install plasma-fractal (Python 3.10+) · https://github.com/plasma-ai/fractal".into());
+                self.push_note(Tone::Neutral, lines.join("\n"));
+                return;
+            }
+            if !probe.is_git_repo {
+                lines.push("not a git repo — `fractal init` needs git".into());
+                self.push_note(Tone::Neutral, lines.join("\n"));
+                return;
+            }
+            if !probe.is_fractal_repo {
+                lines.push("not yet a fractal repo — try `/fractal init` to seed `.fractal`".into());
+                self.push_note(Tone::Neutral, lines.join("\n"));
+                return;
+            }
+            // Try node list via tool host (direct CLI)
+            let host = crate::tools::ToolHost::default();
+            let ctx = crate::tools::ToolContext {
+                cwd: self.cwd.clone(),
+                cancel: tokio_util::sync::CancellationToken::new(),
+            };
+            let args = serde_json::json!({ "action": "node list" }).to_string();
+            match host.dispatch("fractal", &args, &ctx) {
+                Ok(s) => {
+                    lines.push(String::new());
+                    lines.push("nodes (`fractal node list`):".into());
+                    lines.push(s);
+                }
+                Err(e) => {
+                    lines.push(format!("node list error: {e}"));
+                }
+            }
+            lines.push(String::new());
+            lines.push("usage: /fractal init | /fractal node list | /fractal node status <name> | /fractal node start <name> | /fractal open <name>".into());
+            self.push_note(Tone::Neutral, lines.join("\n"));
+            return;
+        }
+
+        // For anything beyond status, delegate to the fractal skill (directive parsing, limits, NODE.md scaffolding)
+        // This seeds a turn that uses the `fractal` tool as needed — multiplicative parallelism.
+        if !self.authed {
+            self.push_error("signed out — /login first".into());
+            return;
+        }
+        if self.busy {
+            self.push_error("busy — finish current turn first".into());
+            return;
+        }
+
+        // Fast-paths that don't need a full agent turn: init, list, status, open, attach.
+        // These use the fractal tool directly (no LLM turn) for immediate feedback.
+        let lower = arg_trim.to_ascii_lowercase();
+        let is_init = lower == "init" || lower.starts_with("init ");
+        let is_list = lower == "list" || lower == "node list" || lower == "node_list";
+        let is_open = lower.starts_with("open ");
+        let is_status = lower.starts_with("node status ") || lower.starts_with("status ");
+        let is_attach = lower.starts_with("node attach ") || lower.starts_with("attach ");
+        if is_init || is_list || is_open || is_status || is_attach {
+            let (action, node_arg) = if is_init {
+                ("init".to_string(), String::new())
+            } else if is_list {
+                ("node list".to_string(), String::new())
+            } else if is_open {
+                let name = arg_trim["open".len()..].trim().to_string();
+                ("open".to_string(), name)
+            } else if is_status {
+                let name2 = if let Some(rest) = arg_trim.splitn(2, ' ').nth(1) {
+                    let rest = rest.trim();
+                    if rest.to_ascii_lowercase().starts_with("status ") {
+                        rest["status ".len()..].trim().to_string()
+                    } else {
+                        rest.to_string()
+                    }
+                } else {
+                    String::new()
+                };
+                ("node status".to_string(), name2)
+            } else {
+                // attach
+                let name = if lower.starts_with("node attach ") {
+                    arg_trim["node attach ".len()..].trim().to_string()
+                } else {
+                    arg_trim["attach ".len()..].trim().to_string()
+                };
+                ("node attach".to_string(), name)
+            };
+            let host = crate::tools::ToolHost::default();
+            let ctx = crate::tools::ToolContext {
+                cwd: self.cwd.clone(),
+                cancel: tokio_util::sync::CancellationToken::new(),
+            };
+            let json_args = if node_arg.is_empty() {
+                serde_json::json!({ "action": action }).to_string()
+            } else {
+                serde_json::json!({ "action": action, "node": node_arg }).to_string()
+            };
+            match host.dispatch("fractal", &json_args, &ctx) {
+                Ok(s) => self.push_note(Tone::Neutral, s),
+                Err(e) => self.push_error(e.to_string()),
+            }
+            return;
+        }
+
+        // Default: launch skill-driven turn so agent can interpret directive (name, path, caps, completion reqs)
+        let display = format!("/fractal {arg_trim}");
+        let model_prompt = format!(
+            "Fractal directive: {arg_trim}\n\n             Use the `fractal` skill (skills/fractal/SKILL.md) and `fractal` tool to handle this.              Steps: probe (tool action=probe), doctor if needed, then interpret directive into name/path/title/scope/base/... and caps (max-depth, max-children, max-descendants, max-cost, timeouts).              If the directive asks to continue a node, use `fractal node list --path=<path>` to resolve it.              Commit fractal artifacts via `fractal init <path> --agent=<agent>` autonomously (idempotent).              After init, draft NODE.md Instructions and Completion Requirements from the directive, show interpreted parameters table, ask for missing name/path and any skipped drafts if needed.              Use tool action=node list / node status / node start as required. Report worktree paths and next steps.              Note: fractal launches nodes via tmux detached, so TUI stays responsive; use `fractal node attach <name>` for interactive."
+        );
+        self.start_turn_labeled(&display, &model_prompt);
+    }
+
+    /// `/graph` — drop (or refresh) an inline live execution-graph card at the bottom.
     pub(crate) fn cmd_graph(&mut self) {
         let fresh = self.build_graph_lines();
-        // If a graph card already exists, refresh + resurface it instead of piling up.
-        if let Some(c) = self
-            .cells
-            .iter_mut()
-            .find(|c| matches!(c, Cell::Graph { .. }))
-        {
-            if let Cell::Graph { lines, .. } = c {
-                *lines = fresh;
-            }
-            self.push_note(Tone::Neutral, "graph refreshed".into());
+        // Resurface at bottom (UX fix) instead of in-place refresh.
+        if self.cells.iter().any(|c| matches!(c, Cell::Graph { .. })) {
+            self.cells.retain(|c| !matches!(c, Cell::Graph { .. }));
+            self.cells.push(Cell::Graph {
+                lines: fresh,
+                live: true,
+            });
+            self.push_note(Tone::Neutral, "graph refreshed · moved to bottom".into());
             self.scroll_to_bottom();
             return;
         }
@@ -5698,6 +6163,218 @@ impl App {
         self.push_note(
             Tone::Neutral,
             "execution graph · updates live as tools run · /graph again to refresh".into(),
+        );
+    }
+
+    // ── /sidegraph — the whole query as a live flow graph ────────────────
+
+    /// Build the flow model for the current (or most recent) query: the root
+    /// prompt, then thinking / tool / steer / queued / done nodes in order.
+    /// Derived from the transcript cells, so it always matches what ran.
+    fn build_sidegraph_model(&self) -> SideGraphModel {
+        let first_line = |text: &str, cap: usize| -> String {
+            let line = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+            line.chars().take(cap).collect()
+        };
+        // Adversarial fix: anchor on TurnDone boundaries, not last User, so mid-turn steers don't re-root.
+        let last_done_pos = self
+            .cells
+            .iter()
+            .rposition(|c| matches!(c, Cell::TurnDone { .. }));
+        let root_idx: Option<usize> = if let Some(ld) = last_done_pos {
+            let after = self.cells[ld + 1..]
+                .iter()
+                .position(|c| matches!(c, Cell::User(_)))
+                .map(|p| ld + 1 + p);
+            if let Some(idx) = after {
+                Some(idx)
+            } else {
+                let prev_done = self.cells[..ld]
+                    .iter()
+                    .rposition(|c| matches!(c, Cell::TurnDone { .. }));
+                let search_start = prev_done.map(|p| p + 1).unwrap_or(0);
+                self.cells[search_start..ld]
+                    .iter()
+                    .position(|c| matches!(c, Cell::User(_)))
+                    .map(|p| search_start + p)
+            }
+        } else {
+            self.cells.iter().position(|c| matches!(c, Cell::User(_)))
+        };
+
+        let (query, start) = match root_idx {
+            Some(idx) => {
+                let q = match &self.cells[idx] {
+                    Cell::User(t) => first_line(t, 160),
+                    _ => String::new(),
+                };
+                (q, idx + 1)
+            }
+            None => (String::new(), 0),
+        };
+
+        let end = if self.busy {
+            self.cells.len()
+        } else if let Some(r) = root_idx {
+            self.cells[r + 1..]
+                .iter()
+                .position(|c| matches!(c, Cell::TurnDone { .. }))
+                .map(|p| r + 1 + p + 1)
+                .unwrap_or(self.cells.len())
+        } else {
+            self.cells.len()
+        };
+
+        let mut nodes: Vec<SgNode> = Vec::new();
+        for c in &self.cells[start..end] {
+            match c {
+                Cell::Thinking {
+                    active,
+                    started,
+                    duration,
+                    ..
+                } => nodes.push(SgNode::Thinking {
+                    live: *active,
+                    started: *started,
+                    duration: *duration,
+                }),
+                Cell::Tool {
+                    name,
+                    args,
+                    ok,
+                    started,
+                    duration,
+                    ..
+                } => nodes.push(SgNode::Tool {
+                    label: graph_tool_label(name, args),
+                    state: match ok {
+                        None => SgState::Running,
+                        Some(true) => SgState::Ok,
+                        Some(false) => SgState::Failed,
+                    },
+                    started: *started,
+                    duration: *duration,
+                    agent: name == "agent",
+                }),
+                Cell::Assistant { streaming, .. } => {
+                    if *streaming {
+                        nodes.push(SgNode::Answering);
+                    }
+                }
+                // A user cell inside the turn span is a mid-turn steer.
+                Cell::User(text) => nodes.push(SgNode::Steer {
+                    text: first_line(text, 120),
+                }),
+                Cell::Queued { text } => nodes.push(SgNode::Queued {
+                    text: first_line(text, 120),
+                }),
+                Cell::TurnDone {
+                    duration,
+                    interrupted,
+                    ..
+                } => nodes.push(SgNode::Done {
+                    duration: *duration,
+                    interrupted: *interrupted,
+                }),
+                _ => {}
+            }
+        }
+        SideGraphModel {
+            query,
+            running: self.busy,
+            turn_started: self.turn_started,
+            nodes,
+        }
+    }
+
+    /// Refresh any live `/sidegraph` card in place (called on turn events).
+    fn refresh_sidegraph(&mut self) {
+        if !self
+            .cells
+            .iter()
+            .any(|c| matches!(c, Cell::SideGraph { live: true, .. }))
+        {
+            return;
+        }
+        let fresh = self.build_sidegraph_model();
+        for c in self.cells.iter_mut() {
+            if let Cell::SideGraph { model, live: true } = c {
+                *model = Box::new(fresh.clone());
+            }
+        }
+    }
+
+    /// Arm or freeze every inline sidegraph card (same contract as the swarm
+    /// card: re-armed on turn start, frozen at turn end).
+    fn set_sidegraph_live(&mut self, on: bool) {
+        if on {
+            // Bring live card to bottom when a new turn starts so flow graph is visible.
+            let mut existing: Option<Box<SideGraphModel>> = None;
+            for c in &self.cells {
+                if let Cell::SideGraph { model, .. } = c {
+                    existing = Some(model.clone());
+                }
+            }
+            if let Some(model) = existing {
+                self.cells.retain(|c| !matches!(c, Cell::SideGraph { .. }));
+                self.cells.push(Cell::SideGraph { model, live: true });
+            }
+            return;
+        }
+        for c in self.cells.iter_mut() {
+            if let Cell::SideGraph { live, .. } = c {
+                *live = false;
+            }
+        }
+    }
+
+    /// `/sidegraph` — the current query as a live flow graph: root prompt,
+    /// thinking, tools, subagent fan-out, steers, interruptions, outcome.
+    pub(crate) fn cmd_sidegraph(&mut self, arg: &str) {
+        let arg = arg.trim().to_ascii_lowercase();
+        match arg.as_str() {
+            "off" | "freeze" | "stop" => {
+                self.set_sidegraph_live(false);
+                self.push_note(Tone::Neutral, "sidegraph · frozen".into());
+                return;
+            }
+            "hide" | "close" => {
+                self.cells.retain(|c| !matches!(c, Cell::SideGraph { .. }));
+                self.push_note(Tone::Neutral, "sidegraph · card removed".into());
+                return;
+            }
+            _ => {}
+        }
+
+        // Resurface at bottom (UX fix): previously refreshed in place forcing scroll-up.
+        // Build fresh model *before* taking a mutable borrow of `cells`
+        // to satisfy the borrow checker (build reads `self.cells` immutably).
+        let model = self.build_sidegraph_model();
+        let has_query = !model.query.is_empty();
+        if self.cells.iter().any(|c| matches!(c, Cell::SideGraph { .. })) {
+            self.cells.retain(|c| !matches!(c, Cell::SideGraph { .. }));
+            self.cells.push(Cell::SideGraph {
+                model: Box::new(model),
+                live: true,
+            });
+            self.push_note(Tone::Neutral, "sidegraph · refreshed · moved to bottom".into());
+            self.scroll_to_bottom();
+            return;
+        }
+        self.cells.push(Cell::SideGraph {
+            model: Box::new(model),
+            live: true,
+        });
+        self.scroll_to_bottom();
+        self.push_note(
+            Tone::Neutral,
+            if has_query {
+                "sidegraph · maps the current query as it runs · /sidegraph off to freeze"
+                    .to_string()
+            } else {
+                "sidegraph · send a prompt first — the graph maps the whole query live"
+                    .to_string()
+            },
         );
     }
 
@@ -5761,6 +6438,9 @@ impl App {
         // Re-arm any swarm card the user left in the transcript so this turn's
         // subagents animate in it without re-running `/swarm`.
         self.set_swarm_live(true);
+        // Same for `/sidegraph`: re-root the flow graph on the new query.
+        self.set_sidegraph_live(true);
+        self.refresh_sidegraph();
         self.thought_accum = Duration::ZERO;
         self.status = format!("thinking · {}", self.permission_mode.get().label());
         let cancel = CancellationToken::new();
@@ -5989,6 +6669,7 @@ impl App {
                 self.tool_cells.insert(id, self.cells.len() - 1);
                 self.status = "running tool".into();
                 self.refresh_graph();
+                self.refresh_sidegraph();
             }
             AgentEvent::ToolEnd { id, result, ok, .. } => {
                 if let Some(&idx) = self.tool_cells.get(&id) {
@@ -6009,6 +6690,7 @@ impl App {
                     }
                 }
                 self.refresh_graph();
+                self.refresh_sidegraph();
             }
             AgentEvent::ApprovalRequest {
                 name,
@@ -6065,6 +6747,9 @@ impl App {
                 // spinning, then freeze the card at its final state.
                 crate::agent::swarm::cancel_running();
                 self.set_swarm_live(false);
+                // Freeze the sidegraph at its final shape too.
+                self.refresh_sidegraph();
+                self.set_sidegraph_live(false);
                 // Turn done — restore mouse modes in case title OSC / host dropped them.
                 enable_mouse();
                 match (&self.turn_kind, result, interrupted) {
@@ -6817,6 +7502,7 @@ fn cells_to_ui_log(cells: &[Cell]) -> Vec<crate::agent::session::UiLogItem> {
             Cell::Queued { .. } => {}
             Cell::Graph { .. } => {}
             Cell::Swarm { .. } => {}
+            Cell::SideGraph { .. } => {}
             Cell::Error(text) => out.push(UiLogItem {
                 kind: "error".into(),
                 text: text.clone(),
@@ -7280,22 +7966,11 @@ body"
         assert_eq!(CTX_ACTIONS.len(), 4);
     }
 
-    /// Calls the same `decide_arrow_action` the App does — no mirrored logic,
-    /// so the tests cannot drift from the behavior they claim to pin.
-    fn arrow_action(input: &InputState, palette: bool, up: bool) -> ArrowAction {
-        let on_edge = if up {
-            input.on_first_line()
-        } else {
-            input.on_last_line()
-        };
-        decide_arrow_action(input.is_empty(), on_edge, palette)
-    }
-
     #[test]
     fn empty_input_arrows_scroll_the_chat() {
         let i = InputState::empty_for_test();
-        assert_eq!(arrow_action(&i, false, true), ArrowAction::Scroll);
-        assert_eq!(arrow_action(&i, false, false), ArrowAction::Scroll);
+        assert_eq!(decide_arrow_action(&i, false, true), ArrowAction::Scroll);
+        assert_eq!(decide_arrow_action(&i, false, false), ArrowAction::Scroll);
     }
 
     #[test]
@@ -7303,8 +7978,8 @@ body"
         // A draft in the box must not turn ↑ into "replace my draft with history".
         let mut i = InputState::empty_for_test();
         i.insert_str("hello draft");
-        assert_eq!(arrow_action(&i, false, true), ArrowAction::Scroll);
-        assert_eq!(arrow_action(&i, false, false), ArrowAction::Scroll);
+        assert_eq!(decide_arrow_action(&i, false, true), ArrowAction::Scroll);
+        assert_eq!(decide_arrow_action(&i, false, false), ArrowAction::Scroll);
     }
 
     #[test]
@@ -7312,20 +7987,20 @@ body"
         let mut i = InputState::empty_for_test();
         i.insert_str("line one\nline two");
         // Cursor on the last line: ↑ edits, ↓ falls through to scroll.
-        assert_eq!(arrow_action(&i, false, true), ArrowAction::Caret);
-        assert_eq!(arrow_action(&i, false, false), ArrowAction::Scroll);
+        assert_eq!(decide_arrow_action(&i, false, true), ArrowAction::Caret);
+        assert_eq!(decide_arrow_action(&i, false, false), ArrowAction::Scroll);
         i.move_up_line();
         // Now on the first line: ↓ edits, ↑ falls through to scroll.
-        assert_eq!(arrow_action(&i, false, false), ArrowAction::Caret);
-        assert_eq!(arrow_action(&i, false, true), ArrowAction::Scroll);
+        assert_eq!(decide_arrow_action(&i, false, false), ArrowAction::Caret);
+        assert_eq!(decide_arrow_action(&i, false, true), ArrowAction::Scroll);
     }
 
     #[test]
     fn palette_owns_the_arrows_while_open() {
         let mut i = InputState::empty_for_test();
         i.insert_str("/mo");
-        assert_eq!(arrow_action(&i, true, true), ArrowAction::Palette);
-        assert_eq!(arrow_action(&i, true, false), ArrowAction::Palette);
+        assert_eq!(decide_arrow_action(&i, true, true), ArrowAction::Palette);
+        assert_eq!(decide_arrow_action(&i, true, false), ArrowAction::Palette);
     }
 
     #[test]

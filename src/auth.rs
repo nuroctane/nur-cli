@@ -254,6 +254,14 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
                 )));
             }
         }
+        // t3code-style fallback: try vendor CLI session import before giving up.
+        // Mirrors t3code's import-first probing (zero-secret-storage delegate).
+        if let Ok(Some(tokens)) = crate::oauth::import_existing_session(exp) {
+            let tok = tokens.access_token.trim().to_string();
+            if !tok.is_empty() {
+                return Ok(tok);
+            }
+        }
         return Err(MuseError::NotAuthenticated);
     }
 

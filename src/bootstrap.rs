@@ -427,13 +427,13 @@ const GH_RELEASES_LATEST: &str = "https://api.github.com/repos/nuroctane/nur-cli
 const AUTO_UPDATE_TTL_SECS: u64 = 6 * 60 * 60; // 6 hours
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct AutoUpdateState {
+pub struct AutoUpdateState {
     #[serde(default)]
-    last_check_at: u64,
+    pub last_check_at: u64,
     #[serde(default)]
-    last_remote_version: String,
+    pub last_remote_version: String,
     #[serde(default)]
-    last_result: String,
+    pub last_result: String,
 }
 
 enum UpdateOutcome {
@@ -441,11 +441,11 @@ enum UpdateOutcome {
     AlreadyCurrent { version: String },
 }
 
-fn auto_update_state_path() -> PathBuf {
+pub(crate) fn auto_update_state_path() -> PathBuf {
     config::muse_home().join("auto_update.json")
 }
 
-fn load_auto_update_state() -> AutoUpdateState {
+pub(crate) fn load_auto_update_state() -> AutoUpdateState {
     fs::read_to_string(auto_update_state_path())
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())

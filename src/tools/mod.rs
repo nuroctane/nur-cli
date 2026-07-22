@@ -1,6 +1,7 @@
 pub mod akarso;
 pub mod t3code_tool;
 pub mod penecho_tool;
+pub mod fractal_tool;
 mod apply_patch;
 mod bash;
 pub mod browser;
@@ -147,6 +148,7 @@ impl ToolHost {
             Box::new(akarso::Akarso),
             Box::new(t3code_tool::T3Code),
             Box::new(penecho_tool::Penecho),
+            Box::new(fractal_tool::Fractal),
             Box::new(executor_tool::ExecutorTool),
             Box::new(omp::OmpTool),
             Box::new(skill_tool::SkillTool),
@@ -228,6 +230,7 @@ impl ToolHost {
             "akarso" => akarso::Akarso.execute(&args, ctx),
             "t3code" => t3code_tool::T3Code.execute(&args, ctx),
             "penecho" => penecho_tool::Penecho.execute(&args, ctx),
+            "fractal" => fractal_tool::Fractal.execute(&args, ctx),
             "executor" => executor_tool::ExecutorTool.execute(&args, ctx),
             "omp" => omp::OmpTool.execute(&args, ctx),
             "skill" => skill_tool::SkillTool.execute(&args, ctx),
@@ -351,6 +354,7 @@ mod tests {
             "akarso",
             "t3code",
             "penecho",
+            "fractal",
             "executor",
             "omp",
             "skill",

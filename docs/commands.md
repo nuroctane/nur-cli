@@ -424,7 +424,11 @@ Type these inside the `nur` TUI. Aliases are shown in the same row.
 | `/receipt` | Session receipt — hash-chained verification |
 | `/cua` | Computer-use desktop driver: `on` \| `off` \| `status` |
 | `/graph` | Inline live execution-graph card for the current turn |
+| `/sidegraph` | Live node-graph of current query: tools, subagents, steers, interrupts (`off` freezes, `hide` removes, no-arg refreshes) |
 | `/swarm` | Inline subagent activity grid — a live tiled pane per subagent (aliases `/subagents`, `/agents`). `detail` adds the status row, `off` freezes, `clear` drops finished runs, `hide` removes the card. |
+| `/subagents` · `/agents` | Alias of `/swarm` — inline subagent grid, live panes per subagent |
+| `/fractal` | Recursive agent tree — hierarchical loops in git worktrees: `node list` · `status` · `start` · `attach` · `init` · `open` |
+| `/pen` · `/drawings` · `/penecho` | Penecho canvas — ink, MathJax, plots, animations; `/drawings` lists saved canvases |
 | `/draw` | Open / build **tldraw offline** boards (`/draw <file.tldraw>`, `/draw install`, `/draw <idea>`). New static boards save to the **Desktop**. Opening a board auto-enables document scripts (canvas API `script-workspace` → applied) for interactive agent-shape files. |
 | `/steer` | Inject a message into the running turn without cancelling it |
 | `/scan` | Map the codebase → shareable foglamp scan |
