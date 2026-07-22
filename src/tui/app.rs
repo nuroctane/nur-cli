@@ -114,6 +114,23 @@ pub fn annotate_model_unavailable(err: &str, provider: &str, model: &str) -> Str
     )
 }
 
+/// Return the API model id and endpoint for an OpenCode picker/custom entry.
+/// Kimi K3 is OpenCode Go-only, so accept its natural bare id as well as the
+/// explicit picker/config form (`opencode-go/kimi-k3`).
+fn opencode_model_selection(id: &str) -> (&str, &'static str) {
+    let prefixed = id.strip_prefix("opencode-go/");
+    let model = prefixed.unwrap_or(id);
+    let go_only = prefixed.is_some() || model.eq_ignore_ascii_case("kimi-k3");
+    let base_url = if go_only {
+        crate::providers::OPENCODE_GO_BASE_URL
+    } else {
+        crate::providers::by_id("opencode")
+            .map(|provider| provider.base_url)
+            .unwrap_or("https://opencode.ai/zen/v1")
+    };
+    (model, base_url)
+}
+
 /// The `/scan` instruction template — bundled skill body that tells the agent
 /// to map this repo and publish a shareable scan to foglamp.dev. Frontmatter is
 /// stripped at use so the model sees only the instructions.
@@ -4274,16 +4291,9 @@ impl App {
         // `opencode-go/` prefix selects Go's required endpoint; the API itself
         // receives the bare model id.
         let id = if self.cfg.provider == "opencode" {
-            if let Some(model) = id.strip_prefix("opencode-go/") {
-                self.cfg.base_url = crate::providers::OPENCODE_GO_BASE_URL.to_string();
-                model
-            } else {
-                self.cfg.base_url = crate::providers::by_id("opencode")
-                    .map(|provider| provider.base_url)
-                    .unwrap_or("https://opencode.ai/zen/v1")
-                    .to_string();
-                id
-            }
+            let (model, base_url) = opencode_model_selection(id);
+            self.cfg.base_url = base_url.to_string();
+            model
         } else {
             id
         };
@@ -7026,6 +7036,18 @@ mod tests {
         assert_eq!(annotate_model_unavailable(net, "xai", "grok-4"), net);
         let rate = "API error (429): rate limit exceeded";
         assert_eq!(annotate_model_unavailable(rate, "openai", "gpt-5.5"), rate);
+    }
+
+    #[test]
+    fn bare_kimi_k3_routes_to_opencode_go() {
+        assert_eq!(
+            opencode_model_selection("kimi-k3"),
+            ("kimi-k3", crate::providers::OPENCODE_GO_BASE_URL)
+        );
+        assert_eq!(
+            opencode_model_selection("opencode-go/kimi-k3"),
+            ("kimi-k3", crate::providers::OPENCODE_GO_BASE_URL)
+        );
     }
 
     #[test]
