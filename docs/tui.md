@@ -143,28 +143,46 @@ forgets finished runs, `/swarm hide` removes the card.
 
 ### The sidegraph panel
 
-`/sidegraph` opens a right-sidebar live node-graph of the current query: root
-prompt as the top box, then boxed steps in chronological order - thinking,
-tool calls (label · hint), answering, steers, queued follow-ups, done. Agent
-tool boxes fan out their live subagent runs underneath as parallel children
-(with `+N more` overflow).
+`/sidegraph` opens a right-sidebar live node-graph of the current query, drawn on a
+2D character canvas: a double-bordered root prompt at the top, then fixed-width
+boxed steps down a centred trunk — reasoning (`◇`, violet), tool calls with their
+formatted arguments and `✓ return { … }` blocks, answering, steers, queued
+follow-ups, and the settled turn. Text word-wraps inside each box; durations ride
+in the bottom border.
+
+Because nodes are placed by coordinate rather than concatenated as strings, a box
+cannot render wider than its own borders, and content is clipped only at paint
+time — which is what gives panning something real to reveal.
+
+Two structures are drawn as actual graph topology, and only these, because they
+are the only ones nur has:
+
+- **Parallel fan-out** — the `agent` tool's live subagent runs hang side by side
+  beneath it on an elbow rail and rejoin the trunk below (up to 4, then `… +N more`).
+  A fan-out is far wider than the panel; that is what horizontal panning is for.
+- **Steer re-entry** — a mid-turn steer sends control back into the preceding
+  reasoning node, drawn as a back-edge up the right gutter (`↻ re-entry`).
 
 | Width | Behaviour |
 |---|---|
-| ≥ ~66 cols | Transcript split into [main | 28–44 col sidebar] |
+| ≥ ~66 cols | Transcript split into [main | resizable sidebar]; drag the left border to resize |
 | < ~66 cols | Panel hidden automatically, state kept; note once: "sidegraph · hidden — window too narrow · reappears on resize" |
 
 - Bare `/sidegraph` toggles the panel (open -> close). `off` / `freeze` freezes
   refresh, `on` / `live` resumes, `hide` / `close` closes.
-- Title shows `◈ sidegraph ● live` + spinner while running, `◼ frozen` when frozen.
-- Footer: `wheel scrolls · off freezes · /sidegraph closes` (or scrolled state).
-- Mouse wheel over the panel scrolls its flow graph; it follows the bottom
-  unless you scrolled up.
-- New turn re-roots the graph and resets scroll to bottom; same-turn refreshes
+- **Resize**: drag the panel's left border. Clamped so the transcript keeps ≥ 35 cols.
+- **Pan**: click and drag anywhere inside the panel to move the canvas under the
+  cursor, both axes. Horizontal range exists only when the graph is genuinely
+  wider than the panel (fan-outs, back-edges).
+- Title shows `◈ sidegraph (N)` with the step count, `● live` + spinner while
+  running, `◼ frozen` when frozen.
+- Mouse wheel scrolls vertically and agrees with drag direction; the view follows
+  the newest node unless you scrolled up.
+- New turn re-roots the graph and resets both scroll axes; same-turn refreshes
   keep scroll sticky.
-- Model is derived from transcript cells on each turn event, so it can never
-  drift from what actually ran; renderer re-reads swarm registry each frame for
-  live subagent fan-out.
+- The model is derived from transcript cells on each turn event, so it can never
+  drift from what actually ran; the renderer re-reads the swarm registry each
+  frame for live subagent fan-out.
 
 ### Knowledge stack
 
@@ -239,7 +257,7 @@ The note is appended to your persistent memory file and recalled automatically i
 /login
 ```
 
-Scrollable, **type-to-filter** catalog of 60 providers → masked key → writes
+Scrollable, **type-to-filter** catalog of 61 providers → masked key → writes
 `provider` / `base_url` / `model` to config and hot-swaps the HTTP client.
 
 Opening `/login` clears nothing, and `Esc` out of it changes nothing — your

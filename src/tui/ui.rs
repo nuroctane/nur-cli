@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use ratatui::Frame;
 use std::time::Duration;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
@@ -68,8 +68,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // `/sidegraph` open: split the transcript row into [main, right sidebar].
     // Below ~66 cols the panel would crush the transcript — keep it stateful
     // but undrawn (noted once) until the window is wide enough again.
-    let sg_w = (chunks[0].width / 3).clamp(28, 44);
-    if app.sidegraph_open && chunks[0].width >= sg_w + 38 {
+    let default_sg_w = (chunks[0].width / 3).clamp(28, 44);
+    let max_sg_w = chunks[0].width.saturating_sub(35);
+    let sg_w = app
+        .sidegraph_width
+        .unwrap_or(default_sg_w)
+        .clamp(24, max_sg_w.max(24));
+    if app.sidegraph_open && chunks[0].width >= sg_w + 35 {
         app.sidegraph_narrow = false;
         let row = Layout::default()
             .direction(Direction::Horizontal)
@@ -2772,20 +2777,28 @@ fn swarm_card(
 // from transcript cells); the renderer re-reads the swarm registry each
 // frame so agent children animate live.
 fn draw_sidegraph_panel(f: &mut Frame, app: &mut App, area: Rect) {
-    use crate::tui::app::{SgNode, SgState};
-
     let live = app.sidegraph_live;
     let tick = app.spinner_epoch.elapsed();
-    let border_hue = if live { theme::NUR_GOLD } else { theme::FAINT };
+    let border_hue = if app.sidegraph_drag_border {
+        theme::NUR_GOLD_SKY
+    } else if live {
+        theme::NUR_GOLD
+    } else {
+        theme::FAINT
+    };
 
-    // Title: gold name + live/frozen chip (+ spinner while the turn runs).
     let running = app
         .sidegraph_model
         .as_ref()
         .map(|m| m.running)
         .unwrap_or(false);
+    let step_count = app
+        .sidegraph_model
+        .as_ref()
+        .map(|m| m.nodes.len())
+        .unwrap_or(0);
     let mut title = vec![Span::styled(
-        " ◈ sidegraph ".to_string(),
+        format!(" ◈ sidegraph ({step_count}) "),
         Style::default()
             .fg(theme::NUR_GOLD)
             .add_modifier(Modifier::BOLD),
@@ -2804,16 +2817,15 @@ fn draw_sidegraph_panel(f: &mut Frame, app: &mut App, area: Rect) {
     } else {
         title.push(Span::styled("◼ frozen".to_string(), theme::style_faint()));
     }
-    title.push(Span::styled(" ".to_string(), theme::style_faint()));
 
-    // Footer hint (bottom border): state-aware, never says "refresh" — bare
-    // /sidegraph now *closes* the panel.
-    let hint = if app.sidegraph_scroll > 0 {
-        " scrolled ↑ · wheel down to follow ".to_string()
-    } else if live {
-        " wheel scrolls · off freezes · /sidegraph closes ".to_string()
+    let hint = if app.sidegraph_drag_border {
+        " ↔ resizing panel ".to_string()
+    } else if app.sidegraph_drag_canvas {
+        " ✥ panning canvas ".to_string()
+    } else if app.sidegraph_scroll_x > 0 {
+        format!(" panned +{} · drag to pan ", app.sidegraph_scroll_x)
     } else {
-        " frozen · /sidegraph on ".to_string()
+        " ↔ drag border · drag canvas to pan · wheel scrolls ".to_string()
     };
     let footer = clip_to(&hint, area.width as usize);
 
@@ -2827,7 +2839,11 @@ fn draw_sidegraph_panel(f: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // ── content lines ────────────────────────────────────────────────────
+    // ── canvas ───────────────────────────────────────────────────────────
+    // The graph is stamped into a character grid rather than concatenated as
+    // strings, so a box's width is set by coordinates and cannot drift from
+    // its borders. Clipping happens only at paint time, which is what makes
+    // horizontal panning reveal real content instead of a rendering overrun.
     let iw = inner.width as usize;
     let mut lines: Vec<Line<'static>> = Vec::new();
     if iw >= 8 && inner.height > 0 {
@@ -2839,227 +2855,20 @@ fn draw_sidegraph_panel(f: &mut Frame, app: &mut App, area: Rect) {
         };
         let model = app.sidegraph_model.as_ref().unwrap_or(&empty_model);
 
-        // Root query box (full inner width): muted border, gold glyph.
-        let rq = if model.query.is_empty() {
-            "(no query yet — send a prompt)".to_string()
-        } else {
-            clip_to(&model.query, iw.saturating_sub(6))
-        };
-        let rq_hue = if model.query.is_empty() {
-            theme::FAINT
-        } else {
-            theme::MUTED
-        };
-        sg_box(
-            &mut lines,
-            "",
-            iw,
-            rq_hue,
-            "●",
-            theme::NUR_GOLD,
-            &rq,
-            "",
-            model.query.is_empty(),
-        );
+        let runs = crate::agent::swarm::snapshot();
+        let this_turn: Vec<_> = runs
+            .iter()
+            .filter(|r| r.started.checked_duration_since(model.turn_started).is_some())
+            .cloned()
+            .collect();
 
-        if model.nodes.is_empty() {
-            if running {
-                lines.push(sg_connector());
-                lines.push(Line::from(Span::styled(
-                    clip_to("   (thinking…)", iw),
-                    theme::style_faint(),
-                )));
-            }
-        } else {
-            // Live subagent fan-out for agent boxes.
-            let runs = crate::agent::swarm::snapshot();
-            let this_turn: Vec<_> = runs
-                .iter()
-                .filter(|r| r.started.checked_duration_since(model.turn_started).is_some())
-                .cloned()
-                .collect();
-
-            let n = model.nodes.len();
-            for (i, node) in model.nodes.iter().enumerate() {
-                let is_last = i + 1 == n;
-                let (first, rest) = if is_last { ("└─", "  ") } else { ("├─", "│ ") };
-
-                // Two-channel color: border = state, glyph = semantics.
-                let (glyph, glyph_hue, box_hue, label, dur): (String, Color, Color, String, String) =
-                    match node {
-                        SgNode::Thinking {
-                            live: l,
-                            started,
-                            duration,
-                        } => {
-                            if *l {
-                                (
-                                    theme::spinner_frame(tick).to_string(),
-                                    theme::NUR_GOLD,
-                                    theme::NUR_GOLD,
-                                    "thinking".to_string(),
-                                    theme::fmt_elapsed_live(started.elapsed()),
-                                )
-                            } else {
-                                (
-                                    "○".to_string(),
-                                    theme::VIOLET,
-                                    theme::FAINT,
-                                    "thinking".to_string(),
-                                    duration.map(theme::fmt_duration).unwrap_or_default(),
-                                )
-                            }
-                        }
-                        SgNode::Tool {
-                            label,
-                            state,
-                            started,
-                            duration,
-                            ..
-                        } => match state {
-                            SgState::Running => (
-                                theme::spinner_frame(tick).to_string(),
-                                theme::NUR_GOLD,
-                                theme::NUR_GOLD,
-                                label.clone(),
-                                theme::fmt_elapsed_live(started.elapsed()),
-                            ),
-                            SgState::Ok => (
-                                "✓".to_string(),
-                                theme::SUCCESS,
-                                theme::FAINT,
-                                label.clone(),
-                                duration.map(theme::fmt_duration).unwrap_or_default(),
-                            ),
-                            SgState::Failed => (
-                                "✗".to_string(),
-                                theme::ERROR,
-                                theme::ERROR,
-                                label.clone(),
-                                duration.map(theme::fmt_duration).unwrap_or_default(),
-                            ),
-                        },
-                        SgNode::Answering => (
-                            "✎".to_string(),
-                            theme::CYAN,
-                            theme::NUR_GOLD,
-                            "answering…".to_string(),
-                            String::new(),
-                        ),
-                        SgNode::Steer { text } => (
-                            "↻".to_string(),
-                            theme::WARN,
-                            theme::FAINT,
-                            format!("steer: {text}"),
-                            String::new(),
-                        ),
-                        SgNode::Queued { text } => (
-                            "↗".to_string(),
-                            theme::WARN,
-                            theme::FAINT,
-                            format!("queued: {text}"),
-                            String::new(),
-                        ),
-                        SgNode::Done {
-                            duration,
-                            interrupted,
-                        } => {
-                            if *interrupted {
-                                (
-                                    "◼".to_string(),
-                                    theme::WARN,
-                                    theme::FAINT,
-                                    "interrupted".to_string(),
-                                    theme::fmt_duration(*duration),
-                                )
-                            } else {
-                                (
-                                    "✓".to_string(),
-                                    theme::SUCCESS,
-                                    theme::FAINT,
-                                    "done".to_string(),
-                                    theme::fmt_duration(*duration),
-                                )
-                            }
-                        }
-                    };
-
-                lines.push(sg_connector());
-                sg_box(
-                    &mut lines,
-                    first,
-                    iw,
-                    box_hue,
-                    &glyph,
-                    glyph_hue,
-                    &label,
-                    &dur,
-                    false,
-                );
-
-                // Subagent fan-out under an agent box, with a `parallel` edge
-                // label on the connector row.
-                let is_agent = matches!(node, SgNode::Tool { agent: true, .. });
-                if is_agent && !this_turn.is_empty() {
-                    let show_children = if is_last {
-                        true
-                    } else {
-                        matches!(node, SgNode::Tool { state: SgState::Running, .. })
-                    };
-                    if show_children {
-                        let mut children = this_turn.clone();
-                        children.sort_by_key(|r| {
-                            (
-                                r.state != crate::agent::swarm::RunState::Running,
-                                std::cmp::Reverse(r.id),
-                            )
-                        });
-                        lines.push(Line::from(Span::styled(
-                            clip_to(&format!("{rest}  ⤷ parallel"), iw),
-                            theme::style_faint(),
-                        )));
-                        let display = 6usize.min(children.len());
-                        for (ci, run) in children.iter().take(display).enumerate() {
-                            let last_child = ci + 1 == display && children.len() <= display;
-                            let child_branch = if last_child { "└─" } else { "├─" };
-                            let (chue, cglyph) = run_look(run.state, tick);
-                            let elapsed = if run.state == crate::agent::swarm::RunState::Running {
-                                theme::fmt_elapsed_live(run.elapsed())
-                            } else {
-                                theme::fmt_duration(run.elapsed())
-                            };
-                            let head = format!("{rest}  {child_branch} {cglyph} #{}·{} ", run.id, run.kind);
-                            let head_w = UnicodeWidthStr::width(head.as_str());
-                            let task = clip_to(
-                                &run.task,
-                                iw.saturating_sub(head_w + elapsed.len() + 2).max(6),
-                            );
-                            lines.push(clip_line(
-                                Line::from(vec![
-                                    Span::styled(head, Style::default().fg(chue)),
-                                    Span::styled(task, theme::style_status()),
-                                    Span::styled(format!("  {elapsed}"), theme::style_faint()),
-                                ]),
-                                iw,
-                            ));
-                        }
-                        if children.len() > display {
-                            lines.push(Line::from(Span::styled(
-                                clip_to(
-                                    &format!("{rest}  … +{} more", children.len() - display),
-                                    iw,
-                                ),
-                                theme::style_faint(),
-                            )));
-                        }
-                    }
-                }
-            }
-        }
+        let (mut spine, back_edge) = sg_build_spine(model, &this_turn, tick, running);
+        let canvas = sg_paint(&mut spine, back_edge, iw);
+        lines = canvas.to_lines();
     }
 
-    // Follow-bottom scroll: offset = lines back from the newest line, clamped
-    // by the content so the wheel can't run away (published for on_mouse).
+    // Vertical scroll (measured from the bottom, so a live graph pins to the
+    // newest node) and horizontal pan, both re-clamped against real content.
     let total = lines.len() as u16;
     let view = inner.height;
     let max_scroll = total.saturating_sub(view);
@@ -3068,93 +2877,650 @@ fn draw_sidegraph_panel(f: &mut Frame, app: &mut App, area: Rect) {
         app.sidegraph_scroll = max_scroll;
     }
     let top = max_scroll.saturating_sub(app.sidegraph_scroll);
-    f.render_widget(Paragraph::new(lines).scroll((top, 0)), inner);
-    // Full panel rect (border included) hit-tests wheel + click swallow.
+
+    let max_line_w = lines
+        .iter()
+        .map(|l| l.width() as u16)
+        .max()
+        .unwrap_or(0);
+    let max_pan_x = max_line_w.saturating_sub(inner.width);
+    app.sidegraph_max_scroll_x = max_pan_x;
+    if app.sidegraph_scroll_x > max_pan_x {
+        app.sidegraph_scroll_x = max_pan_x;
+    }
+
+    f.render_widget(
+        Paragraph::new(lines).scroll((top, app.sidegraph_scroll_x)),
+        inner,
+    );
     app.sidegraph_body = area;
 }
 
-/// One faint vertical connector line between sidegraph boxes.
-fn sg_connector() -> Line<'static> {
-    Line::from(Span::styled("│".to_string(), theme::style_faint()))
+// ── sidegraph canvas primitives ──────────────────────────────────────────
+
+/// Total width of a graph node box, borders included. Fixed, like the
+/// reference: nodes are placed on the canvas, not stretched to the panel.
+const SG_NODE_W: usize = 26;
+/// Horizontal gap between parallel siblings in a fan-out.
+const SG_GAP: usize = 3;
+/// Text columns inside a node (two borders + one pad each side).
+const SG_TEXT_W: usize = SG_NODE_W - 4;
+/// Most parallel children drawn side by side before overflow is summarised.
+const SG_MAX_KIDS: usize = 4;
+/// Most wrapped detail rows kept per node.
+const SG_MAX_DETAIL: usize = 7;
+
+#[derive(Clone, Copy)]
+struct SgPix {
+    ch: char,
+    style: Style,
 }
 
-/// Draw one boxed node: `╭─╮` top, glyph + label + right-aligned duration
-/// middle, `╰─╯` bottom. `first`/`rest` are the 2-col tree prefixes ("" for
-/// the root box). Border hue carries state; glyph hue carries semantics.
-fn sg_box(
-    out: &mut Vec<Line<'static>>,
-    first: &str,
+/// A character grid the graph is drawn into.
+struct SgCanvas {
     w: usize,
-    border_hue: Color,
-    glyph: &str,
-    glyph_hue: Color,
-    label: &str,
-    dur: &str,
-    faint_text: bool,
-) {
-    let rest = match first {
-        "├─" => "│ ",
-        "└─" => "  ",
-        _ => first,
-    };
-    let bw = w.saturating_sub(UnicodeWidthStr::width(first));
-    if bw < 6 {
-        return;
-    }
-    let rule = "─".repeat(bw.saturating_sub(2));
-    let bstyle = Style::default().fg(border_hue);
-    out.push(Line::from(vec![
-        Span::styled(first.to_string(), theme::style_faint()),
-        Span::styled(format!("╭{rule}╮"), bstyle),
-    ]));
-
-    // Middle row: `│ glyph label … dur │` — duration right-aligned in ~7
-    // cols; the label clips first when space runs out.
-    let content = bw.saturating_sub(2); // between the vertical bars
-    let dur_w = if dur.is_empty() {
-        0
-    } else {
-        UnicodeWidthStr::width(dur).min(7)
-    };
-    let glyph_w = UnicodeWidthStr::width(glyph);
-    let label_max = content.saturating_sub(2 + glyph_w + dur_w + usize::from(dur_w > 0));
-    let label_c = clip_to(label, label_max.max(4));
-    let label_w = UnicodeWidthStr::width(label_c.as_str());
-    let pad = content.saturating_sub(1 + glyph_w + 1 + label_w + usize::from(dur_w > 0) + dur_w);
-    let text_style = if faint_text {
-        theme::style_faint()
-    } else {
-        theme::style_status()
-    };
-    let mut mid = vec![
-        Span::styled(rest.to_string(), theme::style_faint()),
-        Span::styled("│".to_string(), bstyle),
-        Span::styled(" ".to_string(), text_style),
-        Span::styled(
-            glyph.to_string(),
-            Style::default().fg(glyph_hue).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" ".to_string(), text_style),
-        Span::styled(label_c, text_style),
-        Span::styled(" ".repeat(pad), text_style),
-    ];
-    if dur_w > 0 {
-        mid.push(Span::styled(
-            format!("{dur:>dur_w$}"),
-            theme::style_faint(),
-        ));
-        mid.push(Span::styled(" ".to_string(), theme::style_faint()));
-    }
-    mid.push(Span::styled("│".to_string(), bstyle));
-    out.push(clip_line(Line::from(mid), w));
-
-    out.push(Line::from(vec![
-        Span::styled(rest.to_string(), theme::style_faint()),
-        Span::styled(format!("╰{rule}╯"), bstyle),
-    ]));
+    h: usize,
+    px: Vec<SgPix>,
 }
 
+impl SgCanvas {
+    fn new(w: usize, h: usize) -> Self {
+        Self {
+            w,
+            h,
+            px: vec![
+                SgPix {
+                    ch: ' ',
+                    style: theme::style_canvas(),
+                };
+                w * h
+            ],
+        }
+    }
 
+    fn put(&mut self, x: usize, y: usize, ch: char, style: Style) {
+        if x < self.w && y < self.h {
+            self.px[y * self.w + x] = SgPix { ch, style };
+        }
+    }
+
+    fn text(&mut self, x: usize, y: usize, s: &str, style: Style) {
+        let mut cx = x;
+        for ch in s.chars() {
+            self.put(cx, y, ch, style);
+            cx += UnicodeWidthChar::width(ch).unwrap_or(1).max(1);
+        }
+    }
+
+    fn vline(&mut self, x: usize, y0: usize, y1: usize, style: Style) {
+        for y in y0..=y1 {
+            self.put(x, y, '│', style);
+        }
+    }
+
+    /// Collapse the grid into styled lines, merging runs of identical style
+    /// and dropping trailing blanks so panning has an honest right edge.
+    fn to_lines(&self) -> Vec<Line<'static>> {
+        let mut out = Vec::with_capacity(self.h);
+        for y in 0..self.h {
+            let row = &self.px[y * self.w..(y + 1) * self.w];
+            let end = row
+                .iter()
+                .rposition(|p| p.ch != ' ')
+                .map(|i| i + 1)
+                .unwrap_or(0);
+            let mut spans: Vec<Span<'static>> = Vec::new();
+            let mut cur = String::new();
+            let mut cur_style: Option<Style> = None;
+            for p in &row[..end] {
+                match cur_style {
+                    Some(s) if s == p.style => cur.push(p.ch),
+                    Some(s) => {
+                        spans.push(Span::styled(std::mem::take(&mut cur), s));
+                        cur.push(p.ch);
+                        cur_style = Some(p.style);
+                    }
+                    None => {
+                        cur.push(p.ch);
+                        cur_style = Some(p.style);
+                    }
+                }
+            }
+            if let (Some(s), false) = (cur_style, cur.is_empty()) {
+                spans.push(Span::styled(cur, s));
+            }
+            out.push(Line::from(spans));
+        }
+        out
+    }
+}
+
+/// Pick the box-drawing glyph for a junction from the directions it connects.
+fn sg_junction(up: bool, down: bool, left: bool, right: bool) -> char {
+    match (up, down, left, right) {
+        (false, true, false, true) => '┌',
+        (false, true, true, false) => '┐',
+        (true, false, false, true) => '└',
+        (true, false, true, false) => '┘',
+        (true, true, false, true) => '├',
+        (true, true, true, false) => '┤',
+        (false, true, true, true) => '┬',
+        (true, false, true, true) => '┴',
+        (true, true, true, true) => '┼',
+        (true, true, false, false) => '│',
+        _ => '─',
+    }
+}
+
+/// Word-wrap to `w` display columns, hard-splitting tokens that never fit.
+fn sg_wrap(s: &str, w: usize) -> Vec<String> {
+    let w = w.max(1);
+    // Preserve leading indent (JSON `return {` blocks nest one level) and wrap
+    // the remainder inside it, so continuation lines stay under their key.
+    let indent_n = s.chars().take_while(|c| *c == ' ').count().min(w / 2);
+    if indent_n > 0 {
+        let pad = " ".repeat(indent_n);
+        return sg_wrap(s.trim_start_matches(' '), w - indent_n)
+            .into_iter()
+            .map(|l| format!("{pad}{l}"))
+            .collect();
+    }
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut cur_w = 0usize;
+    for word in s.split_whitespace() {
+        let ww = UnicodeWidthStr::width(word);
+        if ww > w {
+            if !cur.is_empty() {
+                out.push(std::mem::take(&mut cur));
+            }
+            let mut chunk = String::new();
+            let mut cw = 0usize;
+            for ch in word.chars() {
+                let cwidth = UnicodeWidthChar::width(ch).unwrap_or(1).max(1);
+                if cw + cwidth > w && !chunk.is_empty() {
+                    out.push(std::mem::take(&mut chunk));
+                    cw = 0;
+                }
+                chunk.push(ch);
+                cw += cwidth;
+            }
+            cur = chunk;
+            cur_w = cw;
+            continue;
+        }
+        if cur_w == 0 {
+            cur = word.to_string();
+            cur_w = ww;
+        } else if cur_w + 1 + ww <= w {
+            cur.push(' ');
+            cur.push_str(word);
+            cur_w += 1 + ww;
+        } else {
+            out.push(std::mem::take(&mut cur));
+            cur = word.to_string();
+            cur_w = ww;
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
+
+/// One placed node. `kids` are parallel children (live subagents) that hang
+/// side by side beneath this node and rejoin the spine below.
+struct SgLay {
+    glyph: String,
+    glyph_hue: Color,
+    title: String,
+    dur: String,
+    hue: Color,
+    details: Vec<(String, Color)>,
+    kids: Vec<SgLay>,
+    double: bool,
+    x: usize,
+    y: usize,
+    h: usize,
+}
+
+impl SgLay {
+    fn new(
+        glyph: &str,
+        glyph_hue: Color,
+        title: &str,
+        dur: &str,
+        hue: Color,
+        raw: Vec<(String, Color)>,
+    ) -> Self {
+        let mut details: Vec<(String, Color)> = Vec::new();
+        for (text, c) in raw {
+            for w in sg_wrap(&text, SG_TEXT_W) {
+                details.push((w, c));
+            }
+        }
+        if details.len() > SG_MAX_DETAIL {
+            details.truncate(SG_MAX_DETAIL);
+            details.push(("…".to_string(), theme::FAINT));
+        }
+        let h = 3 + details.len();
+        Self {
+            glyph: glyph.to_string(),
+            glyph_hue,
+            title: title.to_string(),
+            dur: dur.to_string(),
+            hue,
+            details,
+            kids: Vec::new(),
+            double: false,
+            x: 0,
+            y: 0,
+            h,
+        }
+    }
+
+    fn center(&self) -> usize {
+        self.x + SG_NODE_W / 2
+    }
+}
+
+/// Width the node and its parallel children occupy together.
+fn sg_span_w(n: &SgLay) -> usize {
+    if n.kids.is_empty() {
+        SG_NODE_W
+    } else {
+        let k = n.kids.len();
+        SG_NODE_W.max(k * SG_NODE_W + SG_GAP * (k - 1))
+    }
+}
+
+/// Rows from this node's top border to the bottom of its fan-in rail.
+fn sg_subtree_h(n: &SgLay) -> usize {
+    if n.kids.is_empty() {
+        n.h
+    } else {
+        let kh = n.kids.iter().map(|k| k.h).max().unwrap_or(0);
+        n.h + 2 + kh + 1
+    }
+}
+
+fn sg_draw_box(c: &mut SgCanvas, n: &SgLay) {
+    let st = Style::default().fg(n.hue);
+    let (tl, tr, bl, br, hz, vt) = if n.double {
+        ('╔', '╗', '╚', '╝', '═', '║')
+    } else {
+        ('┌', '┐', '└', '┘', '─', '│')
+    };
+    let (x, y, w, h) = (n.x, n.y, SG_NODE_W, n.h);
+    for i in 1..w - 1 {
+        c.put(x + i, y, hz, st);
+        c.put(x + i, y + h - 1, hz, st);
+    }
+    c.put(x, y, tl, st);
+    c.put(x + w - 1, y, tr, st);
+    c.put(x, y + h - 1, bl, st);
+    c.put(x + w - 1, y + h - 1, br, st);
+    for j in 1..h - 1 {
+        c.put(x, y + j, vt, st);
+        c.put(x + w - 1, y + j, vt, st);
+    }
+
+    // Duration rides in the bottom border, right-aligned.
+    let dw = UnicodeWidthStr::width(n.dur.as_str());
+    if dw > 0 && dw + 6 < w {
+        let dx = x + w - 2 - dw;
+        c.put(dx - 1, y + h - 1, ' ', st);
+        c.text(dx, y + h - 1, &n.dur, theme::style_faint());
+        c.put(dx + dw, y + h - 1, ' ', st);
+    }
+
+    // Header row: glyph carries state, title carries identity — two channels.
+    let gw = UnicodeWidthStr::width(n.glyph.as_str()).max(1);
+    c.text(x + 2, y + 1, &n.glyph, Style::default().fg(n.glyph_hue));
+    let title = clip_to(&n.title, SG_TEXT_W.saturating_sub(gw + 1));
+    c.text(
+        x + 2 + gw + 1,
+        y + 1,
+        &title,
+        Style::default().fg(n.hue).add_modifier(Modifier::BOLD),
+    );
+
+    for (i, (d, hue)) in n.details.iter().enumerate() {
+        c.text(x + 2, y + 2 + i, d, Style::default().fg(*hue));
+    }
+}
+
+/// Place the spine, then stamp boxes and edge polylines into a canvas.
+fn sg_paint(spine: &mut [SgLay], back_edge: Option<(usize, usize)>, panel_w: usize) -> SgCanvas {
+    if spine.is_empty() {
+        return SgCanvas::new(panel_w.max(1), 1);
+    }
+    let content_w = spine.iter().map(sg_span_w).max().unwrap_or(SG_NODE_W);
+    let gutter = if back_edge.is_some() { 16 } else { 1 };
+    let canvas_w = content_w.max(panel_w) + gutter;
+
+    // Every spine node shares one centre line, so the trunk never needs a jog.
+    let base_left = canvas_w.saturating_sub(gutter).saturating_sub(content_w) / 2;
+    let node_x = base_left + (content_w - SG_NODE_W) / 2;
+    let cx = node_x + SG_NODE_W / 2;
+
+    let mut y = 0usize;
+    for n in spine.iter_mut() {
+        n.x = node_x;
+        n.y = y;
+        if !n.kids.is_empty() {
+            let k = n.kids.len();
+            let kids_w = k * SG_NODE_W + SG_GAP * (k - 1);
+            let kleft = cx.saturating_sub(kids_w / 2);
+            let ky = y + n.h + 2;
+            // Equal-height siblings keep the fan-in rail straight.
+            let kh = n.kids.iter().map(|kd| kd.h).max().unwrap_or(0);
+            for (i, kid) in n.kids.iter_mut().enumerate() {
+                kid.x = kleft + i * (SG_NODE_W + SG_GAP);
+                kid.y = ky;
+                kid.h = kh;
+            }
+        }
+        y += sg_subtree_h(n) + 2;
+    }
+    let canvas_h = y.saturating_sub(1);
+    let mut c = SgCanvas::new(canvas_w, canvas_h.max(1));
+    let edge = theme::style_faint();
+
+    for i in 0..spine.len() {
+        let n = &spine[i];
+        sg_draw_box(&mut c, n);
+        let box_st = Style::default().fg(n.hue);
+        let mut exit_y = n.y + n.h - 1;
+
+        if !n.kids.is_empty() {
+            let lc = n.kids.first().map(|k| k.center()).unwrap_or(cx);
+            let rc = n.kids.last().map(|k| k.center()).unwrap_or(cx);
+            let centers: Vec<usize> = n.kids.iter().map(|k| k.center()).collect();
+
+            // Fan-out: drop from the parent onto a rail, then into each child.
+            c.put(cx, n.y + n.h - 1, '┬', box_st);
+            let rail_y = n.y + n.h;
+            for x in lc..=rc {
+                let ch = sg_junction(x == cx, centers.contains(&x), x > lc, x < rc);
+                c.put(x, rail_y, ch, edge);
+            }
+            for kid in &n.kids {
+                c.put(kid.center(), rail_y + 1, '▼', edge);
+                sg_draw_box(&mut c, kid);
+            }
+
+            // Fan-in: children rejoin the trunk on a second rail.
+            let kb = n.kids.iter().map(|k| k.y + k.h - 1).max().unwrap_or(rail_y);
+            let fin_y = kb + 1;
+            for kid in &n.kids {
+                c.put(kid.center(), kid.y + kid.h - 1, '┴', Style::default().fg(kid.hue));
+            }
+            // Only stub downward if the trunk actually continues below.
+            let continues = i + 1 < spine.len();
+            for x in lc..=rc {
+                let ch = sg_junction(centers.contains(&x), continues && x == cx, x > lc, x < rc);
+                c.put(x, fin_y, ch, edge);
+            }
+            exit_y = fin_y;
+        }
+
+        // Trunk link to the next node.
+        if i + 1 < spine.len() {
+            let next_y = spine[i + 1].y;
+            if n.kids.is_empty() {
+                c.put(cx, exit_y, '┬', box_st);
+            }
+            if next_y >= 2 {
+                c.vline(cx, exit_y + 1, next_y.saturating_sub(2), edge);
+            }
+            c.put(cx, next_y.saturating_sub(1), '▼', edge);
+        }
+    }
+
+    // Re-entry back-edge: a steer sends control back into reasoning. This is
+    // the one loop nur actually has — drawn only when both ends exist.
+    if let Some((from_i, to_i)) = back_edge {
+        let st = Style::default().fg(theme::WARN);
+        let (fx, fy, fh) = (spine[from_i].x, spine[from_i].y, spine[from_i].h);
+        let (tx, ty, th) = (spine[to_i].x, spine[to_i].y, spine[to_i].h);
+        let fy = fy + fh / 2;
+        let ty = ty + th / 2;
+        let gx = base_left + content_w + 3;
+        if gx < canvas_w && ty < fy {
+            for x in (fx + SG_NODE_W)..gx {
+                c.put(x, fy, '─', st);
+            }
+            c.put(gx, fy, '┘', st);
+            for yy in (ty + 1)..fy {
+                c.put(gx, yy, '│', st);
+            }
+            c.put(gx, ty, '┐', st);
+            for x in (tx + SG_NODE_W + 1)..gx {
+                c.put(x, ty, '─', st);
+            }
+            c.put(tx + SG_NODE_W, ty, '◄', st);
+            c.text(gx + 2, ty, "↻ re-entry", st);
+        }
+    }
+
+    c
+}
+
+/// Turn the graph model into placed-node input: the root prompt, one node per
+/// step, live subagents fanned out under the `agent` tool that spawned them.
+fn sg_build_spine(
+    model: &crate::tui::app::SideGraphModel,
+    this_turn: &[crate::agent::swarm::AgentRun],
+    tick: Duration,
+    running: bool,
+) -> (Vec<SgLay>, Option<(usize, usize)>) {
+    use crate::tui::app::{SgNode, SgState};
+
+    let mut spine: Vec<SgLay> = Vec::new();
+
+    let rq = if model.query.is_empty() {
+        "(no query yet — send a prompt)".to_string()
+    } else {
+        model.query.clone()
+    };
+    let mut root = SgLay::new(
+        "■",
+        theme::NUR_GOLD,
+        "root prompt",
+        "",
+        theme::CYAN,
+        vec![(rq, theme::style_status().fg.unwrap_or(theme::MUTED))],
+    );
+    root.double = true;
+    spine.push(root);
+
+    if model.nodes.is_empty() {
+        if running {
+            spine.push(SgLay::new(
+                theme::spinner_frame(tick),
+                theme::NUR_GOLD,
+                "thinking",
+                "",
+                theme::VIOLET,
+                Vec::new(),
+            ));
+        }
+        return (spine, None);
+    }
+
+    let n_nodes = model.nodes.len();
+    let mut last_thinking: Option<usize> = None;
+    let mut back_edge: Option<(usize, usize)> = None;
+
+    for (i, node) in model.nodes.iter().enumerate() {
+        let is_last = i + 1 == n_nodes;
+        match node {
+            SgNode::Thinking {
+                excerpt,
+                live: l,
+                started,
+                duration,
+            } => {
+                let (glyph, ghue, dur) = if *l {
+                    (
+                        theme::spinner_frame(tick).to_string(),
+                        theme::NUR_GOLD,
+                        theme::fmt_elapsed_live(started.elapsed()),
+                    )
+                } else {
+                    (
+                        "◇".to_string(),
+                        theme::VIOLET,
+                        duration.map(theme::fmt_duration).unwrap_or_default(),
+                    )
+                };
+                last_thinking = Some(spine.len());
+                spine.push(SgLay::new(
+                    &glyph,
+                    ghue,
+                    "reasoning",
+                    &dur,
+                    theme::VIOLET,
+                    vec![(excerpt.clone(), theme::MUTED)],
+                ));
+            }
+            SgNode::Tool {
+                name,
+                args_formatted,
+                result_formatted,
+                state,
+                started,
+                duration,
+                agent,
+            } => {
+                let (glyph, hue, dur) = match state {
+                    SgState::Running => (
+                        theme::spinner_frame(tick).to_string(),
+                        theme::NUR_GOLD,
+                        theme::fmt_elapsed_live(started.elapsed()),
+                    ),
+                    SgState::Ok => (
+                        "✓".to_string(),
+                        theme::SUCCESS,
+                        duration.map(theme::fmt_duration).unwrap_or_default(),
+                    ),
+                    SgState::Failed => (
+                        "✗".to_string(),
+                        theme::ERROR,
+                        duration.map(theme::fmt_duration).unwrap_or_default(),
+                    ),
+                };
+                // Hue is assigned from the field the text came from, never
+                // sniffed back out of the rendered string.
+                let mut raw: Vec<(String, Color)> = args_formatted
+                    .iter()
+                    .map(|a| (a.clone(), theme::NUR_GOLD_SKY))
+                    .collect();
+                if let Some(res) = result_formatted {
+                    let rhue = if matches!(state, SgState::Failed) {
+                        theme::ERROR
+                    } else {
+                        theme::SUCCESS
+                    };
+                    raw.extend(res.iter().map(|r| (r.clone(), rhue)));
+                }
+
+                let show_children = *agent
+                    && !this_turn.is_empty()
+                    && (is_last || matches!(state, SgState::Running));
+                let mut lay = SgLay::new(&glyph, hue, name, &dur, hue, raw);
+
+                if show_children {
+                    let mut children = this_turn.to_vec();
+                    children.sort_by_key(|r| {
+                        (
+                            r.state != crate::agent::swarm::RunState::Running,
+                            std::cmp::Reverse(r.id),
+                        )
+                    });
+                    let shown = SG_MAX_KIDS.min(children.len());
+                    if children.len() > shown {
+                        lay.details.push((
+                            format!("… +{} more subagents", children.len() - shown),
+                            theme::FAINT,
+                        ));
+                        lay.h += 1;
+                    }
+                    for run in children.iter().take(shown) {
+                        let (chue, cglyph) = run_look(run.state, tick);
+                        let elapsed = if run.state == crate::agent::swarm::RunState::Running {
+                            theme::fmt_elapsed_live(run.elapsed())
+                        } else {
+                            theme::fmt_duration(run.elapsed())
+                        };
+                        lay.kids.push(SgLay::new(
+                            &cglyph.to_string(),
+                            chue,
+                            &format!("#{}·{}", run.id, run.kind),
+                            &elapsed,
+                            chue,
+                            vec![(run.task.clone(), theme::MUTED)],
+                        ));
+                    }
+                }
+                spine.push(lay);
+            }
+            SgNode::Answering { text_excerpt } => spine.push(SgLay::new(
+                "✎",
+                theme::CYAN,
+                "answering",
+                "",
+                theme::CYAN,
+                vec![(text_excerpt.clone(), theme::MUTED)],
+            )),
+            SgNode::Steer { text } => {
+                if let Some(t) = last_thinking {
+                    back_edge = Some((spine.len(), t));
+                }
+                spine.push(SgLay::new(
+                    "↻",
+                    theme::WARN,
+                    "steer",
+                    "",
+                    theme::WARN,
+                    vec![(text.clone(), theme::MUTED)],
+                ));
+            }
+            SgNode::Queued { text } => spine.push(SgLay::new(
+                "↗",
+                theme::MUTED,
+                "queued",
+                "",
+                theme::MUTED,
+                vec![(text.clone(), theme::MUTED)],
+            )),
+            SgNode::Done {
+                duration,
+                interrupted,
+            } => {
+                let (glyph, hue, status_str) = if *interrupted {
+                    ("◼", theme::WARN, "interrupted")
+                } else {
+                    ("✓", theme::SUCCESS, "completed")
+                };
+                spine.push(SgLay::new(
+                    glyph,
+                    hue,
+                    "turn",
+                    &theme::fmt_duration(*duration),
+                    hue,
+                    vec![(status_str.to_string(), hue)],
+                ));
+            }
+        }
+    }
+
+    (spine, back_edge)
+}
 
 
 /// Truncate to `width` display columns, marking the cut with an ellipsis.
@@ -5501,5 +5867,158 @@ mod tests {
         let (owner, head) = fixture();
         // Scrolled back into A's work while B exists below: header must say A.
         assert_eq!(sticky_owner(&owner, &head, 4, 9), Some(0));
+    }
+}
+
+#[cfg(test)]
+mod sidegraph_canvas_tests {
+    use super::*;
+    use crate::tui::app::{SgNode, SgState, SideGraphModel};
+    use std::time::{Duration, Instant};
+
+    fn render(model: &SideGraphModel, panel_w: usize) -> Vec<String> {
+        let (mut spine, back) = sg_build_spine(model, &[], Duration::from_millis(0), model.running);
+        let canvas = sg_paint(&mut spine, back, panel_w);
+        canvas
+            .to_lines()
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect()
+    }
+
+    fn demo_model() -> SideGraphModel {
+        let now = Instant::now();
+        SideGraphModel {
+            query: "make the sidegraph descriptive and pannable".into(),
+            running: true,
+            turn_started: now,
+            nodes: vec![
+                SgNode::Thinking {
+                    excerpt: "planning the canvas rewrite across ui.rs".into(),
+                    live: false,
+                    started: now,
+                    duration: Some(Duration::from_secs(12)),
+                },
+                SgNode::Tool {
+                    name: "read".into(),
+                    args_formatted: vec!["path: \"src/tui/ui.rs\"".into()],
+                    result_formatted: Some(vec!["✓ return {".into(), "  lines: 4210".into(), "}".into()]),
+                    state: SgState::Ok,
+                    started: now,
+                    duration: Some(Duration::from_millis(300)),
+                    agent: false,
+                },
+                SgNode::Steer {
+                    text: "also centre the boxes".into(),
+                },
+                SgNode::Done {
+                    duration: Duration::from_secs(41),
+                    interrupted: false,
+                },
+            ],
+        }
+    }
+
+    /// Every row of a node box must be exactly SG_NODE_W wide. This is the
+    /// invariant the previous string-concatenated renderer violated on every
+    /// node that had a duration.
+    #[test]
+    fn box_rows_are_all_equal_width() {
+        let mut n = SgLay::new("✓", theme::SUCCESS, "read", "0.3s", theme::SUCCESS,
+            vec![("path: src/tui/ui.rs".into(), theme::NUR_GOLD_SKY)]);
+        n.x = 0;
+        n.y = 0;
+        let mut c = SgCanvas::new(SG_NODE_W + 4, n.h + 2);
+        sg_draw_box(&mut c, &n);
+        let rows: Vec<String> = c.to_lines().iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .filter(|r: &String| !r.trim().is_empty())
+            .collect();
+        assert_eq!(rows.len(), n.h, "box drew the wrong number of rows");
+        for (i, r) in rows.iter().enumerate() {
+            assert_eq!(
+                UnicodeWidthStr::width(r.as_str()),
+                SG_NODE_W,
+                "row {i} is {:?} — width drift",
+                r
+            );
+        }
+        assert!(rows[0].starts_with('┌') && rows[0].ends_with('┐'));
+        assert!(rows[n.h - 1].starts_with('└') && rows[n.h - 1].ends_with('┘'));
+        assert!(rows[n.h - 1].contains("0.3s"), "duration lost from bottom border");
+    }
+
+    /// Text must wrap inside the box, never spill past it.
+    #[test]
+    fn long_text_wraps_instead_of_overflowing() {
+        let n = SgLay::new("◇", theme::VIOLET, "reasoning", "", theme::VIOLET,
+            vec![("a very long reasoning excerpt that must wrap across several lines inside the node".into(), theme::MUTED)]);
+        assert!(n.details.len() > 1, "text did not wrap");
+        for (d, _) in &n.details {
+            assert!(UnicodeWidthStr::width(d.as_str()) <= SG_TEXT_W, "line {d:?} exceeds text width");
+        }
+    }
+
+    /// A steer is a real re-entry into reasoning — the one loop nur has.
+    #[test]
+    fn steer_produces_a_back_edge_to_the_preceding_reasoning() {
+        let m = demo_model();
+        let (spine, back) = sg_build_spine(&m, &[], Duration::from_millis(0), true);
+        let (from, to) = back.expect("steer should create a back-edge");
+        assert!(to < from, "back-edge must point upward");
+        assert_eq!(spine[to].title, "reasoning");
+        assert_eq!(spine[from].title, "steer");
+    }
+
+    /// No fabricated control flow: the old renderer emitted "Yes"/"Yes->Yes"
+    /// from `i % 3` and labelled a fan-out as a loop.
+    #[test]
+    fn renders_no_invented_branch_labels() {
+        let out = render(&demo_model(), 40).join("\n");
+        for fake in ["Yes->Yes", "Yes→Yes", "Programs (1)", "∞ loop"] {
+            assert!(!out.contains(fake), "fabricated label {fake:?} still rendered");
+        }
+    }
+
+    /// The canvas is allowed to be wider than the panel — that is exactly what
+    /// gives horizontal panning something to reveal.
+    #[test]
+    fn canvas_can_exceed_panel_width_so_panning_has_range() {
+        let mut m = demo_model();
+        m.nodes.truncate(1);
+        let (mut spine, back) = sg_build_spine(&m, &[], Duration::from_millis(0), true);
+        // Two parallel children under the first step.
+        let kid = |id: u64| SgLay::new("◐", theme::NUR_GOLD, &format!("#{id}·explore"), "2s",
+            theme::NUR_GOLD, vec![("scan the tui module".into(), theme::MUTED)]);
+        spine[1].kids = vec![kid(1), kid(2)];
+        let canvas = sg_paint(&mut spine, back, 30);
+        let widest = canvas.to_lines().iter().map(|l| l.width()).max().unwrap_or(0);
+        assert!(widest > 30, "fan-out canvas ({widest}) should exceed the 30-col panel");
+    }
+
+    #[test]
+    fn print_demo_graph() {
+        println!("\n=== sidegraph · sequential spine (panel 40) ===");
+        for l in render(&demo_model(), 40) {
+            println!("{l}");
+        }
+
+        println!("\n=== sidegraph · parallel subagent fan-out (panel 40) ===");
+        let mut m = demo_model();
+        m.nodes.truncate(2);
+        let (mut spine, back) = sg_build_spine(&m, &[], Duration::from_millis(0), true);
+        let kid = |id: u64, task: &str| SgLay::new("◐", theme::NUR_GOLD,
+            &format!("#{id}·explore"), "2.1s", theme::NUR_GOLD,
+            vec![(task.to_string(), theme::MUTED)]);
+        spine[2].kids = vec![
+            kid(1, "map command registration"),
+            kid(2, "trace the render path"),
+            kid(3, "audit mouse handling"),
+        ];
+        let canvas = sg_paint(&mut spine, back, 40);
+        for l in canvas.to_lines() {
+            let s: String = l.spans.iter().map(|sp| sp.content.as_ref()).collect::<String>();
+            println!("{s}");
+        }
     }
 }

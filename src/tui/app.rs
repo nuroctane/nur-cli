@@ -350,6 +350,7 @@ pub enum SgState {
 pub enum SgNode {
     /// Model reasoning span.
     Thinking {
+        excerpt: String,
         live: bool,
         started: Instant,
         duration: Option<Duration>,
@@ -357,14 +358,18 @@ pub enum SgNode {
     /// A tool call. `agent` marks the `agent` tool — the renderer fans its
     /// live subagent runs out underneath as parallel children.
     Tool {
-        label: String,
+        name: String,
+        args_formatted: Vec<String>,
+        result_formatted: Option<Vec<String>>,
         state: SgState,
         started: Instant,
         duration: Option<Duration>,
         agent: bool,
     },
     /// The assistant is streaming an answer right now.
-    Answering,
+    Answering {
+        text_excerpt: String,
+    },
     /// A mid-turn user steer (`/steer` or an injected follow-up).
     Steer { text: String },
     /// A follow-up queued while the turn runs.
@@ -374,6 +379,89 @@ pub enum SgNode {
         duration: Duration,
         interrupted: bool,
     },
+}
+
+/// Format tool JSON args into key-value lines for descriptive sidegraph rendering.
+fn format_tool_args_lines(args: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
+        if let Some(obj) = v.as_object() {
+            for (k, val) in obj.iter().take(4) {
+                let val_str = match val {
+                    serde_json::Value::String(s) => {
+                        let single = s.lines().next().unwrap_or("").trim();
+                        let clipped: String = single.chars().take(45).collect();
+                        if single.chars().count() > 45 {
+                            format!("\"{clipped}…\"")
+                        } else {
+                            format!("\"{clipped}\"")
+                        }
+                    }
+                    serde_json::Value::Bool(b) => b.to_string(),
+                    serde_json::Value::Number(n) => n.to_string(),
+                    serde_json::Value::Array(arr) => format!("[{} items]", arr.len()),
+                    _ => {
+                        let s = val.to_string();
+                        let clipped: String = s.chars().take(40).collect();
+                        if s.chars().count() > 40 {
+                            format!("{clipped}…")
+                        } else {
+                            clipped
+                        }
+                    }
+                };
+                lines.push(format!("{k}: {val_str}"));
+            }
+        }
+    }
+    lines
+}
+
+/// Format tool output/result into code/JSON return blocks for descriptive sidegraph rendering.
+fn format_tool_result_lines(result: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let trimmed = result.trim();
+    if trimmed.is_empty() {
+        return lines;
+    }
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        if let Some(obj) = v.as_object() {
+            lines.push("✓ return {".to_string());
+            for (k, val) in obj.iter().take(3) {
+                let s = match val {
+                    serde_json::Value::String(st) => {
+                        let first = st.lines().next().unwrap_or("").trim();
+                        let clipped: String = first.chars().take(35).collect();
+                        if first.chars().count() > 35 {
+                            format!("\"{clipped}…\"")
+                        } else {
+                            format!("\"{clipped}\"")
+                        }
+                    }
+                    _ => {
+                        let str_val = val.to_string();
+                        let clipped: String = str_val.chars().take(35).collect();
+                        if str_val.chars().count() > 35 {
+                            format!("{clipped}…")
+                        } else {
+                            str_val
+                        }
+                    }
+                };
+                lines.push(format!("  {k}: {s}"));
+            }
+            lines.push("}".to_string());
+            return lines;
+        }
+    }
+    let first = trimmed.lines().next().unwrap_or("").trim();
+    let clipped: String = first.chars().take(45).collect();
+    if trimmed.lines().count() > 1 || trimmed.chars().count() > 45 {
+        lines.push(format!("✓ return: \"{clipped}…\""));
+    } else {
+        lines.push(format!("✓ return: \"{clipped}\""));
+    }
+    lines
 }
 
 /// The whole current (or most recent) query as a flow graph: root prompt +
@@ -1581,6 +1669,20 @@ pub struct App {
     /// Max scroll the current content allows, published by the renderer each
     /// frame so wheel-up clamps instead of running away past the content.
     pub sidegraph_max_scroll: u16,
+    /// Horizontal pan offset for canvas dragging in the sidegraph.
+    pub sidegraph_scroll_x: u16,
+    /// Max horizontal pan allowed by current content.
+    pub sidegraph_max_scroll_x: u16,
+    /// User-resized panel width (overrides default proportion).
+    pub sidegraph_width: Option<u16>,
+    /// True while left border is being dragged to resize panel width.
+    pub sidegraph_drag_border: bool,
+    /// True while canvas content is being click-dragged to pan around.
+    pub sidegraph_drag_canvas: bool,
+    /// Start position (col, row) for canvas panning drag.
+    pub sidegraph_drag_origin: Option<(u16, u16)>,
+    pub sidegraph_drag_start_scroll: u16,
+    pub sidegraph_drag_start_pan_x: u16,
     /// Full panel rect (border included) for wheel / click hit-testing.
     pub sidegraph_body: ratatui::layout::Rect,
     /// One-shot flag: noted once that the open panel is hidden because the
@@ -1904,6 +2006,14 @@ pub async fn run_tui(
         sidegraph_model: None,
         sidegraph_scroll: 0,
         sidegraph_max_scroll: 0,
+        sidegraph_scroll_x: 0,
+        sidegraph_max_scroll_x: 0,
+        sidegraph_width: None,
+        sidegraph_drag_border: false,
+        sidegraph_drag_canvas: false,
+        sidegraph_drag_origin: None,
+        sidegraph_drag_start_scroll: 0,
+        sidegraph_drag_start_pan_x: 0,
         sidegraph_body: ratatui::layout::Rect::default(),
         sidegraph_narrow: false,
         needs_full_redraw: false,
@@ -3445,9 +3555,20 @@ impl App {
                     return;
                 }
                 // The sidegraph panel is a separate surface: clicks inside it
-                // must not arm a transcript drag-select clamped to its edge.
+                // handle border resize or canvas panning drag.
+                if self.hit_sidegraph_border(m.column, m.row) {
+                    self.sidegraph_drag_border = true;
+                    self.mouse_left_down = true;
+                    self.selecting = false;
+                    self.select_anchor = None;
+                    return;
+                }
                 if self.wheel_over_sidegraph(m.column, m.row) {
-                    self.mouse_left_down = false;
+                    self.sidegraph_drag_canvas = true;
+                    self.sidegraph_drag_origin = Some((m.column, m.row));
+                    self.sidegraph_drag_start_scroll = self.sidegraph_scroll;
+                    self.sidegraph_drag_start_pan_x = self.sidegraph_scroll_x;
+                    self.mouse_left_down = true;
                     self.selecting = false;
                     self.select_anchor = None;
                     return;
@@ -3595,9 +3716,15 @@ impl App {
                     self.click_transcript(col, row);
                 }
                 self.selecting = false;
+                self.sidegraph_drag_border = false;
+                self.sidegraph_drag_canvas = false;
+                self.sidegraph_drag_origin = None;
             }
             MouseEventKind::Up(_) => {
                 self.mouse_left_down = false;
+                self.sidegraph_drag_border = false;
+                self.sidegraph_drag_canvas = false;
+                self.sidegraph_drag_origin = None;
             }
             _ => {
                 if !approval_open {
@@ -3607,8 +3734,33 @@ impl App {
         }
     }
 
-    /// Shared path for `Drag` and button-held `Moved` (scrollbar + text select).
+    /// Shared path for `Drag` and button-held `Moved` (scrollbar + text select + sidegraph drag).
     fn apply_mouse_drag(&mut self, col: u16, row: u16) {
+        if self.sidegraph_drag_border {
+            let panel_right = self.sidegraph_body.x + self.sidegraph_body.width;
+            // Must match the renderer's own clamp (`width - 35`), otherwise the
+            // last columns of leftward drag are a dead zone: the stored width
+            // keeps growing while the border stops moving.
+            let new_w = panel_right
+                .saturating_sub(col)
+                .clamp(24, panel_right.saturating_sub(35).max(24));
+            self.sidegraph_width = Some(new_w);
+            return;
+        }
+        if self.sidegraph_drag_canvas {
+            if let Some((start_col, start_row)) = self.sidegraph_drag_origin {
+                let delta_y = row as i32 - start_row as i32;
+                let new_scroll = (self.sidegraph_drag_start_scroll as i32 + delta_y)
+                    .clamp(0, self.sidegraph_max_scroll as i32) as u16;
+                self.sidegraph_scroll = new_scroll;
+
+                let delta_x = col as i32 - start_col as i32;
+                let new_pan_x = (self.sidegraph_drag_start_pan_x as i32 - delta_x)
+                    .clamp(0, self.sidegraph_max_scroll_x as i32) as u16;
+                self.sidegraph_scroll_x = new_pan_x;
+            }
+            return;
+        }
         if self.scrollbar_drag {
             self.scrollbar_drag_to(row);
             return;
@@ -3910,6 +4062,11 @@ impl App {
         self.input_drag = false;
         self.input_selecting = false;
         self.input_drag_origin = None;
+        // Without this the sidegraph drag flags survive the focus loss and
+        // hijack the next transcript drag into a resize / pan.
+        self.sidegraph_drag_border = false;
+        self.sidegraph_drag_canvas = false;
+        self.sidegraph_drag_origin = None;
     }
 
     /// Wheel events over an open pinned peek scroll the peek body.
@@ -3923,6 +4080,15 @@ impl App {
         self.sidegraph_open
             && self.sidegraph_body.width > 0
             && rect_contains(self.sidegraph_body, col, row)
+    }
+
+    /// Check if mouse position is on or adjacent to the left border of the sidegraph panel.
+    pub(crate) fn hit_sidegraph_border(&self, col: u16, row: u16) -> bool {
+        self.sidegraph_open
+            && self.sidegraph_body.width > 0
+            && row >= self.sidegraph_body.y
+            && row < self.sidegraph_body.y + self.sidegraph_body.height
+            && (col == self.sidegraph_body.x || col == self.sidegraph_body.x.saturating_add(1))
     }
 
     fn hit_jump_chip(&self, col: u16, row: u16) -> bool {
@@ -6527,11 +6693,13 @@ impl App {
         for c in &self.cells[start..end] {
             match c {
                 Cell::Thinking {
+                    text,
                     active,
                     started,
                     duration,
                     ..
                 } => nodes.push(SgNode::Thinking {
+                    excerpt: first_line(text, 120),
                     live: *active,
                     started: *started,
                     duration: *duration,
@@ -6539,12 +6707,15 @@ impl App {
                 Cell::Tool {
                     name,
                     args,
+                    result,
                     ok,
                     started,
                     duration,
                     ..
                 } => nodes.push(SgNode::Tool {
-                    label: graph_tool_label(name, args),
+                    name: name.clone(),
+                    args_formatted: format_tool_args_lines(args),
+                    result_formatted: result.as_ref().map(|r| format_tool_result_lines(r)),
                     state: match ok {
                         None => SgState::Running,
                         Some(true) => SgState::Ok,
@@ -6554,9 +6725,11 @@ impl App {
                     duration: *duration,
                     agent: name == "agent",
                 }),
-                Cell::Assistant { streaming, .. } => {
+                Cell::Assistant { streaming, text } => {
                     if *streaming {
-                        nodes.push(SgNode::Answering);
+                        nodes.push(SgNode::Answering {
+                            text_excerpt: first_line(text, 80),
+                        });
                     }
                 }
                 // A user cell inside the turn span is a mid-turn steer.
@@ -6605,6 +6778,7 @@ impl App {
             // A new turn re-roots the graph: land the user on the new content
             // (scroll stays sticky across same-turn refreshes, not new roots).
             self.sidegraph_scroll = 0;
+            self.sidegraph_scroll_x = 0;
             self.refresh_sidegraph();
         }
     }
@@ -6656,6 +6830,7 @@ impl App {
         self.sidegraph_open = true;
         self.sidegraph_live = true;
         self.sidegraph_scroll = 0;
+        self.sidegraph_scroll_x = 0;
         self.push_note(
             Tone::Neutral,
             if has_query {
