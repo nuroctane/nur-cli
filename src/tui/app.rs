@@ -371,6 +371,7 @@ pub enum SgNode {
     /// The assistant is streaming an answer right now.
     Answering {
         text_excerpt: String,
+        cell_idx: usize,
     },
     /// A mid-turn user steer (`/steer` or an injected follow-up).
     Steer { text: String, cell_idx: usize },
@@ -425,9 +426,10 @@ pub(crate) fn sg_node_fingerprint(n: &SgNode, h: &mut impl std::hash::Hasher) {
             agent.hash(h);
             cell_idx.hash(h);
         }
-        SgNode::Answering { text_excerpt } => {
+        SgNode::Answering { text_excerpt, cell_idx } => {
             2u8.hash(h);
             text_excerpt.len().hash(h);
+            cell_idx.hash(h);
         }
         SgNode::Steer { text, cell_idx } => {
             3u8.hash(h);
@@ -622,7 +624,10 @@ impl Cell {
     pub fn is_peekable(&self) -> bool {
         matches!(
             self,
-            Cell::Thinking { .. } | Cell::Tool { .. } | Cell::TurnDone { .. }
+            Cell::Thinking { .. }
+                | Cell::Tool { .. }
+                | Cell::TurnDone { .. }
+                | Cell::Assistant { .. }
         )
     }
 
@@ -1751,6 +1756,9 @@ pub struct App {
     pub ctx_menu: Option<CtxMenu>,
     /// Last left-button press (cell idx, time) — for double-click detection.
     pub last_click: Option<(usize, Instant)>,
+    /// Last left-button press on a swarm card pane (run id, time) — separate
+    /// from `last_click` so prompt double-click detection doesn't clobber it.
+    pub last_swarm_click: Option<(u64, Instant)>,
     /// Last known mouse position (for anchoring the peek box).
     pub mouse_col: u16,
     pub mouse_row: u16,
@@ -1792,6 +1800,10 @@ pub struct App {
     pub sidegraph_drag_origin: Option<(u16, u16)>,
     pub sidegraph_drag_start_scroll: u16,
     pub sidegraph_drag_start_pan_x: u16,
+    /// Max scroll values captured at drag start, so content changes mid-drag
+    /// (new nodes appearing) don't shrink the clamp and snap the canvas back.
+    pub sidegraph_drag_start_max_scroll: u16,
+    pub sidegraph_drag_start_max_pan_x: u16,
     /// True once the user has manually panned / scrolled the sidegraph. When
     /// set, new nodes appearing must NOT move the canvas out from under them
     /// — we keep the viewport anchored instead of auto-scrolling to bottom.
@@ -2188,6 +2200,7 @@ pub async fn run_tui(
         peek_close: ratatui::layout::Rect::default(),
         ctx_menu: None,
         last_click: None,
+        last_swarm_click: None,
         mouse_col: 0,
         mouse_row: 0,
         input: InputState::new(),
@@ -2208,6 +2221,8 @@ pub async fn run_tui(
         sidegraph_drag_origin: None,
         sidegraph_drag_start_scroll: 0,
         sidegraph_drag_start_pan_x: 0,
+        sidegraph_drag_start_max_scroll: 0,
+        sidegraph_drag_start_max_pan_x: 0,
         sidegraph_user_panned: false,
         sidegraph_prev_max_scroll: 0,
         sidegraph_prev_max_scroll_x: 0,
@@ -3848,6 +3863,10 @@ impl App {
                     self.sidegraph_drag_origin = Some((m.column, m.row));
                     self.sidegraph_drag_start_scroll = self.sidegraph_scroll;
                     self.sidegraph_drag_start_pan_x = self.sidegraph_scroll_x;
+                    // Capture max values at drag start so content changes
+                    // mid-drag don't shrink the clamp and snap the canvas back.
+                    self.sidegraph_drag_start_max_scroll = self.sidegraph_max_scroll;
+                    self.sidegraph_drag_start_max_pan_x = self.sidegraph_max_scroll_x;
                     self.mouse_left_down = true;
                     self.selecting = false;
                     self.select_anchor = None;
@@ -3861,6 +3880,7 @@ impl App {
                     self.selecting = false;
                     self.scrollbar_drag = false;
                     self.last_click = None;
+                    self.last_swarm_click = None;
                     self.close_peek();
                     return;
                 }
@@ -3868,18 +3888,18 @@ impl App {
                 // peek modal (same modal the sidegraph kid boxes open).
                 if let Some(run_id) = self.swarm_pane_at_mouse(m.column, m.row) {
                     let dbl = self
-                        .last_click
-                        .map(|(ci, t)| ci == run_id as usize && t.elapsed() < Duration::from_millis(450))
+                        .last_swarm_click
+                        .map(|(rid, t)| rid == run_id && t.elapsed() < Duration::from_millis(450))
                         .unwrap_or(false);
                     if dbl {
-                        self.last_click = None;
+                        self.last_swarm_click = None;
                         self.selecting = false;
                         self.select_anchor = None;
                         self.selection = None;
                         self.open_swarm_peek(run_id);
                         return;
                     }
-                    self.last_click = Some((run_id as usize, Instant::now()));
+                    self.last_swarm_click = Some((run_id, Instant::now()));
                     // fall through so a single click still selects text etc.
                 }
                 // Double-click a User prompt (in the transcript OR the sticky
@@ -3902,6 +3922,7 @@ impl App {
                     self.last_click = Some((idx, Instant::now()));
                 } else {
                     self.last_click = None;
+                    self.last_swarm_click = None;
                 }
                 if self.hit_scrollbar(m.column, m.row) {
                     self.selecting = false;
@@ -3966,6 +3987,11 @@ impl App {
                         return;
                     }
                     // Right-click empty in sidegraph — no action (could reset view, but keep panning)
+                }
+                // Right-click on a `/swarm` card pane → open that subagent's peek modal.
+                if let Some(run_id) = self.swarm_pane_at_mouse(m.column, m.row) {
+                    self.open_swarm_peek(run_id);
+                    return;
                 }
                 self.scrollbar_drag = false;
                 self.selecting = false;
@@ -4071,13 +4097,15 @@ impl App {
         if self.sidegraph_drag_canvas {
             if let Some((start_col, start_row)) = self.sidegraph_drag_origin {
                 let delta_y = row as i32 - start_row as i32;
+                // Use the max values captured at drag start so content changes
+                // mid-drag don't shrink the clamp and snap the canvas back.
                 let new_scroll = (self.sidegraph_drag_start_scroll as i32 + delta_y)
-                    .clamp(0, self.sidegraph_max_scroll as i32) as u16;
+                    .clamp(0, self.sidegraph_drag_start_max_scroll as i32) as u16;
                 self.sidegraph_scroll = new_scroll;
 
                 let delta_x = col as i32 - start_col as i32;
                 let new_pan_x = (self.sidegraph_drag_start_pan_x as i32 - delta_x)
-                    .clamp(0, self.sidegraph_max_scroll_x as i32) as u16;
+                    .clamp(0, self.sidegraph_drag_start_max_pan_x as i32) as u16;
                 self.sidegraph_scroll_x = new_pan_x;
                 // User has taken control — keep canvas sticky
                 if delta_y.abs() > 1 || delta_x.abs() > 1 {
@@ -4423,6 +4451,7 @@ impl App {
         self.sidegraph_drag_border = false;
         self.sidegraph_drag_canvas = false;
         self.sidegraph_drag_origin = None;
+        self.last_swarm_click = None;
     }
 
     /// Wheel events over an open pinned peek scroll the peek body.
@@ -4505,16 +4534,22 @@ impl App {
     pub(crate) fn sidegraph_zoom_in(&mut self) {
         if self.sidegraph_zoom > 0 {
             self.sidegraph_zoom -= 1;
-            // Re-anchor to bottom on zoom so the newest node stays visible;
-            // horizontal pan is preserved so the user keeps their place.
+            // Re-anchor to bottom on zoom so the newest node stays visible.
+            // Also reset horizontal pan — the new zoom level has different
+            // content width, so the old pan offset would leave the canvas
+            // scrolled past the visible area, making content appear lost.
             self.sidegraph_scroll = 0;
+            self.sidegraph_scroll_x = 0;
         }
     }
 
     pub(crate) fn sidegraph_zoom_out(&mut self) {
         if self.sidegraph_zoom < 2 {
             self.sidegraph_zoom += 1;
+            // Same as zoom_in: reset both axes so the compacted canvas is
+            // fully visible and not stuck scrolled off the right edge.
             self.sidegraph_scroll = 0;
+            self.sidegraph_scroll_x = 0;
         }
     }
 
@@ -7142,8 +7177,20 @@ impl App {
                 Cell::Assistant { streaming, text } => {
                     if *streaming {
                         in_turn = true;
+                        // Provide a fallback excerpt so the Answering node is
+                        // never empty — poolside sometimes emits a streaming
+                        // Assistant cell with only whitespace/newlines before
+                        // the first real token arrives, which left the node
+                        // blank and unregistered in the sidegraph.
+                        let excerpt = first_line(text, 80);
+                        let excerpt = if excerpt.is_empty() {
+                            "…".to_string()
+                        } else {
+                            excerpt
+                        };
                         nodes.push(SgNode::Answering {
-                            text_excerpt: first_line(text, 80),
+                            text_excerpt: excerpt,
+                            cell_idx: idx,
                         });
                     }
                 }
@@ -7295,7 +7342,33 @@ impl App {
             "zoom0" | "zoomreset" | "reset" => {
                 self.sidegraph_zoom = 0;
                 self.sidegraph_scroll = 0;
+                self.sidegraph_scroll_x = 0;
+                self.sidegraph_user_panned = false;
                 self.push_note(Tone::Neutral, "sidegraph · zoom reset to detailed".into());
+                return;
+            }
+            "clear" | "refresh" | "reload" => {
+                // Clear the render cache so the next draw rebuilds from scratch,
+                // and reset scroll/pan so the user gets a clean view. This lets
+                // users recover if the graph gets into a bad state.
+                self.sidegraph_cache_lines.clear();
+                self.sidegraph_cache_fp = 0;
+                self.sidegraph_cache_w = 0;
+                self.sidegraph_cache_zoom = 0;
+                self.sidegraph_cache_max_line_w = 0;
+                self.sidegraph_hits.clear();
+                self.sidegraph_swarm_hits.clear();
+                self.sidegraph_scroll = 0;
+                self.sidegraph_scroll_x = 0;
+                self.sidegraph_user_panned = false;
+                self.sidegraph_last_click = None;
+                if self.sidegraph_open {
+                    self.sidegraph_model = Some(self.build_sidegraph_model());
+                }
+                self.push_note(
+                    Tone::Neutral,
+                    "sidegraph · cache cleared, view refreshed".into(),
+                );
                 return;
             }
             "on" | "live" | "" => {}

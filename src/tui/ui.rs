@@ -2952,6 +2952,9 @@ fn draw_sidegraph_panel(f: &mut Frame, app: &mut App, area: Rect) {
     // changes the scroll offsets applied at render time.
     let iw = inner.width as usize;
     let zoom = app.sidegraph_zoom;
+    // Track whether the cache was rebuilt this frame — used below to keep the
+    // viewport stable when the user has panned (only adjust on content change).
+    let dirty;
     if iw >= 8 && inner.height > 0 {
         let empty_model = crate::tui::app::SideGraphModel {
             query: String::new(),
@@ -2986,7 +2989,7 @@ fn draw_sidegraph_panel(f: &mut Frame, app: &mut App, area: Rect) {
         };
         let fp = sidegraph_fingerprint(model, &runs, spin_phase);
 
-        let dirty = fp != app.sidegraph_cache_fp
+        dirty = fp != app.sidegraph_cache_fp
             || iw as u16 != app.sidegraph_cache_w
             || zoom != app.sidegraph_cache_zoom;
 
@@ -3018,6 +3021,7 @@ fn draw_sidegraph_panel(f: &mut Frame, app: &mut App, area: Rect) {
         app.sidegraph_cache_fp = 0;
         app.sidegraph_hits.clear();
         app.sidegraph_swarm_hits.clear();
+        dirty = true;
     }
 
     let lines = &app.sidegraph_cache_lines;
@@ -3026,8 +3030,11 @@ fn draw_sidegraph_panel(f: &mut Frame, app: &mut App, area: Rect) {
     let total = lines.len() as u16;
     let view = inner.height;
     let max_scroll = total.saturating_sub(view);
-    // Keep viewport stable if user has panned — new nodes appearing should not shove the canvas.
-    if app.sidegraph_user_panned && app.sidegraph_prev_max_scroll > 0 {
+    // Keep viewport stable if user has panned — new nodes appearing should not
+    // shove the canvas out from under them. We only adjust scroll when the
+    // content actually grew (cache was rebuilt this frame), not every frame —
+    // otherwise prev_max_scroll == max_scroll and delta is always 0.
+    if app.sidegraph_user_panned && app.sidegraph_prev_max_scroll > 0 && dirty {
         let delta = max_scroll.saturating_sub(app.sidegraph_prev_max_scroll);
         if delta > 0 && app.sidegraph_scroll > 0 {
             // Keep the same top by growing scroll with the content
@@ -3038,7 +3045,9 @@ fn draw_sidegraph_panel(f: &mut Frame, app: &mut App, area: Rect) {
         }
     }
     app.sidegraph_max_scroll = max_scroll;
-    app.sidegraph_prev_max_scroll = max_scroll;
+    if dirty {
+        app.sidegraph_prev_max_scroll = max_scroll;
+    }
     if app.sidegraph_scroll > max_scroll {
         app.sidegraph_scroll = max_scroll;
     }
@@ -3048,7 +3057,9 @@ fn draw_sidegraph_panel(f: &mut Frame, app: &mut App, area: Rect) {
     let max_pan_x = max_line_w.saturating_sub(inner.width);
     // Horizontal is absolute from left, so it is naturally stable when user panned.
     app.sidegraph_max_scroll_x = max_pan_x;
-    app.sidegraph_prev_max_scroll_x = max_pan_x;
+    if dirty {
+        app.sidegraph_prev_max_scroll_x = max_pan_x;
+    }
     if app.sidegraph_scroll_x > max_pan_x {
         app.sidegraph_scroll_x = max_pan_x;
     }
@@ -3693,13 +3704,14 @@ fn sg_build_spine(
                 }
                 spine.push(lay);
             }
-            SgNode::Answering { text_excerpt } => spine.push(SgLay::new(
+            SgNode::Answering { text_excerpt, cell_idx } => spine.push(SgLay::new_with_cell(
                 "✎",
                 theme::CYAN,
                 "answering",
                 "",
                 theme::CYAN,
                 vec![(text_excerpt.clone(), theme::MUTED)],
+                Some(*cell_idx),
             )),
             SgNode::Steer { text, .. } => {
                 if let Some(t) = last_thinking {
@@ -4038,13 +4050,14 @@ fn sg_build_forest(
                     map.entry(name.clone()).or_default().push(lay);
                 }
             }
-            SgNode::Answering { text_excerpt } => main.push(SgLay::new(
+            SgNode::Answering { text_excerpt, cell_idx } => main.push(SgLay::new_with_cell(
                 "✎",
                 theme::CYAN,
                 "answering",
                 "",
                 theme::CYAN,
                 vec![(text_excerpt.clone(), theme::MUTED)],
+                Some(*cell_idx),
             )),
             SgNode::Steer { text, cell_idx } => {
                 if let Some(t) = last_thinking {
@@ -7164,14 +7177,18 @@ mod sidegraph_canvas_tests {
                     agent: false,
                     cell_idx: 1,
                 },
+                SgNode::Answering {
+                    text_excerpt: "the canvas now paints into a character grid".into(),
+                    cell_idx: 2,
+                },
                 SgNode::Steer {
                     text: "also centre the boxes".into(),
-                    cell_idx: 2,
+                    cell_idx: 3,
                 },
                 SgNode::Done {
                     duration: Duration::from_secs(41),
                     interrupted: false,
-                    cell_idx: 3,
+                    cell_idx: 4,
                 },
             ],
             nodes_fp: 0,
@@ -7415,7 +7432,7 @@ mod sidegraph_canvas_tests {
         assert_ne!(a, c, "spinner phase must affect the fingerprint");
         // A new node changes the precomputed nodes_fp → changes the frame fp.
         let mut m2 = m.clone();
-        m2.nodes.push(SgNode::Answering { text_excerpt: "writing".into() });
+        m2.nodes.push(SgNode::Answering { text_excerpt: "writing".into(), cell_idx: 99 });
         recompute_fp(&mut m2);
         let d = sidegraph_fingerprint(&m2, &[], 0);
         assert_ne!(a, d, "adding a node must change the fingerprint");

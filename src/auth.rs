@@ -533,7 +533,7 @@ pub fn ensure_fresh_oauth(auth: &mut Auth) -> Result<()> {
 pub fn resolve_oauth_access_token(provider_id: &str) -> Result<Option<String>> {
     let _guard = oauth_store_guard();
     if let Some(mut auth) = load_auth()? {
-        if matches!(auth.auth_method, AuthMethod::Oauth) && auth.provider == provider_id {
+        if matches!(auth.auth_method, AuthMethod::Oauth) && !provider_mismatch(&auth, provider_id) {
             ensure_fresh_oauth(&mut auth)?;
             return Ok(non_empty_access_token(&auth));
         }
@@ -562,7 +562,7 @@ pub fn resolve_oauth_access_token(provider_id: &str) -> Result<Option<String>> {
 pub fn force_refresh_oauth(provider_id: &str) -> Result<bool> {
     let _guard = oauth_store_guard();
     if let Some(mut auth) = load_auth()? {
-        if matches!(auth.auth_method, AuthMethod::Oauth) && auth.provider == provider_id {
+        if matches!(auth.auth_method, AuthMethod::Oauth) && !provider_mismatch(&auth, provider_id) {
             let Some(refresh) = auth
                 .refresh_token
                 .clone()
