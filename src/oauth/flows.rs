@@ -1959,6 +1959,9 @@ pub mod antigravity {
     const API_CLIENT: &str = "google-cloud-sdk vscode_cloudshelleditor/0.1";
     const CLIENT_METADATA: &str =
         r#"{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}"#;
+    /// Free-tier Code Assist uses a Google-managed project. Passing a project
+    /// into `onboardUser` for free-tier causes Precondition Failed (gemini-cli).
+    const FREE_TIER: &str = "free-tier";
 
     #[derive(Deserialize)]
     struct TokenResponse {
@@ -1975,6 +1978,12 @@ pub mod antigravity {
         cloud_project: Option<serde_json::Value>,
         #[serde(rename = "allowedTiers")]
         allowed_tiers: Option<Vec<Tier>>,
+        #[serde(rename = "currentTier")]
+        current_tier: Option<Tier>,
+        #[serde(rename = "paidTier")]
+        paid_tier: Option<Tier>,
+        #[serde(rename = "ineligibleTiers")]
+        ineligible_tiers: Option<Vec<IneligibleTier>>,
     }
 
     #[derive(Deserialize)]
@@ -1982,11 +1991,24 @@ pub mod antigravity {
         id: String,
         #[serde(rename = "isDefault")]
         is_default: Option<bool>,
+        #[serde(rename = "hasOnboardedPreviously")]
+        has_onboarded_previously: Option<bool>,
+    }
+
+    #[derive(Deserialize)]
+    struct IneligibleTier {
+        #[serde(rename = "reasonMessage")]
+        reason_message: Option<String>,
+        #[serde(rename = "reasonCode")]
+        reason_code: Option<String>,
+        #[serde(rename = "validationUrl")]
+        validation_url: Option<String>,
     }
 
     #[derive(Deserialize)]
     struct OnboardResponse {
         done: Option<bool>,
+        name: Option<String>,
         response: Option<OnboardInner>,
     }
 
@@ -1994,6 +2016,13 @@ pub mod antigravity {
     struct OnboardInner {
         #[serde(rename = "cloudaicompanionProject")]
         project: Option<serde_json::Value>,
+    }
+
+    /// Result of full Code Assist setup (load + optional free-tier onboard).
+    #[derive(Debug, Clone, Default)]
+    pub struct CodeAssistSetup {
+        pub project_id: String,
+        pub tier_id: String,
     }
 
     /// `cloudaicompanionProject` arrives either as a bare id or as an object
@@ -2008,6 +2037,8 @@ pub mod antigravity {
             _ => String::new(),
         }
     }
+
+
 
     // ── Import existing Antigravity / Gemini CLI credentials ────────────────
 
@@ -2116,18 +2147,18 @@ foreach ($t in $targets) {
         let expiry_str = token_obj.get("expiry").and_then(|x| x.as_str());
         let expires_at = expiry_str.and_then(parse_expiry_to_unix);
 
-        // Best-effort: load Code Assist project id for x-goog-user-project header
+        // Best-effort: full Code Assist setup (load + free-tier onboard when needed).
+        // Mirrors gemini-cli `setupUser` so free-tier managed projects activate.
         let mut extra = serde_json::json!({
             "via": "antigravity-cli-wincred",
             "auth_method": v.get("auth_method").and_then(|x| x.as_str()).unwrap_or("consumer"),
         });
-        // Try to fetch project id via Cloud Code API (may fail offline)
-        if let Ok((pid, tid)) = load_code_assist(access) {
-            if !pid.is_empty() {
-                extra["project_id"] = serde_json::Value::String(pid);
+        if let Ok(setup) = setup_code_assist(access, None) {
+            if !setup.project_id.is_empty() {
+                extra["project_id"] = serde_json::Value::String(setup.project_id);
             }
-            if !tid.is_empty() {
-                extra["tier_id"] = serde_json::Value::String(tid);
+            if !setup.tier_id.is_empty() {
+                extra["tier_id"] = serde_json::Value::String(setup.tier_id);
             }
         }
 
@@ -2211,12 +2242,12 @@ foreach ($t in $targets) {
                 "via": "gemini-cli-file",
                 "path": path.display().to_string(),
             });
-            if let Ok((pid, tid)) = load_code_assist(access) {
-                if !pid.is_empty() {
-                    extra["project_id"] = serde_json::Value::String(pid);
+            if let Ok(setup) = setup_code_assist(access, None) {
+                if !setup.project_id.is_empty() {
+                    extra["project_id"] = serde_json::Value::String(setup.project_id);
                 }
-                if !tid.is_empty() {
-                    extra["tier_id"] = serde_json::Value::String(tid);
+                if !setup.tier_id.is_empty() {
+                    extra["tier_id"] = serde_json::Value::String(setup.tier_id);
                 }
             }
             return Some(OAuthTokens {
@@ -2311,53 +2342,42 @@ foreach ($t in $targets) {
             BrowserLoginProgress::Status("loading Code Assist project…".into()),
         );
 
-        let (project_id, tier_id) = match load_code_assist(&tokens.access_token) {
-            Ok(v) => v,
+        send(
+            tx,
+            BrowserLoginProgress::Status("setting up Code Assist (load + onboard if needed)…".into()),
+        );
+        let env_project = crate::providers::explicit_google_cloud_project_from_env();
+        let setup = match setup_code_assist(&tokens.access_token, env_project.as_deref()) {
+            Ok(s) => s,
             Err(e) => {
-                // If load assist fails, still return tokens – project_id may be optional for some endpoints
                 send(
                     tx,
                     BrowserLoginProgress::Status(format!(
-                        "loadCodeAssist warning: {e} – continuing with token only"
+                        "Code Assist setup warning: {e} – continuing with token only"
                     )),
                 );
-                (String::new(), "legacy-tier".to_string())
+                CodeAssistSetup::default()
             }
         };
-
-        let mut project_id = project_id;
-        if !project_id.is_empty() {
+        if !setup.project_id.is_empty() {
             send(
                 tx,
                 BrowserLoginProgress::Status(format!(
-                    "onboarding project {project_id} (tier {tier_id})…"
+                    "Code Assist project {} (tier {})",
+                    setup.project_id, setup.tier_id
                 )),
             );
-            // The server may hand back a different project than we asked for;
-            // that is the one every later Code Assist call has to quote.
-            if let Ok(Some(assigned)) = complete_onboarding(&tokens.access_token, &project_id, &tier_id)
-            {
-                if assigned != project_id {
-                    send(
-                        tx,
-                        BrowserLoginProgress::Status(format!(
-                            "server assigned project {assigned}"
-                        )),
-                    );
-                    project_id = assigned;
-                }
-            }
         }
 
         let mut extra = serde_json::json!({
             "via": "antigravity-oauth",
             "auth_method": "consumer",
         });
-        if !project_id.is_empty() {
-            extra["project_id"] = serde_json::Value::String(project_id.clone());
+        if !setup.project_id.is_empty() {
+            extra["project_id"] = serde_json::Value::String(setup.project_id.clone());
         }
-        if !tier_id.is_empty() {
-            extra["tier_id"] = serde_json::Value::String(tier_id.clone());
+        if !setup.tier_id.is_empty() {
+            extra["tier_id"] = serde_json::Value::String(setup.tier_id.clone());
         }
 
         Ok(OAuthTokens {
@@ -2425,13 +2445,24 @@ foreach ($t in $targets) {
         })
     }
 
-    fn load_code_assist(access_token: &str) -> Result<(String, String)> {        let body = serde_json::json!({
-            "metadata": {
-                "ideType": "IDE_UNSPECIFIED",
-                "platform": "PLATFORM_UNSPECIFIED",
-                "pluginType": "GEMINI"
-            }
+    /// Call `loadCodeAssist` the way gemini-cli does: optional env project +
+    /// `metadata.duetProject`. Returns the full parsed response.
+    fn load_code_assist(
+        access_token: &str,
+        env_project: Option<&str>,
+    ) -> Result<LoadAssistResponse> {
+        let mut metadata = serde_json::json!({
+            "ideType": "IDE_UNSPECIFIED",
+            "platform": "PLATFORM_UNSPECIFIED",
+            "pluginType": "GEMINI"
         });
+        if let Some(p) = env_project.filter(|s| !s.is_empty()) {
+            metadata["duetProject"] = serde_json::Value::String(p.to_string());
+        }
+        let mut body = serde_json::json!({ "metadata": metadata });
+        if let Some(p) = env_project.filter(|s| !s.is_empty()) {
+            body["cloudaicompanionProject"] = serde_json::Value::String(p.to_string());
+        }
 
         let resp = http()?
             .post(LOAD_ASSIST_URL)
@@ -2456,54 +2487,205 @@ foreach ($t in $targets) {
             )));
         }
 
-        let parsed: LoadAssistResponse = serde_json::from_str(&text)
-            .map_err(|e| MuseError::Other(format!("invalid loadCodeAssist JSON: {e}")))?;
+        serde_json::from_str(&text)
+            .map_err(|e| MuseError::Other(format!("invalid loadCodeAssist JSON: {e}")))
+    }
 
-        let project_id = project_id_of(parsed.cloud_project);
+    /// Full Code Assist setup matching gemini-cli `setupUser`:
+    /// 1. Prefer `GOOGLE_CLOUD_PROJECT` env when set
+    /// 2. loadCodeAssist
+    /// 3. If already has currentTier + project → done (unless `force`)
+    /// 4. Else onboardUser — free-tier must NOT send cloudaicompanionProject
+    /// 5. Poll LRO until done; use server-assigned project id
+    pub fn setup_code_assist(
+        access_token: &str,
+        env_project: Option<&str>,
+    ) -> Result<CodeAssistSetup> {
+        setup_code_assist_inner(access_token, env_project, false)
+    }
 
-        let mut tier_id = "legacy-tier".to_string();
-        if let Some(tiers) = parsed.allowed_tiers {
-            for tier in tiers {
-                if tier.is_default.unwrap_or(false) {
-                    tier_id = tier.id;
-                    break;
+    /// Like [`setup_code_assist`], but re-runs `onboardUser` even when
+    /// `currentTier` is already present. Used for 403 Cloud Code Private API
+    /// recovery where a stored free-tier project is not yet activated.
+    pub fn setup_code_assist_force(
+        access_token: &str,
+        env_project: Option<&str>,
+    ) -> Result<CodeAssistSetup> {
+        setup_code_assist_inner(access_token, env_project, true)
+    }
+
+    fn setup_code_assist_inner(
+        access_token: &str,
+        env_project: Option<&str>,
+        force: bool,
+    ) -> Result<CodeAssistSetup> {
+        let env_project = env_project
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .or_else(crate::providers::explicit_google_cloud_project_from_env);
+
+        let load = load_code_assist(access_token, env_project.as_deref())?;
+
+        // Already onboarded: currentTier present (skip when force-recovering).
+        if !force {
+            if let Some(ref current) = load.current_tier {
+                let project = project_id_of(load.cloud_project.clone());
+                let tier_id = load
+                    .paid_tier
+                    .as_ref()
+                    .map(|t| t.id.clone())
+                    .unwrap_or_else(|| current.id.clone());
+                if !project.is_empty() {
+                    return Ok(CodeAssistSetup {
+                        project_id: project,
+                        tier_id,
+                    });
                 }
+                // currentTier but no server project — fall back to env project.
+                if let Some(p) = env_project.clone() {
+                    return Ok(CodeAssistSetup {
+                        project_id: p,
+                        tier_id,
+                    });
+                }
+                // Continue to onboard if allowed tiers exist.
             }
         }
 
-        Ok((project_id, tier_id))
-    }
+        let tier = pick_onboard_tier(&load);
+        let tier_id = tier.id.clone();
 
-    /// Public: resolve the Cloud Code project id for an access token via
-    /// `loadCodeAssist`. Used by the API layer when a Gemini Cloud Code request
-    /// has no stored `project_id` on its OAuth session (the body requires one).
-    pub fn resolve_project_id(access_token: &str) -> Result<String> {
-        let (project_id, _tier) = load_code_assist(access_token)?;
+        // free-tier: never send cloudaicompanionProject (Precondition Failed).
+        // paid/standard: send env project when available.
+        // force free-tier recovery also omits project so the server can assign
+        // a fresh managed project when the stored one returns 403.
+        let assigned = complete_onboarding(
+            access_token,
+            if tier_id == FREE_TIER {
+                None
+            } else {
+                env_project.as_deref()
+            },
+            &tier_id,
+        )?;
+
+        let project_id = assigned
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                // On force free-tier, prefer the newly assigned project only;
+                // fall back to loadCodeAssist project / env last.
+                if force && tier_id == FREE_TIER {
+                    let from_load = project_id_of(load.cloud_project.clone());
+                    if !from_load.is_empty() {
+                        return Some(from_load);
+                    }
+                }
+                env_project.clone()
+            })
+            .or_else(|| {
+                let from_load = project_id_of(load.cloud_project.clone());
+                (!from_load.is_empty()).then_some(from_load)
+            })
+            .unwrap_or_default();
+
         if project_id.is_empty() {
+            // Surface free-tier ineligibility if the server explained it.
+            if let Some(reasons) = load.ineligible_tiers.as_ref() {
+                let msg = reasons
+                    .iter()
+                    .filter_map(|t| t.reason_message.as_deref())
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                if !msg.is_empty() {
+                    return Err(MuseError::Other(format!(
+                        "Code Assist ineligible: {msg}. Set GOOGLE_CLOUD_PROJECT for a paid/workspace project, or fix the account at the validation URL. Or run `/login antigravity` after signing into the Antigravity/Gemini CLI."
+                    )));
+                }
+            }
             return Err(MuseError::Other(
-                "loadCodeAssist returned no cloudaicompanionProject".into(),
+                "Code Assist setup returned no project id. Run `/login antigravity`, enable the Cloud Code API, or set GOOGLE_CLOUD_PROJECT to a project where Code Assist is available.".into(),
             ));
         }
-        Ok(project_id)
+
+        Ok(CodeAssistSetup {
+            project_id,
+            tier_id,
+        })
     }
-    /// asked for, and that is the id later calls must use.
+
+    fn clone_tier(tier: &Tier) -> Tier {
+        Tier {
+            id: tier.id.clone(),
+            is_default: tier.is_default,
+            has_onboarded_previously: tier.has_onboarded_previously,
+        }
+    }
+
+    /// Tier pick: default allowed tier → free-tier preference → first allowed → free-tier.
+    fn pick_onboard_tier(load: &LoadAssistResponse) -> Tier {
+        if let Some(tiers) = load.allowed_tiers.as_ref() {
+            if let Some(tier) = tiers.iter().find(|t| t.is_default.unwrap_or(false)) {
+                return clone_tier(tier);
+            }
+            if let Some(tier) = tiers.iter().find(|t| {
+                let id = t.id.to_ascii_lowercase();
+                id == FREE_TIER || id.contains("free")
+            }) {
+                return clone_tier(tier);
+            }
+            if let Some(first) = tiers.first() {
+                return clone_tier(first);
+            }
+        }
+        // Prefer currentTier when allowed list is empty.
+        if let Some(ref current) = load.current_tier {
+            if !current.id.trim().is_empty() {
+                return clone_tier(current);
+            }
+        }
+        Tier {
+            id: FREE_TIER.to_string(),
+            is_default: Some(true),
+            has_onboarded_previously: None,
+        }
+    }
+
+    /// Public: resolve the Cloud Code project id for an access token via full
+    /// setup (load + onboard when needed). Used by the API layer when a Gemini
+    /// Cloud Code request has no stored `project_id` on its OAuth session.
+    pub fn resolve_project_id(access_token: &str) -> Result<String> {
+        let setup = setup_code_assist(access_token, None)?;
+        if setup.project_id.is_empty() {
+            return Err(MuseError::Other(
+                "Code Assist setup returned no cloudaicompanionProject".into(),
+            ));
+        }
+        Ok(setup.project_id)
+    }
+
+    /// Onboard the user. For free-tier, `project_id` must be `None` (gemini-cli).
+    /// Polls the LRO until done and returns the server-assigned project id.
     fn complete_onboarding(
         access_token: &str,
-        project_id: &str,
+        project_id: Option<&str>,
         tier_id: &str,
     ) -> Result<Option<String>> {
-        // Best-effort with retries
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "tierId": tier_id,
             "metadata": {
                 "ideType": "IDE_UNSPECIFIED",
                 "platform": "PLATFORM_UNSPECIFIED",
                 "pluginType": "GEMINI"
             },
-            "cloudaicompanionProject": project_id
         });
+        if let Some(p) = project_id.filter(|s| !s.is_empty()) {
+            body["cloudaicompanionProject"] = serde_json::Value::String(p.to_string());
+            body["metadata"]["duetProject"] = serde_json::Value::String(p.to_string());
+        }
 
-        for attempt in 0..10 {
+        let mut last_err = String::new();
+        for attempt in 0..12 {
             let resp = http()?
                 .post(ONBOARD_URL)
                 .header("Authorization", format!("Bearer {access_token}"))
@@ -2516,21 +2698,34 @@ foreach ($t in $targets) {
 
             let resp = match resp {
                 Ok(r) => r,
-                Err(_) => {
+                Err(e) => {
+                    last_err = e.to_string();
                     std::thread::sleep(Duration::from_secs(2));
                     continue;
                 }
             };
 
-            if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().unwrap_or_default();
+            if !status.is_success() {
+                last_err = format!("{status}: {text}");
+                // Precondition on free-tier with project set: retry without project.
+                if tier_id == FREE_TIER && body.get("cloudaicompanionProject").is_some() {
+                    body.as_object_mut().map(|o| {
+                        o.remove("cloudaicompanionProject");
+                        if let Some(serde_json::Value::Object(m)) = o.get_mut("metadata") {
+                            m.remove("duetProject");
+                        }
+                    });
+                }
                 std::thread::sleep(Duration::from_secs(2));
                 continue;
             }
 
-            let text = resp.text().unwrap_or_default();
             let parsed: OnboardResponse = match serde_json::from_str(&text) {
                 Ok(v) => v,
-                Err(_) => {
+                Err(e) => {
+                    last_err = e.to_string();
                     std::thread::sleep(Duration::from_secs(2));
                     continue;
                 }
@@ -2541,11 +2736,18 @@ foreach ($t in $targets) {
                 return Ok((!assigned.is_empty()).then_some(assigned));
             }
 
-            if attempt < 9 {
+            // LRO still running — if we got a name, keep polling via onboardUser
+            // with the same body (server is eventually consistent).
+            if attempt < 11 {
                 std::thread::sleep(Duration::from_secs(5));
             }
         }
 
+        if !last_err.is_empty() {
+            return Err(MuseError::Other(format!(
+                "onboardUser did not complete: {last_err}"
+            )));
+        }
         // Non-fatal: onboarding may already be done server-side
         Ok(None)
     }
@@ -2607,21 +2809,26 @@ foreach ($t in $targets) {
             return Err(MuseError::Other("empty access token on refresh".into()));
         }
 
-        // Preserve existing project_id from meta if present
+        // Preserve existing meta; re-run setup when project is missing so free-tier
+        // managed projects stay activated after token refresh.
         let mut extra = auth
             .oauth_meta
             .as_ref()
             .map(|m| m.extra.clone())
             .unwrap_or_else(|| serde_json::json!({}));
 
-        // Ensure project_id still present; if not, try reload
-        if extra.get("project_id").is_none() {
-            if let Ok((pid, tid)) = load_code_assist(&parsed.access_token) {
-                if !pid.is_empty() {
-                    extra["project_id"] = serde_json::Value::String(pid);
+        let needs_setup = extra
+            .get("project_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().is_empty())
+            .unwrap_or(true);
+        if needs_setup {
+            if let Ok(setup) = setup_code_assist(&parsed.access_token, None) {
+                if !setup.project_id.is_empty() {
+                    extra["project_id"] = serde_json::Value::String(setup.project_id);
                 }
-                if !tid.is_empty() {
-                    extra["tier_id"] = serde_json::Value::String(tid);
+                if !setup.tier_id.is_empty() {
+                    extra["tier_id"] = serde_json::Value::String(setup.tier_id);
                 }
             }
         }
@@ -2636,6 +2843,129 @@ foreach ($t in $targets) {
                 extra,
             }),
         })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn project_id_of_accepts_string_and_object() {
+            assert_eq!(
+                project_id_of(Some(serde_json::json!("vivid-question-5fs6l"))),
+                "vivid-question-5fs6l"
+            );
+            assert_eq!(
+                project_id_of(Some(serde_json::json!({"id": "my-proj"}))),
+                "my-proj"
+            );
+            assert_eq!(project_id_of(None), "");
+            assert_eq!(project_id_of(Some(serde_json::json!(null))), "");
+            assert_eq!(project_id_of(Some(serde_json::json!({}))), "");
+        }
+
+        #[test]
+        fn pick_onboard_tier_prefers_default_then_free() {
+            let load = LoadAssistResponse {
+                cloud_project: None,
+                allowed_tiers: Some(vec![
+                    Tier {
+                        id: "standard-tier".into(),
+                        is_default: Some(false),
+                        has_onboarded_previously: None,
+                    },
+                    Tier {
+                        id: FREE_TIER.into(),
+                        is_default: Some(true),
+                        has_onboarded_previously: Some(false),
+                    },
+                ]),
+                current_tier: None,
+                paid_tier: None,
+                ineligible_tiers: None,
+            };
+            assert_eq!(pick_onboard_tier(&load).id, FREE_TIER);
+        }
+
+        #[test]
+        fn pick_onboard_tier_prefers_free_when_no_default() {
+            let load = LoadAssistResponse {
+                cloud_project: None,
+                allowed_tiers: Some(vec![
+                    Tier {
+                        id: "standard-tier".into(),
+                        is_default: Some(false),
+                        has_onboarded_previously: None,
+                    },
+                    Tier {
+                        id: FREE_TIER.into(),
+                        is_default: Some(false),
+                        has_onboarded_previously: None,
+                    },
+                ]),
+                current_tier: None,
+                paid_tier: None,
+                ineligible_tiers: None,
+            };
+            assert_eq!(pick_onboard_tier(&load).id, FREE_TIER);
+        }
+
+        #[test]
+        fn pick_onboard_tier_falls_back_to_current_then_free() {
+            let with_current = LoadAssistResponse {
+                cloud_project: None,
+                allowed_tiers: None,
+                current_tier: Some(Tier {
+                    id: "legacy-tier".into(),
+                    is_default: None,
+                    has_onboarded_previously: Some(true),
+                }),
+                paid_tier: None,
+                ineligible_tiers: None,
+            };
+            assert_eq!(pick_onboard_tier(&with_current).id, "legacy-tier");
+
+            let empty = LoadAssistResponse {
+                cloud_project: None,
+                allowed_tiers: None,
+                current_tier: None,
+                paid_tier: None,
+                ineligible_tiers: None,
+            };
+            assert_eq!(pick_onboard_tier(&empty).id, FREE_TIER);
+        }
+
+        #[test]
+        fn parse_load_assist_response_shape() {
+            // No network: exercise the same serde shape setup_code_assist uses.
+            let text = r#"{
+                "cloudaicompanionProject": {"id": "vivid-question-5fs6l"},
+                "currentTier": {"id": "free-tier", "isDefault": true},
+                "allowedTiers": [
+                    {"id": "free-tier", "isDefault": true, "hasOnboardedPreviously": true},
+                    {"id": "standard-tier", "isDefault": false}
+                ],
+                "paidTier": {"id": "standard-tier"}
+            }"#;
+            let parsed: LoadAssistResponse = serde_json::from_str(text).unwrap();
+            assert_eq!(
+                project_id_of(parsed.cloud_project.clone()),
+                "vivid-question-5fs6l"
+            );
+            assert_eq!(
+                parsed.current_tier.as_ref().map(|t| t.id.as_str()),
+                Some(FREE_TIER)
+            );
+            // When already onboarded, pick still returns free-tier as default.
+            assert_eq!(pick_onboard_tier(&parsed).id, FREE_TIER);
+
+            let bare = r#"{"cloudaicompanionProject":"proj-bare-string"}"#;
+            let bare_parsed: LoadAssistResponse = serde_json::from_str(bare).unwrap();
+            assert_eq!(
+                project_id_of(bare_parsed.cloud_project),
+                "proj-bare-string"
+            );
+        }
     }
 }
 

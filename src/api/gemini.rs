@@ -344,6 +344,10 @@ mod tests {
         let body = build_body(&sample_request(), "vivid-question-5fs6l", "gemini-2.5-flash");
         assert_eq!(body["project"], "vivid-question-5fs6l");
         assert_eq!(body["model"], "gemini-2.5-flash");
+        // Top-level shape matches Gemini CLI / cloudcode-pa generateContent.
+        assert!(body.get("request").is_some());
+        assert!(body.get("project").is_some());
+        assert!(body.get("model").is_some());
         // user message translated to a Gemini content turn
         assert_eq!(body["request"]["contents"][0]["role"], "user");
         assert_eq!(
@@ -360,6 +364,18 @@ mod tests {
             body["request"]["tools"][0]["functionDeclarations"][0]["name"],
             "get_time"
         );
+    }
+
+    #[test]
+    fn cloud_code_body_uses_caller_normalized_bare_model_id() {
+        // Client normalizes via normalize_antigravity_model_id before build_body;
+        // document that the wire model must be bare (no models/ prefix).
+        let bare = crate::providers::normalize_antigravity_model_id("models/gemini-2.5-flash");
+        let body = build_body(&sample_request(), "proj-x", &bare);
+        assert_eq!(body["model"], "gemini-2.5-flash");
+        assert!(!body["model"].as_str().unwrap_or("").starts_with("models/"));
+        assert_eq!(body["project"], "proj-x");
+        assert!(body["request"]["contents"].is_array());
     }
 
     #[test]

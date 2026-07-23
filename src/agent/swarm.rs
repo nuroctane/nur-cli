@@ -21,8 +21,10 @@ const TEXT_CAP: usize = 240;
 const PULSE_CAP: usize = 64;
 /// Finished runs retained before the oldest are dropped.
 const HISTORY_CAP: usize = 24;
-/// Tool-event trace lines retained per run (drives the kid peek modal).
-const TRACE_CAP: usize = 40;
+/// Tool-event trace entries retained per run (drives the kid peek modal).
+const TRACE_CAP: usize = 48;
+/// Cap on stored args/result body per tool entry (peek expand shows full stored).
+const TRACE_BODY_CAP: usize = 12_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RunState {
@@ -35,6 +37,83 @@ pub enum RunState {
 impl RunState {
     pub fn is_terminal(self) -> bool {
         !matches!(self, RunState::Running)
+    }
+}
+
+/// One tool invocation inside a subagent run — header + optional bodies for the
+/// expandable kid peek modal (sidegraph box and `/swarm` card share this).
+#[derive(Debug, Clone)]
+pub struct TraceEntry {
+    pub name: String,
+    /// Clipped tool arguments JSON/string.
+    pub args: String,
+    /// Clipped tool result body (empty while still running).
+    pub result: String,
+    /// `None` while in flight; `Some(ok)` after `tool_end`.
+    pub ok: Option<bool>,
+}
+
+impl TraceEntry {
+    /// One-line header for lists: `✓ bash` / `⚒ read_file` / `✗ grep`.
+    pub fn header_line(&self) -> String {
+        let glyph = match self.ok {
+            Some(true) => "✓",
+            Some(false) => "✗",
+            None => "⚒",
+        };
+        format!("{glyph} {}", self.name)
+    }
+
+    /// Full copy payload for this single entry (header + args + result).
+    pub fn copy_text(&self) -> String {
+        let mut s = self.header_line();
+        s.push('\n');
+        if !self.args.trim().is_empty() {
+            s.push_str("── args ──\n");
+            s.push_str(self.args.trim());
+            s.push('\n');
+        }
+        if !self.result.trim().is_empty() {
+            s.push_str("── output ──\n");
+            s.push_str(self.result.trim());
+            s.push('\n');
+        } else if self.ok.is_none() {
+            s.push_str("(still running)\n");
+        }
+        s
+    }
+
+    /// Does this entry have anything to unfold (args or output)? Headers with no
+    /// body are rendered non-expandable so the caret only shows when it means
+    /// something.
+    pub fn has_body(&self) -> bool {
+        !self.args.trim().is_empty() || !self.result.trim().is_empty() || self.ok.is_none()
+    }
+
+    /// Body payload (args + output) as labelled section strings, for the inline
+    /// expanded view in the peek. Header is NOT included (the caller draws it).
+    pub fn body_sections(&self) -> Vec<(&'static str, String)> {
+        let mut out = Vec::new();
+        if !self.args.trim().is_empty() {
+            out.push(("args", self.args.trim().to_string()));
+        }
+        if !self.result.trim().is_empty() {
+            out.push(("output", self.result.trim().to_string()));
+        } else if self.ok.is_none() {
+            out.push(("output", "(still running)".to_string()));
+        }
+        out
+    }
+
+    /// Test-only constructor: a finished entry with just a name + outcome.
+    #[cfg(test)]
+    pub fn test_entry(name: &str, ok: Option<bool>) -> Self {
+        TraceEntry {
+            name: name.to_string(),
+            args: String::new(),
+            result: String::new(),
+            ok,
+        }
     }
 }
 
@@ -58,10 +137,9 @@ pub struct AgentRun {
     pub tokens: u64,
     /// Recent activity intensity, oldest first — rendered as a sparkline.
     pub pulse: Vec<u8>,
-    /// Bounded log of recent tool events (`tool name` + ok/failed), newest last.
-    /// Feeds the kid click-to-peek modal so a subagent's tool activity is
-    /// inspectable without persisting full args/results (which we don't have).
-    pub trace: Vec<String>,
+    /// Bounded log of tool invocations (name + args + result), newest last.
+    /// Feeds the kid click-to-peek modal (sidegraph + `/swarm` card).
+    pub trace: Vec<TraceEntry>,
 }
 
 impl AgentRun {
@@ -95,6 +173,17 @@ fn clip(text: &str) -> String {
         return line.to_string();
     }
     line.chars().take(TEXT_CAP - 1).chain(['…']).collect()
+}
+
+/// Clip a multi-line tool body for storage (args/result). Keeps newlines.
+fn clip_body(text: &str) -> String {
+    let t = text.trim_end();
+    if t.chars().count() <= TRACE_BODY_CAP {
+        return t.to_string();
+    }
+    let mut s: String = t.chars().take(TRACE_BODY_CAP.saturating_sub(1)).collect();
+    s.push('…');
+    s
 }
 
 fn with_run<T>(id: u64, f: impl FnOnce(&mut AgentRun) -> T) -> Option<T> {
@@ -150,12 +239,24 @@ pub fn activity(id: u64, text: &str) {
     });
 }
 
-/// A tool call started inside the subagent.
+/// A tool call started inside the subagent. `args` is the tool JSON/arguments
+/// string (clipped for storage) so the peek modal can expand it later.
 pub fn tool_start(id: u64, name: &str) {
+    tool_start_with(id, name, "");
+}
+
+/// Like [`tool_start`] but captures the call arguments for expandable peek.
+pub fn tool_start_with(id: u64, name: &str, args: &str) {
     with_run(id, |run| {
-        run.tool = Some(clip(name));
-        run.activity = clip(name);
-        run.trace.push(format!("⚒ {}", clip(name)));
+        let n = clip(name);
+        run.tool = Some(n.clone());
+        run.activity = n.clone();
+        run.trace.push(TraceEntry {
+            name: n,
+            args: clip_body(args),
+            result: String::new(),
+            ok: None,
+        });
         trim_trace(run);
         bump(run, 6);
     });
@@ -163,11 +264,26 @@ pub fn tool_start(id: u64, name: &str) {
 
 /// A tool call finished inside the subagent.
 pub fn tool_end(id: u64, ok: bool) {
+    tool_end_with(id, ok, "");
+}
+
+/// Like [`tool_end`] but stores the tool result body for expandable peek/copy.
+pub fn tool_end_with(id: u64, ok: bool, result: &str) {
     with_run(id, |run| {
         if let Some(name) = run.tool.take() {
-            if let Some(last) = run.trace.last_mut() {
-                if last.starts_with("⚒ ") {
-                    *last = format!("{} {}", if ok { "✓" } else { "✗" }, name);
+            // Prefer the open in-flight entry matching this tool name.
+            if let Some(last) = run
+                .trace
+                .iter_mut()
+                .rev()
+                .find(|e| e.ok.is_none() && e.name == name)
+            {
+                last.ok = Some(ok);
+                last.result = clip_body(result);
+            } else if let Some(last) = run.trace.last_mut() {
+                last.ok = Some(ok);
+                if last.result.is_empty() {
+                    last.result = clip_body(result);
                 }
             }
         }
@@ -320,6 +436,41 @@ mod tests {
         assert_eq!(run.state, RunState::Done);
         assert!(run.tool.is_none(), "no tool may be left in flight");
         assert!(run.ended.is_some());
+    }
+
+    #[test]
+    fn trace_entries_capture_args_and_result_for_expand_and_copy() {
+        let _g = lock();
+        reset();
+        let id = begin("general", "do a thing");
+        tool_start_with(id, "bash", "{\"command\":\"ls -la\"}");
+        tool_end_with(id, true, "total 4\ndrwxr-xr-x  2 me me 4096 .");
+        tool_start_with(id, "read_file", "{\"path\":\"x.rs\"}");
+        // still running — no end yet
+
+        let runs = snapshot();
+        let run = runs.iter().find(|r| r.id == id).unwrap();
+        assert_eq!(run.trace.len(), 2);
+
+        let done = &run.trace[0];
+        assert_eq!(done.name, "bash");
+        assert_eq!(done.ok, Some(true));
+        assert!(done.has_body(), "entry with args+result must be expandable");
+        assert!(done.header_line().starts_with('✓'));
+        let copy = done.copy_text();
+        assert!(copy.contains("ls -la"), "args in copy payload");
+        assert!(copy.contains("total 4"), "output in copy payload");
+        let sections: Vec<_> = done.body_sections().iter().map(|(l, _)| *l).collect();
+        assert_eq!(sections, vec!["args", "output"]);
+
+        let running = &run.trace[1];
+        assert_eq!(running.ok, None);
+        assert!(running.has_body(), "in-flight entry still unfolds (shows args)");
+        assert!(running.header_line().starts_with('⚒'));
+        assert!(
+            running.copy_text().contains("still running"),
+            "in-flight copy notes running state"
+        );
     }
 
     #[test]

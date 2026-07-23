@@ -49,6 +49,8 @@ pub struct PromptContext {
     activation: String,
     /// Short label for TUI status when activation fires (e.g. `fable-method`).
     activation_label: Option<String>,
+    /// Provider aliases the user named in this turn's message (for agent.provider nudge).
+    named_providers: Vec<String>,
 }
 
 impl PromptContext {
@@ -100,6 +102,15 @@ impl PromptContext {
         } else {
             (String::new(), None)
         };
+        // Cross-provider nudge: if the user named claude/grok/gemini/… this turn,
+        // surface those aliases so the model must pass agent.provider for each.
+        let named_providers = if is_subagent {
+            Vec::new()
+        } else {
+            user_text
+                .map(crate::providers::named_providers_in_text)
+                .unwrap_or_default()
+        };
         Self {
             cwd: cwd.to_path_buf(),
             is_subagent,
@@ -111,6 +122,7 @@ impl PromptContext {
             plur,
             activation,
             activation_label,
+            named_providers,
         }
     }
 
@@ -234,13 +246,54 @@ plur, ruflo, skill, memory, todo_write, submit_plan, agent
 - Skills activate on demand only: natural-language intent (e.g. "think like fable") or
   `/skill-name` slash. When a **SKILL ACTIVATED** block appears below, follow it for the turn.
 - UI polish -> design-eng. Site clone -> clone-website-meta. Security -> cybersecurity then one playbook.
-- agent: spawn explore (read-only) or general subagent for parallel research; set `provider` (claude/gpt/grok/gemini/antigravity/deepseek/…) to deploy a subagent on ANOTHER provider - pass it whenever the user names a provider or model
+- agent: spawn explore (read-only) or general subagent — see **# Cross-provider subagents** below when the user names another provider
 - todo_write: maintain a live task list for multi-step work (always keep one in_progress)
 - submit_plan: formal plan artifact in plan mode
 - memory: local markdown journal ~/.nur/memory.md (never store secrets) — complementary to plur
 - Prefer edit_file / multi_edit / apply_patch over full rewrites
 
+# Cross-provider subagents (CRITICAL)
+When the user names another backend (claude, grok, gemini, antigravity, chatgpt, deepseek, …),
+you MUST deploy via the `agent` tool with the structured **`provider`** field set. Do **not**
+claim you "switched models" in prose — only `agent(provider=…)` runs elsewhere. Omit `provider`
+(and `model`) only when inheriting this session's backend.
 
+Concrete shapes (mirror these; aliases are fine — nur resolves them):
+
+- Claude / Anthropic:
+  agent({{"provider":"claude","subagent_type":"general","description":"claude review","prompt":"Review auth for race conditions"}})
+- Grok / xAI:
+  agent({{"provider":"grok","subagent_type":"general","description":"grok audit","prompt":"Audit failover paths"}})
+- Gemini / Google API:
+  agent({{"provider":"gemini","subagent_type":"explore","description":"gemini research","prompt":"Map the graphify module"}})
+- Antigravity (own OAuth — not the same as gemini/google):
+  agent({{"provider":"antigravity","subagent_type":"general","description":"agy implement","prompt":"Implement the missing test"}})
+
+Alias → catalog id (pass either): claude/sonnet/opus/haiku → anthropic; grok → xai;
+gemini → google; chatgpt/gpt → openai; antigravity/agy stays **antigravity** (never collapse to google).
+
+**Missing credentials:** nur opens `/login` pre-selected to that provider and **blocks** the spawn.
+There is **no silent fallback** to the parent provider. Do not re-run the same task on the parent
+and pretend it succeeded. After the user finishes `/login`, nur injects a mandatory re-deploy with
+the exact `agent(...)` call — follow that instruction immediately.
+
+Fan-out: one `agent` call per target provider; set `provider` on every call the user named.
+"#,
+            self.cwd.display(),
+            std::env::consts::OS,
+            self.shell_label,
+        );
+
+        // Per-turn nudge when the user explicitly named providers in their message.
+        if !self.named_providers.is_empty() {
+            s.push_str(&format!(
+                "\nUser named these providers this turn: {} — pass agent.provider for each.\n",
+                self.named_providers.join(", ")
+            ));
+        }
+
+        s.push_str(
+            r#"
 # Workflow
 1. Orient — git_status + targeted grep/read
 2. Plan — todo_write for multi-step; submit_plan in plan mode
@@ -250,9 +303,6 @@ plur, ruflo, skill, memory, todo_write, submit_plan, agent
 # Style
 Direct technical markdown. Fence code with languages.
 "#,
-            self.cwd.display(),
-            std::env::consts::OS,
-            self.shell_label,
         );
 
         if !todos_render.is_empty() && todos_render != "(no todos)" {

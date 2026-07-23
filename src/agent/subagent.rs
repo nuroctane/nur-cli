@@ -86,8 +86,17 @@ pub async fn run_subagent(
                 swarm::activity(run_id, &status);
                 let _ = parent_tx.send(AgentEvent::Status(format!("subagent · {status}")));
             }
-            AgentEvent::ToolStart { name, .. } => swarm::tool_start(run_id, &name),
-            AgentEvent::ToolEnd { ok, .. } => swarm::tool_end(run_id, ok),
+            AgentEvent::ToolStart { name, args, .. } => {
+                swarm::tool_start_with(run_id, &name, &args);
+            }
+            AgentEvent::ToolEnd {
+                name: _,
+                result,
+                ok,
+                ..
+            } => {
+                swarm::tool_end_with(run_id, ok, &result);
+            }
             // A nested subagent asked for a provider with no creds — relay the
             // signal up so the top-level TUI can pop the pre-selected /login.
             AgentEvent::LoginRequired {
@@ -95,12 +104,16 @@ pub async fn run_subagent(
                 provider_name,
                 retry_prompt,
                 retry_desc,
+                retry_kind,
+                retry_model,
             } => {
                 let _ = parent_tx.send(AgentEvent::LoginRequired {
                     provider_id,
                     provider_name,
                     retry_prompt,
                     retry_desc,
+                    retry_kind,
+                    retry_model,
                 });
             }
             AgentEvent::ApprovalRequest {

@@ -901,6 +901,72 @@ pub fn save_provider_oauth(
     save_provider_session(&auth)
 }
 
+/// Best-effort: patch `project_id` / `tier_id` into existing google-family OAuth
+/// sessions without wiping access/refresh tokens. Used after Cloud Code re-onboard.
+pub fn update_oauth_project_meta(
+    provider_id: &str,
+    project_id: &str,
+    tier_id: Option<&str>,
+) -> Result<bool> {
+    if project_id.trim().is_empty() {
+        return Ok(false);
+    }
+    let _guard = oauth_store_guard();
+    const GOOGLE_FAMILY: &[&str] = &["google", "antigravity", "google-oauth"];
+    let is_family = GOOGLE_FAMILY.contains(&provider_id);
+
+    let patch = |auth: &mut Auth| {
+        let mut meta = auth.oauth_meta.clone().unwrap_or_default();
+        if !meta.extra.is_object() {
+            meta.extra = serde_json::json!({});
+        }
+        if let Some(obj) = meta.extra.as_object_mut() {
+            obj.insert(
+                "project_id".into(),
+                serde_json::Value::String(project_id.trim().to_string()),
+            );
+            if let Some(t) = tier_id.map(str::trim).filter(|s| !s.is_empty()) {
+                obj.insert("tier_id".into(), serde_json::Value::String(t.to_string()));
+            }
+        }
+        auth.oauth_meta = Some(meta);
+    };
+
+    let mut changed = false;
+
+    if let Ok(Some(mut auth)) = load_auth() {
+        if matches!(auth.auth_method, AuthMethod::Oauth)
+            && (auth.provider == provider_id
+                || (is_family && GOOGLE_FAMILY.contains(&auth.provider.as_str())))
+        {
+            patch(&mut auth);
+            save_auth(&auth)?;
+            save_provider_session(&auth)?;
+            changed = true;
+        }
+    }
+
+    let path = crate::config::provider_sessions_path();
+    let mut map = read_sessions_at(&path);
+    let keys: Vec<&str> = if is_family {
+        GOOGLE_FAMILY.to_vec()
+    } else {
+        vec![provider_id]
+    };
+    for key in keys {
+        if let Some(auth) = map.get_mut(key) {
+            if matches!(auth.auth_method, AuthMethod::Oauth) {
+                patch(auth);
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        write_sessions_at(&path, &map)?;
+    }
+    Ok(changed)
+}
+
 fn save_provider_session(auth: &Auth) -> Result<()> {
     ensure_dirs()?;
     save_provider_session_at(&crate::config::provider_sessions_path(), auth)

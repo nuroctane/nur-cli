@@ -23,10 +23,32 @@ pub fn kimi_request_headers() -> Result<Vec<(&'static str, String)>> {
 }
 
 /// Resolve the Cloud Code (`cloudcode-pa`) project id for a Google/Antigravity
-/// OAuth access token via `loadCodeAssist`. Used by the API layer when a Gemini
-/// Cloud Code request has no stored `project_id` on its session.
+/// OAuth access token via full Code Assist setup (load + free-tier onboard).
+/// Used by the API layer when a Gemini Cloud Code request has no stored
+/// `project_id` on its session, and on 403 re-onboard retries.
 pub fn antigravity_resolve_project_id(access_token: &str) -> Result<String> {
     flows::antigravity::resolve_project_id(access_token)
+}
+
+/// Full Code Assist setup (loadCodeAssist + free-tier onboardUser when needed).
+/// Returns (project_id, tier_id). Used for login, import, and 403 recovery.
+#[allow(dead_code)] // public API; force variant is what the Cloud Code 403 path uses
+pub fn antigravity_setup_code_assist(
+    access_token: &str,
+    env_project: Option<&str>,
+) -> Result<(String, String)> {
+    let s = flows::antigravity::setup_code_assist(access_token, env_project)?;
+    Ok((s.project_id, s.tier_id))
+}
+
+/// Force Code Assist re-onboard even when `currentTier` already exists.
+/// Used once on Cloud Code Private API 403 recovery.
+pub fn antigravity_setup_code_assist_force(
+    access_token: &str,
+    env_project: Option<&str>,
+) -> Result<(String, String)> {
+    let s = flows::antigravity::setup_code_assist_force(access_token, env_project)?;
+    Ok((s.project_id, s.tier_id))
 }
 
 pub fn now_unix() -> u64 {

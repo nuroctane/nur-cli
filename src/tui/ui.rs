@@ -2920,16 +2920,16 @@ fn draw_sidegraph_panel(f: &mut Frame, app: &mut App, area: Rect) {
             " zoom: {} · Ctrl+wheel · drag to pan ",
             app.sidegraph_zoom_label()
         )
-    } else if app.sidegraph_scroll_x > 0 || app.sidegraph_scroll > 0 {
+    } else if app.sidegraph_scroll_x > 0 || app.sidegraph_scroll > 0 || app.sidegraph_user_panned {
         // Show an x/y reading so users can gauge where they are on the canvas.
         // x = horizontal pan from the left edge; y = vertical offset up from the
         // live edge (0 = latest cards at the bottom).
         format!(
-            " panned x:{} y:{} · Ctrl+wheel zoom · dbl-click empty to recenter ",
+            " panned x:{} y:{} · dbl/rgt-click empty to reset ",
             app.sidegraph_scroll_x, app.sidegraph_scroll
         )
     } else {
-        " drag to pan · Ctrl+wheel zoom · rgt-click box to peek ".to_string()
+        " drag to pan · Ctrl+wheel zoom · rgt-click box=peek · empty=reset ".to_string()
     };
     let footer = clip_to(&hint, area.width as usize);
 
@@ -4938,14 +4938,28 @@ fn draw_hover_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
     };
 
     // Freeze geometry once — never re-anchor to mouse or re-center.
+    // Expanded mode re-fits to ~90% of the frame (toggle clears peek_frozen).
     let rect = if let Some(r) = app.peek_frozen {
         let fitted = constrain_rect(area, r);
         app.peek_frozen = Some(fitted);
         fitted
     } else {
-        let desired_w = (area.width.saturating_mul(7) / 10).clamp(40, 96);
-        let desired_h = (area.height.saturating_mul(6) / 10).clamp(8, 28);
-        let r = fit_modal_rect(area, desired_w, desired_h, 20, 5);
+        let (desired_w, desired_h, min_w, min_h) = if app.peek_expanded {
+            (
+                area.width.saturating_mul(9) / 10,
+                area.height.saturating_mul(9) / 10,
+                28u16,
+                10u16,
+            )
+        } else {
+            (
+                (area.width.saturating_mul(7) / 10).clamp(40, 96),
+                (area.height.saturating_mul(6) / 10).clamp(8, 28),
+                20u16,
+                5u16,
+            )
+        };
+        let r = fit_modal_rect(area, desired_w, desired_h, min_w, min_h);
         app.peek_frozen = Some(r);
         r
     };
@@ -4959,7 +4973,11 @@ fn draw_hover_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
             .style(Style::default().bg(theme::SURFACE_2))
             .title(format!(" {} ", p.title))
             .title_bottom({
-                let mode = if app.peek_expanded { "e collapse" } else { "e expand" };
+                let mode = if app.peek_expanded {
+                    "e collapse · rgt-click"
+                } else {
+                    "e expand · rgt-click"
+                };
                 format!(" Esc · outside · ✕ · Ctrl+C · {mode} ")
             }),
         rect,
@@ -5124,14 +5142,28 @@ fn draw_swarm_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
     let task_border = theme::BORDER;
 
     // Freeze geometry once — never re-anchor to mouse or re-center.
+    // Expanded mode re-fits to ~90% of the frame so tool output has room.
     let rect = if let Some(r) = app.peek_frozen {
         let fitted = constrain_rect(area, r);
         app.peek_frozen = Some(fitted);
         fitted
     } else {
-        let desired_w = (area.width.saturating_mul(7) / 10).clamp(40, 96);
-        let desired_h = (area.height.saturating_mul(6) / 10).clamp(10, 28);
-        let r = fit_modal_rect(area, desired_w, desired_h, 24, 7);
+        let (desired_w, desired_h, min_w, min_h) = if app.peek_expanded {
+            (
+                area.width.saturating_mul(9) / 10,
+                area.height.saturating_mul(9) / 10,
+                32u16,
+                12u16,
+            )
+        } else {
+            (
+                (area.width.saturating_mul(7) / 10).clamp(40, 96),
+                (area.height.saturating_mul(6) / 10).clamp(10, 28),
+                24u16,
+                7u16,
+            )
+        };
+        let r = fit_modal_rect(area, desired_w, desired_h, min_w, min_h);
         app.peek_frozen = Some(r);
         r
     };
@@ -5162,8 +5194,12 @@ fn draw_swarm_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
             .style(Style::default().bg(theme::SURFACE_2))
             .title(format!(" {title_task} "))
             .title_bottom({
-                let mode = if app.peek_expanded { "e collapse" } else { "e expand" };
-                format!(" Esc · outside · ✕ · Ctrl+C copies full trace · {mode} ")
+                let mode = if app.peek_expanded {
+                    "e/rgt collapse"
+                } else {
+                    "e/rgt expand"
+                };
+                format!(" Esc · ✕ · click row = unfold · c copy row · Ctrl+C all · {mode} ")
             }),
         rect,
     );
@@ -5270,67 +5306,142 @@ fn draw_swarm_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
         width: inner.width,
         height: (inner.y + inner.height).saturating_sub(content_y),
     };
-    let body = crate::tui::app::swarm_peek_tool_content(&run);
+    // Keep expanded well under u16::MAX — ScrollView sizes an offscreen buffer
+    // by row count; 200k was a multi-hundred-MB freeze risk.
     const PEEK_MAX_ROWS: usize = 400;
-    const PEEK_MAX_ROWS_EXPANDED: usize = 200_000;
+    const PEEK_MAX_ROWS_EXPANDED: usize = 10_000;
     let row_cap = if app.peek_expanded {
         PEEK_MAX_ROWS_EXPANDED
     } else {
         PEEK_MAX_ROWS
     };
     let max_cols = iw.saturating_sub(1).max(8);
-    let mut lines: Vec<Line> = Vec::new();
-    'outer: for raw in body.lines() {
-        let mut rest = raw;
-        loop {
-            if lines.len() >= row_cap {
-                lines.push(Line::from(Span::styled(
-                    "… truncated · e expands".to_string(),
-                    Style::default().fg(theme::FAINT),
-                )));
-                break 'outer;
+
+    // Build content as (Line, Option<entry_idx>) so header rows can be mapped
+    // back to trace entries for click-to-expand hit-testing after scrolling.
+    let mut rows: Vec<(Line, Option<usize>)> = Vec::new();
+    let push_wrapped =
+        |rows: &mut Vec<(Line, Option<usize>)>, text: &str, hue: ratatui::style::Color, meta: Option<usize>| {
+            let mut rest = text;
+            loop {
+                if rows.len() >= row_cap {
+                    break;
+                }
+                let chunk: String = rest.chars().take(max_cols).collect();
+                let adv = chunk.len();
+                rows.push((Line::from(Span::styled(chunk, Style::default().fg(hue))), meta));
+                if adv >= rest.len() {
+                    break;
+                }
+                rest = &rest[adv..];
             }
-            // Colour tool-trace glyph lines by outcome for legibility.
-            let hue = if rest.starts_with('✓') {
-                theme::SUCCESS
-            } else if rest.starts_with('✗') {
-                theme::ERROR
-            } else if rest.starts_with('⚒') {
-                accent
-            } else {
-                theme::FG
-            };
-            let chunk: String = rest.chars().take(max_cols).collect();
-            let adv = chunk.len();
-            lines.push(Line::from(Span::styled(chunk, Style::default().fg(hue))));
-            if adv >= rest.len() {
+        };
+
+    // ── run summary (status · current tool · counts) ─────────────────────
+    let status = match run.state {
+        RunState::Running => "running",
+        RunState::Done => "done",
+        RunState::Failed => "failed",
+        RunState::Cancelled => "cancelled",
+    };
+    push_wrapped(&mut rows, &format!("#{}\u{00b7}{} \u{2014} {status}", run.id, run.kind), theme::FG, None);
+    if let Some(tool) = run.tool.as_deref() {
+        push_wrapped(&mut rows, &format!("current tool: {tool}"), theme::FAINT, None);
+    }
+    if !run.activity.trim().is_empty() {
+        push_wrapped(&mut rows, &format!("activity: {}", run.activity.trim()), theme::FAINT, None);
+    }
+    push_wrapped(
+        &mut rows,
+        &format!("tools: {} done \u{00b7} {} failed \u{00b7} {} tok", run.tools_done, run.tools_failed, run.tokens),
+        theme::FAINT,
+        None,
+    );
+
+    // ── per-entry trace rows (caret header + inline expandable body) ─────
+    if run.trace.is_empty() {
+        push_wrapped(&mut rows, "(no tool activity yet)", theme::FAINT, None);
+    } else {
+        push_wrapped(&mut rows, "\u{2500}\u{2500} tool trace \u{2500}\u{2500}", accent, None);
+        for (i, entry) in run.trace.iter().enumerate() {
+            if rows.len() >= row_cap {
                 break;
             }
-            rest = &rest[adv..];
+            let expanded = app.peek_trace_expanded.contains(&i);
+            let focused = app.peek_trace_focus == Some(i);
+            let hue = match entry.ok {
+                Some(true) => theme::SUCCESS,
+                Some(false) => theme::ERROR,
+                None => accent,
+            };
+            let caret = if entry.has_body() {
+                if expanded { "\u{25be} " } else { "\u{25b8} " }
+            } else {
+                "  "
+            };
+            let header = format!("{caret}{}", entry.header_line());
+            let chunk: String = header.chars().take(max_cols).collect();
+            let mut style = Style::default().fg(hue).add_modifier(Modifier::BOLD);
+            if focused {
+                style = style.bg(theme::SURFACE_3);
+            }
+            rows.push((Line::from(Span::styled(chunk, style)), Some(i)));
+            if expanded {
+                for (label, text) in entry.body_sections() {
+                    if rows.len() >= row_cap {
+                        break;
+                    }
+                    push_wrapped(&mut rows, &format!("  \u{2500}\u{2500} {label} \u{2500}\u{2500}"), theme::FAINT, Some(i));
+                    for bl in text.lines() {
+                        if rows.len() >= row_cap {
+                            break;
+                        }
+                        push_wrapped(&mut rows, &format!("  {bl}"), theme::FG, Some(i));
+                    }
+                }
+            }
         }
     }
-    if lines.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "(no tool activity yet)".to_string(),
-            theme::style_faint(),
-        )));
+    if rows.len() >= row_cap {
+        rows.push((
+            Line::from(Span::styled(
+                "\u{2026} truncated \u{00b7} e expands modal".to_string(),
+                Style::default().fg(theme::FAINT),
+            )),
+            None,
+        ));
     }
 
-    let total_rows = u16::try_from(lines.len()).unwrap_or(u16::MAX);
+    let total_rows = u16::try_from(rows.len()).unwrap_or(u16::MAX);
     app.peek_rows = total_rows;
-    if total_rows <= content_area.height {
+    // Rebuild trace-header hitboxes each draw. Screen row = content_area.y +
+    // (content_row - scroll); only rows currently in view are recorded.
+    app.peek_trace_hits.clear();
+    let scroll = if total_rows <= content_area.height {
         app.peek_scroll = 0;
+        0
+    } else {
+        let s = app.peek_scroll.min(total_rows.saturating_sub(content_area.height));
+        app.peek_scroll = s;
+        s
+    };
+    for (content_row, (_line, meta)) in rows.iter().enumerate() {
+        if let Some(entry_idx) = meta {
+            let cr = content_row as u16;
+            if cr >= scroll && cr < scroll + content_area.height {
+                let screen_row = content_area.y + (cr - scroll);
+                app.peek_trace_hits.push((screen_row, *entry_idx));
+            }
+        }
+    }
+    let lines: Vec<Line> = rows.into_iter().map(|(l, _)| l).collect();
+    if total_rows <= content_area.height {
         f.render_widget(Paragraph::new(lines).style(bg), content_area);
     } else {
         use ratatui::widgets::StatefulWidget;
-        let scroll = app.peek_scroll.min(total_rows.saturating_sub(content_area.height));
-        app.peek_scroll = scroll;
         let size = Size::new(content_area.width.saturating_sub(1).max(1), total_rows);
         let mut sv = tui_scrollview::ScrollView::new(size);
-        sv.render_widget(
-            Paragraph::new(lines).style(bg),
-            Rect::new(0, 0, size.width, size.height),
-        );
+        sv.render_widget(Paragraph::new(lines).style(bg), Rect::new(0, 0, size.width, size.height));
         let mut st = tui_scrollview::ScrollViewState::with_offset(Position::new(0, scroll));
         StatefulWidget::render(sv, content_area, f.buffer_mut(), &mut st);
     }
@@ -7510,7 +7621,10 @@ mod sidegraph_canvas_tests {
             tools_failed: 0,
             tokens: 42,
             pulse: vec![1],
-            trace: vec!["⚒ grep".into(), "✓ grep".into()],
+            trace: vec![
+                crate::agent::swarm::TraceEntry::test_entry("grep", None),
+                crate::agent::swarm::TraceEntry::test_entry("grep", Some(true)),
+            ],
         }
     }
 }

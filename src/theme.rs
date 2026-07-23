@@ -25,6 +25,8 @@ pub const BG: Color = Color::Rgb(11, 14, 18);
 pub const SURFACE: Color = Color::Rgb(18, 22, 28);
 /// Elevated surface (palette, hover).
 pub const SURFACE_2: Color = Color::Rgb(26, 31, 40);
+/// Highest surface — focused-row highlight inside modals (peek trace focus).
+pub const SURFACE_3: Color = Color::Rgb(38, 45, 58);
 /// Near-white foreground.
 pub const FG: Color = Color::Rgb(245, 242, 232);
 /// Dimmed foreground.

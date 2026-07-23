@@ -959,11 +959,10 @@ async fn run_headless(
                 provider_name,
                 ..
             } => {
-                // Headless: no modal to pop, so print an actionable line telling
-                // the user how to authenticate that provider, then continue on
-                // the parent provider.
+                // Headless: no TUI modal — print how to auth. Spawn is already
+                // blocked (no silent parent fallback); user must re-run after login.
                 theme::print_info(&format!(
-                    "not signed in to {provider_name} - run `nur` then `/login {provider_id}` (or export its API key) to deploy subagents there"
+                    "not signed in to {provider_name} — spawn blocked. Run `nur` then `/login {provider_id}` (or export its API key), then re-deploy the subagent there"
                 ));
             }
             AgentEvent::PlanSubmitted(text) => {

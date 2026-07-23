@@ -563,6 +563,10 @@ pub struct PendingSubagentLogin {
     pub prompt: Option<String>,
     /// The original short description/label, if the loop supplied it.
     pub desc: Option<String>,
+    /// explore | general (defaults to general on retry).
+    pub kind: Option<String>,
+    /// Optional exact model id the original call requested.
+    pub model: Option<String>,
 }
 
 /// Hit-box for a sidegraph kid (swarm subagent) that maps to a swarm run id.
@@ -1723,6 +1727,18 @@ pub struct App {
     /// truncates long tool output is lifted so the full body is scrollable.
     /// Toggled with `e` while a peek is open; reset whenever a peek opens/closes.
     pub peek_expanded: bool,
+    /// Per-trace-entry expand set for the swarm kid peek. Holds the indices of
+    /// the trace entries whose args+output bodies are unfolded inline. Toggled
+    /// by clicking a trace header row (or Enter on the focused row). Reset when
+    /// a peek opens/closes or the target run changes.
+    pub peek_trace_expanded: std::collections::HashSet<usize>,
+    /// Focused trace-entry index for keyboard nav / per-entry copy (`c` copies
+    /// just the focused entry; Enter/Space toggles it). `None` = none focused.
+    pub peek_trace_focus: Option<usize>,
+    /// Per-draw hitboxes for swarm-peek trace headers: screen row → trace entry
+    /// index. Populated by `draw_swarm_peek`; consumed by mouse routing so a
+    /// click on a header toggles that entry's expand and focuses it.
+    pub peek_trace_hits: Vec<(u16, usize)>,
     /// Terminal graphics picker (protocol + font size) for inline image peeks.
     #[cfg(feature = "image-peek")]
     pub img_picker: Option<ratatui_image::picker::Picker>,
@@ -2210,6 +2226,9 @@ pub async fn run_tui(
         peek_rows: 0,
         peek_scroll_cell: None,
         peek_expanded: false,
+        peek_trace_expanded: std::collections::HashSet::new(),
+        peek_trace_focus: None,
+        peek_trace_hits: Vec::new(),
         #[cfg(feature = "image-peek")]
         img_picker,
         #[cfg(feature = "image-peek")]
@@ -3173,6 +3192,9 @@ impl App {
         self.peek_scroll = 0;
         self.peek_scroll_cell = None;
         self.peek_expanded = false;
+        self.peek_trace_expanded.clear();
+        self.peek_trace_focus = None;
+        self.peek_trace_hits.clear();
     }
 
     fn open_stable_peek(&mut self, idx: usize) {
@@ -3183,6 +3205,8 @@ impl App {
         self.peek_scroll = 0;
         self.peek_scroll_cell = Some(idx);
         self.peek_expanded = false;
+        self.peek_trace_expanded.clear();
+        self.peek_trace_focus = None;
         self.hover_cell = None;
     }
 
@@ -3196,10 +3220,142 @@ impl App {
         self.peek_scroll = 0;
         self.peek_scroll_cell = None;
         self.peek_expanded = false;
+        self.peek_trace_expanded.clear();
+        self.peek_trace_focus = None;
         self.hover_cell = None;
     }
 
-    /// Persist expandable transcript cards so reloads keep thought/tool bodies.
+    /// Toggle expanded peek: grow/shrink the frozen modal rect and lift/restore
+    /// the body row cap. Used by `e` and by right-click inside an open peek.
+    fn toggle_peek_expanded(&mut self) {
+        if !self.peek_is_open() {
+            return;
+        }
+        self.peek_expanded = !self.peek_expanded;
+        self.peek_scroll = 0;
+        // Drop frozen geometry so the next draw re-fits (expanded ≈ 90% frame,
+        // collapsed ≈ 70%×60%). Without this, expand only changed the row cap
+        // while the box stayed the same size — felt broken.
+        self.peek_frozen = None;
+    }
+
+    /// Toggle inline expansion of a single trace entry in the swarm kid peek.
+    /// Focuses the entry too, so keyboard copy (`c`) targets it. No-op unless a
+    /// swarm peek is open.
+    fn toggle_trace_entry(&mut self, idx: usize) {
+        if self.peek_swarm.is_none() {
+            return;
+        }
+        if self.peek_trace_expanded.contains(&idx) {
+            self.peek_trace_expanded.remove(&idx);
+        } else {
+            self.peek_trace_expanded.insert(idx);
+        }
+        self.peek_trace_focus = Some(idx);
+    }
+
+    /// Copy of the FULL payload (header + args + output) for the focused trace
+    /// entry — or, if none is focused, the whole trace. Returns true if it put
+    /// something on the clipboard. Used by `c` inside a swarm peek.
+    fn copy_focused_trace_entry(&mut self) -> bool {
+        let Some(run_id) = self.peek_swarm else {
+            return false;
+        };
+        let snap = crate::agent::swarm::snapshot();
+        let Some(run) = snap.iter().find(|r| r.id == run_id) else {
+            return false;
+        };
+        let text = match self.peek_trace_focus.and_then(|i| run.trace.get(i)) {
+            Some(entry) => entry.copy_text(),
+            None => swarm_peek_full_copy(run),
+        };
+        if text.trim().is_empty() {
+            return false;
+        }
+        clipboard_set(&text);
+        true
+    }
+
+    /// Map a screen row inside an open swarm peek to a trace-entry index, using
+    /// the hitboxes recorded during the last draw. `None` if the row isn't a
+    /// trace header/body row.
+    fn trace_entry_at_row(&self, row: u16) -> Option<usize> {
+        self.peek_trace_hits
+            .iter()
+            .find(|(r, _)| *r == row)
+            .map(|(_, i)| *i)
+    }
+
+    /// Number of trace entries in the currently-peeked run, or 0.
+    fn peek_trace_len(&self) -> usize {
+        let Some(run_id) = self.peek_swarm else {
+            return 0;
+        };
+        crate::agent::swarm::snapshot()
+            .iter()
+            .find(|r| r.id == run_id)
+            .map(|r| r.trace.len())
+            .unwrap_or(0)
+    }
+
+    /// Move focus to the next trace entry (wraps). Keeps the focused row roughly
+    /// in view by nudging the scroll toward it. No-op with no entries.
+    fn focus_next_trace_entry(&mut self) {
+        let n = self.peek_trace_len();
+        if n == 0 {
+            return;
+        }
+        let next = match self.peek_trace_focus {
+            Some(i) if i + 1 < n => i + 1,
+            Some(_) => 0,
+            None => 0,
+        };
+        self.peek_trace_focus = Some(next);
+        self.scroll_focused_trace_into_view();
+    }
+
+    /// Move focus to the previous trace entry (wraps).
+    fn focus_prev_trace_entry(&mut self) {
+        let n = self.peek_trace_len();
+        if n == 0 {
+            return;
+        }
+        let prev = match self.peek_trace_focus {
+            Some(0) | None => n - 1,
+            Some(i) => i - 1,
+        };
+        self.peek_trace_focus = Some(prev);
+        self.scroll_focused_trace_into_view();
+    }
+
+    /// If the focused entry's header is currently off-screen, nudge the peek
+    /// scroll so it comes into view on the next draw. Best-effort: the exact
+    /// row is recomputed each draw, so this only needs to be approximately right.
+    fn scroll_focused_trace_into_view(&mut self) {
+        let Some(idx) = self.peek_trace_focus else {
+            return;
+        };
+        // If the focused entry already has a recorded (visible) hit row, we're
+        // fine. Otherwise scroll a page toward where it likely is.
+        if self.peek_trace_hits.iter().any(|(_, i)| *i == idx) {
+            return;
+        }
+        // Heuristic: earlier entries live above the current view, later ones
+        // below. Compare against the smallest visible entry index.
+        let min_visible = self
+            .peek_trace_hits
+            .iter()
+            .map(|(_, i)| *i)
+            .min();
+        match min_visible {
+            Some(v) if idx < v => {
+                self.peek_scroll = self.peek_scroll.saturating_sub(6);
+            }
+            _ => {
+                self.peek_scroll = self.peek_scroll.saturating_add(6);
+            }
+        }
+    }
     /// Remove a transcript cell and keep `tool_cells` pointing at the right rows.
     ///
     /// `tool_cells` maps a tool id to an ABSOLUTE index into `cells`. A queued
@@ -3442,8 +3598,8 @@ impl App {
 
         match key.code {
             KeyCode::Esc => {
-                // Peek closes first — same priority as a modal.
-                if self.peek_open.is_some() {
+                // Peek closes first — cell *or* swarm-kid modal (both share peek_is_open).
+                if self.peek_is_open() {
                     self.close_peek();
                 } else if self.busy {
                     self.interrupt();
@@ -3455,12 +3611,35 @@ impl App {
                     self.clear_paste_merge_state();
                 }
             }
-            // `e` / `E` while a peek modal is open toggles expanded view: the row
-            // cap that truncates long tool output is lifted so the full body is
-            // scrollable. Gated on an open peek so it never eats normal typing.
+            // `e` / `E` while a peek modal is open toggles expanded view: the
+            // modal grows toward the frame and the row cap is lifted so full
+            // tool output is scrollable. Gated on an open peek so it never
+            // eats normal typing.
             KeyCode::Char('e') | KeyCode::Char('E') if !ctrl && !alt && self.peek_is_open() => {
-                self.peek_expanded = !self.peek_expanded;
-                self.peek_scroll = 0;
+                self.toggle_peek_expanded();
+            }
+            // Per-entry trace nav/copy inside a swarm kid peek. `[` / `]` move the
+            // focus between trace entries; Space toggles the focused entry's
+            // inline args/output; `c` copies just the focused entry (falls back
+            // to the whole trace when nothing is focused). All gated on an open
+            // swarm peek so they never eat normal typing.
+            KeyCode::Char('[') if !ctrl && !alt && self.peek_swarm.is_some() => {
+                self.focus_prev_trace_entry();
+            }
+            KeyCode::Char(']') if !ctrl && !alt && self.peek_swarm.is_some() => {
+                self.focus_next_trace_entry();
+            }
+            KeyCode::Char(' ') if !ctrl && !alt && self.peek_swarm.is_some() => {
+                if let Some(idx) = self.peek_trace_focus {
+                    self.toggle_trace_entry(idx);
+                } else {
+                    self.focus_next_trace_entry();
+                }
+            }
+            KeyCode::Char('c') | KeyCode::Char('C')
+                if !ctrl && !alt && self.peek_swarm.is_some() =>
+            {
+                self.copy_focused_trace_entry();
             }
             // Shift+Enter → newline. Plain Enter → always submit. Never the reverse.
             KeyCode::Enter if shift && !ctrl && !alt => {
@@ -3864,6 +4043,15 @@ impl App {
                 // inside keeps it open. This is consistent on every side —
                 // including below the box.
                 if self.peek_is_open() {
+                    // Swarm kid peek: a click on a trace-entry header row toggles
+                    // that entry's inline args/output (per-entry expand). Takes
+                    // precedence over dismiss so clicking a row never closes it.
+                    if self.peek_swarm.is_some() && rect_contains(self.peek_box, m.column, m.row) {
+                        if let Some(entry_idx) = self.trace_entry_at_row(m.row) {
+                            self.toggle_trace_entry(entry_idx);
+                            return;
+                        }
+                    }
                     if peek_click_dismisses(self.peek_close, self.peek_box, m.column, m.row) {
                         self.close_peek();
                     }
@@ -3879,14 +4067,16 @@ impl App {
                     return;
                 }
                 if self.wheel_over_sidegraph(m.column, m.row) {
-                    // Check for double-click detection first (box peek or empty reset)
+                    // Double-click: peek a box, or reset pan/zoom on empty (or a
+                    // non-peekable node). Must run BEFORE we arm drag — and the
+                    // seed must survive micro-jitter (see drag threshold below).
                     let now = Instant::now();
                     let is_dbl = self
                         .sidegraph_last_click
                         .map(|(t, c, r)| {
-                            now.duration_since(t) < Duration::from_millis(500)
-                                && (c as i32 - m.column as i32).abs() < 4
-                                && (r as i32 - m.row as i32).abs() < 3
+                            now.duration_since(t) < Duration::from_millis(650)
+                                && (c as i32 - m.column as i32).abs() < 8
+                                && (r as i32 - m.row as i32).abs() < 6
                         })
                         .unwrap_or(false);
                     let hit = self.sidegraph_hit_at(m.column, m.row);
@@ -3899,20 +4089,28 @@ impl App {
                             return;
                         }
                         if let Some(h) = hit {
-                            // Double-click box -> open click-to-peek modal for that cell if peekable
-                            if self.cells.get(h.cell_idx).map(|c| c.is_peekable()).unwrap_or(false) {
+                            // Double-click box -> open click-to-peek when peekable.
+                            if self
+                                .cells
+                                .get(h.cell_idx)
+                                .map(|c| c.is_peekable())
+                                .unwrap_or(false)
+                            {
                                 self.open_stable_peek(h.cell_idx);
+                                return;
                             }
-                            return;
-                        } else {
-                            // Double-click empty -> return to root/prompt/steer position
-                            self.sidegraph_reset_view();
-                            return;
+                            // Non-peekable node used to `return` with no effect —
+                            // felt like "double-click empty does nothing". Fall
+                            // through to reset instead.
                         }
+                        // Double-click empty (or non-peekable) → recenter + unzoom.
+                        self.sidegraph_reset_view();
+                        return;
                     }
-                    // Store this click for double-click detection
+                    // Seed for a potential second click. Drag is armed but does
+                    // not become a pan until movement exceeds a threshold, so a
+                    // normal double-click is not killed by 1–2px of jitter.
                     self.sidegraph_last_click = Some((now, m.column, m.row));
-                    // Single click on box does NOT open peek (requires double/right), but we still allow drag
                     self.sidegraph_drag_canvas = true;
                     self.sidegraph_drag_origin = Some((m.column, m.row));
                     self.sidegraph_drag_start_scroll = self.sidegraph_scroll;
@@ -4028,7 +4226,53 @@ impl App {
                 if approval_open {
                     return;
                 }
-                // Right-click on sidegraph box -> open click-to-peek modal (same as transcript)
+                // Peek already open: right-click is a first-class surface for
+                // swarm UX — switch target, toggle expand, or dismiss.
+                if self.peek_is_open() {
+                    // Switch to another subagent from the sidegraph or /swarm card
+                    // without closing first (feels like the modal "re-targets").
+                    if self.wheel_over_sidegraph(m.column, m.row) {
+                        if let Some(sh) = self.sidegraph_swarm_hit_at(m.column, m.row) {
+                            self.open_swarm_peek(sh.run_id);
+                            return;
+                        }
+                        if let Some(hit) = self.sidegraph_hit_at(m.column, m.row) {
+                            if self
+                                .cells
+                                .get(hit.cell_idx)
+                                .map(|c| c.is_peekable())
+                                .unwrap_or(false)
+                            {
+                                self.open_stable_peek(hit.cell_idx);
+                            }
+                            return;
+                        }
+                    }
+                    if let Some(run_id) = self.swarm_pane_at_mouse(m.column, m.row) {
+                        self.open_swarm_peek(run_id);
+                        return;
+                    }
+                    // Inside the open peek box → toggle expand (same as `e`).
+                    if rect_contains(self.peek_box, m.column, m.row) {
+                        // ✕ still dismisses.
+                        if rect_contains(self.peek_close, m.column, m.row) {
+                            self.close_peek();
+                        } else if self.peek_swarm.is_some()
+                            && self.trace_entry_at_row(m.row).is_some()
+                        {
+                            // Right-click a trace row → toggle just that entry.
+                            let idx = self.trace_entry_at_row(m.row).unwrap();
+                            self.toggle_trace_entry(idx);
+                        } else {
+                            self.toggle_peek_expanded();
+                        }
+                        return;
+                    }
+                    // Outside the peek → dismiss (parity with left-click).
+                    self.close_peek();
+                    return;
+                }
+                // Right-click on sidegraph box -> open click-to-peek modal
                 if self.wheel_over_sidegraph(m.column, m.row) {
                     if let Some(sh) = self.sidegraph_swarm_hit_at(m.column, m.row) {
                         self.open_swarm_peek(sh.run_id);
@@ -4040,7 +4284,11 @@ impl App {
                         }
                         return;
                     }
-                    // Right-click empty in sidegraph — no action (could reset view, but keep panning)
+                    // Right-click empty sidegraph canvas → same as dbl-click empty:
+                    // snap pan/zoom home. Users who can't land a clean double-click
+                    // still have a reliable reset.
+                    self.sidegraph_reset_view();
+                    return;
                 }
                 // Right-click on a `/swarm` card pane → open that subagent's peek modal.
                 if let Some(run_id) = self.swarm_pane_at_mouse(m.column, m.row) {
@@ -4108,10 +4356,9 @@ impl App {
                     self.click_transcript(col, row);
                 }
                 self.selecting = false;
-                if self.sidegraph_drag_canvas && self.sidegraph_user_panned {
-                    // M3: a real pan just ended — clear the pending double-click
-                    // seed so the next click can't pair with the press that
-                    // started the drag (which would fire reset/peek by mistake).
+                if self.sidegraph_drag_was_real_pan() {
+                    // Only a real pan kills the double-click seed — not a
+                    // click that barely moved the cursor between Down and Up.
                     self.sidegraph_last_click = None;
                 }
                 self.sidegraph_drag_border = false;
@@ -4120,7 +4367,7 @@ impl App {
             }
             MouseEventKind::Up(_) => {
                 self.mouse_left_down = false;
-                if self.sidegraph_drag_canvas && self.sidegraph_user_panned {
+                if self.sidegraph_drag_was_real_pan() {
                     self.sidegraph_last_click = None;
                 }
                 self.sidegraph_drag_border = false;
@@ -4151,20 +4398,24 @@ impl App {
         if self.sidegraph_drag_canvas {
             if let Some((start_col, start_row)) = self.sidegraph_drag_origin {
                 let delta_y = row as i32 - start_row as i32;
+                let delta_x = col as i32 - start_col as i32;
+                // Ignore sub-threshold jitter so a double-click isn't promoted
+                // into a pan that wipes `sidegraph_last_click` on mouse-up.
+                const SIDEGRAPH_DRAG_THRESH: i32 = 6;
+                if delta_y.abs() <= SIDEGRAPH_DRAG_THRESH && delta_x.abs() <= SIDEGRAPH_DRAG_THRESH {
+                    return;
+                }
                 // Use the max values captured at drag start so content changes
                 // mid-drag don't shrink the clamp and snap the canvas back.
                 let new_scroll = (self.sidegraph_drag_start_scroll as i32 + delta_y)
                     .clamp(0, self.sidegraph_drag_start_max_scroll as i32) as u16;
                 self.sidegraph_scroll = new_scroll;
 
-                let delta_x = col as i32 - start_col as i32;
                 let new_pan_x = (self.sidegraph_drag_start_pan_x as i32 - delta_x)
                     .clamp(0, self.sidegraph_drag_start_max_pan_x as i32) as u16;
                 self.sidegraph_scroll_x = new_pan_x;
-                // User has taken control — keep canvas sticky
-                if delta_y.abs() > 1 || delta_x.abs() > 1 {
-                    self.sidegraph_user_panned = true;
-                }
+                // User has taken control — keep canvas sticky (stop auto-follow).
+                self.sidegraph_user_panned = true;
             }
             return;
         }
@@ -4574,15 +4825,30 @@ impl App {
         None
     }
 
-    /// Fast double-click on empty sidegraph canvas -> recenter on the latest
-    /// active tool-output cards (the live edge). Snaps vertical scroll to the
-    /// newest node (scroll 0 == bottom/latest in this model), clears any manual
-    /// pan, and re-enables auto-follow so freshly generated cards stay visible.
+    /// True when the in-progress sidegraph drag actually moved the canvas past
+    /// the click-jitter threshold. Used to decide whether to kill the double-
+    /// click seed on mouse-up (real pan) or keep it (click / double-click).
+    fn sidegraph_drag_was_real_pan(&self) -> bool {
+        if !self.sidegraph_drag_canvas {
+            return false;
+        }
+        self.sidegraph_scroll != self.sidegraph_drag_start_scroll
+            || self.sidegraph_scroll_x != self.sidegraph_drag_start_pan_x
+    }
+
+    /// Double-click empty (or right-click empty) sidegraph canvas → home view:
+    /// vertical scroll to the live edge (scroll 0 == bottom/latest), clear
+    /// horizontal pan, unzoom to detailed, and re-enable auto-follow so new
+    /// cards stay visible. Must be an obvious visual change when the user has
+    /// panned or zoomed away.
     pub(crate) fn sidegraph_reset_view(&mut self) {
         self.sidegraph_scroll = 0;
         self.sidegraph_scroll_x = 0;
         self.sidegraph_user_panned = false;
+        self.sidegraph_zoom = 0;
         self.sidegraph_last_click = None;
+        self.sidegraph_drag_canvas = false;
+        self.sidegraph_drag_origin = None;
     }
 
     /// Zoom levels: 0 = detailed (full boxes), 1 = compact (title row),
@@ -6508,12 +6774,12 @@ impl App {
     /// Apply provider config + hot-swap HTTP client after key or OAuth success.
     /// After a `/login` completes, resume a subagent deployment that was blocked
     /// on missing credentials for `authed_provider` (see `LoginRequired` +
-    /// `pending_subagent_login`). We inject a synthetic follow-up through the
-    /// normal message path so the model re-issues the cross-provider subagent -
-    /// no need for the user to re-type their request. If a turn is still running
-    /// this lands as a steer on the next model round; if idle it starts a fresh
-    /// turn. When the just-authenticated provider does not match the pending
-    /// request we leave it alone.
+    /// `pending_subagent_login`). Inject a **structured steer** that names the
+    /// exact `agent` tool call (provider/model/kind/prompt) so models cannot
+    /// "forget" the `provider` field on retry. If a turn is still running this
+    /// lands as a mid-turn steer; if idle it starts a fresh turn. When the
+    /// just-authenticated provider does not match the pending request we leave
+    /// it alone.
     fn maybe_retry_pending_subagent(&mut self, authed_provider: &str, provider_name: &str) {
         let matches = self
             .pending_subagent_login
@@ -6523,29 +6789,59 @@ impl App {
         if !matches {
             return;
         }
-        let pending = self.pending_subagent_login.take();
+        let pending = self.pending_subagent_login.take().unwrap_or_default();
         self.push_note(
             Tone::Mode,
-            format!("signed in to {provider_name} - re-deploying the subagent there now"),
+            format!("signed in to {provider_name} — re-deploying the subagent there now"),
+        );
+        let kind = pending
+            .kind
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("general");
+        let desc = pending
+            .desc
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("cross-provider re-deploy");
+        let task = pending
+            .prompt
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("(re-run the blocked cross-provider subagent task from context)");
+        // Escape for embedding inside a JSON example the model should mirror.
+        let task_esc = task.replace('\\', "\\\\").replace('"', "\\\"");
+        let desc_esc = desc.replace('\\', "\\\\").replace('"', "\\\"");
+        let model_line = match pending.model.as_deref().filter(|s| !s.is_empty()) {
+            Some(m) => format!(",\n  \"model\": \"{m}\""),
+            None => String::new(),
+        };
+        let prompt = format!(
+            "[SYSTEM REDEPLOY — mandatory tool call]\n\
+             The user just authenticated to **{provider_name}** (provider id `{id}`).\n\
+             You MUST immediately call the `agent` tool **exactly once** with these \
+             arguments — do not answer in prose first, do not swap providers, do not \
+             omit `provider`:\n\n\
+             agent({{\n\
+             \"provider\": \"{id}\"{model_line},\n\
+             \"subagent_type\": \"{kind}\",\n\
+             \"description\": \"{desc_esc}\",\n\
+             \"prompt\": \"{task_esc}\"\n\
+             }})\n\n\
+             Rules:\n\
+             - `provider` MUST be `\"{id}\"` (not a display name, not the parent provider).\n\
+             - Keep the prompt task faithful to the original blocked request above.\n\
+             - If more subagents were part of a fan-out, re-issue only this blocked one \
+             unless the user asked for the full fan-out again.",
+            id = pending.provider_id,
+            provider_name = provider_name,
+            model_line = model_line,
+            kind = kind,
+            desc_esc = desc_esc,
+            task_esc = task_esc,
         );
         // Route through submit_text so it steers into a live turn or starts a
-        // new one when idle - the same channel a manual follow-up would use.
-        // When we captured the original subagent prompt, replay it verbatim so
-        // the re-deploy is faithful; otherwise fall back to a generic re-run
-        // instruction that relies on the model's own context of the request.
-        let original = pending.as_ref().and_then(|p| p.prompt.clone());
-        let prompt = match original {
-            Some(task) => format!(
-                "You are now signed in to {provider_name}. Re-deploy the subagent on \
-                 {provider_name} that was blocked because it was not authenticated. \
-                 The original task was:\n\n{task}"
-            ),
-            None => format!(
-                "You are now signed in to {provider_name}. Re-run the cross-provider subagent \
-                 deployment on {provider_name} that was previously blocked because it was not \
-                 authenticated."
-            ),
-        };
+        // new one when idle — the same channel a manual follow-up would use.
         self.submit_text(&prompt);
     }
 
@@ -6750,13 +7046,18 @@ impl App {
 
     /// Push a message into the live steer queue and echo it in the transcript.
     /// The agent loop drains it at the next round boundary.
+    ///
+    /// When the steer text names a cross-provider target (claude/grok/gemini/…),
+    /// append a short `[STEER · cross-provider deploy]` block mandating
+    /// `agent.provider` so mid-turn redirects do not silently stay on the parent.
     fn steer_now(&mut self, text: &str) {
+        let text = enrich_cross_provider_steer(text);
         if let Ok(mut q) = self.tool_host.steer.lock() {
-            q.push_back(text.to_string());
+            q.push_back(text.clone());
         }
         // Show it as a user turn so the transcript reflects what the model will
         // see; a note explains it lands mid-run.
-        self.cells.push(Cell::User(text.to_string()));
+        self.cells.push(Cell::User(text));
         self.scroll_to_bottom();
         self.push_note(
             Tone::Mode,
@@ -7901,6 +8202,8 @@ impl App {
                 provider_name,
                 retry_prompt,
                 retry_desc,
+                retry_kind,
+                retry_model,
             } => {
                 // A subagent asked for a provider with no stored credentials.
                 // Surface an actionable note and pop the /login modal pre-selected
@@ -7908,7 +8211,7 @@ impl App {
                 self.push_note(
                     Tone::Mode,
                     format!(
-                        "sign in to {provider_name} to deploy subagents there - opening /login (or run /login {provider_id})"
+                        "sign in to {provider_name} to deploy subagents there — opening /login (or run /login {provider_id}). Spawn is blocked until you authenticate."
                     ),
                 );
                 // Only auto-open if no other modal is already up, so we don't
@@ -7916,12 +8219,14 @@ impl App {
                 if self.login.is_none() {
                     self.open_login_for(&provider_id);
                 }
-                // Remember the exact request (provider + original prompt/desc) so
-                // we can faithfully re-deploy it once the user finishes signing in.
+                // Remember the exact request so we can faithfully re-deploy it
+                // once the user finishes signing in (structured agent() recipe).
                 self.pending_subagent_login = Some(PendingSubagentLogin {
                     provider_id,
                     prompt: retry_prompt,
                     desc: retry_desc,
+                    kind: retry_kind,
+                    model: retry_model,
                 });
             }
             AgentEvent::PlanSubmitted(text) => {
@@ -8336,9 +8641,8 @@ pub fn swarm_peek_tool_content(run: &crate::agent::swarm::AgentRun) -> String {
     ));
     if !run.trace.is_empty() {
         s.push_str("\n── tool trace ──\n");
-        for line in &run.trace {
-            s.push_str(line);
-            s.push('\n');
+        for entry in &run.trace {
+            s.push_str(&entry.copy_text());
         }
     }
     s
@@ -8945,6 +9249,30 @@ fn extract_reasoning_summary(it: &serde_json::Value) -> String {
     parts.join("\n")
 }
 
+/// If a mid-turn steer names a provider alias, append a short mandatory block
+/// so the model passes `agent.provider` instead of staying on the parent.
+fn enrich_cross_provider_steer(text: &str) -> String {
+    let named = crate::providers::named_providers_in_text(text);
+    if named.is_empty() {
+        return text.to_string();
+    }
+    // Also accept resolve_provider_alias on the whole trimmed line (e.g. "claude").
+    let _ = named
+        .iter()
+        .filter_map(|a| crate::providers::resolve_provider_alias(a))
+        .count();
+    format!(
+        "{text}\n\n\
+         [STEER · cross-provider deploy]\n\
+         User named these providers: {list}. You MUST call `agent` with \
+         `provider` set for each (claude→anthropic, grok→xai, gemini→google, \
+         antigravity→antigravity, chatgpt→openai, …). Missing creds open \
+         /login and **block** the spawn — do NOT fall back to the parent provider.",
+        text = text,
+        list = named.join(", "),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -8952,6 +9280,69 @@ mod tests {
 
     fn key(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
         KeyEvent::new(code, mods)
+    }
+
+    #[test]
+    fn cross_provider_steer_appends_deploy_block_when_provider_named() {
+        let plain = enrich_cross_provider_steer("just keep going on the current task");
+        assert_eq!(plain, "just keep going on the current task");
+        assert!(!plain.contains("[STEER · cross-provider deploy]"));
+
+        let with = enrich_cross_provider_steer("also spawn a claude subagent on the auth module");
+        assert!(with.contains("[STEER · cross-provider deploy]"), "{with}");
+        assert!(with.contains("claude"), "{with}");
+        assert!(
+            with.contains("provider"),
+            "must mandate the provider field: {with}"
+        );
+        assert!(with.to_ascii_lowercase().contains("block"), "{with}");
+    }
+
+    #[test]
+    fn peek_click_dismisses_on_close_or_outside_only() {
+        use ratatui::layout::Rect;
+        let box_ = Rect::new(10, 5, 40, 20);
+        let close = Rect::new(46, 5, 3, 1);
+        // ✕
+        assert!(peek_click_dismisses(close, box_, 47, 5));
+        // Outside below
+        assert!(peek_click_dismisses(close, box_, 20, 30));
+        // Outside to the left
+        assert!(peek_click_dismisses(close, box_, 2, 10));
+        // Inside body — keep open
+        assert!(!peek_click_dismisses(close, box_, 20, 12));
+    }
+
+    #[test]
+    fn swarm_peek_tool_content_includes_trace_not_task() {
+        use crate::agent::swarm::{AgentRun, RunState};
+        let run = AgentRun {
+            id: 7,
+            kind: "general".into(),
+            task: "implement expand".into(),
+            state: RunState::Running,
+            started: std::time::Instant::now(),
+            ended: None,
+            activity: "running tests".into(),
+            tool: Some("bash".into()),
+            tools_done: 2,
+            tools_failed: 0,
+            tokens: 100,
+            pulse: vec![1, 2, 3],
+            trace: vec![
+                crate::agent::swarm::TraceEntry::test_entry("bash", None),
+                crate::agent::swarm::TraceEntry::test_entry("done", Some(true)),
+            ],
+        };
+        let body = swarm_peek_tool_content(&run);
+        assert!(body.contains("bash"), "{body}");
+        assert!(body.contains("tool trace"), "{body}");
+        assert!(body.contains("✓ done"), "{body}");
+        // Sticky task is separate — not in the dynamic band.
+        assert!(!body.contains("implement expand"), "{body}");
+        let full = swarm_peek_full_copy(&run);
+        assert!(full.contains("implement expand"), "{full}");
+        assert!(full.contains("tool output"), "{full}");
     }
 
     /// The approval modal swallows every key, so a modified keypress must never

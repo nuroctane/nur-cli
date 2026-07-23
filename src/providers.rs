@@ -62,12 +62,40 @@ use ApiStyle::{
 /// (`v1internal:streamGenerateContent`).
 pub const ANTIGRAVITY_CLOUD_CODE_BASE_URL: &str = "https://cloudcode-pa.googleapis.com";
 
+/// User-Agent the Gemini CLI / Antigravity send on Cloud Code (`cloudcode-pa`)
+/// requests. Mirrors `google-api-nodejs-client` so the backend treats nur as a
+/// known client fingerprint.
+pub const CLOUD_CODE_USER_AGENT: &str = "google-api-nodejs-client/9.15.1";
+
+/// `X-Goog-Api-Client` value used by Gemini CLI / VS Code Cloud Shell editor.
+pub const CLOUD_CODE_API_CLIENT: &str = "google-cloud-sdk vscode_cloudshelleditor/0.1";
+
+/// `Client-Metadata` JSON for Gemini plugin type (IDE unspecified).
+pub const CLOUD_CODE_CLIENT_METADATA: &str =
+    r#"{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}"#;
+
 /// The three catalog ids that share Google's OAuth login and Cloud Code backend.
 pub const GOOGLE_FAMILY_IDS: &[&str] = &["google", "antigravity", "google-oauth"];
 
 /// Is this a Google-family provider id (google / antigravity / google-oauth)?
 pub fn is_google_family(provider_id: &str) -> bool {
     GOOGLE_FAMILY_IDS.contains(&provider_id)
+}
+
+/// User-supplied GCP project id from env (`GOOGLE_CLOUD_PROJECT` /
+/// `GOOGLE_CLOUD_PROJECT_ID`). Numeric project *numbers* are rejected — Code
+/// Assist expects the string id (e.g. `my-app-123`). Returns `None` when unset.
+pub fn explicit_google_cloud_project_from_env() -> Option<String> {
+    for var in ["GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_PROJECT_ID"] {
+        if let Ok(value) = std::env::var(var) {
+            let value = value.trim().to_string();
+            if value.is_empty() || value.chars().all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            return Some(value);
+        }
+    }
+    None
 }
 
 /// OpenAI's ChatGPT/Codex backend used by ChatGPT OAuth sessions.
@@ -191,8 +219,13 @@ pub const ANTIGRAVITY_DEFAULT_MODEL: &str = "gemini-2.5-flash";
 /// [`normalize_google_model_id`] are not accepted here. agy advertises
 /// `gemini-3.6-flash-*`, `gemini-2.5-flash`, and friends; anything empty or a
 /// known generativelanguage-only id falls back to [`ANTIGRAVITY_DEFAULT_MODEL`].
+///
+/// Cloud Code wants bare ids (`gemini-2.5-flash`), not the generativelanguage
+/// resource form (`models/gemini-2.5-flash`).
 pub fn normalize_antigravity_model_id(model: &str) -> String {
     let m = model.trim();
+    // Strip optional `models/` resource prefix (listModels / OpenAI-compat form).
+    let m = m.strip_prefix("models/").unwrap_or(m).trim();
     if m.is_empty() {
         return ANTIGRAVITY_DEFAULT_MODEL.to_string();
     }
@@ -1296,6 +1329,86 @@ fn resolve_provider_token(q: &str) -> Option<&'static Provider> {
     PROVIDERS.iter().find(|p| p.name.to_ascii_lowercase() == q)
 }
 
+/// High-signal provider aliases scanned in free-text user turns / mid-turn steers.
+/// Longest first so multi-word hits (`google antigravity`) win over bare tokens.
+/// Intentionally omits ultra-generic single letters/words (`or`, `x`, `pro`, `local`)
+/// that would false-positive ordinary English.
+const TEXT_SCAN_ALIASES: &[&str] = &[
+    "google antigravity",
+    "claude sonnet",
+    "claude opus",
+    "claude haiku",
+    "gemini flash",
+    "gemini pro",
+    "antigravity",
+    "chatgpt",
+    "deepseek",
+    "openrouter",
+    "moonshot",
+    "anthropic",
+    "openai",
+    "gemini",
+    "claude",
+    "sonnet",
+    "opus",
+    "haiku",
+    "grok",
+    "xai",
+    "mistral",
+    "kimi",
+    "qwen",
+    "ollama",
+    "agy",
+    "gpt",
+];
+
+/// Scan free text for provider aliases the user (or a steer) named this turn.
+/// Returns unique alias strings in first-seen order (the wording found in the text,
+/// not necessarily the catalog id). Used to nudge the model to pass `agent.provider`.
+pub fn named_providers_in_text(text: &str) -> Vec<String> {
+    if text.trim().is_empty() {
+        return Vec::new();
+    }
+    let lower = text.to_ascii_lowercase();
+    let mut out: Vec<String> = Vec::new();
+    let mut seen_ids: Vec<&'static str> = Vec::new();
+    for alias in TEXT_SCAN_ALIASES {
+        if !contains_whole_phrase(&lower, alias) {
+            continue;
+        }
+        let Some(p) = resolve_provider_alias(alias) else {
+            continue;
+        };
+        if seen_ids.contains(&p.id) {
+            continue;
+        }
+        seen_ids.push(p.id);
+        out.push((*alias).to_string());
+    }
+    out
+}
+
+/// Whole-phrase match: `phrase` appears in `hay` with non-alphanumeric boundaries.
+fn contains_whole_phrase(hay: &str, phrase: &str) -> bool {
+    let mut start = 0;
+    while let Some(rel) = hay[start..].find(phrase) {
+        let idx = start + rel;
+        let before_ok = idx == 0
+            || !hay.as_bytes()[idx - 1].is_ascii_alphanumeric();
+        let after = idx + phrase.len();
+        let after_ok = after >= hay.len()
+            || !hay.as_bytes()[after].is_ascii_alphanumeric();
+        if before_ok && after_ok {
+            return true;
+        }
+        start = idx + 1;
+        if start >= hay.len() {
+            break;
+        }
+    }
+    false
+}
+
 /// The default provider (Meta).
 pub fn default_provider() -> &'static Provider {
     &PROVIDERS[0]
@@ -1440,6 +1553,24 @@ pub fn effective_privacy(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn named_providers_in_text_finds_aliases_without_false_positives() {
+        let hits = named_providers_in_text(
+            "Deploy a claude review and a grok audit; also try antigravity for the implement step.",
+        );
+        assert!(hits.iter().any(|h| h.contains("claude")), "{hits:?}");
+        assert!(hits.iter().any(|h| h.contains("grok")), "{hits:?}");
+        assert!(hits.iter().any(|h| h.contains("antigravity")), "{hits:?}");
+        // Dedup by catalog id: "claude" + "anthropic" should not double-count.
+        let hits2 = named_providers_in_text("use claude and anthropic together");
+        assert_eq!(hits2.len(), 1, "same provider once: {hits2:?}");
+        // Ordinary prose without a real provider name.
+        assert!(named_providers_in_text("fix the auth module carefully").is_empty());
+        // Whole-word: "pro" alone is not scanned; "gemini pro" is.
+        assert!(named_providers_in_text("write a pro implementation").is_empty());
+        assert!(named_providers_in_text("run on gemini pro").contains(&"gemini pro".into()));
+    }
 
     #[test]
     fn ids_are_unique_and_default_is_meta() {
@@ -1694,6 +1825,35 @@ mod tests {
         ] {
             assert_eq!(normalize_google_model_id(id), id, "{id} must pass through");
         }
+    }
+
+    #[test]
+    fn antigravity_model_ids_strip_models_prefix_and_rewrite_preview() {
+        // Cloud Code wants bare ids — generativelanguage `models/` form must go.
+        assert_eq!(
+            normalize_antigravity_model_id("models/gemini-2.5-flash"),
+            "gemini-2.5-flash"
+        );
+        assert_eq!(
+            normalize_antigravity_model_id("gemini-2.5-flash"),
+            "gemini-2.5-flash"
+        );
+        assert_eq!(
+            normalize_antigravity_model_id("models/gemini-3.1-pro-preview"),
+            ANTIGRAVITY_DEFAULT_MODEL
+        );
+        assert_eq!(
+            normalize_antigravity_model_id("gemini-3.1-pro-preview"),
+            ANTIGRAVITY_DEFAULT_MODEL
+        );
+        assert_eq!(
+            normalize_antigravity_model_id(""),
+            ANTIGRAVITY_DEFAULT_MODEL
+        );
+        assert_eq!(
+            normalize_antigravity_model_id("models/"),
+            ANTIGRAVITY_DEFAULT_MODEL
+        );
     }
 
     #[test]

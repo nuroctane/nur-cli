@@ -43,8 +43,9 @@ pub enum AgentEvent {
     TodosChanged(String),
     /// A subagent was requested on a provider with no stored credentials. The
     /// TUI turns this into a pre-selected `/login` prompt so the user can
-    /// authenticate and activate that provider. The parent run continues on the
-    /// parent provider in the meantime.
+    /// authenticate and activate that provider. The subagent does **not** run
+    /// on the parent provider — the tool result is a blocked message, and the
+    /// TUI re-deploys after login with a structured steer.
     LoginRequired {
         provider_id: String,
         provider_name: String,
@@ -53,6 +54,10 @@ pub enum AgentEvent {
         /// (rather than relying on the model to reconstruct it from context).
         retry_prompt: Option<String>,
         retry_desc: Option<String>,
+        /// explore | general (defaults to explore on retry if missing).
+        retry_kind: Option<String>,
+        /// Optional exact model id the original call requested.
+        retry_model: Option<String>,
     },
     /// Plan written via submit_plan.
     PlanSubmitted(String),
@@ -1165,27 +1170,37 @@ impl AgentRunner {
                 let _ = tx_child.send(AgentEvent::Status(format!("subagent · {desc}")));
                 // Cross-provider: if the call named a different provider, build a
                 // client + config for it from that provider's stored credentials.
-                // Falls back to the parent's client/config when omitted or unresolved.
-                let (child_client, child_config) = resolve_subagent_target(
+                // Missing creds → LoginRequired + hard block (no silent parent run).
+                match resolve_subagent_target(
                     &client,
                     &config,
                     provider_override.as_deref(),
                     model_override.as_deref(),
                     Some(prompt.as_str()),
                     Some(desc.as_str()),
+                    Some(kind.as_str()),
                     &tx_child,
-                );
-                subagent::run_subagent(
-                    child_client,
-                    child_config,
-                    cwd,
-                    mode,
-                    &prompt,
-                    &kind,
-                    &cancel_child,
-                    &tx_child,
-                )
-                .await
+                ) {
+                    SubagentTarget::Ready {
+                        client: child_client,
+                        config: child_config,
+                    } => {
+                        subagent::run_subagent(
+                            child_client,
+                            child_config,
+                            cwd,
+                            mode,
+                            &prompt,
+                            &kind,
+                            &cancel_child,
+                            &tx_child,
+                        )
+                        .await
+                    }
+                    SubagentTarget::AwaitingLogin { message, .. } => {
+                        Err(MuseError::Other(message))
+                    }
+                }
             })));
         }
 
@@ -1634,6 +1649,7 @@ mod tests {
             arguments: r#"{"prompt":"audit auth","provider":"grok","model":"grok-4"}"#.into(),
         })
         .unwrap();
+        // Alias "grok" is preserved as the raw field value; resolve happens later.
         assert_eq!(prov.as_deref(), Some("grok"));
         assert_eq!(model.as_deref(), Some("grok-4"));
 
@@ -1641,6 +1657,81 @@ mod tests {
         let (_, _, _, prov2, model2) =
             parse_agent_call(&agent_call("b", "look", "explore")).unwrap();
         assert!(prov2.is_none() && model2.is_none());
+    }
+
+    /// Models often forget the structured `provider` field but put the target
+    /// in the description or prompt. Recovery must still route correctly.
+    #[test]
+    fn agent_call_infers_provider_from_description_and_prompt() {
+        // Description is a short NL label naming the provider.
+        let (_, _, _, prov, _) = parse_agent_call(&FunctionCallRef {
+            call_id: "a".into(),
+            name: "agent".into(),
+            arguments: r#"{"prompt":"review the auth module","description":"claude review","subagent_type":"general"}"#.into(),
+        })
+        .unwrap();
+        assert_eq!(prov.as_deref(), Some("anthropic"));
+
+        // Routing phrase in the prompt.
+        let (_, _, _, prov2, _) = parse_agent_call(&FunctionCallRef {
+            call_id: "b".into(),
+            name: "agent".into(),
+            arguments: r#"{"prompt":"Deploy this on grok and check the failover path.","description":"failover check"}"#.into(),
+        })
+        .unwrap();
+        assert_eq!(prov2.as_deref(), Some("xai"));
+
+        // Explicit provider:value form.
+        let (_, _, _, prov3, model3) = parse_agent_call(&FunctionCallRef {
+            call_id: "c".into(),
+            name: "agent".into(),
+            arguments: r#"{"prompt":"task\nprovider:antigravity model:gemini-2.5-flash","description":"agy"}"#.into(),
+        })
+        .unwrap();
+        assert_eq!(prov3.as_deref(), Some("antigravity"));
+        assert_eq!(model3.as_deref(), Some("gemini-2.5-flash"));
+
+        // Bare task text that merely mentions a product must NOT hijack routing.
+        let (_, _, _, prov4, _) = parse_agent_call(&FunctionCallRef {
+            call_id: "d".into(),
+            name: "agent".into(),
+            arguments: r#"{"prompt":"Document how Claude Code stores sessions on disk.","description":"session docs"}"#.into(),
+        })
+        .unwrap();
+        assert!(
+            prov4.is_none(),
+            "incidental product mention must not force a provider: {prov4:?}"
+        );
+
+        // "via antigravity" / "using gemini" routing cues.
+        let (_, _, _, prov5, _) = parse_agent_call(&FunctionCallRef {
+            call_id: "e".into(),
+            name: "agent".into(),
+            arguments: r#"{"prompt":"Ship the patch via antigravity","description":"ship"}"#.into(),
+        })
+        .unwrap();
+        assert_eq!(prov5.as_deref(), Some("antigravity"));
+
+        let (_, _, _, prov6, _) = parse_agent_call(&FunctionCallRef {
+            call_id: "f".into(),
+            name: "agent".into(),
+            arguments: r#"{"prompt":"Research using gemini","description":"research"}"#.into(),
+        })
+        .unwrap();
+        assert_eq!(prov6.as_deref(), Some("google"));
+
+        // Structured provider wins over incidental description text.
+        let (_, _, _, prov7, _) = parse_agent_call(&FunctionCallRef {
+            call_id: "g".into(),
+            name: "agent".into(),
+            arguments: r#"{"prompt":"compare notes","description":"claude vs grok","provider":"xai"}"#.into(),
+        })
+        .unwrap();
+        assert_eq!(
+            prov7.as_deref(),
+            Some("xai"),
+            "explicit provider field must not be overwritten by description inference"
+        );
     }
 
     #[test]
@@ -2423,7 +2514,9 @@ type SubagentHandle = tokio::task::JoinHandle<Result<(String, TokenUsage)>>;
 const MAX_CONCURRENT_SUBAGENTS: usize = 4;
 
 /// `{prompt, subagent_type, description, provider?, model?}` out of an `agent`
-/// tool call. Provider/model are optional cross-provider overrides.
+/// tool call. Provider/model are optional cross-provider overrides. When the
+/// model forgets `provider` but names one in the description/prompt (common),
+/// we recover it via [`infer_provider_from_agent_text`].
 fn parse_agent_call(call: &FunctionCallRef) -> Result<(String, String, String, Option<String>, Option<String>)> {
     let v: Value = serde_json::from_str(&call.arguments).unwrap_or(serde_json::json!({}));
     let prompt = v
@@ -2444,19 +2537,180 @@ fn parse_agent_call(call: &FunctionCallRef) -> Result<(String, String, String, O
         .and_then(|x| x.as_str())
         .unwrap_or(&kind)
         .to_string();
-    let provider = v
+    let mut provider = v
         .get("provider")
         .and_then(|x| x.as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
-    let model = v
+    let mut model = v
         .get("model")
         .and_then(|x| x.as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
+    // Robust NL recovery: models often put "on claude" / "grok review" in the
+    // description or prompt and omit the structured `provider` field.
+    if provider.is_none() {
+        if let Some((pid, maybe_model)) = infer_provider_from_agent_text(&desc, &prompt) {
+            provider = Some(pid);
+            if model.is_none() {
+                model = maybe_model;
+            }
+        }
+    }
     Ok((prompt, kind, desc, provider, model))
+}
+
+/// Infer a target provider (and optional model id) from free-text the model
+/// wrote into `description` / `prompt` when it forgot the structured fields.
+///
+/// Prefers explicit routing phrases (`on claude`, `using grok`, `provider:xai`,
+/// `deploy … antigravity`) over bare name mentions, so ordinary task text that
+/// merely discusses a provider does not hijack routing.
+fn infer_provider_from_agent_text(
+    desc: &str,
+    prompt: &str,
+) -> Option<(String, Option<String>)> {
+    // 1) Explicit key=value / key:value in either field.
+    for text in [desc, prompt] {
+        if let Some(hit) = extract_explicit_provider_kv(text) {
+            return Some(hit);
+        }
+    }
+    // 2) Short description that is itself a provider alias ("claude review",
+    //    "grok audit", "antigravity").
+    if let Some(p) = resolve_provider_alias(desc.trim()) {
+        return Some((p.id.to_string(), None));
+    }
+    // 3) Routing phrases in description first, then the head of the prompt.
+    for text in [desc, prompt] {
+        if let Some(hit) = extract_provider_routing_phrase(text) {
+            return Some(hit);
+        }
+    }
+    None
+}
+
+/// `provider:claude`, `provider=xai`, `model:grok-4` pairs in free text.
+fn extract_explicit_provider_kv(text: &str) -> Option<(String, Option<String>)> {
+    let lower = text.to_ascii_lowercase();
+    let mut found_provider: Option<String> = None;
+    let mut found_model: Option<String> = None;
+    for (key, out) in [("provider", &mut found_provider), ("model", &mut found_model)] {
+        for sep in [':', '='] {
+            let needle = format!("{key}{sep}");
+            if let Some(idx) = lower.find(&needle) {
+                let rest = text[idx + needle.len()..].trim_start();
+                let token: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
+                    .collect();
+                if !token.is_empty() {
+                    *out = Some(token);
+                }
+            }
+        }
+    }
+    let prov = found_provider.and_then(|raw| resolve_provider_alias(&raw).map(|p| p.id.to_string()))?;
+    // If model was set but looks like a provider alias, drop it — keep real ids.
+    let model = found_model.filter(|m| resolve_provider_alias(m).is_none() || m.contains('-') || m.contains('/'));
+    Some((prov, model))
+}
+
+/// Phrases like "on claude", "using gemini", "via antigravity", "with grok",
+/// "spawn a claude subagent", "deploy on xai".
+fn extract_provider_routing_phrase(text: &str) -> Option<(String, Option<String>)> {
+    let lower = text.to_ascii_lowercase();
+    // Prefer longer / more specific multi-word hits first.
+    const PHRASES: &[&str] = &[
+        "google antigravity",
+        "claude sonnet",
+        "claude opus",
+        "claude haiku",
+        "gemini flash",
+        "gemini pro",
+        "chatgpt",
+        "antigravity",
+        "deepseek",
+        "openrouter",
+        "moonshot",
+        "anthropic",
+        "openai",
+        "gemini",
+        "claude",
+        "sonnet",
+        "opus",
+        "haiku",
+        "grok",
+        "xai",
+        "mistral",
+        "kimi",
+        "qwen",
+        "ollama",
+        "flash",
+        "gpt",
+    ];
+    // Only accept a hit when preceded by a routing cue or "subagent"/"agent".
+    const CUES: &[&str] = &[
+        " on ",
+        " using ",
+        " via ",
+        " with ",
+        " through ",
+        " against ",
+        " onto ",
+        " deploy ",
+        " deploy on ",
+        " spawn ",
+        " run on ",
+        " routed to ",
+        " target ",
+        " provider ",
+        " subagent on ",
+        " subagent ",
+        " agent on ",
+        " agent ",
+    ];
+    for phrase in PHRASES {
+        let Some(idx) = lower.find(phrase) else { continue };
+        // Whole-word-ish: char before should be boundary.
+        if idx > 0 {
+            let prev = lower.as_bytes()[idx - 1] as char;
+            if prev.is_alphanumeric() {
+                continue;
+            }
+        }
+        let after = idx + phrase.len();
+        if after < lower.len() {
+            let next = lower.as_bytes()[after] as char;
+            if next.is_alphanumeric() || next == '-' {
+                continue;
+            }
+        }
+        // Window before the match for a routing cue.
+        let window_start = idx.saturating_sub(24);
+        let window = &lower[window_start..idx];
+        let cued = idx == 0
+            || CUES.iter().any(|c| window.ends_with(c.trim_start()) || window.contains(c))
+            || window.trim().is_empty();
+        // Bare description-start hit is ok (idx==0); mid-sentence needs a cue.
+        if !cued && idx > 0 {
+            // Also allow "…claude subagent" / "…grok agent" immediately after.
+            let tail = &lower[after..];
+            let tail_ok = tail.trim_start().starts_with("subagent")
+                || tail.trim_start().starts_with("agent")
+                || tail.trim_start().starts_with("reviewer")
+                || tail.trim_start().starts_with("review");
+            if !tail_ok {
+                continue;
+            }
+        }
+        if let Some(p) = resolve_provider_alias(phrase) {
+            return Some((p.id.to_string(), None));
+        }
+    }
+    None
 }
 
 async fn run_agent_tool(
@@ -2468,33 +2722,61 @@ async fn run_agent_tool(
     let (prompt, kind, desc, provider_override, model_override) = parse_agent_call(call)?;
     let _ = tx.send(AgentEvent::Status(format!("subagent · {desc}")));
 
-    let (child_client, child_config) = resolve_subagent_target(
+    match resolve_subagent_target(
         &runner.client,
         &runner.config,
         provider_override.as_deref(),
         model_override.as_deref(),
         Some(prompt.as_str()),
         Some(desc.as_str()),
+        Some(kind.as_str()),
         tx,
-    );
-    subagent::run_subagent(
-        child_client,
-        child_config,
-        runner.cwd.clone(),
-        runner.permission_mode.clone(),
-        &prompt,
-        &kind,
-        cancel,
-        tx,
-    )
-    .await
+    ) {
+        SubagentTarget::Ready { client, config } => {
+            subagent::run_subagent(
+                client,
+                config,
+                runner.cwd.clone(),
+                runner.permission_mode.clone(),
+                &prompt,
+                &kind,
+                cancel,
+                tx,
+            )
+            .await
+        }
+        SubagentTarget::AwaitingLogin { message, .. } => {
+            // Surface as a tool error so the parent model does not treat a
+            // parent-provider run as success. LoginRequired was already emitted.
+            Err(MuseError::Other(message))
+        }
+    }
+}
+
+/// Outcome of resolving where a subagent should run.
+enum SubagentTarget {
+    Ready {
+        client: ApiClient,
+        config: Config,
+    },
+    /// Explicit cross-provider request, but no credentials yet. Do not run.
+    AwaitingLogin {
+        #[allow(dead_code)]
+        provider_id: String,
+        #[allow(dead_code)]
+        provider_name: String,
+        message: String,
+    },
 }
 
 /// Resolve a subagent's client + config, honoring an optional cross-provider
 /// override. When `provider` names a DIFFERENT provider than the parent, build a
-/// client from that provider's stored credentials + catalog base/model. Any
-/// failure (unknown provider, not signed in) falls back to the parent's client
-/// with a status note, so a subagent never silently dies on a bad provider name.
+/// client from that provider's stored credentials + catalog base/model.
+///
+/// Unknown provider names fall back to the parent with a status note. A **known**
+/// provider with **no credentials** does **not** fall back — it emits
+/// [`AgentEvent::LoginRequired`] and returns [`SubagentTarget::AwaitingLogin`]
+/// so the TUI can open `/login` and the model is told the spawn was blocked.
 fn resolve_subagent_target(
     parent_client: &ApiClient,
     parent_config: &Config,
@@ -2502,22 +2784,32 @@ fn resolve_subagent_target(
     model: Option<&str>,
     retry_prompt: Option<&str>,
     retry_desc: Option<&str>,
+    retry_kind: Option<&str>,
     tx: &mpsc::UnboundedSender<AgentEvent>,
-) -> (ApiClient, Config) {
+) -> SubagentTarget {
     let Some(requested) = provider else {
         // No override: inherit parent, but still allow a model-only override.
         if let Some(m) = model {
             let mut cfg = parent_config.clone();
             cfg.model = m.to_string();
-            return (parent_client.clone(), cfg);
+            return SubagentTarget::Ready {
+                client: parent_client.clone(),
+                config: cfg,
+            };
         }
-        return (parent_client.clone(), parent_config.clone());
+        return SubagentTarget::Ready {
+            client: parent_client.clone(),
+            config: parent_config.clone(),
+        };
     };
     let Some(prov) = resolve_provider_alias(requested) else {
         let _ = tx.send(AgentEvent::Status(format!(
             "subagent · unknown provider '{requested}' — using parent provider instead"
         )));
-        return (parent_client.clone(), parent_config.clone());
+        return SubagentTarget::Ready {
+            client: parent_client.clone(),
+            config: parent_config.clone(),
+        };
     };
     // Same provider as parent → just reuse the parent client (maybe new model).
     if prov.id == parent_config.provider {
@@ -2525,7 +2817,10 @@ fn resolve_subagent_target(
         if let Some(m) = model {
             cfg.model = m.to_string();
         }
-        return (parent_client.clone(), cfg);
+        return SubagentTarget::Ready {
+            client: parent_client.clone(),
+            config: cfg,
+        };
     }
     // Different provider: resolve its credential and build a client.
     let key = match crate::auth::resolve_api_key_for(Some(prov.id)) {
@@ -2577,23 +2872,39 @@ fn resolve_subagent_target(
         }
     }
     if key.trim().is_empty() && !prov.key_optional {
-        // No stored credential and no importable vendor CLI session. Surface a
-        // typed signal the TUI turns into a pre-selected `/login` modal, and
-        // continue on the parent so the run doesn't silently die. The status
-        // line is also actionable in case the modal can't open (e.g. headless).
+        // No stored credential and no importable vendor CLI session. Open /login
+        // pre-selected to this provider and BLOCK the spawn — never silently run
+        // on the parent (that made models think cross-provider "worked").
         let _ = tx.send(AgentEvent::LoginRequired {
             provider_id: prov.id.to_string(),
             provider_name: prov.name.to_string(),
             retry_prompt: retry_prompt.map(str::to_string),
             retry_desc: retry_desc.map(str::to_string),
+            retry_kind: retry_kind.map(str::to_string),
+            retry_model: model.map(str::to_string),
         });
         let _ = tx.send(AgentEvent::Status(format!(
-            "subagent · not signed in to {} - opening /login {} (using parent provider until you authenticate)",
+            "subagent · not signed in to {} — opening /login {} (spawn blocked until you authenticate)",
             prov.name, prov.id
         )));
-        return (parent_client.clone(), parent_config.clone());
+        let message = format!(
+            "blocked: not signed in to {name} (provider id `{id}`). \
+             A /login modal was opened pre-selected to `{id}`. \
+             Do NOT re-run this subagent on the parent provider. \
+             After the user finishes /login, nur will inject a mandatory re-deploy \
+             instruction with the exact `agent` tool call (provider=\"{id}\"). \
+             Original task is preserved for that retry.",
+            name = prov.name,
+            id = prov.id,
+        );
+        return SubagentTarget::AwaitingLogin {
+            provider_id: prov.id.to_string(),
+            provider_name: prov.name.to_string(),
+            message,
+        };
     }
     let style = prov.style;
+    // key_optional local providers may have an empty key.
     let client = match ApiClient::for_provider(prov.base_url, &key, prov.id) {
         Ok(c) => c.with_style(style),
         Err(e) => {
@@ -2601,7 +2912,10 @@ fn resolve_subagent_target(
                 "subagent · could not build {} client ({e}) — using parent",
                 prov.name
             )));
-            return (parent_client.clone(), parent_config.clone());
+            return SubagentTarget::Ready {
+                client: parent_client.clone(),
+                config: parent_config.clone(),
+            };
         }
     };
     let mut cfg = parent_config.clone();
@@ -2614,7 +2928,10 @@ fn resolve_subagent_target(
         "subagent · routed to {} · {}",
         prov.name, cfg.model
     )));
-    (client, cfg)
+    SubagentTarget::Ready {
+        client,
+        config: cfg,
+    }
 }
 
 /// Map a natural-language provider name to a catalog provider. Thin wrapper over

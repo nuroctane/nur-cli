@@ -336,7 +336,14 @@ impl ApiClient {
                 }
             }
         }
-        if matches!(self.provider_id.as_str(), "google" | "antigravity" | "google-oauth") {
+        // Google generativelanguage API-key path can use x-goog-user-project.
+        // Cloud Code free-tier managed projects (e.g. vivid-question-*) reject
+        // that header with 403 "Cloud Code Private API has not been used" —
+        // the project is already in the JSON body. Only attach the header for
+        // non-Cloud-Code google family requests.
+        if matches!(self.provider_id.as_str(), "google" | "antigravity" | "google-oauth")
+            && self.style != ApiStyle::GeminiCloudCode
+        {
             if let Some(project_id) = self
                 .oauth
                 .as_ref()
@@ -344,6 +351,16 @@ impl ApiClient {
             {
                 req = req.header("x-goog-user-project", project_id);
             }
+        }
+        // Match Gemini CLI / Antigravity identity on Cloud Code hosts.
+        if self.style == ApiStyle::GeminiCloudCode {
+            req = req
+                .header("User-Agent", crate::providers::CLOUD_CODE_USER_AGENT)
+                .header("X-Goog-Api-Client", crate::providers::CLOUD_CODE_API_CLIENT)
+                .header(
+                    "Client-Metadata",
+                    crate::providers::CLOUD_CODE_CLIENT_METADATA,
+                );
         }
         if self.provider_id == "kimi" && self.oauth.is_some() {
             if let Ok(headers) = crate::oauth::kimi_request_headers() {
@@ -1201,43 +1218,105 @@ impl ApiClient {
         Ok(resp)
     }
 
-    /// Resolve the Cloud Code project id: the OAuth session's stored id, else a
-    /// live `loadCodeAssist` lookup for the active access token.
+    /// Resolve the Cloud Code project id.
+    ///
+    /// Order: OAuth meta → `GOOGLE_CLOUD_PROJECT` env → live Code Assist setup
+    /// (`loadCodeAssist` + free-tier `onboardUser` via oauth public wrapper).
     fn gemini_project_id(&self) -> Result<String> {
-        if let Some(project_id) = self
-            .oauth
-            .as_ref()
-            .and_then(|context| context.project_id.clone())
-            .filter(|p| !p.trim().is_empty())
-        {
-            return Ok(project_id);
+        self.resolve_gemini_project_id(false)
+    }
+
+    /// `force_refresh` skips stored meta (used after a Private-API 403 so a
+    /// stale companion project id can be replaced by a fresh setup).
+    fn resolve_gemini_project_id(&self, force_refresh: bool) -> Result<String> {
+        if !force_refresh {
+            if let Some(project_id) = self
+                .oauth
+                .as_ref()
+                .and_then(|context| context.project_id.clone())
+                .filter(|p| !p.trim().is_empty())
+            {
+                return Ok(project_id);
+            }
+            if let Some(env_project) = crate::providers::explicit_google_cloud_project_from_env() {
+                return Ok(env_project);
+            }
         }
-        // No stored project id (imported session, or stale meta): ask the server.
         let token = self.api_key_for_request();
         let token_for_lookup = token.clone();
         let resolved = oauth_blocking(move || {
-            crate::oauth::antigravity_resolve_project_id(&token_for_lookup)
+            if force_refresh {
+                crate::oauth::antigravity_setup_code_assist_force(&token_for_lookup, None)
+                    .map(|(project, _tier)| project)
+            } else {
+                crate::oauth::antigravity_resolve_project_id(&token_for_lookup)
+            }
         });
         resolved.map_err(|e| {
             MuseError::Other(format!(
-                "Cloud Code needs a project id and loadCodeAssist failed: {e}"
+                "Cloud Code needs a project id and Code Assist setup failed: {e}. \
+                 Run /login antigravity (or sign in via the Antigravity/Gemini CLI), \
+                 enable the Cloud Code API, or set GOOGLE_CLOUD_PROJECT for a \
+                 paid/workspace project."
             ))
         })
     }
 
+    /// True when a Cloud Code 403 indicates the managed project is not activated
+    /// for this account yet (onboardUser never completed / stale project id).
+    fn is_cloudcode_activation_error(status: u16, message: &str) -> bool {
+        is_cloudcode_private_api_error(status, message)
+    }
+
+    /// Force Code Assist re-onboard (even when currentTier exists), best-effort
+    /// persist the new project id without wiping refresh tokens.
+    fn reonboard_cloudcode_project(&self) -> Result<String> {
+        let token_c = self.api_key_for_request();
+        let env_project = crate::providers::explicit_google_cloud_project_from_env();
+        let env_for_setup = env_project.clone();
+        // Force: re-run onboardUser even if currentTier is already present so a
+        // free-tier managed project that never activated (403 Private API) can
+        // be recovered instead of reusing the same stale id.
+        let (project, tier) = oauth_blocking(move || {
+            crate::oauth::antigravity_setup_code_assist_force(&token_c, env_for_setup.as_deref())
+        })
+        .map_err(|e| {
+            MuseError::Other(format!(
+                "Cloud Code re-onboard failed: {e}. Complete /login antigravity, \
+                 enable the Cloud Code API, or set GOOGLE_CLOUD_PROJECT, then retry."
+            ))
+        })?;
+        if project.trim().is_empty() {
+            return self.resolve_gemini_project_id(true).map_err(|e| {
+                MuseError::Other(format!(
+                    "Cloud Code re-onboard returned an empty project id ({e})"
+                ))
+            });
+        }
+        // Patch existing sessions in place — do not call save_provider_oauth with
+        // None refresh/expiry (that would wipe a working OAuth session).
+        let _ = crate::auth::update_oauth_project_meta(
+            self.provider_id.as_str(),
+            &project,
+            Some(tier.as_str()),
+        );
+        Ok(project)
+    }
+
     /// Non-streaming Gemini Cloud Code call (`v1internal:generateContent`).
     async fn create_gemini_cloudcode(&self, req: &ResponseRequest) -> Result<ApiResponse> {
-        let project = self.gemini_project_id()?;
+        let mut project = self.gemini_project_id()?;
         let model = crate::providers::normalize_antigravity_model_id(&req.model);
-        let body = super::gemini::build_body(req, &project, &model);
         let url = format!(
             "{}/v1internal:generateContent",
             self.base_url.trim_end_matches('/')
         );
         let mut attempt = 0u32;
         let mut oauth_refreshed = false;
+        let mut reonboarded = false;
         loop {
             attempt += 1;
+            let body = super::gemini::build_body(req, &project, &model);
             let res = self
                 .auth_headers(
                     self.http
@@ -1264,12 +1343,37 @@ impl ApiClient {
                     continue;
                 }
                 let message = parse_error_message(&text).unwrap_or(text);
+                // Free-tier managed project not activated / stale → re-onboard once.
+                if !reonboarded && is_cloudcode_private_api_error(status.as_u16(), &message) {
+                    reonboarded = true;
+                    match self.reonboard_cloudcode_project() {
+                        Ok(new_project) => {
+                            project = new_project;
+                            continue;
+                        }
+                        Err(e) => {
+                            return Err(MuseError::Api {
+                                status: status.as_u16(),
+                                message: format_cloud_code_403(
+                                    &message,
+                                    &project,
+                                    Some(&e.to_string()),
+                                ),
+                            });
+                        }
+                    }
+                }
                 if is_retryable_error(status.as_u16(), &message, false) && attempt < 4 {
                     let backoff =
                         std::time::Duration::from_millis(300 * (1 << (attempt - 1)) + rand_jitter());
                     tokio::time::sleep(backoff).await;
                     continue;
                 }
+                let message = if is_cloudcode_private_api_error(status.as_u16(), &message) {
+                    format_cloud_code_403(&message, &project, None)
+                } else {
+                    message
+                };
                 return Err(MuseError::Api {
                     status: status.as_u16(),
                     message,
@@ -1286,18 +1390,19 @@ impl ApiClient {
         mut on_event: impl FnMut(StreamEvent),
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<ApiResponse> {
-        let project = self.gemini_project_id()?;
+        let mut project = self.gemini_project_id()?;
         let model = crate::providers::normalize_antigravity_model_id(&req.model);
-        let body = super::gemini::build_body(req, &project, &model);
         let url = format!(
             "{}/v1internal:streamGenerateContent?alt=sse",
             self.base_url.trim_end_matches('/')
         );
         let mut attempt = 0u32;
         let mut oauth_refreshed = false;
+        let mut reonboarded = false;
 
         loop {
             attempt += 1;
+            let body = super::gemini::build_body(req, &project, &model);
             let res = match self
                 .auth_headers(
                     self.http
@@ -1330,11 +1435,35 @@ impl ApiClient {
                 }
                 let body_text = res.text().await.unwrap_or_default();
                 let msg = parse_error_message(&body_text).unwrap_or(body_text);
+                if !reonboarded && is_cloudcode_private_api_error(status.as_u16(), &msg) {
+                    reonboarded = true;
+                    match self.reonboard_cloudcode_project() {
+                        Ok(new_project) => {
+                            project = new_project;
+                            continue;
+                        }
+                        Err(e) => {
+                            return Err(MuseError::Api {
+                                status: status.as_u16(),
+                                message: format_cloud_code_403(
+                                    &msg,
+                                    &project,
+                                    Some(&e.to_string()),
+                                ),
+                            });
+                        }
+                    }
+                }
                 if is_retryable_error(status.as_u16(), &msg, false) && attempt < 3 {
                     let backoff = std::time::Duration::from_millis(500 * (1 << (attempt - 1)));
                     tokio::time::sleep(backoff).await;
                     continue;
                 }
+                let msg = if is_cloudcode_private_api_error(status.as_u16(), &msg) {
+                    format_cloud_code_403(&msg, &project, None)
+                } else {
+                    msg
+                };
                 return Err(MuseError::Api {
                     status: status.as_u16(),
                     message: msg,
@@ -1602,6 +1731,60 @@ fn is_retryable_error(status: u16, message: &str, opencode_route: bool) -> bool 
         || (opencode_route
             && matches!(status, 400 | 408 | 409 | 502 | 503 | 504)
             && is_transient_upstream_message(message))
+}
+
+/// True when a Cloud Code 403 indicates Private API / service not enabled
+/// (managed free-tier not onboarded, or user GCP project missing the API).
+fn is_cloudcode_private_api_error(status: u16, message: &str) -> bool {
+    if status != 403 {
+        return false;
+    }
+    let m = message.to_ascii_lowercase();
+    m.contains("cloud code private api")
+        || m.contains("has not been used in project")
+        || m.contains("is disabled")
+        || m.contains("service_disabled")
+        || m.contains("precondition check failed")
+        || (m.contains("not enabled") && m.contains("project"))
+}
+
+/// Human guidance for Cloud Code Private-API 403s.
+///
+/// Distinguishes:
+/// - (a) free-tier managed companion project → needs `onboardUser` via `/login antigravity`
+/// - (b) user GCP project (`GOOGLE_CLOUD_PROJECT`) → enable the API on that project
+fn format_cloud_code_403(original: &str, project: &str, reonboard_err: Option<&str>) -> String {
+    let env_project = crate::providers::explicit_google_cloud_project_from_env();
+    let is_user_gcp = env_project
+        .as_deref()
+        .map(|p| p == project)
+        .unwrap_or(false);
+
+    let mut out = original.to_string();
+    out.push_str("\n\n");
+    if is_user_gcp {
+        // (b) User-owned GCP project — API enablement is the fix.
+        out.push_str(&format!(
+            "Cloud Code API is not enabled on your GCP project '{project}'.\n\
+             Enable it:\n\
+               gcloud services enable cloudaicompanion.googleapis.com --project={project}\n\
+             (Console: APIs & Services → enable Cloud Code / Gemini Code Assist for that project.)"
+        ));
+    } else {
+        // (a) Free-tier / managed companion project — needs onboardUser.
+        out.push_str(&format!(
+            "Cloud Code Private API is not activated for managed project '{project}'.\n\
+             This usually means free-tier onboardUser never completed (or the stored project is stale).\n\
+             Fix: re-login Antigravity so setup can run onboardUser — `/login` → antigravity, \
+             or `nur login antigravity` (or re-import from the Antigravity/Gemini CLI).\n\
+             If you meant your own GCP project instead, set GOOGLE_CLOUD_PROJECT and enable \
+             cloudaicompanion.googleapis.com there."
+        ));
+    }
+    if let Some(e) = reonboard_err {
+        out.push_str(&format!("\n\n(re-onboard also failed: {e})"));
+    }
+    out
 }
 
 fn parse_response_body(body: &str, status: u16) -> Result<ApiResponse> {
@@ -1975,6 +2158,140 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
             request.headers().get("x-goog-user-project").unwrap(),
             "project-test"
         );
+    }
+
+    #[test]
+    fn gemini_cloud_code_sends_cli_headers_without_user_project() {
+        // Match Gemini CLI / Antigravity: UA + X-Goog-Api-Client + Client-Metadata,
+        // Bearer auth. Do NOT send x-goog-user-project (body already has project;
+        // free-tier companion projects often 403 with that header).
+        let client = ApiClient {
+            http: Client::new(),
+            base_url: crate::providers::ANTIGRAVITY_CLOUD_CODE_BASE_URL.to_string(),
+            api_key: "ya29.tok".to_string(),
+            provider_id: "antigravity".to_string(),
+            oauth: Some(crate::auth::OAuthRequestContext {
+                account_id: None,
+                is_fedramp: false,
+                project_id: Some("vivid-question-5fs6l".to_string()),
+            }),
+            refresh_oauth: false,
+            style: ApiStyle::GeminiCloudCode,
+        };
+        let request = client
+            .auth_headers(
+                client
+                    .http
+                    .post("https://cloudcode-pa.googleapis.com/v1internal:generateContent")
+                    .header("Content-Type", "application/json"),
+            )
+            .build()
+            .unwrap();
+        let h = request.headers();
+        assert_eq!(
+            h.get("User-Agent").and_then(|v| v.to_str().ok()),
+            Some(crate::providers::CLOUD_CODE_USER_AGENT)
+        );
+        assert_eq!(
+            h.get("X-Goog-Api-Client").and_then(|v| v.to_str().ok()),
+            Some(crate::providers::CLOUD_CODE_API_CLIENT)
+        );
+        assert_eq!(
+            h.get("Client-Metadata").and_then(|v| v.to_str().ok()),
+            Some(crate::providers::CLOUD_CODE_CLIENT_METADATA)
+        );
+        assert_eq!(
+            h.get("Authorization").and_then(|v| v.to_str().ok()),
+            Some("Bearer ya29.tok")
+        );
+        assert!(
+            h.get("x-goog-user-project").is_none(),
+            "x-goog-user-project must not be sent on Cloud Code requests"
+        );
+        assert!(
+            h.get("Client-Metadata")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .contains("GEMINI"),
+            "Client-Metadata should identify GEMINI plugin"
+        );
+    }
+
+    #[test]
+    fn cloud_code_private_api_error_detection_and_guidance() {
+        let managed_msg =
+            "Cloud Code Private API has not been used in project vivid-question-5fs6l before or it is disabled.";
+        assert!(is_cloudcode_private_api_error(403, managed_msg));
+        assert!(!is_cloudcode_private_api_error(401, managed_msg));
+        assert!(!is_cloudcode_private_api_error(403, "permission denied for other reason"));
+
+        // (a) managed free-tier project → onboardUser / re-login guidance
+        let a = format_cloud_code_403(managed_msg, "vivid-question-5fs6l", None);
+        assert!(
+            a.contains("/login") || a.contains("antigravity"),
+            "managed project tip should mention re-login: {a}"
+        );
+        assert!(
+            a.contains("onboardUser") || a.contains("onboard"),
+            "managed tip should mention onboarding: {a}"
+        );
+        assert!(
+            !a.contains("gcloud services enable"),
+            "managed tip should not lead with user-GCP enable: {a}"
+        );
+
+        // re-onboard failure is appended
+        let with_err = format_cloud_code_403(managed_msg, "vivid-question-5fs6l", Some("boom"));
+        assert!(with_err.contains("re-onboard also failed: boom"));
+    }
+
+    #[test]
+    fn cloud_code_style_skips_user_project_header_and_sends_cli_identity() {
+        // Free-tier managed projects 403 when x-goog-user-project is set;
+        // body already carries project. Identity headers match gemini-cli/agy.
+        let client = ApiClient {
+            http: Client::new(),
+            base_url: crate::providers::ANTIGRAVITY_CLOUD_CODE_BASE_URL.to_string(),
+            api_key: "oauth-token".to_string(),
+            provider_id: "antigravity".to_string(),
+            oauth: Some(crate::auth::OAuthRequestContext {
+                account_id: None,
+                is_fedramp: false,
+                project_id: Some("vivid-question-5fs6l".to_string()),
+            }),
+            refresh_oauth: false,
+            style: ApiStyle::GeminiCloudCode,
+        };
+        let request = client
+            .auth_headers(client.http.post("https://cloudcode-pa.googleapis.com/v1internal:generateContent"))
+            .build()
+            .unwrap();
+
+        assert!(
+            request.headers().get("x-goog-user-project").is_none(),
+            "x-goog-user-project must not be sent on Cloud Code free-tier"
+        );
+        assert_eq!(
+            request.headers().get("User-Agent").and_then(|v| v.to_str().ok()),
+            Some("google-api-nodejs-client/9.15.1")
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get("X-Goog-Api-Client")
+                .and_then(|v| v.to_str().ok()),
+            Some("google-cloud-sdk vscode_cloudshelleditor/0.1")
+        );
+    }
+
+    #[test]
+    fn cloudcode_activation_error_detects_private_api_message() {
+        assert!(ApiClient::is_cloudcode_activation_error(
+            403,
+            "Cloud Code Private API has not been used in project vivid-question-5fs6l before or it is disabled."
+        ));
+        assert!(!ApiClient::is_cloudcode_activation_error(401, "UNAUTHENTICATED"));
+        assert!(!ApiClient::is_cloudcode_activation_error(403, "permission denied on bucket"));
     }
 
     #[test]

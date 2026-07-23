@@ -245,12 +245,32 @@ session list while their usage is folded into the parent turn.
 **Cross-provider subagents.** An `agent` call may set `provider` (and optionally
 `model`) to run a subagent on a *different* provider than the parent — in natural
 language. `provider:"grok"` → xAI, `"gemini"`/`"google"` → Google, `"claude"` →
-Anthropic, `"chatgpt"`/`"gpt"` → OpenAI, plus `deepseek`, `mistral`, `kimi`, and
-direct catalog ids. The subagent uses that provider's stored credentials; if
-you're not signed in to it, the run falls back to the parent provider with a
-status note rather than failing. Omit both to inherit the parent's provider/model.
-This lets one turn fan out across providers — e.g. an Opus reviewer arguing with a
-Sonnet reviewer — from a single prompt.
+Anthropic, `"chatgpt"`/`"gpt"` → OpenAI, `"antigravity"`/`"agy"` → Antigravity
+(own OAuth — not the same as Gemini), plus `deepseek`, `mistral`, `kimi`, and
+direct catalog ids. Omit both fields to inherit the parent's provider/model.
+This lets one turn fan out across providers — e.g. a Claude reviewer alongside a
+Grok auditor — from a single prompt.
+
+**No silent parent fallback.** If you are not signed in to the requested
+provider, nur **blocks** the spawn (tool result is an error), opens the `/login`
+modal pre-selected to that provider, and does **not** quietly re-run the
+subagent on the parent backend. After you finish `/login`, nur injects a
+**mandatory re-deploy** steer with the exact structured `agent({ "provider":
+"…", … })` recipe so the model cannot omit `provider` on retry. Mid-turn steers
+that name a provider get a short cross-provider deploy nudge for the same
+reason.
+
+**Auto-retry recipe (after `/login`):**
+
+```text
+agent({
+  "provider": "<catalog-id>",
+  "subagent_type": "general|explore",
+  "description": "<original label>",
+  "prompt": "<original task>",
+  "model": "<optional exact model id>"
+})
+```
 
 ### `fractal`
 
