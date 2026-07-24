@@ -212,6 +212,37 @@ If you see API errors:
 2. Check the model: `cat ~/.nur/config.toml`
 3. Verify the API is up: [dev.meta.ai](https://dev.meta.ai/)
 
+#### `API error (mid-stream): …`
+
+`mid-stream` is not an HTTP status. It means the request returned **200** and the
+provider then reported a failure inside the response stream, so there is no
+status code to show.
+
+The common case is capacity. Providers that queue per worker — NVIDIA NIM, vLLM,
+Triton, local servers — refuse admission this way:
+
+```text
+API error (mid-stream): ResourceExhausted: Worker local total request limit reached (90/32)
+```
+
+nur treats that as a pause, not a failure: it waits and re-offers the turn to the
+same provider up to three times (1s → 2s → 4s), showing
+
+```text
+nvidia is at capacity — waiting 2s, retry 1/3
+```
+
+Retrying only happens when the stream produced **no output yet** — replaying a
+turn that already wrote text would duplicate it. If the retries are used up, the
+normal [failover](configuration.md) chain takes over.
+
+Billing exhaustion (`insufficient_quota`, `credit balance too low`) is *not*
+retried — waiting cannot fix it — but it does fail over to another provider.
+
+If you hit this constantly on one provider, you are probably outrunning it:
+subagents fan out up to 4 at a time, so a small worker pool saturates fast. Send
+less in parallel, or add a fallback with `/failover`.
+
 ### Session not resuming
 
 ```bash

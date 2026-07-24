@@ -253,25 +253,55 @@ impl AgentRunner {
         tx: &mpsc::UnboundedSender<AgentEvent>,
         cancel: &CancellationToken,
     ) -> Result<(ApiResponse, usize, Served)> {
-        let primary_err = match self.stream_one(&self.client, req, tx, cancel).await {
-            Ok((resp, deltas)) => {
-                return Ok((
-                    resp,
-                    deltas,
-                    Served {
-                        provider: self.config.provider.clone(),
-                        model: self.config.model.clone(),
-                        failover: false,
-                    },
-                ))
-            }
-            Err((e, emitted)) => {
-                if emitted > 0
-                    || !crate::api::failover::should_failover_for(&e, &self.config.provider)
-                {
-                    return Err(e);
+        // Saturation is a pause, not a failure. Providers that queue per worker
+        // (NVIDIA NIM, vLLM, Triton, local servers) refuse admission *mid-stream*
+        // on an HTTP 200 — NIM answers `ResourceExhausted: Worker local total
+        // request limit reached (90/32)` as an SSE error event. The transport
+        // retry in `ApiClient` never sees that, because the response itself
+        // succeeded, so a blip that clears in a second used to kill the turn.
+        //
+        // Only retried when the stream emitted nothing: replaying a request that
+        // already wrote text would duplicate it into the transcript.
+        let mut attempt: u32 = 0;
+        let primary_err = loop {
+            match self.stream_one(&self.client, req, tx, cancel).await {
+                Ok((resp, deltas)) => {
+                    return Ok((
+                        resp,
+                        deltas,
+                        Served {
+                            provider: self.config.provider.clone(),
+                            model: self.config.model.clone(),
+                            failover: false,
+                        },
+                    ))
                 }
-                e
+                Err((e, emitted)) => {
+                    if emitted == 0
+                        && attempt < CAPACITY_RETRIES
+                        && crate::api::failover::is_transient_capacity(&e)
+                        && !cancel.is_cancelled()
+                    {
+                        attempt += 1;
+                        let wait_ms = CAPACITY_BACKOFF_BASE_MS * 2u64.pow(attempt - 1);
+                        let _ = tx.send(AgentEvent::Status(format!(
+                            "{} is at capacity — waiting {}s, retry {attempt}/{CAPACITY_RETRIES}",
+                            self.config.provider,
+                            wait_ms / 1000
+                        )));
+                        tokio::select! {
+                            _ = cancel.cancelled() => return Err(MuseError::Interrupted),
+                            _ = tokio::time::sleep(std::time::Duration::from_millis(wait_ms)) => {}
+                        }
+                        continue;
+                    }
+                    if emitted > 0
+                        || !crate::api::failover::should_failover_for(&e, &self.config.provider)
+                    {
+                        return Err(e);
+                    }
+                    break e;
+                }
             }
         };
 
@@ -2625,6 +2655,13 @@ fn emit_side_effects(tx: &mpsc::UnboundedSender<AgentEvent>, name: &str, body: &
 
 /// A spawned subagent run: its report text plus the tokens it spent.
 type SubagentHandle = tokio::task::JoinHandle<Result<(String, TokenUsage)>>;
+
+/// How many times to re-offer a turn to a provider that reported saturation
+/// before giving up on it and falling over. Three attempts spans ~7s of
+/// backoff, which clears a per-worker queue without stalling a real outage.
+const CAPACITY_RETRIES: u32 = 3;
+/// First capacity backoff; doubles per attempt (1s → 2s → 4s).
+const CAPACITY_BACKOFF_BASE_MS: u64 = 1000;
 
 /// Most subagents to keep in flight at once.
 ///

@@ -11,6 +11,9 @@ fn api_message(status: u16, message: &str) -> String {
         return message.to_string();
     }
     match status {
+        // Mid-stream failure on an otherwise-successful response: there is no
+        // HTTP status to report because the request itself returned 200.
+        0 => "the provider ended the stream without a reason. Retry, or /model to another route.".into(),
         401 | 403 => "no details returned - the key was rejected. Check it with /login (or the provider's dashboard); an expired or wrong-scope key looks like this.".into(),
         404 => "no details returned - endpoint or model not found. Check the base URL and model id with /model.".into(),
         429 => "no details returned - rate limited. Wait and retry, or switch model/provider.".into(),
@@ -19,12 +22,24 @@ fn api_message(status: u16, message: &str) -> String {
     }
 }
 
+/// How to name the status in the message. `0` is not an HTTP code — it is our
+/// marker for "the response was 200 and the failure arrived inside the stream",
+/// and printing it as `API error (0)` read like a bug in nur rather than a
+/// provider-side condition.
+fn api_status_label(status: u16) -> String {
+    if status == 0 {
+        "mid-stream".to_string()
+    } else {
+        status.to_string()
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum MuseError {
     #[error("not authenticated: set NUR_API_KEY (or META_API_KEY for Meta provider) or run `nur auth login`")]
     NotAuthenticated,
 
-    #[error("API error ({status}): {}", api_message(*status, message))]
+    #[error("API error ({}): {}", api_status_label(*status), api_message(*status, message))]
     Api { status: u16, message: String },
 
     #[error("API request failed: {0}")]
@@ -73,6 +88,30 @@ mod tests {
             e.to_string(),
             "API error (400): invalid_request_error: model not found"
         );
+    }
+
+    /// `status: 0` is our marker for "the response was 200 and the failure came
+    /// down the stream". Rendering it as `API error (0)` read like a nur bug and
+    /// told the user nothing about whose fault it was.
+    #[test]
+    fn a_mid_stream_failure_is_not_reported_as_status_zero() {
+        let e = MuseError::Api {
+            status: 0,
+            message: "ResourceExhausted: Worker local total request limit reached (90/32)".into(),
+        };
+        let s = e.to_string();
+        assert!(!s.contains("(0)"), "0 is not an HTTP status: {s}");
+        assert_eq!(
+            s,
+            "API error (mid-stream): ResourceExhausted: Worker local total request limit reached (90/32)"
+        );
+
+        // And with no body at all it still explains itself.
+        let bare = MuseError::Api {
+            status: 0,
+            message: String::new(),
+        };
+        assert!(bare.to_string().contains("ended the stream"), "{bare}");
     }
 
     #[test]

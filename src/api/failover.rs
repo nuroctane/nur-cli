@@ -68,9 +68,80 @@ pub fn should_failover_for(err: &MuseError, provider_id: &str) -> bool {
     }
 }
 
+/// Squash a message to lowercase alphanumerics so a single needle matches every
+/// spelling a vendor might pick.
+///
+/// gRPC-derived backends (NVIDIA NIM, Triton, vLLM, Google) report status codes
+/// in camelCase — `ResourceExhausted` — while others send `RESOURCE_EXHAUSTED`,
+/// `resource-exhausted`, or `resource exhausted`. Matching the separators
+/// literally meant the most common spelling of the most common transient error
+/// fell through every needle in the list below.
+fn squash(message: &str) -> String {
+    message
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+/// Separator-insensitive capacity markers. Kept apart from the phrase list so
+/// each can stay readable: these are matched against [`squash`]ed text, where
+/// word boundaries no longer exist.
+const SQUASHED_CAPACITY_NEEDLES: &[&str] = &[
+    // gRPC status any spelling: ResourceExhausted / RESOURCE_EXHAUSTED / …
+    "resourceexhausted",
+    // NVIDIA NIM worker saturation: "Worker local total request limit reached (90/32)"
+    "requestlimitreached",
+    "concurrentrequest",
+    "concurrencylimit",
+    "toomanyrequests",
+    "serveroverloaded",
+    "capacityexceeded",
+    "unavailable",
+];
+
+/// Billing / plan exhaustion — real capacity trouble, but waiting will not fix
+/// it. Worth failing over to another provider, never worth retrying in place.
+fn is_hard_quota_message(message: &str) -> bool {
+    let m = message.to_ascii_lowercase();
+    const NEEDLES: &[&str] = &[
+        "insufficient_quota",
+        "out of credits",
+        "credit balance",
+        "billing hard limit",
+        "quota exceeded",
+        "quota_exceeded",
+    ];
+    NEEDLES.iter().any(|n| m.contains(n))
+}
+
+/// A transient saturation error worth **retrying the same provider** after a
+/// backoff, rather than failing the turn or moving the user elsewhere.
+///
+/// Deliberately narrower than [`should_failover_for`]: a mid-stream `status: 0`
+/// only qualifies when its body actually names a capacity condition, and
+/// billing exhaustion is excluded because no amount of waiting clears it.
+pub fn is_transient_capacity(err: &MuseError) -> bool {
+    match err {
+        MuseError::Api { status, message } => {
+            if is_hard_quota_message(message) {
+                return false;
+            }
+            matches!(status, 429 | 503 | 529) || is_capacity_or_quota_message(message)
+        }
+        _ => false,
+    }
+}
+
 /// True when the API error text indicates rate/usage/capacity — not a bad request.
 fn is_capacity_or_quota_message(message: &str) -> bool {
     let m = message.to_ascii_lowercase();
+    if SQUASHED_CAPACITY_NEEDLES
+        .iter()
+        .any(|n| squash(message).contains(n))
+    {
+        return true;
+    }
     const NEEDLES: &[&str] = &[
         "rate_limit",
         "rate limit",
@@ -249,6 +320,71 @@ mod tests {
         )));
         assert!(!should_failover(&MuseError::Interrupted));
         assert!(!should_failover(&MuseError::NotAuthenticated));
+    }
+
+    /// The exact string that killed live runs: NVIDIA NIM refuses admission
+    /// *mid-stream* on an HTTP 200, so it surfaces as `status: 0`, and it spells
+    /// the gRPC code in camelCase with no separator — which matched none of the
+    /// original phrase needles.
+    #[test]
+    fn nim_worker_saturation_is_transient_capacity() {
+        let nim = MuseError::Api {
+            status: 0,
+            message: "ResourceExhausted: Worker local total request limit reached (90/32)".into(),
+        };
+        assert!(
+            is_transient_capacity(&nim),
+            "NIM worker saturation must be retried in place, not fail the turn"
+        );
+        assert!(should_failover(&nim), "and still fail over if retries lose");
+
+        // Every spelling of the same gRPC status, from any vendor.
+        for spelling in [
+            "ResourceExhausted",
+            "RESOURCE_EXHAUSTED",
+            "resource_exhausted",
+            "resource exhausted",
+            "resource-exhausted",
+        ] {
+            assert!(
+                is_transient_capacity(&MuseError::Api {
+                    status: 0,
+                    message: format!("{spelling}: try again"),
+                }),
+                "{spelling} must classify as capacity"
+            );
+        }
+    }
+
+    /// Retry-in-place is narrower than failover: waiting cannot buy credits, and
+    /// a mid-stream error that is not about capacity must not be replayed.
+    #[test]
+    fn transient_capacity_excludes_billing_and_unrelated_stream_errors() {
+        for hard in [
+            "insufficient_quota: you have exceeded your current quota",
+            "Your credit balance is too low to access the API",
+            "billing hard limit has been reached",
+        ] {
+            assert!(
+                !is_transient_capacity(&MuseError::Api {
+                    status: 429,
+                    message: hard.into()
+                }),
+                "waiting will not fix: {hard}"
+            );
+        }
+        // A non-capacity mid-stream failure is left to the failover path alone.
+        assert!(!is_transient_capacity(&MuseError::Api {
+            status: 0,
+            message: "OpenCode returned an empty stream".into(),
+        }));
+        // Plain rate limits still retry.
+        assert!(is_transient_capacity(&MuseError::Api {
+            status: 429,
+            message: "rate limit exceeded".into(),
+        }));
+        // Non-API errors are never retried in place.
+        assert!(!is_transient_capacity(&MuseError::Interrupted));
     }
 
     #[test]
