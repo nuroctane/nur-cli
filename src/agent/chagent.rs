@@ -283,7 +283,7 @@ pub fn list_all(
             Err(e) => errors.push(format!("{label}: {e}")),
         }
     }
-    all.sort_by(|a, b| b.updated().cmp(&a.updated()));
+    all.sort_by_key(|b| std::cmp::Reverse(b.updated()));
     all
 }
 

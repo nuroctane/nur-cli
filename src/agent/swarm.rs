@@ -506,7 +506,10 @@ mod tests {
 
         let running = &run.trace[1];
         assert_eq!(running.ok, None);
-        assert!(running.has_body(), "in-flight entry still unfolds (shows args)");
+        assert!(
+            running.has_body(),
+            "in-flight entry still unfolds (shows args)"
+        );
         assert!(running.header_line().starts_with('⚒'));
         assert!(
             running.copy_text().contains("still running"),

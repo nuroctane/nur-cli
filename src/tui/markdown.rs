@@ -18,7 +18,7 @@ pub fn render_markdown(text: &str, base: Style) -> Vec<Line<'static>> {
     // `from_str` borrows from `text`; we copy each span into an owned String
     // so the result is `'static` and cacheable.
     let parsed = tui_markdown::from_str(text);
-    let default_fg = base.fg.unwrap_or(theme::FG);
+    let default_fg = base.fg.unwrap_or(theme::FG());
 
     let mut out: Vec<Line<'static>> = Vec::with_capacity(parsed.lines.len());
     for line in parsed.lines {
@@ -52,25 +52,25 @@ fn meta_palette(mut style: Style) -> Style {
     use ratatui::style::Color;
     // Inline code / code blocks: mint-on-dark (not gold-on-dark).
     if style.bg == Some(Color::Black) {
-        style.bg = Some(theme::CODE_BG);
+        style.bg = Some(theme::CODE_BG());
         if matches!(style.fg, Some(Color::White) | None) {
-            style.fg = Some(theme::MD_CODE);
+            style.fg = Some(theme::MD_CODE());
         }
     }
     // H1 banner uses a cyan background bar — drop bg, use cool heading hue.
     if style.bg == Some(Color::Cyan) {
         style.bg = None;
-        style.fg = Some(theme::MD_H1);
+        style.fg = Some(theme::MD_H1());
     }
     style.fg = match style.fg {
-        Some(Color::Cyan) => Some(theme::MD_H2),        // H2 / H3
-        Some(Color::LightCyan) => Some(theme::MD_H3),   // H4–H6
-        Some(Color::Green) => Some(theme::MD_QUOTE),    // blockquotes
-        Some(Color::Blue) => Some(theme::MD_LINK),      // links
-        Some(Color::LightBlue) => Some(theme::MD_LIST), // list markers
-        Some(Color::Yellow) | Some(Color::LightYellow) => Some(theme::AMBER),
-        Some(Color::Magenta) | Some(Color::LightMagenta) => Some(theme::LAVENDER),
-        Some(Color::Red) | Some(Color::LightRed) => Some(theme::ERROR),
+        Some(Color::Cyan) => Some(theme::MD_H2()),      // H2 / H3
+        Some(Color::LightCyan) => Some(theme::MD_H3()), // H4–H6
+        Some(Color::Green) => Some(theme::MD_QUOTE()),  // blockquotes
+        Some(Color::Blue) => Some(theme::MD_LINK()),    // links
+        Some(Color::LightBlue) => Some(theme::MD_LIST()), // list markers
+        Some(Color::Yellow) | Some(Color::LightYellow) => Some(theme::AMBER()),
+        Some(Color::Magenta) | Some(Color::LightMagenta) => Some(theme::LAVENDER()),
+        Some(Color::Red) | Some(Color::LightRed) => Some(theme::ERROR()),
         other => other,
     };
     style

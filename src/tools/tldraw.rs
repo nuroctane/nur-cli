@@ -325,7 +325,7 @@ fn resolve_open_path(cwd: &Path, path: &str) -> Result<PathBuf> {
         }
     }
     // Fall back to workspace (sandbox-checked)
-    resolve_path(&cwd.to_path_buf(), path)
+    resolve_path(cwd, path)
 }
 
 /// Resolve output path for `create` — **always under Desktop**.
@@ -366,8 +366,6 @@ fn slug_filename(title: &str) -> String {
         .map(|c| {
             if c.is_ascii_alphanumeric() {
                 c.to_ascii_lowercase()
-            } else if c.is_whitespace() || c == '-' || c == '_' {
-                '-'
             } else {
                 '-'
             }

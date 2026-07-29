@@ -1,120 +1,465 @@
-//! NurCLI visual system — gold-led chrome, purple + deep teal accents.
+//! NurCLI visual system — runtime-swappable palette (gold-led by default).
 //!
 //! Single source of truth for colors + text styles used by both the TUI
 //! (ratatui) and plain stdout printing (colored).
+//!
+//! The palette is now **runtime-selectable** (`/theme`, onboarding): every
+//! color is an accessor that reads the active [`Palette`]. Non-color chrome
+//! (spinners, glyphs, timings) stays `const` — those are not themed.
 
 use colored::Colorize;
 use ratatui::style::{Color, Modifier, Style};
+use std::sync::RwLock;
 use std::time::Duration;
 
-// ── Palette ────────────────────────────────────────────────────────────────
-/// Primary interactive gold (#E8B923).
-pub const NUR_GOLD: Color = Color::Rgb(232, 185, 35);
-/// Deep mustard / pressed gold.
-pub const NUR_GOLD_DEEP: Color = Color::Rgb(184, 134, 11);
-/// Soft champagne accent for secondary labels.
-pub const NUR_GOLD_SKY: Color = Color::Rgb(255, 224, 140);
-/// Legacy name used across the TUI - now gold (not Meta blue).
-pub const META_BLUE: Color = NUR_GOLD;
-#[allow(dead_code)]
-pub const META_BLUE_DEEP: Color = NUR_GOLD_DEEP;
-pub const META_BLUE_SKY: Color = NUR_GOLD_SKY;
-/// Near-black canvas (terminal fill).
-pub const BG: Color = Color::Rgb(11, 14, 18);
-/// Raised surface (input well, modals).
-pub const SURFACE: Color = Color::Rgb(18, 22, 28);
-/// Elevated surface (palette, hover).
-pub const SURFACE_2: Color = Color::Rgb(26, 31, 40);
-/// Highest surface — focused-row highlight inside modals (peek trace focus).
-pub const SURFACE_3: Color = Color::Rgb(38, 45, 58);
-/// Near-white foreground.
-pub const FG: Color = Color::Rgb(245, 242, 232);
-/// Dimmed foreground.
-pub const MUTED: Color = Color::Rgb(148, 142, 128);
-/// Extra-dim (hints, separators).
-pub const FAINT: Color = Color::Rgb(126, 119, 104);
-/// Hairline / border idle.
-pub const BORDER: Color = Color::Rgb(48, 44, 36);
-/// Code / block background.
-pub const CODE_BG: Color = Color::Rgb(16, 18, 14);
-/// Cool mint code in assistant markdown (stands out from body + gold chrome).
-pub const MD_CODE: Color = Color::Rgb(160, 220, 195);
-/// Markdown structure hues — keep these *off* the gold spine for legibility.
-pub const MD_H1: Color = Color::Rgb(120, 210, 215); // aqua
-pub const MD_H2: Color = Color::Rgb(130, 175, 235); // soft sky blue
-pub const MD_H3: Color = Color::Rgb(165, 155, 235); // periwinkle
-pub const MD_LINK: Color = Color::Rgb(100, 195, 235); // bright sky
-pub const MD_QUOTE: Color = Color::Rgb(150, 165, 145); // sage
-pub const MD_LIST: Color = Color::Rgb(90, 185, 165); // teal-mint
-/// Assistant prose — cool off-white (not pure white, not warm parchment).
-pub const ASSISTANT_FG: Color = Color::Rgb(228, 232, 240);
-/// Soft secondary assistant labels (meta under answers).
-pub const ASSISTANT_DIM: Color = Color::Rgb(150, 160, 175);
-pub const SUCCESS: Color = Color::Rgb(52, 199, 123);
-pub const WARN: Color = Color::Rgb(255, 186, 73);
-pub const ERROR: Color = Color::Rgb(255, 99, 99);
-/// Diff bands (Claude-Code style): added / removed line fg + subtle bg.
-pub const DIFF_ADD_FG: Color = Color::Rgb(126, 231, 166);
-pub const DIFF_ADD_BG: Color = Color::Rgb(18, 42, 30);
-pub const DIFF_DEL_FG: Color = Color::Rgb(255, 138, 148);
-pub const DIFF_DEL_BG: Color = Color::Rgb(46, 24, 28);
-/// Diff hunk header.
-pub const DIFF_META: Color = Color::Rgb(212, 175, 80);
-/// User message accent (crisp white).
-pub const USER: Color = Color::Rgb(255, 255, 255);
+// ── Runtime palette ──────────────────────────────────────────────────────────
 
-/// Banner gradient (top → bottom rows of the NUR logotype) — yellow spectrum.
-pub const GRADIENT: [(u8, u8, u8); 6] = [
-    (255, 248, 180), // pale lemon
-    (255, 230, 120), // canary
-    (255, 200, 60),  // bright gold
-    (232, 185, 35),  // nur gold
-    (200, 150, 20),  // mustard
-    (160, 110, 15),  // bronze
+/// Every themeable color, in one flat record. Presets fill this in; the active
+/// one lives behind [`ACTIVE`] and is read via the `UPPER_CASE()` accessors so
+/// existing call sites (`theme::NUR_GOLD()`) keep reading like named colors.
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)] // Presets intentionally define the complete visual vocabulary.
+pub struct Palette {
+    pub nur_gold: Color,
+    pub nur_gold_deep: Color,
+    pub nur_gold_sky: Color,
+    pub bg: Color,
+    pub surface: Color,
+    pub surface_2: Color,
+    pub surface_3: Color,
+    pub fg: Color,
+    pub muted: Color,
+    pub faint: Color,
+    pub border: Color,
+    pub code_bg: Color,
+    pub md_code: Color,
+    pub md_h1: Color,
+    pub md_h2: Color,
+    pub md_h3: Color,
+    pub md_link: Color,
+    pub md_quote: Color,
+    pub md_list: Color,
+    pub assistant_fg: Color,
+    pub assistant_dim: Color,
+    pub success: Color,
+    pub warn: Color,
+    pub error: Color,
+    pub diff_add_fg: Color,
+    pub diff_add_bg: Color,
+    pub diff_del_fg: Color,
+    pub diff_del_bg: Color,
+    pub diff_meta: Color,
+    pub user: Color,
+    pub blue_050: Color,
+    pub blue_100: Color,
+    pub blue_150: Color,
+    pub blue_200: Color,
+    pub blue_250: Color,
+    pub blue_300: Color,
+    pub blue_400: Color,
+    pub blue_500: Color,
+    pub blue_600: Color,
+    pub indigo: Color,
+    pub periwinkle: Color,
+    pub violet: Color,
+    pub lavender: Color,
+    pub magenta: Color,
+    pub pink: Color,
+    pub rose: Color,
+    pub coral: Color,
+    pub amber: Color,
+    pub gold: Color,
+    pub orange: Color,
+    pub lime: Color,
+    pub mint: Color,
+    pub seafoam: Color,
+    pub teal: Color,
+    pub cyan: Color,
+    /// Banner gradient (top → bottom rows of the NUR logotype).
+    pub gradient: [(u8, u8, u8); 6],
+    /// Shimmer ring for animated borders/separators.
+    pub aurora: [Color; 12],
+}
+
+/// Default theme — the gold-led NurCLI identity. All other presets derive from
+/// this so a theme only has to override what actually changes.
+const GOLD: Palette = Palette {
+    nur_gold: Color::Rgb(232, 185, 35),
+    nur_gold_deep: Color::Rgb(184, 134, 11),
+    nur_gold_sky: Color::Rgb(255, 224, 140),
+    bg: Color::Rgb(11, 14, 18),
+    surface: Color::Rgb(18, 22, 28),
+    surface_2: Color::Rgb(26, 31, 40),
+    surface_3: Color::Rgb(38, 45, 58),
+    fg: Color::Rgb(245, 242, 232),
+    muted: Color::Rgb(148, 142, 128),
+    faint: Color::Rgb(126, 119, 104),
+    border: Color::Rgb(48, 44, 36),
+    code_bg: Color::Rgb(16, 18, 14),
+    md_code: Color::Rgb(160, 220, 195),
+    md_h1: Color::Rgb(120, 210, 215),
+    md_h2: Color::Rgb(130, 175, 235),
+    md_h3: Color::Rgb(165, 155, 235),
+    md_link: Color::Rgb(100, 195, 235),
+    md_quote: Color::Rgb(150, 165, 145),
+    md_list: Color::Rgb(90, 185, 165),
+    assistant_fg: Color::Rgb(228, 232, 240),
+    assistant_dim: Color::Rgb(150, 160, 175),
+    success: Color::Rgb(52, 199, 123),
+    warn: Color::Rgb(255, 186, 73),
+    error: Color::Rgb(255, 99, 99),
+    diff_add_fg: Color::Rgb(126, 231, 166),
+    diff_add_bg: Color::Rgb(18, 42, 30),
+    diff_del_fg: Color::Rgb(255, 138, 148),
+    diff_del_bg: Color::Rgb(46, 24, 28),
+    diff_meta: Color::Rgb(212, 175, 80),
+    user: Color::Rgb(255, 255, 255),
+    blue_050: Color::Rgb(255, 250, 220),
+    blue_100: Color::Rgb(255, 242, 190),
+    blue_150: Color::Rgb(255, 236, 160),
+    blue_200: Color::Rgb(255, 224, 140),
+    blue_250: Color::Rgb(255, 216, 100),
+    blue_300: Color::Rgb(255, 208, 90),
+    blue_400: Color::Rgb(232, 185, 35),
+    blue_500: Color::Rgb(184, 134, 11),
+    blue_600: Color::Rgb(140, 100, 10),
+    indigo: Color::Rgb(139, 120, 220),
+    periwinkle: Color::Rgb(168, 150, 230),
+    violet: Color::Rgb(178, 148, 255),
+    lavender: Color::Rgb(202, 180, 255),
+    magenta: Color::Rgb(200, 120, 200),
+    pink: Color::Rgb(220, 140, 180),
+    rose: Color::Rgb(255, 143, 168),
+    coral: Color::Rgb(255, 138, 120),
+    amber: Color::Rgb(236, 162, 44),
+    gold: Color::Rgb(255, 208, 110),
+    orange: Color::Rgb(255, 150, 89),
+    lime: Color::Rgb(160, 224, 122),
+    mint: Color::Rgb(80, 190, 170),
+    seafoam: Color::Rgb(56, 170, 160),
+    teal: Color::Rgb(32, 150, 148),
+    cyan: Color::Rgb(72, 196, 208),
+    gradient: [
+        (255, 248, 180),
+        (255, 230, 120),
+        (255, 200, 60),
+        (232, 185, 35),
+        (200, 150, 20),
+        (160, 110, 15),
+    ],
+    aurora: [
+        Color::Rgb(255, 252, 200),
+        Color::Rgb(255, 245, 160),
+        Color::Rgb(255, 230, 100),
+        Color::Rgb(255, 214, 70),
+        Color::Rgb(232, 185, 35),
+        Color::Rgb(212, 160, 25),
+        Color::Rgb(190, 140, 20),
+        Color::Rgb(170, 120, 18),
+        Color::Rgb(200, 150, 40),
+        Color::Rgb(230, 190, 90),
+        Color::Rgb(255, 220, 120),
+        Color::Rgb(255, 200, 80),
+    ],
+};
+
+/// The active palette. Swapped by [`set_theme`]; read (copied) by [`current`].
+static ACTIVE: RwLock<Palette> = RwLock::new(GOLD);
+
+/// Copy of the live palette (cheap — `Palette: Copy`, uncontended read).
+#[inline]
+pub fn current() -> Palette {
+    *ACTIVE.read().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Registered themes, in menu order. `(id, human label)`.
+pub const THEMES: &[(&str, &str)] = &[
+    ("gold", "Nur Gold - the signature gold spine"),
+    ("mono", "Mono - neutral graphite, silver accent"),
+    ("midnight", "Midnight - deep indigo + cyan"),
+    ("solarized", "Solarized Dark - the classic base16"),
+    ("ember", "Ember - warm crimson + amber"),
 ];
 
-// ── Gold spine + accents ───────────────────────────────────────────────────
-// Primary chrome is gold; purple + deep teal remain for tool families.
+/// Every registered theme id.
+pub fn theme_ids() -> Vec<&'static str> {
+    THEMES.iter().map(|(id, _)| *id).collect()
+}
 
-/// Gold ramp, light → deep (replaces old blue spine).
-pub const BLUE_100: Color = Color::Rgb(255, 242, 190);
-pub const BLUE_200: Color = Color::Rgb(255, 224, 140);
-pub const BLUE_300: Color = Color::Rgb(255, 208, 90);
-pub const BLUE_400: Color = Color::Rgb(232, 185, 35); // == NUR_GOLD
-pub const BLUE_500: Color = Color::Rgb(184, 134, 11);
-#[allow(dead_code)]
-pub const BLUE_600: Color = Color::Rgb(140, 100, 10);
+/// Resolve aliases to a registered theme id.
+pub fn canonical_theme_id(id: &str) -> Option<&'static str> {
+    let id = id.trim();
+    if id.is_empty() || id.eq_ignore_ascii_case("default") || id.eq_ignore_ascii_case("nur") {
+        return Some("gold");
+    }
+    THEMES
+        .iter()
+        .find(|(candidate, _)| candidate.eq_ignore_ascii_case(id))
+        .map(|(candidate, _)| *candidate)
+}
 
-pub const BLUE_050: Color = Color::Rgb(255, 250, 220);
-#[allow(dead_code)] // brand palette reserved for future chrome
-pub const BLUE_150: Color = Color::Rgb(255, 236, 160);
-pub const BLUE_250: Color = Color::Rgb(255, 216, 100);
+/// True when `id` names a registered theme.
+pub fn is_theme(id: &str) -> bool {
+    canonical_theme_id(id).is_some()
+}
 
-/// Accents: purple family + deep teal (kept per brand brief).
-pub const INDIGO: Color = Color::Rgb(139, 120, 220); // structure: skills, todos
-#[allow(dead_code)] // brand palette reserved for future chrome
-pub const PERIWINKLE: Color = Color::Rgb(168, 150, 230);
-pub const VIOLET: Color = Color::Rgb(178, 148, 255); // thought & authored change
-pub const LAVENDER: Color = Color::Rgb(202, 180, 255);
-#[allow(dead_code)] // brand palette reserved for future chrome
-pub const MAGENTA: Color = Color::Rgb(200, 120, 200);
-pub const PINK: Color = Color::Rgb(220, 140, 180);
-#[allow(dead_code)]
-pub const ROSE: Color = Color::Rgb(255, 143, 168);
-#[allow(dead_code)]
-pub const CORAL: Color = Color::Rgb(255, 138, 120);
-pub const AMBER: Color = Color::Rgb(236, 162, 44); // shell - deliberately NOT WARN
-#[allow(dead_code)] // brand palette reserved for future chrome
-pub const GOLD: Color = Color::Rgb(255, 208, 110);
-pub const ORANGE: Color = Color::Rgb(255, 150, 89); // memory
-#[allow(dead_code)]
-pub const LIME: Color = Color::Rgb(160, 224, 122);
-#[allow(dead_code)] // brand palette reserved for future chrome
-pub const MINT: Color = Color::Rgb(80, 190, 170); // deep-teal bridge
-pub const SEAFOAM: Color = Color::Rgb(56, 170, 160);
-pub const TEAL: Color = Color::Rgb(32, 150, 148); // deep teal — network
-pub const CYAN: Color = Color::Rgb(72, 196, 208); // git - clear of SEAFOAM's answer teal
-                                                  // Green lives in SUCCESS — status, not a family hue.
+/// The active theme id (tracked alongside the palette).
+static ACTIVE_NAME: RwLock<String> = RwLock::new(String::new());
+
+/// Name of the active theme (`"gold"` when unset).
+pub fn current_theme_name() -> String {
+    let n = ACTIVE_NAME.read().map(|s| s.clone()).unwrap_or_default();
+    if n.is_empty() {
+        "gold".into()
+    } else {
+        n
+    }
+}
+
+/// Build a preset by id (case-insensitive). `None` if the id is unknown.
+fn preset(id: &str) -> Option<Palette> {
+    Some(match canonical_theme_id(id)? {
+        "gold" => GOLD,
+        "mono" => Palette {
+            nur_gold: Color::Rgb(210, 214, 222),
+            nur_gold_deep: Color::Rgb(150, 156, 166),
+            nur_gold_sky: Color::Rgb(236, 239, 244),
+            bg: Color::Rgb(14, 15, 17),
+            surface: Color::Rgb(20, 22, 25),
+            surface_2: Color::Rgb(30, 33, 38),
+            surface_3: Color::Rgb(44, 48, 55),
+            border: Color::Rgb(52, 55, 62),
+            code_bg: Color::Rgb(17, 18, 20),
+            blue_050: Color::Rgb(244, 246, 250),
+            blue_100: Color::Rgb(226, 230, 238),
+            blue_150: Color::Rgb(210, 215, 224),
+            blue_200: Color::Rgb(194, 200, 210),
+            blue_250: Color::Rgb(178, 184, 196),
+            blue_300: Color::Rgb(200, 205, 214),
+            blue_400: Color::Rgb(210, 214, 222),
+            blue_500: Color::Rgb(150, 156, 166),
+            blue_600: Color::Rgb(112, 118, 128),
+            diff_meta: Color::Rgb(176, 182, 194),
+            gradient: ramp6(Color::Rgb(236, 239, 244), Color::Rgb(120, 126, 136)),
+            aurora: ring12(Color::Rgb(236, 239, 244), Color::Rgb(120, 126, 136)),
+            ..GOLD
+        },
+        "midnight" => Palette {
+            nur_gold: Color::Rgb(96, 176, 246),
+            nur_gold_deep: Color::Rgb(58, 118, 196),
+            nur_gold_sky: Color::Rgb(158, 208, 255),
+            bg: Color::Rgb(9, 12, 22),
+            surface: Color::Rgb(15, 19, 32),
+            surface_2: Color::Rgb(22, 28, 46),
+            surface_3: Color::Rgb(32, 40, 62),
+            border: Color::Rgb(40, 50, 78),
+            code_bg: Color::Rgb(12, 16, 26),
+            blue_050: Color::Rgb(224, 238, 255),
+            blue_100: Color::Rgb(190, 222, 255),
+            blue_150: Color::Rgb(158, 208, 255),
+            blue_200: Color::Rgb(128, 192, 250),
+            blue_250: Color::Rgb(110, 184, 248),
+            blue_300: Color::Rgb(96, 176, 246),
+            blue_400: Color::Rgb(96, 176, 246),
+            blue_500: Color::Rgb(58, 118, 196),
+            blue_600: Color::Rgb(40, 88, 150),
+            diff_meta: Color::Rgb(120, 176, 236),
+            gradient: ramp6(Color::Rgb(158, 208, 255), Color::Rgb(40, 88, 150)),
+            aurora: ring12(Color::Rgb(158, 208, 255), Color::Rgb(40, 88, 150)),
+            ..GOLD
+        },
+        "solarized" => Palette {
+            nur_gold: Color::Rgb(181, 137, 0),
+            nur_gold_deep: Color::Rgb(133, 100, 0),
+            nur_gold_sky: Color::Rgb(203, 161, 40),
+            bg: Color::Rgb(0, 43, 54),
+            surface: Color::Rgb(7, 54, 66),
+            surface_2: Color::Rgb(20, 68, 80),
+            surface_3: Color::Rgb(34, 84, 96),
+            fg: Color::Rgb(147, 161, 161),
+            muted: Color::Rgb(131, 148, 150),
+            faint: Color::Rgb(101, 123, 131),
+            border: Color::Rgb(40, 88, 100),
+            code_bg: Color::Rgb(0, 38, 48),
+            assistant_fg: Color::Rgb(238, 232, 213),
+            assistant_dim: Color::Rgb(147, 161, 161),
+            success: Color::Rgb(133, 153, 0),
+            warn: Color::Rgb(203, 75, 22),
+            error: Color::Rgb(220, 50, 47),
+            user: Color::Rgb(238, 232, 213),
+            md_h1: Color::Rgb(38, 139, 210),
+            md_h2: Color::Rgb(42, 161, 152),
+            md_h3: Color::Rgb(108, 113, 196),
+            md_link: Color::Rgb(38, 139, 210),
+            md_code: Color::Rgb(42, 161, 152),
+            blue_050: Color::Rgb(238, 232, 213),
+            blue_100: Color::Rgb(213, 196, 140),
+            blue_150: Color::Rgb(203, 161, 40),
+            blue_200: Color::Rgb(181, 137, 0),
+            blue_250: Color::Rgb(181, 137, 0),
+            blue_300: Color::Rgb(181, 137, 0),
+            blue_400: Color::Rgb(181, 137, 0),
+            blue_500: Color::Rgb(133, 100, 0),
+            blue_600: Color::Rgb(101, 123, 131),
+            indigo: Color::Rgb(108, 113, 196),
+            violet: Color::Rgb(108, 113, 196),
+            teal: Color::Rgb(42, 161, 152),
+            cyan: Color::Rgb(38, 139, 210),
+            seafoam: Color::Rgb(42, 161, 152),
+            diff_meta: Color::Rgb(181, 137, 0),
+            gradient: ramp6(Color::Rgb(203, 161, 40), Color::Rgb(101, 79, 0)),
+            aurora: ring12(Color::Rgb(203, 161, 40), Color::Rgb(101, 79, 0)),
+            ..GOLD
+        },
+        "ember" => Palette {
+            nur_gold: Color::Rgb(240, 120, 74),
+            nur_gold_deep: Color::Rgb(186, 74, 44),
+            nur_gold_sky: Color::Rgb(255, 178, 128),
+            bg: Color::Rgb(18, 12, 12),
+            surface: Color::Rgb(26, 18, 17),
+            surface_2: Color::Rgb(38, 25, 24),
+            surface_3: Color::Rgb(54, 34, 32),
+            border: Color::Rgb(64, 40, 34),
+            code_bg: Color::Rgb(20, 13, 12),
+            blue_050: Color::Rgb(255, 234, 214),
+            blue_100: Color::Rgb(255, 208, 170),
+            blue_150: Color::Rgb(255, 178, 128),
+            blue_200: Color::Rgb(255, 150, 100),
+            blue_250: Color::Rgb(248, 132, 84),
+            blue_300: Color::Rgb(240, 120, 74),
+            blue_400: Color::Rgb(240, 120, 74),
+            blue_500: Color::Rgb(186, 74, 44),
+            blue_600: Color::Rgb(140, 52, 30),
+            diff_meta: Color::Rgb(232, 140, 90),
+            gradient: ramp6(Color::Rgb(255, 200, 120), Color::Rgb(150, 40, 30)),
+            aurora: ring12(Color::Rgb(255, 200, 120), Color::Rgb(150, 40, 30)),
+            ..GOLD
+        },
+        _ => return None,
+    })
+}
+
+/// Switch the active theme by id. Returns `false` for an unknown id (palette
+/// unchanged). Applies immediately to the next render.
+pub fn set_theme(id: &str) -> bool {
+    let Some(canonical) = canonical_theme_id(id) else {
+        return false;
+    };
+    match preset(canonical) {
+        Some(p) => {
+            if let Ok(mut w) = ACTIVE.write() {
+                *w = p;
+            }
+            if let Ok(mut n) = ACTIVE_NAME.write() {
+                *n = canonical.to_string();
+            }
+            true
+        }
+        None => false,
+    }
+}
+
+/// Three accent stops used by the theme picker preview.
+pub fn theme_preview(id: &str) -> Option<[Color; 3]> {
+    preset(id).map(|p| [p.nur_gold_sky, p.nur_gold, p.nur_gold_deep])
+}
+
+/// Build a 6-stop banner gradient by interpolating a light → deep accent.
+fn ramp6(light: Color, deep: Color) -> [(u8, u8, u8); 6] {
+    let mut out = [(0u8, 0u8, 0u8); 6];
+    for (i, slot) in out.iter_mut().enumerate() {
+        let t = i as f64 / 5.0;
+        if let Color::Rgb(r, g, b) = lerp(light, deep, t) {
+            *slot = (r, g, b);
+        }
+    }
+    out
+}
+
+/// Build a 12-color shimmer ring: light → deep → light so it loops smoothly.
+fn ring12(light: Color, deep: Color) -> [Color; 12] {
+    let mut out = [Color::Rgb(0, 0, 0); 12];
+    for (i, slot) in out.iter_mut().enumerate() {
+        // Triangle wave 0→1→0 across the ring for a seamless loop.
+        let x = i as f64 / 12.0;
+        let t = 1.0 - (2.0 * x - 1.0).abs();
+        *slot = lerp(light, deep, t);
+    }
+    out
+}
+
+/// Generate the `UPPER_CASE()` color accessors that read the live palette.
+macro_rules! palette_accessors {
+    ($($name:ident => $field:ident),* $(,)?) => {
+        $(
+            #[allow(non_snake_case, dead_code)]
+            #[inline]
+            pub fn $name() -> Color { current().$field }
+        )*
+    };
+}
+
+palette_accessors! {
+    NUR_GOLD => nur_gold,
+    NUR_GOLD_DEEP => nur_gold_deep,
+    NUR_GOLD_SKY => nur_gold_sky,
+    // Legacy names kept across the TUI — all now gold (not Meta blue).
+    META_BLUE => nur_gold,
+    META_BLUE_DEEP => nur_gold_deep,
+    META_BLUE_SKY => nur_gold_sky,
+    BG => bg,
+    SURFACE => surface,
+    SURFACE_2 => surface_2,
+    SURFACE_3 => surface_3,
+    FG => fg,
+    MUTED => muted,
+    FAINT => faint,
+    BORDER => border,
+    CODE_BG => code_bg,
+    MD_CODE => md_code,
+    MD_H1 => md_h1,
+    MD_H2 => md_h2,
+    MD_H3 => md_h3,
+    MD_LINK => md_link,
+    MD_QUOTE => md_quote,
+    MD_LIST => md_list,
+    ASSISTANT_FG => assistant_fg,
+    ASSISTANT_DIM => assistant_dim,
+    SUCCESS => success,
+    WARN => warn,
+    ERROR => error,
+    DIFF_ADD_FG => diff_add_fg,
+    DIFF_ADD_BG => diff_add_bg,
+    DIFF_DEL_FG => diff_del_fg,
+    DIFF_DEL_BG => diff_del_bg,
+    DIFF_META => diff_meta,
+    USER => user,
+    BLUE_050 => blue_050,
+    BLUE_100 => blue_100,
+    BLUE_150 => blue_150,
+    BLUE_200 => blue_200,
+    BLUE_250 => blue_250,
+    BLUE_300 => blue_300,
+    BLUE_400 => blue_400,
+    BLUE_500 => blue_500,
+    BLUE_600 => blue_600,
+    INDIGO => indigo,
+    PERIWINKLE => periwinkle,
+    VIOLET => violet,
+    LAVENDER => lavender,
+    MAGENTA => magenta,
+    PINK => pink,
+    ROSE => rose,
+    CORAL => coral,
+    AMBER => amber,
+    GOLD_ACCENT => gold,
+    ORANGE => orange,
+    LIME => lime,
+    MINT => mint,
+    SEAFOAM => seafoam,
+    TEAL => teal,
+    CYAN => cyan,
+}
 
 // ── Color math + animated gradients ─────────────────────────────────────────
 /// Decompose a color to RGB (non-RGB variants fall back to the canvas).
@@ -139,33 +484,17 @@ pub fn lerp(a: Color, b: Color, t: f64) -> Color {
 
 /// Blend a color toward the canvas background by `t` (0 = full, 1 = invisible).
 pub fn dim(c: Color, t: f64) -> Color {
-    lerp(c, BG, t)
+    lerp(c, BG(), t)
 }
 
-/// Gold shimmer ring — full yellow spectrum (lemon → canary → gold → mustard →
-/// honey → bronze → champagne) with a touch of amber/honey for motion.
-pub const AURORA: &[Color] = &[
-    Color::Rgb(255, 252, 200), // pale lemon
-    Color::Rgb(255, 245, 160), // light canary
-    Color::Rgb(255, 230, 100), // canary
-    Color::Rgb(255, 214, 70),  // bright gold
-    Color::Rgb(232, 185, 35),  // nur gold
-    Color::Rgb(212, 160, 25),  // honey
-    Color::Rgb(190, 140, 20),  // mustard
-    Color::Rgb(170, 120, 18),  // deep mustard
-    Color::Rgb(200, 150, 40),  // antique gold
-    Color::Rgb(230, 190, 90),  // champagne
-    Color::Rgb(255, 220, 120), // pale gold
-    Color::Rgb(255, 200, 80),  // sunflower
-];
-
-/// Sample the aurora ring at `phase` (any f64; wraps) with smooth interpolation.
+/// Sample the active aurora ring at `phase` (any f64; wraps) with smooth interpolation.
 pub fn aurora_at(phase: f64) -> Color {
-    let n = AURORA.len();
+    let ring = current().aurora;
+    let n = ring.len();
     let x = phase.rem_euclid(1.0) * n as f64;
     let i = (x.floor() as usize) % n;
     let j = (i + 1) % n;
-    lerp(AURORA[i], AURORA[j], x.fract())
+    lerp(ring[i], ring[j], x.fract())
 }
 
 /// Aurora colour that travels over time and across a horizontal position — the
@@ -189,17 +518,17 @@ pub fn aurora_cell(elapsed: Duration, pos: usize, span: usize, period_ms: u128) 
 /// net (deep teal) · git (teal) · delegate (pink) · knowledge (indigo/orange).
 pub fn tool_color(name: &str) -> Color {
     match name {
-        "read_file" | "list_dir" | "grep" | "glob" => BLUE_300,
-        "write_file" | "edit_file" | "multi_edit" | "apply_patch" => VIOLET,
-        "bash" => AMBER,
-        "web_fetch" | "web_search" | "browser" => TEAL,
-        "look" | "extract_frames" => PINK,
-        "git_status" | "git_diff" => CYAN,
-        "agent" | "omp" => PINK,
-        "memory" => ORANGE,
-        "skill" | "todo_write" | "graphify" | "plur" | "ruflo" | "executor" => INDIGO,
-        "submit_plan" => VIOLET,
-        _ => BLUE_200,
+        "read_file" | "list_dir" | "grep" | "glob" => BLUE_300(),
+        "write_file" | "edit_file" | "multi_edit" | "apply_patch" => VIOLET(),
+        "bash" => AMBER(),
+        "web_fetch" | "web_search" | "browser" => TEAL(),
+        "look" | "extract_frames" => PINK(),
+        "git_status" | "git_diff" => CYAN(),
+        "agent" | "omp" => PINK(),
+        "memory" => ORANGE(),
+        "skill" | "todo_write" | "graphify" | "plur" | "ruflo" | "executor" => INDIGO(),
+        "submit_plan" => VIOLET(),
+        _ => BLUE_200(),
     }
 }
 
@@ -245,14 +574,14 @@ pub enum Tone {
 impl Tone {
     pub fn color(self) -> Color {
         match self {
-            Tone::Neutral => BLUE_400,
-            Tone::Mode => INDIGO,
-            Tone::Plan => VIOLET,
-            Tone::Todos => CYAN,
-            Tone::Usage => TEAL,
-            Tone::Session => BLUE_200,
-            Tone::Skill => PERIWINKLE,
-            Tone::Memory => ORANGE,
+            Tone::Neutral => BLUE_400(),
+            Tone::Mode => INDIGO(),
+            Tone::Plan => VIOLET(),
+            Tone::Todos => CYAN(),
+            Tone::Usage => TEAL(),
+            Tone::Session => BLUE_200(),
+            Tone::Skill => PERIWINKLE(),
+            Tone::Memory => ORANGE(),
         }
     }
 
@@ -337,7 +666,7 @@ pub fn pulse_frame(elapsed: Duration) -> &'static str {
 
 /// True during the "on" half of a blink cycle.
 pub fn blink_on(elapsed: Duration) -> bool {
-    (elapsed.as_millis() / BLINK_MS) % 2 == 0
+    (elapsed.as_millis() / BLINK_MS).is_multiple_of(2)
 }
 
 /// Cubic ease-out: 1 - (1-t)³. `t` in 0..=1.
@@ -389,15 +718,18 @@ pub fn style_duration_chip(live: bool) -> Style {
     // running card outranks a finished one. Violet is deliberately absent: it
     // means model thought and nothing else, and a running `bash` is not a
     // thought. See `style_thought_chip`.
-    let bg = if live { NUR_GOLD } else { META_BLUE_SKY };
-    Style::default().fg(BG).bg(bg).add_modifier(Modifier::BOLD)
+    let bg = if live { NUR_GOLD() } else { META_BLUE_SKY() };
+    Style::default()
+        .fg(BG())
+        .bg(bg)
+        .add_modifier(Modifier::BOLD)
 }
 
 /// Chip for the model's thinking time - the one duration that is violet.
 pub fn style_thought_chip() -> Style {
     Style::default()
-        .fg(BG)
-        .bg(VIOLET)
+        .fg(BG())
+        .bg(VIOLET())
         .add_modifier(Modifier::BOLD)
 }
 
@@ -405,13 +737,13 @@ pub fn style_thought_chip() -> Style {
 pub fn style_turn_chip(interrupted: bool) -> Style {
     if interrupted {
         Style::default()
-            .fg(BG)
-            .bg(WARN)
+            .fg(BG())
+            .bg(WARN())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
-            .fg(BG)
-            .bg(SUCCESS)
+            .fg(BG())
+            .bg(SUCCESS())
             .add_modifier(Modifier::BOLD)
     }
 }
@@ -440,33 +772,35 @@ pub fn activity_bar(elapsed: Duration, width: usize) -> String {
 // ── ratatui styles ─────────────────────────────────────────────────────────
 #[allow(dead_code)]
 pub fn style_title() -> Style {
-    Style::default().fg(META_BLUE).add_modifier(Modifier::BOLD)
+    Style::default()
+        .fg(META_BLUE())
+        .add_modifier(Modifier::BOLD)
 }
 
 pub fn style_status() -> Style {
-    Style::default().fg(MUTED)
+    Style::default().fg(MUTED())
 }
 
 pub fn style_faint() -> Style {
-    Style::default().fg(FAINT)
+    Style::default().fg(FAINT())
 }
 
 pub fn style_user() -> Style {
-    Style::default().fg(USER).add_modifier(Modifier::BOLD)
+    Style::default().fg(USER()).add_modifier(Modifier::BOLD)
 }
 
 pub fn style_assistant() -> Style {
-    Style::default().fg(ASSISTANT_FG)
+    Style::default().fg(ASSISTANT_FG())
 }
 
 /// Secondary lines under an answer (e.g. meta footnotes).
 #[allow(dead_code)]
 pub fn style_assistant_dim() -> Style {
-    Style::default().fg(ASSISTANT_DIM)
+    Style::default().fg(ASSISTANT_DIM())
 }
 
 pub fn style_tool() -> Style {
-    Style::default().fg(TEAL)
+    Style::default().fg(TEAL())
 }
 
 /// Tool result body: soft tint from the tool family (not plain grey).
@@ -475,45 +809,53 @@ pub fn style_tool_result(name: &str) -> Style {
 }
 
 pub fn style_success() -> Style {
-    Style::default().fg(SUCCESS)
+    Style::default().fg(SUCCESS())
 }
 
 pub fn style_warn() -> Style {
-    Style::default().fg(WARN)
+    Style::default().fg(WARN())
 }
 
 pub fn style_error() -> Style {
-    Style::default().fg(ERROR)
+    Style::default().fg(ERROR())
 }
 
 /// Reasoning / "thinking" text — violet, so model thought is never confused
 /// with tool output or the assistant's actual answer.
 pub fn style_thinking_violet() -> Style {
-    Style::default().fg(VIOLET).add_modifier(Modifier::ITALIC)
+    Style::default().fg(VIOLET()).add_modifier(Modifier::ITALIC)
 }
 
 #[allow(dead_code)]
 pub fn style_thinking() -> Style {
-    Style::default().fg(MUTED).add_modifier(Modifier::ITALIC)
+    Style::default().fg(MUTED()).add_modifier(Modifier::ITALIC)
 }
 
 pub fn style_canvas() -> Style {
-    Style::default().bg(BG).fg(FG)
+    Style::default().bg(BG()).fg(FG())
 }
 
 pub fn style_surface() -> Style {
-    Style::default().bg(SURFACE).fg(FG)
+    Style::default().bg(SURFACE()).fg(FG())
 }
 
 /// Input caret / stream caret: reverse gold block.
 pub fn style_cursor_on() -> Style {
     Style::default()
-        .fg(BG)
-        .bg(NUR_GOLD)
+        .fg(BG())
+        .bg(NUR_GOLD())
         .add_modifier(Modifier::BOLD)
 }
 
 // ── stdout helpers (headless / subcommands) ────────────────────────────────
+/// RGB triple of a themed color, for the `colored` crate (falls back to canvas).
+fn tc(c: Color) -> (u8, u8, u8) {
+    match c {
+        Color::Rgb(r, g, b) => (r, g, b),
+        _ => (232, 185, 35),
+    }
+}
+
 #[allow(dead_code)]
 pub fn banner() {
     let rows = [
@@ -524,15 +866,18 @@ pub fn banner() {
         r#" ██║ ╚████║╚██████╔╝██║  ██║"#,
         r#" ╚═╝  ╚═══╝ ╚═════╝ ╚═╝  ╚═╝"#,
     ];
+    let grad = current().gradient;
     println!();
     for (i, row) in rows.iter().enumerate() {
-        let (r, g, b) = GRADIENT[i.min(GRADIENT.len() - 1)];
+        let (r, g, b) = grad[i.min(grad.len() - 1)];
         println!("{}", row.truecolor(r, g, b));
     }
+    let (ar, ag, ab) = tc(NUR_GOLD());
+    let (mr, mg, mb) = tc(MUTED());
     println!(
         "  {}  {}  {}   {}",
-        "NurCLI".truecolor(232, 185, 35).bold(),
-        "·".truecolor(148, 142, 128),
+        "NurCLI".truecolor(ar, ag, ab).bold(),
+        "·".truecolor(mr, mg, mb),
         "multi-provider coding agent".truecolor(200, 190, 170),
         format!("v{}", env!("CARGO_PKG_VERSION")).truecolor(96, 90, 78)
     );
@@ -543,23 +888,28 @@ pub fn banner() {
 }
 
 pub fn print_info(msg: &str) {
-    println!("{} {}", "●".truecolor(232, 185, 35), msg);
+    let (r, g, b) = tc(NUR_GOLD());
+    println!("{} {}", "●".truecolor(r, g, b), msg);
 }
 
 pub fn print_ok(msg: &str) {
-    println!("{} {}", "✓".truecolor(52, 199, 123), msg);
+    let (r, g, b) = tc(SUCCESS());
+    println!("{} {}", "✓".truecolor(r, g, b), msg);
 }
 
 pub fn print_err(msg: &str) {
-    eprintln!("{} {}", "✗".truecolor(255, 99, 99), msg);
+    let (r, g, b) = tc(ERROR());
+    eprintln!("{} {}", "✗".truecolor(r, g, b), msg);
 }
 
 pub fn print_tool(name: &str, detail: &str) {
+    let (ar, ag, ab) = tc(NUR_GOLD());
+    let (mr, mg, mb) = tc(MUTED());
     println!(
         "{} {} {}",
-        "●".truecolor(232, 185, 35),
-        name.truecolor(232, 185, 35).bold(),
-        detail.truecolor(148, 142, 128)
+        "●".truecolor(ar, ag, ab),
+        name.truecolor(ar, ag, ab).bold(),
+        detail.truecolor(mr, mg, mb)
     );
 }
 
@@ -606,18 +956,18 @@ mod tests {
     #[test]
     fn hint_and_secondary_text_clear_the_contrast_floor() {
         assert!(
-            contrast(FAINT, BG) >= 3.0,
+            contrast(FAINT(), BG()) >= 3.0,
             "FAINT on BG is {:.2}:1",
-            contrast(FAINT, BG)
+            contrast(FAINT(), BG())
         );
         assert!(
-            contrast(FAINT, SURFACE_2) >= 3.0,
+            contrast(FAINT(), SURFACE_2()) >= 3.0,
             "FAINT on SURFACE_2 is {:.2}:1",
-            contrast(FAINT, SURFACE_2)
+            contrast(FAINT(), SURFACE_2())
         );
         // MUTED outranks FAINT - the hierarchy has to survive any retune.
-        assert!(contrast(MUTED, BG) > contrast(FAINT, BG));
-        assert!(contrast(FG, BG) >= 7.0);
+        assert!(contrast(MUTED(), BG()) > contrast(FAINT(), BG()));
+        assert!(contrast(FG(), BG()) >= 7.0);
     }
 
     /// Colours that mean different things must look different. Each of these
@@ -626,17 +976,17 @@ mod tests {
     fn distinct_roles_use_distinguishable_colours() {
         // "assistant is answering" vs "git tool".
         assert!(
-            distance(SEAFOAM, CYAN) > 40.0,
+            distance(SEAFOAM(), CYAN()) > 40.0,
             "SEAFOAM/CYAN distance {:.0}",
-            distance(SEAFOAM, CYAN)
+            distance(SEAFOAM(), CYAN())
         );
         // Shell-tool family vs warning status. Status colours are never family hues.
         assert!(
-            distance(AMBER, WARN) > 20.0,
+            distance(AMBER(), WARN()) > 20.0,
             "AMBER/WARN distance {:.0}",
-            distance(AMBER, WARN)
+            distance(AMBER(), WARN())
         );
-        assert_ne!(AMBER, WARN, "a shell card must not read as a warning");
+        assert_ne!(AMBER(), WARN(), "a shell card must not read as a warning");
     }
 
     /// `Tone` exists so system notices are each visually distinct rather than
@@ -663,9 +1013,9 @@ mod tests {
                 assert_ne!(a.glyph(), b.glyph(), "{a:?} and {b:?} share a glyph");
             }
             assert!(
-                contrast(a.color(), BG) >= 4.5,
+                contrast(a.color(), BG()) >= 4.5,
                 "{a:?} is unreadable on BG: {:.2}:1",
-                contrast(a.color(), BG)
+                contrast(a.color(), BG())
             );
         }
     }
@@ -675,9 +1025,13 @@ mod tests {
     #[test]
     fn violet_is_reserved_for_thought() {
         let bg_of = |s: Style| s.bg.expect("chips set a background");
-        assert_eq!(bg_of(style_thought_chip()), VIOLET);
-        assert_ne!(bg_of(style_duration_chip(true)), VIOLET, "a running tool is not a thought");
-        assert_ne!(bg_of(style_duration_chip(false)), VIOLET);
+        assert_eq!(bg_of(style_thought_chip()), VIOLET());
+        assert_ne!(
+            bg_of(style_duration_chip(true)),
+            VIOLET(),
+            "a running tool is not a thought"
+        );
+        assert_ne!(bg_of(style_duration_chip(false)), VIOLET());
         // Live still outranks finished.
         assert_ne!(
             bg_of(style_duration_chip(true)),
@@ -685,8 +1039,26 @@ mod tests {
             "live and settled chips must be tellable apart"
         );
         // Chips are dark-on-light: the text has to survive the background.
-        for s in [style_thought_chip(), style_duration_chip(true), style_duration_chip(false)] {
-            assert!(contrast(bg_of(s), BG) >= 4.5);
+        for s in [
+            style_thought_chip(),
+            style_duration_chip(true),
+            style_duration_chip(false),
+        ] {
+            assert!(contrast(bg_of(s), BG()) >= 4.5);
         }
+    }
+
+    /// Every registered theme applies and swaps the palette live.
+    #[test]
+    fn themes_switch_the_active_palette() {
+        assert!(set_theme("mono"));
+        assert_eq!(current_theme_name(), "mono");
+        assert_eq!(current().nur_gold, super::preset("mono").unwrap().nur_gold);
+        assert!(set_theme("default"));
+        assert_eq!(current_theme_name(), "gold");
+        assert!(!set_theme("does-not-exist"));
+        // Restore the default so other tests see gold.
+        assert!(set_theme("gold"));
+        assert_eq!(current().nur_gold, GOLD.nur_gold);
     }
 }

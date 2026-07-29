@@ -5,7 +5,7 @@
 ### Extremely efficient token spend
 
 **Use fewer paid tokens by default.**
-The harness trims old tool context, supports prompt caching and local models, and routes focused Oh My Pi delegation through its economical `pi/smol` role. Delegated OMP tokens and cost are included in Nur's session budgets and `/usage` totals.
+The harness supersedes stale duplicate reads, spills large tool results, compacts repeatedly under pressure, supports prompt caching and local models, and routes focused Oh My Pi delegation through a verified authenticated economy model. Delegated OMP tokens and cost are included in Nur's session budgets and `/usage` totals.
 
 </div>
 

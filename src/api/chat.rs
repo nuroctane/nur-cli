@@ -86,10 +86,8 @@ pub fn build_body_opts(
                 // two consecutive assistant messages — the strict upstream that Go
                 // proxies rejects the split form.
                 if let Some(last) = messages.last_mut() {
-                    let is_assistant = last
-                        .get("role")
-                        .and_then(|r| r.as_str())
-                        == Some("assistant");
+                    let is_assistant =
+                        last.get("role").and_then(|r| r.as_str()) == Some("assistant");
                     let has_no_calls = last.get("tool_calls").is_none();
                     if is_assistant && has_no_calls {
                         last["tool_calls"] = json!(tool_calls);
@@ -881,7 +879,10 @@ mod tests {
             );
             // The first assistant after user should have both text and tool_calls merged.
             let merged = &assistants[0];
-            assert_eq!(merged["content"], "I'll check.", "content must survive for {pid}");
+            assert_eq!(
+                merged["content"], "I'll check.",
+                "content must survive for {pid}"
+            );
             assert_eq!(
                 merged["tool_calls"].as_array().unwrap().len(),
                 1,
@@ -1254,8 +1255,14 @@ mod tool_choice_tests {
     /// Providers that never set it must be byte-identical to before.
     #[test]
     fn absent_tool_choice_still_defaults_to_auto() {
-        assert_eq!(build_body(&req_with_choice(None), false)["tool_choice"], "auto");
-        assert_eq!(build_body(&req_with_choice(Some("")), false)["tool_choice"], "auto");
+        assert_eq!(
+            build_body(&req_with_choice(None), false)["tool_choice"],
+            "auto"
+        );
+        assert_eq!(
+            build_body(&req_with_choice(Some("")), false)["tool_choice"],
+            "auto"
+        );
     }
 
     /// Cached-token reporting was dropped in the shared usage remap, so every

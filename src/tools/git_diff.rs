@@ -33,11 +33,9 @@ impl Tool for GitDiff {
         let path = arg_str(args, "path").ok();
         let ref_ = arg_str(args, "ref").ok();
         // Refuse anything that parses as a flag — this tool is read-only.
-        for v in [&path, &ref_] {
-            if let Some(s) = v {
-                if s.starts_with('-') {
-                    return Err(MuseError::Tool(format!("invalid argument: {s}")));
-                }
+        for s in [&path, &ref_].into_iter().flatten() {
+            if s.starts_with('-') {
+                return Err(MuseError::Tool(format!("invalid argument: {s}")));
             }
         }
 

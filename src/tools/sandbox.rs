@@ -7,8 +7,8 @@ use std::path::{Component, Path, PathBuf};
 /// prefix so comparisons against non-verbatim roots are consistent.
 fn strip_verbatim(path: &Path) -> PathBuf {
     let s = path.to_string_lossy();
-    if s.starts_with(r"\\?\") {
-        PathBuf::from(s[4..].to_string())
+    if let Some(path) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(path)
     } else {
         path.to_path_buf()
     }
@@ -129,7 +129,7 @@ fn component_key(c: &Component<'_>) -> String {
     #[cfg(windows)]
     {
         // Compare case-insensitively on Windows.
-        return s.to_ascii_lowercase();
+        s.to_ascii_lowercase()
     }
     #[cfg(not(windows))]
     {

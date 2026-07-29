@@ -15,12 +15,14 @@ use crate::config::nur_home;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::skills::{find_skill_mds, Skill, SKILL_WALK_MAX_DEPTH};
 
 const CACHE_VERSION: u32 = 1;
 const CACHE_TTL_SECS: u64 = 24 * 60 * 60; // 24h
+static CACHE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedSkill {
@@ -89,7 +91,14 @@ fn quick_count_global() -> usize {
 /// Try to load cache if fresh. Returns None when stale/missing.
 /// Fast path: only checks version + TTL (24h). No filesystem walk for instant TUI.
 /// Explicit invalidation via `invalidate_cache()` is called after skill installs.
-pub fn try_load_cache() -> Option<Vec<Skill>> {
+fn cache_guard() -> MutexGuard<'static, ()> {
+    CACHE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn try_load_cache() -> Option<Vec<Skill>> {
     let path = cache_path();
     let text = std::fs::read_to_string(&path).ok()?;
     let cf: SkillCacheFile = serde_json::from_str(&text).ok()?;
@@ -120,7 +129,7 @@ pub fn try_load_cache() -> Option<Vec<Skill>> {
 }
 
 /// Save global skills to cache.
-pub fn save_cache(skills: &[Skill]) {
+fn save_cache(skills: &[Skill]) {
     let path = cache_path();
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -149,6 +158,10 @@ pub fn save_cache(skills: &[Skill]) {
 
 /// Load skills with cache for global roots + fresh scan for cwd roots.
 pub fn load_skills_cached(cwd: &Path) -> Vec<Skill> {
+    // Serialise cache rebuilds as well as reads. Without this, two concurrent
+    // agent starts can observe a half-written JSON file and both fall back to
+    // the multi-second global scan.
+    let _cache_guard = cache_guard();
     let mut global_skills = Vec::new();
     let mut from_cache = false;
 
@@ -195,6 +208,7 @@ pub fn load_skills_cached(cwd: &Path) -> Vec<Skill> {
 }
 
 pub fn invalidate_cache() {
+    let _cache_guard = cache_guard();
     let _ = std::fs::remove_file(cache_path());
 }
 
@@ -207,7 +221,7 @@ mod tests {
     fn bench_cached_vs_cold() {
         let cwd = std::env::current_dir().unwrap();
         // clear cache first to measure cold
-        let _ = std::fs::remove_file(cache_path());
+        invalidate_cache();
         let start = Instant::now();
         let cold = load_skills_cached(&cwd);
         let cold_elapsed = start.elapsed();
@@ -222,7 +236,7 @@ mod tests {
             cached_elapsed
         );
 
-        assert!(cached.len() > 0);
+        assert!(!cached.is_empty());
         // cached should be significantly faster than cold (at least 2x faster, ideally 5x)
         // cold was ~1-2s with read, cached should be <100ms
         assert!(

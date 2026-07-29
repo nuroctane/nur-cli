@@ -5,6 +5,41 @@ use futures_util::StreamExt;
 use reqwest::Client;
 use reqwest::RequestBuilder;
 
+/// Meta's Model API is the only backend that accepts inline `input_video`
+/// content parts on the Responses API. Every other Responses provider (OpenAI
+/// `sol`/`gpt-*`, and the OpenAI-compatible gateways) rejects the whole request
+/// with `400 Invalid value: 'input_video'`. That poisons not just the turn that
+/// attached the clip but every later turn, because the video part lives on in
+/// the replayed history.
+///
+/// Rewrite any `input_video` part into a plain `input_text` placeholder for
+/// non-Meta providers, so a clip attached under Meta (or before a `/login`
+/// switch) never 400s a later OpenAI/sol turn. The model still learns a video
+/// was attached and can fall back to `extract_frames`.
+fn sanitize_media_for_provider(input: &mut serde_json::Value, provider_id: &str) {
+    if provider_id == "meta" {
+        return;
+    }
+    let items = match input.as_array_mut() {
+        Some(items) => items,
+        None => return,
+    };
+    for item in items {
+        let Some(parts) = item.get_mut("content").and_then(|c| c.as_array_mut()) else {
+            continue;
+        };
+        for part in parts {
+            if part.get("type").and_then(|t| t.as_str()) == Some("input_video") {
+                *part = serde_json::json!({
+                    "type": "input_text",
+                    "text": "[video attachment omitted — this backend cannot accept inline \
+                             video; run extract_frames on it and look at the JPEG stills]",
+                });
+            }
+        }
+    }
+}
+
 fn effective_base_url(base_url: &str, provider_id: &str, is_oauth: bool) -> String {
     if is_oauth {
         if let Some(fixed) = crate::providers::oauth_base_url(provider_id) {
@@ -241,6 +276,20 @@ impl ApiClient {
         model.to_string()
     }
 
+    /// Live model ids available to this exact credential and effective route.
+    /// Used by the agent loop only to heal a catalog default that a provider
+    /// retired after this Nur build. User-selected exact ids still fail closed.
+    pub async fn live_model_ids(&self) -> std::result::Result<Vec<String>, String> {
+        let base_url = self.base_url.clone();
+        let api_key = self.api_key_for_request();
+        let provider_id = self.provider_id.clone();
+        tokio::task::spawn_blocking(move || {
+            super::models::fetch_model_ids(&base_url, &api_key, Some(&provider_id))
+        })
+        .await
+        .map_err(|error| format!("model discovery task failed: {error}"))?
+    }
+
     /// Is this client pointed at an OpenCode gateway (Zen or Go)?
     ///
     /// Only that route opts into the message-based retries below: OpenCode
@@ -341,8 +390,10 @@ impl ApiClient {
         // that header with 403 "Cloud Code Private API has not been used" —
         // the project is already in the JSON body. Only attach the header for
         // non-Cloud-Code google family requests.
-        if matches!(self.provider_id.as_str(), "google" | "antigravity" | "google-oauth")
-            && self.style != ApiStyle::GeminiCloudCode
+        if matches!(
+            self.provider_id.as_str(),
+            "google" | "antigravity" | "google-oauth"
+        ) && self.style != ApiStyle::GeminiCloudCode
         {
             if let Some(project_id) = self
                 .oauth
@@ -407,6 +458,9 @@ impl ApiClient {
         }
         // ChatGPT/Codex OAuth backend often ignores stream:false and returns SSE.
         // Collect the completed event rather than failing JSON parse on `event:`.
+        let mut req_owned = req.clone();
+        sanitize_media_for_provider(&mut req_owned.input, &self.provider_id);
+        let req = &req_owned;
         let url = format!("{}/responses", self.base_url);
         let mut attempt = 0u32;
         let mut oauth_refreshed = false;
@@ -503,6 +557,7 @@ impl ApiClient {
         // so the body matches what we parse.
         let mut stream_req = req.clone();
         stream_req.stream = Some(true);
+        sanitize_media_for_provider(&mut stream_req.input, &self.provider_id);
         let url = format!("{}/responses", self.base_url);
         let mut attempt = 0u32;
         let mut last_err: Option<MuseError> = None;
@@ -1264,6 +1319,7 @@ impl ApiClient {
 
     /// True when a Cloud Code 403 indicates the managed project is not activated
     /// for this account yet (onboardUser never completed / stale project id).
+    #[cfg(test)]
     fn is_cloudcode_activation_error(status: u16, message: &str) -> bool {
         is_cloudcode_private_api_error(status, message)
     }
@@ -1329,7 +1385,8 @@ impl ApiClient {
             let res = match res {
                 Ok(r) => r,
                 Err(e) if attempt < 4 => {
-                    tokio::time::sleep(std::time::Duration::from_millis(300 * attempt as u64)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(300 * attempt as u64))
+                        .await;
                     let _ = e;
                     continue;
                 }
@@ -1364,8 +1421,9 @@ impl ApiClient {
                     }
                 }
                 if is_retryable_error(status.as_u16(), &message, false) && attempt < 4 {
-                    let backoff =
-                        std::time::Duration::from_millis(300 * (1 << (attempt - 1)) + rand_jitter());
+                    let backoff = std::time::Duration::from_millis(
+                        300 * (1 << (attempt - 1)) + rand_jitter(),
+                    );
                     tokio::time::sleep(backoff).await;
                     continue;
                 }
@@ -1495,9 +1553,8 @@ impl ApiClient {
             }
 
             let value = acc.into_response_value();
-            let resp: ApiResponse = serde_json::from_value(value).map_err(|e| {
-                MuseError::Other(format!("Cloud Code stream map failed: {e}"))
-            })?;
+            let resp: ApiResponse = serde_json::from_value(value)
+                .map_err(|e| MuseError::Other(format!("Cloud Code stream map failed: {e}")))?;
             on_event(StreamEvent::Completed(resp.clone()));
             return Ok(resp);
         }
@@ -1569,7 +1626,10 @@ fn handle_sse_json(
                     .pointer("/incomplete_details/reason")
                     .and_then(|r| r.as_str())
                     .unwrap_or("");
-                if reason.contains("max_output") || reason.contains("length") || parsed.status.as_deref() == Some("incomplete") {
+                if reason.contains("max_output")
+                    || reason.contains("length")
+                    || parsed.status.as_deref() == Some("incomplete")
+                {
                     parsed.status = Some("length".to_string());
                 } else if parsed.status.is_none() {
                     parsed.status = Some("incomplete".to_string());
@@ -1888,6 +1948,35 @@ fn uuid_simple() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn input_video_is_downgraded_for_non_meta_providers() {
+        let mk = || {
+            serde_json::json!([{
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "look"},
+                    {"type": "input_video", "video_url": "data:video/mp4;base64,AAAA"},
+                    {"type": "input_image", "image_url": "data:image/png;base64,BBBB"},
+                ]
+            }])
+        };
+        // Meta keeps the native input_video part untouched.
+        let mut meta = mk();
+        sanitize_media_for_provider(&mut meta, "meta");
+        assert_eq!(meta[0]["content"][1]["type"], "input_video");
+
+        // OpenAI (and every other Responses provider) gets a text placeholder,
+        // and the image survives.
+        let mut openai = mk();
+        sanitize_media_for_provider(&mut openai, "openai");
+        assert_eq!(openai[0]["content"][1]["type"], "input_text");
+        assert!(openai[0]["content"][1]["text"]
+            .as_str()
+            .unwrap()
+            .contains("extract_frames"));
+        assert_eq!(openai[0]["content"][2]["type"], "input_image");
+    }
 
     #[test]
     fn opencode_route_is_detected_by_provider_or_base_url() {
@@ -2223,7 +2312,10 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
             "Cloud Code Private API has not been used in project vivid-question-5fs6l before or it is disabled.";
         assert!(is_cloudcode_private_api_error(403, managed_msg));
         assert!(!is_cloudcode_private_api_error(401, managed_msg));
-        assert!(!is_cloudcode_private_api_error(403, "permission denied for other reason"));
+        assert!(!is_cloudcode_private_api_error(
+            403,
+            "permission denied for other reason"
+        ));
 
         // (a) managed free-tier project → onboardUser / re-login guidance
         let a = format_cloud_code_403(managed_msg, "vivid-question-5fs6l", None);
@@ -2263,7 +2355,11 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
             style: ApiStyle::GeminiCloudCode,
         };
         let request = client
-            .auth_headers(client.http.post("https://cloudcode-pa.googleapis.com/v1internal:generateContent"))
+            .auth_headers(
+                client
+                    .http
+                    .post("https://cloudcode-pa.googleapis.com/v1internal:generateContent"),
+            )
             .build()
             .unwrap();
 
@@ -2272,7 +2368,10 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
             "x-goog-user-project must not be sent on Cloud Code free-tier"
         );
         assert_eq!(
-            request.headers().get("User-Agent").and_then(|v| v.to_str().ok()),
+            request
+                .headers()
+                .get("User-Agent")
+                .and_then(|v| v.to_str().ok()),
             Some("google-api-nodejs-client/9.15.1")
         );
         assert_eq!(
@@ -2290,8 +2389,14 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
             403,
             "Cloud Code Private API has not been used in project vivid-question-5fs6l before or it is disabled."
         ));
-        assert!(!ApiClient::is_cloudcode_activation_error(401, "UNAUTHENTICATED"));
-        assert!(!ApiClient::is_cloudcode_activation_error(403, "permission denied on bucket"));
+        assert!(!ApiClient::is_cloudcode_activation_error(
+            401,
+            "UNAUTHENTICATED"
+        ));
+        assert!(!ApiClient::is_cloudcode_activation_error(
+            403,
+            "permission denied on bucket"
+        ));
     }
 
     #[test]
@@ -2317,18 +2422,22 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
         // A google-family session carrying an OAuth token is a Google access
         // token, not a Gemini API key: it must speak the Cloud Code protocol on
         // the cloudcode-pa host. A bare API key stays on generativelanguage CC.
-        let mut oauth_client =
-            ApiClient::new("https://generativelanguage.googleapis.com/v1beta/openai", "ya29.tok")
-                .unwrap();
+        let mut oauth_client = ApiClient::new(
+            "https://generativelanguage.googleapis.com/v1beta/openai",
+            "ya29.tok",
+        )
+        .unwrap();
         oauth_client.provider_id = "google".to_string();
         oauth_client.oauth = Some(crate::auth::OAuthRequestContext::default());
         let routed = oauth_client.with_style(ApiStyle::ChatCompletions);
         assert_eq!(routed.style, ApiStyle::GeminiCloudCode);
         assert_eq!(routed.base_url, "https://cloudcode-pa.googleapis.com");
 
-        let mut key_client =
-            ApiClient::new("https://generativelanguage.googleapis.com/v1beta/openai", "AIza-key")
-                .unwrap();
+        let mut key_client = ApiClient::new(
+            "https://generativelanguage.googleapis.com/v1beta/openai",
+            "AIza-key",
+        )
+        .unwrap();
         key_client.provider_id = "google".to_string();
         let kept = key_client.with_style(ApiStyle::ChatCompletions);
         assert_eq!(kept.style, ApiStyle::ChatCompletions);

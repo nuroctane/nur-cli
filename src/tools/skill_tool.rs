@@ -58,9 +58,9 @@ impl Tool for SkillTool {
                 let body = std::fs::read_to_string(&skill.path)
                     .map(|t| {
                         // Strip YAML frontmatter if present.
-                        if t.starts_with("---") {
-                            if let Some(end) = t[3..].find("---") {
-                                return t[end + 6..].trim().to_string();
+                        if let Some(content) = t.strip_prefix("---") {
+                            if let Some(end) = content.find("---") {
+                                return content[end + 3..].trim().to_string();
                             }
                         }
                         t

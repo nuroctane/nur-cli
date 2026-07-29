@@ -123,11 +123,11 @@ pub fn detect_shell() -> ShellBackend {
     // 5) cmd last resort
     #[cfg(windows)]
     {
-        return ShellBackend {
+        ShellBackend {
             kind: ShellKind::Cmd,
             program: PathBuf::from("cmd.exe"),
             label: "cmd.exe".into(),
-        };
+        }
     }
     #[cfg(not(windows))]
     {

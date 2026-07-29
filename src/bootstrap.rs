@@ -623,7 +623,11 @@ pub fn maybe_auto_update_on_launch(enabled: bool) -> bool {
     // Throttle on the timestamp alone. Keying this on `last_result == "current"`
     // meant a failed check re-downloaded on every single launch — invisible now
     // that the attempt happens on a background thread.
-    if !auto_update_due(st.last_check_at, now_secs(), auto_update_min_interval_secs()) {
+    if !auto_update_due(
+        st.last_check_at,
+        now_secs(),
+        auto_update_min_interval_secs(),
+    ) {
         return false;
     }
 
@@ -817,7 +821,10 @@ pub fn auto_update_report() -> Vec<String> {
             }
         ));
     }
-    out.push(format!("state file   {}", auto_update_state_path().display()));
+    out.push(format!(
+        "state file   {}",
+        auto_update_state_path().display()
+    ));
     out
 }
 
@@ -1051,11 +1058,7 @@ fn pick_nur_release_asset(assets: &[(String, String)]) -> Option<(String, String
     } else {
         "linux"
     };
-    let arch = match std::env::consts::ARCH {
-        "x86_64" => "x86_64",
-        "aarch64" => "aarch64",
-        other => other,
-    };
+    let arch = std::env::consts::ARCH;
     // Preferred names used by our release pipeline / docs.
     let preferred: Vec<String> = if cfg!(windows) {
         vec![
@@ -1578,12 +1581,15 @@ mod auto_update_tests {
             parse_min_interval(Some("nonsense")),
             AUTO_UPDATE_MIN_INTERVAL_SECS
         );
-        assert_eq!(parse_min_interval(Some("-5")), AUTO_UPDATE_MIN_INTERVAL_SECS);
+        assert_eq!(
+            parse_min_interval(Some("-5")),
+            AUTO_UPDATE_MIN_INTERVAL_SECS
+        );
     }
 
     #[test]
     fn default_floor_is_small_enough_to_feel_like_every_run() {
-        assert!(AUTO_UPDATE_MIN_INTERVAL_SECS <= 60);
+        const { assert!(AUTO_UPDATE_MIN_INTERVAL_SECS <= 60) };
     }
 
     // ── install dir override ──────────────────────────────────────────────
@@ -1648,7 +1654,9 @@ mod auto_update_tests {
         ));
         assert!(!looks_like_native_executable(b""));
         assert!(!looks_like_native_executable(b"MZ")); // too short to judge
-        assert!(!looks_like_native_executable(b"{\"message\":\"Not Found\"}"));
+        assert!(!looks_like_native_executable(
+            b"{\"message\":\"Not Found\"}"
+        ));
     }
 
     #[test]
@@ -1657,7 +1665,9 @@ mod auto_update_tests {
             assert!(looks_like_native_executable(b"MZ\x90\x00\x03\x00"));
             assert!(!looks_like_native_executable(b"\x7fELF\x02\x01"));
         } else if cfg!(target_os = "macos") {
-            assert!(looks_like_native_executable(&[0xcf, 0xfa, 0xed, 0xfe, 0, 0]));
+            assert!(looks_like_native_executable(&[
+                0xcf, 0xfa, 0xed, 0xfe, 0, 0
+            ]));
         } else {
             assert!(looks_like_native_executable(b"\x7fELF\x02\x01"));
             assert!(!looks_like_native_executable(b"MZ\x90\x00"));

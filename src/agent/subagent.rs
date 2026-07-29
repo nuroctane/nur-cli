@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+#[allow(clippy::too_many_arguments)] // Cohesive spawn boundary; these inputs define one child run.
 pub async fn run_subagent(
     client: ApiClient,
     config: Config,
@@ -154,11 +155,7 @@ pub async fn run_subagent(
                     }
                     Err(e) => {
                         swarm::finish(run_id, RunState::Failed, tokens);
-                        if !last_text.trim().is_empty() {
-                            Ok((format!("{last_text}\n\n(subagent ended: {e})"), spent))
-                        } else {
-                            Err(MuseError::Other(e))
-                        }
+                        Err(subagent_failure(&e, &last_text))
                     }
                 };
             }
@@ -166,12 +163,26 @@ pub async fn run_subagent(
         }
     }
     let _ = handle.await;
-    if last_text.is_empty() {
-        swarm::finish(run_id, RunState::Failed, 0);
-        Err(MuseError::Other("subagent produced no output".into()))
+    swarm::finish(run_id, RunState::Failed, 0);
+    Err(subagent_failure(
+        "event channel closed before the child reported completion",
+        &last_text,
+    ))
+}
+
+/// A child failure stays a failure even when it streamed useful partial text.
+///
+/// Treating partial output as `Ok` made the parent believe the delegated task
+/// completed, so it would continue from an unverified half-result instead of
+/// retrying or reporting the provider/runtime failure.
+fn subagent_failure(error: &str, partial: &str) -> MuseError {
+    let partial = partial.trim();
+    if partial.is_empty() {
+        MuseError::Other(format!("subagent failed: {error}"))
     } else {
-        swarm::finish(run_id, RunState::Done, 0);
-        Ok((last_text, TokenUsage::default()))
+        MuseError::Other(format!(
+            "subagent failed: {error}\n\nPartial output before failure:\n{partial}"
+        ))
     }
 }
 
@@ -224,6 +235,23 @@ async fn relay_approval(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn partial_child_output_never_turns_a_failure_into_success() {
+        let error = subagent_failure("provider disconnected", "inspected auth.rs");
+        let message = error.to_string();
+        assert!(message.starts_with("subagent failed: provider disconnected"));
+        assert!(message.contains("Partial output before failure"));
+        assert!(message.contains("inspected auth.rs"));
+    }
+
+    #[test]
+    fn child_failure_without_output_is_still_actionable() {
+        assert_eq!(
+            subagent_failure("event channel closed", "").to_string(),
+            "subagent failed: event channel closed"
+        );
+    }
 
     #[tokio::test]
     async fn child_approval_is_proxied_to_parent() {

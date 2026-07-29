@@ -210,10 +210,8 @@ fn apply_unified_diff(original: &str, patch: &str) -> Result<String> {
     }
 
     let mut out = lines.join("\n");
-    if had_trailing_nl || out.is_empty() {
-        if !out.ends_with('\n') && !out.is_empty() {
-            out.push('\n');
-        }
+    if (had_trailing_nl || out.is_empty()) && !out.ends_with('\n') && !out.is_empty() {
+        out.push('\n');
     }
     Ok(out)
 }

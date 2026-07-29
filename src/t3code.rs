@@ -215,11 +215,9 @@ fn probes_have_credentials(driver: DriverId, dir: &Path) -> bool {
     // is considered has_credentials in probe_driver if file probe fails – handled below).
     match driver {
         DriverId::Claude => {
-            dir.join(".credentials.json").exists()
-                || dir.join("credentials.json").exists()
-                || dir.join(".claude.json").exists()
+            dir.join(".credentials.json").exists() || dir.join("credentials.json").exists()
         }
-        DriverId::Codex => dir.join("auth.json").exists() || dir.join("config.toml").exists(),
+        DriverId::Codex => dir.join("auth.json").exists(),
         DriverId::Cursor => {
             dir.join("auth.json").exists()
                 || dir.join("mcp.json").exists()
@@ -230,14 +228,22 @@ fn probes_have_credentials(driver: DriverId, dir: &Path) -> bool {
                 || dir.join("config.json").exists()
                 || dir.join("opencode.json").exists()
         }
-        DriverId::Grok => dir.join("auth.json").exists() || dir.join("config.json").exists(),
+        DriverId::Grok => {
+            dir.join("auth.json").exists()
+                || dirs::home_dir()
+                    .is_some_and(|home| home.join(".grok").join("auth.json").exists())
+        }
         DriverId::Antigravity => {
-            // File-based check
             dir.join("settings.json").exists()
                 || dir.join("cache").join("onboarding.json").exists()
-                // On Windows, credential manager is primary – treat existence of dir as enough,
-                // the real check is done via import_existing_session.
-                || dir.exists()
+                || dirs::home_dir().is_some_and(|home| {
+                    home.join(".gemini").join("oauth_creds.json").exists()
+                        || home
+                            .join(".config")
+                            .join("gemini")
+                            .join("oauth_creds.json")
+                            .exists()
+                })
         }
         DriverId::Gemini => {
             dir.join("credentials.db").exists()

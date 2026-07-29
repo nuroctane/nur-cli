@@ -169,9 +169,8 @@ pub fn resolve_api_config(
         f.to_string()
     } else if url.ends_with("/v1/messages") {
         "anthropic".to_string()
-    } else if url.ends_with("/chat/completions") {
-        "openai".to_string()
-    } else if url.ends_with("/v1") || url.contains("/openai") {
+    } else if url.ends_with("/chat/completions") || url.ends_with("/v1") || url.contains("/openai")
+    {
         "openai".to_string()
     } else {
         // default heuristic like penecho: if contains anthropic -> anthropic else openai
@@ -322,6 +321,7 @@ pub fn penecho_state_dir() -> PathBuf {
 /// - `AI_PROVIDER=api`
 /// - `AI_API_URL`, `AI_API_KEY`, `AI_API_MODEL`, `AI_API_FORMAT`
 /// - `AI_EFFORT`
+///
 /// Placeholder emitted instead of the real key whenever the rendered config
 /// could be seen by anything other than the local filesystem.
 pub const REDACTED_KEY: &str = "<redacted — set AI_API_KEY yourself in ~/.penecho/config.env>";

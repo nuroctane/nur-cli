@@ -51,7 +51,7 @@ pub fn should_failover_for(err: &MuseError, provider_id: &str) -> bool {
                 return true;
             }
             // Quota / overload often arrives as 400/401/402/403 with a clear body.
-            if matches!(status, 400 | 401 | 402 | 403) && is_capacity_or_quota_message(message) {
+            if matches!(status, 400..=403) && is_capacity_or_quota_message(message) {
                 return true;
             }
             if *status == 400
@@ -249,7 +249,8 @@ pub fn plan_targets(
 /// 3. an API key saved via `/failover` (`auth::load_provider_key`),
 /// 4. t3 vendor CLI session (Claude Code, Codex, agy, gcloud, etc.) when no key on disk,
 /// 5. an empty string for local servers that don't need one.
-/// `None` = no credentials, skip this provider.
+///
+/// None = no credentials, skip this provider.
 pub fn resolve_target_key(p: &Provider) -> Option<String> {
     if let Some(k) = crate::auth::load_provider_oauth_token(p.id) {
         let k = k.trim().to_string();
@@ -273,7 +274,9 @@ pub fn resolve_target_key(p: &Provider) -> Option<String> {
     // this is called synchronously from the async failover path and can shell
     // out (e.g. reading an OS credential store), so it must not block a Tokio
     // worker thread outright.
-    if let Ok(Some(tokens)) = crate::oauth::run_blocking(|| crate::oauth::import_existing_session(p.id)) {
+    if let Ok(Some(tokens)) =
+        crate::oauth::run_blocking(|| crate::oauth::import_existing_session(p.id))
+    {
         let tok = tokens.access_token.trim().to_string();
         if !tok.is_empty() {
             return Some(tok);

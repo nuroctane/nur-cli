@@ -664,11 +664,21 @@ pub fn parse_message(v: &Value) -> Value {
         }
     }
     let usage = v.get("usage").map(chat_usage_from_anthropic);
-    let stop = v.get("stop_reason").and_then(|s| s.as_str()).map(|s| match s {
-        "max_tokens" => "length",
-        other => other,
-    });
-    super::chat::build_response_value_with_status(id, model, &text, &tool_calls, usage.as_ref(), stop)
+    let stop = v
+        .get("stop_reason")
+        .and_then(|s| s.as_str())
+        .map(|s| match s {
+            "max_tokens" => "length",
+            other => other,
+        });
+    super::chat::build_response_value_with_status(
+        id,
+        model,
+        &text,
+        &tool_calls,
+        usage.as_ref(),
+        stop,
+    )
 }
 
 /// Streaming accumulator for Anthropic SSE events.
@@ -756,7 +766,11 @@ impl StreamAccumulator {
             }
             "message_delta" => {
                 if self.finish_reason.is_none() {
-                    if let Some(sr) = v.get("delta").and_then(|d| d.get("stop_reason")).and_then(|s| s.as_str()) {
+                    if let Some(sr) = v
+                        .get("delta")
+                        .and_then(|d| d.get("stop_reason"))
+                        .and_then(|s| s.as_str())
+                    {
                         if !sr.is_empty() {
                             self.finish_reason = Some(sr.to_string());
                         }

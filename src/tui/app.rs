@@ -241,6 +241,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/hooks", "show local tool hook status (hooks.toml)"),
     ("/model", "show and switch models  (/models)"),
     ("/models", "show and switch models  (alias of /model)"),
+    ("/theme", "choose a live color theme  (/theme <name>)"),
     ("/plugins", "browse · install · enable marketplace plugins"),
     ("/plugin", "browse · install · enable marketplace plugins  (alias of /plugins)"),
     // Rendered through `App::command_hint` — the rungs shown are the active
@@ -422,13 +423,20 @@ pub(crate) fn sg_node_fingerprint(n: &SgNode, h: &mut impl std::hash::Hasher) {
             1u8.hash(h);
             name.hash(h);
             args_formatted.len().hash(h);
-            result_formatted.as_ref().map(|r| r.len()).unwrap_or(0).hash(h);
+            result_formatted
+                .as_ref()
+                .map(|r| r.len())
+                .unwrap_or(0)
+                .hash(h);
             state.hash(h);
             duration.map(|d| d.as_millis()).hash(h);
             agent.hash(h);
             cell_idx.hash(h);
         }
-        SgNode::Answering { text_excerpt, cell_idx } => {
+        SgNode::Answering {
+            text_excerpt,
+            cell_idx,
+        } => {
             2u8.hash(h);
             text_excerpt.len().hash(h);
             cell_idx.hash(h);
@@ -968,8 +976,21 @@ pub enum LoginStage {
     /// Browser vs API key (only for `provider.browser_auth`).
     Method,
     Key,
+    /// Optional base-URL override for OpenAI-compatible key logins (OpenAI,
+    /// Azure, groq, a local/proxy endpoint, …). Prefilled with the default —
+    /// press ↵ to accept, or edit to point at a custom endpoint.
+    BaseUrl,
     /// Device-code / SSO wait (URL + short code like `hf auth login`).
     Browser,
+}
+
+/// OpenAI-compatible key logins can point at a custom endpoint (`base_url`);
+/// Anthropic / Gemini-CloudCode cannot. Gates the `/login` base-URL stage.
+pub fn provider_takes_custom_base(p: &crate::providers::Provider) -> bool {
+    matches!(
+        p.style,
+        crate::providers::ApiStyle::Responses | crate::providers::ApiStyle::ChatCompletions
+    )
 }
 
 pub struct LoginModal {
@@ -1141,6 +1162,25 @@ pub struct ModelPicker {
     pub error: Option<String>,
     /// Background fetch result channel (ids, or an error string).
     pub rx: Option<std::sync::mpsc::Receiver<std::result::Result<Vec<String>, String>>>,
+}
+
+/// Runtime theme chooser opened by `/theme` and once during first-run
+/// onboarding. Moving the selection previews immediately; Enter persists it,
+/// while Esc restores the palette that was active when the picker opened.
+pub struct ThemePicker {
+    pub sel: usize,
+    pub original: String,
+    pub onboarding: bool,
+    pub hit: PickerHit,
+}
+
+impl ThemePicker {
+    pub fn chosen(&self) -> &'static str {
+        theme::THEMES
+            .get(self.sel)
+            .map(|(id, _)| *id)
+            .unwrap_or("gold")
+    }
 }
 
 impl ModelPicker {
@@ -1934,6 +1974,8 @@ pub struct App {
     pub pending_subagent_login: Option<PendingSubagentLogin>,
     /// Model chooser (`/model`) — live provider model list, when open.
     pub model_picker: Option<ModelPicker>,
+    /// Runtime theme chooser (`/theme`), also shown before `/login` on first run.
+    pub theme_picker: Option<ThemePicker>,
     /// Plugin marketplace (`/plugins`) — install / enable / disable.
     pub plugin_picker: Option<PluginPicker>,
     /// Whether an API key is available. `/logout` flips this false and blocks
@@ -2097,6 +2139,7 @@ fn disable_mouse() {
     let _ = stdout().execute(DisableMouseCapture);
 }
 
+#[allow(clippy::too_many_arguments)] // Top-level runtime boundary assembled once by main.
 pub async fn run_tui(
     client: ApiClient,
     cfg: Config,
@@ -2108,6 +2151,9 @@ pub async fn run_tui(
     _ecosystem_summary: String,
     workspace_note: Option<String>,
 ) -> Result<()> {
+    if !theme::set_theme(cfg.theme.as_deref().unwrap_or("gold")) {
+        let _ = theme::set_theme("gold");
+    }
     // Fail clearly if stdin isn't a real console (redirects / dead pipes).
     if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         return Err(crate::error::MuseError::Other(
@@ -2329,6 +2375,7 @@ pub async fn run_tui(
         login: None,
         pending_subagent_login: None,
         model_picker: None,
+        theme_picker: None,
         plugin_picker: None,
         authed: true,
         auto_update_last_poll: std::time::Instant::now(),
@@ -2382,7 +2429,11 @@ pub async fn run_tui(
             Tone::Mode,
             "no API key found — press any key, then /login to sign in (or set NUR_API_KEY)".into(),
         );
-        app.open_login();
+        if app.cfg.theme.is_none() {
+            app.open_theme_picker(true);
+        } else {
+            app.open_login();
+        }
     }
 
     if let Some(p) = initial_prompt {
@@ -2421,6 +2472,7 @@ pub async fn run_tui(
             || app.approval.is_some()
             || app.login.is_some()
             || app.model_picker.is_some()
+            || app.theme_picker.is_some()
             || app.plugin_picker.is_some()
             || app.scrollbar_drag
             || app.selecting
@@ -2448,6 +2500,7 @@ pub async fn run_tui(
         // coalescing (that path is for the main prompt only).
         let modal_open = app.login.is_some()
             || app.model_picker.is_some()
+            || app.theme_picker.is_some()
             || app.plugin_picker.is_some()
             || app.approval.is_some()
             || app.picker.is_some()
@@ -2776,7 +2829,7 @@ impl App {
             return base.to_string();
         }
         let levels = crate::providers::effort_levels(&self.cfg.provider);
-        if levels.is_empty() {
+        if !crate::providers::supports_effort(&self.cfg.provider) {
             let who = crate::providers::by_id(&self.cfg.provider)
                 .map(|p| p.name)
                 .unwrap_or(self.cfg.provider.as_str());
@@ -3367,11 +3420,7 @@ impl App {
         }
         // Heuristic: earlier entries live above the current view, later ones
         // below. Compare against the smallest visible entry index.
-        let min_visible = self
-            .peek_trace_hits
-            .iter()
-            .map(|(_, i)| *i)
-            .min();
+        let min_visible = self.peek_trace_hits.iter().map(|(_, i)| *i).min();
         match min_visible {
             Some(v) if idx < v => {
                 self.peek_scroll = self.peek_scroll.saturating_sub(6);
@@ -3458,6 +3507,11 @@ impl App {
 
     // ── keys ───────────────────────────────────────────────────────────
     fn on_key(&mut self, key: event::KeyEvent) {
+        // Theme picker owns the keyboard while it previews live palettes.
+        if self.theme_picker.is_some() {
+            self.on_theme_picker_key(key.code);
+            return;
+        }
         // Secure login modal swallows all keys (masked key entry).
         // Ordered ABOVE the update modal on purpose: the updater opens on a
         // background timer, and if it could win this race it would swallow the
@@ -3628,10 +3682,7 @@ impl App {
                     self.close_peek();
                 } else if self.busy {
                     self.interrupt();
-                } else if self.palette_visible() {
-                    self.input.clear();
-                    self.clear_paste_merge_state();
-                } else if !self.input.is_empty() {
+                } else if self.palette_visible() || !self.input.is_empty() {
                     self.input.clear();
                     self.clear_paste_merge_state();
                 }
@@ -3897,6 +3948,14 @@ impl App {
     /// Works while a turn is streaming. Approval/login modals no longer kill
     /// an in-progress scrollbar drag or wheel scroll.
     fn on_mouse(&mut self, m: event::MouseEvent) {
+        if self.theme_picker.is_some() {
+            self.scrollbar_drag = false;
+            self.selecting = false;
+            self.select_anchor = None;
+            self.mouse_left_down = false;
+            self.on_theme_picker_mouse(m);
+            return;
+        }
         if self.update_modal.is_some() {
             self.scrollbar_drag = false;
             self.selecting = false;
@@ -4304,7 +4363,12 @@ impl App {
                         return;
                     }
                     if let Some(hit) = self.sidegraph_hit_at(m.column, m.row) {
-                        if self.cells.get(hit.cell_idx).map(|c| c.is_peekable()).unwrap_or(false) {
+                        if self
+                            .cells
+                            .get(hit.cell_idx)
+                            .map(|c| c.is_peekable())
+                            .unwrap_or(false)
+                        {
                             self.open_stable_peek(hit.cell_idx);
                         }
                         return;
@@ -4427,17 +4491,20 @@ impl App {
                 // Ignore sub-threshold jitter so a double-click isn't promoted
                 // into a pan that wipes `sidegraph_last_click` on mouse-up.
                 const SIDEGRAPH_DRAG_THRESH: i32 = 6;
-                if delta_y.abs() <= SIDEGRAPH_DRAG_THRESH && delta_x.abs() <= SIDEGRAPH_DRAG_THRESH {
+                if delta_y.abs() <= SIDEGRAPH_DRAG_THRESH && delta_x.abs() <= SIDEGRAPH_DRAG_THRESH
+                {
                     return;
                 }
                 // Use the max values captured at drag start so content changes
                 // mid-drag don't shrink the clamp and snap the canvas back.
                 let new_scroll = (self.sidegraph_drag_start_scroll as i32 + delta_y)
-                    .clamp(0, self.sidegraph_drag_start_max_scroll as i32) as u16;
+                    .clamp(0, self.sidegraph_drag_start_max_scroll as i32)
+                    as u16;
                 self.sidegraph_scroll = new_scroll;
 
                 let new_pan_x = (self.sidegraph_drag_start_pan_x as i32 - delta_x)
-                    .clamp(0, self.sidegraph_drag_start_max_pan_x as i32) as u16;
+                    .clamp(0, self.sidegraph_drag_start_max_pan_x as i32)
+                    as u16;
                 self.sidegraph_scroll_x = new_pan_x;
                 // User has taken control — keep canvas sticky (stop auto-follow).
                 self.sidegraph_user_panned = true;
@@ -4506,10 +4573,10 @@ impl App {
         // Distance past the edge scales step size a little (still small).
         let step = if dir < 0 {
             let past = body.y.saturating_sub(row);
-            (1 + past / 3).min(4) as u16
+            (1 + past / 3).min(4)
         } else {
             let past = row.saturating_sub(body.bottom().saturating_sub(1));
-            (1 + past / 3).min(4) as u16
+            (1 + past / 3).min(4)
         };
         if dir < 0 {
             self.scroll_up(step);
@@ -5333,32 +5400,29 @@ impl App {
         self.mouse_row = m.row;
         let Some(u) = &self.update_modal else { return };
         let hit = u.hit.clone();
-        match m.kind {
-            MouseEventKind::Down(MouseButton::Left) => {
-                let col = m.column;
-                let row = m.row;
-                if rect_contains(hit.close, col, row) {
-                    self.close_update_modal();
-                    return;
-                }
-                if rect_contains(hit.update_btn, col, row) {
-                    let exe =
-                        std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("nur"));
-                    let args = vec!["update".to_string()];
-                    let _ = crate::tui::app::commands::spawn_console_for_update(&exe, &args);
-                    self.close_update_modal();
-                    self.push_note(
-                        crate::theme::Tone::Mode,
-                        "update started in new window · restart after it finishes".into(),
-                    );
-                    return;
-                }
-                if !rect_contains(hit.frame, col, row) {
-                    // Click outside → close (parity with peek / session picker)
-                    self.close_update_modal();
-                }
+        if let MouseEventKind::Down(MouseButton::Left) = m.kind {
+            let col = m.column;
+            let row = m.row;
+            if rect_contains(hit.close, col, row) {
+                self.close_update_modal();
+                return;
             }
-            _ => {}
+            if rect_contains(hit.update_btn, col, row) {
+                let exe =
+                    std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("nur"));
+                let args = vec!["update".to_string()];
+                let _ = crate::tui::app::commands::spawn_console_for_update(&exe, &args);
+                self.close_update_modal();
+                self.push_note(
+                    crate::theme::Tone::Mode,
+                    "update started in new window · restart after it finishes".into(),
+                );
+                return;
+            }
+            if !rect_contains(hit.frame, col, row) {
+                // Click outside → close (parity with peek / session picker)
+                self.close_update_modal();
+            }
         }
     }
 
@@ -5722,6 +5786,119 @@ impl App {
             error: None,
             rx: Some(rx),
         });
+    }
+
+    /// Open the live-preview theme chooser.
+    pub fn open_theme_picker(&mut self, onboarding: bool) {
+        let original = theme::current_theme_name();
+        let sel = theme::THEMES
+            .iter()
+            .position(|(id, _)| *id == original)
+            .unwrap_or(0);
+        self.theme_picker = Some(ThemePicker {
+            sel,
+            original,
+            onboarding,
+            hit: PickerHit::default(),
+        });
+    }
+
+    fn preview_theme_at(&mut self, idx: usize) {
+        let max = theme::THEMES.len().saturating_sub(1);
+        let idx = idx.min(max);
+        if let Some(picker) = &mut self.theme_picker {
+            picker.sel = idx;
+            let _ = theme::set_theme(picker.chosen());
+        }
+    }
+
+    fn step_theme(&mut self, delta: i32) {
+        let Some(picker) = self.theme_picker.as_ref() else {
+            return;
+        };
+        let len = theme::THEMES.len() as i32;
+        if len == 0 {
+            return;
+        }
+        let next = (picker.sel as i32 + delta).clamp(0, len - 1) as usize;
+        self.preview_theme_at(next);
+    }
+
+    fn cancel_theme_picker(&mut self) {
+        let Some(picker) = self.theme_picker.take() else {
+            return;
+        };
+        let _ = theme::set_theme(&picker.original);
+        if picker.onboarding {
+            // Esc means "keep the current/default look", not "block setup".
+            self.cfg.theme = Some(picker.original);
+            if let Err(e) = crate::config::save_config(&self.cfg) {
+                self.push_error(format!("could not save theme: {e}"));
+            }
+            self.open_login();
+        }
+    }
+
+    fn commit_theme_picker(&mut self) {
+        let Some(picker) = self.theme_picker.take() else {
+            return;
+        };
+        let id = picker.chosen().to_string();
+        let _ = theme::set_theme(&id);
+        self.cfg.theme = Some(id.clone());
+        match crate::config::save_config(&self.cfg) {
+            Ok(()) => self.push_note(Tone::Mode, format!("theme · {id} · saved")),
+            Err(e) => self.push_error(format!("could not save theme: {e}")),
+        }
+        if picker.onboarding {
+            self.open_login();
+        }
+    }
+
+    fn on_theme_picker_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Esc | KeyCode::Char('q') => self.cancel_theme_picker(),
+            KeyCode::Enter => self.commit_theme_picker(),
+            KeyCode::Up => self.step_theme(-1),
+            KeyCode::Down => self.step_theme(1),
+            KeyCode::Home => self.preview_theme_at(0),
+            KeyCode::End => {
+                self.preview_theme_at(theme::THEMES.len().saturating_sub(1));
+            }
+            _ => {}
+        }
+    }
+
+    fn on_theme_picker_mouse(&mut self, m: event::MouseEvent) {
+        self.mouse_col = m.column;
+        self.mouse_row = m.row;
+        match m.kind {
+            MouseEventKind::ScrollUp => self.step_theme(-1),
+            MouseEventKind::ScrollDown => self.step_theme(1),
+            MouseEventKind::Down(MouseButton::Left) => {
+                let hit = self.theme_picker.as_ref().map(|p| p.hit.clone());
+                let Some(hit) = hit else { return };
+                if rect_contains(hit.close, m.column, m.row) {
+                    self.cancel_theme_picker();
+                    return;
+                }
+                for (idx, rect) in hit.rows {
+                    if rect_contains(rect, m.column, m.row) {
+                        let same = self
+                            .theme_picker
+                            .as_ref()
+                            .map(|p| p.sel == idx)
+                            .unwrap_or(false);
+                        self.preview_theme_at(idx);
+                        if same {
+                            self.commit_theme_picker();
+                        }
+                        return;
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Commit a model switch (from the picker or `/model <id>`): update config,
@@ -6164,6 +6341,7 @@ impl App {
             Some(LoginStage::Provider) => self.on_login_picker_key(key, ctrl),
             Some(LoginStage::Method) => self.on_login_method_key(key, ctrl),
             Some(LoginStage::Key) => self.on_login_key_entry(key, ctrl),
+            Some(LoginStage::BaseUrl) => self.on_login_baseurl_key(key, ctrl),
             Some(LoginStage::Browser) => self.on_login_browser_key(key),
             None => {}
         }
@@ -6568,6 +6746,7 @@ impl App {
             || self.approval.is_some()
             || self.picker.is_some()
             || self.model_picker.is_some()
+            || self.theme_picker.is_some()
             || self.plugin_picker.is_some()
             || self.ctx_menu.is_some();
         if self.update_modal.is_none() && !modal_busy {
@@ -6793,7 +6972,81 @@ impl App {
             let _ = crate::auth::save_provider_key(&provider_id, &key);
         }
 
+        // OpenAI-compatible providers get an optional base-URL step so you can
+        // point OpenAI (or any compatible key login) at a custom endpoint. The
+        // field is prefilled with the current/default host — ↵ accepts it.
+        if provider_takes_custom_base(&provider) {
+            let prefill = crate::config::provider_base_url_override(&self.cfg, &provider_id)
+                .unwrap_or_else(|| provider.base_url.to_string());
+            if let Some(m) = &mut self.login {
+                m.stage = LoginStage::BaseUrl;
+                m.buf = prefill;
+                m.error = None;
+            }
+            return;
+        }
+
         self.apply_provider_login(&provider_id, &key, false);
+    }
+
+    fn on_login_baseurl_key(&mut self, key: event::KeyEvent, ctrl: bool) {
+        let Some(m) = &mut self.login else { return };
+        match key.code {
+            KeyCode::Esc => {
+                // Back to key entry (the key is still buffered/saved).
+                m.stage = LoginStage::Key;
+                m.buf.clear();
+                m.error = None;
+            }
+            KeyCode::Enter => self.submit_baseurl(),
+            KeyCode::Backspace => {
+                m.buf.pop();
+            }
+            KeyCode::Char('v') if ctrl => {
+                if let Some(t) = clipboard_get() {
+                    m.buf.push_str(t.trim());
+                }
+            }
+            KeyCode::Char('u') if ctrl => m.buf.clear(),
+            KeyCode::Char(c) if !ctrl && !c.is_control() => m.buf.push(c),
+            _ => {}
+        }
+    }
+
+    /// Confirm the base-URL stage: persist a per-provider override (or clear it
+    /// when the field is left at the catalog default), then apply the login.
+    fn submit_baseurl(&mut self) {
+        let (provider_id, typed) = match &self.login {
+            Some(m) => (m.provider_id.clone(), m.buf.trim().to_string()),
+            None => return,
+        };
+        let provider = crate::providers::by_id(&provider_id)
+            .copied()
+            .unwrap_or(*crate::providers::default_provider());
+        let url = typed.trim_end_matches('/').to_string();
+
+        if !url.is_empty() && !(url.starts_with("http://") || url.starts_with("https://")) {
+            if let Some(m) = &mut self.login {
+                m.error = Some("base URL must start with http:// or https://".into());
+            }
+            return;
+        }
+        // Left at (or cleared to) the catalog default → no override; otherwise
+        // record the custom endpoint so it survives restarts and client builds.
+        if url.is_empty() || url == provider.base_url.trim_end_matches('/') {
+            self.cfg.provider_base_urls.remove(&provider_id);
+        } else {
+            self.cfg
+                .provider_base_urls
+                .insert(provider_id.clone(), url.clone());
+        }
+        if let Some(m) = &mut self.login {
+            m.buf.clear();
+            m.error = None;
+        }
+        // apply_provider_login re-resolves the saved key and picks up the
+        // override via provider_base_url_override.
+        self.apply_provider_login(&provider_id, "", false);
     }
 
     /// Apply provider config + hot-swap HTTP client after key or OAuth success.
@@ -6870,7 +7123,8 @@ impl App {
         self.submit_text(&prompt);
     }
 
-    fn apply_provider_login(&mut self, provider_id: &str, key: &str, via_oauth: bool) {        let provider = crate::providers::by_id(provider_id)
+    fn apply_provider_login(&mut self, provider_id: &str, key: &str, via_oauth: bool) {
+        let provider = crate::providers::by_id(provider_id)
             .copied()
             .unwrap_or(*crate::providers::default_provider());
 
@@ -6887,7 +7141,14 @@ impl App {
         // Self-hosted overrides apply only when the access token is not bound
         // to a first-party OAuth inference backend.
         if fixed_oauth_base.is_none() {
-            crate::config::apply_base_url_env(&mut self.cfg);
+            // Per-provider override (`OPENAI_BASE_URL`, `[provider_base_urls]`) wins
+            // over the catalog default — this is how `openai` (and any provider)
+            // points at an OpenAI-compatible endpoint in API-key mode.
+            if let Some(base) = crate::config::provider_base_url_override(&self.cfg, provider.id) {
+                self.cfg.base_url = base;
+            } else {
+                crate::config::apply_base_url_env(&mut self.cfg);
+            }
         }
         // OAuth tokens may be refreshed while the login result is persisted.
         // Always use the canonical stored token for model detection and the
@@ -7535,7 +7796,7 @@ impl App {
                 let name = arg_trim["open".len()..].trim().to_string();
                 ("open".to_string(), name)
             } else if is_status {
-                let name2 = if let Some(rest) = arg_trim.splitn(2, ' ').nth(1) {
+                let name2 = if let Some(rest) = arg_trim.split_once(' ').map(|x| x.1) {
                     let rest = rest.trim();
                     if rest.to_ascii_lowercase().starts_with("status ") {
                         rest["status ".len()..].trim().to_string()
@@ -7648,7 +7909,7 @@ impl App {
                         duration: *duration,
                         cell_idx: idx,
                     })
-                },
+                }
                 Cell::Tool {
                     name,
                     args,
@@ -7673,7 +7934,7 @@ impl App {
                         agent: name == "agent",
                         cell_idx: idx,
                     })
-                },
+                }
                 Cell::Assistant { streaming, text } => {
                     // Emit an Answering node for BOTH streaming and finished
                     // answers so a completed answer box stays peekable (right
@@ -7732,7 +7993,7 @@ impl App {
                         interrupted: *interrupted,
                         cell_idx: idx,
                     })
-                },
+                }
                 _ => {}
             }
         }
@@ -7827,20 +8088,38 @@ impl App {
             }
             "zoom" | "zoom+" | "zoomin" | "zoom-in" | "in" => {
                 if !self.sidegraph_open {
-                    self.push_note(Tone::Neutral, "sidegraph · panel is closed — /sidegraph to open".into());
+                    self.push_note(
+                        Tone::Neutral,
+                        "sidegraph · panel is closed — /sidegraph to open".into(),
+                    );
                     return;
                 }
                 self.sidegraph_zoom_in();
-                self.push_note(Tone::Neutral, format!("sidegraph · zoom {} (Ctrl+wheel to zoom)", self.sidegraph_zoom_label()));
+                self.push_note(
+                    Tone::Neutral,
+                    format!(
+                        "sidegraph · zoom {} (Ctrl+wheel to zoom)",
+                        self.sidegraph_zoom_label()
+                    ),
+                );
                 return;
             }
             "zoom-" | "zoomout" | "zoom-out" | "out" => {
                 if !self.sidegraph_open {
-                    self.push_note(Tone::Neutral, "sidegraph · panel is closed — /sidegraph to open".into());
+                    self.push_note(
+                        Tone::Neutral,
+                        "sidegraph · panel is closed — /sidegraph to open".into(),
+                    );
                     return;
                 }
                 self.sidegraph_zoom_out();
-                self.push_note(Tone::Neutral, format!("sidegraph · zoom {} (Ctrl+wheel to zoom)", self.sidegraph_zoom_label()));
+                self.push_note(
+                    Tone::Neutral,
+                    format!(
+                        "sidegraph · zoom {} (Ctrl+wheel to zoom)",
+                        self.sidegraph_zoom_label()
+                    ),
+                );
                 return;
             }
             "zoom0" | "zoomreset" | "reset" => {
@@ -8115,12 +8394,10 @@ impl App {
                     started,
                     duration,
                     ..
-                } => {
-                    if result.is_none() {
-                        *result = Some("cancelled".into());
-                        *ok = Some(false);
-                        *duration = Some(started.elapsed());
-                    }
+                } if result.is_none() => {
+                    *result = Some("cancelled".into());
+                    *ok = Some(false);
+                    *duration = Some(started.elapsed());
                 }
                 _ => {}
             }
@@ -8792,6 +9069,9 @@ impl App {
             }
             return;
         }
+        if self.theme_picker.is_some() {
+            return;
+        }
         if self.model_picker.is_some() {
             if let Some(mp) = &mut self.model_picker {
                 mp.filter.push_str(&text);
@@ -9307,7 +9587,7 @@ fn extract_reasoning_summary(it: &serde_json::Value) -> String {
 /// If a mid-turn steer names a provider alias, append a short mandatory block
 /// so the model passes `agent.provider` instead of staying on the parent.
 fn enrich_cross_provider_steer(text: &str) -> String {
-    let named = crate::providers::named_providers_in_text(text);
+    let named = crate::providers::delegated_providers_in_text(text);
     if named.is_empty() {
         return text.to_string();
     }
@@ -9326,6 +9606,16 @@ fn enrich_cross_provider_steer(text: &str) -> String {
         text = text,
         list = named.join(", "),
     )
+}
+
+pub fn fmt_num(n: u64) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 10_000 {
+        format!("{:.1}k", n as f64 / 1_000.0)
+    } else {
+        n.to_string()
+    }
 }
 
 #[cfg(test)]
@@ -9480,11 +9770,17 @@ mod tests {
     fn bare_kimi_k3_routes_to_opencode_go() {
         assert_eq!(
             opencode_model_selection("kimi-k3"),
-            ("kimi-k3".to_string(), crate::providers::OPENCODE_GO_BASE_URL)
+            (
+                "kimi-k3".to_string(),
+                crate::providers::OPENCODE_GO_BASE_URL
+            )
         );
         assert_eq!(
             opencode_model_selection("opencode-go/kimi-k3"),
-            ("kimi-k3".to_string(), crate::providers::OPENCODE_GO_BASE_URL)
+            (
+                "kimi-k3".to_string(),
+                crate::providers::OPENCODE_GO_BASE_URL
+            )
         );
         // Go-exclusive families must also auto-route to Go even when bare.
         for id in &[
@@ -9896,15 +10192,5 @@ body"
             b.wheel_step(-1);
             assert_eq!((a.idx, a.scroll), (b.idx, b.scroll));
         }
-    }
-}
-
-pub fn fmt_num(n: u64) -> String {
-    if n >= 1_000_000 {
-        format!("{:.1}M", n as f64 / 1_000_000.0)
-    } else if n >= 10_000 {
-        format!("{:.1}k", n as f64 / 1_000.0)
-    } else {
-        n.to_string()
     }
 }

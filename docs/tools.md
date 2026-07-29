@@ -194,8 +194,17 @@ Delegate a focused coding task to the [Oh My Pi](https://omp.sh) agent backend
 used). Strong at LSP-backed refactors, debugger-driven diagnosis (DAP), and AST
 rewrites.
 
-Focused delegation defaults to `cost_mode=economy`, which selects OMP's
-`pi/smol` role, low thinking, and a reduced coding tool surface. Use
+Focused delegation defaults to `cost_mode=economy`. Nur first honors
+`OMP_SMOL_MODEL` / `PI_SMOL_MODEL` or OMP's configured `modelRoles.smol`; when
+none exists, it inspects OMP's authenticated accounts and live model catalog and
+selects a small, low-cost text model. The route is cached briefly, but every OMP
+run still reports the provider and model it actually used. No authenticated
+route means a clear login error, never a silent fallback to an unrelated model.
+
+Economy runs use low thinking and a reduced coding tool surface. All delegated
+runs disable ambient OMP extensions and skills because Nur already supplies the
+bounded handoff and owns skill activation. This keeps unrelated local plugin
+state out of the run and avoids duplicating large prompt catalogs. Use
 `cost_mode=balanced` or an explicit `model` only when the task needs more
 capability. Runs use bounded time, ephemeral sessions, and compact result
 contracts. OMP's JSON events supply the concrete provider, model, token counts,
@@ -204,7 +213,10 @@ and cost, which Nur folds into `/usage`, session status, and `/budget` totals.
 `run` is write-class: it needs approval in manual mode and is blocked in plan
 mode. Once Nur approves the delegation, the headless OMP child receives an
 explicit approval policy. Esc kills the whole OMP process tree so it cannot keep
-editing or spending after cancellation. `status` and `version` remain free.
+editing or spending after cancellation. OMP JSON error events remain failures
+even when the OMP process exits with code 0. `status` reports version,
+authenticated providers, model roles, the resolved economy route, and warnings;
+`version` is the lightweight version-only check. Both remain free.
 Provisioning requires a working OMP binary; Bun installs require version 1.3.14
 or newer.
 
@@ -240,7 +252,11 @@ Submit a plan for approval.
 Spawn a subagent for complex tasks. `explore` runs read-only research; `general`
 inherits the parent permission mode. In the CLI, child approval requests are
 proxied to the parent prompt, and subagent transcripts stay out of the native
-session list while their usage is folded into the parent turn.
+session list while their usage is folded into the parent turn. Child prompts
+receive a focused core tool schema rather than the parent's full ecosystem
+catalog. Nested delegation and OMP are intentionally absent, so a failed child
+cannot recurse or silently substitute OMP. Partial output from a failed child is
+preserved in the error but never marked successful.
 
 **Cross-provider subagents.** An `agent` call may set `provider` (and optionally
 `model`) to run a subagent on a *different* provider than the parent — in natural

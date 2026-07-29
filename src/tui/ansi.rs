@@ -183,22 +183,22 @@ fn apply_sgr(mut style: Style, base: Style, params: &str) -> Style {
 fn basic_color(n: u8, bright: bool) -> Color {
     use crate::theme;
     match (n, bright) {
-        (0, _) => theme::FAINT, // "black" would vanish on the dark canvas
-        (1, false) => theme::ERROR,
+        (0, _) => theme::FAINT(), // "black" would vanish on the dark canvas
+        (1, false) => theme::ERROR(),
         (1, true) => Color::Rgb(255, 128, 128),
-        (2, false) => theme::SUCCESS,
+        (2, false) => theme::SUCCESS(),
         (2, true) => Color::Rgb(110, 235, 160),
-        (3, false) => theme::WARN,
+        (3, false) => theme::WARN(),
         (3, true) => Color::Rgb(255, 210, 110),
-        (4, false) => theme::META_BLUE,
-        (4, true) => theme::META_BLUE_SKY,
-        (5, false) => theme::VIOLET,
-        (5, true) => theme::LAVENDER,
-        (6, false) => theme::TEAL,
-        (6, true) => theme::SEAFOAM,
-        (7, false) => theme::MUTED,
-        (7, true) => theme::FG,
-        _ => theme::FG,
+        (4, false) => theme::META_BLUE(),
+        (4, true) => theme::META_BLUE_SKY(),
+        (5, false) => theme::VIOLET(),
+        (5, true) => theme::LAVENDER(),
+        (6, false) => theme::TEAL(),
+        (6, true) => theme::SEAFOAM(),
+        (7, false) => theme::MUTED(),
+        (7, true) => theme::FG(),
+        _ => theme::FG(),
     }
 }
 
@@ -226,7 +226,7 @@ mod tests {
         let spans = line_to_spans("a \u{1b}[32mgreen\u{1b}[0m b", base);
         let texts: Vec<&str> = spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(texts, vec!["a ", "green", " b"]);
-        assert_eq!(spans[1].style.fg, Some(crate::theme::SUCCESS));
+        assert_eq!(spans[1].style.fg, Some(crate::theme::SUCCESS()));
         assert_eq!(spans[2].style, base, "reset returns to base");
     }
 

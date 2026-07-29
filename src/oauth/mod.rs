@@ -120,7 +120,7 @@ pub fn revoke_session(auth: &Auth) -> Result<String> {
             "no remote revoke endpoint wired for '{}' — local tokens deleted; revoke in the vendor account UI if needed",
             auth.provider
         )),
-        other if other.is_empty() => Ok(String::new()),
+        "" => Ok(String::new()),
         other => Ok(format!(
             "no remote revoke for provider '{other}' — local file removed"
         )),

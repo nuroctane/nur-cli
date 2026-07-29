@@ -202,14 +202,13 @@ impl Session {
         // Fallback: most recently updated session with matching cwd
         let mut best: Option<Session> = None;
         for s in list_sessions()? {
-            if normalize_cwd(&s.cwd) == key {
-                if best
+            if normalize_cwd(&s.cwd) == key
+                && best
                     .as_ref()
                     .map(|b| s.updated_at > b.updated_at)
                     .unwrap_or(true)
-                {
-                    best = Some(s);
-                }
+            {
+                best = Some(s);
             }
         }
         best.ok_or_else(|| {
@@ -335,7 +334,7 @@ pub fn list_sessions() -> Result<Vec<Session>> {
             }
         }
     }
-    out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    out.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
     Ok(out)
 }
 
@@ -381,7 +380,7 @@ pub fn list_session_summaries() -> Result<Vec<SessionSummary>> {
         }
     }
     let mut out: Vec<SessionSummary> = by_id.into_values().collect();
-    out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    out.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
     Ok(out)
 }
 
@@ -454,8 +453,8 @@ pub fn print_sessions(limit: usize) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<10}  {:<20}  {:>8}  {:>10}  {:>9}  {}",
-        "ID", "UPDATED", "MSGS", "TOKENS", "COST", "CWD"
+        "{:<10}  {:<20}  {:>8}  {:>10}  {:>9}  CWD",
+        "ID", "UPDATED", "MSGS", "TOKENS", "COST"
     );
     let iter: Box<dyn Iterator<Item = SessionSummary>> = if limit == 0 {
         Box::new(sessions.into_iter())

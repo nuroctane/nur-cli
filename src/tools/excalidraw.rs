@@ -109,7 +109,7 @@ fn create(args: &Value, cwd: &Path) -> Result<String> {
     let output = arg_str(args, "output").map_err(|_| {
         MuseError::Tool("create requires output= path (e.g. docs/arch.excalidraw)".into())
     })?;
-    let abs_out = resolve_path(&cwd.to_path_buf(), &output)?;
+    let abs_out = resolve_path(cwd, &output)?;
     if let Some(parent) = abs_out.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| MuseError::Tool(format!("create parent dir {}: {e}", parent.display())))?;
@@ -165,7 +165,7 @@ fn export_file(args: &Value, cwd: &Path) -> Result<String> {
     let path = arg_str(args, "path")
         .or_else(|_| arg_str(args, "output"))
         .map_err(|_| MuseError::Tool("export requires path= to a .excalidraw file".into()))?;
-    let abs = resolve_path(&cwd.to_path_buf(), &path)?;
+    let abs = resolve_path(cwd, &path)?;
     if !abs.is_file() {
         return Err(MuseError::Tool(format!(
             "file not found: {}",
@@ -251,7 +251,7 @@ fn checkpoint(args: &Value, cwd: &Path) -> Result<String> {
         "save" => {
             let name = arg_str(args, "name")?;
             let path = arg_str(args, "path").or_else(|_| arg_str(args, "output"))?;
-            let abs = resolve_path(&cwd.to_path_buf(), &path)?;
+            let abs = resolve_path(cwd, &path)?;
             run_cli(
                 &[
                     "checkpoint",
@@ -268,7 +268,7 @@ fn checkpoint(args: &Value, cwd: &Path) -> Result<String> {
             let name = arg_str(args, "name")?;
             let output = arg_str(args, "output")
                 .map_err(|_| MuseError::Tool("checkpoint load requires output= path".into()))?;
-            let abs = resolve_path(&cwd.to_path_buf(), &output)?;
+            let abs = resolve_path(cwd, &output)?;
             if let Some(parent) = abs.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }

@@ -341,7 +341,11 @@ mod tests {
 
     #[test]
     fn builds_cloud_code_body_with_project_system_and_tools() {
-        let body = build_body(&sample_request(), "vivid-question-5fs6l", "gemini-2.5-flash");
+        let body = build_body(
+            &sample_request(),
+            "vivid-question-5fs6l",
+            "gemini-2.5-flash",
+        );
         assert_eq!(body["project"], "vivid-question-5fs6l");
         assert_eq!(body["model"], "gemini-2.5-flash");
         // Top-level shape matches Gemini CLI / cloudcode-pa generateContent.
@@ -350,10 +354,7 @@ mod tests {
         assert!(body.get("model").is_some());
         // user message translated to a Gemini content turn
         assert_eq!(body["request"]["contents"][0]["role"], "user");
-        assert_eq!(
-            body["request"]["contents"][0]["parts"][0]["text"],
-            "say OK"
-        );
+        assert_eq!(body["request"]["contents"][0]["parts"][0]["text"], "say OK");
         // system prompt lands in systemInstruction
         assert_eq!(
             body["request"]["systemInstruction"]["parts"][0]["text"],
@@ -392,10 +393,7 @@ mod tests {
         let contents = body["request"]["contents"].as_array().unwrap();
         assert_eq!(contents.len(), 3);
         assert_eq!(contents[1]["role"], "model");
-        assert_eq!(
-            contents[1]["parts"][0]["functionCall"]["name"],
-            "get_time"
-        );
+        assert_eq!(contents[1]["parts"][0]["functionCall"]["name"], "get_time");
         assert_eq!(contents[1]["parts"][0]["functionCall"]["args"]["tz"], "utc");
         assert_eq!(contents[2]["role"], "user");
         assert_eq!(

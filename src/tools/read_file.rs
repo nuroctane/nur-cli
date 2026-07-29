@@ -110,7 +110,9 @@ mod tests {
             cancel: CancellationToken::new(),
         };
         // Must return Ok — the whole point is that it does not panic.
-        let out = tool.execute(&args, &ctx).expect("read_file must not panic on multibyte cut");
+        let out = tool
+            .execute(&args, &ctx)
+            .expect("read_file must not panic on multibyte cut");
         assert!(out.contains("truncated"), "large file should be truncated");
         let _ = std::fs::remove_dir_all(&dir);
     }

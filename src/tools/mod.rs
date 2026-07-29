@@ -1,10 +1,10 @@
 pub mod akarso;
-pub mod t3code_tool;
-pub mod penecho_tool;
-pub mod fractal_tool;
 mod apply_patch;
 mod bash;
 pub mod browser;
+pub mod fractal_tool;
+pub mod penecho_tool;
+pub mod t3code_tool;
 pub use browser::is_read_only_action as browser_is_read_only;
 pub mod capabilities;
 mod edit_file;
@@ -42,7 +42,7 @@ use crate::agent::todos::{shared_empty, SharedTodos, TodoList};
 use crate::api::types::ToolDef;
 use crate::error::{MuseError, Result};
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 #[allow(unused_imports)] // full capability surface re-exported; loop uses a subset
@@ -64,6 +64,31 @@ pub type SharedSteer = Arc<Mutex<std::collections::VecDeque<String>>>;
 pub fn shared_steer() -> SharedSteer {
     Arc::new(Mutex::new(std::collections::VecDeque::new()))
 }
+
+/// Focused tool surface for child agents.
+///
+/// Children receive the repo and web primitives needed to investigate or edit,
+/// but not nested delegation, OMP, memory systems, ecosystem gateways, or
+/// presentation tools. Besides preventing accidental fallback recursion, this
+/// avoids re-sending a large schema catalog on every child model round.
+pub const SUBAGENT_TOOL_NAMES: &[&str] = &[
+    "read_file",
+    "list_dir",
+    "write_file",
+    "edit_file",
+    "multi_edit",
+    "apply_patch",
+    "bash",
+    "grep",
+    "glob",
+    "web_fetch",
+    "web_search",
+    "browser",
+    "look",
+    "extract_frames",
+    "git_status",
+    "git_diff",
+];
 
 pub struct ToolContext {
     pub cwd: PathBuf,
@@ -178,6 +203,18 @@ impl ToolHost {
                         description: Some(t.description().into()),
                         parameters: Some(t.parameters_schema()),
                     })
+                    .collect()
+            })
+            .clone()
+    }
+
+    pub fn subagent_tool_defs(&self) -> Vec<ToolDef> {
+        static CACHE: std::sync::OnceLock<Vec<ToolDef>> = std::sync::OnceLock::new();
+        CACHE
+            .get_or_init(|| {
+                self.tool_defs()
+                    .into_iter()
+                    .filter(|tool| SUBAGENT_TOOL_NAMES.contains(&tool.name.as_str()))
                     .collect()
             })
             .clone()
@@ -323,7 +360,7 @@ impl Tool for AgentStub {
     }
 }
 
-pub(crate) fn resolve_path(cwd: &PathBuf, path: &str) -> Result<PathBuf> {
+pub(crate) fn resolve_path(cwd: &Path, path: &str) -> Result<PathBuf> {
     sandbox::resolve_in_workspace(cwd, path)
 }
 
@@ -401,6 +438,19 @@ mod tests {
             "tool roster drift: update BOTH boxed_tools() and the dispatch match \
              (and this list) when adding/removing a tool"
         );
+    }
+
+    #[test]
+    fn subagent_surface_is_focused_and_cannot_recurse() {
+        let host = ToolHost::default();
+        let defs = host.subagent_tool_defs();
+        let names: Vec<&str> = defs.iter().map(|tool| tool.name.as_str()).collect();
+        assert_eq!(names, SUBAGENT_TOOL_NAMES);
+        assert!(names.contains(&"read_file"));
+        assert!(names.contains(&"write_file"));
+        assert!(!names.contains(&"agent"));
+        assert!(!names.contains(&"omp"));
+        assert!(defs.len() < host.tool_defs().len());
     }
 
     /// The unknown-tool fallthrough must actually reject unregistered names

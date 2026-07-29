@@ -634,8 +634,10 @@ pub mod openai {
     /// Reuse the official Codex CLI login when present. This reads only the
     /// first-party token cache and converts it into Nur's normal OAuth shape.
     pub fn import_codex_cli() -> Result<Option<OAuthTokens>> {
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        let path = home.join(".codex").join("auth.json");
+        // Respect CODEX_HOME exactly like the official CLI. Reading only
+        // ~/.codex made a valid isolated/workspace login look signed out.
+        let path =
+            crate::t3code::driver_config_dir(crate::t3code::DriverId::Codex).join("auth.json");
         if !path.exists() {
             return Ok(None);
         }
@@ -967,52 +969,57 @@ pub mod xai {
 
     pub fn import_grok_cli() -> Result<Option<OAuthTokens>> {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        let path = home.join(".grok").join("auth.json");
-        if !path.exists() {
-            return Ok(None);
-        }
-        let text = std::fs::read_to_string(&path)?;
-        let v: serde_json::Value = serde_json::from_str(&text)?;
-        // Map of "issuer::client_id" → session object.
-        if let Some(map) = v.as_object() {
-            for (_k, sess) in map {
-                let access = sess
-                    .get("key")
-                    .or_else(|| sess.get("access_token"))
-                    .and_then(|x| x.as_str())
-                    .unwrap_or("");
-                if access.is_empty() {
-                    continue;
+        let candidates = [
+            crate::t3code::driver_config_dir(crate::t3code::DriverId::Grok).join("auth.json"),
+            home.join(".grok").join("auth.json"),
+        ];
+        for path in candidates {
+            if !path.exists() {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path)?;
+            let v: serde_json::Value = serde_json::from_str(&text)?;
+            // Map of "issuer::client_id" -> session object.
+            if let Some(map) = v.as_object() {
+                for (_k, sess) in map {
+                    let access = sess
+                        .get("key")
+                        .or_else(|| sess.get("access_token"))
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("");
+                    if access.is_empty() {
+                        continue;
+                    }
+                    let refresh = sess
+                        .get("refresh_token")
+                        .and_then(|x| x.as_str())
+                        .map(|s| s.to_string());
+                    let expires_at = sess
+                        .get("expires_at")
+                        .and_then(|x| x.as_str())
+                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                        .map(|dt| dt.timestamp() as u64);
+                    let client_id = sess
+                        .get("oidc_client_id")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or(CLIENT_ID)
+                        .to_string();
+                    let issuer = sess
+                        .get("oidc_issuer")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or(ISSUER)
+                        .to_string();
+                    return Ok(Some(OAuthTokens {
+                        access_token: access.to_string(),
+                        refresh_token: refresh,
+                        expires_at,
+                        meta: Some(OauthMeta {
+                            issuer,
+                            client_id,
+                            extra: serde_json::json!({"imported_from": "grok-cli"}),
+                        }),
+                    }));
                 }
-                let refresh = sess
-                    .get("refresh_token")
-                    .and_then(|x| x.as_str())
-                    .map(|s| s.to_string());
-                let expires_at = sess
-                    .get("expires_at")
-                    .and_then(|x| x.as_str())
-                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                    .map(|dt| dt.timestamp() as u64);
-                let client_id = sess
-                    .get("oidc_client_id")
-                    .and_then(|x| x.as_str())
-                    .unwrap_or(CLIENT_ID)
-                    .to_string();
-                let issuer = sess
-                    .get("oidc_issuer")
-                    .and_then(|x| x.as_str())
-                    .unwrap_or(ISSUER)
-                    .to_string();
-                return Ok(Some(OAuthTokens {
-                    access_token: access.to_string(),
-                    refresh_token: refresh,
-                    expires_at,
-                    meta: Some(OauthMeta {
-                        issuer,
-                        client_id,
-                        extra: serde_json::json!({"imported_from": "grok-cli"}),
-                    }),
-                }));
             }
         }
         Ok(None)
@@ -1660,8 +1667,10 @@ pub mod claude {
 
     pub fn import_claude_cli() -> Result<Option<OAuthTokens>> {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let config_dir = crate::t3code::driver_config_dir(crate::t3code::DriverId::Claude);
         let candidates = [
-            home.join(".claude").join(".credentials.json"),
+            config_dir.join(".credentials.json"),
+            config_dir.join("credentials.json"),
             home.join(".config")
                 .join("claude")
                 .join(".credentials.json"),
@@ -1703,11 +1712,8 @@ pub mod claude {
                 .get("expiresAt")
                 .or_else(|| oauth.get("expires_at"))
                 .and_then(|x| {
-                    if let Some(n) = x.as_u64() {
-                        Some(if n > 10_000_000_000 { n / 1000 } else { n })
-                    } else {
-                        None
-                    }
+                    x.as_u64()
+                        .map(|n| if n > 10_000_000_000 { n / 1000 } else { n })
                 });
             return Ok(Some(OAuthTokens {
                 access_token: access.to_string(),
@@ -1996,6 +2002,7 @@ pub mod antigravity {
     }
 
     #[derive(Deserialize)]
+    #[allow(dead_code)] // Mirrors the complete upstream error shape for diagnostics.
     struct IneligibleTier {
         #[serde(rename = "reasonMessage")]
         reason_message: Option<String>,
@@ -2006,6 +2013,7 @@ pub mod antigravity {
     }
 
     #[derive(Deserialize)]
+    #[allow(dead_code)] // `name` is returned by some Code Assist deployments.
     struct OnboardResponse {
         done: Option<bool>,
         name: Option<String>,
@@ -2037,8 +2045,6 @@ pub mod antigravity {
             _ => String::new(),
         }
     }
-
-
 
     // ── Import existing Antigravity / Gemini CLI credentials ────────────────
 
@@ -2211,12 +2217,18 @@ foreach ($t in $targets) {
             // Try various shapes: flat {access_token, refresh_token, expiry...} or nested {token: {...}}
             let (access, refresh, expiry) = if let Some(token) = v.get("token") {
                 (
-                    token.get("access_token").and_then(|x| x.as_str()).unwrap_or(""),
+                    token
+                        .get("access_token")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or(""),
                     token
                         .get("refresh_token")
                         .and_then(|x| x.as_str())
                         .map(|s| s.to_string()),
-                    token.get("expiry").and_then(|x| x.as_str()).map(|s| s.to_string()),
+                    token
+                        .get("expiry")
+                        .and_then(|x| x.as_str())
+                        .map(|s| s.to_string()),
                 )
             } else {
                 (
@@ -2233,11 +2245,14 @@ foreach ($t in $targets) {
             if access.is_empty() {
                 continue;
             }
-            let expires_at = expiry.as_deref().and_then(parse_expiry_to_unix).or_else(|| {
-                v.get("expires_in")
-                    .and_then(|x| x.as_u64())
-                    .map(|secs| crate::oauth::now_unix() + secs)
-            });
+            let expires_at = expiry
+                .as_deref()
+                .and_then(parse_expiry_to_unix)
+                .or_else(|| {
+                    v.get("expires_in")
+                        .and_then(|x| x.as_u64())
+                        .map(|secs| crate::oauth::now_unix() + secs)
+                });
             let mut extra = serde_json::json!({
                 "via": "gemini-cli-file",
                 "path": path.display().to_string(),
@@ -2283,9 +2298,7 @@ foreach ($t in $targets) {
             } else {
                 send(
                     tx,
-                    BrowserLoginProgress::Status(
-                        "using existing Antigravity CLI session".into(),
-                    ),
+                    BrowserLoginProgress::Status("using existing Antigravity CLI session".into()),
                 );
                 return Ok(existing);
             }
@@ -2301,10 +2314,7 @@ foreach ($t in $targets) {
         // Loopback server
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .map_err(|e| MuseError::Other(format!("failed to bind loopback: {e}")))?;
-        let port = listener
-            .local_addr()
-            .map(|a| a.port())
-            .unwrap_or(8080);
+        let port = listener.local_addr().map(|a| a.port()).unwrap_or(8080);
         let redirect_uri = format!("http://localhost:{port}/callback");
         let state = random_urlsafe(32);
 
@@ -2319,16 +2329,14 @@ foreach ($t in $targets) {
         send(tx, BrowserLoginProgress::OpenUrl(auth_url.clone()));
         send(
             tx,
-            BrowserLoginProgress::Status("complete Antigravity / Google sign-in in the browser…".into()),
+            BrowserLoginProgress::Status(
+                "complete Antigravity / Google sign-in in the browser…".into(),
+            ),
         );
         let _ = open_browser(&auth_url);
 
-        let code = wait_localhost_code_on(
-            listener,
-            Some(&state),
-            cancel,
-            Duration::from_secs(600),
-        )?;
+        let code =
+            wait_localhost_code_on(listener, Some(&state), cancel, Duration::from_secs(600))?;
 
         send(
             tx,
@@ -2344,7 +2352,9 @@ foreach ($t in $targets) {
 
         send(
             tx,
-            BrowserLoginProgress::Status("setting up Code Assist (load + onboard if needed)…".into()),
+            BrowserLoginProgress::Status(
+                "setting up Code Assist (load + onboard if needed)…".into(),
+            ),
         );
         let env_project = crate::providers::explicit_google_cloud_project_from_env();
         let setup = match setup_code_assist(&tokens.access_token, env_project.as_deref()) {
@@ -2434,7 +2444,9 @@ foreach ($t in $targets) {
         }
 
         if parsed.access_token.trim().is_empty() {
-            return Err(MuseError::Other("empty access token from Antigravity".into()));
+            return Err(MuseError::Other(
+                "empty access token from Antigravity".into(),
+            ));
         }
 
         Ok(OAuthTokens {
@@ -2711,12 +2723,12 @@ foreach ($t in $targets) {
                 last_err = format!("{status}: {text}");
                 // Precondition on free-tier with project set: retry without project.
                 if tier_id == FREE_TIER && body.get("cloudaicompanionProject").is_some() {
-                    body.as_object_mut().map(|o| {
+                    if let Some(o) = body.as_object_mut() {
                         o.remove("cloudaicompanionProject");
                         if let Some(serde_json::Value::Object(m)) = o.get_mut("metadata") {
                             m.remove("duetProject");
                         }
-                    });
+                    }
                 }
                 std::thread::sleep(Duration::from_secs(2));
                 continue;
@@ -2835,7 +2847,9 @@ foreach ($t in $targets) {
 
         Ok(OAuthTokens {
             access_token: parsed.access_token,
-            refresh_token: parsed.refresh_token.or_else(|| Some(refresh_token.to_string())),
+            refresh_token: parsed
+                .refresh_token
+                .or_else(|| Some(refresh_token.to_string())),
             expires_at: expires_in_to_at(parsed.expires_in),
             meta: Some(OauthMeta {
                 issuer: "https://accounts.google.com".into(),
@@ -2961,10 +2975,7 @@ foreach ($t in $targets) {
 
             let bare = r#"{"cloudaicompanionProject":"proj-bare-string"}"#;
             let bare_parsed: LoadAssistResponse = serde_json::from_str(bare).unwrap();
-            assert_eq!(
-                project_id_of(bare_parsed.cloud_project),
-                "proj-bare-string"
-            );
+            assert_eq!(project_id_of(bare_parsed.cloud_project), "proj-bare-string");
         }
     }
 }
@@ -3711,6 +3722,13 @@ pub mod bedrock {
     }
 }
 
+// silence unused import warning for mpsc in some builds
+#[allow(dead_code)]
+fn _channel_ty() -> mpsc::Sender<u8> {
+    let (tx, _) = mpsc::channel();
+    tx
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3772,11 +3790,4 @@ mod tests {
             serde_json::json!("file-account")
         );
     }
-}
-
-// silence unused import warning for mpsc in some builds
-#[allow(dead_code)]
-fn _channel_ty() -> mpsc::Sender<u8> {
-    let (tx, _) = mpsc::channel();
-    tx
 }

@@ -102,13 +102,15 @@ impl PromptContext {
         } else {
             (String::new(), None)
         };
-        // Cross-provider nudge: if the user named claude/grok/gemini/… this turn,
-        // surface those aliases so the model must pass agent.provider for each.
+        // Cross-provider nudge: only when the user *explicitly asks* to delegate
+        // work to another backend this turn (e.g. "spawn a grok subagent",
+        // "have claude review"). A bare mention ("the claude error") must never
+        // nudge a fan-out — that wasted tokens and derailed turns.
         let named_providers = if is_subagent {
             Vec::new()
         } else {
             user_text
-                .map(crate::providers::named_providers_in_text)
+                .map(crate::providers::delegated_providers_in_text)
                 .unwrap_or_default()
         };
         Self {
@@ -197,6 +199,40 @@ If asked your name or who you are: say you are **Nur** (NurCLI). Do **not** call
             )
         };
 
+        if self.is_subagent {
+            let permission = match mode {
+                PermissionMode::Plan => {
+                    "PLAN: inspect and analyze only. Do not write files or mutate the repository."
+                }
+                PermissionMode::Manual => {
+                    "MANUAL: mutating tools require approval relayed through the parent."
+                }
+                PermissionMode::Auto => {
+                    "AUTO: make only the scoped changes required by the delegated task."
+                }
+            };
+            let mut prompt = format!(
+                "{role}\n\nWorkspace: {}\nOS: {} · shell: {}\nPermission mode: {permission}\n\n\
+                 # Focused tools\n{}\n\n\
+                 Use grep/glob for search, read_file/list_dir for file contents, and \
+                 git_status/git_diff for repository state. Prefer dedicated edit tools over \
+                 shell rewrites. Never run interactive/watch commands. Keep paths inside the \
+                 workspace. Read tool errors before changing approach.\n\n\
+                 Delegation tools and OMP are intentionally unavailable in child runs. Do not \
+                 substitute another backend when a tool or provider fails. Return a clear \
+                 failure with any useful partial findings so the parent can retry or recover.\n\n\
+                 Finish with a concise report of findings, files touched, and checks run.\n",
+                self.cwd.display(),
+                std::env::consts::OS,
+                self.shell_label,
+                crate::tools::SUBAGENT_TOOL_NAMES.join(", "),
+            );
+            if let Some((name, text)) = &self.project {
+                prompt.push_str(&format!("\n# Project instructions ({name})\n{text}\n"));
+            }
+            return prompt;
+        }
+
         let mut s = format!(
             r#"{role}
 
@@ -252,11 +288,15 @@ plur, ruflo, skill, memory, todo_write, submit_plan, agent
 - memory: local markdown journal ~/.nur/memory.md (never store secrets) — complementary to plur
 - Prefer edit_file / multi_edit / apply_patch over full rewrites
 
-# Cross-provider subagents (CRITICAL)
-When the user names another backend (claude, grok, gemini, antigravity, chatgpt, deepseek, …),
-you MUST deploy via the `agent` tool with the structured **`provider`** field set. Do **not**
-claim you "switched models" in prose — only `agent(provider=…)` runs elsewhere. Omit `provider`
-(and `model`) only when inheriting this session's backend.
+# Cross-provider subagents
+Only when the user **explicitly asks you to run work on another backend** — e.g. "spawn a
+grok subagent", "have claude review this", "ask gemini to research", "run this on chatgpt",
+"fan out to claude and grok" — deploy via the `agent` tool with the structured **`provider`**
+field set. A **bare mention** of a model or provider ("the claude error", "5.6 sol is slow",
+"like grok does") is **not** a delegation request — just do the work yourself on this session's
+backend; do not spawn a subagent. When you do delegate, do **not** claim you "switched models"
+in prose — only `agent(provider=…)` runs elsewhere. Omit `provider` (and `model`) when
+inheriting this session's backend.
 
 Concrete shapes (mirror these; aliases are fine — nur resolves them):
 
@@ -277,6 +317,12 @@ There is **no silent fallback** to the parent provider. Do not re-run the same t
 and pretend it succeeded. After the user finishes `/login`, nur injects a mandatory re-deploy with
 the exact `agent(...)` call — follow that instruction immediately.
 
+**Failure isolation:** a failed `agent` result stays failed even if it contains partial output.
+Do not call `omp`, switch to the parent backend, or choose another provider as a substitute unless
+the user explicitly requested that route. Retry the same named provider after authentication or
+report the failure clearly. OMP is an explicit specialized delegation tool, never an automatic
+recovery path for broken subagent orchestration.
+
 Fan-out: one `agent` call per target provider; set `provider` on every call the user named.
 "#,
             self.cwd.display(),
@@ -284,10 +330,11 @@ Fan-out: one `agent` call per target provider; set `provider` on every call the 
             self.shell_label,
         );
 
-        // Per-turn nudge when the user explicitly named providers in their message.
+        // Per-turn nudge — only when the user explicitly asked to delegate to
+        // these providers this turn (bare mentions are filtered out upstream).
         if !self.named_providers.is_empty() {
             s.push_str(&format!(
-                "\nUser named these providers this turn: {} — pass agent.provider for each.\n",
+                "\nUser asked to delegate to: {} — pass agent.provider for each.\n",
                 self.named_providers.join(", ")
             ));
         }
@@ -333,4 +380,21 @@ pub fn system_instructions(
     provider: &str,
 ) -> String {
     PromptContext::build(cwd, is_subagent, model, provider).render(mode, todos_render)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn child_prompt_matches_the_focused_non_recursive_tool_surface() {
+        let prompt = PromptContext::build(Path::new("."), true, "test-model", "test-provider")
+            .render(PermissionMode::Auto, "(no todos)");
+        assert!(prompt.contains("read_file"));
+        assert!(prompt.contains("write_file"));
+        assert!(prompt.contains("Delegation tools and OMP are intentionally unavailable"));
+        assert!(!prompt.contains("# Cross-provider subagents"));
+        assert!(!prompt.contains("plur:"));
+        assert!(!prompt.contains("ruflo:"));
+    }
 }

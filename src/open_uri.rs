@@ -3,8 +3,8 @@
 //! Used by the TUI (click links), browser setup, and tools (excalidraw export).
 
 use std::path::Path;
-use unicode_width::UnicodeWidthStr;
 use std::process::Command;
+use unicode_width::UnicodeWidthStr;
 
 /// Open a URL or path with the system default application (best-effort).
 pub fn open(target: &str) -> Result<(), String> {

@@ -294,10 +294,11 @@ pub fn refresh_catalog_if_stale() {
     let now = now_unix();
     let stale = {
         let g = state().lock().ok();
-        match g {
-            Some(g) if g.ready && now.saturating_sub(g.fetched_at_unix) < CACHE_TTL_SECS => false,
-            _ => true,
-        }
+        !matches!(
+            g,
+            Some(g) if g.ready
+                && now.saturating_sub(g.fetched_at_unix) < CACHE_TTL_SECS
+        )
     };
     // Also treat on-disk fresh cache as enough (may not be loaded yet).
     if !stale {
@@ -489,10 +490,12 @@ mod tests {
         }
         spawn_catalog_refresh();
 
-        let mut cfg = crate::config::Config::default();
-        cfg.provider = "anthropic".into();
-        cfg.model = "claude-opus-4-5".into();
-        cfg.context_window = 1_000_000;
+        let mut cfg = crate::config::Config {
+            provider: "anthropic".into(),
+            model: "claude-opus-4-5".into(),
+            context_window: 1_000_000,
+            ..Default::default()
+        };
         maybe_apply_context_window(&mut cfg);
 
         assert_eq!(

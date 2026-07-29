@@ -62,9 +62,9 @@ these providers:
 
 | Provider | Browser flow | Import existing CLI session | OAuth inference host |
 |----------|--------------|-----------------------------|----------------------|
-| **OpenAI** | Loopback PKCE (Codex client) | `~/.codex` | `chatgpt.com/backend-api/codex` |
-| **xAI** | Device code | `~/.grok` | `cli-chat-proxy.grok.com` (+ Grok CLI version headers) |
-| **Anthropic** | Loopback PKCE (Claude Code client) | `~/.claude` | `api.anthropic.com` (Bearer + `oauth-2025-04-20` beta) |
+| **OpenAI** | Loopback PKCE (Codex client) | `$CODEX_HOME` or `~/.codex` | `chatgpt.com/backend-api/codex` |
+| **xAI** | Device code | `$XAI_CONFIG_DIR` or `~/.grok` | `cli-chat-proxy.grok.com` (+ Grok CLI version headers) |
+| **Anthropic** | Loopback PKCE (Claude Code client) | `$CLAUDE_CONFIG_DIR` or `~/.claude` | `api.anthropic.com` (Bearer + `oauth-2025-04-20` beta) |
 | **Kimi** | Device code | `~/.kimi` | `api.kimi.com/coding/v1` |
 | **Google Gemini** | Google Cloud ADC via `gcloud` | ADC store | `generativelanguage.googleapis.com` |
 | **Azure OpenAI** | Entra device login via `az` | Azure CLI session | Configured Azure resource |
@@ -86,6 +86,11 @@ Imported tokens are used transiently and never written to `auth.json`. If the
 imported session has gone stale, nur mints a fresh access token from the same
 refresh token the CLI stores, exactly as the CLI would have on its next use — a
 session merely being a few minutes old no longer sends you to `/login`.
+
+Nur respects the official CLI isolation variables when locating those sessions:
+`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `XAI_CONFIG_DIR`, `ANTIGRAVITY_HOME`, and
+`GCLOUD_CONFIG_DIR`. This matters for work profiles and sandboxed CLI installs:
+a valid login outside the default home directory is not treated as signed out.
 
 Kimi Code API keys work against `https://api.kimi.com/coding/v1`. The separate Moonshot
 AI catalog entry remains available for `https://api.moonshot.ai/v1` keys.

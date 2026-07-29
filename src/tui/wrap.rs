@@ -62,6 +62,32 @@ fn wrap_one(line: &Line<'static>, width: usize, out: &mut Vec<Line<'static>>) {
     out.push(row_to_line(row));
 }
 
+fn row_to_line(row: Vec<(char, Style)>) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut cur = String::new();
+    let mut cur_style: Option<Style> = None;
+    for (ch, st) in row {
+        match cur_style {
+            Some(s) if s == st => cur.push(ch),
+            Some(s) => {
+                spans.push(Span::styled(std::mem::take(&mut cur), s));
+                cur.push(ch);
+                cur_style = Some(st);
+            }
+            None => {
+                cur.push(ch);
+                cur_style = Some(st);
+            }
+        }
+    }
+    if let Some(s) = cur_style {
+        if !cur.is_empty() {
+            spans.push(Span::styled(cur, s));
+        }
+    }
+    Line::from(spans)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,30 +138,4 @@ mod tests {
         let w = wrap_lines(&lines, 7);
         assert_eq!(text(&w), vec!["aaaa", "bbbb", "cccc"]);
     }
-}
-
-fn row_to_line(row: Vec<(char, Style)>) -> Line<'static> {
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    let mut cur = String::new();
-    let mut cur_style: Option<Style> = None;
-    for (ch, st) in row {
-        match cur_style {
-            Some(s) if s == st => cur.push(ch),
-            Some(s) => {
-                spans.push(Span::styled(std::mem::take(&mut cur), s));
-                cur.push(ch);
-                cur_style = Some(st);
-            }
-            None => {
-                cur.push(ch);
-                cur_style = Some(st);
-            }
-        }
-    }
-    if let Some(s) = cur_style {
-        if !cur.is_empty() {
-            spans.push(Span::styled(cur, s));
-        }
-    }
-    Line::from(spans)
 }

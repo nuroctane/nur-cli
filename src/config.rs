@@ -19,7 +19,7 @@ pub fn model_display_name(model_id: &str) -> String {
     if s.contains(' ') {
         return s.to_string();
     }
-    s.split(|c| c == '-' || c == '_')
+    s.split(['-', '_'])
         .filter(|p| !p.is_empty())
         .map(|p| {
             // Keep version-like tokens (1.1, v2, 70b) mostly as-is.
@@ -157,6 +157,41 @@ pub struct Config {
     /// picker). See `crate::api::fusion`.
     #[serde(default)]
     pub fusion_panel: Vec<String>,
+    /// Per-provider base-URL overrides (`{provider_id: "https://…/v1"}`). Lets you
+    /// point any provider — **including `openai`** — at an OpenAI-compatible
+    /// endpoint (Azure, a local proxy, LiteLLM, a mirror) in API-key mode.
+    /// Also honored via env `{PROVIDER}_BASE_URL` (e.g. `OPENAI_BASE_URL`).
+    /// OAuth backends keep their fixed inference host and ignore this.
+    #[serde(default)]
+    pub provider_base_urls: std::collections::HashMap<String, String>,
+    /// Runtime TUI theme selected through the theme command.
+    ///
+    /// `None` means the user has not made an onboarding choice yet. Rendering
+    /// still uses Nur Gold until they choose (or skip) the first-run picker.
+    #[serde(default)]
+    pub theme: Option<String>,
+}
+
+/// Resolve a per-provider base-URL override for API-key mode, if any.
+///
+/// Order: `{PROVIDER}_BASE_URL` env (e.g. `OPENAI_BASE_URL`, `XAI_BASE_URL`) →
+/// the `[provider_base_urls]` config map. Returns a trimmed, slash-normalized
+/// URL or `None`. OAuth-forced hosts must not call this.
+pub fn provider_base_url_override(cfg: &Config, provider_id: &str) -> Option<String> {
+    let env_key = format!(
+        "{}_BASE_URL",
+        provider_id.to_ascii_uppercase().replace('-', "_")
+    );
+    if let Ok(u) = std::env::var(&env_key) {
+        let u = u.trim().trim_end_matches('/').to_string();
+        if !u.is_empty() {
+            return Some(u);
+        }
+    }
+    cfg.provider_base_urls.get(provider_id).and_then(|u| {
+        let u = u.trim().trim_end_matches('/').to_string();
+        (!u.is_empty()).then_some(u)
+    })
 }
 
 fn default_model() -> String {
@@ -245,6 +280,8 @@ impl Default for Config {
             failover_allow_downgrade: false,
             provider_privacy: std::collections::HashMap::new(),
             fusion_panel: Vec::new(),
+            provider_base_urls: std::collections::HashMap::new(),
+            theme: None,
         }
     }
 }
@@ -307,7 +344,8 @@ pub fn migrate_config(cfg: &mut Config) -> bool {
         }
         cfg.fallback_providers.retain(|id| !is_retired_provider(id));
         cfg.fusion_panel.retain(|id| !is_retired_provider(id));
-        cfg.provider_privacy.retain(|id, _| !is_retired_provider(id));
+        cfg.provider_privacy
+            .retain(|id, _| !is_retired_provider(id));
     }
     if cfg.config_schema < 9 {
         // OpenCode Go routing: bare Go-exclusive models (kimi-*, glm-*, qwen*,
@@ -564,7 +602,15 @@ pub fn load_config() -> Result<Config> {
         }
     }
     // Self-hosted OpenAI-compat (Ollama, vLLM, LiteLLM, custom gateways).
-    apply_base_url_env(&mut cfg);
+    // A per-provider override for the active provider (`OPENAI_BASE_URL`,
+    // `[provider_base_urls]`) is more specific than the global `NUR_BASE_URL`,
+    // so it wins. OAuth-forced hosts are re-fixed at client build time.
+    let provider_id = cfg.provider.clone();
+    if let Some(base) = provider_base_url_override(&cfg, &provider_id) {
+        cfg.base_url = base;
+    } else {
+        apply_base_url_env(&mut cfg);
+    }
     cfg.validate()?;
     Ok(cfg)
 }
@@ -620,155 +666,6 @@ pub fn save_config(cfg: &Config) -> Result<()> {
 /// unknown name is forwarded rather than rejected.
 pub const VALID_EFFORTS: &[&str] = crate::providers::EFFORT_LADDER;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn unique_tmp(label: &str) -> PathBuf {
-        let n = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        std::env::temp_dir().join(format!("nur-cli-{label}-{n}"))
-    }
-
-    #[test]
-    fn migrate_forces_unlimited_turns_on_schema_upgrade() {
-        let mut cfg = Config::default();
-        cfg.config_schema = 0;
-        cfg.max_turns = 99; // leftover stock/old cap — must clear on upgrade
-        assert!(migrate_config(&mut cfg));
-        assert_eq!(cfg.max_turns, 0);
-        assert_eq!(cfg.config_schema, CONFIG_SCHEMA);
-        // Second pass is a no-op; user-set caps after migration stick.
-        cfg.max_turns = 12;
-        assert!(!migrate_config(&mut cfg));
-        assert_eq!(cfg.max_turns, 12);
-    }
-
-    /// A config saved when `grok-4` was the default must heal itself on load,
-    /// not 404 on the user's next turn.
-    #[test]
-    fn migrate_rewrites_a_retired_grok_id_on_upgrade() {
-        let mut cfg = Config::default();
-        cfg.config_schema = 5;
-        cfg.provider = "xai".into();
-        cfg.model = "grok-4".into();
-        assert!(migrate_config(&mut cfg));
-        assert_eq!(cfg.model, crate::providers::XAI_DEFAULT_MODEL);
-        assert_eq!(cfg.config_schema, CONFIG_SCHEMA);
-    }
-
-    #[test]
-    fn migrate_leaves_a_current_grok_id_and_other_providers_alone() {
-        let mut cfg = Config::default();
-        cfg.config_schema = 5;
-        cfg.provider = "xai".into();
-        cfg.model = "grok-4.20-0309-reasoning".into();
-        assert!(migrate_config(&mut cfg));
-        assert_eq!(cfg.model, "grok-4.20-0309-reasoning");
-
-        // The rewrite is scoped to xAI — a same-named model elsewhere is safe.
-        let mut other = Config::default();
-        other.config_schema = 5;
-        other.provider = "opencode".into();
-        other.model = "grok-4".into();
-        assert!(migrate_config(&mut other));
-        assert_eq!(other.model, "grok-4");
-    }
-
-    #[test]
-    fn default_max_turns_is_unlimited() {
-        assert_eq!(Config::default().max_turns, 0);
-        assert_eq!(default_max_turns(), 0);
-        assert_eq!(Config::default().config_schema, CONFIG_SCHEMA);
-    }
-
-    #[test]
-    fn migrate_normalizes_the_legacy_antigravity_alias_without_resetting_limits() {
-        let mut cfg = Config::default();
-        cfg.config_schema = 3;
-        cfg.provider = "antigravity".into();
-        cfg.max_turns = 12;
-        cfg.fallback_providers = vec!["openai".into(), "antigravity".into()];
-        cfg.fusion_panel = vec!["antigravity".into()];
-        cfg.provider_privacy
-            .insert("antigravity".into(), "standard".into());
-
-        assert!(migrate_config(&mut cfg));
-        assert_eq!(cfg.provider, "google");
-        assert_eq!(cfg.max_turns, 12, "a user-set limit must survive schema 4");
-        assert_eq!(cfg.fallback_providers, ["openai", "google"]);
-        assert_eq!(cfg.fusion_panel, ["google"]);
-        assert_eq!(
-            cfg.provider_privacy.get("google").map(String::as_str),
-            Some("standard")
-        );
-        assert!(!cfg.provider_privacy.contains_key("antigravity"));
-    }
-
-    #[test]
-    fn migrate_removes_retired_catalog_providers() {
-        let mut cfg = Config::default();
-        cfg.config_schema = 4;
-        cfg.provider = "anyscale".into();
-        cfg.base_url = "https://api.endpoints.anyscale.com/v1".into();
-        cfg.model = "obsolete-model".into();
-        cfg.fallback_providers = vec!["openai".into(), "octoai".into(), "unify".into()];
-        cfg.fusion_panel = vec!["kluster".into(), "google".into()];
-        cfg.provider_privacy
-            .insert("omniroute".into(), "standard".into());
-
-        assert!(migrate_config(&mut cfg));
-        assert_eq!(cfg.provider, "meta");
-        assert_eq!(cfg.base_url, DEFAULT_BASE_URL);
-        assert_eq!(cfg.model, DEFAULT_MODEL);
-        assert_eq!(cfg.fallback_providers, ["openai"]);
-        assert_eq!(cfg.fusion_panel, ["google"]);
-        assert!(!cfg.provider_privacy.contains_key("omniroute"));
-    }
-
-    #[test]
-    fn migrate_fills_missing_files_without_overwrite() {
-        let root = unique_tmp("migrate");
-        let legacy_muse = root.join(".muse");
-        let legacy_meta = root.join(".meta");
-        let nur = root.join(".nur");
-        fs::create_dir_all(legacy_muse.join("sessions")).unwrap();
-        fs::create_dir_all(&legacy_meta).unwrap();
-        fs::create_dir_all(&nur).unwrap();
-        fs::write(
-            legacy_muse.join("auth.json"),
-            r#"{"api_key":"k","source":"t"}"#,
-        )
-        .unwrap();
-        fs::write(legacy_meta.join("memory.md"), "from-meta\n").unwrap();
-        fs::write(legacy_muse.join("sessions").join("abc.json"), "{}").unwrap();
-        // Pre-existing config in nur must not be overwritten
-        fs::write(nur.join("config.toml"), "model = \"keep-me\"\n").unwrap();
-
-        gap_fill_from(&legacy_meta, &nur);
-        gap_fill_from(&legacy_muse, &nur);
-
-        assert!(fs::read_to_string(nur.join("config.toml"))
-            .unwrap()
-            .contains("keep-me"));
-        assert!(nur.join("auth.json").is_file());
-        assert!(nur.join("memory.md").is_file());
-        assert!(nur.join("sessions").join("abc.json").is_file());
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn model_display_name_title_cases() {
-        assert_eq!(model_display_name(""), "model");
-        assert_eq!(model_display_name("  "), "model");
-        assert_eq!(model_display_name("muse-spark-1.1"), "Muse Spark 1.1");
-    }
-}
-
 impl Config {
     pub fn validate(&self) -> Result<()> {
         // Effort is deliberately NOT a closed set. Rungs are provider-specific
@@ -817,5 +714,194 @@ impl Config {
             ));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_tmp(label: &str) -> PathBuf {
+        let n = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        std::env::temp_dir().join(format!("nur-cli-{label}-{n}"))
+    }
+
+    #[test]
+    fn provider_base_url_override_is_scoped_and_normalized() {
+        let mut cfg = Config::default();
+        cfg.provider_base_urls.insert(
+            "nur-test-compatible".into(),
+            "https://gateway.example.test/v1/".into(),
+        );
+        assert_eq!(
+            provider_base_url_override(&cfg, "nur-test-compatible").as_deref(),
+            Some("https://gateway.example.test/v1")
+        );
+        assert_eq!(provider_base_url_override(&cfg, "another-provider"), None);
+    }
+
+    #[test]
+    fn theme_selection_is_backward_compatible_and_round_trips() {
+        let legacy: Config = toml::from_str("").expect("all config fields have defaults");
+        assert_eq!(legacy.theme, None);
+
+        let selected = Config {
+            theme: Some("midnight".into()),
+            ..Default::default()
+        };
+        let text = toml::to_string(&selected).expect("serialize config");
+        let decoded: Config = toml::from_str(&text).expect("deserialize config");
+        assert_eq!(decoded.theme.as_deref(), Some("midnight"));
+    }
+
+    #[test]
+    fn migrate_forces_unlimited_turns_on_schema_upgrade() {
+        let mut cfg = Config {
+            config_schema: 0,
+            max_turns: 99, // leftover stock/old cap - must clear on upgrade
+            ..Default::default()
+        };
+        assert!(migrate_config(&mut cfg));
+        assert_eq!(cfg.max_turns, 0);
+        assert_eq!(cfg.config_schema, CONFIG_SCHEMA);
+        // Second pass is a no-op; user-set caps after migration stick.
+        cfg.max_turns = 12;
+        assert!(!migrate_config(&mut cfg));
+        assert_eq!(cfg.max_turns, 12);
+    }
+
+    /// A config saved when `grok-4` was the default must heal itself on load,
+    /// not 404 on the user's next turn.
+    #[test]
+    fn migrate_rewrites_a_retired_grok_id_on_upgrade() {
+        let mut cfg = Config {
+            config_schema: 5,
+            provider: "xai".into(),
+            model: "grok-4".into(),
+            ..Default::default()
+        };
+        assert!(migrate_config(&mut cfg));
+        assert_eq!(cfg.model, crate::providers::XAI_DEFAULT_MODEL);
+        assert_eq!(cfg.config_schema, CONFIG_SCHEMA);
+    }
+
+    #[test]
+    fn migrate_leaves_a_current_grok_id_and_other_providers_alone() {
+        let mut cfg = Config {
+            config_schema: 5,
+            provider: "xai".into(),
+            model: "grok-4.20-0309-reasoning".into(),
+            ..Default::default()
+        };
+        assert!(migrate_config(&mut cfg));
+        assert_eq!(cfg.model, "grok-4.20-0309-reasoning");
+
+        // The rewrite is scoped to xAI — a same-named model elsewhere is safe.
+        let mut other = Config {
+            config_schema: 5,
+            provider: "opencode".into(),
+            model: "grok-4".into(),
+            ..Default::default()
+        };
+        assert!(migrate_config(&mut other));
+        assert_eq!(other.model, "grok-4");
+    }
+
+    #[test]
+    fn default_max_turns_is_unlimited() {
+        assert_eq!(Config::default().max_turns, 0);
+        assert_eq!(default_max_turns(), 0);
+        assert_eq!(Config::default().config_schema, CONFIG_SCHEMA);
+    }
+
+    #[test]
+    fn migrate_normalizes_the_legacy_antigravity_alias_without_resetting_limits() {
+        let mut cfg = Config {
+            config_schema: 3,
+            provider: "antigravity".into(),
+            max_turns: 12,
+            fallback_providers: vec!["openai".into(), "antigravity".into()],
+            fusion_panel: vec!["antigravity".into()],
+            ..Default::default()
+        };
+        cfg.provider_privacy
+            .insert("antigravity".into(), "standard".into());
+
+        assert!(migrate_config(&mut cfg));
+        assert_eq!(cfg.provider, "google");
+        assert_eq!(cfg.max_turns, 12, "a user-set limit must survive schema 4");
+        assert_eq!(cfg.fallback_providers, ["openai", "google"]);
+        assert_eq!(cfg.fusion_panel, ["google"]);
+        assert_eq!(
+            cfg.provider_privacy.get("google").map(String::as_str),
+            Some("standard")
+        );
+        assert!(!cfg.provider_privacy.contains_key("antigravity"));
+    }
+
+    #[test]
+    fn migrate_removes_retired_catalog_providers() {
+        let mut cfg = Config {
+            config_schema: 4,
+            provider: "anyscale".into(),
+            base_url: "https://api.endpoints.anyscale.com/v1".into(),
+            model: "obsolete-model".into(),
+            fallback_providers: vec!["openai".into(), "octoai".into(), "unify".into()],
+            fusion_panel: vec!["kluster".into(), "google".into()],
+            ..Default::default()
+        };
+        cfg.provider_privacy
+            .insert("omniroute".into(), "standard".into());
+
+        assert!(migrate_config(&mut cfg));
+        assert_eq!(cfg.provider, "meta");
+        assert_eq!(cfg.base_url, DEFAULT_BASE_URL);
+        assert_eq!(cfg.model, DEFAULT_MODEL);
+        assert_eq!(cfg.fallback_providers, ["openai"]);
+        assert_eq!(cfg.fusion_panel, ["google"]);
+        assert!(!cfg.provider_privacy.contains_key("omniroute"));
+    }
+
+    #[test]
+    fn migrate_fills_missing_files_without_overwrite() {
+        let root = unique_tmp("migrate");
+        let legacy_muse = root.join(".muse");
+        let legacy_meta = root.join(".meta");
+        let nur = root.join(".nur");
+        fs::create_dir_all(legacy_muse.join("sessions")).unwrap();
+        fs::create_dir_all(&legacy_meta).unwrap();
+        fs::create_dir_all(&nur).unwrap();
+        fs::write(
+            legacy_muse.join("auth.json"),
+            r#"{"api_key":"k","source":"t"}"#,
+        )
+        .unwrap();
+        fs::write(legacy_meta.join("memory.md"), "from-meta\n").unwrap();
+        fs::write(legacy_muse.join("sessions").join("abc.json"), "{}").unwrap();
+        // Pre-existing config in nur must not be overwritten
+        fs::write(nur.join("config.toml"), "model = \"keep-me\"\n").unwrap();
+
+        gap_fill_from(&legacy_meta, &nur);
+        gap_fill_from(&legacy_muse, &nur);
+
+        assert!(fs::read_to_string(nur.join("config.toml"))
+            .unwrap()
+            .contains("keep-me"));
+        assert!(nur.join("auth.json").is_file());
+        assert!(nur.join("memory.md").is_file());
+        assert!(nur.join("sessions").join("abc.json").is_file());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn model_display_name_title_cases() {
+        assert_eq!(model_display_name(""), "model");
+        assert_eq!(model_display_name("  "), "model");
+        assert_eq!(model_display_name("muse-spark-1.1"), "Muse Spark 1.1");
     }
 }

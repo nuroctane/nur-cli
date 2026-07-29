@@ -290,7 +290,9 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
         // is reachable directly from the async main() / turn-1 startup path, so
         // an unguarded call here could stall a Tokio worker thread on the very
         // first request.
-        if let Ok(Some(tokens)) = crate::oauth::run_blocking(|| crate::oauth::import_existing_session(exp)) {
+        if let Ok(Some(tokens)) =
+            crate::oauth::run_blocking(|| crate::oauth::import_existing_session(exp))
+        {
             let tok = tokens.access_token.trim().to_string();
             if !tok.is_empty() && !oauth_expired(tokens.expires_at) {
                 return Ok(tok);
@@ -306,7 +308,9 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
                     provider: exp.to_string(),
                     ..Default::default()
                 };
-                if let Ok(fresh) = crate::oauth::run_blocking(|| crate::oauth::refresh_tokens(exp, &probe, refresh)) {
+                if let Ok(fresh) = crate::oauth::run_blocking(|| {
+                    crate::oauth::refresh_tokens(exp, &probe, refresh)
+                }) {
                     let tok = fresh.access_token.trim().to_string();
                     if !tok.is_empty() && !oauth_expired(fresh.expires_at) {
                         // Persist the refreshed token back to the per-provider
@@ -319,7 +323,10 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
                         let _ = save_provider_oauth(
                             exp,
                             &tok,
-                            fresh.refresh_token.clone().or_else(|| Some(refresh.to_string())),
+                            fresh
+                                .refresh_token
+                                .clone()
+                                .or_else(|| Some(refresh.to_string())),
                             fresh.expires_at,
                             fresh.meta.clone(),
                         );
@@ -520,7 +527,8 @@ fn refresh_oauth_with_token(auth: &mut Auth, refresh: &str) -> Result<bool> {
     // stall every Tokio worker thread at once — see its doc comment for why a
     // bare `thread::spawn(..).join()` here previously caused turn-1 and
     // concurrent-subagent hangs whenever a token needed refreshing.
-    let tokens = crate::oauth::run_blocking(|| crate::oauth::refresh_tokens(provider, auth, refresh))?;
+    let tokens =
+        crate::oauth::run_blocking(|| crate::oauth::refresh_tokens(provider, auth, refresh))?;
     auth.api_key = tokens.access_token;
     if let Some(r) = tokens.refresh_token {
         auth.refresh_token = Some(r);
@@ -712,7 +720,11 @@ fn save_key_at(path: &Path, provider_id: &str, key: &str) -> Result<()> {
 /// A stored per-provider failover key, if one was saved for this provider id.
 pub fn load_provider_key(provider_id: &str) -> Option<String> {
     let map = read_keys_at(&crate::config::provider_keys_path());
-    if let Some(k) = map.get(provider_id).cloned().filter(|k| !k.trim().is_empty()) {
+    if let Some(k) = map
+        .get(provider_id)
+        .cloned()
+        .filter(|k| !k.trim().is_empty())
+    {
         return Some(k);
     }
     // google family alias fallback
@@ -1033,6 +1045,87 @@ pub fn has_provider_oauth(provider_id: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Non-secret readiness lines for browser/official-CLI providers.
+///
+/// This deliberately does not refresh tokens or make network requests. It
+/// reports which local source can satisfy a route so `doctor` can distinguish
+/// "provider down" from "Nur never found the login".
+pub fn provider_health_report() -> Vec<String> {
+    let keys = read_keys_at(&crate::config::provider_keys_path());
+    let sessions = read_sessions_at(&crate::config::provider_sessions_path());
+    let active = load_auth().ok().flatten();
+    crate::providers::oauth_browser_provider_ids()
+        .iter()
+        .filter_map(|id| {
+            let provider = crate::providers::by_id(id)?;
+            let mut sources = Vec::new();
+            if std::env::var(provider.env_key).is_ok_and(|value| !value.trim().is_empty()) {
+                sources.push(format!("env:{}", provider.env_key));
+            }
+            if keys.get(*id).is_some_and(|value| !value.trim().is_empty()) {
+                sources.push("saved-key".into());
+            }
+            if let Some(auth) = sessions.get(*id) {
+                let expiry = if oauth_expired(auth.expires_at) {
+                    if auth
+                        .refresh_token
+                        .as_deref()
+                        .is_some_and(|token| !token.trim().is_empty())
+                    {
+                        "oauth-refreshable"
+                    } else {
+                        "oauth-expired"
+                    }
+                } else {
+                    "oauth"
+                };
+                sources.push(expiry.into());
+            }
+            if let Some(auth) = active.as_ref().filter(|auth| {
+                auth.provider == *id
+                    || (crate::providers::is_google_family(&auth.provider)
+                        && crate::providers::is_google_family(id))
+            }) {
+                let usable = !matches!(auth.auth_method, AuthMethod::Oauth)
+                    || !oauth_expired(auth.expires_at)
+                    || auth
+                        .refresh_token
+                        .as_deref()
+                        .is_some_and(|token| !token.trim().is_empty());
+                if usable {
+                    sources.push("active".into());
+                }
+            }
+            let driver = match *id {
+                "openai" => Some(crate::t3code::DriverId::Codex),
+                "anthropic" => Some(crate::t3code::DriverId::Claude),
+                "xai" => Some(crate::t3code::DriverId::Grok),
+                "google" => Some(crate::t3code::DriverId::Gemini),
+                "antigravity" => Some(crate::t3code::DriverId::Antigravity),
+                _ => None,
+            };
+            if let Some(driver) = driver {
+                let probe = crate::t3code::probe_driver(driver);
+                if probe.has_credentials {
+                    sources.push(format!("{}-cli", driver.as_str()));
+                } else if probe.binary_present {
+                    sources.push(format!("{}-cli:no-importable-session", driver.as_str()));
+                }
+            }
+            let ready = sources.iter().any(|source| {
+                !source.ends_with(":no-importable-session") && source != "oauth-expired"
+            });
+            let state = if ready { "ready" } else { "login needed" };
+            let source = if sources.is_empty() {
+                "none".into()
+            } else {
+                sources.join(",")
+            };
+            Some(format!("{:<14} {:<12} {}", id, state, source))
+        })
+        .collect()
+}
+
 /// Delete local credentials. If `revoke` is true, best-effort remote revoke first.
 pub fn logout(revoke: bool) -> Result<()> {
     if revoke {
@@ -1233,9 +1326,23 @@ mod tests {
     }
 
     #[test]
+    fn provider_health_report_is_complete_and_never_prints_credentials() {
+        let report = provider_health_report();
+        for id in crate::providers::oauth_browser_provider_ids() {
+            assert!(
+                report.iter().any(|line| line.starts_with(id)),
+                "missing {id}: {report:?}"
+            );
+        }
+        let joined = report.join("\n").to_ascii_lowercase();
+        assert!(!joined.contains("access_token"));
+        assert!(!joined.contains("refresh_token"));
+        assert!(!joined.contains("bearer "));
+    }
+
+    #[test]
     fn provider_mismatch_rules() {
         let mut a = Auth::default();
-        a.provider = String::new();
         assert!(!provider_mismatch(&a, "xai"));
         a.provider = "xai".into();
         assert!(!provider_mismatch(&a, "xai"));

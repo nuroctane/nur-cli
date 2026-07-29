@@ -8,17 +8,17 @@ mod cli;
 mod config;
 mod ecosystem;
 mod error;
+mod fractal;
 mod gateway;
 mod gepa;
 mod local;
-mod t3code;
-mod penecho;
-mod fractal;
 mod oauth;
 mod open_uri;
+mod penecho;
 mod plugins;
 mod pricing;
 mod providers;
+mod t3code;
 mod theme;
 mod tools;
 mod tui;
@@ -203,11 +203,11 @@ async fn real_main() -> Result<()> {
             local::run_local(action).await?;
             return Ok(());
         }
-        None => {
+        None
             // Interactive launch: one-stop install FIRST when needed (release EXE
             // or never bootstrapped). Never open the TUI while packs are still
             // installing in the background for a first-time machine.
-            if bootstrap::should_bootstrap_on_launch() {
+            if bootstrap::should_bootstrap_on_launch() => {
                 bootstrap::run_full_install()?;
                 // Release artifact → re-exec the installed `nur` for a clean TUI.
                 if bootstrap::looks_like_release_artifact() && !bootstrap::is_running_from_install()
@@ -218,11 +218,18 @@ async fn real_main() -> Result<()> {
             }
             // The release check already fired at the top of `real_main` for
             // every invocation shape — nothing extra to do here.
-        }
         _ => {}
     }
 
     let mut cfg = load_config()?;
+    // Apply the saved palette before any headless status text or TUI frame is
+    // rendered. Unknown hand-edited values fail soft to Nur Gold.
+    let selected_theme = cfg
+        .theme
+        .as_deref()
+        .filter(|id| theme::is_theme(id))
+        .unwrap_or("gold");
+    let _ = theme::set_theme(selected_theme);
     if let Some(m) = &cli.model {
         cfg.model = m.clone();
     } else if let Ok(m) = std::env::var("NUR_MODEL")
@@ -748,6 +755,14 @@ fn run_doctor() -> Result<()> {
         }
         Err(_) => theme::print_err("auth    not set — run: nur auth login"),
     }
+    theme::print_info("provider auth routes (local, no network)");
+    for line in auth::provider_health_report() {
+        if line.contains("login needed") {
+            theme::print_info(&line);
+        } else {
+            theme::print_ok(&line);
+        }
+    }
 
     // Auto-update — the only place a user can see whether the launch check is
     // actually running. `doctor` deliberately does not trigger one, so these
@@ -853,10 +868,7 @@ fn file_sha256(path: &std::path::Path) -> std::io::Result<String> {
                 return Ok(t.to_lowercase());
             }
         }
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "certutil hash parse failed",
-        ));
+        Err(std::io::Error::other("certutil hash parse failed"))
     }
     #[cfg(not(windows))]
     {
@@ -1124,12 +1136,13 @@ async fn run_continuous(
         agent::spawn_turn(runner.clone(), sess, usg, prompt, tx, cancel.clone());
 
         let mut midline = false;
-        let mut done: Option<(
+        type ContinuousTurnResult = (
             Box<Session>,
             Box<UsageTracker>,
             std::result::Result<String, String>,
             bool,
-        )> = None;
+        );
+        let mut done: Option<ContinuousTurnResult> = None;
         while let Some(ev) = rx.recv().await {
             if midline && !matches!(ev, AgentEvent::TextDelta(_)) {
                 println!();

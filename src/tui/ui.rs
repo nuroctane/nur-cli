@@ -35,6 +35,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         if app.model_picker.is_some() {
             draw_model_picker(f, app, area);
         }
+        if app.theme_picker.is_some() {
+            draw_theme_picker(f, app, area);
+        }
         if app.plugin_picker.is_some() {
             draw_plugin_picker(f, app, area);
         }
@@ -52,7 +55,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let est_w = (area.width as usize).saturating_sub(5).max(8);
     let vcount = app.input.visual_line_count(est_w).max(1);
     const INPUT_VIEW_MAX: usize = 8;
-    let input_body = vcount.min(INPUT_VIEW_MAX).max(1) as u16;
+    let input_body = vcount.clamp(1, INPUT_VIEW_MAX) as u16;
     let busy_h = if app.busy { 1 } else { 0 };
 
     let chunks = Layout::default()
@@ -104,6 +107,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         && app.approval.is_none()
         && app.picker.is_none()
         && app.login.is_none()
+        && app.theme_picker.is_none()
     {
         draw_palette(f, app, chunks[2]);
     }
@@ -119,6 +123,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.model_picker.is_some() {
         draw_model_picker(f, app, area);
     }
+    if app.theme_picker.is_some() {
+        draw_theme_picker(f, app, area);
+    }
     if app.plugin_picker.is_some() {
         draw_plugin_picker(f, app, area);
     }
@@ -131,6 +138,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         && app.picker.is_none()
         && app.login.is_none()
         && app.model_picker.is_none()
+        && app.theme_picker.is_none()
         && app.plugin_picker.is_none()
         && app.update_modal.is_none()
         && app.ctx_menu.is_none()
@@ -168,6 +176,7 @@ fn draw_login(f: &mut Frame, app: &mut App, area: Rect) {
         Some(super::app::LoginStage::Provider) => draw_login_picker(f, app, area),
         Some(super::app::LoginStage::Method) => draw_login_method(f, app, area),
         Some(super::app::LoginStage::Key) => draw_login_key(f, app, area),
+        Some(super::app::LoginStage::BaseUrl) => draw_login_baseurl(f, app, area),
         Some(super::app::LoginStage::Browser) => draw_login_browser(f, app, area),
         None => {}
     }
@@ -183,7 +192,7 @@ fn draw_login_method(f: &mut Frame, app: &App, area: Rect) {
     let rect = fit_modal_rect(area, 64, want, 44, 8);
     f.render_widget(Clear, rect);
     f.render_widget(
-        Block::default().style(Style::default().bg(theme::SURFACE_2)),
+        Block::default().style(Style::default().bg(theme::SURFACE_2())),
         rect,
     );
     let phase = modal_phase(app);
@@ -197,7 +206,7 @@ fn draw_login_method(f: &mut Frame, app: &App, area: Rect) {
         f,
         rect,
         phase,
-        theme::INDIGO,
+        theme::INDIGO(),
         &title,
         None,
         "  ↑↓  ·  ↵ choose  ·  esc back  ",
@@ -228,14 +237,18 @@ fn draw_login_method(f: &mut Frame, app: &App, area: Rect) {
         let marker = if selected { "❯ " } else { "  " };
         let title_style = if selected {
             Style::default()
-                .fg(theme::BG)
-                .bg(theme::META_BLUE)
+                .fg(theme::BG())
+                .bg(theme::META_BLUE())
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(theme::FG).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(theme::FG())
+                .add_modifier(Modifier::BOLD)
         };
         let sub_style = if selected {
-            Style::default().fg(theme::BLUE_100).bg(theme::META_BLUE)
+            Style::default()
+                .fg(theme::BLUE_100())
+                .bg(theme::META_BLUE())
         } else {
             theme::style_faint()
         };
@@ -253,7 +266,7 @@ fn draw_login_method(f: &mut Frame, app: &App, area: Rect) {
         )));
     }
     f.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2)),
+        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
         inner,
     );
 }
@@ -268,7 +281,7 @@ fn draw_login_browser(f: &mut Frame, app: &App, area: Rect) {
     let rect = fit_modal_rect(area, 72, want, 48, 8);
     f.render_widget(Clear, rect);
     f.render_widget(
-        Block::default().style(Style::default().bg(theme::SURFACE_2)),
+        Block::default().style(Style::default().bg(theme::SURFACE_2())),
         rect,
     );
     let phase = modal_phase(app);
@@ -286,7 +299,7 @@ fn draw_login_browser(f: &mut Frame, app: &App, area: Rect) {
         f,
         rect,
         phase,
-        theme::INDIGO,
+        theme::INDIGO(),
         &title,
         None,
         "  esc cancel  ·  paste code + ↵ if prompted  ",
@@ -296,7 +309,7 @@ fn draw_login_browser(f: &mut Frame, app: &App, area: Rect) {
     let mut lines: Vec<Line> = vec![
         Line::from(Span::styled(
             format!("  {}", m.browser_status),
-            Style::default().fg(theme::BLUE_100),
+            Style::default().fg(theme::BLUE_100()),
         )),
         Line::default(),
     ];
@@ -306,8 +319,8 @@ fn draw_login_browser(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(
                 m.browser_user_code.clone(),
                 Style::default()
-                    .fg(theme::BG)
-                    .bg(theme::META_BLUE)
+                    .fg(theme::BG())
+                    .bg(theme::META_BLUE())
                     .add_modifier(Modifier::BOLD),
             ),
         ]));
@@ -324,7 +337,9 @@ fn draw_login_browser(f: &mut Frame, app: &App, area: Rect) {
             Span::styled("  paste  ".to_string(), theme::style_faint()),
             Span::styled(
                 shown,
-                Style::default().fg(theme::FG).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme::FG())
+                    .add_modifier(Modifier::BOLD),
             ),
         ]));
         lines.push(Line::default());
@@ -337,7 +352,7 @@ fn draw_login_browser(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::from(Span::styled(
             format!("  {}", truncate(&m.browser_url, col)),
             Style::default()
-                .fg(theme::FG)
+                .fg(theme::FG())
                 .add_modifier(Modifier::UNDERLINED),
         )));
         lines.push(Line::default());
@@ -354,7 +369,7 @@ fn draw_login_browser(f: &mut Frame, app: &App, area: Rect) {
         )));
     }
     f.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2)),
+        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
         inner,
     );
 }
@@ -366,7 +381,7 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
     let rect = fit_modal_rect(area, 74, 28, 48, 12);
     f.render_widget(Clear, rect);
     f.render_widget(
-        Block::default().style(Style::default().bg(theme::SURFACE_2)),
+        Block::default().style(Style::default().bg(theme::SURFACE_2())),
         rect,
     );
     let phase = modal_phase(app);
@@ -390,7 +405,7 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
     } else {
         " ↑↓ move  ·  enter pick  ·  space add failover  ·  alt+p privacy tier  ·  esc  "
     };
-    draw_modal_frame(f, rect, phase, theme::INDIGO, &title, None, hint);
+    draw_modal_frame(f, rect, phase, theme::INDIGO(), &title, None, hint);
     let inner = modal_inner(rect);
 
     let close = Rect {
@@ -436,7 +451,7 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
             Span::styled(
                 caret,
                 Style::default()
-                    .fg(theme::BLUE_100)
+                    .fg(theme::BLUE_100())
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
@@ -452,7 +467,7 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
             theme::style_faint(),
         )));
         f.render_widget(
-            Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2)),
+            Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
             inner,
         );
         if let Some(m) = &mut app.login {
@@ -467,14 +482,16 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
         let marker = if selected { "❯ " } else { "  " };
         let name_style = if selected {
             Style::default()
-                .fg(theme::BG)
-                .bg(theme::META_BLUE)
+                .fg(theme::BG())
+                .bg(theme::META_BLUE())
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(theme::FG)
+            Style::default().fg(theme::FG())
         };
         let note_style = if selected {
-            Style::default().fg(theme::BLUE_100).bg(theme::META_BLUE)
+            Style::default()
+                .fg(theme::BLUE_100())
+                .bg(theme::META_BLUE())
         } else {
             theme::style_faint()
         };
@@ -517,7 +534,7 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     f.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2)),
+        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
         inner,
     );
     if let Some(m) = &mut app.login {
@@ -533,7 +550,7 @@ fn draw_model_picker(f: &mut Frame, app: &mut App, area: Rect) {
     let rect = fit_modal_rect(area, 74, 28, 48, 12);
     f.render_widget(Clear, rect);
     f.render_widget(
-        Block::default().style(Style::default().bg(theme::SURFACE_2)),
+        Block::default().style(Style::default().bg(theme::SURFACE_2())),
         rect,
     );
     let phase = modal_phase(app);
@@ -552,7 +569,7 @@ fn draw_model_picker(f: &mut Frame, app: &mut App, area: Rect) {
         f,
         rect,
         phase,
-        theme::INDIGO,
+        theme::INDIGO(),
         &title,
         None,
         " ↑↓/wheel  ·  ↵ switch  ·  type to filter / custom id  ·  esc/✕  ",
@@ -607,7 +624,7 @@ fn draw_model_picker(f: &mut Frame, app: &mut App, area: Rect) {
             Span::styled(
                 caret,
                 Style::default()
-                    .fg(theme::BLUE_100)
+                    .fg(theme::BLUE_100())
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
@@ -637,11 +654,11 @@ fn draw_model_picker(f: &mut Frame, app: &mut App, area: Rect) {
         if error.is_some() && !filter.trim().is_empty() {
             lines.push(Line::from(Span::styled(
                 truncate(&format!("  ↵ switch to \"{}\"", filter.trim()), col),
-                Style::default().fg(theme::BLUE_100),
+                Style::default().fg(theme::BLUE_100()),
             )));
         }
         f.render_widget(
-            Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2)),
+            Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
             inner,
         );
         if let Some(m) = &mut app.model_picker {
@@ -659,15 +676,15 @@ fn draw_model_picker(f: &mut Frame, app: &mut App, area: Rect) {
         let text = format!("{marker}{id}{badge}");
         let style = if selected {
             Style::default()
-                .fg(theme::BG)
-                .bg(theme::META_BLUE)
+                .fg(theme::BG())
+                .bg(theme::META_BLUE())
                 .add_modifier(Modifier::BOLD)
         } else if is_current {
             Style::default()
-                .fg(theme::BLUE_100)
+                .fg(theme::BLUE_100())
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(theme::FG)
+            Style::default().fg(theme::FG())
         };
         lines.push(Line::from(Span::styled(truncate(&text, col), style)));
 
@@ -687,11 +704,128 @@ fn draw_model_picker(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     f.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2)),
+        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
         inner,
     );
     if let Some(m) = &mut app.model_picker {
         m.hit = hit;
+    }
+}
+
+// ── runtime theme chooser (`/theme`) ────────────────────────────────────────
+fn draw_theme_picker(f: &mut Frame, app: &mut App, area: Rect) {
+    let rect = fit_modal_rect(area, 72, 16, 46, 10);
+    f.render_widget(Clear, rect);
+    f.render_widget(
+        Block::default().style(Style::default().bg(theme::SURFACE_2())),
+        rect,
+    );
+    let phase = modal_phase(app);
+    let onboarding = app
+        .theme_picker
+        .as_ref()
+        .map(|p| p.onboarding)
+        .unwrap_or(false);
+    let title = if onboarding {
+        " ✦ Choose your Nur look "
+    } else {
+        " ✦ Theme "
+    };
+    draw_modal_frame(
+        f,
+        rect,
+        phase,
+        theme::NUR_GOLD(),
+        title,
+        None,
+        " ↑↓/wheel preview  ·  ↵ save  ·  esc/✕ keep previous ",
+    );
+    let inner = modal_inner(rect);
+    let close = Rect {
+        x: rect.x + rect.width.saturating_sub(5),
+        y: rect.y,
+        width: 3,
+        height: 1,
+    };
+    let mut hit = super::app::PickerHit {
+        frame: rect,
+        close,
+        body: inner,
+        scope: Rect::default(),
+        foreign: Rect::default(),
+        rows: Vec::new(),
+    };
+
+    let selected = app.theme_picker.as_ref().map(|p| p.sel).unwrap_or(0);
+    let saved = app.cfg.theme.as_deref().unwrap_or("gold");
+    let mut lines = vec![Line::from(Span::styled(
+        if onboarding {
+            "  Pick a palette before signing in. Change it anytime with /theme."
+        } else {
+            "  Selection previews live across the whole interface."
+        },
+        theme::style_faint(),
+    ))];
+    let col = (inner.width as usize).saturating_sub(3);
+
+    for (idx, (id, label)) in theme::THEMES.iter().enumerate() {
+        let is_selected = idx == selected;
+        let is_saved = *id == saved;
+        let row_bg = if is_selected {
+            theme::NUR_GOLD()
+        } else {
+            theme::SURFACE_2()
+        };
+        let text_style = if is_selected {
+            Style::default()
+                .fg(theme::BG())
+                .bg(row_bg)
+                .add_modifier(Modifier::BOLD)
+        } else if is_saved {
+            Style::default()
+                .fg(theme::NUR_GOLD_SKY())
+                .bg(row_bg)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::FG()).bg(row_bg)
+        };
+        let marker = if is_selected { " ❯ " } else { "   " };
+        let badge = if is_saved { "  ● saved" } else { "" };
+        let preview = theme::theme_preview(id).unwrap_or([
+            theme::NUR_GOLD_SKY(),
+            theme::NUR_GOLD(),
+            theme::NUR_GOLD_DEEP(),
+        ]);
+        let mut spans = vec![Span::styled(marker, text_style)];
+        for color in preview {
+            spans.push(Span::styled("●", Style::default().fg(color).bg(row_bg)));
+        }
+        spans.push(Span::styled(
+            truncate(&format!("  {label}{badge}"), col.saturating_sub(6)),
+            text_style,
+        ));
+        lines.push(Line::from(spans));
+
+        let row_y = inner.y + 1 + idx as u16;
+        if row_y < inner.y + inner.height {
+            hit.rows.push((
+                idx,
+                Rect {
+                    x: inner.x,
+                    y: row_y,
+                    width: inner.width,
+                    height: 1,
+                },
+            ));
+        }
+    }
+
+    f.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
+        inner,
+    );
+    if let Some(picker) = &mut app.theme_picker {
+        picker.hit = hit;
     }
 }
 
@@ -701,7 +835,7 @@ fn draw_plugin_picker(f: &mut Frame, app: &mut App, area: Rect) {
     let rect = fit_modal_rect(area, 78, 28, 52, 12);
     f.render_widget(Clear, rect);
     f.render_widget(
-        Block::default().style(Style::default().bg(theme::SURFACE_2)),
+        Block::default().style(Style::default().bg(theme::SURFACE_2())),
         rect,
     );
     let phase = modal_phase(app);
@@ -726,7 +860,7 @@ fn draw_plugin_picker(f: &mut Frame, app: &mut App, area: Rect) {
         f,
         rect,
         phase,
-        theme::INDIGO,
+        theme::INDIGO(),
         &title,
         None,
         " ↑↓/wheel  ·  ↵ install/toggle  ·  filter: design|finance|workflow|…  ·  esc/✕  ",
@@ -776,7 +910,7 @@ fn draw_plugin_picker(f: &mut Frame, app: &mut App, area: Rect) {
             Span::styled(
                 caret,
                 Style::default()
-                    .fg(theme::BLUE_100)
+                    .fg(theme::BLUE_100())
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
@@ -808,15 +942,15 @@ fn draw_plugin_picker(f: &mut Frame, app: &mut App, area: Rect) {
             );
             let style = if selected {
                 Style::default()
-                    .fg(theme::BG)
-                    .bg(theme::META_BLUE)
+                    .fg(theme::BG())
+                    .bg(theme::META_BLUE())
                     .add_modifier(Modifier::BOLD)
             } else if p.enabled {
                 Style::default()
-                    .fg(theme::BLUE_100)
+                    .fg(theme::BLUE_100())
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(theme::FG)
+                Style::default().fg(theme::FG())
             };
             lines.push(Line::from(Span::styled(truncate(&text, col), style)));
 
@@ -854,7 +988,7 @@ fn draw_plugin_picker(f: &mut Frame, app: &mut App, area: Rect) {
         lines.push(Line::from(Span::styled(
             truncate(&format!("  {s}"), col),
             if busy {
-                Style::default().fg(theme::BLUE_100)
+                Style::default().fg(theme::BLUE_100())
             } else {
                 theme::style_faint()
             },
@@ -862,7 +996,7 @@ fn draw_plugin_picker(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     f.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2)),
+        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
         inner,
     );
     if let Some(m) = &mut app.plugin_picker {
@@ -880,7 +1014,7 @@ fn draw_login_key(f: &mut Frame, app: &App, area: Rect) {
     let rect = fit_modal_rect(area, 64, want, 44, 8);
     f.render_widget(Clear, rect);
     f.render_widget(
-        Block::default().style(Style::default().bg(theme::SURFACE_2)),
+        Block::default().style(Style::default().bg(theme::SURFACE_2())),
         rect,
     );
     let phase = modal_phase(app);
@@ -893,7 +1027,7 @@ fn draw_login_key(f: &mut Frame, app: &App, area: Rect) {
         f,
         rect,
         phase,
-        theme::INDIGO,
+        theme::INDIGO(),
         &title,
         None,
         "  ↵ save  ·  ctrl+v paste  ·  ctrl+u clear  ·  esc back  ",
@@ -919,8 +1053,8 @@ fn draw_login_key(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(
                 format!("{field:<field_w$}"),
                 Style::default()
-                    .fg(theme::BLUE_100)
-                    .bg(theme::SURFACE)
+                    .fg(theme::BLUE_100())
+                    .bg(theme::SURFACE())
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
@@ -956,7 +1090,95 @@ fn draw_login_key(f: &mut Frame, app: &App, area: Rect) {
         ]));
     }
     f.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2)),
+        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
+        inner,
+    );
+}
+
+/// Stage 3 (OpenAI-compatible only) — optional base-URL override. Prefilled
+/// with the default host; ↵ accepts, edit to point at a custom endpoint.
+fn draw_login_baseurl(f: &mut Frame, app: &App, area: Rect) {
+    let Some(m) = &app.login else { return };
+    let provider = crate::providers::by_id(&m.provider_id)
+        .copied()
+        .unwrap_or(*crate::providers::default_provider());
+    let want: u16 = if m.error.is_some() { 12 } else { 11 };
+    let rect = fit_modal_rect(area, 72, want, 48, 8);
+    f.render_widget(Clear, rect);
+    f.render_widget(
+        Block::default().style(Style::default().bg(theme::SURFACE_2())),
+        rect,
+    );
+    let phase = modal_phase(app);
+    draw_modal_frame(
+        f,
+        rect,
+        phase,
+        theme::INDIGO(),
+        &format!(" 🌐 {} · endpoint ", provider.name),
+        None,
+        "  ↵ accept  ·  ctrl+v paste  ·  ctrl+u clear  ·  esc back  ",
+    );
+    let inner = modal_inner(rect);
+    let field_w = (inner.width as usize).saturating_sub(4).max(8);
+
+    let mut field: String = m.buf.chars().collect();
+    if theme::blink_on(app.spinner_epoch.elapsed()) {
+        field.push('▉');
+    }
+    // Show the tail when the URL overflows the field width.
+    let shown: String = {
+        let chars: Vec<char> = field.chars().collect();
+        if chars.len() > field_w {
+            chars[chars.len() - field_w..].iter().collect()
+        } else {
+            field.clone()
+        }
+    };
+    let mut lines: Vec<Line> = vec![
+        Line::from(Span::styled(
+            format!(
+                "  {} base URL  ·  OpenAI-compatible endpoint",
+                provider.name
+            ),
+            theme::style_faint(),
+        )),
+        Line::default(),
+        Line::from(vec![
+            Span::raw("  ".to_string()),
+            Span::styled(
+                format!("{shown:<field_w$}"),
+                Style::default()
+                    .fg(theme::BLUE_100())
+                    .bg(theme::SURFACE())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::default(),
+        Line::from(vec![
+            Span::raw("  ".to_string()),
+            Span::styled(
+                format!("default {}", provider.base_url),
+                theme::style_faint(),
+            ),
+        ]),
+        Line::from(vec![
+            Span::raw("  ".to_string()),
+            Span::styled(
+                "↵ at the default = no override  ·  saved to config".to_string(),
+                theme::style_faint(),
+            ),
+        ]),
+    ];
+    if let Some(e) = &m.error {
+        lines.push(Line::default());
+        lines.push(Line::from(vec![
+            Span::raw("  ".to_string()),
+            Span::styled(truncate(e, field_w), theme::style_error()),
+        ]));
+    }
+    f.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
         inner,
     );
 }
@@ -980,7 +1202,7 @@ fn draw_session_picker(f: &mut Frame, app: &mut App, area: Rect) {
     let rect = fit_modal_rect(area, 82, 40, 54, 8);
     f.render_widget(Clear, rect);
     f.render_widget(
-        Block::default().style(Style::default().bg(theme::SURFACE_2)),
+        Block::default().style(Style::default().bg(theme::SURFACE_2())),
         rect,
     );
 
@@ -1000,7 +1222,7 @@ fn draw_session_picker(f: &mut Frame, app: &mut App, area: Rect) {
     };
     // Both windows default to every workspace and narrow with Tab.
     let right = Some(scope_label);
-    draw_modal_frame(f, rect, phase, theme::META_BLUE, &title, right, footer);
+    draw_modal_frame(f, rect, phase, theme::META_BLUE(), &title, right, footer);
 
     let pad = 2u16;
     let inner = Rect {
@@ -1046,7 +1268,7 @@ fn draw_session_picker(f: &mut Frame, app: &mut App, area: Rect) {
                 Span::styled(empty.to_string(), theme::style_faint()),
                 Span::styled(hint.to_string(), theme::style_tool()),
             ]))
-            .style(Style::default().bg(theme::SURFACE_2)),
+            .style(Style::default().bg(theme::SURFACE_2())),
             inner,
         );
         if let Some(p) = &mut app.picker {
@@ -1080,19 +1302,24 @@ fn draw_session_picker(f: &mut Frame, app: &mut App, area: Rect) {
         .collect();
 
     let mut lines: Vec<Line> = Vec::new();
-    let mut drawn = 0usize;
-    for (i, r) in rows_snapshot.iter().enumerate().skip(start).take(vis_rows) {
+    for (drawn, (i, r)) in rows_snapshot
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(vis_rows)
+        .enumerate()
+    {
         let selected = i == sel;
         let bg = if selected {
-            theme::META_BLUE
+            theme::META_BLUE()
         } else {
-            theme::SURFACE_2
+            theme::SURFACE_2()
         };
-        let prompt_fg = if selected { theme::BG } else { theme::FG };
+        let prompt_fg = if selected { theme::BG() } else { theme::FG() };
         let meta_fg = if selected {
-            theme::BLUE_100
+            theme::BLUE_100()
         } else {
-            theme::FAINT
+            theme::FAINT()
         };
         let marker = if selected { "❯ " } else { "  " };
 
@@ -1113,9 +1340,9 @@ fn draw_session_picker(f: &mut Frame, app: &mut App, area: Rect) {
             marker.to_string(),
             Style::default()
                 .fg(if selected {
-                    theme::BG
+                    theme::BG()
                 } else {
-                    theme::META_BLUE
+                    theme::META_BLUE()
                 })
                 .bg(bg)
                 .add_modifier(Modifier::BOLD),
@@ -1127,7 +1354,7 @@ fn draw_session_picker(f: &mut Frame, app: &mut App, area: Rect) {
             prow.push(Span::styled(
                 tag,
                 Style::default()
-                    .fg(if selected { theme::BG } else { theme::WARN })
+                    .fg(if selected { theme::BG() } else { theme::WARN() })
                     .bg(bg)
                     .add_modifier(Modifier::BOLD),
             ));
@@ -1183,11 +1410,10 @@ fn draw_session_picker(f: &mut Frame, app: &mut App, area: Rect) {
             Style::default().fg(meta_fg).bg(bg),
         )));
         lines.push(picker_separator_line(inner.width as usize, phase, i));
-        drawn += 1;
     }
 
     f.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2)),
+        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
         inner,
     );
 
@@ -1198,7 +1424,9 @@ fn draw_session_picker(f: &mut Frame, app: &mut App, area: Rect) {
 
 // ── update-available modal (parity with session/login/model pickers + click-to-peek) ──
 fn draw_update_modal(f: &mut Frame, app: &mut App, area: Rect) {
-    let Some(modal) = &app.update_modal else { return };
+    let Some(modal) = &app.update_modal else {
+        return;
+    };
     let phase = modal_phase(app);
     let current = modal.current.clone();
     let remote = modal.remote.clone();
@@ -1207,14 +1435,14 @@ fn draw_update_modal(f: &mut Frame, app: &mut App, area: Rect) {
     let rect = fit_modal_rect(area, 64, 14, 48, 10);
     f.render_widget(Clear, rect);
     f.render_widget(
-        Block::default().style(Style::default().bg(theme::SURFACE_2)),
+        Block::default().style(Style::default().bg(theme::SURFACE_2())),
         rect,
     );
 
     let title = " Update available ";
     let right = Some(remote.as_str());
     let footer = " ↵ update now · esc dismiss · outside/✕ close ";
-    draw_modal_frame(f, rect, phase, theme::NUR_GOLD, title, right, footer);
+    draw_modal_frame(f, rect, phase, theme::NUR_GOLD(), title, right, footer);
 
     let pad = 2u16;
     let inner = Rect {
@@ -1255,12 +1483,16 @@ fn draw_update_modal(f: &mut Frame, app: &mut App, area: Rect) {
         Span::styled("  Current: ".to_string(), theme::style_faint()),
         Span::styled(
             format!("v{current}"),
-            Style::default().fg(theme::FG).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::FG())
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled("  →  ".to_string(), theme::style_faint()),
         Span::styled(
             format!("v{remote}"),
-            Style::default().fg(theme::NUR_GOLD).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::NUR_GOLD())
+                .add_modifier(Modifier::BOLD),
         ),
     ]));
     lines.push(Line::default());
@@ -1278,8 +1510,8 @@ fn draw_update_modal(f: &mut Frame, app: &mut App, area: Rect) {
         Span::styled(
             "▶ Update now".to_string(),
             Style::default()
-                .fg(theme::NUR_GOLD)
-                .bg(theme::SURFACE_2)
+                .fg(theme::NUR_GOLD())
+                .bg(theme::SURFACE_2())
                 .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
         ),
         Span::styled("  ".to_string(), theme::style_faint()),
@@ -1293,7 +1525,7 @@ fn draw_update_modal(f: &mut Frame, app: &mut App, area: Rect) {
 
     // Render inner
     f.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2)),
+        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
         inner,
     );
 
@@ -1303,8 +1535,8 @@ fn draw_update_modal(f: &mut Frame, app: &mut App, area: Rect) {
         let buf = f.buffer_mut();
         buf[(cx, rect.y)].set_char('✕').set_style(
             Style::default()
-                .fg(theme::ERROR)
-                .bg(theme::SURFACE_2)
+                .fg(theme::ERROR())
+                .bg(theme::SURFACE_2())
                 .add_modifier(Modifier::BOLD),
         );
     }
@@ -1326,18 +1558,18 @@ fn draw_modal_frame(
     footer: &str,
 ) {
     let buf = f.buffer_mut();
-    let border = Style::default().fg(hue).bg(theme::SURFACE_2);
+    let border = Style::default().fg(hue).bg(theme::SURFACE_2());
     // Traveling accent head cycles the aurora ring so every modal edge shimmers.
     let accent = Style::default()
         .fg(theme::aurora_at(phase as f64 / 40.0))
-        .bg(theme::SURFACE_2)
+        .bg(theme::SURFACE_2())
         .add_modifier(Modifier::BOLD);
-    let dim = Style::default().fg(theme::BORDER).bg(theme::SURFACE_2);
+    let dim = Style::default().fg(theme::BORDER()).bg(theme::SURFACE_2());
     let title_s = Style::default()
         .fg(hue)
-        .bg(theme::SURFACE_2)
+        .bg(theme::SURFACE_2())
         .add_modifier(Modifier::BOLD);
-    let mute = Style::default().fg(theme::MUTED).bg(theme::SURFACE_2);
+    let mute = Style::default().fg(theme::MUTED()).bg(theme::SURFACE_2());
 
     let x0 = rect.x;
     let y0 = rect.y;
@@ -1429,8 +1661,8 @@ fn draw_modal_frame(
             if x > x0 && x < x1 {
                 let st = if *ch == '✕' {
                     Style::default()
-                        .fg(theme::ERROR)
-                        .bg(theme::SURFACE_2)
+                        .fg(theme::ERROR())
+                        .bg(theme::SURFACE_2())
                         .add_modifier(Modifier::BOLD)
                 } else {
                     mute
@@ -1448,7 +1680,7 @@ fn draw_modal_frame(
         if x < x1 {
             buf[(x, y1)]
                 .set_char(*ch)
-                .set_style(Style::default().fg(theme::FAINT).bg(theme::SURFACE_2));
+                .set_style(Style::default().fg(theme::FAINT()).bg(theme::SURFACE_2()));
         }
     }
 }
@@ -1532,7 +1764,7 @@ fn picker_separator_line(width: usize, phase: usize, row_i: usize) -> Line<'stat
     }
     Line::from(Span::styled(
         s,
-        Style::default().fg(theme::BORDER).bg(theme::SURFACE_2),
+        Style::default().fg(theme::BORDER()).bg(theme::SURFACE_2()),
     ))
 }
 
@@ -1880,8 +2112,8 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
             Paragraph::new(Span::styled(
                 tag,
                 Style::default()
-                    .fg(theme::BG)
-                    .bg(theme::META_BLUE)
+                    .fg(theme::BG())
+                    .bg(theme::META_BLUE())
                     .add_modifier(Modifier::BOLD),
             )),
             r,
@@ -1917,8 +2149,8 @@ fn sticky_owner(
 /// hitbox for the prompt's context menu.
 fn draw_sticky_banner(f: &mut Frame, prompt: &str, area: Rect) {
     f.render_widget(Clear, area);
-    let bar = Style::default().bg(theme::META_BLUE);
-    let surface = Style::default().bg(theme::SURFACE);
+    let bar = Style::default().bg(theme::META_BLUE());
+    let surface = Style::default().bg(theme::SURFACE());
 
     // Row 0: solid Nur-gold title bar.
     let title = Rect {
@@ -1932,13 +2164,15 @@ fn draw_sticky_banner(f: &mut Frame, prompt: &str, area: Rect) {
             Span::styled(
                 "  PROMPT  ".to_string(),
                 Style::default()
-                    .fg(theme::BG)
-                    .bg(theme::META_BLUE)
+                    .fg(theme::BG())
+                    .bg(theme::META_BLUE())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 " · scroll follows this turn · double/right-click for menu ".to_string(),
-                Style::default().fg(theme::BLUE_100).bg(theme::META_BLUE),
+                Style::default()
+                    .fg(theme::BLUE_100())
+                    .bg(theme::META_BLUE()),
             ),
         ]))
         .style(bar),
@@ -1977,15 +2211,15 @@ fn draw_sticky_banner(f: &mut Frame, prompt: &str, area: Rect) {
                 Span::styled(
                     prefix.to_string(),
                     Style::default()
-                        .fg(theme::META_BLUE)
-                        .bg(theme::SURFACE)
+                        .fg(theme::META_BLUE())
+                        .bg(theme::SURFACE())
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     chunk,
                     Style::default()
-                        .fg(theme::FG)
-                        .bg(theme::SURFACE)
+                        .fg(theme::FG())
+                        .bg(theme::SURFACE())
                         .add_modifier(Modifier::BOLD),
                 ),
             ]));
@@ -2007,7 +2241,7 @@ fn draw_sticky_banner(f: &mut Frame, prompt: &str, area: Rect) {
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 "▁".repeat(area.width as usize),
-                Style::default().fg(theme::BORDER).bg(theme::SURFACE),
+                Style::default().fg(theme::BORDER()).bg(theme::SURFACE()),
             ))),
             edge,
         );
@@ -2032,18 +2266,18 @@ fn draw_scrollbar(f: &mut Frame, app: &App, track: Rect, top: u16, total: u16, v
 
     // Thumb hue steps up as you interact: idle → hover → drag.
     let thumb_fg = if app.scrollbar_drag {
-        theme::META_BLUE_SKY
+        theme::META_BLUE_SKY()
     } else if app.scrollbar_hover {
-        theme::BLUE_250
+        theme::BLUE_250()
     } else {
-        theme::META_BLUE
+        theme::META_BLUE()
     };
     let track_fg = if !scrollable {
-        theme::dim(theme::BORDER, 0.4)
+        theme::dim(theme::BORDER(), 0.4)
     } else if app.scrollbar_hover || app.scrollbar_drag {
-        theme::BLUE_500
+        theme::BLUE_500()
     } else {
-        theme::BORDER
+        theme::BORDER()
     };
 
     let buf = f.buffer_mut();
@@ -2055,22 +2289,22 @@ fn draw_scrollbar(f: &mut Frame, app: &App, track: Rect, top: u16, total: u16, v
             Some(g) => {
                 buf[(lane_x, y)]
                     .set_char(g)
-                    .set_style(Style::default().fg(thumb_fg).bg(theme::BG));
+                    .set_style(Style::default().fg(thumb_fg).bg(theme::BG()));
                 // Hover/drag: thumb grows to both columns — chunky, grabbable.
                 if (app.scrollbar_hover || app.scrollbar_drag) && track.width >= 2 {
                     buf[(edge_x, y)]
                         .set_char(g)
-                        .set_style(Style::default().fg(thumb_fg).bg(theme::BG));
+                        .set_style(Style::default().fg(thumb_fg).bg(theme::BG()));
                 }
             }
             None => {
                 buf[(lane_x, y)]
                     .set_char('│')
-                    .set_style(Style::default().fg(track_fg).bg(theme::BG));
+                    .set_style(Style::default().fg(track_fg).bg(theme::BG()));
                 if track.width >= 2 {
                     buf[(edge_x, y)]
                         .set_char(' ')
-                        .set_style(Style::default().bg(theme::BG));
+                        .set_style(Style::default().bg(theme::BG()));
                 }
             }
         }
@@ -2091,14 +2325,14 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
             out.push(Line::default());
             let md = markdown::render_markdown(text, theme::style_assistant());
             // Cool teal/mint bullet — chrome stays gold; answers should not.
-            let bullet = theme::SEAFOAM;
+            let bullet = theme::SEAFOAM();
             // render_markdown always yields ≥1 line, so gate on the source text.
             if text.trim().is_empty() && *streaming {
                 out.push(Line::from(vec![
                     Span::styled("● ".to_string(), Style::default().fg(bullet)),
                     Span::styled(
                         theme::pulse_frame(tick).to_string(),
-                        Style::default().fg(theme::CYAN),
+                        Style::default().fg(theme::CYAN()),
                     ),
                 ]));
             }
@@ -2117,14 +2351,14 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                         last.spans.push(Span::styled(
                             "█".to_string(),
                             Style::default()
-                                .fg(theme::BG)
-                                .bg(theme::SEAFOAM)
+                                .fg(theme::BG())
+                                .bg(theme::SEAFOAM())
                                 .add_modifier(Modifier::BOLD),
                         ));
                     } else {
                         last.spans.push(Span::styled(
                             "▏".to_string(),
-                            Style::default().fg(theme::SEAFOAM),
+                            Style::default().fg(theme::SEAFOAM()),
                         ));
                     }
                 }
@@ -2155,11 +2389,11 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                 theme::CHEVRON_COLLAPSED
             };
             let head_hue = if flash.is_some() {
-                theme::BLUE_100
+                theme::BLUE_100()
             } else if live {
-                theme::VIOLET
+                theme::VIOLET()
             } else {
-                theme::MUTED
+                theme::MUTED()
             };
             let lines_n = text.lines().filter(|l| !l.trim().is_empty()).count();
             let mut head = vec![
@@ -2170,7 +2404,11 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                 Span::styled(
                     "thought".to_string(),
                     Style::default()
-                        .fg(if live { theme::VIOLET } else { theme::MUTED })
+                        .fg(if live {
+                            theme::VIOLET()
+                        } else {
+                            theme::MUTED()
+                        })
                         .add_modifier(if live {
                             Modifier::ITALIC
                         } else {
@@ -2195,12 +2433,12 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                     } else {
                         "  ·  click to peek · ▸ expands".to_string()
                     },
-                    Style::default().fg(theme::FAINT),
+                    Style::default().fg(theme::FAINT()),
                 ));
             } else {
                 head.push(Span::styled(
                     "  ·  click ▾ to collapse".to_string(),
-                    Style::default().fg(theme::FAINT),
+                    Style::default().fg(theme::FAINT()),
                 ));
             }
             out.push(Line::from(head));
@@ -2265,15 +2503,15 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
             };
             let status_glyph = match ok {
                 None => None,
-                Some(true) => Some(("✓", theme::SUCCESS)),
-                Some(false) => Some(("✗", theme::ERROR)),
+                Some(true) => Some(("✓", theme::SUCCESS())),
+                Some(false) => Some(("✗", theme::ERROR())),
             };
             let chev_hue = if flash.is_some() {
-                theme::BLUE_100
+                theme::BLUE_100()
             } else if running {
                 hue
             } else {
-                theme::MUTED
+                theme::MUTED()
             };
             let mut head_spans = vec![Span::styled(
                 format!("{chevron} "),
@@ -2292,7 +2530,7 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
             ));
             head_spans.push(Span::styled(
                 format!("  ·  {}", theme::tool_family(name)),
-                Style::default().fg(theme::FAINT),
+                Style::default().fg(theme::FAINT()),
             ));
             head_spans.push(Span::raw(" ".to_string()));
             head_spans.push(Span::styled(
@@ -2309,15 +2547,15 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                 head_spans.push(Span::styled(
                     format!(" +{add} "),
                     Style::default()
-                        .fg(theme::BG)
-                        .bg(theme::SUCCESS)
+                        .fg(theme::BG())
+                        .bg(theme::SUCCESS())
                         .add_modifier(Modifier::BOLD),
                 ));
                 head_spans.push(Span::styled(
                     format!(" -{del} "),
                     Style::default()
-                        .fg(theme::BG)
-                        .bg(theme::ERROR)
+                        .fg(theme::BG())
+                        .bg(theme::ERROR())
                         .add_modifier(Modifier::BOLD),
                 ));
             }
@@ -2339,11 +2577,11 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                         None => "  ·  click to peek · ▸ expands".into(),
                     }
                 };
-                head_spans.push(Span::styled(extra, Style::default().fg(theme::FAINT)));
+                head_spans.push(Span::styled(extra, Style::default().fg(theme::FAINT())));
             } else {
                 head_spans.push(Span::styled(
                     "  ·  click to peek · ▾ collapse".to_string(),
-                    Style::default().fg(theme::FAINT),
+                    Style::default().fg(theme::FAINT()),
                 ));
             }
             out.push(Line::from(head_spans));
@@ -2474,13 +2712,13 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                     format!("{glyph} "),
                     Style::default()
                         .fg(if *interrupted {
-                            theme::WARN
+                            theme::WARN()
                         } else {
-                            theme::SUCCESS
+                            theme::SUCCESS()
                         })
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(label.to_string(), Style::default().fg(theme::MUTED)),
+                Span::styled(label.to_string(), Style::default().fg(theme::MUTED())),
                 Span::raw(" ".to_string()),
                 Span::styled(format!(" took {d} "), theme::style_turn_chip(*interrupted)),
             ];
@@ -2492,7 +2730,7 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
             ));
             spans.push(Span::styled(
                 "  ·  click to peek".to_string(),
-                Style::default().fg(theme::FAINT),
+                Style::default().fg(theme::FAINT()),
             ));
             out.push(Line::from(spans));
         }
@@ -2517,7 +2755,7 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
         }
         Cell::Queued { text } => {
             out.push(Line::default());
-            let hue = theme::WARN;
+            let hue = theme::WARN();
             // Preview (one line) so the card stays compact.
             let preview: String = text.chars().take(72).collect();
             let ellip = if text.chars().count() > 72 { "…" } else { "" };
@@ -2537,23 +2775,23 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                 Span::styled(
                     "steer".to_string(),
                     Style::default()
-                        .fg(theme::BG)
-                        .bg(theme::WARN)
+                        .fg(theme::BG())
+                        .bg(theme::WARN())
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled("  ·  ".to_string(), theme::style_faint()),
                 Span::styled(
                     "send now".to_string(),
                     Style::default()
-                        .fg(theme::BG)
-                        .bg(theme::META_BLUE)
+                        .fg(theme::BG())
+                        .bg(theme::META_BLUE())
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled("  ·  ".to_string(), theme::style_faint()),
                 Span::styled(
                     "dismiss".to_string(),
                     Style::default()
-                        .fg(theme::MUTED)
+                        .fg(theme::MUTED())
                         .add_modifier(Modifier::UNDERLINED),
                 ),
                 Span::styled(
@@ -2564,7 +2802,7 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
         }
         Cell::Graph { lines, live } => {
             out.push(Line::default());
-            let hue = theme::META_BLUE;
+            let hue = theme::META_BLUE();
             let head = if *live {
                 "◈ execution graph · live"
             } else {
@@ -2623,10 +2861,10 @@ const MAX_COMPACT: usize = 6;
 fn run_look(state: crate::agent::swarm::RunState, tick: Duration) -> (Color, String) {
     use crate::agent::swarm::RunState as S;
     match state {
-        S::Running => (theme::NUR_GOLD, theme::spinner_frame(tick).to_string()),
-        S::Done => (theme::SUCCESS, "✓".into()),
-        S::Failed => (theme::ERROR, "✗".into()),
-        S::Cancelled => (theme::WARN, "◼".into()),
+        S::Running => (theme::NUR_GOLD(), theme::spinner_frame(tick).to_string()),
+        S::Done => (theme::SUCCESS(), "✓".into()),
+        S::Failed => (theme::ERROR(), "✗".into()),
+        S::Cancelled => (theme::WARN(), "◼".into()),
     }
 }
 
@@ -2695,16 +2933,16 @@ fn swarm_card(
     // Header strip: title + as many rollup chips as fit, widest-value first.
     let mut chips: Vec<(String, Color)> = Vec::new();
     if running > 0 {
-        chips.push((format!("{running} running"), theme::NUR_GOLD_SKY));
+        chips.push((format!("{running} running"), theme::NUR_GOLD_SKY()));
     }
     if done > 0 {
-        chips.push((format!("{done} done"), theme::SUCCESS));
+        chips.push((format!("{done} done"), theme::SUCCESS()));
     }
     if failed > 0 {
-        chips.push((format!("{failed} ended early"), theme::ERROR));
+        chips.push((format!("{failed} ended early"), theme::ERROR()));
     }
     if tokens > 0 {
-        chips.push((format!("Σ {} tok", fmt_tokens(tokens)), theme::MUTED));
+        chips.push((format!("Σ {} tok", fmt_tokens(tokens)), theme::MUTED()));
     }
     let title = clip_to(
         if live {
@@ -2717,7 +2955,7 @@ fn swarm_card(
     let mut header = vec![Span::styled(
         title.clone(),
         Style::default()
-            .fg(theme::NUR_GOLD)
+            .fg(theme::NUR_GOLD())
             .add_modifier(Modifier::BOLD),
     )];
     let sep = if compact { " · " } else { "  ·  " };
@@ -2873,11 +3111,11 @@ fn draw_sidegraph_panel(f: &mut Frame, app: &mut App, area: Rect) {
     let live = app.sidegraph_live;
     let tick = app.spinner_epoch.elapsed();
     let border_hue = if app.sidegraph_drag_border {
-        theme::NUR_GOLD_SKY
+        theme::NUR_GOLD_SKY()
     } else if live {
-        theme::NUR_GOLD
+        theme::NUR_GOLD()
     } else {
-        theme::FAINT
+        theme::FAINT()
     };
 
     let running = app
@@ -2893,18 +3131,18 @@ fn draw_sidegraph_panel(f: &mut Frame, app: &mut App, area: Rect) {
     let mut title = vec![Span::styled(
         format!(" ◈ sidegraph ({step_count}) "),
         Style::default()
-            .fg(theme::NUR_GOLD)
+            .fg(theme::NUR_GOLD())
             .add_modifier(Modifier::BOLD),
     )];
     if live {
         title.push(Span::styled(
             "● live".to_string(),
-            Style::default().fg(theme::NUR_GOLD_SKY),
+            Style::default().fg(theme::NUR_GOLD_SKY()),
         ));
         if running {
             title.push(Span::styled(
                 format!(" {}", theme::spinner_frame(tick)),
-                Style::default().fg(theme::NUR_GOLD_SKY),
+                Style::default().fg(theme::NUR_GOLD_SKY()),
             ));
         }
     } else {
@@ -3002,7 +3240,11 @@ fn draw_sidegraph_panel(f: &mut Frame, app: &mut App, area: Rect) {
         if dirty {
             let this_turn: Vec<_> = runs
                 .iter()
-                .filter(|r| r.started.checked_duration_since(model.turn_started).is_some())
+                .filter(|r| {
+                    r.started
+                        .checked_duration_since(model.turn_started)
+                        .is_some()
+                })
                 .cloned()
                 .collect();
 
@@ -3014,7 +3256,12 @@ fn draw_sidegraph_panel(f: &mut Frame, app: &mut App, area: Rect) {
             // Rebuild hit-boxes alongside the cache (only when the forest changed).
             app.sidegraph_hits.clear();
             app.sidegraph_swarm_hits.clear();
-            collect_sidegraph_hits(&forest, zoom, &mut app.sidegraph_hits, &mut app.sidegraph_swarm_hits);
+            collect_sidegraph_hits(
+                &forest,
+                zoom,
+                &mut app.sidegraph_hits,
+                &mut app.sidegraph_swarm_hits,
+            );
 
             app.sidegraph_cache_lines = lines;
             app.sidegraph_cache_fp = fp;
@@ -3044,10 +3291,7 @@ fn draw_sidegraph_panel(f: &mut Frame, app: &mut App, area: Rect) {
         let delta = max_scroll.saturating_sub(app.sidegraph_prev_max_scroll);
         if delta > 0 && app.sidegraph_scroll > 0 {
             // Keep the same top by growing scroll with the content
-            app.sidegraph_scroll = app
-                .sidegraph_scroll
-                .saturating_add(delta)
-                .min(max_scroll);
+            app.sidegraph_scroll = app.sidegraph_scroll.saturating_add(delta).min(max_scroll);
         }
     }
     app.sidegraph_max_scroll = max_scroll;
@@ -3312,7 +3556,7 @@ impl SgLay {
         }
         if details.len() > SG_MAX_DETAIL {
             details.truncate(SG_MAX_DETAIL);
-            details.push(("…".to_string(), theme::FAINT));
+            details.push(("…".to_string(), theme::FAINT()));
         }
         let h = 3 + details.len();
         Self {
@@ -3468,7 +3712,12 @@ fn sg_paint(spine: &mut [SgLay], back_edge: Option<(usize, usize)>, panel_w: usi
             let kb = n.kids.iter().map(|k| k.y + k.h - 1).max().unwrap_or(rail_y);
             let fin_y = kb + 1;
             for kid in &n.kids {
-                c.put(kid.center(), kid.y + kid.h - 1, '┴', Style::default().fg(kid.hue));
+                c.put(
+                    kid.center(),
+                    kid.y + kid.h - 1,
+                    '┴',
+                    Style::default().fg(kid.hue),
+                );
             }
             // Only stub downward if the trunk actually continues below.
             let continues = i + 1 < spine.len();
@@ -3495,7 +3744,7 @@ fn sg_paint(spine: &mut [SgLay], back_edge: Option<(usize, usize)>, panel_w: usi
     // Re-entry back-edge: a steer sends control back into reasoning. This is
     // the one loop nur actually has — drawn only when both ends exist.
     if let Some((from_i, to_i)) = back_edge {
-        let st = Style::default().fg(theme::WARN);
+        let st = Style::default().fg(theme::WARN());
         let (fx, fy, fh) = (spine[from_i].x, spine[from_i].y, spine[from_i].h);
         let (tx, ty, th) = (spine[to_i].x, spine[to_i].y, spine[to_i].h);
         let fy = fy + fh / 2;
@@ -3541,11 +3790,11 @@ fn sg_build_spine(
     };
     let mut root = SgLay::new(
         "■",
-        theme::NUR_GOLD,
+        theme::NUR_GOLD(),
         "root prompt",
         "",
-        theme::CYAN,
-        vec![(rq, theme::style_status().fg.unwrap_or(theme::MUTED))],
+        theme::CYAN(),
+        vec![(rq, theme::style_status().fg.unwrap_or(theme::MUTED()))],
     );
     root.double = true;
     spine.push(root);
@@ -3554,10 +3803,10 @@ fn sg_build_spine(
         if running {
             spine.push(SgLay::new(
                 theme::spinner_frame(tick),
-                theme::NUR_GOLD,
+                theme::NUR_GOLD(),
                 "thinking",
                 "",
-                theme::VIOLET,
+                theme::VIOLET(),
                 Vec::new(),
             ));
         }
@@ -3581,13 +3830,13 @@ fn sg_build_spine(
                 let (glyph, ghue, dur) = if *l {
                     (
                         theme::spinner_frame(tick).to_string(),
-                        theme::NUR_GOLD,
+                        theme::NUR_GOLD(),
                         theme::fmt_elapsed_live(started.elapsed()),
                     )
                 } else {
                     (
                         "◇".to_string(),
-                        theme::VIOLET,
+                        theme::VIOLET(),
                         duration.map(theme::fmt_duration).unwrap_or_default(),
                     )
                 };
@@ -3597,8 +3846,8 @@ fn sg_build_spine(
                     ghue,
                     "reasoning",
                     &dur,
-                    theme::VIOLET,
-                    vec![(excerpt.clone(), theme::MUTED)],
+                    theme::VIOLET(),
+                    vec![(excerpt.clone(), theme::MUTED())],
                 ));
             }
             SgNode::Tool {
@@ -3614,17 +3863,17 @@ fn sg_build_spine(
                 let (glyph, hue, dur) = match state {
                     SgState::Running => (
                         theme::spinner_frame(tick).to_string(),
-                        theme::NUR_GOLD,
+                        theme::NUR_GOLD(),
                         theme::fmt_elapsed_live(started.elapsed()),
                     ),
                     SgState::Ok => (
                         "✓".to_string(),
-                        theme::SUCCESS,
+                        theme::SUCCESS(),
                         duration.map(theme::fmt_duration).unwrap_or_default(),
                     ),
                     SgState::Failed => (
                         "✗".to_string(),
-                        theme::ERROR,
+                        theme::ERROR(),
                         duration.map(theme::fmt_duration).unwrap_or_default(),
                     ),
                 };
@@ -3632,13 +3881,13 @@ fn sg_build_spine(
                 // sniffed back out of the rendered string.
                 let mut raw: Vec<(String, Color)> = args_formatted
                     .iter()
-                    .map(|a| (a.clone(), theme::NUR_GOLD_SKY))
+                    .map(|a| (a.clone(), theme::NUR_GOLD_SKY()))
                     .collect();
                 if let Some(res) = result_formatted {
                     let rhue = if matches!(state, SgState::Failed) {
-                        theme::ERROR
+                        theme::ERROR()
                     } else {
-                        theme::SUCCESS
+                        theme::SUCCESS()
                     };
                     raw.extend(res.iter().map(|r| (r.clone(), rhue)));
                 }
@@ -3660,7 +3909,7 @@ fn sg_build_spine(
                     if children.len() > shown {
                         lay.details.push((
                             format!("… +{} more subagents", children.len() - shown),
-                            theme::FAINT,
+                            theme::FAINT(),
                         ));
                         lay.h += 1;
                     }
@@ -3672,7 +3921,7 @@ fn sg_build_spine(
                             theme::fmt_duration(run.elapsed())
                         };
                         let mut kid_details: Vec<(String, Color)> = Vec::new();
-                        kid_details.push((run.task.clone(), theme::MUTED));
+                        kid_details.push((run.task.clone(), theme::MUTED()));
                         if let Some(t) = run.tool.as_deref() {
                             let short: String = t.chars().take(32).collect();
                             let ell = if t.chars().count() > 32 { "…" } else { "" };
@@ -3683,7 +3932,7 @@ fn sg_build_spine(
                             if !act.is_empty() && act != run.task {
                                 let clipped: String = act.chars().take(40).collect();
                                 let ell = if act.chars().count() > 40 { "…" } else { "" };
-                                kid_details.push((format!("{clipped}{ell}"), theme::FAINT));
+                                kid_details.push((format!("{clipped}{ell}"), theme::FAINT()));
                             }
                         }
                         if run.tools_done > 0 || run.tokens > 0 {
@@ -3694,7 +3943,7 @@ fn sg_build_spine(
                             if run.tokens > 0 {
                                 stats.push_str(&format!(" {} tok", run.tokens));
                             }
-                            kid_details.push((stats, theme::FAINT));
+                            kid_details.push((stats, theme::FAINT()));
                         }
                         let mut kid = SgLay::new(
                             &cglyph.to_string(),
@@ -3710,13 +3959,16 @@ fn sg_build_spine(
                 }
                 spine.push(lay);
             }
-            SgNode::Answering { text_excerpt, cell_idx } => spine.push(SgLay::new_with_cell(
+            SgNode::Answering {
+                text_excerpt,
+                cell_idx,
+            } => spine.push(SgLay::new_with_cell(
                 "✎",
-                theme::CYAN,
+                theme::CYAN(),
                 "answering",
                 "",
-                theme::CYAN,
-                vec![(text_excerpt.clone(), theme::MUTED)],
+                theme::CYAN(),
+                vec![(text_excerpt.clone(), theme::MUTED())],
                 Some(*cell_idx),
             )),
             SgNode::Steer { text, .. } => {
@@ -3725,20 +3977,20 @@ fn sg_build_spine(
                 }
                 spine.push(SgLay::new(
                     "↻",
-                    theme::WARN,
+                    theme::WARN(),
                     "steer",
                     "",
-                    theme::WARN,
-                    vec![(text.clone(), theme::MUTED)],
+                    theme::WARN(),
+                    vec![(text.clone(), theme::MUTED())],
                 ));
             }
             SgNode::Queued { text } => spine.push(SgLay::new(
                 "↗",
-                theme::MUTED,
+                theme::MUTED(),
                 "queued",
                 "",
-                theme::MUTED,
-                vec![(text.clone(), theme::MUTED)],
+                theme::MUTED(),
+                vec![(text.clone(), theme::MUTED())],
             )),
             SgNode::Done {
                 duration,
@@ -3746,9 +3998,9 @@ fn sg_build_spine(
                 ..
             } => {
                 let (glyph, hue, status_str) = if *interrupted {
-                    ("◼", theme::WARN, "interrupted")
+                    ("◼", theme::WARN(), "interrupted")
                 } else {
-                    ("✓", theme::SUCCESS, "completed")
+                    ("✓", theme::SUCCESS(), "completed")
                 };
                 spine.push(SgLay::new(
                     glyph,
@@ -3762,11 +4014,11 @@ fn sg_build_spine(
             SgNode::Prompt { text, .. } => {
                 let mut lay = SgLay::new(
                     "■",
-                    theme::CYAN,
+                    theme::CYAN(),
                     "prompt",
                     "",
-                    theme::CYAN,
-                    vec![(text.clone(), theme::MUTED)],
+                    theme::CYAN(),
+                    vec![(text.clone(), theme::MUTED())],
                 );
                 lay.double = true;
                 spine.push(lay);
@@ -3783,7 +4035,6 @@ fn sg_build_spine(
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum SgCat {
     Main,
-    Live,
     Search,
     Edit,
     Exec,
@@ -3795,8 +4046,8 @@ enum SgCat {
 fn sg_cat_for_tool(name: &str) -> SgCat {
     match name {
         // search / read
-        "read_file" | "list_dir" | "grep" | "glob" | "git_status" | "git_diff"
-        | "web_fetch" | "web_search" | "look" | "browser" => SgCat::Search,
+        "read_file" | "list_dir" | "grep" | "glob" | "git_status" | "git_diff" | "web_fetch"
+        | "web_search" | "look" | "browser" => SgCat::Search,
         // editing
         "write_file" | "edit_file" | "multi_edit" | "apply_patch" => SgCat::Edit,
         // execution
@@ -3812,14 +4063,14 @@ fn sg_cat_for_tool(name: &str) -> SgCat {
 
 fn sg_cat_hue(cat: SgCat) -> Color {
     match cat {
-        SgCat::Main => theme::VIOLET,
-        SgCat::Live => theme::NUR_GOLD,
-        SgCat::Search => theme::CYAN,
-        SgCat::Edit => theme::SUCCESS,
-        SgCat::Exec => theme::AMBER,
-        SgCat::Agent => theme::NUR_GOLD_SKY,
-        SgCat::Knowledge => theme::INDIGO,
-        SgCat::Other => theme::MUTED,
+        SgCat::Main => theme::VIOLET(),
+
+        SgCat::Search => theme::CYAN(),
+        SgCat::Edit => theme::SUCCESS(),
+        SgCat::Exec => theme::AMBER(),
+        SgCat::Agent => theme::NUR_GOLD_SKY(),
+        SgCat::Knowledge => theme::INDIGO(),
+        SgCat::Other => theme::MUTED(),
     }
 }
 
@@ -3827,7 +4078,7 @@ fn sg_cat_hue(cat: SgCat) -> Color {
 fn sg_cat_label(cat: SgCat) -> &'static str {
     match cat {
         SgCat::Main => "reasoning",
-        SgCat::Live => "live",
+
         SgCat::Search => "search",
         SgCat::Edit => "edit",
         SgCat::Exec => "exec",
@@ -3840,13 +4091,12 @@ fn sg_cat_label(cat: SgCat) -> &'static str {
 fn sg_cat_order(cat: SgCat) -> usize {
     match cat {
         SgCat::Main => 0,
-        SgCat::Live => 1,
-        SgCat::Search => 2,
-        SgCat::Edit => 3,
-        SgCat::Exec => 4,
-        SgCat::Agent => 5,
-        SgCat::Knowledge => 6,
-        SgCat::Other => 7,
+        SgCat::Search => 1,
+        SgCat::Edit => 2,
+        SgCat::Exec => 3,
+        SgCat::Agent => 4,
+        SgCat::Knowledge => 5,
+        SgCat::Other => 6,
     }
 }
 
@@ -3886,11 +4136,11 @@ fn sg_build_forest(
     };
     let mut root = SgLay::new(
         "■",
-        theme::NUR_GOLD,
+        theme::NUR_GOLD(),
         "root prompt",
         "",
-        theme::CYAN,
-        vec![(rq, theme::style_status().fg.unwrap_or(theme::MUTED))],
+        theme::CYAN(),
+        vec![(rq, theme::style_status().fg.unwrap_or(theme::MUTED()))],
     );
     root.double = true;
 
@@ -3903,10 +4153,10 @@ fn sg_build_forest(
     if model.nodes.is_empty() && running {
         main.push(SgLay::new(
             theme::spinner_frame(tick),
-            theme::NUR_GOLD,
+            theme::NUR_GOLD(),
             "thinking",
             "",
-            theme::VIOLET,
+            theme::VIOLET(),
             Vec::new(),
         ));
     }
@@ -3925,13 +4175,13 @@ fn sg_build_forest(
                 let (glyph, ghue, dur) = if *l {
                     (
                         theme::spinner_frame(tick).to_string(),
-                        theme::NUR_GOLD,
+                        theme::NUR_GOLD(),
                         theme::fmt_elapsed_live(started.elapsed()),
                     )
                 } else {
                     (
                         "◇".to_string(),
-                        theme::VIOLET,
+                        theme::VIOLET(),
                         duration.map(theme::fmt_duration).unwrap_or_default(),
                     )
                 };
@@ -3941,8 +4191,8 @@ fn sg_build_forest(
                     ghue,
                     "reasoning",
                     &dur,
-                    theme::VIOLET,
-                    vec![(excerpt.clone(), theme::MUTED)],
+                    theme::VIOLET(),
+                    vec![(excerpt.clone(), theme::MUTED())],
                     Some(*cell_idx),
                 ));
             }
@@ -3959,29 +4209,29 @@ fn sg_build_forest(
                 let (glyph, hue, dur) = match state {
                     SgState::Running => (
                         theme::spinner_frame(tick).to_string(),
-                        theme::NUR_GOLD,
+                        theme::NUR_GOLD(),
                         theme::fmt_elapsed_live(started.elapsed()),
                     ),
                     SgState::Ok => (
                         "✓".to_string(),
-                        theme::SUCCESS,
+                        theme::SUCCESS(),
                         duration.map(theme::fmt_duration).unwrap_or_default(),
                     ),
                     SgState::Failed => (
                         "✗".to_string(),
-                        theme::ERROR,
+                        theme::ERROR(),
                         duration.map(theme::fmt_duration).unwrap_or_default(),
                     ),
                 };
                 let mut raw: Vec<(String, Color)> = args_formatted
                     .iter()
-                    .map(|a| (a.clone(), theme::NUR_GOLD_SKY))
+                    .map(|a| (a.clone(), theme::NUR_GOLD_SKY()))
                     .collect();
                 if let Some(res) = result_formatted {
                     let rhue = if matches!(state, SgState::Failed) {
-                        theme::ERROR
+                        theme::ERROR()
                     } else {
-                        theme::SUCCESS
+                        theme::SUCCESS()
                     };
                     raw.extend(res.iter().map(|r| (r.clone(), rhue)));
                 }
@@ -4002,7 +4252,7 @@ fn sg_build_forest(
                     if children.len() > shown {
                         lay.details.push((
                             format!("… +{} more subagents", children.len() - shown),
-                            theme::FAINT,
+                            theme::FAINT(),
                         ));
                         lay.h += 1;
                     }
@@ -4014,7 +4264,7 @@ fn sg_build_forest(
                             theme::fmt_duration(run.elapsed())
                         };
                         let mut kid_details: Vec<(String, Color)> = Vec::new();
-                        kid_details.push((run.task.clone(), theme::MUTED));
+                        kid_details.push((run.task.clone(), theme::MUTED()));
                         if let Some(t) = run.tool.as_deref() {
                             let short: String = t.chars().take(32).collect();
                             let ell = if t.chars().count() > 32 { "…" } else { "" };
@@ -4025,7 +4275,7 @@ fn sg_build_forest(
                             if !act.is_empty() && act != run.task {
                                 let clipped: String = act.chars().take(40).collect();
                                 let ell = if act.chars().count() > 40 { "…" } else { "" };
-                                kid_details.push((format!("{clipped}{ell}"), theme::FAINT));
+                                kid_details.push((format!("{clipped}{ell}"), theme::FAINT()));
                             }
                         }
                         if run.tools_done > 0 || run.tokens > 0 {
@@ -4036,7 +4286,7 @@ fn sg_build_forest(
                             if run.tokens > 0 {
                                 stats.push_str(&format!(" {} tok", run.tokens));
                             }
-                            kid_details.push((stats, theme::FAINT));
+                            kid_details.push((stats, theme::FAINT()));
                         }
                         let mut kid = SgLay::new(
                             &cglyph.to_string(),
@@ -4056,13 +4306,16 @@ fn sg_build_forest(
                     map.entry(name.clone()).or_default().push(lay);
                 }
             }
-            SgNode::Answering { text_excerpt, cell_idx } => main.push(SgLay::new_with_cell(
+            SgNode::Answering {
+                text_excerpt,
+                cell_idx,
+            } => main.push(SgLay::new_with_cell(
                 "✎",
-                theme::CYAN,
+                theme::CYAN(),
                 "answering",
                 "",
-                theme::CYAN,
-                vec![(text_excerpt.clone(), theme::MUTED)],
+                theme::CYAN(),
+                vec![(text_excerpt.clone(), theme::MUTED())],
                 Some(*cell_idx),
             )),
             SgNode::Steer { text, cell_idx } => {
@@ -4071,21 +4324,21 @@ fn sg_build_forest(
                 }
                 main.push(SgLay::new_with_cell(
                     "↻",
-                    theme::WARN,
+                    theme::WARN(),
                     "steer",
                     "",
-                    theme::WARN,
-                    vec![(text.clone(), theme::MUTED)],
+                    theme::WARN(),
+                    vec![(text.clone(), theme::MUTED())],
                     Some(*cell_idx),
                 ));
             }
             SgNode::Queued { text } => main.push(SgLay::new(
                 "↗",
-                theme::MUTED,
+                theme::MUTED(),
                 "queued",
                 "",
-                theme::MUTED,
-                vec![(text.clone(), theme::MUTED)],
+                theme::MUTED(),
+                vec![(text.clone(), theme::MUTED())],
             )),
             SgNode::Done {
                 duration,
@@ -4093,9 +4346,9 @@ fn sg_build_forest(
                 cell_idx,
             } => {
                 let (glyph, hue, status_str) = if *interrupted {
-                    ("◼", theme::WARN, "interrupted")
+                    ("◼", theme::WARN(), "interrupted")
                 } else {
-                    ("✓", theme::SUCCESS, "completed")
+                    ("✓", theme::SUCCESS(), "completed")
                 };
                 main.push(SgLay::new_with_cell(
                     glyph,
@@ -4111,11 +4364,11 @@ fn sg_build_forest(
                 // Prompt nodes are double-bordered like root, titled "prompt"
                 let mut lay = SgLay::new_with_cell(
                     "■",
-                    theme::CYAN,
+                    theme::CYAN(),
                     "prompt",
                     "",
-                    theme::CYAN,
-                    vec![(text.clone(), theme::MUTED)],
+                    theme::CYAN(),
+                    vec![(text.clone(), theme::MUTED())],
                     Some(*cell_idx),
                 );
                 lay.double = true;
@@ -4243,7 +4496,14 @@ fn sg_paint_forest_zoom(forest: &mut SgForest, panel_w: usize, zoom: u8) -> SgCa
         n.details.clear();
         if zoom >= 2 {
             // minimap: keep the glyph, shrink the title to its first token
-            let first: String = n.title.split_whitespace().next().unwrap_or("").chars().take(6).collect();
+            let first: String = n
+                .title
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take(6)
+                .collect();
             n.title = first;
         }
         n.h = 3; // top border + single content row + bottom border
@@ -4301,11 +4561,11 @@ fn sg_paint_forest(forest: &mut SgForest, panel_w: usize) -> SgCanvas {
     let gap = SG_GAP + 1;
     let gutter = if forest.back_edge.is_some() { 16 } else { 1 };
     let anchor_x: usize = 2; // fixed left edge for the central column
-    // The central column's CENTER is the anchor point that root, main, and live
-    // all share. Fixing the center (not the left edge) keeps the root ┬, the
-    // fan-out rail, and every ▼ vertically aligned even when a fan-out node
-    // makes `central_w` wider than a single box (M2 fix: previously the root
-    // connector at cx_root=x+13 fell left of the rail span and drew into blank).
+                             // The central column's CENTER is the anchor point that root, main, and live
+                             // all share. Fixing the center (not the left edge) keeps the root ┬, the
+                             // fan-out rail, and every ▼ vertically aligned even when a fan-out node
+                             // makes `central_w` wider than a single box (M2 fix: previously the root
+                             // connector at cx_root=x+13 fell left of the rail span and drew into blank).
     let central_center = anchor_x + central_w / 2;
 
     // total width = central column + gaps + side tracks (+ right gutter)
@@ -4414,7 +4674,10 @@ fn sg_paint_forest(forest: &mut SgForest, panel_w: usize) -> SgCanvas {
         center_kinds.push(forest.tool_tracks[i].cat);
     }
 
-    let canvas_h = max_y.saturating_sub(1).max(forest.root.h + 2).max(canvas_h_estimate);
+    let canvas_h = max_y
+        .saturating_sub(1)
+        .max(forest.root.h + 2)
+        .max(canvas_h_estimate);
     let mut c = SgCanvas::new(canvas_w, canvas_h.max(1));
     let edge = theme::style_faint();
 
@@ -4526,7 +4789,7 @@ fn sg_paint_forest(forest: &mut SgForest, panel_w: usize) -> SgCanvas {
             if from_i < forest.main.len() && to_i < forest.main.len() {
                 let from_node = &forest.main[from_i];
                 let to_node = &forest.main[to_i];
-                let st = Style::default().fg(theme::WARN);
+                let st = Style::default().fg(theme::WARN());
                 let (fx, fy, fh) = (from_node.x, from_node.y, from_node.h);
                 let (tx_, ty, _th) = (to_node.x, to_node.y, to_node.h);
                 let fy_mid = fy + fh / 2;
@@ -4553,8 +4816,6 @@ fn sg_paint_forest(forest: &mut SgForest, panel_w: usize) -> SgCanvas {
 
     c
 }
-
-
 
 /// Truncate to `width` display columns, marking the cut with an ellipsis.
 fn clip_to(text: &str, width: usize) -> String {
@@ -4681,7 +4942,7 @@ fn draw_pane(
     let border = Style::default().fg(if running {
         theme::dim(hue, 0.55)
     } else {
-        theme::BORDER
+        theme::BORDER()
     });
 
     canvas.frame(rect, border, None);
@@ -4782,9 +5043,9 @@ fn draw_pane(
 /// than the text alone.
 fn user_prompt_card(text: &str, width: usize, out: &mut Vec<Line<'static>>) {
     let w = width.max(12);
-    let border = Style::default().fg(theme::META_BLUE);
+    let border = Style::default().fg(theme::META_BLUE());
     let label = Style::default()
-        .fg(theme::META_BLUE_SKY)
+        .fg(theme::META_BLUE_SKY())
         .add_modifier(Modifier::BOLD);
     // Inner text width: "│  " + text + "  │"
     let text_w = w.saturating_sub(6).max(4);
@@ -4878,8 +5139,8 @@ fn apply_selection_style(line: Line<'static>, line_idx: usize, range: TextRange)
     spans.push(Span::styled(
         mid,
         Style::default()
-            .fg(theme::BG)
-            .bg(theme::META_BLUE)
+            .fg(theme::BG())
+            .bg(theme::META_BLUE())
             .add_modifier(Modifier::BOLD),
     ));
     if !after.is_empty() {
@@ -4912,16 +5173,16 @@ fn draw_hover_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
             return None;
         }
         let hue = match cell {
-            Cell::Thinking { .. } => theme::VIOLET,
+            Cell::Thinking { .. } => theme::VIOLET(),
             Cell::Tool { name, .. } => theme::tool_color(name),
             Cell::TurnDone { interrupted, .. } => {
                 if *interrupted {
-                    theme::WARN
+                    theme::WARN()
                 } else {
-                    theme::SUCCESS
+                    theme::SUCCESS()
                 }
             }
-            _ => theme::META_BLUE,
+            _ => theme::META_BLUE(),
         };
         let (diff, image) = if let Cell::Tool { name, args, .. } = cell {
             let diff = if is_edit_tool(name) {
@@ -4981,7 +5242,7 @@ fn draw_hover_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
         Block::default()
             .borders(ratatui::widgets::Borders::ALL)
             .border_style(Style::default().fg(p.hue))
-            .style(Style::default().bg(theme::SURFACE_2))
+            .style(Style::default().bg(theme::SURFACE_2()))
             .title(format!(" {} ", p.title))
             .title_bottom({
                 let mode = if app.peek_expanded {
@@ -5007,8 +5268,8 @@ fn draw_hover_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
         let buf = f.buffer_mut();
         buf[(cx, rect.y)].set_char('✕').set_style(
             Style::default()
-                .fg(theme::ERROR)
-                .bg(theme::SURFACE_2)
+                .fg(theme::ERROR())
+                .bg(theme::SURFACE_2())
                 .add_modifier(Modifier::BOLD),
         );
     }
@@ -5049,10 +5310,7 @@ fn draw_hover_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
         }
         if diff.len() > row_cap {
             lines.push(Line::from(Span::styled(
-                format!(
-                    "… +{} more · e expands in place",
-                    diff.len() - row_cap
-                ),
+                format!("… +{} more · e expands in place", diff.len() - row_cap),
                 theme::style_faint(),
             )));
         }
@@ -5061,7 +5319,7 @@ fn draw_hover_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
         let style = if p.thinking {
             theme::style_thinking_violet()
         } else {
-            Style::default().fg(theme::FG)
+            Style::default().fg(theme::FG())
         };
         'outer: for raw in clean.lines() {
             // Soft wrap long lines into the dialogue.
@@ -5071,7 +5329,7 @@ fn draw_hover_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
                 if lines.len() >= row_cap {
                     lines.push(Line::from(Span::styled(
                         "… truncated · e expands".to_string(),
-                        Style::default().fg(theme::FAINT),
+                        Style::default().fg(theme::FAINT()),
                     )));
                     break 'outer;
                 }
@@ -5102,7 +5360,7 @@ fn draw_hover_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
 
     let total_rows = u16::try_from(lines.len()).unwrap_or(u16::MAX);
     app.peek_rows = total_rows;
-    let bg = Style::default().bg(theme::SURFACE_2);
+    let bg = Style::default().bg(theme::SURFACE_2());
 
     if total_rows <= inner.height {
         // Fits — plain paragraph, no scroll state to keep.
@@ -5145,12 +5403,12 @@ fn draw_swarm_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
     // Dynamic accent: current tool's colour, or the run's terminal state colour.
     let accent = match (run.tool.as_deref(), run.state) {
         (Some(t), _) => theme::tool_color(t),
-        (None, RunState::Failed | RunState::Cancelled) => theme::ERROR,
-        (None, RunState::Done) => theme::SUCCESS,
-        (None, RunState::Running) => theme::NUR_GOLD,
+        (None, RunState::Failed | RunState::Cancelled) => theme::ERROR(),
+        (None, RunState::Done) => theme::SUCCESS(),
+        (None, RunState::Running) => theme::NUR_GOLD(),
     };
     // Static structural ink for the task frame — NEVER a tool accent.
-    let task_border = theme::BORDER;
+    let task_border = theme::BORDER();
 
     // Freeze geometry once — never re-anchor to mouse or re-center.
     // Expanded mode re-fits to ~90% of the frame so tool output has room.
@@ -5195,14 +5453,18 @@ fn draw_swarm_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
             .saturating_sub(prefix.chars().count() + 4)
             .max(6);
         let t: String = raw.chars().take(budget).collect();
-        let ell = if raw.chars().count() > budget { "…" } else { "" };
+        let ell = if raw.chars().count() > budget {
+            "…"
+        } else {
+            ""
+        };
         format!("{prefix}{t}{ell}")
     };
     f.render_widget(
         Block::default()
             .borders(ratatui::widgets::Borders::ALL)
             .border_style(Style::default().fg(accent))
-            .style(Style::default().bg(theme::SURFACE_2))
+            .style(Style::default().bg(theme::SURFACE_2()))
             .title(format!(" {title_task} "))
             .title_bottom({
                 let mode = if app.peek_expanded {
@@ -5228,13 +5490,13 @@ fn draw_swarm_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
         let buf = f.buffer_mut();
         buf[(cx, rect.y)].set_char('✕').set_style(
             Style::default()
-                .fg(theme::ERROR)
-                .bg(theme::SURFACE_2)
+                .fg(theme::ERROR())
+                .bg(theme::SURFACE_2())
                 .add_modifier(Modifier::BOLD),
         );
     }
 
-    let bg = Style::default().bg(theme::SURFACE_2);
+    let bg = Style::default().bg(theme::SURFACE_2());
     let iw = inner.width as usize;
 
     // ── STICKY task zone (static frame, never scrolls) ────────────────────
@@ -5248,7 +5510,9 @@ fn draw_swarm_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
     let mut task_lines: Vec<Line> = Vec::new();
     task_lines.push(Line::from(Span::styled(
         "TASK".to_string(),
-        Style::default().fg(task_border).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(task_border)
+            .add_modifier(Modifier::BOLD),
     )));
     {
         let wrap_w = iw.saturating_sub(1).max(8);
@@ -5275,11 +5539,13 @@ fn draw_swarm_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
             };
             task_lines.push(Line::from(Span::styled(
                 shown,
-                Style::default().fg(theme::FG),
+                Style::default().fg(theme::FG()),
             )));
         }
     }
-    let task_h = (task_lines.len() as u16).min(inner.height.saturating_sub(2)).max(1);
+    let task_h = (task_lines.len() as u16)
+        .min(inner.height.saturating_sub(2))
+        .max(1);
     let task_area = Rect {
         x: inner.x,
         y: inner.y,
@@ -5295,7 +5561,7 @@ fn draw_swarm_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 rule,
-                Style::default().fg(accent).bg(theme::SURFACE_2),
+                Style::default().fg(accent).bg(theme::SURFACE_2()),
             ))),
             Rect {
                 x: inner.x,
@@ -5331,22 +5597,27 @@ fn draw_swarm_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
     // Build content as (Line, Option<entry_idx>) so header rows can be mapped
     // back to trace entries for click-to-expand hit-testing after scrolling.
     let mut rows: Vec<(Line, Option<usize>)> = Vec::new();
-    let push_wrapped =
-        |rows: &mut Vec<(Line, Option<usize>)>, text: &str, hue: ratatui::style::Color, meta: Option<usize>| {
-            let mut rest = text;
-            loop {
-                if rows.len() >= row_cap {
-                    break;
-                }
-                let chunk: String = rest.chars().take(max_cols).collect();
-                let adv = chunk.len();
-                rows.push((Line::from(Span::styled(chunk, Style::default().fg(hue))), meta));
-                if adv >= rest.len() {
-                    break;
-                }
-                rest = &rest[adv..];
+    let push_wrapped = |rows: &mut Vec<(Line, Option<usize>)>,
+                        text: &str,
+                        hue: ratatui::style::Color,
+                        meta: Option<usize>| {
+        let mut rest = text;
+        loop {
+            if rows.len() >= row_cap {
+                break;
             }
-        };
+            let chunk: String = rest.chars().take(max_cols).collect();
+            let adv = chunk.len();
+            rows.push((
+                Line::from(Span::styled(chunk, Style::default().fg(hue))),
+                meta,
+            ));
+            if adv >= rest.len() {
+                break;
+            }
+            rest = &rest[adv..];
+        }
+    };
 
     // ── run summary (status · current tool · counts) ─────────────────────
     let status = match run.state {
@@ -5355,29 +5626,52 @@ fn draw_swarm_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
         RunState::Failed => "failed",
         RunState::Cancelled => "cancelled",
     };
-    push_wrapped(&mut rows, &format!("#{}\u{00b7}{} \u{2014} {status}", run.id, run.kind), theme::FG, None);
+    push_wrapped(
+        &mut rows,
+        &format!("#{}\u{00b7}{} \u{2014} {status}", run.id, run.kind),
+        theme::FG(),
+        None,
+    );
     let route = run.route_label();
     if !route.is_empty() {
-        push_wrapped(&mut rows, &format!("ran on: {route}"), theme::FAINT, None);
+        push_wrapped(&mut rows, &format!("ran on: {route}"), theme::FAINT(), None);
     }
     if let Some(tool) = run.tool.as_deref() {
-        push_wrapped(&mut rows, &format!("current tool: {tool}"), theme::FAINT, None);
+        push_wrapped(
+            &mut rows,
+            &format!("current tool: {tool}"),
+            theme::FAINT(),
+            None,
+        );
     }
     if !run.activity.trim().is_empty() {
-        push_wrapped(&mut rows, &format!("activity: {}", run.activity.trim()), theme::FAINT, None);
+        push_wrapped(
+            &mut rows,
+            &format!("activity: {}", run.activity.trim()),
+            theme::FAINT(),
+            None,
+        );
     }
     push_wrapped(
         &mut rows,
-        &format!("tools: {} done \u{00b7} {} failed \u{00b7} {} tok", run.tools_done, run.tools_failed, run.tokens),
-        theme::FAINT,
+        &format!(
+            "tools: {} done \u{00b7} {} failed \u{00b7} {} tok",
+            run.tools_done, run.tools_failed, run.tokens
+        ),
+        theme::FAINT(),
         None,
     );
 
     // ── per-entry trace rows (caret header + inline expandable body) ─────
     if run.trace.is_empty() {
-        push_wrapped(&mut rows, "(no tool activity yet)", theme::FAINT, None);
+        push_wrapped(&mut rows, "(no tool activity yet)", theme::FAINT(), None);
     } else {
-        push_wrapped(&mut rows, "\u{2500}\u{2500} tool trace \u{2500}\u{2500}", accent, None);
+        push_wrapped(
+            &mut rows,
+            "\u{2500}\u{2500} tool trace \u{2500}\u{2500}",
+            accent,
+            None,
+        );
         for (i, entry) in run.trace.iter().enumerate() {
             if rows.len() >= row_cap {
                 break;
@@ -5385,12 +5679,16 @@ fn draw_swarm_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
             let expanded = app.peek_trace_expanded.contains(&i);
             let focused = app.peek_trace_focus == Some(i);
             let hue = match entry.ok {
-                Some(true) => theme::SUCCESS,
-                Some(false) => theme::ERROR,
+                Some(true) => theme::SUCCESS(),
+                Some(false) => theme::ERROR(),
                 None => accent,
             };
             let caret = if entry.has_body() {
-                if expanded { "\u{25be} " } else { "\u{25b8} " }
+                if expanded {
+                    "\u{25be} "
+                } else {
+                    "\u{25b8} "
+                }
             } else {
                 "  "
             };
@@ -5398,7 +5696,7 @@ fn draw_swarm_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
             let chunk: String = header.chars().take(max_cols).collect();
             let mut style = Style::default().fg(hue).add_modifier(Modifier::BOLD);
             if focused {
-                style = style.bg(theme::SURFACE_3);
+                style = style.bg(theme::SURFACE_3());
             }
             rows.push((Line::from(Span::styled(chunk, style)), Some(i)));
             if expanded {
@@ -5406,12 +5704,17 @@ fn draw_swarm_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
                     if rows.len() >= row_cap {
                         break;
                     }
-                    push_wrapped(&mut rows, &format!("  \u{2500}\u{2500} {label} \u{2500}\u{2500}"), theme::FAINT, Some(i));
+                    push_wrapped(
+                        &mut rows,
+                        &format!("  \u{2500}\u{2500} {label} \u{2500}\u{2500}"),
+                        theme::FAINT(),
+                        Some(i),
+                    );
                     for bl in text.lines() {
                         if rows.len() >= row_cap {
                             break;
                         }
-                        push_wrapped(&mut rows, &format!("  {bl}"), theme::FG, Some(i));
+                        push_wrapped(&mut rows, &format!("  {bl}"), theme::FG(), Some(i));
                     }
                 }
             }
@@ -5421,7 +5724,7 @@ fn draw_swarm_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
         rows.push((
             Line::from(Span::styled(
                 "\u{2026} truncated \u{00b7} e expands modal".to_string(),
-                Style::default().fg(theme::FAINT),
+                Style::default().fg(theme::FAINT()),
             )),
             None,
         ));
@@ -5436,7 +5739,9 @@ fn draw_swarm_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
         app.peek_scroll = 0;
         0
     } else {
-        let s = app.peek_scroll.min(total_rows.saturating_sub(content_area.height));
+        let s = app
+            .peek_scroll
+            .min(total_rows.saturating_sub(content_area.height));
         app.peek_scroll = s;
         s
     };
@@ -5456,7 +5761,10 @@ fn draw_swarm_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
         use ratatui::widgets::StatefulWidget;
         let size = Size::new(content_area.width.saturating_sub(1).max(1), total_rows);
         let mut sv = tui_scrollview::ScrollView::new(size);
-        sv.render_widget(Paragraph::new(lines).style(bg), Rect::new(0, 0, size.width, size.height));
+        sv.render_widget(
+            Paragraph::new(lines).style(bg),
+            Rect::new(0, 0, size.width, size.height),
+        );
         let mut st = tui_scrollview::ScrollViewState::with_offset(Position::new(0, scroll));
         StatefulWidget::render(sv, content_area, f.buffer_mut(), &mut st);
     }
@@ -5542,7 +5850,7 @@ fn turn_separator(width: usize, elapsed: Duration) -> Line<'static> {
                 '◇',
                 theme::dim(theme::aurora_cell(elapsed, i, inner, 1600), 0.35),
             ),
-            _ => ('·', theme::BORDER),
+            _ => ('·', theme::BORDER()),
         };
         spans.push(Span::styled(ch.to_string(), Style::default().fg(col)));
     }
@@ -5604,10 +5912,10 @@ fn banner_lines(app: &App, out: &mut Vec<Line<'static>>) {
         Span::styled("model  ".to_string(), theme::style_faint()),
         Span::styled(
             app.cfg.model.clone(),
-            Style::default().fg(theme::META_BLUE_SKY),
+            Style::default().fg(theme::META_BLUE_SKY()),
         ),
         Span::styled("    provider  ".to_string(), theme::style_faint()),
-        Span::styled(provider.clone(), Style::default().fg(theme::SEAFOAM)),
+        Span::styled(provider.clone(), Style::default().fg(theme::SEAFOAM())),
     ]));
     out.push(Line::from(vec![
         Span::raw("  ".to_string()),
@@ -5631,12 +5939,12 @@ fn draw_busy_line(f: &mut Frame, app: &App, area: Rect) {
         spans.push(Span::styled(
             "◼ ".to_string(),
             Style::default()
-                .fg(theme::WARN)
+                .fg(theme::WARN())
                 .add_modifier(Modifier::BOLD),
         ));
         spans.push(Span::styled(
             format!("cancelling…  {live}  "),
-            Style::default().fg(theme::WARN),
+            Style::default().fg(theme::WARN()),
         ));
         spans.push(Span::styled(
             "waiting for in-flight work".to_string(),
@@ -5653,7 +5961,7 @@ fn draw_busy_line(f: &mut Frame, app: &App, area: Rect) {
         ));
         spans.push(Span::styled(
             format!("  {}  ", capitalize(&app.status)),
-            Style::default().fg(theme::META_BLUE_SKY),
+            Style::default().fg(theme::META_BLUE_SKY()),
         ));
         spans.push(Span::styled(live, theme::style_faint()));
         // Decorative ease-out activity strip, per-cell aurora colour.
@@ -5677,7 +5985,7 @@ fn draw_busy_line(f: &mut Frame, app: &App, area: Rect) {
         if !app.queue.is_empty() {
             spans.push(Span::styled(
                 format!("  ·  {} queued", app.queue.len()),
-                Style::default().fg(theme::WARN),
+                Style::default().fg(theme::WARN()),
             ));
         }
     }
@@ -5699,7 +6007,7 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
     let border_color = if active_border {
         theme::aurora_cell(tick, 0, 1, 3200)
     } else {
-        theme::BORDER
+        theme::BORDER()
     };
 
     // Active provider chrome (tracks /login) — not a hard-coded product brand.
@@ -5738,8 +6046,8 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
         let buf = f.buffer_mut();
         buf[(area.x + 1 + hx, area.y)].set_char('━').set_style(
             Style::default()
-                .fg(theme::BLUE_050)
-                .bg(theme::SURFACE)
+                .fg(theme::BLUE_050())
+                .bg(theme::SURFACE())
                 .add_modifier(Modifier::BOLD),
         );
     }
@@ -5748,17 +6056,17 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
     let sel = app.input.selection_range();
     // Same wash as the transcript's drag-select - one gesture, one colour.
     let sel_style = Style::default()
-        .fg(theme::BG)
-        .bg(theme::META_BLUE)
+        .fg(theme::BG())
+        .bg(theme::META_BLUE())
         .add_modifier(Modifier::BOLD);
-    let normal = Style::default().fg(theme::FG);
+    let normal = Style::default().fg(theme::FG());
     let chip_style = Style::default()
-        .fg(theme::META_BLUE)
-        .bg(theme::SURFACE)
+        .fg(theme::META_BLUE())
+        .bg(theme::SURFACE())
         .add_modifier(Modifier::BOLD);
     let chip_sel_style = Style::default()
-        .fg(theme::BG)
-        .bg(theme::META_BLUE)
+        .fg(theme::BG())
+        .bg(theme::META_BLUE())
         .add_modifier(Modifier::BOLD);
 
     // Reverse history search (Ctrl+R) takes over the composer body so the user
@@ -5769,7 +6077,7 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
             Span::styled(
                 "❯ ".to_string(),
                 Style::default()
-                    .fg(theme::META_BLUE)
+                    .fg(theme::META_BLUE())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(format!("(reverse-search)`{query}`: "), theme::style_faint()),
@@ -5808,7 +6116,7 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
     app.input_usable_w = usable;
     let vrows = app.input.visual_rows(usable);
     let vcount = vrows.len().max(1);
-    let h = (inner.height as usize).max(1).min(INPUT_VIEW_MAX);
+    let h = (inner.height as usize).clamp(1, INPUT_VIEW_MAX);
     app.input_view_h = h;
     let max_top = vcount.saturating_sub(h);
     if app.input_scroll_top > max_top {
@@ -5828,7 +6136,7 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
         let mut spans = vec![Span::styled(
             "❯ ".to_string(),
             Style::default()
-                .fg(theme::META_BLUE)
+                .fg(theme::META_BLUE())
                 .add_modifier(Modifier::BOLD),
         )];
         spans.push(Span::styled(
@@ -5849,7 +6157,7 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
             let mut spans = vec![Span::styled(
                 prefix.to_string(),
                 Style::default()
-                    .fg(theme::META_BLUE)
+                    .fg(theme::META_BLUE())
                     .add_modifier(Modifier::BOLD),
             )];
             let mut run = String::new();
@@ -5872,8 +6180,8 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
                             chip_sel_style
                         } else {
                             Style::default()
-                                .fg(theme::BG)
-                                .bg(theme::META_BLUE)
+                                .fg(theme::BG())
+                                .bg(theme::META_BLUE())
                                 .add_modifier(Modifier::BOLD)
                         }
                     } else if is_sel {
@@ -5894,8 +6202,8 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
                         ch.to_string(),
                         if is_sel {
                             Style::default()
-                                .fg(theme::BG)
-                                .bg(theme::META_BLUE)
+                                .fg(theme::BG())
+                                .bg(theme::META_BLUE())
                                 .add_modifier(Modifier::BOLD)
                         } else {
                             theme::style_cursor_on()
@@ -5983,11 +6291,11 @@ fn draw_statusline(f: &mut Frame, app: &App, area: Rect) {
 
     let tick = app.spinner_epoch.elapsed();
     let state_dot = if app.cancelling {
-        Span::styled("◼ ".to_string(), Style::default().fg(theme::WARN))
+        Span::styled("◼ ".to_string(), Style::default().fg(theme::WARN()))
     } else if app.busy {
         Span::styled(
             format!("{} ", theme::spinner_frame(tick)),
-            Style::default().fg(theme::META_BLUE),
+            Style::default().fg(theme::META_BLUE()),
         )
     } else {
         Span::styled("● ".to_string(), theme::style_success())
@@ -6036,9 +6344,9 @@ fn draw_statusline(f: &mut Frame, app: &App, area: Rect) {
     let left = vec![
         Span::raw(" ".to_string()),
         state_dot,
-        Span::styled(tok_label, Style::default().fg(theme::BLUE_200)),
+        Span::styled(tok_label, Style::default().fg(theme::BLUE_200())),
         sep(),
-        Span::styled(cost_label, Style::default().fg(theme::TEAL)),
+        Span::styled(cost_label, Style::default().fg(theme::TEAL())),
         sep(),
         Span::styled(ctx_label, ctx_style),
     ];
@@ -6052,38 +6360,41 @@ fn draw_statusline(f: &mut Frame, app: &App, area: Rect) {
         vec![Span::styled(
             "ctrl+c again to quit ".to_string(),
             Style::default()
-                .fg(theme::WARN)
+                .fg(theme::WARN())
                 .add_modifier(Modifier::BOLD),
         )]
     } else {
         let mode = app.permission_mode.get();
         let state = if app.cancelling {
-            ("cancelling", theme::WARN)
+            ("cancelling", theme::WARN())
         } else if app.busy {
-            (app.status.as_str(), theme::BLUE_300)
+            (app.status.as_str(), theme::BLUE_300())
         } else {
-            ("ready", theme::SUCCESS)
+            ("ready", theme::SUCCESS())
         };
         vec![
-            Span::styled(app.cfg.model.clone(), Style::default().fg(theme::BLUE_300)),
+            Span::styled(
+                app.cfg.model.clone(),
+                Style::default().fg(theme::BLUE_300()),
+            ),
             // Reasoning effort rides with the model, violet like the thought cards.
-            Span::styled(" · ".to_string(), Style::default().fg(theme::FAINT)),
+            Span::styled(" · ".to_string(), Style::default().fg(theme::FAINT())),
             Span::styled(
                 effort_label(&app.cfg.reasoning_effort),
-                Style::default().fg(theme::VIOLET),
+                Style::default().fg(theme::VIOLET()),
             ),
             sep(),
             // Mode is the thing you most need to be sure of before a tool runs.
             Span::styled(
                 mode.label().to_string(),
                 Style::default()
-                    .fg(theme::INDIGO)
+                    .fg(theme::INDIGO())
                     .add_modifier(Modifier::BOLD),
             ),
             sep(),
             Span::styled(
                 app.session_id[..8.min(app.session_id.len())].to_string(),
-                Style::default().fg(theme::FAINT),
+                Style::default().fg(theme::FAINT()),
             ),
             sep(),
             Span::styled(state.0.to_string(), Style::default().fg(state.1)),
@@ -6100,7 +6411,7 @@ fn draw_statusline(f: &mut Frame, app: &App, area: Rect) {
     spans.extend(right);
     f.render_widget(
         Paragraph::new(Line::from(spans))
-            .style(Style::default().bg(theme::SURFACE).fg(theme::MUTED)),
+            .style(Style::default().bg(theme::SURFACE()).fg(theme::MUTED())),
         area,
     );
 }
@@ -6138,7 +6449,7 @@ fn draw_palette(f: &mut Frame, app: &App, input_area: Rect) {
     rect.y = input_area.y.saturating_sub(rect.height).max(area.y);
     f.render_widget(Clear, rect);
     f.render_widget(
-        Block::default().style(Style::default().bg(theme::SURFACE_2)),
+        Block::default().style(Style::default().bg(theme::SURFACE_2())),
         rect,
     );
     let phase = modal_phase(app);
@@ -6146,7 +6457,7 @@ fn draw_palette(f: &mut Frame, app: &App, input_area: Rect) {
         f,
         rect,
         phase,
-        theme::META_BLUE,
+        theme::META_BLUE(),
         " ⌘  commands ",
         None,
         " ↑↓ move  ·  ↵ run  ·  esc close ",
@@ -6172,28 +6483,28 @@ fn draw_palette(f: &mut Frame, app: &App, input_area: Rect) {
                 // stop mid-row and read as ragged.
                 let head = format!(" {name:<12}");
                 let body = format!(" {desc} ");
-                let used = UnicodeWidthStr::width(head.as_str())
-                    + UnicodeWidthStr::width(body.as_str());
+                let used =
+                    UnicodeWidthStr::width(head.as_str()) + UnicodeWidthStr::width(body.as_str());
                 let pad = (inner.width as usize).saturating_sub(used);
                 Line::from(vec![
                     Span::styled(
                         head,
                         Style::default()
-                            .fg(theme::BG)
-                            .bg(theme::META_BLUE)
+                            .fg(theme::BG())
+                            .bg(theme::META_BLUE())
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(body, Style::default().fg(theme::BG).bg(theme::META_BLUE)),
                     Span::styled(
-                        " ".repeat(pad),
-                        Style::default().bg(theme::META_BLUE),
+                        body,
+                        Style::default().fg(theme::BG()).bg(theme::META_BLUE()),
                     ),
+                    Span::styled(" ".repeat(pad), Style::default().bg(theme::META_BLUE())),
                 ])
             } else {
                 Line::from(vec![
                     Span::styled(
                         format!(" {name:<12}"),
-                        Style::default().fg(theme::META_BLUE_SKY),
+                        Style::default().fg(theme::META_BLUE_SKY()),
                     ),
                     Span::styled(format!(" {desc}"), theme::style_faint()),
                 ])
@@ -6201,7 +6512,7 @@ fn draw_palette(f: &mut Frame, app: &App, input_area: Rect) {
         })
         .collect();
     f.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2)),
+        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
         inner,
     );
 }
@@ -6211,14 +6522,14 @@ fn draw_approval(f: &mut Frame, app: &App, area: Rect) {
     let Some(a) = &app.approval else { return };
     let preview = approval_preview(&a.name, &a.args);
     // body rows + 2 border + 2 inner padding.
-    let max_body = (area.height.saturating_sub(6)).min(18).max(6) as usize;
+    let max_body = area.height.saturating_sub(6).clamp(6, 18) as usize;
     let body_lines: Vec<&str> = preview.iter().map(|s| s.as_str()).take(max_body).collect();
     let overflow = preview.len() > max_body;
     let content = body_lines.len() as u16 + if overflow { 1 } else { 0 };
     let rect = fit_modal_rect(area, 78, content + 4, 48, 7);
     f.render_widget(Clear, rect);
     f.render_widget(
-        Block::default().style(Style::default().bg(theme::SURFACE_2)),
+        Block::default().style(Style::default().bg(theme::SURFACE_2())),
         rect,
     );
     let family = theme::tool_family(&a.name);
@@ -6239,13 +6550,13 @@ fn draw_approval(f: &mut Frame, app: &App, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
     for l in &body_lines {
         let style = if l.starts_with('+') && !l.starts_with("+++") {
-            Style::default().fg(theme::SUCCESS)
+            Style::default().fg(theme::SUCCESS())
         } else if l.starts_with('-') && !l.starts_with("---") {
-            Style::default().fg(theme::ERROR)
+            Style::default().fg(theme::ERROR())
         } else if l.starts_with("@@") || l.starts_with("path ") || l.starts_with("cmd ") {
-            Style::default().fg(theme::META_BLUE_SKY)
+            Style::default().fg(theme::META_BLUE_SKY())
         } else {
-            Style::default().fg(theme::MUTED)
+            Style::default().fg(theme::MUTED())
         };
         lines.push(Line::from(Span::styled(
             format!("  {}", truncate(l, col_w)),
@@ -6259,7 +6570,7 @@ fn draw_approval(f: &mut Frame, app: &App, area: Rect) {
         )));
     }
     f.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2)),
+        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
         inner,
     );
 }
@@ -6480,29 +6791,29 @@ fn diff_line(l: &str, indent: usize, width: usize) -> Line<'static> {
     match diff_kind(l) {
         DiffKind::Add => {
             let body = l.strip_prefix('+').unwrap_or(l);
-            let text = pad_to(&format!("{body}"), width.saturating_sub(indent + 2));
+            let text = pad_to(body, width.saturating_sub(indent + 2));
             Line::from(vec![
                 Span::raw(pad),
-                Span::styled("▎".to_string(), Style::default().fg(theme::SUCCESS)),
+                Span::styled("▎".to_string(), Style::default().fg(theme::SUCCESS())),
                 Span::styled(
                     format!("+{text}"),
                     Style::default()
-                        .fg(theme::DIFF_ADD_FG)
-                        .bg(theme::DIFF_ADD_BG),
+                        .fg(theme::DIFF_ADD_FG())
+                        .bg(theme::DIFF_ADD_BG()),
                 ),
             ])
         }
         DiffKind::Del => {
             let body = l.strip_prefix('-').unwrap_or(l);
-            let text = pad_to(&format!("{body}"), width.saturating_sub(indent + 2));
+            let text = pad_to(body, width.saturating_sub(indent + 2));
             Line::from(vec![
                 Span::raw(pad),
-                Span::styled("▎".to_string(), Style::default().fg(theme::ERROR)),
+                Span::styled("▎".to_string(), Style::default().fg(theme::ERROR())),
                 Span::styled(
                     format!("-{text}"),
                     Style::default()
-                        .fg(theme::DIFF_DEL_FG)
-                        .bg(theme::DIFF_DEL_BG),
+                        .fg(theme::DIFF_DEL_FG())
+                        .bg(theme::DIFF_DEL_BG()),
                 ),
             ])
         }
@@ -6511,7 +6822,7 @@ fn diff_line(l: &str, indent: usize, width: usize) -> Line<'static> {
             Span::styled(
                 truncate(l, width.saturating_sub(indent)),
                 Style::default()
-                    .fg(theme::DIFF_META)
+                    .fg(theme::DIFF_META())
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
@@ -6793,7 +7104,7 @@ fn draw_ctx_menu(f: &mut Frame, app: &mut App) {
 
     f.render_widget(Clear, frame);
     f.render_widget(
-        Block::default().style(Style::default().bg(theme::SURFACE_2)),
+        Block::default().style(Style::default().bg(theme::SURFACE_2())),
         frame,
     );
     let phase = modal_phase(app);
@@ -6801,7 +7112,7 @@ fn draw_ctx_menu(f: &mut Frame, app: &mut App) {
         f,
         frame,
         phase,
-        theme::META_BLUE,
+        theme::META_BLUE(),
         " prompt ",
         None,
         "  ↑↓/wheel move  ·  ↵ choose  ·  esc  ",
@@ -6817,9 +7128,9 @@ fn draw_ctx_menu(f: &mut Frame, app: &mut App) {
     {
         let selected = i == sel;
         let (fg, bg) = if selected {
-            (theme::BG, theme::META_BLUE)
+            (theme::BG(), theme::META_BLUE())
         } else {
-            (theme::FG, theme::SURFACE_2)
+            (theme::FG(), theme::SURFACE_2())
         };
         let marker = if selected { "❯ " } else { "  " };
         let line = Line::from(vec![
@@ -7209,8 +7520,13 @@ mod tests {
         for h in 0..=40u16 {
             for w in [20u16, 24, 40, 120] {
                 let area = Rect::new(0, 0, w, h);
-                let frame =
-                    fit_modal_rect(area, 46, 12, 34, crate::tui::app::CTX_ACTIONS.len() as u16 + 4);
+                let frame = fit_modal_rect(
+                    area,
+                    46,
+                    12,
+                    34,
+                    crate::tui::app::CTX_ACTIONS.len() as u16 + 4,
+                );
                 for r in ctx_menu_row_rects(frame) {
                     assert!(
                         r.bottom() <= area.bottom() && r.right() <= area.right(),
@@ -7221,8 +7537,13 @@ mod tests {
         }
         // Roomy terminal still draws every action.
         let area = Rect::new(0, 0, 100, 30);
-        let frame =
-            fit_modal_rect(area, 46, 12, 34, crate::tui::app::CTX_ACTIONS.len() as u16 + 4);
+        let frame = fit_modal_rect(
+            area,
+            46,
+            12,
+            34,
+            crate::tui::app::CTX_ACTIONS.len() as u16 + 4,
+        );
         assert_eq!(
             ctx_menu_row_rects(frame).len(),
             crate::tui::app::CTX_ACTIONS.len()
@@ -7325,7 +7646,11 @@ mod sidegraph_canvas_tests {
                 SgNode::Tool {
                     name: "read".into(),
                     args_formatted: vec!["path: \"src/tui/ui.rs\"".into()],
-                    result_formatted: Some(vec!["✓ return {".into(), "  lines: 4210".into(), "}".into()]),
+                    result_formatted: Some(vec![
+                        "✓ return {".into(),
+                        "  lines: 4210".into(),
+                        "}".into(),
+                    ]),
                     state: SgState::Ok,
                     started: now,
                     duration: Some(Duration::from_millis(300)),
@@ -7355,14 +7680,27 @@ mod sidegraph_canvas_tests {
     /// node that had a duration.
     #[test]
     fn box_rows_are_all_equal_width() {
-        let mut n = SgLay::new("✓", theme::SUCCESS, "read", "0.3s", theme::SUCCESS,
-            vec![("path: src/tui/ui.rs".into(), theme::NUR_GOLD_SKY)]);
+        let mut n = SgLay::new(
+            "✓",
+            theme::SUCCESS(),
+            "read",
+            "0.3s",
+            theme::SUCCESS(),
+            vec![("path: src/tui/ui.rs".into(), theme::NUR_GOLD_SKY())],
+        );
         n.x = 0;
         n.y = 0;
         let mut c = SgCanvas::new(SG_NODE_W + 4, n.h + 2);
         sg_draw_box(&mut c, &n);
-        let rows: Vec<String> = c.to_lines().iter()
-            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+        let rows: Vec<String> = c
+            .to_lines()
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
             .filter(|r: &String| !r.trim().is_empty())
             .collect();
         assert_eq!(rows.len(), n.h, "box drew the wrong number of rows");
@@ -7376,17 +7714,33 @@ mod sidegraph_canvas_tests {
         }
         assert!(rows[0].starts_with('┌') && rows[0].ends_with('┐'));
         assert!(rows[n.h - 1].starts_with('└') && rows[n.h - 1].ends_with('┘'));
-        assert!(rows[n.h - 1].contains("0.3s"), "duration lost from bottom border");
+        assert!(
+            rows[n.h - 1].contains("0.3s"),
+            "duration lost from bottom border"
+        );
     }
 
     /// Text must wrap inside the box, never spill past it.
     #[test]
     fn long_text_wraps_instead_of_overflowing() {
-        let n = SgLay::new("◇", theme::VIOLET, "reasoning", "", theme::VIOLET,
-            vec![("a very long reasoning excerpt that must wrap across several lines inside the node".into(), theme::MUTED)]);
+        let n = SgLay::new(
+            "◇",
+            theme::VIOLET(),
+            "reasoning",
+            "",
+            theme::VIOLET(),
+            vec![(
+                "a very long reasoning excerpt that must wrap across several lines inside the node"
+                    .into(),
+                theme::MUTED(),
+            )],
+        );
         assert!(n.details.len() > 1, "text did not wrap");
         for (d, _) in &n.details {
-            assert!(UnicodeWidthStr::width(d.as_str()) <= SG_TEXT_W, "line {d:?} exceeds text width");
+            assert!(
+                UnicodeWidthStr::width(d.as_str()) <= SG_TEXT_W,
+                "line {d:?} exceeds text width"
+            );
         }
     }
 
@@ -7407,7 +7761,10 @@ mod sidegraph_canvas_tests {
     fn renders_no_invented_branch_labels() {
         let out = render(&demo_model(), 40).join("\n");
         for fake in ["Yes->Yes", "Yes→Yes", "Programs (1)", "∞ loop"] {
-            assert!(!out.contains(fake), "fabricated label {fake:?} still rendered");
+            assert!(
+                !out.contains(fake),
+                "fabricated label {fake:?} still rendered"
+            );
         }
     }
 
@@ -7419,12 +7776,28 @@ mod sidegraph_canvas_tests {
         m.nodes.truncate(1);
         let (mut spine, back) = sg_build_spine(&m, &[], Duration::from_millis(0), true);
         // Two parallel children under the first step.
-        let kid = |id: u64| SgLay::new("◐", theme::NUR_GOLD, &format!("#{id}·explore"), "2s",
-            theme::NUR_GOLD, vec![("scan the tui module".into(), theme::MUTED)]);
+        let kid = |id: u64| {
+            SgLay::new(
+                "◐",
+                theme::NUR_GOLD(),
+                &format!("#{id}·explore"),
+                "2s",
+                theme::NUR_GOLD(),
+                vec![("scan the tui module".into(), theme::MUTED())],
+            )
+        };
         spine[1].kids = vec![kid(1), kid(2)];
         let canvas = sg_paint(&mut spine, back, 30);
-        let widest = canvas.to_lines().iter().map(|l| l.width()).max().unwrap_or(0);
-        assert!(widest > 30, "fan-out canvas ({widest}) should exceed the 30-col panel");
+        let widest = canvas
+            .to_lines()
+            .iter()
+            .map(|l| l.width())
+            .max()
+            .unwrap_or(0);
+        assert!(
+            widest > 30,
+            "fan-out canvas ({widest}) should exceed the 30-col panel"
+        );
     }
 
     #[test]
@@ -7438,9 +7811,16 @@ mod sidegraph_canvas_tests {
         let mut m = demo_model();
         m.nodes.truncate(2);
         let (mut spine, back) = sg_build_spine(&m, &[], Duration::from_millis(0), true);
-        let kid = |id: u64, task: &str| SgLay::new("◐", theme::NUR_GOLD,
-            &format!("#{id}·explore"), "2.1s", theme::NUR_GOLD,
-            vec![(task.to_string(), theme::MUTED)]);
+        let kid = |id: u64, task: &str| {
+            SgLay::new(
+                "◐",
+                theme::NUR_GOLD(),
+                &format!("#{id}·explore"),
+                "2.1s",
+                theme::NUR_GOLD(),
+                vec![(task.to_string(), theme::MUTED())],
+            )
+        };
         spine[2].kids = vec![
             kid(1, "map command registration"),
             kid(2, "trace the render path"),
@@ -7448,7 +7828,11 @@ mod sidegraph_canvas_tests {
         ];
         let canvas = sg_paint(&mut spine, back, 40);
         for l in canvas.to_lines() {
-            let s: String = l.spans.iter().map(|sp| sp.content.as_ref()).collect::<String>();
+            let s: String = l
+                .spans
+                .iter()
+                .map(|sp| sp.content.as_ref())
+                .collect::<String>();
             println!("{s}");
         }
     }
@@ -7498,12 +7882,28 @@ mod sidegraph_canvas_tests {
             cell_idx: 13,
         });
         let mut forest = sg_build_forest(&m, &[], Duration::from_millis(0), true);
-        assert!(forest.tool_tracks.len() >= 3, "should have many tool tracks, got {}", forest.tool_tracks.len());
+        assert!(
+            forest.tool_tracks.len() >= 3,
+            "should have many tool tracks, got {}",
+            forest.tool_tracks.len()
+        );
         assert!(!forest.main.is_empty());
-        assert!(!forest.live.is_empty(), "live track should have running tool");
+        assert!(
+            !forest.live.is_empty(),
+            "live track should have running tool"
+        );
         let canvas = sg_paint_forest(&mut forest, 40);
-        let widest = canvas.to_lines().iter().map(|l| l.width()).max().unwrap_or(0);
-        assert!(widest > 40, "forest canvas {} should exceed panel 40 to make panning useful", widest);
+        let widest = canvas
+            .to_lines()
+            .iter()
+            .map(|l| l.width())
+            .max()
+            .unwrap_or(0);
+        assert!(
+            widest > 40,
+            "forest canvas {} should exceed panel 40 to make panning useful",
+            widest
+        );
     }
 
     /// M2 regression: the fan-out rail must connect the root ┬ to the central
@@ -7514,7 +7914,7 @@ mod sidegraph_canvas_tests {
     fn root_connector_aligns_with_central_track_center() {
         let mut m = demo_model();
         m.nodes.truncate(1); // just reasoning under root
-        // Give the root's child track a fan-out so central_w > SG_NODE_W.
+                             // Give the root's child track a fan-out so central_w > SG_NODE_W.
         let now = std::time::Instant::now();
         m.nodes.push(SgNode::Tool {
             name: "agent".into(),
@@ -7587,7 +7987,10 @@ mod sidegraph_canvas_tests {
         assert_ne!(a, c, "spinner phase must affect the fingerprint");
         // A new node changes the precomputed nodes_fp → changes the frame fp.
         let mut m2 = m.clone();
-        m2.nodes.push(SgNode::Answering { text_excerpt: "writing".into(), cell_idx: 99 });
+        m2.nodes.push(SgNode::Answering {
+            text_excerpt: "writing".into(),
+            cell_idx: 99,
+        });
         recompute_fp(&mut m2);
         let d = sidegraph_fingerprint(&m2, &[], 0);
         assert_ne!(a, d, "adding a node must change the fingerprint");
@@ -7619,7 +8022,10 @@ mod sidegraph_canvas_tests {
         let run_ids: Vec<u64> = swarm_hits.iter().map(|h| h.run_id).collect();
         assert!(run_ids.contains(&7), "kid #7 should be a swarm hit");
         assert!(run_ids.contains(&8), "kid #8 should be a swarm hit");
-        assert!(hits.iter().any(|h| h.cell_idx == 9), "agent tool box should be a cell hit");
+        assert!(
+            hits.iter().any(|h| h.cell_idx == 9),
+            "agent tool box should be a cell hit"
+        );
     }
 
     fn mk_run(id: u64, kind: &str, task: &str) -> crate::agent::swarm::AgentRun {

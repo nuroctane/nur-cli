@@ -108,14 +108,14 @@ impl Tool for Penecho {
             }
             "launch" => {
                 let st = crate::penecho::probe();
-                if st.binary.is_none() {
-                    Ok("penecho binary not found on PATH. Install via `npm i -g penecho` (Node >=18.17). Then run `penecho --help`. Integration via sidecar spawn (AGPL-compliant, no linking).".into())
-                } else {
+                if let Some(binary) = st.binary.as_ref() {
                     Ok(format!(
                         "penecho binary found at {:?}. To launch as sidecar: `penecho` (or `penecho --port 3000`). Config at {}. Use export action to generate config.env from nur auth. Canvas: 20k x 20k, sparse 512 tiles, draft layer, MathJax, plots, animation scenes (max 32 objects).",
-                        st.binary.unwrap(),
+                        binary,
                         st.config_file.display()
                     ))
+                } else {
+                    Ok("penecho binary not found on PATH. Install via `npm i -g penecho` (Node >=18.17). Then run `penecho --help`. Integration via sidecar spawn (AGPL-compliant, no linking).".into())
                 }
             }
             _ => {

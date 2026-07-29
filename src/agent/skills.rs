@@ -926,9 +926,9 @@ fn read_skill_body(sk: &Skill) -> String {
     std::fs::read_to_string(&sk.path)
         .ok()
         .map(|t| {
-            if t.starts_with("---") {
-                if let Some(end) = t[3..].find("---") {
-                    return t[end + 6..].trim().to_string();
+            if let Some(content) = t.strip_prefix("---") {
+                if let Some(end) = content.find("---") {
+                    return content[end + 3..].trim().to_string();
                 }
             }
             t
@@ -969,6 +969,7 @@ pub fn slash_activation_section(sk: &Skill) -> String {
 /// - legacy `~/.muse/skills`
 /// - `~/.agents/skills` (Agent Skills / graphify install --platform agents)
 /// - `<cwd>/.meta/skills` · `<cwd>/.muse/skills` · `<cwd>/.agents/skills` · `<cwd>/.nur/skills`
+///
 /// Max directory depth when walking for nested SKILL.md (category/pack layouts).
 pub(crate) const SKILL_WALK_MAX_DEPTH: usize = 5;
 
@@ -1039,10 +1040,10 @@ pub(crate) fn parse_skill(path: &Path) -> Option<Skill> {
         .to_string();
 
     // Optional YAML frontmatter
-    let (name, description, body) = if text.starts_with("---") {
-        if let Some(end) = text[3..].find("---") {
-            let fm = &text[3..end + 3];
-            let body = text[end + 6..].trim().to_string();
+    let (name, description, body) = if let Some(content) = text.strip_prefix("---") {
+        if let Some(end) = content.find("---") {
+            let fm = &content[..end];
+            let body = content[end + 3..].trim().to_string();
             let fm_name = fm.lines().find_map(|l| {
                 let rest = l.strip_prefix("name:")?;
                 let s = rest.trim().trim_matches('"').trim();

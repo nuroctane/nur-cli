@@ -141,8 +141,8 @@ pub fn spawn_turn(
 /// (there is no interactive approver here).
 pub async fn run_collect(
     runner: Arc<AgentRunner>,
-    session: Session,
-    usage: UsageTracker,
+    mut session: Session,
+    mut usage: UsageTracker,
     prompt: String,
     cancel: CancellationToken,
 ) -> (
@@ -152,36 +152,45 @@ pub async fn run_collect(
     bool,
 ) {
     let (tx, mut rx) = mpsc::unbounded_channel();
-    spawn_turn(runner, session, usage, prompt, tx, cancel);
-    let mut acc = String::new();
-    while let Some(ev) = rx.recv().await {
-        match ev {
-            AgentEvent::TextDelta(d) => acc.push_str(&d),
-            AgentEvent::AssistantMessage(m) => {
-                if acc.trim().is_empty() {
-                    acc = m;
+    let collector = tokio::spawn(async move {
+        let mut acc = String::new();
+        while let Some(ev) = rx.recv().await {
+            match ev {
+                AgentEvent::TextDelta(d) => acc.push_str(&d),
+                AgentEvent::AssistantMessage(m) => {
+                    if acc.trim().is_empty() {
+                        acc = m;
+                    }
                 }
+                // No interactive approver in headless integrations - deny
+                // anything that slips through. Callers should use Auto mode.
+                AgentEvent::ApprovalRequest { respond, .. } => {
+                    let _ = respond.send(ApprovalDecision::Deny);
+                }
+                _ => {}
             }
-            // No interactive approver in headless integrations — deny anything
-            // that slips through (shouldn't happen: callers run in Auto mode).
-            AgentEvent::ApprovalRequest { respond, .. } => {
-                let _ = respond.send(ApprovalDecision::Deny);
-            }
-            AgentEvent::Done {
-                session,
-                usage,
-                result,
-                interrupted,
-            } => {
-                let result = result.map(|t| if t.trim().is_empty() { acc.clone() } else { t });
-                return (session, usage, result, interrupted);
-            }
-            _ => {}
         }
+        acc
+    });
+
+    // Run headless turns directly so ownership of the session and usage never
+    // depends on receiving a final channel event. The old detached-task path
+    // used `unreachable!` when a task panicked or the channel closed, turning a
+    // recoverable backend failure into a parent-process panic.
+    let result = runner
+        .run_turn_events(&mut session, &prompt, &mut usage, &tx, &cancel)
+        .await;
+    usage.set_state("idle");
+    if !runner.is_subagent {
+        let _ = session.save();
     }
-    // spawn_turn always emits Done as its last act, so the channel never closes
-    // before it — but stay honest if that invariant ever breaks.
-    unreachable!("agent turn ended without a Done event")
+    drop(tx);
+    let acc = collector.await.unwrap_or_default();
+    let interrupted = matches!(result, Err(MuseError::Interrupted));
+    let result = result
+        .map(|text| if text.trim().is_empty() { acc } else { text })
+        .map_err(|error| error.to_string());
+    (Box::new(session), Box::new(usage), result, interrupted)
 }
 
 /// Which provider/model actually served a model request (for the receipt).
@@ -271,7 +280,7 @@ impl AgentRunner {
                         deltas,
                         Served {
                             provider: self.config.provider.clone(),
-                            model: self.config.model.clone(),
+                            model: req.model.clone(),
                             failover: false,
                         },
                     ))
@@ -428,7 +437,11 @@ impl AgentRunner {
             )));
         }
 
-        let tools = self.tools.tool_defs();
+        let tools = if self.is_subagent {
+            self.tools.subagent_tool_defs()
+        } else {
+            self.tools.tool_defs()
+        };
         // Disk-backed prompt parts (skills, NUR.md, memory, shell) — read once
         // per user turn, not once per model request. Pass user_text so natural
         // language (e.g. "think like fable") can auto-activate skills.
@@ -465,6 +478,7 @@ impl AgentRunner {
         let mut compactions: u8 = 0;
         let mut compact_failures: u8 = 0;
         let mut last_compact_input: u64 = 0;
+        let mut emergency_compactions: u8 = 0;
         // Codex/ChatGPT free (and some hosts) sometimes emit only a reasoning
         // summary and zero tool calls / zero answer text. Retry once with a
         // hard nudge + tool_choice=required before giving up.
@@ -472,6 +486,7 @@ impl AgentRunner {
         let mut truncation_continuations: u8 = 0;
         let mut truncation_giving_up = false;
         let mut force_tool_choice = false;
+        let mut recovered_default_model: Option<String> = None;
 
         loop {
             if cancel.is_cancelled() {
@@ -541,6 +556,18 @@ impl AgentRunner {
                 )));
             }
 
+            // OMP-style dynamic context pruning: when the model reads the same
+            // target again, the newer observation supersedes the old body.
+            // Keep both tool pairs valid, but stop paying for stale duplicate
+            // read/search output on every later request.
+            let superseded = prune_superseded_observations(&mut session.input_items);
+            if superseded > 0 {
+                self.persist_session(session);
+                let _ = tx.send(AgentEvent::Status(format!(
+                    "context · pruned {superseded} superseded read/search result(s)"
+                )));
+            }
+
             let mode_now = self.permission_mode.get();
             let instructions = prompt_ctx.render(mode_now, &self.tools.todos_snapshot().render());
 
@@ -561,17 +588,20 @@ impl AgentRunner {
             // Lazy /models resolution for local placeholder (llama.cpp proof).
             // If cfg still holds `local-model`, attempt to resolve to a real id
             // from the live local server before we POST.
-            let effective_model = if crate::providers::is_placeholder_local_model(&self.config.model)
+            let configured_model = recovered_default_model
+                .as_deref()
+                .unwrap_or(&self.config.model);
+            let effective_model = if crate::providers::is_placeholder_local_model(configured_model)
             {
-                let resolved = self.client.resolve_local_model(&self.config.model).await;
-                if resolved != self.config.model {
+                let resolved = self.client.resolve_local_model(configured_model).await;
+                if resolved != configured_model {
                     let _ = tx.send(AgentEvent::Status(format!(
                         "local model placeholder → resolved to `{resolved}` via /models"
                     )));
                 }
                 resolved
             } else {
-                self.config.model.clone()
+                configured_model.to_string()
             };
 
             let req = ResponseRequest {
@@ -601,7 +631,71 @@ impl AgentRunner {
             };
 
             let (resp, text_deltas, served): (ApiResponse, usize, Served) =
-                self.request_with_failover(&req, tx, cancel).await?;
+                match self.request_with_failover(&req, tx, cancel).await {
+                    Ok(response) => response,
+                    Err(error)
+                        if is_context_limit_error(&error)
+                            && emergency_compactions < MAX_EMERGENCY_COMPACTIONS =>
+                    {
+                        emergency_compactions += 1;
+                        let _ = tx.send(AgentEvent::Status(format!(
+                            "provider rejected the context window - recovering and retrying \
+                             ({emergency_compactions}/{MAX_EMERGENCY_COMPACTIONS})"
+                        )));
+
+                        match compact_session(self, session, usage).await {
+                            Ok(_) => {
+                                compactions = compactions.saturating_add(1);
+                                let _ = tx.send(AgentEvent::Status(
+                                    "emergency context compaction succeeded - continuing".into(),
+                                ));
+                            }
+                            Err(compact_error) => {
+                                // A model-assisted summary can itself exceed the
+                                // provider window. Keep a valid recent working
+                                // set locally so the turn continues instead of
+                                // dying at exactly the point compaction is needed.
+                                let kept = emergency_compact_session(self, session);
+                                compactions = compactions.saturating_add(1);
+                                let _ = tx.send(AgentEvent::Status(format!(
+                                    "model compaction failed ({compact_error}); recovered a \
+                                     valid {kept}-item recent context locally - continuing"
+                                )));
+                            }
+                        }
+                        continue;
+                    }
+                    Err(error)
+                        if recovered_default_model.is_none()
+                            && is_model_unavailable_error(&error)
+                            && is_catalog_default_model(&self.config) =>
+                    {
+                        match self.client.live_model_ids().await {
+                            Ok(models) => {
+                                if let Some(model) =
+                                    pick_replacement_model(&models, &self.config.model)
+                                {
+                                    let _ = tx.send(AgentEvent::Status(format!(
+                                        "provider no longer serves default model `{}` - \
+                                         retrying this turn with live model `{model}`",
+                                        self.config.model
+                                    )));
+                                    recovered_default_model = Some(model);
+                                    continue;
+                                }
+                                return Err(error);
+                            }
+                            Err(discovery_error) => {
+                                let _ = tx.send(AgentEvent::Status(format!(
+                                    "default model is unavailable and live model discovery \
+                                     failed: {discovery_error}"
+                                )));
+                                return Err(error);
+                            }
+                        }
+                    }
+                    Err(error) => return Err(error),
+                };
 
             let (in_tok, out_tok) = if let Some(u) = &resp.usage {
                 let tu: TokenUsage = u.into();
@@ -681,7 +775,8 @@ impl AgentRunner {
             let mut truncated_this_round = false;
             if resp.status.as_deref() == Some("length") {
                 truncated_this_round = true;
-                if truncation_giving_up || truncation_continuations >= MAX_TRUNCATION_CONTINUATIONS {
+                if truncation_giving_up || truncation_continuations >= MAX_TRUNCATION_CONTINUATIONS
+                {
                     // Terminal: surface partial output, never continue again.
                     if !truncation_giving_up {
                         truncation_giving_up = true;
@@ -703,7 +798,9 @@ impl AgentRunner {
                     } else {
                         "[harness] Your previous response was truncated at max_tokens (finish_reason: length) with no usable output. Retry the last step, possibly with smaller chunks, or summarize and continue."
                     };
-                    session.input_items.push(crate::api::types::user_text_item(nudge));
+                    session
+                        .input_items
+                        .push(crate::api::types::user_text_item(nudge));
                     self.persist_session(session);
                     continue;
                 } else {
@@ -719,7 +816,8 @@ impl AgentRunner {
             }
             if resp.status.as_deref() == Some("content_filter") {
                 let _ = tx.send(AgentEvent::Status(
-                    "model stopped for content_filter — surfacing partial output and ending turn".into(),
+                    "model stopped for content_filter — surfacing partial output and ending turn"
+                        .into(),
                 ));
             }
             if !truncated_this_round {
@@ -877,7 +975,7 @@ impl AgentRunner {
                 }
 
                 // Collect in submission order (handles order matches meta)
-                for (handle, (id, call_id, name)) in handles.into_iter().zip(meta.into_iter()) {
+                for (handle, (id, call_id, name)) in handles.into_iter().zip(meta) {
                     let joined = tokio::select! {
                         // The caller's guard fills this call, the rest of the
                         // batch, and every post-batch call.
@@ -1224,7 +1322,7 @@ impl AgentRunner {
                     } => {
                         subagent::run_subagent(
                             child_client,
-                            child_config,
+                            *child_config,
                             cwd,
                             mode,
                             &prompt,
@@ -1234,9 +1332,8 @@ impl AgentRunner {
                         )
                         .await
                     }
-                    SubagentTarget::AwaitingLogin { message, .. } => {
-                        Err(MuseError::Other(message))
-                    }
+                    SubagentTarget::AwaitingLogin { message, .. }
+                    | SubagentTarget::Unavailable { message } => Err(MuseError::Other(message)),
                 }
             })));
         }
@@ -1669,7 +1766,8 @@ mod tests {
         );
 
         // Defaults: explore, and the label falls back to the kind.
-        let (_, kind, desc, _prov, _model) = parse_agent_call(&agent_call("b", "look around", "explore")).unwrap();
+        let (_, kind, desc, _prov, _model) =
+            parse_agent_call(&agent_call("b", "look around", "explore")).unwrap();
         assert_eq!((kind.as_str(), desc.as_str()), ("explore", "explore"));
 
         // A missing prompt is a tool error, not a spawned no-op subagent.
@@ -1761,7 +1859,9 @@ mod tests {
         let (_, _, _, prov7, _) = parse_agent_call(&FunctionCallRef {
             call_id: "g".into(),
             name: "agent".into(),
-            arguments: r#"{"prompt":"compare notes","description":"claude vs grok","provider":"xai"}"#.into(),
+            arguments:
+                r#"{"prompt":"compare notes","description":"claude vs grok","provider":"xai"}"#
+                    .into(),
         })
         .unwrap();
         assert_eq!(
@@ -1808,7 +1908,9 @@ mod tests {
         let (_, _, _, prov, _) = parse_agent_call(&FunctionCallRef {
             call_id: "c".into(),
             name: "agent".into(),
-            arguments: r#"{"prompt":"Claude subagent: review auth for races","description":"review"}"#.into(),
+            arguments:
+                r#"{"prompt":"Claude subagent: review auth for races","description":"review"}"#
+                    .into(),
         })
         .unwrap();
         assert_eq!(
@@ -1829,9 +1931,11 @@ mod tests {
     fn subagent_target_short_circuits_within_the_google_family() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let parent_client = ApiClient::new("https://example.invalid", "parent-key").unwrap();
-        let mut parent_config = Config::default();
-        parent_config.provider = "antigravity".into();
-        parent_config.model = "gemini-2.5-pro".into();
+        let parent_config = Config {
+            provider: "antigravity".into(),
+            model: "gemini-2.5-pro".into(),
+            ..Default::default()
+        };
 
         let target = resolve_subagent_target(
             &parent_client,
@@ -1858,12 +1962,15 @@ mod tests {
             SubagentTarget::AwaitingLogin { .. } => {
                 panic!("same-provider-family request must never require login");
             }
+            SubagentTarget::Unavailable { message } => panic!("{message}"),
         }
 
         // The reverse direction (parent already on `google`, request "antigravity")
         // must also short-circuit.
-        let mut parent_config_google = Config::default();
-        parent_config_google.provider = "google".into();
+        let parent_config_google = Config {
+            provider: "google".into(),
+            ..Default::default()
+        };
         let target2 = resolve_subagent_target(
             &parent_client,
             &parent_config_google,
@@ -1881,18 +1988,34 @@ mod tests {
             SubagentTarget::AwaitingLogin { .. } => {
                 panic!("same-provider-family request must never require login");
             }
+            SubagentTarget::Unavailable { message } => panic!("{message}"),
         }
     }
 
     #[test]
     fn natural_language_provider_names_resolve() {
         assert_eq!(resolve_provider_alias("grok").map(|p| p.id), Some("xai"));
-        assert_eq!(resolve_provider_alias("gemini").map(|p| p.id), Some("google"));
-        assert_eq!(resolve_provider_alias("claude").map(|p| p.id), Some("anthropic"));
-        assert_eq!(resolve_provider_alias("chatgpt").map(|p| p.id), Some("openai"));
-        assert_eq!(resolve_provider_alias("deepseek").map(|p| p.id), Some("deepseek"));
+        assert_eq!(
+            resolve_provider_alias("gemini").map(|p| p.id),
+            Some("google")
+        );
+        assert_eq!(
+            resolve_provider_alias("claude").map(|p| p.id),
+            Some("anthropic")
+        );
+        assert_eq!(
+            resolve_provider_alias("chatgpt").map(|p| p.id),
+            Some("openai")
+        );
+        assert_eq!(
+            resolve_provider_alias("deepseek").map(|p| p.id),
+            Some("deepseek")
+        );
         // Direct id passes through.
-        assert_eq!(resolve_provider_alias("anthropic").map(|p| p.id), Some("anthropic"));
+        assert_eq!(
+            resolve_provider_alias("anthropic").map(|p| p.id),
+            Some("anthropic")
+        );
         // Antigravity is its OWN provider — must NOT collapse to google.
         assert_eq!(
             resolve_provider_alias("antigravity").map(|p| p.id),
@@ -1907,23 +2030,60 @@ mod tests {
             resolve_provider_alias("antigravity subagent").map(|p| p.id),
             Some("antigravity")
         );
-        assert_eq!(resolve_provider_alias("use grok").map(|p| p.id), Some("xai"));
+        assert_eq!(
+            resolve_provider_alias("use grok").map(|p| p.id),
+            Some("xai")
+        );
         assert_eq!(
             resolve_provider_alias("the gemini provider").map(|p| p.id),
             Some("google")
         );
         // Model-family nicknames route to the serving provider.
-        assert_eq!(resolve_provider_alias("sonnet").map(|p| p.id), Some("anthropic"));
-        assert_eq!(resolve_provider_alias("opus").map(|p| p.id), Some("anthropic"));
-        assert_eq!(resolve_provider_alias("flash").map(|p| p.id), Some("google"));
+        assert_eq!(
+            resolve_provider_alias("sonnet").map(|p| p.id),
+            Some("anthropic")
+        );
+        assert_eq!(
+            resolve_provider_alias("opus").map(|p| p.id),
+            Some("anthropic")
+        );
+        assert_eq!(
+            resolve_provider_alias("flash").map(|p| p.id),
+            Some("google")
+        );
         assert_eq!(resolve_provider_alias("gpt").map(|p| p.id), Some("openai"));
         // Distinct kimi vs moonshot catalog ids.
         assert_eq!(resolve_provider_alias("kimi").map(|p| p.id), Some("kimi"));
-        assert_eq!(resolve_provider_alias("moonshot").map(|p| p.id), Some("moonshot"));
+        assert_eq!(
+            resolve_provider_alias("moonshot").map(|p| p.id),
+            Some("moonshot")
+        );
         // "meta" must not over-match every display name via naive substring.
         assert_eq!(resolve_provider_alias("meta").map(|p| p.id), Some("meta"));
-        // Unknown name → None (caller falls back to parent).
+        // Unknown name -> None (explicit routing fails closed).
         assert!(resolve_provider_alias("nonesuch-xyz").is_none());
+    }
+
+    #[test]
+    fn explicit_unknown_provider_never_impersonates_with_parent_client() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let parent_client = ApiClient::new("https://example.invalid", "parent-key").unwrap();
+        let target = resolve_subagent_target(
+            &parent_client,
+            &Config::default(),
+            Some("definitely-not-a-provider"),
+            None,
+            None,
+            None,
+            None,
+            &tx,
+        );
+        match target {
+            SubagentTarget::Unavailable { message } => {
+                assert!(message.contains("unknown provider"));
+            }
+            _ => panic!("unknown explicit provider must fail closed"),
+        }
     }
 
     /// The fan-out path must only ever claim a run of `agent` calls — grouping
@@ -2278,9 +2438,11 @@ mod tests {
         assert!(session_budget_exceeded(&cfg, &usage).is_none());
         cfg.max_session_cost_usd = Some(0.01);
         // Seed enough tokens that estimated cost exceeds $0.01 at default prices.
-        let mut u = TokenUsage::default();
-        u.input_tokens = 50_000;
-        u.total_tokens = 50_000;
+        let u = TokenUsage {
+            input_tokens: 50_000,
+            total_tokens: 50_000,
+            ..Default::default()
+        };
         usage.seed_session(u.clone());
         assert!(session_budget_exceeded(&cfg, &usage).is_some());
         cfg.max_session_cost_usd = None;
@@ -2631,6 +2793,123 @@ const MAX_TRUNCATION_CONTINUATIONS: u8 = 5;
 const MAX_AUTO_COMPACTIONS: u8 = 8;
 /// Consecutive-ish compaction failures tolerated before giving up on the turn.
 const MAX_AUTO_COMPACT_FAILURES: u8 = 3;
+/// Reactive recoveries after a provider rejects the request as too large.
+/// This is separate from proactive compaction because usage metadata can be
+/// absent or inaccurate on gateways and OAuth-backed compatibility routes.
+const MAX_EMERGENCY_COMPACTIONS: u8 = 2;
+
+fn is_context_limit_error(error: &MuseError) -> bool {
+    let message = match error {
+        MuseError::Api { message, .. } | MuseError::Other(message) => message,
+        _ => return false,
+    }
+    .to_ascii_lowercase();
+    const NEEDLES: &[&str] = &[
+        "context length",
+        "context window",
+        "maximum context",
+        "max context",
+        "input is too long",
+        "input too long",
+        "prompt is too long",
+        "prompt too long",
+        "too many input tokens",
+        "input token count exceeds",
+        "request too large",
+        "request_too_large",
+        "tokens exceed",
+    ];
+    NEEDLES.iter().any(|needle| message.contains(needle))
+}
+
+fn is_model_unavailable_error(error: &MuseError) -> bool {
+    let message = match error {
+        MuseError::Api { message, .. } | MuseError::Other(message) => message,
+        _ => return false,
+    }
+    .to_ascii_lowercase();
+    let names_model = message.contains("model") || message.contains("deployment");
+    names_model
+        && [
+            "not found",
+            "does not exist",
+            "not available",
+            "unsupported model",
+            "unknown model",
+            "retired",
+            "deprecated",
+        ]
+        .iter()
+        .any(|needle| message.contains(needle))
+}
+
+fn is_catalog_default_model(config: &Config) -> bool {
+    crate::providers::by_id(&config.provider)
+        .is_some_and(|provider| provider.default_model == config.model)
+}
+
+fn pick_replacement_model(models: &[String], unavailable: &str) -> Option<String> {
+    const NON_CHAT: &[&str] = &[
+        "embedding",
+        "moderation",
+        "realtime",
+        "transcribe",
+        "whisper",
+        "tts",
+        "image",
+        "video",
+        "audio",
+        "veo",
+        "imagen",
+    ];
+    const ROLE_HINTS: &[&str] = &[
+        "sonnet",
+        "opus",
+        "haiku",
+        "pro",
+        "flash",
+        "mini",
+        "nano",
+        "terra",
+        "sol",
+        "luna",
+        "reasoning",
+    ];
+    let unavailable_lower = unavailable.to_ascii_lowercase();
+    let family = unavailable_lower
+        .split(['-', '/', ':'])
+        .next()
+        .unwrap_or_default();
+    let wanted_roles: Vec<&str> = ROLE_HINTS
+        .iter()
+        .copied()
+        .filter(|hint| unavailable_lower.contains(hint))
+        .collect();
+
+    let mut candidates: Vec<&String> = models
+        .iter()
+        .filter(|model| !model.eq_ignore_ascii_case(unavailable))
+        .filter(|model| {
+            let lower = model.to_ascii_lowercase();
+            !NON_CHAT.iter().any(|needle| lower.contains(needle))
+                && (family.is_empty() || lower.contains(family))
+        })
+        .collect();
+    candidates.sort_by(|left, right| {
+        let left_lower = left.to_ascii_lowercase();
+        let right_lower = right.to_ascii_lowercase();
+        let left_role = wanted_roles
+            .iter()
+            .filter(|hint| left_lower.contains(**hint))
+            .count();
+        let right_role = wanted_roles
+            .iter()
+            .filter(|hint| right_lower.contains(**hint))
+            .count();
+        right_role.cmp(&left_role).then_with(|| right.cmp(left))
+    });
+    candidates.first().map(|model| (*model).clone())
+}
 
 fn should_auto_compact(usage: &UsageTracker, cfg: &Config) -> bool {
     let last = usage.last_usage();
@@ -2642,6 +2921,98 @@ fn should_auto_compact(usage: &UsageTracker, cfg: &Config) -> bool {
     };
     let window = cfg.context_window.max(1);
     used > (window as f64 * 0.55) as u64 && used > 40_000
+}
+
+/// Replace stale bodies from repeated identical observations while preserving
+/// the function-call/result pair required by strict provider protocols.
+///
+/// This mirrors OMP's `supersedeReads`: a second read/grep of the same target is
+/// the current truth, so carrying the earlier full body forward only wastes
+/// context. Mutating and delegated tools are deliberately never touched.
+fn prune_superseded_observations(items: &mut [Value]) -> usize {
+    const OBSERVATION_TOOLS: &[&str] = &[
+        "read_file",
+        "list_dir",
+        "grep",
+        "glob",
+        "git_status",
+        "git_diff",
+        "web_fetch",
+        "web_search",
+    ];
+    const MIN_BODY_CHARS: usize = 512;
+
+    let mut seen = HashSet::new();
+    let mut superseded: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for item in items.iter().rev() {
+        if item.get("type").and_then(Value::as_str) != Some("function_call") {
+            continue;
+        }
+        let name = item.get("name").and_then(Value::as_str).unwrap_or_default();
+        if !OBSERVATION_TOOLS.contains(&name) {
+            continue;
+        }
+        let call_id = item
+            .get("call_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let arguments = item
+            .get("arguments")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if call_id.is_empty() {
+            continue;
+        }
+        let key = format!("{name}\0{arguments}");
+        if !seen.insert(key) {
+            superseded.insert(call_id.to_string(), name.to_string());
+        }
+    }
+
+    let mut pruned = 0;
+    let item_chars: Vec<usize> = items
+        .iter()
+        .map(|item| serde_json::to_string(item).map_or(0, |text| text.len()))
+        .collect();
+    let mut suffix_chars = vec![0usize; items.len()];
+    let mut running = 0usize;
+    for index in (0..items.len()).rev() {
+        suffix_chars[index] = running;
+        running = running.saturating_add(item_chars[index]);
+    }
+    for index in 0..items.len() {
+        // Rewriting deep history can discard a much larger provider prompt
+        // cache than it saves. Match OMP's cache-aware policy: prune while the
+        // changed entry is still near the live suffix (roughly <=8k tokens).
+        if suffix_chars[index] > 32_000 {
+            continue;
+        }
+        let item = &mut items[index];
+        if item.get("type").and_then(Value::as_str) != Some("function_call_output") {
+            continue;
+        }
+        let Some(call_id) = item.get("call_id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(name) = superseded.get(call_id) else {
+            continue;
+        };
+        let Some(output) = item.get_mut("output") else {
+            continue;
+        };
+        let Some(body) = output.as_str() else {
+            continue;
+        };
+        if body.chars().count() < MIN_BODY_CHARS || body.starts_with("[superseded by newer") {
+            continue;
+        }
+        *output = Value::String(format!(
+            "[superseded by newer identical `{name}` call; stale body removed to save context]"
+        ));
+        pruned += 1;
+    }
+    pruned
 }
 
 fn emit_side_effects(tx: &mpsc::UnboundedSender<AgentEvent>, name: &str, body: &str) {
@@ -2674,7 +3045,9 @@ const MAX_CONCURRENT_SUBAGENTS: usize = 4;
 /// tool call. Provider/model are optional cross-provider overrides. When the
 /// model forgets `provider` but names one in the description/prompt (common),
 /// we recover it via [`infer_provider_from_agent_text`].
-fn parse_agent_call(call: &FunctionCallRef) -> Result<(String, String, String, Option<String>, Option<String>)> {
+type ParsedAgentCall = (String, String, String, Option<String>, Option<String>);
+
+fn parse_agent_call(call: &FunctionCallRef) -> Result<ParsedAgentCall> {
     let v: Value = serde_json::from_str(&call.arguments).unwrap_or(serde_json::json!({}));
     let prompt = v
         .get("prompt")
@@ -2725,10 +3098,7 @@ fn parse_agent_call(call: &FunctionCallRef) -> Result<(String, String, String, O
 /// Prefers explicit routing phrases (`on claude`, `using grok`, `provider:xai`,
 /// `deploy … antigravity`) over bare name mentions, so ordinary task text that
 /// merely discusses a provider does not hijack routing.
-fn infer_provider_from_agent_text(
-    desc: &str,
-    prompt: &str,
-) -> Option<(String, Option<String>)> {
+fn infer_provider_from_agent_text(desc: &str, prompt: &str) -> Option<(String, Option<String>)> {
     // 1) Explicit key=value / key:value in either field.
     for text in [desc, prompt] {
         if let Some(hit) = extract_explicit_provider_kv(text) {
@@ -2757,7 +3127,10 @@ fn extract_explicit_provider_kv(text: &str) -> Option<(String, Option<String>)> 
     let lower = text.to_ascii_lowercase();
     let mut found_provider: Option<String> = None;
     let mut found_model: Option<String> = None;
-    for (key, out) in [("provider", &mut found_provider), ("model", &mut found_model)] {
+    for (key, out) in [
+        ("provider", &mut found_provider),
+        ("model", &mut found_model),
+    ] {
         for sep in [':', '='] {
             let needle = format!("{key}{sep}");
             if let Some(idx) = lower.find(&needle) {
@@ -2772,9 +3145,11 @@ fn extract_explicit_provider_kv(text: &str) -> Option<(String, Option<String>)> 
             }
         }
     }
-    let prov = found_provider.and_then(|raw| resolve_provider_alias(&raw).map(|p| p.id.to_string()))?;
+    let prov =
+        found_provider.and_then(|raw| resolve_provider_alias(&raw).map(|p| p.id.to_string()))?;
     // If model was set but looks like a provider alias, drop it — keep real ids.
-    let model = found_model.filter(|m| resolve_provider_alias(m).is_none() || m.contains('-') || m.contains('/'));
+    let model = found_model
+        .filter(|m| resolve_provider_alias(m).is_none() || m.contains('-') || m.contains('/'));
     Some((prov, model))
 }
 
@@ -2839,7 +3214,9 @@ fn extract_provider_routing_phrase(
         " agent ",
     ];
     for phrase in PHRASES {
-        let Some(idx) = lower.find(phrase) else { continue };
+        let Some(idx) = lower.find(phrase) else {
+            continue;
+        };
         // Whole-word-ish: char before should be boundary.
         if idx > 0 {
             let prev = lower.as_bytes()[idx - 1] as char;
@@ -2861,7 +3238,9 @@ fn extract_provider_routing_phrase(
         // provider name means routing (the description label), never in prose.
         let leads = idx == 0 || window.trim().is_empty();
         let cued = (leads && lead_counts)
-            || CUES.iter().any(|c| window.ends_with(c.trim_start()) || window.contains(c));
+            || CUES
+                .iter()
+                .any(|c| window.ends_with(c.trim_start()) || window.contains(c));
         if !cued {
             // Also allow "…claude subagent" / "…grok agent" immediately after.
             let tail = &lower[after..];
@@ -2902,7 +3281,7 @@ async fn run_agent_tool(
         SubagentTarget::Ready { client, config } => {
             subagent::run_subagent(
                 client,
-                config,
+                *config,
                 runner.cwd.clone(),
                 runner.permission_mode.clone(),
                 &prompt,
@@ -2912,7 +3291,7 @@ async fn run_agent_tool(
             )
             .await
         }
-        SubagentTarget::AwaitingLogin { message, .. } => {
+        SubagentTarget::AwaitingLogin { message, .. } | SubagentTarget::Unavailable { message } => {
             // Surface as a tool error so the parent model does not treat a
             // parent-provider run as success. LoginRequired was already emitted.
             Err(MuseError::Other(message))
@@ -2924,7 +3303,7 @@ async fn run_agent_tool(
 enum SubagentTarget {
     Ready {
         client: ApiClient,
-        config: Config,
+        config: Box<Config>,
     },
     /// Explicit cross-provider request, but no credentials yet. Do not run.
     AwaitingLogin {
@@ -2934,16 +3313,21 @@ enum SubagentTarget {
         provider_name: String,
         message: String,
     },
+    /// Explicit routing was understood, but the target could not be built.
+    /// This stays a failure rather than impersonating the requested provider
+    /// with the parent's client.
+    Unavailable { message: String },
 }
 
 /// Resolve a subagent's client + config, honoring an optional cross-provider
 /// override. When `provider` names a DIFFERENT provider than the parent, build a
 /// client from that provider's stored credentials + catalog base/model.
 ///
-/// Unknown provider names fall back to the parent with a status note. A **known**
-/// provider with **no credentials** does **not** fall back — it emits
+/// Unknown provider names fail closed. A **known** provider with **no credentials**
+/// also does **not** fall back - it emits
 /// [`AgentEvent::LoginRequired`] and returns [`SubagentTarget::AwaitingLogin`]
 /// so the TUI can open `/login` and the model is told the spawn was blocked.
+#[allow(clippy::too_many_arguments)] // Cohesive routing boundary; every input affects target resolution.
 fn resolve_subagent_target(
     parent_client: &ApiClient,
     parent_config: &Config,
@@ -2961,22 +3345,21 @@ fn resolve_subagent_target(
             cfg.model = m.to_string();
             return SubagentTarget::Ready {
                 client: parent_client.clone(),
-                config: cfg,
+                config: Box::new(cfg),
             };
         }
         return SubagentTarget::Ready {
             client: parent_client.clone(),
-            config: parent_config.clone(),
+            config: Box::new(parent_config.clone()),
         };
     };
     let Some(prov) = resolve_provider_alias(requested) else {
-        let _ = tx.send(AgentEvent::Status(format!(
-            "subagent · unknown provider '{requested}' — using parent provider instead"
-        )));
-        return SubagentTarget::Ready {
-            client: parent_client.clone(),
-            config: parent_config.clone(),
-        };
+        let message = format!(
+            "subagent routing failed: unknown provider `{requested}`. Use a provider id from \
+             `/login` or omit `provider` to inherit the parent explicitly."
+        );
+        let _ = tx.send(AgentEvent::Status(message.clone()));
+        return SubagentTarget::Unavailable { message };
     };
     // Same provider as parent — or same account family (google / antigravity /
     // google-oauth all share one Google OAuth session) — means the model is
@@ -2997,7 +3380,7 @@ fn resolve_subagent_target(
         }
         return SubagentTarget::Ready {
             client: parent_client.clone(),
-            config: cfg,
+            config: Box::new(cfg),
         };
     }
     // Different provider: resolve its credential and build a client.
@@ -3023,7 +3406,8 @@ fn resolve_subagent_target(
             let has_credentials =
                 crate::oauth::run_blocking(|| crate::t3code::probe_driver(driver)).has_credentials;
             if has_credentials {
-                match crate::oauth::run_blocking(|| crate::oauth::import_existing_session(prov.id)) {
+                match crate::oauth::run_blocking(|| crate::oauth::import_existing_session(prov.id))
+                {
                     Ok(Some(tokens)) if !tokens.access_token.trim().is_empty() => {
                         // Persist so load_provider_oauth_token can re-resolve it.
                         let _ = crate::auth::save_provider_oauth(
@@ -3099,14 +3483,12 @@ fn resolve_subagent_target(
     let client = match ApiClient::for_provider(base_url, &key, prov.id) {
         Ok(c) => c.with_style(style),
         Err(e) => {
-            let _ = tx.send(AgentEvent::Status(format!(
-                "subagent · could not build {} client ({e}) — using parent",
+            let message = format!(
+                "subagent routing failed: could not build the explicitly requested {} client: {e}",
                 prov.name
-            )));
-            return SubagentTarget::Ready {
-                client: parent_client.clone(),
-                config: parent_config.clone(),
-            };
+            );
+            let _ = tx.send(AgentEvent::Status(message.clone()));
+            return SubagentTarget::Unavailable { message };
         }
     };
     let mut cfg = parent_config.clone();
@@ -3125,7 +3507,7 @@ fn resolve_subagent_target(
     )));
     SubagentTarget::Ready {
         client,
-        config: cfg,
+        config: Box::new(cfg),
     }
 }
 
@@ -3161,14 +3543,7 @@ pub async fn compact_session(
     session: &mut Session,
     usage: &mut UsageTracker,
 ) -> Result<String> {
-    // Snapshot full session before rewrite (never-lose-context; beside .json.bak).
-    {
-        let path = session.path();
-        if path.is_file() {
-            let pre = path.with_extension("precompact.bak");
-            let _ = std::fs::copy(&path, &pre);
-        }
-    }
+    snapshot_before_compact(session);
 
     // Thin old tool bodies for the summarizer so we don't re-pay huge dumps.
     let mut items = session.input_items.clone();
@@ -3241,9 +3616,43 @@ pub async fn compact_session(
     ))
 }
 
+/// Keep a request-valid recent context when the provider refuses both the
+/// original request and the model-assisted compaction request as too large.
+///
+/// The full persisted transcript is copied to `*.precompact.bak` first. The
+/// live request retains recent dialogue and complete tool-call/result pairs,
+/// which is enough for the agent to continue or reconstruct details with tools.
+fn emergency_compact_session(runner: &AgentRunner, session: &mut Session) -> usize {
+    snapshot_before_compact(session);
+    let keep_turns = runner.config.compact_keep_user_turns.max(2) as usize;
+    let mut new_items = vec![user_text_item(
+        "[Emergency context recovery: the provider rejected the prior request as larger than its \
+         context window. Older details remain in the persisted session and precompact backup. \
+         Continue the current task from the recent dialogue and complete tool results below. \
+         Re-read workspace files when an omitted detail is needed.]",
+    )];
+    new_items.extend(recent_dialogue_items(&session.messages, keep_turns));
+    new_items.extend(safe_tail_after_compact(
+        &session.input_items,
+        EMERGENCY_KEEP_WORKING_ITEMS,
+    ));
+    session.input_items = new_items;
+    runner.persist_session(session);
+    session.input_items.len()
+}
+
+fn snapshot_before_compact(session: &Session) {
+    let path = session.path();
+    if path.is_file() {
+        let pre = path.with_extension("precompact.bak");
+        let _ = std::fs::copy(path, pre);
+    }
+}
+
 /// Working items carried across a compaction so the model can see the task it
 /// was mid-way through.
 const COMPACT_KEEP_WORKING_ITEMS: usize = 12;
+const EMERGENCY_KEEP_WORKING_ITEMS: usize = 16;
 
 /// Take the tail of the working items, keeping only *complete* tool pairs.
 ///
@@ -3449,5 +3858,94 @@ mod compact_tail_tests {
     #[test]
     fn empty_items_are_safe() {
         assert!(safe_tail_after_compact(&[], 12).is_empty());
+    }
+
+    #[test]
+    fn repeated_observations_drop_only_the_stale_body_and_keep_pairs() {
+        let large = "old ".repeat(200);
+        let mut items = vec![
+            json!({"type":"function_call","call_id":"old","name":"read_file","arguments":"{\"path\":\"a.rs\"}"}),
+            json!({"type":"function_call_output","call_id":"old","output":large}),
+            json!({"type":"function_call","call_id":"write","name":"write_file","arguments":"{\"path\":\"a.rs\"}"}),
+            json!({"type":"function_call_output","call_id":"write","output":"wrote file"}),
+            json!({"type":"function_call","call_id":"new","name":"read_file","arguments":"{\"path\":\"a.rs\"}"}),
+            json!({"type":"function_call_output","call_id":"new","output":"current contents"}),
+        ];
+        assert_eq!(prune_superseded_observations(&mut items), 1);
+        assert!(items[1]["output"]
+            .as_str()
+            .unwrap()
+            .starts_with("[superseded by newer"));
+        assert_eq!(items[3]["output"], "wrote file");
+        assert_eq!(items[5]["output"], "current contents");
+        assert_eq!(
+            items
+                .iter()
+                .filter(|item| item["type"] == "function_call")
+                .count(),
+            3,
+            "tool declarations remain paired"
+        );
+        assert_eq!(
+            items
+                .iter()
+                .filter(|item| item["type"] == "function_call_output")
+                .count(),
+            3,
+            "tool results remain paired"
+        );
+        assert_eq!(
+            prune_superseded_observations(&mut items),
+            0,
+            "pruning is idempotent"
+        );
+    }
+
+    #[test]
+    fn context_limit_errors_are_detected_without_retrying_validation_errors() {
+        for message in [
+            "maximum context length is 128000 tokens",
+            "input token count exceeds the model limit",
+            "request_too_large",
+            "Prompt is too long for this context window",
+        ] {
+            assert!(
+                is_context_limit_error(&MuseError::Api {
+                    status: 400,
+                    message: message.into(),
+                }),
+                "{message}"
+            );
+        }
+        assert!(!is_context_limit_error(&MuseError::Api {
+            status: 400,
+            message: "invalid tool call id".into(),
+        }));
+        assert!(!is_context_limit_error(&MuseError::Api {
+            status: 401,
+            message: "invalid api key".into(),
+        }));
+    }
+
+    #[test]
+    fn retired_default_recovery_picks_a_same_family_chat_model() {
+        let models = vec![
+            "text-embedding-3-large".into(),
+            "gpt-image-1".into(),
+            "gpt-5.4-mini".into(),
+            "gpt-5.6-terra".into(),
+        ];
+        assert_eq!(
+            pick_replacement_model(&models, "gpt-5.5").as_deref(),
+            Some("gpt-5.6-terra")
+        );
+        assert!(is_model_unavailable_error(&MuseError::Api {
+            status: 404,
+            message: "model gpt-5.5 does not exist".into(),
+        }));
+        assert!(!is_model_unavailable_error(&MuseError::Api {
+            status: 404,
+            message: "file does not exist".into(),
+        }));
     }
 }

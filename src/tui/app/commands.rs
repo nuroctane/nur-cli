@@ -166,6 +166,7 @@ impl App {
             "/status" => self.cmd_status(),
             "/doctor" => self.cmd_doctor(),
             "/model" | "/models" => self.cmd_model(&arg),
+            "/theme" => self.cmd_theme(&arg),
             "/plugins" | "/plugin" => self.cmd_plugins(&arg),
             "/effort" => self.cmd_effort(&arg),
             // /sessions and /resume are the same interactive picker.
@@ -777,7 +778,10 @@ impl App {
 
         s.push_str("\ncommands\n");
         for (name, desc) in COMMANDS {
-            s.push_str(&format!("  {name:<12}  {}\n", self.command_hint(name, desc)));
+            s.push_str(&format!(
+                "  {name:<12}  {}\n",
+                self.command_hint(name, desc)
+            ));
         }
         s.push_str("\n  #<note>       quick-save to memory (no turn)\n");
         self.push_info(s);
@@ -854,7 +858,7 @@ impl App {
         let tok_cap = self
             .cfg
             .max_session_tokens
-            .map(|t| fmt_num(t))
+            .map(fmt_num)
             .unwrap_or_else(|| "∞".into());
         let turn_cap = if self.cfg.max_turns == 0 {
             "∞".into()
@@ -909,7 +913,7 @@ impl App {
         let toks = self
             .cfg
             .max_session_tokens
-            .map(|t| fmt_num(t))
+            .map(fmt_num)
             .unwrap_or_else(|| "∞".into());
         let turns = if self.cfg.max_turns == 0 {
             "∞".into()
@@ -1335,7 +1339,7 @@ impl App {
             let toks = self
                 .cfg
                 .max_session_tokens
-                .map(|t| fmt_num(t))
+                .map(fmt_num)
                 .unwrap_or_else(|| "unlimited".into());
             let turns = if self.cfg.max_turns == 0 {
                 "unlimited".into()
@@ -1410,7 +1414,7 @@ impl App {
                             ),
                         );
                     }
-                    Ok(n) if n == 0.0 => {
+                    Ok(0.0) => {
                         self.cfg.max_session_cost_usd = None;
                         self.push_note(
                             Tone::Usage,
@@ -1664,9 +1668,15 @@ impl App {
             auth,
             sh.label,
         );
-        lines.push_str("\n");
+        lines.push_str("\nprovider auth routes (local, no network):\n");
+        for route in crate::auth::provider_health_report() {
+            lines.push_str("  ");
+            lines.push_str(&route);
+            lines.push('\n');
+        }
+        lines.push('\n');
         lines.push_str(&crate::ecosystem::quick_status());
-        lines.push_str("\n");
+        lines.push('\n');
         lines.push_str(&crate::plugins::quick_status());
         self.push_note(Tone::Skill, lines);
     }
@@ -1679,6 +1689,34 @@ impl App {
             return;
         }
         self.apply_model_selection(arg);
+    }
+
+    fn cmd_theme(&mut self, arg: &str) {
+        let requested = arg.trim();
+        if requested.is_empty() {
+            self.open_theme_picker(false);
+            return;
+        }
+        let Some(id) = crate::theme::canonical_theme_id(requested) else {
+            self.push_error(format!(
+                "unknown theme `{requested}` · choose one of: {}",
+                crate::theme::theme_ids().join(", ")
+            ));
+            return;
+        };
+
+        let previous = crate::theme::current_theme_name();
+        let previous_cfg = self.cfg.theme.clone();
+        let _ = crate::theme::set_theme(id);
+        self.cfg.theme = Some(id.to_string());
+        match crate::config::save_config(&self.cfg) {
+            Ok(()) => self.push_note(Tone::Mode, format!("theme · {id} · saved")),
+            Err(e) => {
+                let _ = crate::theme::set_theme(&previous);
+                self.cfg.theme = previous_cfg;
+                self.push_error(format!("could not save theme: {e}"));
+            }
+        }
     }
 
     fn cmd_plugins(&mut self, arg: &str) {
@@ -1873,8 +1911,8 @@ impl App {
 
     /// takeover — cross-agent session migration (chagent engine).
     ///
-    /// - `/takeover`                     open the takeover window (parity with
-    ///                                   `/sessions`, foreign sessions only)
+    /// - `/takeover` open the takeover window (parity with `/sessions`,
+    ///   foreign sessions only)
     /// - `/takeover ls [agent]`          list migratable sessions
     /// - `/takeover <agent> [id|latest]` import that session and resume it
     ///

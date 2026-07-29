@@ -47,7 +47,7 @@ pub const SEARCH_BUDGET: Duration = Duration::from_secs(8);
 pub fn is_hard_excluded(path: &Path) -> bool {
     for c in path.components() {
         if let Some(name) = c.as_os_str().to_str() {
-            if HARD_EXCLUDES.iter().any(|e| *e == name) {
+            if HARD_EXCLUDES.contains(&name) {
                 return true;
             }
         }
@@ -155,8 +155,6 @@ pub fn rg_files(cwd: &Path, pattern: &str, search_path: &Path, max: usize) -> Op
         pattern.to_string()
     } else if pattern.starts_with('.') {
         format!("*{pattern}")
-    } else if !pattern.contains('/') && !pattern.contains('\\') {
-        format!("*{pattern}*")
     } else {
         format!("*{pattern}*")
     };

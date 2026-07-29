@@ -320,22 +320,12 @@ pub fn is_opencode_go_model(id: &str) -> bool {
     }
     // Strip prefix if present for the bare check below (caller may have already
     // stripped, but accept either form).
-    let bare = lower
-        .strip_prefix("opencode-go/")
-        .unwrap_or(&lower)
-        .trim();
+    let bare = lower.strip_prefix("opencode-go/").unwrap_or(&lower).trim();
     // Go-exclusive families observed in
     // https://julien.cloud/opencode-go-models/ + https://opencode.ai/docs/go/.
     // `grok-` is deliberately excluded — it exists in both Zen and Go, and a
     // Zen-only credential would break if bare `grok-4.5` were forced to Go.
-    const GO_PREFIXES: &[&str] = &[
-        "kimi-",
-        "glm-",
-        "qwen",
-        "mimo",
-        "minimax",
-        "deepseek",
-    ];
+    const GO_PREFIXES: &[&str] = &["kimi-", "glm-", "qwen", "mimo", "minimax", "deepseek"];
     GO_PREFIXES.iter().any(|p| bare.starts_with(p))
 }
 
@@ -358,14 +348,7 @@ pub fn normalize_opencode_selection(id: &str) -> (String, &'static str) {
     };
     let bare_lower = bare.to_ascii_lowercase();
     let goes_to_go = had_prefix || {
-        const GO_PREFIXES: &[&str] = &[
-            "kimi-",
-            "glm-",
-            "qwen",
-            "mimo",
-            "minimax",
-            "deepseek",
-        ];
+        const GO_PREFIXES: &[&str] = &["kimi-", "glm-", "qwen", "mimo", "minimax", "deepseek"];
         GO_PREFIXES.iter().any(|p| bare_lower.starts_with(p))
     };
     let base = if goes_to_go {
@@ -475,7 +458,10 @@ pub fn oauth_base_url(provider_id: &str) -> Option<&'static str> {
 /// Every place that builds a client for a provider *other than the active one*
 /// (cross-provider subagents, failover) must go through this, or it silently
 /// aims an OAuth token at the key-only endpoint and eats a 401.
-pub fn endpoint_for_credential(p: &Provider, is_oauth: bool) -> (&'static str, ApiStyle, &'static str) {
+pub fn endpoint_for_credential(
+    p: &Provider,
+    is_oauth: bool,
+) -> (&'static str, ApiStyle, &'static str) {
     if !is_oauth {
         return (p.base_url, p.style, p.default_model);
     }
@@ -1386,11 +1372,11 @@ fn resolve_provider_token(q: &str) -> Option<&'static Provider> {
         // distinct from `google` so its stored credentials are used.
         "antigravity" | "agy" | "gravity" => "antigravity",
         // Anthropic Claude (model nicknames included)
-        "claude" | "anthropic" | "sonnet" | "opus" | "haiku" | "claude-sonnet"
-        | "claude-opus" | "claude-haiku" => "anthropic",
+        "claude" | "anthropic" | "sonnet" | "opus" | "haiku" | "claude-sonnet" | "claude-opus"
+        | "claude-haiku" => "anthropic",
         // OpenAI
-        "gpt" | "chatgpt" | "openai" | "oai" | "o1" | "o3" | "o4" | "gpt-5" | "gpt5"
-        | "gpt-4" | "gpt4" => "openai",
+        "gpt" | "chatgpt" | "openai" | "oai" | "o1" | "o3" | "o4" | "gpt-5" | "gpt5" | "gpt-4"
+        | "gpt4" => "openai",
         "openai-cc" | "gpt-cc" | "openai-chat" => "openai-cc",
         // DeepSeek
         "deepseek" | "ds" | "deep-seek" | "r1" | "deepseek-r1" | "deepseek-v3" => "deepseek",
@@ -1497,11 +1483,9 @@ fn contains_whole_phrase(hay: &str, phrase: &str) -> bool {
     let mut start = 0;
     while let Some(rel) = hay[start..].find(phrase) {
         let idx = start + rel;
-        let before_ok = idx == 0
-            || !hay.as_bytes()[idx - 1].is_ascii_alphanumeric();
+        let before_ok = idx == 0 || !hay.as_bytes()[idx - 1].is_ascii_alphanumeric();
         let after = idx + phrase.len();
-        let after_ok = after >= hay.len()
-            || !hay.as_bytes()[after].is_ascii_alphanumeric();
+        let after_ok = after >= hay.len() || !hay.as_bytes()[after].is_ascii_alphanumeric();
         if before_ok && after_ok {
             return true;
         }
@@ -1511,6 +1495,91 @@ fn contains_whole_phrase(hay: &str, phrase: &str) -> bool {
         }
     }
     false
+}
+
+/// High-signal cues that the user actually wants work **delegated to / run on**
+/// another backend, as opposed to merely mentioning a model or provider in
+/// passing ("the grok error", "5.6 sol is slow", "like claude does"). Bare
+/// mentions must never spend tokens spawning a cross-provider subagent — that
+/// was toxic UX. Deliberately excludes ultra-generic words ("use", "agent")
+/// that appear constantly in ordinary coding requests.
+const DELEGATION_CUES: &[&str] = &[
+    "subagent",
+    "sub-agent",
+    "subagents",
+    "sub-agents",
+    "spawn",
+    "delegate",
+    "delegation",
+    "dispatch",
+    "deploy",
+    "fan out",
+    "fan-out",
+    "in parallel",
+    "hand off",
+    "hand-off",
+    "handoff",
+    "route to",
+    "route it",
+    "farm out",
+    "offload",
+    "orchestrate",
+    "orchestration",
+    "swarm",
+    "ask claude",
+    "ask grok",
+    "ask gemini",
+    "ask chatgpt",
+    "ask openai",
+    "have claude",
+    "have grok",
+    "have gemini",
+    "run on",
+    "run it on",
+    "run this on",
+    "send to",
+    "let claude",
+    "let grok",
+    "let gemini",
+];
+
+/// True when a clause carries an explicit delegation cue (see [`DELEGATION_CUES`]).
+fn clause_has_delegation_cue(lower_clause: &str) -> bool {
+    DELEGATION_CUES
+        .iter()
+        .any(|cue| contains_whole_phrase(lower_clause, cue))
+}
+
+/// Scan free text for providers the user is explicitly asking to **delegate**
+/// work to (spawn a subagent on, ask/route/deploy, run on, …) — as opposed to a
+/// bare mention. Only these should nudge cross-provider fan-out.
+///
+/// Detection is clause-scoped: a provider alias only counts when the *same*
+/// clause (split on sentence/newline/comma boundaries) also carries a
+/// delegation cue. So "I'm getting an error with grok" yields nothing, while
+/// "spawn a grok subagent to audit failover" yields `["grok"]`.
+pub fn delegated_providers_in_text(text: &str) -> Vec<String> {
+    if text.trim().is_empty() {
+        return Vec::new();
+    }
+    let mut out: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
+    for clause in text.split(['.', '!', '?', ';', ',', '\n']) {
+        let lower = clause.to_ascii_lowercase();
+        if !clause_has_delegation_cue(&lower) {
+            continue;
+        }
+        // Reuse the alias scanner, but only for clauses that carry a delegation
+        // cue — so a bare mention in a cue-free clause never counts.
+        for alias in named_providers_in_text(clause) {
+            if let Some(p) = resolve_provider_alias(&alias) {
+                if seen.insert(p.id) {
+                    out.push(alias);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// The default provider (Meta).
@@ -1654,6 +1723,23 @@ pub fn effective_privacy(
         .unwrap_or_else(|| builtin_privacy(id))
 }
 
+/// Catalog ids with `browser_auth: true`. Keep in sync with
+/// `oauth::login_browser` / `refresh_tokens` match arms (enforced by tests).
+#[allow(dead_code)] // used by tests; available for TUI/docs tooling
+pub fn oauth_browser_provider_ids() -> &'static [&'static str] {
+    &[
+        "openai",
+        "xai",
+        "kimi",
+        "anthropic",
+        "google",
+        "antigravity",
+        "azure",
+        "github-models",
+        "github-copilot",
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1676,6 +1762,49 @@ mod tests {
         assert!(named_providers_in_text("run on gemini pro").contains(&"gemini pro".into()));
     }
 
+    #[test]
+    fn delegated_providers_requires_intent_not_bare_mention() {
+        // Bare mentions — must NOT trigger cross-provider fan-out.
+        assert!(
+            delegated_providers_in_text("I'm getting an error while using claude").is_empty(),
+            "mere mention must not delegate"
+        );
+        assert!(
+            delegated_providers_in_text("the grok output looked wrong").is_empty(),
+            "passing reference must not delegate"
+        );
+        assert!(
+            delegated_providers_in_text("5.6 sol is slow, and gemini too").is_empty(),
+            "comparisons must not delegate"
+        );
+
+        // Explicit delegation — must trigger.
+        assert!(
+            delegated_providers_in_text("spawn a claude subagent to review auth")
+                .iter()
+                .any(|h| h.contains("claude")),
+            "explicit spawn should delegate"
+        );
+        assert!(
+            delegated_providers_in_text("have grok audit the failover paths")
+                .iter()
+                .any(|h| h.contains("grok")),
+            "have <provider> <verb> should delegate"
+        );
+        assert!(
+            delegated_providers_in_text("run this on gemini and fan out to claude").len() >= 2,
+            "multi-target delegation"
+        );
+
+        // Clause scoping: cue in one clause must not leak to a mention in another.
+        assert!(
+            delegated_providers_in_text("spawn a subagent to fix auth. by the way grok was down")
+                .iter()
+                .all(|h| !h.contains("grok")),
+            "delegation cue must not leak across clauses to a bare mention"
+        );
+    }
+
     /// A credential's *kind* decides the endpoint, not just the provider id.
     /// Every cross-provider client (subagent routing, failover) builds through
     /// this, so an OAuth token must never be aimed at the key-only host.
@@ -1688,7 +1817,10 @@ mod tests {
         assert_eq!(model, openai.default_model);
 
         let (base, _, _) = endpoint_for_credential(openai, true);
-        assert_eq!(base, OPENAI_OAUTH_BASE_URL, "ChatGPT session → Codex backend");
+        assert_eq!(
+            base, OPENAI_OAUTH_BASE_URL,
+            "ChatGPT session → Codex backend"
+        );
 
         // Grok Build sessions change host, wire format AND model line.
         let xai = by_id("xai").expect("xai in catalog");
@@ -2236,21 +2368,4 @@ mod tests {
             assert!(!p.env_key.is_empty(), "{id} env_key empty");
         }
     }
-}
-
-/// Catalog ids with `browser_auth: true`. Keep in sync with
-/// `oauth::login_browser` / `refresh_tokens` match arms (enforced by tests).
-#[allow(dead_code)] // used by tests; available for TUI/docs tooling
-pub fn oauth_browser_provider_ids() -> &'static [&'static str] {
-    &[
-        "openai",
-        "xai",
-        "kimi",
-        "anthropic",
-        "google",
-        "antigravity",
-        "azure",
-        "github-models",
-        "github-copilot",
-    ]
 }
