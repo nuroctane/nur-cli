@@ -170,6 +170,62 @@ pub struct Config {
     /// still uses Nur Gold until they choose (or skip) the first-run picker.
     #[serde(default)]
     pub theme: Option<String>,
+    /// Headroom context compression (inline tool-result compress; default on).
+    #[serde(default)]
+    pub headroom: HeadroomConfig,
+    /// OptMem permanent memory (upstream-pure ~/.optmem; default on).
+    #[serde(default)]
+    pub optmem: OptmemConfig,
+}
+
+/// `[headroom]` — compress large tool results before they enter model context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeadroomConfig {
+    /// Default **true**. Set false to disable inline compress.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// `inline` (default) or `off`. Proxy mode reserved.
+    #[serde(default = "default_headroom_mode")]
+    pub mode: String,
+    /// Skip compression below this many chars (default 2000).
+    #[serde(default = "default_headroom_min_chars")]
+    pub min_chars: u64,
+    /// Optional override for Headroom's token-counter model. Empty = use the
+    /// active session model at compress time.
+    #[serde(default)]
+    pub model: String,
+}
+
+fn default_headroom_mode() -> String {
+    "inline".into()
+}
+fn default_headroom_min_chars() -> u64 {
+    2000
+}
+
+impl Default for HeadroomConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            mode: default_headroom_mode(),
+            min_chars: default_headroom_min_chars(),
+            model: String::new(),
+        }
+    }
+}
+
+/// `[optmem]` — Victor Taelin OptMem under ~/.optmem.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OptmemConfig {
+    /// Default **true**. Wake inject + tool available when enabled.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+impl Default for OptmemConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 /// Resolve a per-provider base-URL override for API-key mode, if any.
@@ -282,6 +338,8 @@ impl Default for Config {
             fusion_panel: Vec::new(),
             provider_base_urls: std::collections::HashMap::new(),
             theme: None,
+            headroom: HeadroomConfig::default(),
+            optmem: OptmemConfig::default(),
         }
     }
 }

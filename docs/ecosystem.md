@@ -17,6 +17,11 @@ NurCLI ships with an auto-provisioned knowledge stack.
 | **Plugins** | In-product marketplace (`/plugins` · `nur plugins`) — install Superpowers, Vercel, Firecrawl, Chrome DevTools, Figma, Sentry, Fable, … into `~/.nur/plugins` |
 | **Takeover** | `/takeover` (alias `/hijack`) imports **Claude Code · Codex · Cursor · Nur · Grok Build** sessions, powered by the bundled `resume-session` reader |
 | **AKM** | Agent knowledge package manager (requires Node.js) |
+| **Headroom** | [headroom-ai](https://github.com/headroomlabs-ai/headroom) inline tool-result compression (default **on**; disable with `[headroom] enabled = false`) |
+| **OptMem** | [OptMem](https://github.com/VictorTaelin/OptMem) permanent memory under upstream `~/.optmem` (`/optmem` · `/memo`) |
+| **egaki** | [egaki](https://github.com/remorses/egaki) image/video gen (`/egaki` · `/image`; `login --provider chatgpt`) |
+| **fractal** | [fractal](https://github.com/plasma-ai/fractal) hierarchical loops - Unix only; ecosystem ensure + loud warn on `node start` |
+| **infinite-headcount** | Factory skill pack auto-provisioned via ecosystem packs |
 
 
 ---

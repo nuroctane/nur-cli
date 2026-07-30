@@ -436,6 +436,10 @@ Type these inside the `nur` TUI. Aliases are shown in the same row.
 | `/swarm` | Inline subagent activity grid — a live tiled pane per subagent (aliases `/subagents`, `/agents`). **Auto-surfaces the moment a subagent spawns**, so you no longer have to run it first to watch a fan-out. `detail` adds the status row, `off` freezes, `clear` drops finished runs, `hide` removes the card and suppresses auto-surfacing for the rest of the turn (it re-arms on the next turn). |
 | `/subagents` · `/agents` | Alias of `/swarm` — inline subagent grid, live panes per subagent |
 | `/fractal` | Recursive agent tree — hierarchical loops in git worktrees: `init` · `node list` · `node status <name>` · `node start <name>` · `attach <name>` · `open`. **`open`** launches fractal's own full-screen dashboard: nur hands the terminal over and restores it when you quit. ⚠️ **Unix only** — see below. |
+| `/optmem` · `/memo` | OptMem permanent memory (`~/.optmem`): `wake` · `note` · `nap` · `recall` · `doctor` |
+| `/headroom` | Context compression doctor (inline tool-result compress on by default) |
+| `/egaki` · `/image` | Image/video gen via egaki (`login --provider chatgpt` supported) |
+| `/factory-overnight` | Fractal-first overnight factory from `HANDOFF.md` (Unix preferred) |
 | `/pen` · `/drawings` · `/penecho` | Penecho canvas — ink, MathJax, plots, animations; `/drawings` lists saved canvases |
 | `/draw` | Open / build **tldraw offline** boards (`/draw <file.tldraw>`, `/draw install`, `/draw <idea>`). New static boards save to the **Desktop**. Opening a board auto-enables document scripts (canvas API `script-workspace` → applied) for interactive agent-shape files. |
 | `/steer` | Inject a message into the running turn without cancelling it |

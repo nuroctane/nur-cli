@@ -70,14 +70,15 @@ Apply a unified diff patch to a file.
 
 ### `bash`
 
-Execute shell commands. Hardened with:
+Execute shell commands in the workspace cwd (cwd-scoped, not a full OS sandbox). Hardened with:
 
-- **Denylist** — blocks dangerous commands (e.g. `rm -rf /`, fork bombs)
-- **Timeout** — commands are killed after a configurable timeout
-- **Sandbox** — when available, runs in an isolated environment
+- **Denylist** — blocks dangerous commands (e.g. `rm -rf /`, fork bombs) and hang-prone patterns (dev servers, `watch`, interactive prompts)
+- **Timeout** — default **60s**, hard max **180s**; idle (no output ~90s after grace) kills the process tree
+- **Failure lockout** — identical timed-out/hung commands in the same cwd are refused for 15 minutes
+- **Non-interactive env** — `CI=1`, `GIT_TERMINAL_PROMPT=0`, stdin null
 
 !!! note "Shell backend"
-    NurCLI uses Git Bash on Windows when available, otherwise falls back to PowerShell. On macOS/Linux it uses Bash. Check with `nur doctor`.
+    NurCLI uses Git Bash on Windows when available, otherwise falls back to PowerShell. On macOS/Linux it uses Bash. Check with `nur doctor`. Prefer `list_dir` / `read_file` / `grep` / `glob` over shell for file IO and search.
 
 ---
 
@@ -152,6 +153,24 @@ Search shared engram memory.
 ### `ruflo`
 
 Search vector memory.
+
+### `headroom`
+
+Doctor / optional one-shot compress for [Headroom](https://github.com/headroomlabs-ai/headroom).
+Inline compression of large tool results is **on by default** (`[headroom] enabled`);
+missing install no-ops. Also `/headroom`.
+
+### `optmem`
+
+Permanent memory via [OptMem](https://github.com/VictorTaelin/OptMem) at `~/.optmem`
+(upstream path, not under `~/.nur`). Actions: `doctor` · `wake` · `note` · `nap` ·
+`recall` · `zoom` · `forget` · `config`. Also `/optmem` · `/memo`.
+
+### `egaki`
+
+Image/video generation via [egaki](https://github.com/remorses/egaki). Prefer
+`egaki login --provider chatgpt` when using a ChatGPT subscription. Also `/egaki`
+· `/image`.
 
 ### `akarso`
 

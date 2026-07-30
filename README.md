@@ -247,6 +247,9 @@ nur "steal UI design tokens from demo.mp4 and scaffold a matching component"
 | **Skills** | Progressive packs via `skill` |
 | **AKM** | Skill package manager |
 | **[fractal](https://github.com/plasma-ai/fractal)** | Hierarchical recursive agent loops in git worktrees (`/fractal`). Apache-2.0. **Unix only** — fractal 1.0.0 imports `fcntl`, so use WSL on Windows. Python 3.12–3.14 |
+| **[Headroom](https://github.com/headroomlabs-ai/headroom)** | Inline tool-result compression (default on; `[headroom] enabled = false` to disable) |
+| **[OptMem](https://github.com/VictorTaelin/OptMem)** | Permanent memory at `~/.optmem` (`/optmem` · `/memo`) |
+| **[egaki](https://github.com/remorses/egaki)** | Image/video gen (`/egaki` · `/image`; ChatGPT-sub login supported) |
 | **[penecho](https://github.com/penecho/penecho)** | Infinite thinking canvas run as a sidecar (`/penecho`). AGPL-3.0 |
 | **[t3code](https://github.com/pingdotgg/t3code)** | Vendor-CLI auth delegation — driver probing, env isolation, pairing. MIT |
 

@@ -39,9 +39,9 @@ mod commands;
 
 /// `/bro` style rider, prepended to every turn while chill mode is on.
 /// Mirrors `skills/bro/SKILL.md`, but phrased as a standing style rather than a
-/// one-shot restate. Tone only — it must never soften what is actually true.
+/// one-shot restate. Tone only - it must never soften what is actually true.
 pub const BRO_STYLE: &str = "[style] Talk like a friend who knows this stuff, \
-not like documentation. Plain words, no jargon — if a technical term is \
+not like documentation. Plain words, no jargon - if a technical term is \
 unavoidable, say what it means in passing. Skip the preamble and the hedging; \
 lead with the answer, then explain if it needs it. Short sentences. Contractions \
 are fine. Being chill is about tone, not substance: keep every fact, caveat, and \
@@ -85,9 +85,9 @@ pub fn compose_turn_prompt(
 }
 
 /// When a turn error means the model isn't available for the active credential,
-/// append which model/provider failed and how to recover. Provider-agnostic —
+/// append which model/provider failed and how to recover. Provider-agnostic -
 /// the trigger phrases cover OpenAI ("do not have access to"), NVIDIA NIM
-/// ("not found for account"), and the common OpenAI-compatible variants — so it
+/// ("not found for account"), and the common OpenAI-compatible variants - so it
 /// helps every provider, not just the one that surfaced the bug.
 pub fn annotate_model_unavailable(err: &str, provider: &str, model: &str) -> String {
     const PHRASES: &[&str] = &[
@@ -125,7 +125,7 @@ fn opencode_model_selection(id: &str) -> (String, &'static str) {
     crate::providers::normalize_opencode_selection(id)
 }
 
-/// The `/scan` instruction template — bundled skill body that tells the agent
+/// The `/scan` instruction template - bundled skill body that tells the agent
 /// to map this repo and publish a shareable scan to foglamp.dev. Frontmatter is
 /// stripped at use so the model sees only the instructions.
 const SCAN_SKILL_RAW: &str = include_str!("../../skills/scan/SKILL.md");
@@ -144,13 +144,13 @@ fn strip_frontmatter(s: &str) -> &str {
 pub fn scan_prompt(focus: &str) -> String {
     let body = strip_frontmatter(SCAN_SKILL_RAW).trim_end();
     let focus = focus.trim();
-    // Hard preamble — models (esp. high-reasoning hosts) otherwise stall on
+    // Hard preamble - models (esp. high-reasoning hosts) otherwise stall on
     // "approval" without calling tools or writing the local JSON.
     let mut s = String::from(
-        "# /scan — execute now\n\
+        "# /scan - execute now\n\
          Call tools this turn. Investigate the repo, then **write** \
          `.foglamp/scan.json` (local only). Report the absolute path. \
-         Ask the user **only** before POSTing to foglamp.dev — not before \
+         Ask the user **only** before POSTing to foglamp.dev - not before \
          exploring or writing the file. Do not end with only reasoning.\n\n",
     );
     s.push_str(body);
@@ -220,6 +220,12 @@ pub const COMMANDS: &[(&str, &str)] = &[
 
     ("/graphify", "knowledge graph: status | query | path | explain | extract"),
     ("/plur", "shared engram memory: status | learn | recall | inject"),
+    ("/optmem", "OptMem permanent memory (~/.optmem): wake | note | nap | recall"),
+    ("/memo", "alias of /optmem"),
+    ("/headroom", "context compression status / doctor (inline default on)"),
+    ("/egaki", "image/video gen via egaki (login --provider chatgpt supported)"),
+    ("/image", "alias: egaki image generation"),
+    ("/factory-overnight", "fractal-first overnight factory from HANDOFF.md"),
     ("/ruflo", "vector memory / swarm: status | search | store"),
     ("/ecosystem", "ecosystem readiness (graphify · plur · ruflo · excalidraw · …)"),
     ("/usage", "token usage + cost for this session  (/cost)"),
@@ -229,7 +235,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/poor", "cost-saver prompt (skip PLUR/skills/memory) · shows budget status · /poor status"),
     ("/undo", "revert the last file edit (write/edit/multi_edit) made this session"),
     ("/receipt", "session receipt: verify what actually ran (models, tools, privacy tiers)"),
-    ("/cua", "computer-use desktop driver — /cua on (always-on background control) · off (on-demand) · status"),
+    ("/cua", "computer-use desktop driver - /cua on (always-on background control) · off (on-demand) · status"),
     ("/failover", "set up cross-provider failover in the provider picker (space toggles)"),
     ("/fusion", "multi-model debate → one answer: /fusion <question> · panel <ids> · off"),
     ("/local", "run a model locally (llama.cpp): /local up [tier|url] · status · models · down"),
@@ -244,7 +250,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/theme", "choose a live color theme  (/theme <name>)"),
     ("/plugins", "browse · install · enable marketplace plugins"),
     ("/plugin", "browse · install · enable marketplace plugins  (alias of /plugins)"),
-    // Rendered through `App::command_hint` — the rungs shown are the active
+    // Rendered through `App::command_hint` - the rungs shown are the active
     // provider's, not this placeholder.
     ("/effort", "reasoning effort for the active provider"),
     ("/sessions", "browse & open past sessions  ·  c → takeover  (same as /resume)"),
@@ -284,7 +290,7 @@ pub enum Cell {
         text: String,
         streaming: bool,
     },
-    /// Model reasoning stream. Collapsed by default when finished — click or
+    /// Model reasoning stream. Collapsed by default when finished - click or
     /// click to expand. `duration` set when the thought ends.
     Thinking {
         text: String,
@@ -304,7 +310,7 @@ pub enum Cell {
         duration: Option<Duration>,
         expanded: bool,
     },
-    /// End-of-turn timing strip — always includes wall time + thought time.
+    /// End-of-turn timing strip - always includes wall time + thought time.
     TurnDone {
         duration: Duration,
         /// Sum of model thinking time during this turn (0 if none).
@@ -325,14 +331,14 @@ pub enum Cell {
     },
     /// Inline execution-graph card (`/graph`). A live tree of the current turn's
     /// tools / subagents / todos, refreshed on each tool transition while `live`.
-    /// Ephemeral — not persisted to the session log.
+    /// Ephemeral - not persisted to the session log.
     Graph {
         lines: Vec<String>,
         live: bool,
     },
     /// Inline subagent activity card (`/swarm`). Renders the live subagent
     /// table as a tiled grid of panes; `live` keeps it animating and re-reading
-    /// the registry each frame. Ephemeral — not persisted to the session log.
+    /// the registry each frame. Ephemeral - not persisted to the session log.
     Swarm {
         live: bool,
         detail: bool,
@@ -359,7 +365,7 @@ pub enum SgNode {
         duration: Option<Duration>,
         cell_idx: usize,
     },
-    /// A tool call. `agent` marks the `agent` tool — the renderer fans its
+    /// A tool call. `agent` marks the `agent` tool - the renderer fans its
     /// live subagent runs out underneath as parallel children.
     Tool {
         name: String,
@@ -383,7 +389,7 @@ pub enum SgNode {
     Prompt { text: String, cell_idx: usize },
     /// A follow-up queued while the turn runs.
     Queued { text: String },
-    /// The turn settled — completed or interrupted.
+    /// The turn settled - completed or interrupted.
     Done {
         duration: Duration,
         interrupted: bool,
@@ -391,7 +397,7 @@ pub enum SgNode {
     },
 }
 
-/// Hash one `SgNode`'s structural identity into `h` — shared by the build-time
+/// Hash one `SgNode`'s structural identity into `h` - shared by the build-time
 /// model fingerprint (`build_sidegraph_model`) and any per-node hashing so the
 /// two can never drift. Uses derived `Hash` on `SgState` (no `format!` alloc).
 pub(crate) fn sg_node_fingerprint(n: &SgNode, h: &mut impl std::hash::Hasher) {
@@ -594,11 +600,11 @@ pub struct SwarmHit {
 /// event, so it can never drift from what actually happened.
 #[derive(Debug, Clone)]
 pub struct SideGraphModel {
-    /// Root node text — the prompt that started this turn (clipped).
+    /// Root node text - the prompt that started this turn (clipped).
     pub query: String,
     /// The turn is still running.
     pub running: bool,
-    /// When the rooted turn began — the renderer filters swarm runs started
+    /// When the rooted turn began - the renderer filters swarm runs started
     /// after this into the fan-out, so children animate live.
     pub turn_started: Instant,
     pub nodes: Vec<SgNode>,
@@ -648,7 +654,7 @@ impl Cell {
         matches!(self, Cell::Thinking { .. } | Cell::Tool { .. })
     }
 
-    /// Hover peek / expand target — thoughts, tools/bash, and turn timing strips.
+    /// Hover peek / expand target - thoughts, tools/bash, and turn timing strips.
     pub fn is_peekable(&self) -> bool {
         matches!(
             self,
@@ -690,7 +696,7 @@ impl Cell {
                 } else {
                     duration
                         .map(theme::fmt_duration)
-                        .unwrap_or_else(|| "—".into())
+                        .unwrap_or_else(|| "-".into())
                 };
                 Some(if *active {
                     format!("thought · {d} (live)")
@@ -710,7 +716,7 @@ impl Cell {
                 } else {
                     duration
                         .map(theme::fmt_duration)
-                        .unwrap_or_else(|| "—".into())
+                        .unwrap_or_else(|| "-".into())
                 };
                 let status = match ok {
                     None => "running",
@@ -732,11 +738,27 @@ impl Cell {
                     format!("turn · took {t} · thought {th}")
                 })
             }
-            Cell::Assistant { streaming, .. } => Some(if *streaming {
-                "answer · writing".to_string()
-            } else {
-                "answer".to_string()
-            }),
+            Cell::Assistant { text, streaming } => {
+                #[cfg(feature = "image-peek")]
+                let mut title = if *streaming {
+                    "answer · writing".to_string()
+                } else {
+                    "answer".to_string()
+                };
+                #[cfg(not(feature = "image-peek"))]
+                let title = if *streaming {
+                    "answer · writing".to_string()
+                } else {
+                    "answer".to_string()
+                };
+                #[cfg(feature = "image-peek")]
+                if crate::tui::latex::first_cached_png(text).is_some() {
+                    title.push_str(" · equation");
+                }
+                #[cfg(not(feature = "image-peek"))]
+                let _ = text;
+                Some(title)
+            }
             _ => None,
         }
     }
@@ -784,7 +806,7 @@ impl Cell {
                 } else {
                     duration
                         .map(theme::fmt_duration)
-                        .unwrap_or_else(|| "—".into())
+                        .unwrap_or_else(|| "-".into())
                 };
                 s.push_str(&format!("duration: {d}\n"));
                 s.push_str("---\n");
@@ -857,12 +879,12 @@ pub struct CtxMenu {
 /// the action it shows.
 pub const CTX_ACTIONS: &[(&str, &str)] = &[
     ("⑂", "Fork"),   // branch: a new session seeded up to this prompt
-    ("✎", "Edit"),   // load prompt into input (no rewind) — send interjects as a new turn
+    ("✎", "Edit"),   // load prompt into input (no rewind) - send interjects as a new turn
     ("↺", "Revert"), // rewind this session to just before this prompt
     ("⧉", "Copy"),   // copy the prompt text
 ];
 
-/// What ↑/↓ do in the current UI state. Never history — history lives on
+/// What ↑/↓ do in the current UI state. Never history - history lives on
 /// Ctrl+P / Ctrl+N, because a past prompt jumping into the input box unbidden
 /// is exactly the behavior we removed.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -905,7 +927,7 @@ impl TextRange {
     }
 }
 
-/// The whole arrow-key policy, as a pure function — single source of truth for
+/// The whole arrow-key policy, as a pure function - single source of truth for
 /// both `App::arrow_action` and its tests.
 ///
 /// Reading the chat is the common case, so arrows scroll. They only move the
@@ -934,7 +956,7 @@ pub fn decide_arrow_action(input: &InputState, palette_visible: bool, up: bool) 
 pub enum TranscriptClick {
     /// Expand/collapse via the left chevron only.
     ToggleExpand(usize),
-    /// Open stable peek — **only** when the pointer is on the literal
+    /// Open stable peek - **only** when the pointer is on the literal
     /// `"click to peek"` substring (see `hit_click_to_peek`).
     OpenPeek(usize),
     /// No-op for this click (stable peek is closed only via Esc / outside / ✕).
@@ -977,7 +999,7 @@ pub enum LoginStage {
     Method,
     Key,
     /// Optional base-URL override for OpenAI-compatible key logins (OpenAI,
-    /// Azure, groq, a local/proxy endpoint, …). Prefilled with the default —
+    /// Azure, groq, a local/proxy endpoint, …). Prefilled with the default -
     /// press ↵ to accept, or edit to point at a custom endpoint.
     BaseUrl,
     /// Device-code / SSO wait (URL + short code like `hf auth login`).
@@ -998,9 +1020,9 @@ pub struct LoginModal {
     /// Provider-search filter typed in the picker stage.
     pub filter: String,
     /// Selected row index into the filtered provider list (same role as
-    /// `SessionPicker::idx` — one-step ↑↓/wheel).
+    /// `SessionPicker::idx` - one-step ↑↓/wheel).
     pub sel: usize,
-    /// First visible row — only moves by 1 when selection leaves the window.
+    /// First visible row - only moves by 1 when selection leaves the window.
     pub scroll: usize,
     /// How many provider rows fit in the body (set by last draw).
     pub vis_page: usize,
@@ -1055,7 +1077,7 @@ impl LoginModal {
         self.filtered().len()
     }
 
-    /// Same clamp rules as `SessionPicker` — selection stays in view with min scroll.
+    /// Same clamp rules as `SessionPicker` - selection stays in view with min scroll.
     pub fn clamp_scroll(&mut self) {
         let count = self.count();
         if count == 0 {
@@ -1142,13 +1164,13 @@ pub struct ModelPicker {
     pub provider_name: String,
     /// Model ids fetched from the provider (empty until the fetch lands).
     pub models: Vec<String>,
-    /// The currently active model id — marked in the list.
+    /// The currently active model id - marked in the list.
     pub current: String,
     /// Search filter; also usable verbatim as a custom id to switch to.
     pub filter: String,
     /// Selected row into the filtered list.
     pub sel: usize,
-    /// First visible row — moves by 1 when selection leaves the window.
+    /// First visible row - moves by 1 when selection leaves the window.
     pub scroll: usize,
     /// Rows that fit in the body (set by last draw).
     pub vis_page: usize,
@@ -1275,8 +1297,8 @@ impl ModelPicker {
         self.clamp_scroll();
     }
 
-    /// The id that Enter would select: the highlighted row, or — when nothing
-    /// matches the filter — the raw filter text as a custom id.
+    /// The id that Enter would select: the highlighted row, or - when nothing
+    /// matches the filter - the raw filter text as a custom id.
     pub fn chosen(&self) -> Option<String> {
         let picks = self.filtered();
         if let Some(m) = picks.get(self.sel) {
@@ -1435,12 +1457,12 @@ impl SessionRow {
     }
 }
 
-/// Interactive sessions browser — open with `/sessions` or `/resume`.
+/// Interactive sessions browser - open with `/sessions` or `/resume`.
 pub struct SessionPicker {
     pub rows: Vec<SessionRow>,
     /// Selected entry (absolute index into `visible()`).
     pub idx: usize,
-    /// First visible entry — only advances/retreats by 1 when selection leaves the window.
+    /// First visible entry - only advances/retreats by 1 when selection leaves the window.
     pub scroll: usize,
     /// How many entries fit in the body (set by last draw).
     pub vis_page: usize,
@@ -1456,7 +1478,7 @@ pub struct SessionPicker {
     pub last_step_at: Instant,
 }
 
-/// Update-available modal — opencode-style UX with parity to other pickers (session, model, login, peek).
+/// Update-available modal - opencode-style UX with parity to other pickers (session, model, login, peek).
 #[derive(Debug, Clone, Default)]
 #[allow(dead_code)]
 pub struct UpdateHit {
@@ -1495,7 +1517,7 @@ pub struct PickerHit {
     /// List body (rows).
     #[allow(dead_code)]
     pub body: ratatui::layout::Rect,
-    /// Scope chip ("here" / "all") — click to toggle.
+    /// Scope chip ("here" / "all") - click to toggle.
     pub scope: ratatui::layout::Rect,
     /// Window-switch chip ("takeover" / "sessions").
     /// Reserved for a future clickable chip; the switch is keyboard-driven (`c`).
@@ -1618,7 +1640,7 @@ impl SessionPicker {
             return;
         }
         self.idx = i.min(count - 1);
-        // Bring into view with minimal scroll (may jump if click far — intentional).
+        // Bring into view with minimal scroll (may jump if click far - intentional).
         self.clamp_scroll();
     }
 }
@@ -1626,7 +1648,7 @@ impl SessionPicker {
 /// Compact relative timestamp for the sessions picker.
 /// True when a session recorded at `session_cwd` belongs to `here`.
 ///
-/// Exact match, or `here` sits inside `session_cwd` — Grok roots many sessions
+/// Exact match, or `here` sits inside `session_cwd` - Grok roots many sessions
 /// at the drive or home directory, and those are still "this workspace" from a
 /// project folder. Case-insensitive and separator-agnostic for Windows.
 fn cwd_matches(here: &str, session_cwd: &str) -> bool {
@@ -1680,7 +1702,7 @@ pub struct App {
     pub client: ApiClient,
     pub cfg: Config,
     pub cwd: PathBuf,
-    /// Live permission mode (manual / plan / auto) — Arc, mid-turn safe.
+    /// Live permission mode (manual / plan / auto) - Arc, mid-turn safe.
     pub permission_mode: SharedMode,
     pub approved_tools: Arc<Mutex<HashSet<String>>>,
     pub tool_host: ToolHost,
@@ -1716,11 +1738,11 @@ pub struct App {
     /// Coalesced paste buffer. A paste arrives either as one bracketed
     /// `Event::Paste` (handled immediately) or, on terminals that "drip" it,
     /// as a burst of key events queued in the same instant. Burst chars land
-    /// here and flush as ONE chip once the input stream goes quiet — so a lone
+    /// here and flush as ONE chip once the input stream goes quiet - so a lone
     /// keystroke is never mistaken for a paste. See `flush_paste_accum`.
     paste_accum: String,
     paste_accum_at: Option<Instant>,
-    /// Merged paste session — ensures a large wall of text that the PTY split
+    /// Merged paste session - ensures a large wall of text that the PTY split
     /// across many frames / Event::Paste chunks becomes ONE chip, not N chips.
     /// Any paste arriving within PASTE_MERGE_WINDOW appends to this chip.
     active_paste_id: Option<u32>,
@@ -1734,7 +1756,7 @@ pub struct App {
     /// Standing session goal (`/goal`), prepended to every model turn as context
     /// without appearing in the transcript. Cleared with `/goal clear`.
     session_goal: Option<String>,
-    /// `/bro` — restate everything in plain, low-jargon language for this session.
+    /// `/bro` - restate everything in plain, low-jargon language for this session.
     bro: bool,
     /// Sticky skill names (`/adhd`, `/skillname`) injected every turn until off.
     sticky_skills: Vec<String>,
@@ -1754,7 +1776,7 @@ pub struct App {
     pub sticky_cell: Option<usize>,
     /// True while the user is dragging the scrollbar thumb.
     pub scrollbar_drag: bool,
-    /// Mouse is over the scrollbar rail (hover affordance — thumb widens).
+    /// Mouse is over the scrollbar rail (hover affordance - thumb widens).
     pub scrollbar_hover: bool,
     /// Subcell offset between the grab point and the thumb's top edge, so
     /// dragging keeps the exact spot under the pointer (no jump-to-centre).
@@ -1763,7 +1785,7 @@ pub struct App {
     pub peek_scroll: u16,
     /// Total content rows of the current peek body (set at draw; drives clamping).
     pub peek_rows: u16,
-    /// Peek cell the scroll offset belongs to — reset when the target changes.
+    /// Peek cell the scroll offset belongs to - reset when the target changes.
     pub peek_scroll_cell: Option<usize>,
     /// Expanded state for the open peek modal. When set, the row cap that
     /// truncates long tool output is lifted so the full body is scrollable.
@@ -1784,22 +1806,22 @@ pub struct App {
     /// Terminal graphics picker (protocol + font size) for inline image peeks.
     #[cfg(feature = "image-peek")]
     pub img_picker: Option<ratatui_image::picker::Picker>,
-    /// Decoded image protocols keyed by path — encoding is expensive, cache it.
+    /// Decoded image protocols keyed by path - encoding is expensive, cache it.
     #[cfg(feature = "image-peek")]
     pub img_cache: HashMap<String, ratatui_image::protocol::StatefulProtocol>,
     /// True while drag-selecting transcript text (not scrollbar).
     pub selecting: bool,
-    /// Left button is held — some hosts emit `Moved` instead of `Drag` while held.
+    /// Left button is held - some hosts emit `Moved` instead of `Drag` while held.
     pub mouse_left_down: bool,
     /// Down position before we know if this is a click or a drag-select.
     pub select_anchor: Option<TextPos>,
-    /// Active text selection in the transcript (plain drag — no Shift needed).
+    /// Active text selection in the transcript (plain drag - no Shift needed).
     pub selection: Option<TextRange>,
     /// Throttle for edge auto-scroll while drag-selecting.
     pub select_autoscroll_at: Option<Instant>,
     /// Plain text of every wrapped transcript line (for copy). Rebuilt each draw.
     pub plain_lines: Vec<String>,
-    /// Per-cell wrap cache — avoids re-wrapping the whole transcript every frame.
+    /// Per-cell wrap cache - avoids re-wrapping the whole transcript every frame.
     pub wrap_cache_width: u16,
     pub wrap_cache_keys: Vec<u64>,
     pub wrap_cache_parts: Vec<Vec<ratatui::text::Line<'static>>>,
@@ -1830,7 +1852,7 @@ pub struct App {
     pub transcript_top: u16,
     /// Brief highlight after toggle: (cell_idx, when).
     pub expand_flash: Option<(usize, Instant)>,
-    /// Unused (hover peeks removed — kept so field layout stays simple).
+    /// Unused (hover peeks removed - kept so field layout stays simple).
     pub hover_cell: Option<usize>,
     /// Stable click-to-peek: cell index while open.
     pub peek_open: Option<usize>,
@@ -1838,7 +1860,7 @@ pub struct App {
     /// exclusive with `peek_open` (opening one closes the other). Reuses the
     /// same frozen geometry + scroll + dismiss machinery as the cell peek.
     pub peek_swarm: Option<u64>,
-    /// Frozen dialogue geometry — set **once** on first draw, never moves.
+    /// Frozen dialogue geometry - set **once** on first draw, never moves.
     pub peek_frozen: Option<ratatui::layout::Rect>,
     /// Bounds used for outside-click / ✕ (equals `peek_frozen` while open).
     pub peek_box: ratatui::layout::Rect,
@@ -1846,9 +1868,9 @@ pub struct App {
     pub peek_close: ratatui::layout::Rect,
     /// Right-click / double-click context menu on a User prompt.
     pub ctx_menu: Option<CtxMenu>,
-    /// Last left-button press (cell idx, time) — for double-click detection.
+    /// Last left-button press (cell idx, time) - for double-click detection.
     pub last_click: Option<(usize, Instant)>,
-    /// Last left-button press on a swarm card pane (run id, time) — separate
+    /// Last left-button press on a swarm card pane (run id, time) - separate
     /// from `last_click` so prompt double-click detection doesn't clobber it.
     pub last_swarm_click: Option<(u64, Instant)>,
     /// Last known mouse position (for anchoring the peek box).
@@ -1862,7 +1884,7 @@ pub struct App {
     preserve_queue_on_interrupt: bool,
     /// Highest subagent run id the swarm card has already been surfaced for
     /// (see [`App::poll_swarm_autoshow`]). Monotonic for the life of the
-    /// session — run ids never restart, so this must NOT be reset per turn or
+    /// session - run ids never restart, so this must NOT be reset per turn or
     /// last turn's finished runs would re-open the card on every new prompt.
     swarm_autoshow_seen_id: u64,
     /// User dismissed the swarm card with `/swarm hide`; do not auto-surface it
@@ -1900,7 +1922,7 @@ pub struct App {
     pub sidegraph_drag_start_max_pan_x: u16,
     /// True once the user has manually panned / scrolled the sidegraph. When
     /// set, new nodes appearing must NOT move the canvas out from under them
-    /// — we keep the viewport anchored instead of auto-scrolling to bottom.
+    /// - we keep the viewport anchored instead of auto-scrolling to bottom.
     pub sidegraph_user_panned: bool,
     /// Previous max scroll values, used to keep viewport stable when user has panned.
     pub sidegraph_prev_max_scroll: u16,
@@ -1922,7 +1944,7 @@ pub struct App {
     pub sidegraph_cache_max_line_w: u16,
     /// Zoom level for the sidegraph canvas: 0 = detailed (full boxes),
     /// 1 = compact (titles only), 2 = minimap (glyph dots). Purely a render
-    /// concern — never touches the transcript, window, or model.
+    /// concern - never touches the transcript, window, or model.
     pub sidegraph_zoom: u8,
     /// Full panel rect (border included) for wheel / click hit-testing.
     pub sidegraph_body: ratatui::layout::Rect,
@@ -1934,7 +1956,7 @@ pub struct App {
     pub needs_full_redraw: bool,
 
     pub busy: bool,
-    /// True after Esc/Ctrl+C until Done arrives — spinners show "cancelling…".
+    /// True after Esc/Ctrl+C until Done arrives - spinners show "cancelling…".
     pub cancelling: bool,
     turn_kind: TurnMode,
     pub turn_started: Instant,
@@ -1962,7 +1984,7 @@ pub struct App {
     should_quit: bool,
     /// Window title locked to the session's first user prompt.
     title_from_prompt: bool,
-    /// Base text for the (animated) window title — the current prompt or "ready".
+    /// Base text for the (animated) window title - the current prompt or "ready".
     window_base: String,
     /// Secure API-key entry modal (`/login`), when open.
     pub login: Option<LoginModal>,
@@ -1972,11 +1994,11 @@ pub struct App {
     /// finishes signing in, we can faithfully auto-retry the exact pending
     /// cross-provider subagent instead of making them re-issue it.
     pub pending_subagent_login: Option<PendingSubagentLogin>,
-    /// Model chooser (`/model`) — live provider model list, when open.
+    /// Model chooser (`/model`) - live provider model list, when open.
     pub model_picker: Option<ModelPicker>,
     /// Runtime theme chooser (`/theme`), also shown before `/login` on first run.
     pub theme_picker: Option<ThemePicker>,
-    /// Plugin marketplace (`/plugins`) — install / enable / disable.
+    /// Plugin marketplace (`/plugins`) - install / enable / disable.
     pub plugin_picker: Option<PluginPicker>,
     /// Whether an API key is available. `/logout` flips this false and blocks
     /// turns until `/login` provides a new key.
@@ -1994,7 +2016,7 @@ pub struct App {
 /// `fractal open` (and `fractal node attach`, which drops into tmux) are
 /// *interactive full-screen* apps: they need raw mode, the main screen, and
 /// inherited stdio. nur is already holding all of that. Running them through
-/// `Command::output()` — which is what the tool path does — captures stdout and
+/// `Command::output()` - which is what the tool path does - captures stdout and
 /// blocks until a child that never exits returns, freezing the TUI with no way
 /// back. So we tear our terminal state down, let the child own the tty, and
 /// rebuild afterwards.
@@ -2070,7 +2092,7 @@ impl Drop for TermGuard {
 /// Install a panic hook that routes panic output to a log file instead of
 /// stderr while the alternate screen is active. A panicking blocking tool task
 /// (caught as a JoinError in the agent loop) otherwise triggers the default
-/// hook, which writes the panic + backtrace to stderr — bleeding raw text over
+/// hook, which writes the panic + backtrace to stderr - bleeding raw text over
 /// the input box and transcript. We keep the message (to `~/.nur/panic.log`)
 /// so real diagnostics survive, but never write it to the live terminal.
 fn install_tui_panic_hook() {
@@ -2095,7 +2117,7 @@ fn install_tui_panic_hook() {
                     let _ = writeln!(f, "[{}] {}", now_stamp(), info);
                 }
             }
-            // Deliberately do NOT call `prev` here — the default hook prints to
+            // Deliberately do NOT call `prev` here - the default hook prints to
             // stderr. Keep a reference so it isn't dropped/optimised oddly.
             let _ = &prev;
         }));
@@ -2120,10 +2142,10 @@ fn now_stamp() -> String {
 /// Capture mouse for drag-select, scrollbar, wheel, click-peek (always on).
 ///
 /// Mode 1002 (button-event tracking) reports motion only while a button is held
-/// — exactly what drag-select and scrollbar-drag need — plus 1000 (clicks) and
+/// - exactly what drag-select and scrollbar-drag need - plus 1000 (clicks) and
 /// 1006 (SGR coords). We deliberately do NOT enable 1003 (any-motion): it floods
-/// a motion event for every cell the pointer crosses, which — combined with the
-/// ambient repaint — backs up the event queue and makes drags/clicks lag. The
+/// a motion event for every cell the pointer crosses, which - combined with the
+/// ambient repaint - backs up the event queue and makes drags/clicks lag. The
 /// cost is free (no-click) hover-peek; click-to-peek stays the primary path.
 fn enable_mouse() {
     let _ = stdout().execute(EnableMouseCapture);
@@ -2173,15 +2195,15 @@ pub async fn run_tui(
         .map_err(|e| crate::error::MuseError::Other(format!("alternate screen: {e}")))?;
     stdout().execute(EnableBracketedPaste)?;
     // Focus events: when the user releases the mouse *outside* the terminal,
-    // we never see MouseUp — FocusLost clears stuck drag/select state.
+    // we never see MouseUp - FocusLost clears stuck drag/select state.
     let _ = stdout().execute(EnableFocusChange);
     enable_mouse();
-    // Hardware cursor hidden — we paint a Nur-gold block caret ourselves.
+    // Hardware cursor hidden - we paint a Nur-gold block caret ourselves.
     stdout().execute(Hide)?;
     let _guard = TermGuard;
     // Suppress panic-hook stderr while the alternate screen is up. A panicking
     // blocking tool task (already caught as a JoinError in the agent loop) still
-    // triggers the default hook, which writes the panic + backtrace to stderr —
+    // triggers the default hook, which writes the panic + backtrace to stderr -
     // bleeding raw text over the input box and transcript. Route those messages
     // to a log file instead so the TUI is never corrupted; real crashes still
     // unwind and TermGuard restores the terminal.
@@ -2427,7 +2449,7 @@ pub async fn run_tui(
         app.authed = false;
         app.push_note(
             Tone::Mode,
-            "no API key found — press any key, then /login to sign in (or set NUR_API_KEY)".into(),
+            "no API key found - press any key, then /login to sign in (or set NUR_API_KEY)".into(),
         );
         if app.cfg.theme.is_none() {
             app.open_theme_picker(true);
@@ -2451,7 +2473,7 @@ pub async fn run_tui(
     let mut last_draw = Instant::now();
     let mut last_title = Instant::now();
     let mut title_animating = false;
-    // Re-assert mouse modes occasionally — OSC title spam / hosts can drop them.
+    // Re-assert mouse modes occasionally - OSC title spam / hosts can drop them.
     let mut last_mouse_rearm = Instant::now();
     loop {
         // 1) Agent events (streaming text/tools).
@@ -2483,13 +2505,13 @@ pub async fn run_tui(
             FRAME_IDLE_MS
         };
 
-        // 2) Input FIRST — drain the whole queue every tick.
+        // 2) Input FIRST - drain the whole queue every tick.
         //    Wait up to one frame for the first event when idle; never draw
         //    before handling a pending Down/Drag/Up (that was the post-submit lag).
         //
         //    Keys/Paste before mouse: Windows mouse-capture floods Moved/Drag and
         //    can starve ↑↓ / typing in modals. We still run the proven main-prompt
-        //    paste-chip coalescer (live poll burst drain) — only the *order*
+        //    paste-chip coalescer (live poll burst drain) - only the *order*
         //    relative to mouse changes, not the paste algorithm.
         let wait = if dirty {
             Duration::ZERO
@@ -2506,7 +2528,7 @@ pub async fn run_tui(
             || app.picker.is_some()
             || app.ctx_menu.is_some();
         if event::poll(wait)? {
-            // Phase A — drain queue. Preserve Key/Paste relative order; park
+            // Phase A - drain queue. Preserve Key/Paste relative order; park
             // mouse/focus/resize for later so floods cannot interleave ahead of
             // keyboard work.
             let mut kb_events: Vec<Event> = Vec::new();
@@ -2528,7 +2550,7 @@ pub async fn run_tui(
                         kb_events.push(Event::Key(key));
                     }
                     Event::Paste(s) => kb_events.push(Event::Paste(s)),
-                    // Drop pure hover motion while a modal is open — bulk of
+                    // Drop pure hover motion while a modal is open - bulk of
                     // Windows mouse floods; no modal use.
                     Event::Mouse(m)
                         if modal_open
@@ -2559,7 +2581,7 @@ pub async fn run_tui(
                 }
             }
 
-            // Phase B — keyboard / paste (before mouse).
+            // Phase B - keyboard / paste (before mouse).
             if modal_open {
                 // Modal: no chip coalescing. Press + Repeat both drive handlers
                 // (held arrows). Enter is Press-only (no multi-submit).
@@ -2588,10 +2610,10 @@ pub async fn run_tui(
                 // Main prompt: original paste-chip machine.
                 // Paste: bracketed Event::Paste → one chip; key drips coalesce into
                 // paste_accum only when more *text* presses are already queued (not
-                // KeyRelease — Windows always pairs Press+Release, which broke Enter).
+                // KeyRelease - Windows always pairs Press+Release, which broke Enter).
                 // Enter is never paste: plain Enter submits, Shift+Enter = newline.
                 // Live poll(ZERO) during a paste-char burst still peeks the PTY for
-                // drips that arrive after Phase A — that is the proven path.
+                // drips that arrive after Phase A - that is the proven path.
                 let mut deferred: Option<Event> = None;
                 let mut kb_i = 0usize;
                 while kb_i < kb_events.len() || deferred.is_some() {
@@ -2621,7 +2643,7 @@ pub async fn run_tui(
                             if let Some(c) = key_as_paste_burst_char(&key) {
                                 // Drain further paste-text / Event::Paste; skip
                                 // KeyRelease (Windows ConPTY interleaves Press/Release
-                                // for every char — treating Release as a break made
+                                // for every char - treating Release as a break made
                                 // pastes type out char-by-char and never coalesce).
                                 let mut burst = String::new();
                                 burst.push(c);
@@ -2642,7 +2664,7 @@ pub async fn run_tui(
                                         _ => break,
                                     }
                                 }
-                                // Then live-queue peek — same as pre-v0.13.7: PTY
+                                // Then live-queue peek - same as pre-v0.13.7: PTY
                                 // may still be delivering drip chars this frame.
                                 loop {
                                     if !event::poll(Duration::ZERO)? {
@@ -2654,7 +2676,7 @@ pub async fn run_tui(
                                     };
                                     match next {
                                         Event::Key(k) if k.kind == KeyEventKind::Release => {
-                                            // Ignore release — keep draining the burst.
+                                            // Ignore release - keep draining the burst.
                                             continue;
                                         }
                                         Event::Key(k) if key_as_paste_burst_char(&k).is_some() => {
@@ -2704,7 +2726,7 @@ pub async fn run_tui(
                             dirty = true;
                         }
                         Event::Paste(s) => {
-                            // Bracketed paste (the clean path) — but the terminal may
+                            // Bracketed paste (the clean path) - but the terminal may
                             // split a huge paste into many Event::Paste chunks across
                             // frames. Coalesce them in paste_accum and flush as ONE chip,
                             // which then uses the active_paste_id merge window so even
@@ -2721,7 +2743,7 @@ pub async fn run_tui(
                 }
             }
 
-            // Phase C — mouse / focus / resize (never starves keys above).
+            // Phase C - mouse / focus / resize (never starves keys above).
             for ev in other_events {
                 match ev {
                     Event::Mouse(m) => {
@@ -2731,7 +2753,7 @@ pub async fn run_tui(
                     }
                     Event::Resize(_, _) => dirty = true,
                     Event::FocusLost => {
-                        // Mouse-up outside the window never arrives — reset
+                        // Mouse-up outside the window never arrives - reset
                         // drag/select so hover isn't misread as a held button.
                         app.on_focus_lost();
                         dirty = true;
@@ -2822,7 +2844,7 @@ impl App {
     ///
     /// `/effort` is the case that forced this: the rungs are provider-specific
     /// (xAI takes `low|high`; Anthropic and Gemini take none at all and budget
-    /// thinking in tokens), and vendors keep adding new ones — so printing a
+    /// thinking in tokens), and vendors keep adding new ones - so printing a
     /// frozen `minimal|low|medium|high|xhigh` was wrong for most providers.
     pub fn command_hint(&self, name: &str, base: &str) -> String {
         if name != "/effort" {
@@ -2833,7 +2855,7 @@ impl App {
             let who = crate::providers::by_id(&self.cfg.provider)
                 .map(|p| p.name)
                 .unwrap_or(self.cfg.provider.as_str());
-            return format!("reasoning effort — {who} budgets thinking in tokens, no rungs");
+            return format!("reasoning effort - {who} budgets thinking in tokens, no rungs");
         }
         format!("reasoning effort: {}", levels.join("|"))
     }
@@ -2864,7 +2886,7 @@ impl App {
             .map(|(n, _)| n.trim_start_matches('/').to_ascii_lowercase())
             .collect();
 
-        // Installed skills as /skillname — filter as the user types.
+        // Installed skills as /skillname - filter as the user types.
         let skill_token = token_l.trim_start_matches('/');
         let mut skill_hits: Vec<(String, String)> = self
             .skill_palette_cache
@@ -3042,7 +3064,7 @@ impl App {
     }
 
     /// Wheel / trackpad: one menu row per notch (45ms coalesce), same as the
-    /// sessions picker — without this, OS multi-fire events jump Fork→Copy
+    /// sessions picker - without this, OS multi-fire events jump Fork→Copy
     /// and land past Revert.
     fn ctx_wheel_step(&mut self, dir: i32) {
         let Some(menu) = &mut self.ctx_menu else {
@@ -3132,7 +3154,7 @@ impl App {
         self.input_scroll_top = 0;
         self.push_note(
             Tone::Neutral,
-            "edit — prompt loaded in input · send to interject as a new turn (history kept)".into(),
+            "edit - prompt loaded in input · send to interject as a new turn (history kept)".into(),
         );
     }
 
@@ -3193,7 +3215,7 @@ impl App {
         self.scroll_to_bottom();
         self.push_note(
             Tone::Session,
-            "reverted — dropped this prompt and everything after; it's back in the input to edit or resend".into(),
+            "reverted - dropped this prompt and everything after; it's back in the input to edit or resend".into(),
         );
     }
 
@@ -3245,7 +3267,7 @@ impl App {
         self.push_note(
             Tone::Session,
             format!(
-                "forked → {} · branched from this prompt (original kept) — prompt is in the input, send to continue the fork",
+                "forked → {} · branched from this prompt (original kept) - prompt is in the input, send to continue the fork",
                 &self.session_id[..8.min(self.session_id.len())]
             ),
         );
@@ -3289,7 +3311,7 @@ impl App {
     }
 
     /// Open a stable peek on a swarm subagent run (kid box). Same geometry /
-    /// scroll / dismiss machinery as the cell peek — only the content source
+    /// scroll / dismiss machinery as the cell peek - only the content source
     /// differs. Mutually exclusive with `peek_open`.
     fn open_swarm_peek(&mut self, run_id: u64) {
         self.peek_open = None;
@@ -3313,7 +3335,7 @@ impl App {
         self.peek_scroll = 0;
         // Drop frozen geometry so the next draw re-fits (expanded ≈ 90% frame,
         // collapsed ≈ 70%×60%). Without this, expand only changed the row cap
-        // while the box stayed the same size — felt broken.
+        // while the box stayed the same size - felt broken.
         self.peek_frozen = None;
     }
 
@@ -3333,7 +3355,7 @@ impl App {
     }
 
     /// Copy of the FULL payload (header + args + output) for the focused trace
-    /// entry — or, if none is focused, the whole trace. Returns true if it put
+    /// entry - or, if none is focused, the whole trace. Returns true if it put
     /// something on the clipboard. Used by `c` inside a swarm peek.
     fn copy_focused_trace_entry(&mut self) -> bool {
         let Some(run_id) = self.peek_swarm else {
@@ -3456,8 +3478,8 @@ impl App {
     /// bare `cells.retain(...)` silently corrupts it: every surviving tool card
     /// shifts down, and the next `ToolEnd` writes its result into a neighbouring
     /// card while the real one spins forever. The "resurface at the bottom"
-    /// commands (`/swarm`, `/graph`, `/sidegraph`) are reachable *mid-turn* —
-    /// `submit_text` routes a `/` line to `run_command` before the busy check —
+    /// commands (`/swarm`, `/graph`, `/sidegraph`) are reachable *mid-turn* -
+    /// `submit_text` routes a `/` line to `run_command` before the busy check -
     /// so they must go through this rather than `retain`. See [`Self::remove_cell`].
     fn remove_cells_matching(&mut self, pred: impl Fn(&Cell) -> bool) {
         let doomed: Vec<usize> = self
@@ -3606,8 +3628,8 @@ impl App {
                         }
                     }
                 }
-                // Swarm kid peek: copy the FULL trace — task header (context)
-                // PLUS the dynamic tool output — so the clipboard carries the
+                // Swarm kid peek: copy the FULL trace - task header (context)
+                // PLUS the dynamic tool output - so the clipboard carries the
                 // whole picture, not just the currently-visible dynamic band.
                 if let Some(run_id) = self.peek_swarm {
                     let body = crate::agent::swarm::snapshot()
@@ -3677,7 +3699,7 @@ impl App {
 
         match key.code {
             KeyCode::Esc => {
-                // Peek closes first — cell *or* swarm-kid modal (both share peek_is_open).
+                // Peek closes first - cell *or* swarm-kid modal (both share peek_is_open).
                 if self.peek_is_open() {
                     self.close_peek();
                 } else if self.busy {
@@ -3721,7 +3743,7 @@ impl App {
             KeyCode::Enter if shift && !ctrl && !alt => {
                 self.input.insert_char('\n');
                 self.ensure_input_caret_visible();
-                // Newline is typing — break raw chain (chip merge is cursor-checked).
+                // Newline is typing - break raw chain (chip merge is cursor-checked).
                 self.last_raw_start = None;
                 self.last_raw_len = 0;
                 self.last_raw_text.clear();
@@ -3750,7 +3772,7 @@ impl App {
                 }
                 let submitted = self.input.submit();
                 self.submit_text(&submitted);
-                // After submit, start fresh — no dangling paste session.
+                // After submit, start fresh - no dangling paste session.
                 self.clear_paste_merge_state();
             }
             KeyCode::Tab => {
@@ -3887,7 +3909,7 @@ impl App {
             KeyCode::Char('u') if ctrl => self.input.delete_to_line_start(),
             KeyCode::Char('w') if ctrl => self.input.delete_word_back(),
             KeyCode::Char('j') if ctrl => self.input.insert_char('\n'),
-            // No bare/Alt letter shortcuts for peek/expand — those used to eat the
+            // No bare/Alt letter shortcuts for peek/expand - those used to eat the
             // first keystroke of normal typing ("e"xplain, "p"lease). Use click.
             KeyCode::Char(c) if !ctrl && !alt => {
                 self.input.insert_char(c);
@@ -3965,7 +3987,7 @@ impl App {
             return;
         }
         if self.picker.is_some() {
-            // Don't clear left-down state for the main transcript — picker is modal.
+            // Don't clear left-down state for the main transcript - picker is modal.
             self.scrollbar_drag = false;
             self.selecting = false;
             self.select_anchor = None;
@@ -3973,7 +3995,7 @@ impl App {
             self.on_picker_mouse(m);
             return;
         }
-        // Login picker is modal — same wheel/click routing as the sessions picker.
+        // Login picker is modal - same wheel/click routing as the sessions picker.
         if self.login.is_some() {
             self.scrollbar_drag = false;
             self.selecting = false;
@@ -3982,7 +4004,7 @@ impl App {
             self.on_login_mouse(m);
             return;
         }
-        // Model picker is modal — same wheel/click routing.
+        // Model picker is modal - same wheel/click routing.
         if self.model_picker.is_some() {
             self.scrollbar_drag = false;
             self.selecting = false;
@@ -3991,7 +4013,7 @@ impl App {
             self.on_model_picker_mouse(m);
             return;
         }
-        // Plugin marketplace is modal — same wheel/click routing.
+        // Plugin marketplace is modal - same wheel/click routing.
         if self.plugin_picker.is_some() {
             self.scrollbar_drag = false;
             self.selecting = false;
@@ -4014,7 +4036,7 @@ impl App {
         // Hover affordance: the thumb widens when the pointer is on the rail.
         self.scrollbar_hover = self.scrollbar_drag || self.hit_scrollbar(m.column, m.row);
 
-        // Context menu is modal — forward all mouse events.
+        // Context menu is modal - forward all mouse events.
         if self.ctx_menu.is_some() {
             self.scrollbar_drag = false;
             self.selecting = false;
@@ -4047,7 +4069,7 @@ impl App {
                 } else if self.wheel_over_sidegraph(m.column, m.row) {
                     if m.modifiers.contains(KeyModifiers::CONTROL) {
                         // Ctrl+wheel zooms the graph in (toward detail). Purely a
-                        // render concern — transcript, window, and model untouched.
+                        // render concern - transcript, window, and model untouched.
                         self.sidegraph_zoom_in();
                     } else {
                         // Wheel inside the sidebar scrolls its flow graph (clamped
@@ -4059,7 +4081,7 @@ impl App {
                         self.sidegraph_user_panned = true;
                     }
                 } else {
-                    // Always works — including during streaming and under approval.
+                    // Always works - including during streaming and under approval.
                     self.scroll_up(3);
                     // Keep drag-select alive across scroll (absolute line anchors).
                     if self.mouse_left_down && self.select_anchor.is_some() {
@@ -4124,7 +4146,7 @@ impl App {
                 }
                 // Pinned peek acts like a popup: the ✕ or a click anywhere
                 // OUTSIDE the box closes it (and consumes the click); a click
-                // inside keeps it open. This is consistent on every side —
+                // inside keeps it open. This is consistent on every side -
                 // including below the box.
                 if self.peek_is_open() {
                     // Swarm kid peek: a click on a trace-entry header row toggles
@@ -4152,7 +4174,7 @@ impl App {
                 }
                 if self.wheel_over_sidegraph(m.column, m.row) {
                     // Double-click: peek a box, or reset pan/zoom on empty (or a
-                    // non-peekable node). Must run BEFORE we arm drag — and the
+                    // non-peekable node). Must run BEFORE we arm drag - and the
                     // seed must survive micro-jitter (see drag threshold below).
                     let now = Instant::now();
                     let is_dbl = self
@@ -4183,7 +4205,7 @@ impl App {
                                 self.open_stable_peek(h.cell_idx);
                                 return;
                             }
-                            // Non-peekable node used to `return` with no effect —
+                            // Non-peekable node used to `return` with no effect -
                             // felt like "double-click empty does nothing". Fall
                             // through to reset instead.
                         }
@@ -4193,7 +4215,7 @@ impl App {
                     }
                     // Seed for a potential second click. Drag is armed but does
                     // not become a pan until movement exceeds a threshold, so a
-                    // normal double-click is not killed by 1–2px of jitter.
+                    // normal double-click is not killed by 1-2px of jitter.
                     self.sidegraph_last_click = Some((now, m.column, m.row));
                     self.sidegraph_drag_canvas = true;
                     self.sidegraph_drag_origin = Some((m.column, m.row));
@@ -4208,7 +4230,7 @@ impl App {
                     self.select_anchor = None;
                     return;
                 }
-                // "↓ N · End" chip — one click jumps to latest.
+                // "↓ N · End" chip - one click jumps to latest.
                 if self.hit_jump_chip(m.column, m.row) {
                     self.scroll_to_bottom();
                     self.selection = None;
@@ -4311,7 +4333,7 @@ impl App {
                     return;
                 }
                 // Peek already open: right-click is a first-class surface for
-                // swarm UX — switch target, toggle expand, or dismiss.
+                // swarm UX - switch target, toggle expand, or dismiss.
                 if self.peek_is_open() {
                     // Switch to another subagent from the sidegraph or /swarm card
                     // without closing first (feels like the modal "re-targets").
@@ -4446,7 +4468,7 @@ impl App {
                 }
                 self.selecting = false;
                 if self.sidegraph_drag_was_real_pan() {
-                    // Only a real pan kills the double-click seed — not a
+                    // Only a real pan kills the double-click seed - not a
                     // click that barely moved the cursor between Down and Up.
                     self.sidegraph_last_click = None;
                 }
@@ -4506,7 +4528,7 @@ impl App {
                     .clamp(0, self.sidegraph_drag_start_max_pan_x as i32)
                     as u16;
                 self.sidegraph_scroll_x = new_pan_x;
-                // User has taken control — keep canvas sticky (stop auto-follow).
+                // User has taken control - keep canvas sticky (stop auto-follow).
                 self.sidegraph_user_panned = true;
             }
             return;
@@ -4524,7 +4546,7 @@ impl App {
             if self.input_selecting {
                 self.input_drag_to(col, row);
             } else if let Some((vrow, dcol)) = self.input_pos_at(col, row) {
-                // Still a click — keep selection collapsed under the pointer.
+                // Still a click - keep selection collapsed under the pointer.
                 let w = self.input_usable_w.max(1);
                 let idx = self.input.index_at_visual(vrow, dcol, w);
                 self.input.select_start_at_index(idx);
@@ -4537,7 +4559,7 @@ impl App {
         // Update the range first so we know whether this is a real drag.
         self.extend_selection_to(col, row);
         // Only auto-scroll after a real drag (not on click jitter), and only
-        // when the pointer leaves the body — scrolling on the first/last row
+        // when the pointer leaves the body - scrolling on the first/last row
         // made ordinary selects feel jumpy.
         if self.selecting {
             self.maybe_autoscroll_while_selecting(row);
@@ -4726,7 +4748,7 @@ impl App {
         Some(out)
     }
 
-    /// Hover peeks removed — keep mouse tracking for other UI only.
+    /// Hover peeks removed - keep mouse tracking for other UI only.
     fn update_hover_from_mouse(&mut self) {
         self.hover_cell = None;
     }
@@ -4747,7 +4769,7 @@ impl App {
         self.line_cell_all.get(line_idx).copied().flatten()
     }
 
-    /// The User-prompt cell under the mouse — from a transcript line OR the
+    /// The User-prompt cell under the mouse - from a transcript line OR the
     /// sticky prompt banner at the top. Single entry point for right-click and
     /// double-click so both open the fork/revert/copy menu, header included.
     fn prompt_cell_at_mouse(&self) -> Option<usize> {
@@ -4765,7 +4787,7 @@ impl App {
     }
 
     /// The swarm run id under the mouse in a `/swarm` transcript card pane, if
-    /// any — for double-click-to-peek parity with the sidegraph kid boxes.
+    /// any - for double-click-to-peek parity with the sidegraph kid boxes.
     fn swarm_pane_at_mouse(&self, col: u16, row: u16) -> Option<u64> {
         let body = self.transcript_body;
         if body.width == 0
@@ -4824,7 +4846,7 @@ impl App {
             return false;
         }
         // Hit only the painted rail (2 cols). Do NOT steal clicks from the
-        // rightmost transcript columns — that was a known UX bug.
+        // rightmost transcript columns - that was a known UX bug.
         col >= t.x && col < t.right() && row >= t.y && row < t.bottom()
     }
 
@@ -4864,7 +4886,7 @@ impl App {
             && rect_contains(self.sidegraph_body, col, row)
     }
 
-    /// Inner rect of sidegraph panel (border excluded) — where canvas is drawn.
+    /// Inner rect of sidegraph panel (border excluded) - where canvas is drawn.
     fn sidegraph_inner_rect(&self) -> ratatui::layout::Rect {
         let b = self.sidegraph_body;
         if b.width <= 2 || b.height <= 2 {
@@ -4950,7 +4972,7 @@ impl App {
         if self.sidegraph_zoom > 0 {
             self.sidegraph_zoom -= 1;
             // Re-anchor to bottom on zoom so the newest node stays visible.
-            // Also reset horizontal pan — the new zoom level has different
+            // Also reset horizontal pan - the new zoom level has different
             // content width, so the old pan offset would leave the canvas
             // scrolled past the visible area, making content appear lost.
             self.sidegraph_scroll = 0;
@@ -5007,7 +5029,7 @@ impl App {
         )
     }
 
-    /// Press on the rail — GUI-standard feel:
+    /// Press on the rail - GUI-standard feel:
     /// on the thumb → start a drag, remembering where inside the thumb you
     /// grabbed (so it never jumps to centre under the pointer);
     /// on the open track → page toward the click.
@@ -5164,7 +5186,7 @@ impl App {
         if inner.height == 0 {
             return;
         }
-        // One row per event at the edge — smooth, not a leap to top/bottom.
+        // One row per event at the edge - smooth, not a leap to top/bottom.
         if row < inner.y.saturating_add(1) {
             self.scroll_input(-1);
         } else if row + 1 >= inner.bottom() {
@@ -5240,7 +5262,7 @@ impl App {
         if rows.is_empty() {
             self.push_note(
                 Tone::Session,
-                "no past sessions yet — keep chatting, then /sessions to jump back\n\
+                "no past sessions yet - keep chatting, then /sessions to jump back\n\
                  (searched ~/.nur/sessions and legacy ~/.muse/sessions)"
                     .into(),
             );
@@ -5306,7 +5328,7 @@ impl App {
         (rows, errors)
     }
 
-    /// Takeover picker — same chrome as `/sessions`, but populated only with
+    /// Takeover picker - same chrome as `/sessions`, but populated only with
     /// migratable foreign sessions (Claude/Codex/Cursor/Grok). Defaults to
     /// **all** workspaces (Tab narrows to here); Enter imports the selected one
     /// and resumes it natively.
@@ -5339,8 +5361,8 @@ impl App {
         });
     }
 
-    /// Switch the open modal between its two windows — native `/sessions` and
-    /// foreign `/takeover` imports — reloading that side's rows in place. The
+    /// Switch the open modal between its two windows - native `/sessions` and
+    /// foreign `/takeover` imports - reloading that side's rows in place. The
     /// modal stays open even when the other side is empty; its empty state
     /// tells you how to get back.
     fn picker_switch_window(&mut self) {
@@ -5455,7 +5477,7 @@ impl App {
         let count = p.count();
         match code {
             KeyCode::Esc | KeyCode::Char('q') => self.close_picker(),
-            // One entry per key — same path the wheel uses.
+            // One entry per key - same path the wheel uses.
             KeyCode::Up | KeyCode::Char('k') => p.step(-1),
             KeyCode::Down | KeyCode::Char('j') => p.step(1),
             KeyCode::PageUp => p.move_by(-(p.vis_page.max(1) as i32)),
@@ -5485,7 +5507,7 @@ impl App {
         self.mouse_col = m.column;
         self.mouse_row = m.row;
         match m.kind {
-            // Same as ↑ / ↓ — one entry. Coalesce OS wheel floods so one notch ≈ one key.
+            // Same as ↑ / ↓ - one entry. Coalesce OS wheel floods so one notch ≈ one key.
             MouseEventKind::ScrollUp => {
                 if let Some(p) = &mut self.picker {
                     p.wheel_step(-1);
@@ -5622,7 +5644,7 @@ impl App {
             }
         }
     }
-    /// does **not** log the active provider out — it only edits the failover
+    /// does **not** log the active provider out - it only edits the failover
     /// chain (`fallback_providers`) and per-provider keys.
     fn open_failover(&mut self) {
         self.login = Some(LoginModal {
@@ -5676,7 +5698,7 @@ impl App {
     }
 
     /// Toggle the currently-selected provider in the failover chain. When newly
-    /// added without resolvable credentials, capture them now — Method stage
+    /// added without resolvable credentials, capture them now - Method stage
     /// (browser / key / import) for OAuth-capable providers, Key stage otherwise.
     fn toggle_fallback_selected(&mut self) {
         let provider = {
@@ -5754,7 +5776,7 @@ impl App {
             .unwrap_or(*crate::providers::default_provider());
         let base_url = self.cfg.base_url.clone();
         // Resolve against the *active* provider so OAuth tokens refresh and
-        // catalog env keys (TINKER_API_KEY, XAI_API_KEY, …) are picked up —
+        // catalog env keys (TINKER_API_KEY, XAI_API_KEY, …) are picked up -
         // not a stale generic NUR_API_KEY or empty string.
         let key = crate::auth::resolve_api_key_for(Some(provider.id)).unwrap_or_default();
         let pid = provider.id.to_string();
@@ -6071,7 +6093,7 @@ impl App {
         }
     }
 
-    /// Mouse while the model picker is open — wheel scrolls, click row selects,
+    /// Mouse while the model picker is open - wheel scrolls, click row selects,
     /// second click / Enter confirms, click ✕ closes.
     fn on_model_picker_mouse(&mut self, m: event::MouseEvent) {
         self.mouse_col = m.column;
@@ -6203,7 +6225,7 @@ impl App {
                     .map(|_| format!("disabled {name} (skills stay on disk; re-enable anytime)"))
             } else {
                 crate::plugins::set_enabled(&id, true)
-                    .map(|_| format!("enabled {name} — skills active on next agent turn"))
+                    .map(|_| format!("enabled {name} - skills active on next agent turn"))
             };
             let _ = tx.send(res);
         });
@@ -6549,7 +6571,7 @@ impl App {
                 }
                 if let Some(m) = &mut self.login {
                     m.buf.clear();
-                    m.browser_status = "code submitted — exchanging…".into();
+                    m.browser_status = "code submitted - exchanging…".into();
                     m.error = None;
                 }
             }
@@ -6629,7 +6651,7 @@ impl App {
                     }
                     if is_fallback {
                         // Failover-only: stash OAuth for this provider, stay on
-                        // the manage picker — do not switch active login.
+                        // the manage picker - do not switch active login.
                         if let Err(e) = crate::auth::save_provider_oauth(
                             &provider_id,
                             &tokens.access_token,
@@ -6739,7 +6761,7 @@ impl App {
         // Never steal focus from a modal the user is actively typing into. This
         // fires on a background timer, and `on_key` checks `update_modal` first,
         // so opening it over `/login` sent the user's API-key keystrokes to a
-        // handler that only understands Esc/q/Enter — the characters vanished
+        // handler that only understands Esc/q/Enter - the characters vanished
         // and Enter spawned an updater instead of submitting the key. The note
         // above is still pushed either way, so nothing is lost by waiting.
         let modal_busy = self.login.is_some()
@@ -6754,7 +6776,7 @@ impl App {
         }
     }
 
-    /// Mouse while the provider picker is open — same contract as `on_picker_mouse`:
+    /// Mouse while the provider picker is open - same contract as `on_picker_mouse`:
     /// one-entry wheel, click row to select, second click / Enter confirms.
     fn on_login_mouse(&mut self, m: event::MouseEvent) {
         self.mouse_col = m.column;
@@ -6814,7 +6836,7 @@ impl App {
         let Some(m) = &mut self.login else { return };
         match key.code {
             KeyCode::Esc => self.close_login_cancelled(),
-            // One entry per key — same `step` path the wheel uses (sessions picker).
+            // One entry per key - same `step` path the wheel uses (sessions picker).
             // Arrows only: j/k stay available for type-to-filter.
             KeyCode::Up => m.step(-1),
             KeyCode::Down => m.step(1),
@@ -6857,7 +6879,7 @@ impl App {
             KeyCode::Char(' ') if manage => self.toggle_fallback_selected(),
             // Alt+P cycles the asserted privacy tier of the selected provider
             // (Standard → ZDR → TEE → Local → …), saved as an override. Alt, not
-            // Ctrl — Ctrl+P is taken by many terminals/ADEs.
+            // Ctrl - Ctrl+P is taken by many terminals/ADEs.
             KeyCode::Char('p') if alt => self.cycle_privacy_selected(),
             KeyCode::Backspace => {
                 m.filter.pop();
@@ -6935,7 +6957,7 @@ impl App {
         }
 
         // Failover key: save to the per-provider store and return to the picker
-        // — do NOT switch the active provider.
+        // - do NOT switch the active provider.
         if is_fallback {
             if !key.is_empty() {
                 if let Err(e) = crate::auth::save_provider_key(&provider_id, &key) {
@@ -6974,7 +6996,7 @@ impl App {
 
         // OpenAI-compatible providers get an optional base-URL step so you can
         // point OpenAI (or any compatible key login) at a custom endpoint. The
-        // field is prefilled with the current/default host — ↵ accepts it.
+        // field is prefilled with the current/default host - ↵ accepts it.
         if provider_takes_custom_base(&provider) {
             let prefill = crate::config::provider_base_url_override(&self.cfg, &provider_id)
                 .unwrap_or_else(|| provider.base_url.to_string());
@@ -7070,7 +7092,7 @@ impl App {
         let pending = self.pending_subagent_login.take().unwrap_or_default();
         self.push_note(
             Tone::Mode,
-            format!("signed in to {provider_name} — re-deploying the subagent there now"),
+            format!("signed in to {provider_name} - re-deploying the subagent there now"),
         );
         let kind = pending
             .kind
@@ -7095,10 +7117,10 @@ impl App {
             None => String::new(),
         };
         let prompt = format!(
-            "[SYSTEM REDEPLOY — mandatory tool call]\n\
+            "[SYSTEM REDEPLOY - mandatory tool call]\n\
              The user just authenticated to **{provider_name}** (provider id `{id}`).\n\
              You MUST immediately call the `agent` tool **exactly once** with these \
-             arguments — do not answer in prose first, do not swap providers, do not \
+             arguments - do not answer in prose first, do not swap providers, do not \
              omit `provider`:\n\n\
              agent({{\n\
              \"provider\": \"{id}\"{model_line},\n\
@@ -7119,7 +7141,7 @@ impl App {
             task_esc = task_esc,
         );
         // Route through submit_text so it steers into a live turn or starts a
-        // new one when idle — the same channel a manual follow-up would use.
+        // new one when idle - the same channel a manual follow-up would use.
         self.submit_text(&prompt);
     }
 
@@ -7142,7 +7164,7 @@ impl App {
         // to a first-party OAuth inference backend.
         if fixed_oauth_base.is_none() {
             // Per-provider override (`OPENAI_BASE_URL`, `[provider_base_urls]`) wins
-            // over the catalog default — this is how `openai` (and any provider)
+            // over the catalog default - this is how `openai` (and any provider)
             // points at an OpenAI-compatible endpoint in API-key mode.
             if let Some(base) = crate::config::provider_base_url_override(&self.cfg, provider.id) {
                 self.cfg.base_url = base;
@@ -7247,7 +7269,7 @@ impl App {
             if !rest.starts_with('#') {
                 let note = rest.trim();
                 if note.is_empty() {
-                    self.push_error("nothing to remember — type your note after #".into());
+                    self.push_error("nothing to remember - type your note after #".into());
                 } else if let Err(e) = crate::agent::memory::append_memory(note) {
                     self.push_error(format!("could not save memory: {e}"));
                 } else {
@@ -7303,7 +7325,7 @@ impl App {
             self.interrupt();
             self.push_note(
                 Tone::Mode,
-                "send now — cancelling current turn; this follow-up goes next with full context"
+                "send now - cancelling current turn; this follow-up goes next with full context"
                     .into(),
             );
         } else {
@@ -7347,7 +7369,7 @@ impl App {
         self.scroll_to_bottom();
         self.push_note(
             Tone::Mode,
-            "steered · injected into the running turn (no cancel) — lands on the next model round"
+            "steered · injected into the running turn (no cancel) - lands on the next model round"
                 .into(),
         );
         // Keep live graphs in sync immediately (was previously only on agent events).
@@ -7478,11 +7500,11 @@ impl App {
     ///
     /// [`Self::set_swarm_live`] only *re-arms an existing* card, so before this
     /// a user who had never typed `/swarm` saw nothing at all while subagents
-    /// ran — the whole fan-out was invisible. Spawning an agent is exactly when
+    /// ran - the whole fan-out was invisible. Spawning an agent is exactly when
     /// you want the panel.
     ///
     /// Keyed on run **ids**, not on "is anything running": ids are monotonic, so
-    /// remembering the last one reacted to catches every later spawn — a second
+    /// remembering the last one reacted to catches every later spawn - a second
     /// fan-out mid-turn, or a child that started and finished inside one frame.
     /// A once-per-turn latch missed all of those.
     ///
@@ -7576,7 +7598,7 @@ impl App {
         }
     }
 
-    /// `/swarm` — inline subagent activity grid.
+    /// `/swarm` - inline subagent activity grid.
     ///
     /// Blank toggles the card in (or resurfaces it); `detail` adds the status
     /// line under the current tool, `off` freezes, `clear` forgets finished
@@ -7629,7 +7651,7 @@ impl App {
         );
     }
 
-    /// `/fractal` — recursive agent tree: node list | status | start | attach | init
+    /// `/fractal` - recursive agent tree: node list | status | start | attach | init
     /// Mirrors the upstream `fractal` CLI (https://github.com/plasma-ai/fractal) with worktree safety.
     /// Empty arg -> status + node list, otherwise forwards to skill or direct CLI when possible.
     pub(crate) fn cmd_fractal(&mut self, arg: &str) {
@@ -7654,7 +7676,7 @@ impl App {
                 probe.worktrees_exist
             ));
             if probe.binary.is_none() {
-                lines.push("install: pipx install plasma-fractal (Python 3.12–3.14) · https://github.com/plasma-ai/fractal".into());
+                lines.push("install: pipx install plasma-fractal (Python 3.12-3.14) · https://github.com/plasma-ai/fractal".into());
                 self.push_note(Tone::Neutral, lines.join("\n"));
                 return;
             }
@@ -7670,13 +7692,13 @@ impl App {
                 return;
             }
             if !probe.is_git_repo {
-                lines.push("not a git repo — `fractal init` needs git".into());
+                lines.push("not a git repo - `fractal init` needs git".into());
                 self.push_note(Tone::Neutral, lines.join("\n"));
                 return;
             }
             if !probe.is_fractal_repo {
                 lines
-                    .push("not yet a fractal repo — try `/fractal init` to seed `.fractal`".into());
+                    .push("not yet a fractal repo - try `/fractal init` to seed `.fractal`".into());
                 self.push_note(Tone::Neutral, lines.join("\n"));
                 return;
             }
@@ -7704,13 +7726,13 @@ impl App {
         }
 
         // For anything beyond status, delegate to the fractal skill (directive parsing, limits, NODE.md scaffolding)
-        // This seeds a turn that uses the `fractal` tool as needed — multiplicative parallelism.
+        // This seeds a turn that uses the `fractal` tool as needed - multiplicative parallelism.
         if !self.authed {
-            self.push_error("signed out — /login first".into());
+            self.push_error("signed out - /login first".into());
             return;
         }
         if self.busy {
-            self.push_error("busy — finish current turn first".into());
+            self.push_error("busy - finish current turn first".into());
             return;
         }
 
@@ -7727,15 +7749,15 @@ impl App {
         let is_attach = lower.starts_with("node attach ") || lower.starts_with("attach ");
         // `open` and `attach` are full-screen interactive programs (fractal's
         // own four-pane dashboard; attach drops into tmux). They must OWN the
-        // terminal — routing them through the tool's `Command::output()` captured
+        // terminal - routing them through the tool's `Command::output()` captured
         // their stdout and blocked forever on a child that never exits, wedging
         // the TUI with no way back. Hand the tty over and take it back after.
         if is_open || is_attach {
             let probe = crate::fractal::probe_at(&self.cwd);
             let Some(bin) = probe.binary.clone() else {
                 self.push_error(
-                    "fractal binary not found — install: pipx install plasma-fractal \
-                     (Python 3.12–3.14)"
+                    "fractal binary not found - install: pipx install plasma-fractal \
+                     (Python 3.12-3.14)"
                         .into(),
                 );
                 return;
@@ -7767,13 +7789,13 @@ impl App {
             if !name.is_empty() {
                 if !crate::fractal::is_valid_fractal_node_name(&name) {
                     self.push_error(format!(
-                        "invalid node name `{name}` — ^[A-Za-z0-9_]+$, max 64 chars"
+                        "invalid node name `{name}` - ^[A-Za-z0-9_]+$, max 64 chars"
                     ));
                     return;
                 }
                 cli.push(name);
             } else if is_attach {
-                self.push_error("attach needs a node name — /fractal attach <name>".into());
+                self.push_error("attach needs a node name - /fractal attach <name>".into());
                 return;
             }
             let cwd = self.cwd.clone();
@@ -7841,7 +7863,7 @@ impl App {
         self.start_turn_labeled(&display, &model_prompt);
     }
 
-    /// `/graph` — drop (or refresh) an inline live execution-graph card at the bottom.
+    /// `/graph` - drop (or refresh) an inline live execution-graph card at the bottom.
     pub(crate) fn cmd_graph(&mut self) {
         let fresh = self.build_graph_lines();
         // Resurface at bottom (UX fix) instead of in-place refresh.
@@ -7866,7 +7888,7 @@ impl App {
         );
     }
 
-    // ── /sidegraph — the whole query as a live flow graph ────────────────
+    // ── /sidegraph - the whole query as a live flow graph ────────────────
 
     /// Build the flow model for the current (or most recent) query: the root
     /// prompt, then thinking / tool / steer / queued / done nodes in order.
@@ -7886,7 +7908,7 @@ impl App {
         // after a TurnDone become Prompt nodes (double-bordered like root, titled
         // "prompt"). Users that appear mid-turn (while in_turn) are Steers with
         // back-edge. This way interruption or "send now" does not clear the graph
-        // — new prompts flow in after previous Done nodes, like the transcript.
+        // - new prompts flow in after previous Done nodes, like the transcript.
         let mut query = String::new();
         let mut nodes: Vec<SgNode> = Vec::new();
         let mut first_user_seen = false;
@@ -7945,7 +7967,7 @@ impl App {
                         in_turn = true;
                     }
                     // Provide a fallback excerpt so the Answering node is never
-                    // empty — poolside sometimes emits a streaming Assistant cell
+                    // empty - poolside sometimes emits a streaming Assistant cell
                     // with only whitespace/newlines before the first real token
                     // arrives, which left the node blank and unregistered.
                     let excerpt = first_line(text, 80);
@@ -7999,8 +8021,8 @@ impl App {
         }
         // PERF-C: bound the node vector so a long session can never grow the
         // graph (or its per-event rebuild, canvas height, to_lines output, and
-        // hit-box vectors) without limit. Keep the most recent nodes — the live
-        // tail is what the user watches — and drop older ones. The root prompt
+        // hit-box vectors) without limit. Keep the most recent nodes - the live
+        // tail is what the user watches - and drop older ones. The root prompt
         // is rendered separately from `query`, so trimming leading nodes only
         // hides finished mid-history steps, which the transcript still holds.
         const MAX_SG_NODES: usize = 240;
@@ -8059,7 +8081,7 @@ impl App {
         }
     }
 
-    /// `/sidegraph` — the current query as a live flow graph in a right-hand
+    /// `/sidegraph` - the current query as a live flow graph in a right-hand
     /// sidebar panel: root prompt, thinking, tools, subagent fan-out, steers,
     /// interruptions, outcome. Bare `/sidegraph` toggles the panel.
     pub(crate) fn cmd_sidegraph(&mut self, arg: &str) {
@@ -8069,7 +8091,7 @@ impl App {
                 if !self.sidegraph_open {
                     self.push_note(
                         Tone::Neutral,
-                        "sidegraph · panel is closed — /sidegraph to open".into(),
+                        "sidegraph · panel is closed - /sidegraph to open".into(),
                     );
                     return;
                 }
@@ -8090,7 +8112,7 @@ impl App {
                 if !self.sidegraph_open {
                     self.push_note(
                         Tone::Neutral,
-                        "sidegraph · panel is closed — /sidegraph to open".into(),
+                        "sidegraph · panel is closed - /sidegraph to open".into(),
                     );
                     return;
                 }
@@ -8108,7 +8130,7 @@ impl App {
                 if !self.sidegraph_open {
                     self.push_note(
                         Tone::Neutral,
-                        "sidegraph · panel is closed — /sidegraph to open".into(),
+                        "sidegraph · panel is closed - /sidegraph to open".into(),
                     );
                     return;
                 }
@@ -8183,7 +8205,7 @@ impl App {
                 "sidegraph · right panel maps the current query live · /sidegraph again to close"
                     .to_string()
             } else {
-                "sidegraph · send a prompt first — the panel maps the whole query live".to_string()
+                "sidegraph · send a prompt first - the panel maps the whole query live".to_string()
             },
         );
     }
@@ -8215,7 +8237,7 @@ impl App {
     fn start_turn_labeled(&mut self, display: &str, model_prompt: &str) {
         if !self.authed {
             self.push_error(
-                "signed out — run /login to enter an API key before sending a message".into(),
+                "signed out - run /login to enter an API key before sending a message".into(),
             );
             return;
         }
@@ -8237,7 +8259,7 @@ impl App {
         self.selecting = false;
         self.select_anchor = None;
         self.mouse_left_down = false;
-        // Re-assert mouse capture — hosts sometimes drop modes after heavy I/O.
+        // Re-assert mouse capture - hosts sometimes drop modes after heavy I/O.
         enable_mouse();
         self.busy = true;
         self.cancelling = false;
@@ -8325,7 +8347,7 @@ impl App {
         self.push_note(
             Tone::Mode,
             format!(
-                "mode · {} — {}{}",
+                "mode · {} - {}{}",
                 mode.badge(),
                 mode.description(),
                 if self.busy {
@@ -8345,7 +8367,7 @@ impl App {
 
     fn interrupt(&mut self) {
         if self.cancelling {
-            // Already cancelling — keep calm UI.
+            // Already cancelling - keep calm UI.
             return;
         }
         if let Some(c) = &self.cancel {
@@ -8361,7 +8383,7 @@ impl App {
         self.status = "cancelling…".into();
         // Stop "live" animations that look like work is progressing.
         self.freeze_live_cells_as_cancelled();
-        self.push_info("cancelled — waiting for in-flight work to stop".into());
+        self.push_info("cancelled - waiting for in-flight work to stop".into());
     }
 
     /// Mark streaming/thinking/running-tool cells so the UI stops looking "active".
@@ -8429,11 +8451,11 @@ impl App {
                         active: true,
                         started: Instant::now(),
                         duration: None,
-                        // Always start collapsed — user clicks ▸ to open body.
+                        // Always start collapsed - user clicks ▸ to open body.
                         expanded: false,
                     });
                     // A new thinking node appears in the sidegraph (not per-delta
-                    // — that would rebuild the model hundreds of times a second).
+                    // - that would rebuild the model hundreds of times a second).
                     self.refresh_sidegraph();
                 }
             }
@@ -8462,6 +8484,10 @@ impl App {
                 self.finish_thinking();
                 self.finish_streaming();
                 if !m.trim().is_empty() {
+                    #[cfg(feature = "image-peek")]
+                    if m.contains("$$") {
+                        crate::tui::latex::warm_render_async(m.clone());
+                    }
                     self.cells.push(Cell::Assistant {
                         text: m,
                         streaming: false,
@@ -8482,7 +8508,7 @@ impl App {
                     ok: None,
                     started: Instant::now(),
                     duration: None,
-                    // Always start collapsed — user clicks ▸ to open full output.
+                    // Always start collapsed - user clicks ▸ to open full output.
                     expanded: false,
                 });
                 self.tool_cells.insert(id, self.cells.len() - 1);
@@ -8543,7 +8569,7 @@ impl App {
                 self.push_note(
                     Tone::Mode,
                     format!(
-                        "sign in to {provider_name} to deploy subagents there — opening /login (or run /login {provider_id}). Spawn is blocked until you authenticate."
+                        "sign in to {provider_name} to deploy subagents there - opening /login (or run /login {provider_id}). Spawn is blocked until you authenticate."
                     ),
                 );
                 // Only auto-open if no other modal is already up, so we don't
@@ -8564,7 +8590,7 @@ impl App {
             AgentEvent::PlanSubmitted(text) => {
                 self.push_note(
                     Tone::Plan,
-                    format!("plan saved — Shift+Tab to manual/auto, then implement\n{text}"),
+                    format!("plan saved - Shift+Tab to manual/auto, then implement\n{text}"),
                 );
             }
             AgentEvent::Done {
@@ -8594,14 +8620,14 @@ impl App {
                         *live = false;
                     }
                 }
-                // No subagent can outlive its turn — settle any pane still
+                // No subagent can outlive its turn - settle any pane still
                 // spinning, then freeze the card at its final state.
                 crate::agent::swarm::cancel_running();
                 self.set_swarm_live(false);
                 // Freeze the sidegraph at its final shape too.
                 self.refresh_sidegraph();
                 self.set_sidegraph_live(false);
-                // Turn done — restore mouse modes in case title OSC / host dropped them.
+                // Turn done - restore mouse modes in case title OSC / host dropped them.
                 enable_mouse();
                 match (&self.turn_kind, result, interrupted) {
                     (_, _, true) => {
@@ -8614,7 +8640,7 @@ impl App {
                         self.push_turn_done(turn_dur, true);
                     }
                     (TurnMode::Compact, Ok(summary), _) => {
-                        self.push_info(format!("context compacted — summary:\n{summary}"));
+                        self.push_info(format!("context compacted - summary:\n{summary}"));
                         self.push_turn_done(turn_dur, false);
                     }
                     (TurnMode::Compact, Err(e), _) => {
@@ -8636,7 +8662,7 @@ impl App {
                     }
                 }
                 self.turn_kind = TurnMode::Chat;
-                // Drop queued prompts after cancel so we don't surprise-run them —
+                // Drop queued prompts after cancel so we don't surprise-run them -
                 // unless send-now asked to preserve the queue for interjection.
                 if interrupted && !self.preserve_queue_on_interrupt {
                     self.queue.clear();
@@ -8658,8 +8684,14 @@ impl App {
     }
 
     fn finish_streaming(&mut self) {
-        if let Some(Cell::Assistant { streaming, .. }) = self.cells.last_mut() {
+        if let Some(Cell::Assistant { streaming, text }) = self.cells.last_mut() {
             *streaming = false;
+            #[cfg(feature = "image-peek")]
+            if text.contains("$$") {
+                crate::tui::latex::warm_render_async(text.clone());
+            }
+            #[cfg(not(feature = "image-peek"))]
+            let _ = text;
         }
     }
 
@@ -8678,7 +8710,7 @@ impl App {
                     *active = false;
                     *duration = Some(d);
                     self.thought_accum = self.thought_accum.saturating_add(d);
-                    // Never auto-expand — duration lives on the header chip.
+                    // Never auto-expand - duration lives on the header chip.
                     *expanded = false;
                 }
                 break;
@@ -8715,7 +8747,7 @@ impl App {
     /// - Chevron (left ~3 cols on a header): expand/collapse.
     /// - Exact `"click to peek"` text span only: open stable dialogue.
     /// - `http(s)://…` text spans: open in the OS default browser.
-    /// - Closing the dialogue is **never** done here — only Esc / outside / ✕.
+    /// - Closing the dialogue is **never** done here - only Esc / outside / ✕.
     fn click_transcript(&mut self, col: u16, row: u16) {
         let body = self.transcript_body;
         if body.width == 0 || body.height == 0 {
@@ -8920,7 +8952,7 @@ pub fn truncate_session_before_prompt(session: &mut crate::agent::Session, from_
         let cut = user_msgs[user_msgs.len() - from_end];
         session.messages.truncate(cut);
     }
-    // API input_items — each user turn begins with a `role: "user"` item.
+    // API input_items - each user turn begins with a `role: "user"` item.
     let user_items: Vec<usize> = session
         .input_items
         .iter()
@@ -8936,7 +8968,7 @@ pub fn truncate_session_before_prompt(session: &mut crate::agent::Session, from_
 }
 
 /// A pinned peek behaves like a popup: a left-click dismisses it when it lands
-/// on the ✕ or **anywhere outside** the box — the same on every side (this is
+/// on the ✕ or **anywhere outside** the box - the same on every side (this is
 /// the fix for "clicking below the box didn't close it"). A click inside keeps
 /// it open.
 pub fn peek_click_dismisses(
@@ -8948,7 +8980,7 @@ pub fn peek_click_dismisses(
     rect_contains(close, col, row) || !rect_contains(box_, col, row)
 }
 
-/// Tool-output content for a swarm kid peek — everything EXCEPT the sticky task
+/// Tool-output content for a swarm kid peek - everything EXCEPT the sticky task
 /// header. This is exactly what Ctrl+C copies and what renders below the seam.
 /// Dynamic (changes with the run's tool activity), unlike the static task.
 pub fn swarm_peek_tool_content(run: &crate::agent::swarm::AgentRun) -> String {
@@ -8960,7 +8992,7 @@ pub fn swarm_peek_tool_content(run: &crate::agent::swarm::AgentRun) -> String {
         RunState::Failed => "failed",
         RunState::Cancelled => "cancelled",
     };
-    s.push_str(&format!("#{}·{} — {status}\n", run.id, run.kind));
+    s.push_str(&format!("#{}·{} - {status}\n", run.id, run.kind));
     if let Some(tool) = run.tool.as_deref() {
         s.push_str(&format!("current tool: {tool}\n"));
     }
@@ -9023,7 +9055,7 @@ const PASTE_FLUSH_MS: u64 = 120;
 const PASTE_MERGE_MS: u64 = 800;
 
 /// Printable text that may be part of an unbracketed paste drip.
-/// **Never** Enter or Tab — those are real keys (submit / focus), not paste.
+/// **Never** Enter or Tab - those are real keys (submit / focus), not paste.
 fn key_as_paste_burst_char(key: &KeyEvent) -> Option<char> {
     if key.kind != KeyEventKind::Press && key.kind != KeyEventKind::Repeat {
         return None;
@@ -9035,7 +9067,7 @@ fn key_as_paste_burst_char(key: &KeyEvent) -> Option<char> {
         return None;
     }
     match key.code {
-        // Never treat CR/LF Char as paste — submit is KeyCode::Enter only.
+        // Never treat CR/LF Char as paste - submit is KeyCode::Enter only.
         KeyCode::Char(c) if c != '\n' && c != '\r' => Some(c),
         _ => None,
     }
@@ -9094,7 +9126,7 @@ impl App {
             return;
         }
 
-        // Reverse history search owns the keyboard — a paste extends the search
+        // Reverse history search owns the keyboard - a paste extends the search
         // query, it must not leak into the stashed composer buffer.
         if self.input.search_is_active() {
             for c in text.chars() {
@@ -9175,7 +9207,7 @@ impl App {
                             return;
                         }
                     } else {
-                        // Still small — re-insert combined as raw and keep tracking.
+                        // Still small - re-insert combined as raw and keep tracking.
                         let new_start = self.input.cursor_index();
                         self.input.insert_str(&combined);
                         self.last_raw_start = Some(new_start);
@@ -9188,14 +9220,14 @@ impl App {
                         return;
                     }
                 } else {
-                    // Cursor moved — break raw merge chain.
+                    // Cursor moved - break raw merge chain.
                     self.last_raw_start = None;
                     self.last_raw_len = 0;
                     self.last_raw_text.clear();
                 }
             }
         } else {
-            // Outside merge window — clear stale raw tracker.
+            // Outside merge window - clear stale raw tracker.
             self.last_raw_start = None;
             self.last_raw_len = 0;
             self.last_raw_text.clear();
@@ -9217,7 +9249,7 @@ impl App {
                 self.last_raw_len = 0;
                 self.last_raw_text.clear();
             } else {
-                // Slot exhaustion — fallback to raw but don't lose content.
+                // Slot exhaustion - fallback to raw but don't lose content.
                 let start = self.input.cursor_index();
                 self.input.insert_str(&text);
                 self.last_raw_start = Some(start);
@@ -9255,12 +9287,12 @@ impl App {
         self.on_paste(&text);
     }
 
-    /// Clear the paste merge session — called when the user types / moves
+    /// Clear the paste merge session - called when the user types / moves
     /// caret / deletes, so the next paste starts a fresh chip.
     #[allow(dead_code)]
     fn clear_paste_merge_state(&mut self) {
         self.active_paste_id = None;
-        // Keep active_paste_at for a short grace? No — break immediately on edit.
+        // Keep active_paste_at for a short grace? No - break immediately on edit.
         self.active_paste_at = None;
         self.last_raw_start = None;
         self.last_raw_len = 0;
@@ -9405,7 +9437,7 @@ fn cells_to_ui_log(cells: &[Cell]) -> Vec<crate::agent::session::UiLogItem> {
                 thought_ms: None,
                 interrupted: false,
             }),
-            // Ephemeral — only meaningful while a turn is running.
+            // Ephemeral - only meaningful while a turn is running.
             Cell::Queued { .. } => {}
             Cell::Graph { .. } => {}
             Cell::Swarm { .. } => {}
@@ -9602,7 +9634,7 @@ fn enrich_cross_provider_steer(text: &str) -> String {
          User named these providers: {list}. You MUST call `agent` with \
          `provider` set for each (claude→anthropic, grok→xai, gemini→google, \
          antigravity→antigravity, chatgpt→openai, …). Missing creds open \
-         /login and **block** the spawn — do NOT fall back to the parent provider.",
+         /login and **block** the spawn - do NOT fall back to the parent provider.",
         text = text,
         list = named.join(", "),
     )
@@ -9654,7 +9686,7 @@ mod tests {
         assert!(peek_click_dismisses(close, box_, 20, 30));
         // Outside to the left
         assert!(peek_click_dismisses(close, box_, 2, 10));
-        // Inside body — keep open
+        // Inside body - keep open
         assert!(!peek_click_dismisses(close, box_, 20, 12));
     }
 
@@ -9685,7 +9717,7 @@ mod tests {
         assert!(body.contains("bash"), "{body}");
         assert!(body.contains("tool trace"), "{body}");
         assert!(body.contains("✓ done"), "{body}");
-        // Sticky task is separate — not in the dynamic band.
+        // Sticky task is separate - not in the dynamic band.
         assert!(!body.contains("implement expand"), "{body}");
         let full = swarm_peek_full_copy(&run);
         assert!(full.contains("implement expand"), "{full}");
@@ -9871,7 +9903,7 @@ body"
     }
 
     /// `/clear` is display-only, but the end-of-turn sync used to overwrite the
-    /// session's replay log with the cleared screen — deleting the conversation
+    /// session's replay log with the cleared screen - deleting the conversation
     /// from disk. The implicit sync must never shrink; deliberate truncation
     /// goes through the explicit replace instead.
     #[test]
@@ -9898,7 +9930,7 @@ body"
             "precondition: clearing really does yield a shorter log"
         );
 
-        // The implicit sync's guard — this is the rule that saves the history.
+        // The implicit sync's guard - this is the rule that saves the history.
         assert!(
             !(cleared.len() >= history.len()),
             "a cleared screen must not overwrite a longer saved log"
@@ -9956,14 +9988,14 @@ body"
         assert!(!(76 >= left && 76 < track.right()), "col 76 must miss rail");
         assert!(78 >= left && 78 < track.right(), "col 78 hits rail");
         assert!(79 >= left && 79 < track.right(), "col 79 hits rail");
-        // Old bug: left = track.x - 2 would steal 76–77.
+        // Old bug: left = track.x - 2 would steal 76-77.
         let old_left = track.x.saturating_sub(2);
         assert!(76 >= old_left && 76 < track.right());
     }
 
     #[test]
     fn only_click_to_peek_text_opens_dialogue() {
-        // OpenPeek only when click_to_peek_cell is Some — never from bare header.
+        // OpenPeek only when click_to_peek_cell is Some - never from bare header.
         assert_eq!(
             resolve_transcript_click(false, Some(3), None),
             TranscriptClick::None
@@ -10066,18 +10098,18 @@ body"
         // Exact, and separator/case insensitive.
         assert!(cwd_matches(here, here));
         assert!(cwd_matches(here, "c:/users/david/laboratory/nur-cli"));
-        // Grok roots sessions at the drive or home — still this workspace.
+        // Grok roots sessions at the drive or home - still this workspace.
         assert!(cwd_matches(here, r"C:\Users\david"));
         assert!(cwd_matches(here, r"C:\"));
         // A sibling project is not.
         assert!(!cwd_matches(here, r"C:\Users\david\Laboratory\ASTROSleep"));
-        // A *deeper* folder is not "here" either — only ancestors count.
+        // A *deeper* folder is not "here" either - only ancestors count.
         assert!(!cwd_matches(here, r"C:\Users\david\Laboratory\nur-cli\src"));
         // Prefix must land on a separator, not mid-name.
         assert!(!cwd_matches(here, r"C:\Users\david\Laboratory\nur"));
     }
 
-    /// The two windows must never show each other's rows — that separation is
+    /// The two windows must never show each other's rows - that separation is
     /// the whole point of `c` switching rather than merging.
     #[test]
     fn foreign_and_native_rows_never_share_a_window() {

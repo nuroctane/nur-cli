@@ -2324,9 +2324,7 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
         Cell::Assistant { text, streaming } => {
             out.push(Line::default());
             let md = markdown::render_markdown(text, theme::style_assistant());
-            // Cool teal/mint bullet — chrome stays gold; answers should not.
             let bullet = theme::SEAFOAM();
-            // render_markdown always yields ≥1 line, so gate on the source text.
             if text.trim().is_empty() && *streaming {
                 out.push(Line::from(vec![
                     Span::styled("● ".to_string(), Style::default().fg(bullet)),
@@ -2344,6 +2342,16 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                 };
                 l.spans.insert(0, prefix);
                 out.push(l);
+            }
+            #[cfg(feature = "image-peek")]
+            if crate::tui::latex::first_cached_png(text).is_some() {
+                out.push(Line::from(vec![
+                    Span::raw("  ".to_string()),
+                    Span::styled(
+                        "equation rendered · click answer to peek image".to_string(),
+                        theme::style_faint(),
+                    ),
+                ]));
             }
             if *streaming {
                 if let Some(last) = out.last_mut() {
@@ -5196,6 +5204,15 @@ fn draw_hover_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
                 None
             };
             (diff, image)
+        } else if let Cell::Assistant { text, .. } = cell {
+            #[cfg(feature = "image-peek")]
+            let image = crate::tui::latex::first_cached_png(text);
+            #[cfg(not(feature = "image-peek"))]
+            let image = {
+                let _ = text;
+                None::<String>
+            };
+            (None, image)
         } else {
             (None, None)
         };
@@ -6867,6 +6884,10 @@ fn cell_wrap_key(cell: &Cell, spin_i: u64) -> u64 {
             3u8.hash(&mut h);
             text.hash(&mut h);
             streaming.hash(&mut h);
+            #[cfg(feature = "image-peek")]
+            crate::tui::latex::first_cached_png(text)
+                .is_some()
+                .hash(&mut h);
             if *streaming {
                 spin_i.hash(&mut h);
             }

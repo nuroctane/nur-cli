@@ -4,18 +4,63 @@ use crate::error::{MuseError, Result};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-fn read_all(pipe: Option<impl Read>) -> Vec<u8> {
+/// Default when the model omits `timeout_ms`.
+pub const DEFAULT_TIMEOUT_MS: u64 = 60_000;
+/// Hard ceiling — models (especially Claude) often request huge timeouts that
+/// just make hung commands feel immortal.
+pub const MAX_TIMEOUT_MS: u64 = 180_000;
+/// No stdout/stderr bytes for this long → treat as hung (waiting on stdin, etc.).
+/// Kept long enough that quiet compilers/linkers are not killed mid-build.
+const IDLE_TIMEOUT_MS: u64 = 90_000;
+/// Grace before idle timeout starts (compilers are quiet at startup).
+const IDLE_GRACE_MS: u64 = 20_000;
+/// How long we wait for pipe drain threads after killing the process tree.
+const JOIN_AFTER_KILL_MS: u64 = 2_000;
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn read_all(pipe: Option<impl Read>, progress_ms: Arc<AtomicU64>) -> Vec<u8> {
     // Cap at 2MB per stream to prevent memory blow-up from cat largefile etc
-    const CAP: u64 = 2_000_000;
+    const CAP: usize = 2_000_000;
     let mut buf = Vec::new();
-    if let Some(p) = pipe {
-        let mut limited = p.take(CAP);
-        let _ = limited.read_to_end(&mut buf);
+    let mut tmp = [0u8; 8192];
+    let Some(mut p) = pipe else {
+        return buf;
+    };
+    loop {
+        match p.read(&mut tmp) {
+            Ok(0) => break,
+            Ok(n) => {
+                progress_ms.store(now_ms(), Ordering::Relaxed);
+                if buf.len() < CAP {
+                    let take = n.min(CAP - buf.len());
+                    buf.extend_from_slice(&tmp[..take]);
+                }
+                // Past CAP: keep draining so the child does not block on a full pipe.
+            }
+            Err(_) => break,
+        }
     }
     buf
+}
+
+fn join_with_timeout(handle: thread::JoinHandle<Vec<u8>>, timeout_ms: u64) -> Vec<u8> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(handle.join().unwrap_or_default());
+    });
+    rx.recv_timeout(Duration::from_millis(timeout_ms))
+        .unwrap_or_default()
 }
 
 #[derive(Debug, Clone)]
@@ -177,6 +222,11 @@ fn kill_tree(child: &mut std::process::Child) {
     let _ = child.wait();
 }
 
+/// Clamp model-requested timeouts into a sane band.
+pub fn clamp_timeout_ms(requested: u64) -> u64 {
+    requested.clamp(1_000, MAX_TIMEOUT_MS)
+}
+
 pub fn run_in_shell(
     backend: &ShellBackend,
     command: &str,
@@ -186,12 +236,22 @@ pub fn run_in_shell(
 ) -> Result<String> {
     let kind = backend.kind;
     let label = backend.label.clone();
+    let timeout_ms = clamp_timeout_ms(timeout_ms);
 
     let mut cmd = Command::new(&backend.program);
     cmd.current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        // Nudge CLIs away from interactive prompts (stdin is already null).
+        .env("CI", "1")
+        .env("TERM", "dumb")
+        .env("NO_COLOR", "1")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never")
+        .env("NPM_CONFIG_YES", "true")
+        .env("DEBIAN_FRONTEND", "noninteractive")
+        .env("PYTHONUNBUFFERED", "1");
     match kind {
         ShellKind::Bash => {
             cmd.args(["-lc", command]);
@@ -209,38 +269,59 @@ pub fn run_in_shell(
         .map_err(|e| MuseError::Tool(format!("command failed to start: {e}")))?;
 
     // Drain pipes on threads so a chatty child can't deadlock on a full pipe.
+    let progress = Arc::new(AtomicU64::new(now_ms()));
     let out_pipe = child.stdout.take();
     let err_pipe = child.stderr.take();
-    let out_h = thread::spawn(move || read_all(out_pipe));
-    let err_h = thread::spawn(move || read_all(err_pipe));
+    let prog_out = Arc::clone(&progress);
+    let prog_err = Arc::clone(&progress);
+    let out_h = thread::spawn(move || read_all(out_pipe, prog_out));
+    let err_h = thread::spawn(move || read_all(err_pipe, prog_err));
 
-    // Poll for exit; on deadline or user cancel, kill the whole process tree
-    // so Esc/timeouts never leave orphaned shells running.
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    let started = Instant::now();
+    let deadline = started + Duration::from_millis(timeout_ms);
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {
                 if cancel.is_cancelled() {
                     kill_tree(&mut child);
-                    let _ = out_h.join();
-                    let _ = err_h.join();
+                    let _ = join_with_timeout(out_h, JOIN_AFTER_KILL_MS);
+                    let _ = join_with_timeout(err_h, JOIN_AFTER_KILL_MS);
                     return Err(MuseError::Tool(
                         "command cancelled by user (process tree killed)".into(),
                     ));
                 }
                 if Instant::now() >= deadline {
                     kill_tree(&mut child);
-                    let _ = out_h.join();
-                    let _ = err_h.join();
+                    let _ = join_with_timeout(out_h, JOIN_AFTER_KILL_MS);
+                    let _ = join_with_timeout(err_h, JOIN_AFTER_KILL_MS);
                     return Err(MuseError::Tool(format!(
-                        "command timed out after {timeout_ms}ms (process tree killed)"
+                        "command timed out after {timeout_ms}ms (process tree killed). \
+                         Do not retry the same command with a longer timeout - use \
+                         list_dir/read_file/grep/glob, or a narrower non-interactive command."
                     )));
+                }
+                // Idle: no pipe bytes for IDLE_TIMEOUT after grace → likely waiting on stdin.
+                if started.elapsed() >= Duration::from_millis(IDLE_GRACE_MS) {
+                    let last = progress.load(Ordering::Relaxed);
+                    let idle_for = now_ms().saturating_sub(last);
+                    if idle_for >= IDLE_TIMEOUT_MS {
+                        kill_tree(&mut child);
+                        let _ = join_with_timeout(out_h, JOIN_AFTER_KILL_MS);
+                        let _ = join_with_timeout(err_h, JOIN_AFTER_KILL_MS);
+                        return Err(MuseError::Tool(format!(
+                            "command idle for {idle_for}ms with no output (process tree killed). \
+                             Likely waiting for interactive input or stuck. Do not retry the \
+                             identical command - switch to a dedicated tool or a non-interactive form."
+                        )));
+                    }
                 }
                 thread::sleep(Duration::from_millis(30));
             }
             Err(e) => {
                 kill_tree(&mut child);
+                let _ = join_with_timeout(out_h, JOIN_AFTER_KILL_MS);
+                let _ = join_with_timeout(err_h, JOIN_AFTER_KILL_MS);
                 return Err(MuseError::Tool(format!("command wait failed: {e}")));
             }
         }
@@ -266,6 +347,12 @@ pub fn run_in_shell(
     if stdout.is_empty() && stderr.is_empty() {
         out.push_str("(no output)\n");
     }
+    if code != 0 {
+        out.push_str(
+            "note: non-zero exit - do NOT retry this identical command. \
+             Read stderr, then switch approach (dedicated tool or different flags).\n",
+        );
+    }
     if kind == ShellKind::Cmd {
         out.push_str(
             "note: shell is cmd.exe — use Windows syntax (dir, type, findstr). \
@@ -275,10 +362,25 @@ pub fn run_in_shell(
     Ok(out)
 }
 
-fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else {
-        format!("{}…\n[truncated {} chars]", &s[..max], s.len())
+fn truncate(s: &str, max_bytes: usize) -> String {
+    if s.len() <= max_bytes {
+        return s.to_string();
+    }
+    let mut cut = max_bytes.min(s.len());
+    while cut > 0 && !s.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!("{}…\n[truncated {} bytes]", &s[..cut], s.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clamp_bounds_timeout() {
+        assert_eq!(clamp_timeout_ms(0), 1_000);
+        assert_eq!(clamp_timeout_ms(30_000), 30_000);
+        assert_eq!(clamp_timeout_ms(999_999), MAX_TIMEOUT_MS);
     }
 }

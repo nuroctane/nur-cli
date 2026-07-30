@@ -192,6 +192,10 @@ impl App {
             "/graphify" => self.cmd_graphify(&arg),
             "/graphjin" | "/gj" => self.cmd_graphjin(&arg),
             "/plur" => self.cmd_plur(&arg),
+            "/optmem" | "/memo" => self.cmd_optmem(&arg),
+            "/headroom" => self.cmd_headroom(&arg),
+            "/egaki" | "/image" => self.cmd_egaki(&arg),
+            "/factory-overnight" => self.cmd_skill_or_unknown("/factory-overnight", &arg),
             "/ruflo" => self.cmd_ruflo(&arg),
             "/akarso" => self.cmd_akarso(&arg),
             "/openseo" => self.cmd_openseo(),
@@ -377,13 +381,102 @@ impl App {
                 }
             }
         };
+        self.run_slash_tool("plur", &json);
+    }
+
+    fn cmd_optmem(&mut self, arg: &str) {
+        let arg = arg.trim();
+        let json = if arg.is_empty() || arg == "status" || arg == "help" || arg == "doctor" {
+            r#"{"action":"doctor"}"#.to_string()
+        } else {
+            let mut parts = arg.splitn(2, char::is_whitespace);
+            let action = parts.next().unwrap_or("status").trim();
+            let rest = parts.next().unwrap_or("").trim();
+            match action {
+                "wake" => r#"{"action":"wake"}"#.to_string(),
+                "nap" => r#"{"action":"nap"}"#.to_string(),
+                "note" => {
+                    if rest.is_empty() {
+                        self.push_error("usage: /optmem note <one line>".into());
+                        return;
+                    }
+                    serde_json::json!({"action":"note","text": rest}).to_string()
+                }
+                "recall" => {
+                    if rest.is_empty() {
+                        self.push_error("usage: /optmem recall <query>".into());
+                        return;
+                    }
+                    serde_json::json!({"action":"recall","query": rest}).to_string()
+                }
+                "zoom" | "forget" => {
+                    if rest.is_empty() {
+                        self.push_error(format!("usage: /optmem {action} <a-b>"));
+                        return;
+                    }
+                    serde_json::json!({"action": action, "range": rest}).to_string()
+                }
+                "config" => {
+                    if rest.is_empty() {
+                        r#"{"action":"config"}"#.to_string()
+                    } else {
+                        serde_json::json!({"action":"config","config_kv": rest}).to_string()
+                    }
+                }
+                _ => r#"{"action":"doctor"}"#.to_string(),
+            }
+        };
+        self.run_slash_tool("optmem", &json);
+    }
+
+    fn cmd_headroom(&mut self, arg: &str) {
+        let arg = arg.trim();
+        let json = if arg.is_empty() || arg == "status" || arg == "doctor" || arg == "help" {
+            r#"{"action":"doctor"}"#.to_string()
+        } else if let Some(rest) = arg.strip_prefix("compress ") {
+            serde_json::json!({"action":"compress","text": rest}).to_string()
+        } else {
+            r#"{"action":"doctor"}"#.to_string()
+        };
+        self.run_slash_tool("headroom", &json);
+    }
+
+    fn cmd_egaki(&mut self, arg: &str) {
+        let arg = arg.trim();
+        let json = if arg.is_empty() || arg == "status" || arg == "doctor" || arg == "help" {
+            r#"{"action":"doctor"}"#.to_string()
+        } else if arg == "login" || arg.starts_with("login ") {
+            let provider = arg
+                .strip_prefix("login")
+                .unwrap_or("")
+                .trim()
+                .trim_start_matches("--provider")
+                .trim();
+            let provider = if provider.is_empty() {
+                "chatgpt"
+            } else {
+                provider
+            };
+            serde_json::json!({"action":"login","provider": provider}).to_string()
+        } else if let Some(rest) = arg.strip_prefix("image ") {
+            serde_json::json!({"action":"image","prompt": rest}).to_string()
+        } else if let Some(rest) = arg.strip_prefix("video ") {
+            serde_json::json!({"action":"video","prompt": rest}).to_string()
+        } else {
+            // bare prompt → image
+            serde_json::json!({"action":"image","prompt": arg}).to_string()
+        };
+        self.run_slash_tool("egaki", &json);
+    }
+
+    fn run_slash_tool(&mut self, name: &str, json: &str) {
         let host = ToolHost::default();
         let ctx = crate::tools::ToolContext {
             cwd: self.cwd.clone(),
             cancel: CancellationToken::new(),
         };
-        match host.dispatch("plur", &json, &ctx) {
-            Ok(s) => self.push_note(Tone::Memory, s),
+        match host.dispatch(name, json, &ctx) {
+            Ok(s) => self.push_note(Tone::Skill, s),
             Err(e) => self.push_error(e.to_string()),
         }
     }

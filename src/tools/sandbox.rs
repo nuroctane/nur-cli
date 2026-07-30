@@ -106,6 +106,35 @@ pub fn resolve_in_workspace(cwd: &Path, path: &str) -> Result<PathBuf> {
     Ok(lexical)
 }
 
+/// Resolve a path for **read** tools: workspace sandbox, plus nur tool-result
+/// spills under `~/.nur/tool-results/` (so truncated tool output stays recoverable).
+pub fn resolve_for_read(cwd: &Path, path: &str) -> Result<PathBuf> {
+    match resolve_in_workspace(cwd, path) {
+        Ok(p) => Ok(p),
+        Err(workspace_err) => {
+            let candidate = if Path::new(path).is_absolute() {
+                PathBuf::from(path)
+            } else {
+                // Relative paths never mean tool-results; keep original error.
+                return Err(workspace_err);
+            };
+            if crate::tools::spill::is_under_tool_results(&candidate) {
+                if candidate.is_file() || candidate.exists() {
+                    return Ok(candidate
+                        .canonicalize()
+                        .map(|p| strip_verbatim(&p))
+                        .unwrap_or(candidate));
+                }
+                // Allow exact path even if canonicalize failed after create race.
+                if crate::tools::spill::is_under_tool_results(&normalize_path(&candidate)) {
+                    return Ok(normalize_path(&candidate));
+                }
+            }
+            Err(workspace_err)
+        }
+    }
+}
+
 fn escape_err(path: &Path, root: &Path) -> MuseError {
     MuseError::Tool(format!(
         "path escapes workspace sandbox\n  path: {}\n  workspace: {}\n\

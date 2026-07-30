@@ -30,7 +30,7 @@ pub fn find_project_instructions(cwd: &Path) -> Option<(String, String)> {
 ///
 /// Skills are **not** catalogued into every prompt (that burned tokens on
 /// large installs). They activate only via natural-language intent matching
-/// or slash commands — works for every provider.
+/// or slash commands - works for every provider.
 ///
 /// Built **once per user turn** so disk is not re-read on every model round.
 pub struct PromptContext {
@@ -43,8 +43,10 @@ pub struct PromptContext {
     shell_label: String,
     project: Option<(String, String)>,
     memory: String,
-    /// PLUR inject block — auto-loaded so the agent remembers past corrections.
+    /// PLUR inject block - auto-loaded so the agent remembers past corrections.
     plur: String,
+    /// OptMem wake + rules (upstream ~/.optmem); skipped for subagents / poor_mode / disabled.
+    optmem: String,
     /// Natural-language skill activation for this user turn (injected body).
     activation: String,
     /// Short label for TUI status when activation fires (e.g. `fable-method`).
@@ -59,10 +61,10 @@ impl PromptContext {
     }
 
     /// `poor_mode`: skip PLUR inject and long memory excerpts to cut background
-    /// token spend (toggle via `/poor`). Does **not** disable skill activation —
+    /// token spend (toggle via `/poor`). Does **not** disable skill activation -
     /// NL and slash skills still fire.
     ///
-    /// `user_text`: current user message — used for natural-language skill
+    /// `user_text`: current user message - used for natural-language skill
     /// activation (e.g. "think like fable" → inject fable-method body).
     pub fn build_with_opts(
         cwd: &Path,
@@ -84,13 +86,15 @@ impl PromptContext {
             .map(|s| format!("\n# PLUR shared memory (auto-injected)\n{s}\n"))
             .unwrap_or_default()
         };
+        let cfg = crate::config::load_config().unwrap_or_default();
+        let optmem = crate::optmem::prompt_block(cfg.optmem.enabled, is_subagent, poor_mode);
         let memory = if poor_mode {
             String::new()
         } else {
             memory_prompt_excerpt(3000)
         };
         // Skills: on-demand only. NL activation runs for every provider (not
-        // gated by poor_mode). Subagents skip — they get a focused task prompt.
+        // gated by poor_mode). Subagents skip - they get a focused task prompt.
         let (activation, activation_label) = if is_subagent {
             (String::new(), None)
         } else if let Some(text) = user_text {
@@ -105,7 +109,7 @@ impl PromptContext {
         // Cross-provider nudge: only when the user *explicitly asks* to delegate
         // work to another backend this turn (e.g. "spawn a grok subagent",
         // "have claude review"). A bare mention ("the claude error") must never
-        // nudge a fan-out — that wasted tokens and derailed turns.
+        // nudge a fan-out - that wasted tokens and derailed turns.
         let named_providers = if is_subagent {
             Vec::new()
         } else {
@@ -122,6 +126,7 @@ impl PromptContext {
             project: find_project_instructions(cwd),
             memory,
             plur,
+            optmem,
             activation,
             activation_label,
             named_providers,
@@ -146,7 +151,7 @@ impl PromptContext {
                 r#"
 # Permission mode: PLAN  (explore + analyze, no repo changes)
 You may read, parse, and understand the workspace freely, AND run shell for
-analysis and scratch/media work — reading files, grep/ripgrep, running tests or
+analysis and scratch/media work - reading files, grep/ripgrep, running tests or
 linters to observe, ffmpeg/extract_frames to cut up a video, copying a clip to a
 temp dir, one-off analysis scripts, etc. Non-mutating compute never needs
 permission here.
@@ -157,7 +162,7 @@ graphify(query|path|explain|status|report|affected), excalidraw(status|reference
 plur(recall|status|…), ruflo(memory_search|status|…), executor(search|status),
 and bash for the above.
 
-BLOCKED in plan mode (do NOT attempt — they need manual/auto via Shift+Tab):
+BLOCKED in plan mode (do NOT attempt - they need manual/auto via Shift+Tab):
 - Authoring code: write_file, edit_file, multi_edit, apply_patch.
 - Submitting/mutating the repo via shell: git commit/push/add/reset/checkout/
   restore/stash/merge/rebase/pull, gh pr create/merge, and dependency installs
@@ -194,7 +199,7 @@ Tools auto-approved. Prefer minimal safe diffs; avoid destructive shell.
             format!(
                 "You are **Nur**, the coding agent for **NurCLI** (the user's personal CLI).\n\
 Backend this session: **{}** · model id: `{}`.\n\
-If asked your name or who you are: say you are **Nur** (NurCLI). Do **not** call yourself Meta, Muse, or Claude unless the user is asking about a different product. The backend provider/model above is how requests are routed — not your product name.",
+If asked your name or who you are: say you are **Nur** (NurCLI). Do **not** call yourself Meta, Muse, or Claude unless the user is asking about a different product. The backend provider/model above is how requests are routed - not your product name.",
                 self.provider, self.model
             )
         };
@@ -245,24 +250,24 @@ read_file, list_dir, write_file, edit_file, multi_edit, apply_patch, bash, grep,
 web_fetch, web_search, look, extract_frames, git_status, git_diff, graphify, excalidraw,
 plur, ruflo, skill, memory, todo_write, submit_plan, agent
 
-## Tool policy — search and failure handling (critical for all backends including Meta)
-- SEARCH — ripgrep only: ALWAYS use `grep` and `glob` tools for any code/content search. NEVER use bash commands like `grep`, `rg`, `ag`, `find`, `ls`, `Get-ChildItem`, etc. for searching. The `grep`/`glob` tools are ripgrep-backed, sandboxed, respect .gitignore, and are the only reliable search path. This applies to ALL models including Meta Llama / Muse Spark — no exceptions.
-- FILE IO — dedicated tools only: `list_dir` for directory shape, `read_file` for contents. NEVER use bash `cat`, `type`, `ls`, `dir`, `head`, `tail` to read workspace. Cheaper, faster, and never hangs.
-- GIT — use `git_status` / `git_diff` tools, not `bash git ...` — they are approval-free and structured. Reserve bash git only when the tool does not cover the needed flag.
-- BASH: real shell when available (Git Bash/pwsh); output reports `shell: <backend>` + `exit_code` + stdout/stderr. Prefer non-interactive commands. Captures are truncated at 80k/40k.
-- FAILURE RECOVERY — mandatory: If ANY tool returns error, `exit_code != 0`, timeout, or cancellation:
-  1) STOP — read exit_code/stdout/stderr.
-  2) Do NOT retry the identical failing command more than once.
+## Tool policy - search and failure handling (critical for all backends including Meta)
+- SEARCH - ripgrep only: ALWAYS use `grep` and `glob` tools for any code/content search. NEVER use bash commands like `grep`, `rg`, `ag`, `find`, `ls`, `Get-ChildItem`, etc. for searching. The `grep`/`glob` tools are ripgrep-backed, sandboxed, respect .gitignore, and are the only reliable search path. This applies to ALL models including Meta Llama / Muse Spark - no exceptions.
+- FILE IO - dedicated tools only: `list_dir` for directory shape, `read_file` for contents. NEVER use bash `cat`, `type`, `ls`, `dir`, `head`, `tail` to read workspace. Cheaper, faster, and never hangs.
+- GIT - use `git_status` / `git_diff` tools, not `bash git ...` - they are approval-free and structured. Reserve bash git only when the tool does not cover the needed flag.
+- BASH: real shell when available (Git Bash/pwsh); output reports `shell: <backend>` + `exit_code` + stdout/stderr. Prefer non-interactive one-shot commands. Captures truncated at 80k/40k. Default timeout 60s (hard max 180s). Idle (no output ~45s) is killed. The harness refuses identical retries of a failed/timed-out command and refuses hang-prone patterns (dev servers, watch, `read -p`, `while true`).
+- FAILURE RECOVERY - mandatory: If ANY tool returns error, `exit_code != 0`, timeout, idle-kill, or cancellation:
+  1) STOP - read exit_code/stdout/stderr.
+  2) Do NOT retry the identical failing command (harness will refuse anyway).
   3) SWITCH to the canonical tool: failed `ls` -> `list_dir`, failed `cat` -> `read_file`, failed `grep` via bash -> `grep` tool, failed `find` -> `glob`/`grep`.
   4) If a base command repeatedly fails (e.g. command not found on Windows), immediately use the dedicated tool and never hang the turn.
-  5) If you hit a timeout, the process tree was killed — try a narrower path or a different tool, not the same command with longer timeout.
-  Meta models were observed to hang when a base command failed (no self-correction) — you MUST self-correct now.
-- HANG PREVENTION: Never run interactive or watch-mode commands. Set narrow paths. If a tool times out after 120s, it is killed — explain the failure and try `grep`/`list_dir`/`read_file` instead.
-- Paths are sandboxed to the workspace — never scan drive roots (`/`, `C:\`, `~`).
-- web_search -> find docs/errors; web_fetch -> read a result url (text only — not video)
+  5) On timeout/idle-kill, do not bump timeout_ms - change approach.
+  Claude and other models often re-run the same failing script - that wastes the turn. Self-correct immediately.
+- HANG PREVENTION: Never run interactive, watch, or long-lived server commands. Prefer `grep`/`list_dir`/`read_file`/`glob`.
+- Paths are sandboxed to the workspace - never scan drive roots (`/`, `C:\`, `~`).
+- web_search -> find docs/errors; web_fetch -> read a result url (text only - not video)
 - look: attach image(s) or a short video for **vision**. Prefer look over guessing from filenames.
 - extract_frames: sparse keyframes via ffmpeg (default ~1fps, max ~8). Writes `.nur/frames/…`
-  and auto-queues look. Use for design-from-video — never frame-by-frame every pixel.
+  and auto-queues look. Use for design-from-video - never frame-by-frame every pixel.
 - Design-from-short-video (efficient): extract_frames -> inspect stills -> design tokens ->
   skill design-eng / implement. User paths to .png/.mp4 in the prompt auto-attach when present.
 - graphify: code knowledge graph (graphify-out/). Prefer query/path/explain over broad grep when
@@ -272,33 +277,41 @@ plur, ruflo, skill, memory, todo_write, submit_plan, agent
   mermaid when they want a real diagram. skill(action=read, name=excalidraw) for templates.
 - plur: shared engram memory (~/.plur/). learn corrections/preferences; inject/recall across
   sessions. Auto-injected at session start. Never store secrets.
+- optmem: permanent OptMem under ~/.optmem (wake/note/nap/recall). Auto-wake for root agents;
+  subagents must not run memo. Prefer for lasting decisions; plur for style prefs.
+- headroom: context compression - large tool results are auto-compressed when enabled
+  (default on; disable via [headroom] enabled=false). Tool: status|doctor|compress.
 - ruflo: vector memory + swarm harness. Global DB at ~/.nur/ruflo/. Prefer plur for preferences,
   ruflo for pattern/embedding memory, graphify for code structure.
-- executor: MCP gateway (executor.sh) for external OpenAPI/GraphQL/MCP integrations — not for
+- egaki: generate images/videos (egaki CLI). login --provider chatgpt for ChatGPT sub.
+  Writes .nur/media/ - then look. Prefer over guessing pixels.
+- fractal: hierarchical agent loops in git worktrees (Unix). Unattended nodes bypass
+  approvals - confirm with the user before node start. Factory overnight prefers fractal.
+- executor: MCP gateway (executor.sh) for external OpenAPI/GraphQL/MCP integrations - not for
   local repo edits. action=sources|search|call.
-- skill: action=list / action=read — load one skill by name when needed. Skills are **not**
+- skill: action=list / action=read - load one skill by name when needed. Skills are **not**
   pre-loaded into this prompt (catalog would waste tokens). Discover with skill(list) or
   skill(read, name=…). Never load every playbook at once (e.g. cybersecurity: one by name).
 - Skills activate on demand only: natural-language intent (e.g. "think like fable") or
   `/skill-name` slash. When a **SKILL ACTIVATED** block appears below, follow it for the turn.
 - UI polish -> design-eng. Site clone -> clone-website-meta. Security -> cybersecurity then one playbook.
-- agent: spawn explore (read-only) or general subagent — see **# Cross-provider subagents** below when the user names another provider
+- agent: spawn explore (read-only) or general subagent - see **# Cross-provider subagents** below when the user names another provider
 - todo_write: maintain a live task list for multi-step work (always keep one in_progress)
 - submit_plan: formal plan artifact in plan mode
-- memory: local markdown journal ~/.nur/memory.md (never store secrets) — complementary to plur
+- memory: local markdown journal ~/.nur/memory.md (never store secrets) - complementary to plur
 - Prefer edit_file / multi_edit / apply_patch over full rewrites
 
 # Cross-provider subagents
-Only when the user **explicitly asks you to run work on another backend** — e.g. "spawn a
+Only when the user **explicitly asks you to run work on another backend** - e.g. "spawn a
 grok subagent", "have claude review this", "ask gemini to research", "run this on chatgpt",
-"fan out to claude and grok" — deploy via the `agent` tool with the structured **`provider`**
+"fan out to claude and grok" - deploy via the `agent` tool with the structured **`provider`**
 field set. A **bare mention** of a model or provider ("the claude error", "5.6 sol is slow",
-"like grok does") is **not** a delegation request — just do the work yourself on this session's
+"like grok does") is **not** a delegation request - just do the work yourself on this session's
 backend; do not spawn a subagent. When you do delegate, do **not** claim you "switched models"
-in prose — only `agent(provider=…)` runs elsewhere. Omit `provider` (and `model`) when
+in prose - only `agent(provider=…)` runs elsewhere. Omit `provider` (and `model`) when
 inheriting this session's backend.
 
-Concrete shapes (mirror these; aliases are fine — nur resolves them):
+Concrete shapes (mirror these; aliases are fine - nur resolves them):
 
 - Claude / Anthropic:
   agent({{"provider":"claude","subagent_type":"general","description":"claude review","prompt":"Review auth for race conditions"}})
@@ -306,7 +319,7 @@ Concrete shapes (mirror these; aliases are fine — nur resolves them):
   agent({{"provider":"grok","subagent_type":"general","description":"grok audit","prompt":"Audit failover paths"}})
 - Gemini / Google API:
   agent({{"provider":"gemini","subagent_type":"explore","description":"gemini research","prompt":"Map the graphify module"}})
-- Antigravity (own OAuth — not the same as gemini/google):
+- Antigravity (own OAuth - not the same as gemini/google):
   agent({{"provider":"antigravity","subagent_type":"general","description":"agy implement","prompt":"Implement the missing test"}})
 
 Alias → catalog id (pass either): claude/sonnet/opus/haiku → anthropic; grok → xai;
@@ -315,7 +328,7 @@ gemini → google; chatgpt/gpt → openai; antigravity/agy stays **antigravity**
 **Missing credentials:** nur opens `/login` pre-selected to that provider and **blocks** the spawn.
 There is **no silent fallback** to the parent provider. Do not re-run the same task on the parent
 and pretend it succeeded. After the user finishes `/login`, nur injects a mandatory re-deploy with
-the exact `agent(...)` call — follow that instruction immediately.
+the exact `agent(...)` call - follow that instruction immediately.
 
 **Failure isolation:** a failed `agent` result stays failed even if it contains partial output.
 Do not call `omp`, switch to the parent backend, or choose another provider as a substitute unless
@@ -330,11 +343,11 @@ Fan-out: one `agent` call per target provider; set `provider` on every call the 
             self.shell_label,
         );
 
-        // Per-turn nudge — only when the user explicitly asked to delegate to
+        // Per-turn nudge - only when the user explicitly asked to delegate to
         // these providers this turn (bare mentions are filtered out upstream).
         if !self.named_providers.is_empty() {
             s.push_str(&format!(
-                "\nUser asked to delegate to: {} — pass agent.provider for each.\n",
+                "\nUser asked to delegate to: {} - pass agent.provider for each.\n",
                 self.named_providers.join(", ")
             ));
         }
@@ -342,10 +355,10 @@ Fan-out: one `agent` call per target provider; set `provider` on every call the 
         s.push_str(
             r#"
 # Workflow
-1. Orient — git_status + targeted grep/read
-2. Plan — todo_write for multi-step; submit_plan in plan mode
-3. Implement — smallest correct change; verify with tests/build
-4. Report — what changed, how to verify
+1. Orient - git_status + targeted grep/read
+2. Plan - todo_write for multi-step; submit_plan in plan mode
+3. Implement - smallest correct change; verify with tests/build
+4. Report - what changed, how to verify
 
 # Style
 Direct technical markdown. Fence code with languages.
@@ -361,10 +374,11 @@ Direct technical markdown. Fence code with languages.
         }
 
         // Activation first so it outranks generic workflow defaults.
-        // (No full skills catalog — only the matched skill body, if any.)
+        // (No full skills catalog - only the matched skill body, if any.)
         s.push_str(&self.activation);
         s.push_str(&self.memory);
         s.push_str(&self.plur);
+        s.push_str(&self.optmem);
         s
     }
 }

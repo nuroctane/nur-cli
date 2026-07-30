@@ -22,6 +22,8 @@ const SKILL_PACKS: &[(&str, &str)] = &[
     ("mattpocock/skills", "mattpocock"),
     ("addyosmani/agent-skills", "addyosmani"),
     ("BuilderIO/skills", "builderio"),
+    // Marketing + software factory (factory overnight prefers fractal)
+    ("MikeFishbeinAtherial/infinite-headcount", "infinite-headcount"),
 ];
 
 pub fn ensure_skills_cli(node_ok: bool) -> ComponentStatus {

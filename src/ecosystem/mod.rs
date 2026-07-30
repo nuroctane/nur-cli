@@ -26,7 +26,8 @@ const ECOSYSTEM_MARKER: &str = "ecosystem.json";
 /// Bump to force `ensure_ecosystem` past a cached marker on upgrade.
 /// 10: retire the resume-* skills superseded by `/takeover`.
 /// 11: session_reader.py gains `--all-cwds` (takeover lists every workspace).
-const ECOSYSTEM_SCHEMA: u32 = 11;
+/// 12: headroom + optmem + egaki + fractal ensure + infinite-headcount pack.
+const ECOSYSTEM_SCHEMA: u32 = 12;
 /// Re-run ensure at most once per this many seconds unless forced.
 const ENSURE_TTL_SECS: u64 = 86_400;
 
@@ -54,19 +55,31 @@ pub struct EcosystemStatus {
     pub executor: ComponentStatus,
     #[serde(default)]
     pub omp: ComponentStatus,
-    /// GraphJin — governed GraphQL→SQL over live data (detect-only; opt-in).
+    /// GraphJin - governed GraphQL→SQL over live data (detect-only; opt-in).
     #[serde(default)]
     pub graphjin: ComponentStatus,
     #[serde(default)]
     pub browser: ComponentStatus,
     #[serde(default)]
     pub excalidraw: ComponentStatus,
-    /// Cua Drivers — computer-use MCP server + CLI (`cua-driver`).
+    /// Cua Drivers - computer-use MCP server + CLI (`cua-driver`).
     #[serde(default)]
     pub cua: ComponentStatus,
-    /// Akarso — social posting CLI/MCP (`akarso`).
+    /// Akarso - social posting CLI/MCP (`akarso`).
     #[serde(default)]
     pub akarso: ComponentStatus,
+    /// Headroom - tool-result context compression.
+    #[serde(default)]
+    pub headroom: ComponentStatus,
+    /// OptMem - permanent memory (~/.optmem).
+    #[serde(default)]
+    pub optmem: ComponentStatus,
+    /// egaki - image/video generation CLI.
+    #[serde(default)]
+    pub egaki: ComponentStatus,
+    /// fractal - hierarchical agent loops (Unix).
+    #[serde(default)]
+    pub fractal: ComponentStatus,
     pub skills_installed: Vec<String>,
     #[serde(default)]
     pub packs_installed: Vec<String>,
@@ -85,17 +98,22 @@ impl EcosystemStatus {
             }
         };
         format!(
-            "ecosystem · {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  · packs {}",
+            "ecosystem · {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  · packs {}",
             bit(self.graphify.available, "graphify"),
             bit(self.plur.available, "plur"),
             bit(self.ruflo.available, "ruflo"),
             bit(self.executor.available, "executor"),
             bit(self.omp.available, "omp"),
+            bit(self.graphjin.available, "graphjin"),
             bit(self.browser.available, "browser"),
             bit(self.excalidraw.available, "excalidraw"),
             bit(self.skills_cli.available, "skills"),
             bit(self.cua.available, "cua"),
             bit(self.akarso.available, "akarso"),
+            bit(self.headroom.available, "headroom"),
+            bit(self.optmem.available, "optmem"),
+            bit(self.egaki.available, "egaki"),
+            bit(self.fractal.available, "fractal"),
             if self.packs_installed.is_empty() {
                 "…".into()
             } else {
@@ -107,7 +125,7 @@ impl EcosystemStatus {
     pub fn report(&self) -> String {
         let mut s = String::from("Nur ecosystem (auto-provisioned on install / open)\n");
         // Fixed names so older ecosystem.json markers (pre-field) still list every slot.
-        let comps: [(&str, &ComponentStatus); 11] = [
+        let comps: [(&str, &ComponentStatus); 16] = [
             ("graphify", &self.graphify),
             ("plur", &self.plur),
             ("ruflo", &self.ruflo),
@@ -115,10 +133,15 @@ impl EcosystemStatus {
             ("akm", &self.akm),
             ("executor", &self.executor),
             ("omp", &self.omp),
+            ("graphjin", &self.graphjin),
             ("browser", &self.browser),
             ("excalidraw", &self.excalidraw),
             ("cua", &self.cua),
             ("akarso", &self.akarso),
+            ("headroom", &self.headroom),
+            ("optmem", &self.optmem),
+            ("egaki", &self.egaki),
+            ("fractal", &self.fractal),
         ];
         for (fallback_name, c) in comps {
             let name = if c.name.is_empty() {
@@ -130,7 +153,7 @@ impl EcosystemStatus {
                 if c.available {
                     "ready"
                 } else {
-                    "not provisioned yet — will install on next open / ensure"
+                    "not provisioned yet - will install on next open / ensure"
                 }
             } else if c.detail.is_empty() {
                 if c.available {
@@ -155,7 +178,7 @@ impl EcosystemStatus {
             if self.node_ok {
                 "ok"
             } else {
-                "missing — install Node.js 20+"
+                "missing - install Node.js 20+"
             }
         ));
         if !self.skills_installed.is_empty() {
@@ -199,7 +222,7 @@ pub fn marker_path() -> PathBuf {
 }
 
 /// Ensure the full Meta ecosystem is installed and initialised.
-/// Safe to call on every launch — skips heavy work when the marker is fresh.
+/// Safe to call on every launch - skips heavy work when the marker is fresh.
 pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
     // Always heal ~/.muse → ~/.nur gaps before creating empty ruflo/skills dirs.
     let _ = crate::config::ensure_dirs();
@@ -237,10 +260,14 @@ pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
     status.graphjin = packs::ensure_graphjin();
     status.browser = packs::ensure_browser_cli(status.node_ok);
     status.excalidraw = ensure_excalidraw(status.node_ok);
+    status.headroom = ensure_headroom();
+    status.optmem = ensure_optmem();
+    status.egaki = ensure_egaki(status.node_ok);
+    status.fractal = ensure_fractal();
     status.cua = ensure_cua();
     status.akarso = ensure_akarso(status.node_ok);
 
-    // tldraw offline desktop app (official) — best-effort auto-install so `/draw`
+    // tldraw offline desktop app (official) - best-effort auto-install so `/draw`
     // works out of the box. No-ops when already present; skips quietly offline.
     match crate::tools::tldraw::ensure_installed() {
         Ok(note) => status.notes.push(format!(
@@ -264,7 +291,7 @@ pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
         }
     }
     status.notes.extend(plug_notes);
-    // Packs/plugins may have mirrored new skills into ~/.nur/skills — invalidate cache
+    // Packs/plugins may have mirrored new skills into ~/.nur/skills - invalidate cache
     crate::agent::skill_cache::invalidate_cache();
 
     if status.plur.available {
@@ -327,7 +354,7 @@ fn ensure_excalidraw(node_ok: bool) -> ComponentStatus {
         return c;
     }
     if !node_ok {
-        c.detail = "needs Node.js 18+ — npm i -g excalidraw-cli".into();
+        c.detail = "needs Node.js 18+ - npm i -g excalidraw-cli".into();
         return c;
     }
     let npm = find_bin("npm").unwrap_or_else(|| "npm".into());
@@ -349,14 +376,185 @@ fn ensure_excalidraw(node_ok: bool) -> ComponentStatus {
         return c;
     }
     if c.detail.is_empty() {
-        c.detail = "not found after npm install — try: npm i -g excalidraw-cli".into();
+        c.detail = "not found after npm install - try: npm i -g excalidraw-cli".into();
     }
     c
 }
 
+// ── Headroom (context compression) ────────────────────────────────────────
+
+fn ensure_headroom() -> ComponentStatus {
+    let mut c = ComponentStatus {
+        name: "headroom".into(),
+        ..Default::default()
+    };
+    let _ = crate::headroom::ensure_helper_script();
+    if let Some(bin) = find_bin("headroom") {
+        c.available = true;
+        c.path = Some(bin.clone());
+        c.version = cmd_version(&bin, &["--version"]);
+        c.detail = "CLI ready · inline tool-result compress (disable: [headroom] enabled=false)".into();
+        return c;
+    }
+    // Best-effort install via uv / pip
+    if let Some(uv) = find_bin("uv") {
+        let _ = run_capture(
+            &uv,
+            &[
+                "tool",
+                "install",
+                "--python",
+                "3.13",
+                "headroom-ai[all]",
+            ],
+            None,
+            600_000,
+        );
+    } else if let Some(pip) = find_bin("pip3").or_else(|| find_bin("pip")) {
+        let _ = run_capture(
+            &pip,
+            &["install", "--user", "headroom-ai[all]"],
+            None,
+            600_000,
+        );
+    }
+    if let Some(bin) = find_bin("headroom") {
+        c.available = true;
+        c.path = Some(bin.clone());
+        c.version = cmd_version(&bin, &["--version"]);
+        c.detail = "installed headroom-ai".into();
+        return c;
+    }
+    // Inline compress only needs `from headroom import compress` - no CLI required.
+    if crate::headroom::python_import_ok() {
+        c.available = true;
+        c.detail =
+            "Python package ready · inline compress (no headroom CLI; disable: [headroom] enabled=false)"
+                .into();
+    } else {
+        c.detail =
+            "not found - uv tool install --python 3.13 \"headroom-ai[all]\" (inline compress no-ops until installed)"
+                .into();
+    }
+    c
+}
+
+// ── OptMem (permanent memory, upstream ~/.optmem) ─────────────────────────
+
+fn ensure_optmem() -> ComponentStatus {
+    let mut c = ComponentStatus {
+        name: "optmem".into(),
+        ..Default::default()
+    };
+    match crate::optmem::ensure_install() {
+        Ok(msg) => {
+            c.available = crate::optmem::memo_bin().is_some();
+            c.path = crate::optmem::memo_bin().map(|p| p.display().to_string());
+            c.detail = msg;
+        }
+        Err(e) => {
+            c.detail = e;
+        }
+    }
+    c
+}
+
+// ── egaki (image/video gen) ───────────────────────────────────────────────
+
+fn ensure_egaki(node_ok: bool) -> ComponentStatus {
+    let mut c = ComponentStatus {
+        name: "egaki".into(),
+        ..Default::default()
+    };
+    if let Some(bin) = find_bin("egaki") {
+        c.available = true;
+        c.path = Some(bin.clone());
+        c.version = cmd_version(&bin, &["--version"]);
+        c.detail =
+            "CLI ready · egaki login --provider chatgpt for ChatGPT sub path".into();
+        return c;
+    }
+    if !node_ok {
+        c.detail = "needs Node.js - npm i -g egaki".into();
+        return c;
+    }
+    let npm = find_bin("npm").unwrap_or_else(|| "npm".into());
+    let _ = run_capture(&npm, &["install", "-g", "egaki"], None, 300_000);
+    if let Some(bin) = find_bin("egaki") {
+        c.available = true;
+        c.path = Some(bin.clone());
+        c.version = cmd_version(&bin, &["--version"]);
+        c.detail = "installed via npm i -g egaki".into();
+    } else {
+        c.detail = "not found after npm install - try: npm i -g egaki".into();
+    }
+    c
+}
+
+// ── fractal (Unix hierarchical loops) ─────────────────────────────────────
+
+fn ensure_fractal() -> ComponentStatus {
+    let mut c = ComponentStatus {
+        name: "fractal".into(),
+        ..Default::default()
+    };
+    #[cfg(windows)]
+    {
+        c.detail = crate::fractal::PLATFORM_UNSUPPORTED.to_string();
+        // Still report binary presence for awareness
+        if let Some(bin) = crate::fractal::find_on_path("fractal") {
+            c.path = Some(bin.display().to_string());
+        }
+        return c;
+    }
+    #[cfg(not(windows))]
+    {
+        if let Some(bin) = crate::fractal::find_on_path("fractal") {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let probe = crate::fractal::probe_at(&cwd);
+            c.available = probe.usable;
+            c.path = Some(bin.display().to_string());
+            c.version = probe.version;
+            if probe.usable {
+                c.detail = "CLI ready · /fractal · unattended nodes bypass approvals".into();
+                let _ = run_capture(&bin.to_string_lossy(), &["install"], None, 60_000);
+            } else {
+                c.detail = probe
+                    .unusable_reason
+                    .unwrap_or_else(|| "fractal present but not usable".into());
+            }
+            return c;
+        }
+        if let Some(uv) = find_bin("uv") {
+            let _ = run_capture(
+                &uv,
+                &[
+                    "tool",
+                    "install",
+                    "plasma-fractal",
+                    "--with-executables-from",
+                    "plasma-wiki",
+                ],
+                None,
+                600_000,
+            );
+        } else if let Some(pipx) = find_bin("pipx") {
+            let _ = run_capture(&pipx, &["install", "plasma-fractal"], None, 600_000);
+        }
+        if let Some(bin) = crate::fractal::find_on_path("fractal") {
+            c.available = true;
+            c.path = Some(bin.display().to_string());
+            c.detail = "installed plasma-fractal".into();
+        } else {
+            c.detail = "not found - uv tool install plasma-fractal (Unix only)".into();
+        }
+        c
+    }
+}
+
 // ── Akarso (social posting CLI/MCP) ─────────────────────────────────────────
 
-/// Akarso — post/schedule/reply across 14 social platforms (`akarso` npm CLI).
+/// Akarso - post/schedule/reply across 14 social platforms (`akarso` npm CLI).
 /// Best-effort global install so the `akarso` tool + `/akarso` work out of the
 /// box; the user still runs `akarso auth login` once to connect. Never blocks
 /// ensure on failure (no account required to install the CLI).
@@ -374,7 +572,7 @@ fn ensure_akarso(node_ok: bool) -> ComponentStatus {
         return c;
     }
     if !node_ok {
-        c.detail = "needs Node.js 18+ — npm i -g akarso".into();
+        c.detail = "needs Node.js 18+ - npm i -g akarso".into();
         return c;
     }
     let _ = run_quiet("npm", &["install", "-g", "akarso"], None, 600_000);
@@ -384,7 +582,7 @@ fn ensure_akarso(node_ok: bool) -> ComponentStatus {
         c.version = cmd_version(&bin, &["--version"]);
         c.detail = "installed via npm i -g akarso · run `akarso auth login`".into();
     } else {
-        c.detail = "not found — npm install -g akarso".into();
+        c.detail = "not found - npm install -g akarso".into();
     }
     c
 }
@@ -418,11 +616,11 @@ pub fn cua_driver_path() -> Option<String> {
     cua_driver_bin()
 }
 
-/// Cua Drivers — computer-use MCP server + CLI (`cua-driver`) from trycua/cua.
+/// Cua Drivers - computer-use MCP server + CLI (`cua-driver`) from trycua/cua.
 /// Installed via the vendor's official script. On Windows we pass `-NoAutoStart`
 /// so nur never silently registers an **elevated** background daemon: the useful
 /// binary lands on PATH, and you start it on demand (`cua-driver serve`) or wire
-/// its MCP (`cua-driver mcp-config`). Best-effort — a failure never blocks ensure.
+/// its MCP (`cua-driver mcp-config`). Best-effort - a failure never blocks ensure.
 fn ensure_cua() -> ComponentStatus {
     let mut c = ComponentStatus {
         name: "cua".into(),
@@ -471,7 +669,7 @@ fn ensure_cua() -> ComponentStatus {
         c.path = Some(bin);
         c.detail = "cua-driver installed · computer-use MCP/CLI (no autostart daemon)".into();
     } else {
-        c.detail = "installed but cua-driver not on PATH yet — open a new shell".into();
+        c.detail = "installed but cua-driver not on PATH yet - open a new shell".into();
     }
     c
 }
@@ -504,7 +702,7 @@ fn ensure_graphify() -> ComponentStatus {
             return c;
         }
     }
-    c.detail = "not found — install: uv tool install graphifyy".into();
+    c.detail = "not found - install: uv tool install graphifyy".into();
     c
 }
 
@@ -543,7 +741,7 @@ fn ensure_plur(node_ok: bool) -> ComponentStatus {
             .join(".plur");
         c.detail = format!("store {}", home.display());
     } else {
-        c.detail = "not found — npm install -g @plur-ai/cli @plur-ai/mcp".into();
+        c.detail = "not found - npm install -g @plur-ai/cli @plur-ai/mcp".into();
     }
     c
 }
@@ -563,7 +761,7 @@ fn seed_default_plur_engrams() {
         "When editing code in nur-cli or similar agents, prefer apply_patch / multi_edit over full file rewrites for multi-hunk changes.",
         "Never commit secrets, API keys, or ~/.nur/auth.json. Keys live only in local auth storage.",
         "Prefer graphify query/path/explain over broad grep when graphify-out/graph.json exists for architecture questions.",
-        "PLUR engrams are shared memory — learn corrections and preferences so future sessions remember them.",
+        "PLUR engrams are shared memory - learn corrections and preferences so future sessions remember them.",
         "Ruflo memory is vector memory for patterns and trajectories; use it for cross-session swarm knowledge.",
     ];
     for s in seeds {
@@ -595,7 +793,7 @@ fn ensure_ruflo(node_ok: bool) -> ComponentStatus {
         }
     }
     let Some(bin) = find_bin("ruflo") else {
-        c.detail = "not found — npm install -g ruflo".into();
+        c.detail = "not found - npm install -g ruflo".into();
         return c;
     };
     c.available = true;
@@ -606,7 +804,7 @@ fn ensure_ruflo(node_ok: bool) -> ComponentStatus {
     let _ = fs::create_dir_all(&home);
     let db = ruflo_db_path();
 
-    // Initialise memory DB once (global under ~/.nur/ruflo — does not pollute projects).
+    // Initialise memory DB once (global under ~/.nur/ruflo - does not pollute projects).
     if !db.is_file() {
         let path_s = db.to_string_lossy().into_owned();
         let _ = run_quiet(
@@ -633,7 +831,7 @@ fn ensure_ruflo(node_ok: bool) -> ComponentStatus {
 
 /// Resolve a CLI to an **absolute** path when possible.
 ///
-/// On Windows we never return a bare name like `"npm"` / `"skills"` — those
+/// On Windows we never return a bare name like `"npm"` / `"skills"` - those
 /// are `.cmd` shims and `std::process::Command` cannot CreateProcess them
 /// without going through `cmd /C`. Returning `…\npm.cmd` (or `where`’s path)
 /// makes spawns reliable.
@@ -655,7 +853,7 @@ pub fn find_bin(name: &str) -> Option<String> {
         PathBuf::from(r"C:\Program Files\nodejs").join(format!("{name}.cmd")),
         PathBuf::from(r"C:\Program Files\nodejs").join(format!("{name}.exe")),
         PathBuf::from(r"C:\Program Files\nodejs").join(name),
-        // Bun global installs (`bun install -g`) — e.g. the omp coding agent.
+        // Bun global installs (`bun install -g`) - e.g. the omp coding agent.
         home.join(".bun").join("bin").join(format!("{name}.exe")),
         home.join(".bun").join("bin").join(format!("{name}.cmd")),
         home.join(".bun").join("bin").join(name),
@@ -695,7 +893,7 @@ pub fn find_bin(name: &str) -> Option<String> {
         }
     }
 
-    // `where` / `which` last — returns absolute paths on modern Windows.
+    // `where` / `which` last - returns absolute paths on modern Windows.
     resolve_where(name)
 }
 
@@ -783,7 +981,7 @@ fn spawn_program(bin: &str, args: &[&str]) -> Command {
             c.args(args);
             c
         };
-        // CREATE_NO_WINDOW — keep background/ensure children off nur's console so
+        // CREATE_NO_WINDOW - keep background/ensure children off nur's console so
         // their cmd/npm `SetConsoleTitle` never clobbers nur's animated moon-phase
         // window title (and no console window flashes on install).
         c.creation_flags(0x0800_0000);
@@ -841,8 +1039,9 @@ fn run_capture_inner(
     if let Some(c) = cwd {
         cmd.current_dir(c);
     }
-    // Capture output manually to enforce timeout
-    cmd.stdout(std::process::Stdio::piped())
+    // Capture output manually to enforce timeout; never inherit TUI stdin.
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
     // Ruflo global memory path for any child that respects it.
@@ -918,8 +1117,8 @@ fn run_capture_inner(
         }
     };
 
-    let stdout_bytes = out_handle.join().unwrap_or_default();
-    let stderr_bytes = err_handle.join().unwrap_or_default();
+    let stdout_bytes = join_capture(out_handle, 2_000);
+    let stderr_bytes = join_capture(err_handle, 2_000);
     if let Some(reason) = stopped_early {
         return Err(reason);
     }
@@ -945,6 +1144,15 @@ fn run_capture_inner(
     } else {
         out
     })
+}
+
+fn join_capture(handle: std::thread::JoinHandle<Vec<u8>>, timeout_ms: u64) -> Vec<u8> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(handle.join().unwrap_or_default());
+    });
+    rx.recv_timeout(std::time::Duration::from_millis(timeout_ms))
+        .unwrap_or_default()
 }
 
 fn kill_process_tree(child: &mut std::process::Child) {
@@ -973,7 +1181,7 @@ pub(crate) fn cmd_version_pub(bin: &str, args: &[&str]) -> Option<String> {
         .map(|s| s.lines().next().unwrap_or(&s).trim().to_string())
 }
 
-/// PLUR inject for the current task — used to seed the system prompt.
+/// PLUR inject for the current task - used to seed the system prompt.
 pub fn plur_inject(task: &str) -> Option<String> {
     let bin = find_bin("plur")?;
     // Prefer --fast so cold start does not stall on ONNX download.
@@ -989,7 +1197,7 @@ pub fn plur_inject(task: &str) -> Option<String> {
 }
 
 /// Status for `/ecosystem` and doctor. Heals the marker when schema is old or
-/// a component (e.g. excalidraw) is missing — same path as one-shot install.
+/// a component (e.g. excalidraw) is missing - same path as one-shot install.
 pub fn quick_status() -> String {
     // Prefer a live ensure so /ecosystem never lies about a stale marker.
     // Cached when fresh (TTL + all core bits including excalidraw).
@@ -1035,7 +1243,7 @@ mod tests {
 
         assert!(result.unwrap_err().contains("cancelled"));
         // The property is "cancellation does not wait for the child to finish
-        // on its own" — the child sleeps 30s, so anything comfortably under
+        // on its own" - the child sleeps 30s, so anything comfortably under
         // that proves it. The old 5s bound was really measuring PowerShell's
         // cold-start time and failed intermittently whenever the rest of the
         // suite was spawning processes in parallel; a flaky assertion trains
@@ -1044,7 +1252,7 @@ mod tests {
         let elapsed = started.elapsed();
         assert!(
             elapsed < Duration::from_secs(15),
-            "cancel took {elapsed:?} — should not wait out the child's 30s sleep"
+            "cancel took {elapsed:?} - should not wait out the child's 30s sleep"
         );
     }
 }

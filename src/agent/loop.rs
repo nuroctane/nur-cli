@@ -13,7 +13,7 @@ use crate::api::{ApiClient, ApiResponse, StreamEvent};
 use crate::config::Config;
 use crate::error::{MuseError, Result};
 use crate::tools::media::{self, MediaAttach};
-use crate::tools::{is_parallel_safe, is_read_only_call, spill, ToolContext, ToolHost};
+use crate::tools::{is_parallel_safe, is_read_only_call, ToolContext, ToolHost};
 use crate::usage::{TokenUsage, UsageTracker};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -991,12 +991,18 @@ impl AgentRunner {
                         Ok((_, _, Err(e))) => (format!("error: {e}"), false),
                         Err(e) => (format!("error: tool panicked: {e}"), false),
                     };
-                    let body = spill::maybe_spill(
-                        &session.id,
-                        &name,
-                        body,
-                        self.config.tool_result_max_chars as usize,
-                    );
+                    let hr = self.config.headroom.clone();
+                    let sid = session.id.clone();
+                    let tname = name.clone();
+                    let model = self.config.model.clone();
+                    let spill_max = self.config.tool_result_max_chars as usize;
+                    let body = tokio::task::spawn_blocking(move || {
+                        crate::headroom::prepare_tool_body(
+                            &hr, &sid, &tname, body, ok, spill_max, &model,
+                        )
+                    })
+                    .await
+                    .unwrap_or_else(|e| format!("error: headroom task failed: {e}"));
                     receipt::record(
                         &session.id,
                         receipt::Event::Tool {
@@ -1136,14 +1142,18 @@ impl AgentRunner {
                 }
                 // Snapshot the target before a single-file mutating tool so
                 // `/undo` can restore it. Best-effort; never blocks the tool.
+                // If the tool fails, drop the checkpoint so `/undo` does not
+                // revert an edit that never landed.
+                let mut recorded_undo = false;
                 if matches!(
                     call.name.as_str(),
-                    "write_file" | "edit_file" | "multi_edit"
+                    "write_file" | "edit_file" | "multi_edit" | "apply_patch"
                 ) {
                     if let Ok(v) = serde_json::from_str::<Value>(&call.arguments) {
                         if let Some(p) = v.get("path").and_then(|p| p.as_str()) {
                             if let Ok(abs) = crate::tools::resolve_path(&self.cwd, p) {
                                 crate::tools::undo::record(&session.id, &abs);
+                                recorded_undo = true;
                             }
                         }
                     }
@@ -1167,14 +1177,18 @@ impl AgentRunner {
                         },
                     )
                 });
-                tokio::select! {
+                let (body, ok) = tokio::select! {
                     _ = cancel.cancelled() => return Err(MuseError::Interrupted),
                     r = exec => match r {
                         Ok(Ok(s)) => (s, true),
                         Ok(Err(e)) => (format!("error: {e}"), false),
                         Err(e) => (format!("error: tool panicked: {e}"), false),
                     },
+                };
+                if recorded_undo && !ok {
+                    let _ = crate::tools::undo::drop_last(&session.id);
                 }
+                (body, ok)
             };
 
             if ok && call.name == "omp" {
@@ -1189,12 +1203,18 @@ impl AgentRunner {
             }
 
             let body = if ok {
-                spill::maybe_spill(
-                    &session.id,
-                    &call.name,
-                    body,
-                    self.config.tool_result_max_chars as usize,
-                )
+                let hr = self.config.headroom.clone();
+                let sid = session.id.clone();
+                let tname = call.name.clone();
+                let model = self.config.model.clone();
+                let spill_max = self.config.tool_result_max_chars as usize;
+                tokio::task::spawn_blocking(move || {
+                    crate::headroom::prepare_tool_body(
+                        &hr, &sid, &tname, body, true, spill_max, &model,
+                    )
+                })
+                .await
+                .unwrap_or_else(|e| format!("error: headroom task failed: {e}"))
             } else {
                 // Keep error messages intact (usually short).
                 body
@@ -1375,12 +1395,18 @@ impl AgentRunner {
                 }
                 (None, None) => ("error: subagent was never started".to_string(), false),
             };
-            let body = spill::maybe_spill(
-                &session.id,
-                &call.name,
-                body,
-                self.config.tool_result_max_chars as usize,
-            );
+            let hr = self.config.headroom.clone();
+            let sid = session.id.clone();
+            let tname = call.name.clone();
+            let model = self.config.model.clone();
+            let spill_max = self.config.tool_result_max_chars as usize;
+            let body = tokio::task::spawn_blocking(move || {
+                crate::headroom::prepare_tool_body(
+                    &hr, &sid, &tname, body, ok, spill_max, &model,
+                )
+            })
+            .await
+            .unwrap_or_else(|e| format!("error: headroom task failed: {e}"));
             receipt::record(
                 &session.id,
                 receipt::Event::Tool {

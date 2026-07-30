@@ -17,6 +17,10 @@ use ratatui::text::{Line, Span};
 pub fn render_markdown(text: &str, base: Style) -> Vec<Line<'static>> {
     // `from_str` borrows from `text`; we copy each span into an owned String
     // so the result is `'static` and cacheable.
+    #[cfg(feature = "image-peek")]
+    let annotated = crate::tui::latex::annotate_display_math(text);
+    #[cfg(feature = "image-peek")]
+    let text = annotated.as_str();
     let parsed = tui_markdown::from_str(text);
     let default_fg = base.fg.unwrap_or(theme::FG());
 

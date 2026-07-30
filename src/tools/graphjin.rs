@@ -49,8 +49,19 @@ pub fn is_read_only_action(args: &str) -> bool {
         .unwrap_or_else(|| "status".into());
     matches!(
         action.as_str(),
-        "status" | "catalog" | "schema" | "help" | "explain" | "query" | "security" | "ask"
+        "status" | "catalog" | "schema" | "help" | "explain" | "query" | "security"
     )
+}
+
+/// True when a GraphQL document looks like a write (mutation/subscription).
+pub fn looks_like_write_operation(q: &str) -> bool {
+    let t = q.trim_start().to_ascii_lowercase();
+    t.starts_with("mutation")
+        || t.starts_with("subscription")
+        || t.contains("\nmutation")
+        || t.contains("\nsubscription")
+        || t.contains(" mutation ")
+        || t.contains(" subscription ")
 }
 
 /// Does this look like a GraphQL document rather than a saved-query name?
@@ -161,9 +172,24 @@ impl Tool for GraphJin {
                 push_opt(&mut argv, "--vars", vars.as_deref());
                 run(&argv, 60_000)
             }
-            "query" | "mutate" => {
+            "query" => {
                 let q = arg_str(args, "query")?;
-                // `exec` for a document, `run` for a saved query by name.
+                if looks_like_write_operation(&q) {
+                    return Err(MuseError::Tool(
+                        "action=query refused a mutation/subscription document - use action=mutate"
+                            .into(),
+                    ));
+                }
+                let mut argv = if looks_like_graphql(&q) {
+                    vec!["cli".into(), "query".into(), "exec".into(), q]
+                } else {
+                    vec!["cli".into(), "query".into(), "run".into(), q]
+                };
+                push_opt(&mut argv, "--vars", vars.as_deref());
+                run(&argv, 120_000)
+            }
+            "mutate" => {
+                let q = arg_str(args, "query")?;
                 let mut argv = if looks_like_graphql(&q) {
                     vec!["cli".into(), "query".into(), "exec".into(), q]
                 } else {
@@ -341,7 +367,7 @@ mod tests {
     #[test]
     fn only_mutate_is_write_class() {
         for action in [
-            "status", "catalog", "schema", "help", "explain", "query", "security", "ask",
+            "status", "catalog", "schema", "help", "explain", "query", "security",
         ] {
             let args = serde_json::json!({ "action": action }).to_string();
             assert!(is_read_only_action(&args), "{action} must be read-only");
@@ -350,10 +376,20 @@ mod tests {
             !is_read_only_action(r#"{"action":"mutate"}"#),
             "mutate must be gated"
         );
+        assert!(
+            !is_read_only_action(r#"{"action":"ask"}"#),
+            "ask must be gated (agent may mutate)"
+        );
         // Fail-closed on an action we don't know.
         assert!(!is_read_only_action(r#"{"action":"drop_everything"}"#));
         // Missing action defaults to status.
         assert!(is_read_only_action("{}"));
+    }
+
+    #[test]
+    fn query_rejects_mutation_documents() {
+        assert!(looks_like_write_operation("mutation { x }"));
+        assert!(!looks_like_write_operation("{ users { id } }"));
     }
 
     #[test]

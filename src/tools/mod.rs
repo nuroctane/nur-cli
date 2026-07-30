@@ -2,7 +2,10 @@ pub mod akarso;
 mod apply_patch;
 mod bash;
 pub mod browser;
+pub mod egaki_tool;
 pub mod fractal_tool;
+pub mod headroom_tool;
+pub mod optmem_tool;
 pub mod penecho_tool;
 pub mod t3code_tool;
 pub use browser::is_read_only_action as browser_is_read_only;
@@ -30,6 +33,7 @@ mod search_util;
 mod shell;
 mod skill_tool;
 pub mod spill;
+pub(crate) mod sensitive;
 mod submit_plan;
 pub mod tldraw;
 mod todo_write;
@@ -174,6 +178,9 @@ impl ToolHost {
             Box::new(t3code_tool::T3Code),
             Box::new(penecho_tool::Penecho),
             Box::new(fractal_tool::Fractal),
+            Box::new(headroom_tool::Headroom),
+            Box::new(optmem_tool::OptMem),
+            Box::new(egaki_tool::Egaki),
             Box::new(executor_tool::ExecutorTool),
             Box::new(omp::OmpTool),
             Box::new(skill_tool::SkillTool),
@@ -268,6 +275,9 @@ impl ToolHost {
             "t3code" => t3code_tool::T3Code.execute(&args, ctx),
             "penecho" => penecho_tool::Penecho.execute(&args, ctx),
             "fractal" => fractal_tool::Fractal.execute(&args, ctx),
+            "headroom" => headroom_tool::Headroom.execute(&args, ctx),
+            "optmem" => optmem_tool::OptMem.execute(&args, ctx),
+            "egaki" => egaki_tool::Egaki.execute(&args, ctx),
             "executor" => executor_tool::ExecutorTool.execute(&args, ctx),
             "omp" => omp::OmpTool.execute(&args, ctx),
             "skill" => skill_tool::SkillTool.execute(&args, ctx),
@@ -423,6 +433,9 @@ mod tests {
             "t3code",
             "penecho",
             "fractal",
+            "headroom",
+            "optmem",
+            "egaki",
             "executor",
             "omp",
             "skill",

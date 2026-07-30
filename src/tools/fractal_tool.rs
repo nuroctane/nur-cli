@@ -252,9 +252,13 @@ impl Tool for Fractal {
                 // re-arm a budget the CLI stops on deliberately. See
                 // `skills/fractal/SKILL.md` "Start".
                 cli_args.extend(extra_parts);
+                let warn = "WARNING: fractal nodes run without permission prompts by default \
+                    (bypassPermissions / --always-approve / --yolo). A node can run any \
+                    command its agent decides. Only start nodes whose task you would trust \
+                    unsupervised.\n\n";
                 match crate::fractal::run_fractal_args_cancellable(&cwd, &cli_args, cancel) {
-                    Ok(s) => Ok(s),
-                    Err(e) => Ok(format!("node start {node} failed: {e}")),
+                    Ok(s) => Ok(format!("{warn}{s}")),
+                    Err(e) => Ok(format!("{warn}node start {node} failed: {e}")),
                 }
             }
             "node attach" | "attach" => {

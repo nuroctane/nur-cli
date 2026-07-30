@@ -1,7 +1,8 @@
-use super::{arg_str, arg_u64, resolve_path, Tool, ToolContext};
+use super::{arg_str, arg_u64, Tool, ToolContext};
 use crate::error::{MuseError, Result};
 use serde_json::Value;
 use std::fs;
+use std::io::{BufRead, BufReader};
 
 pub struct ReadFile;
 
@@ -28,53 +29,54 @@ impl Tool for ReadFile {
 
     fn execute(&self, args: &Value, ctx: &ToolContext) -> Result<String> {
         let path = arg_str(args, "path")?;
-        let full = resolve_path(&ctx.cwd, &path)?;
+        let full = super::sandbox::resolve_for_read(&ctx.cwd, &path)?;
         if !full.exists() {
             return Err(MuseError::Tool(format!(
                 "file not found: {}",
                 full.display()
             )));
         }
-        let content = fs::read_to_string(&full)
-            .map_err(|e| MuseError::Tool(format!("read {}: {e}", full.display())))?;
-
-        // Cap very large files. Slice on a CHAR boundary, not a raw byte index —
-        // `content.len()` is bytes, and a fixed byte cut can land inside a
-        // multi-byte UTF-8 sequence (e.g. `─` is 3 bytes), which panics the
-        // whole tool worker thread with "not a char boundary".
-        const MAX_BYTES: usize = 200_000;
-        let content = if content.len() > MAX_BYTES {
-            // Walk back to the nearest char boundary at or before MAX_BYTES.
-            let mut cut = MAX_BYTES;
-            while cut > 0 && !content.is_char_boundary(cut) {
-                cut -= 1;
-            }
-            format!(
-                "{}\n\n… truncated ({} bytes total, showing first {})",
-                &content[..cut],
-                content.len(),
-                cut
-            )
-        } else {
-            content
-        };
 
         let offset = arg_u64(args, "offset").unwrap_or(1).max(1) as usize;
         let limit = arg_u64(args, "limit").map(|l| l as usize);
+        // Cap returned body size (chars/bytes of joined lines), not the whole file first.
+        const MAX_OUT_BYTES: usize = 200_000;
 
-        let lines: Vec<&str> = content.lines().collect();
-        let start = offset.saturating_sub(1).min(lines.len());
+        let file = fs::File::open(&full)
+            .map_err(|e| MuseError::Tool(format!("read {}: {e}", full.display())))?;
+        let reader = BufReader::new(file);
+
+        let start = offset.saturating_sub(1);
         let end = match limit {
-            Some(l) => (start + l).min(lines.len()),
-            None => lines.len(),
+            Some(l) => start.saturating_add(l),
+            None => usize::MAX,
         };
 
         let mut out = String::new();
-        for (i, line) in lines[start..end].iter().enumerate() {
-            out.push_str(&format!("{:>6}|{}\n", start + i + 1, line));
+        let mut truncated = false;
+        for (i, line_res) in reader.lines().enumerate() {
+            if i < start {
+                continue;
+            }
+            if i >= end {
+                break;
+            }
+            let line = line_res
+                .map_err(|e| MuseError::Tool(format!("read {}: {e}", full.display())))?;
+            let numbered = format!("{:>6}|{}\n", i + 1, line);
+            if out.len().saturating_add(numbered.len()) > MAX_OUT_BYTES {
+                truncated = true;
+                break;
+            }
+            out.push_str(&numbered);
         }
-        if out.is_empty() {
+
+        if out.is_empty() && !truncated {
             out = String::from("(empty file)");
+        } else if truncated {
+            out.push_str(
+                "\n… truncated (hit 200k output cap; raise offset or lower limit)\n",
+            );
         }
         Ok(out)
     }
@@ -86,20 +88,14 @@ mod tests {
     use crate::tools::ToolContext;
     use tokio_util::sync::CancellationToken;
 
-    /// Regression: a file larger than MAX_BYTES whose byte-200000 boundary lands
-    /// inside a multi-byte UTF-8 char (e.g. `─`, 3 bytes) must not panic. Before
-    /// the fix, `&content[..200_000]` panicked the whole tool worker thread with
-    /// "not a char boundary", bleeding stderr over the TUI.
     #[test]
     fn large_file_with_multibyte_at_cut_does_not_panic() {
         let dir = std::env::temp_dir().join(format!("nur_readfile_test_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let file = dir.join("big.txt");
-        // Fill past 200_000 bytes with a 3-byte char so *some* char straddles
-        // the byte-200000 boundary regardless of exact alignment.
         let mut content = String::new();
         while content.len() < 200_050 {
-            content.push('─'); // U+2500, 3 bytes
+            content.push('─');
         }
         std::fs::write(&file, &content).unwrap();
 
@@ -109,11 +105,33 @@ mod tests {
             cwd: dir.clone(),
             cancel: CancellationToken::new(),
         };
-        // Must return Ok — the whole point is that it does not panic.
         let out = tool
             .execute(&args, &ctx)
             .expect("read_file must not panic on multibyte cut");
-        assert!(out.contains("truncated"), "large file should be truncated");
+        assert!(out.contains("truncated") || out.contains('─'));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn offset_reads_beyond_first_chunk() {
+        let dir = std::env::temp_dir().join(format!("nur_readfile_off_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let file = dir.join("lines.txt");
+        let mut body = String::new();
+        for i in 1..=50 {
+            body.push_str(&format!("line-{i}\n"));
+        }
+        std::fs::write(&file, &body).unwrap();
+        let tool = ReadFile;
+        let args = serde_json::json!({ "path": file.to_string_lossy(), "offset": 40, "limit": 5 });
+        let ctx = ToolContext {
+            cwd: dir.clone(),
+            cancel: CancellationToken::new(),
+        };
+        let out = tool.execute(&args, &ctx).unwrap();
+        assert!(out.contains("line-40"), "{out}");
+        assert!(out.contains("line-44"), "{out}");
+        assert!(!out.contains("line-1\n") && !out.contains("|line-1\n"), "{out}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
