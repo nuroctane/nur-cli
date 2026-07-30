@@ -221,7 +221,7 @@ run still reports the provider and model it actually used. No authenticated
 route means a clear login error, never a silent fallback to an unrelated model.
 
 Economy runs use low thinking and a reduced coding tool surface. All delegated
-runs disable ambient OMP extensions and skills because Nur already supplies the
+runs disable ambient OMP extensions, skills, and rules because Nur already supplies the
 bounded handoff and owns skill activation. This keeps unrelated local plugin
 state out of the run and avoids duplicating large prompt catalogs. Use
 `cost_mode=balanced` or an explicit `model` only when the task needs more
@@ -236,8 +236,8 @@ editing or spending after cancellation. OMP JSON error events remain failures
 even when the OMP process exits with code 0. `status` reports version,
 authenticated providers, model roles, the resolved economy route, and warnings;
 `version` is the lightweight version-only check. Both remain free.
-Provisioning requires a working OMP binary; Bun installs require version 1.3.14
-or newer.
+Provisioning requires **omp >= 17.2.0** (feature floor; `nur ecosystem ensure`
+auto-upgrades). Bun installs require version 1.3.14 or newer.
 
 ### `skill`
 

@@ -109,7 +109,7 @@ impl Tool for OmpTool {
                 },
                 "thinking": {
                     "type": "string",
-                    "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "auto"],
+                    "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"],
                     "description": "Optional OMP thinking level; economy defaults to low"
                 },
                 "tool_profile": {
@@ -128,10 +128,10 @@ impl Tool for OmpTool {
     }
 
     fn execute(&self, args: &Value, ctx: &ToolContext) -> Result<String> {
-        let bin = ecosystem::find_bin("omp").ok_or_else(|| {
+        let bin = ecosystem::find_omp().ok_or_else(|| {
             MuseError::Tool(
                 "omp CLI not found. Install Bun (bun.sh) then `nur ecosystem ensure`, \
-                 or install directly: bun install -g @oh-my-pi/pi-coding-agent \
+                 or install directly: bun install -g @oh-my-pi/pi-coding-agent@latest \
                  (Windows: irm https://omp.sh/install.ps1 | iex)"
                     .into(),
             )
@@ -484,6 +484,7 @@ fn build_run_args(
         // focused delegation to unrelated local plugin state.
         "--no-extensions".into(),
         "--no-skills".into(),
+        "--no-rules".into(),
         "--max-time".into(),
         timeout_secs.to_string(),
         "--approval-mode".into(),
@@ -717,6 +718,7 @@ mod tests {
         assert!(argv.contains(&"--no-session".to_string()));
         assert!(argv.contains(&"--no-extensions".to_string()));
         assert!(argv.contains(&"--no-skills".to_string()));
+        assert!(argv.contains(&"--no-rules".to_string()));
         assert!(argv.windows(2).any(|v| v == ["--approval-mode", "yolo"]));
     }
 

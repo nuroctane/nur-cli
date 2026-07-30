@@ -20,6 +20,13 @@ mod skills;
 
 pub use skills::install_bundled_skills;
 
+/// Absolute path to the newest available `omp` binary (Bun / native / PATH).
+pub fn find_omp() -> Option<String> {
+    packs::best_omp()
+        .map(|(path, _)| path)
+        .or_else(|| find_bin("omp"))
+}
+
 const ECOSYSTEM_MARKER: &str = "ecosystem.json";
 /// Bump when new packs/tools are added so old markers re-run ensure.
 /// Bump when spawn/install logic changes so markers re-run ensure.
@@ -27,7 +34,8 @@ const ECOSYSTEM_MARKER: &str = "ecosystem.json";
 /// 10: retire the resume-* skills superseded by `/takeover`.
 /// 11: session_reader.py gains `--all-cwds` (takeover lists every workspace).
 /// 12: headroom + optmem + egaki + fractal ensure + infinite-headcount pack.
-const ECOSYSTEM_SCHEMA: u32 = 12;
+/// 13: omp floor 17.2.0 + auto-upgrade for omp/plur/egaki/ruflo/browser/executor/graphify/headroom.
+const ECOSYSTEM_SCHEMA: u32 = 13;
 /// Re-run ensure at most once per this many seconds unless forced.
 const ENSURE_TTL_SECS: u64 = 86_400;
 
@@ -318,6 +326,7 @@ fn load_marker_if_fresh() -> Option<EcosystemStatus> {
         && st.ruflo.available
         && st.skills_cli.available
         && st.excalidraw.available
+        && st.omp.available
     {
         Some(st)
     } else {
@@ -389,6 +398,22 @@ fn ensure_headroom() -> ComponentStatus {
         ..Default::default()
     };
     let _ = crate::headroom::ensure_helper_script();
+    // Refresh Python package / uv tool when possible so inline compress stays current.
+    if let Some(uv) = find_bin("uv") {
+        let _ = run_capture(
+            &uv,
+            &[
+                "tool",
+                "install",
+                "--upgrade",
+                "--python",
+                "3.13",
+                "headroom-ai[all]",
+            ],
+            None,
+            600_000,
+        );
+    }
     if let Some(bin) = find_bin("headroom") {
         c.available = true;
         c.path = Some(bin.clone());
@@ -413,7 +438,7 @@ fn ensure_headroom() -> ComponentStatus {
     } else if let Some(pip) = find_bin("pip3").or_else(|| find_bin("pip")) {
         let _ = run_capture(
             &pip,
-            &["install", "--user", "headroom-ai[all]"],
+            &["install", "--user", "-U", "headroom-ai[all]"],
             None,
             600_000,
         );
@@ -466,27 +491,20 @@ fn ensure_egaki(node_ok: bool) -> ComponentStatus {
         name: "egaki".into(),
         ..Default::default()
     };
+    if !node_ok {
+        c.detail = "needs Node.js - npm i -g egaki@latest".into();
+        return c;
+    }
+    let npm = find_bin("npm").unwrap_or_else(|| "npm".into());
+    let _ = run_capture(&npm, &["install", "-g", "egaki@latest"], None, 300_000);
     if let Some(bin) = find_bin("egaki") {
         c.available = true;
         c.path = Some(bin.clone());
         c.version = cmd_version(&bin, &["--version"]);
         c.detail =
             "CLI ready · egaki login --provider chatgpt for ChatGPT sub path".into();
-        return c;
-    }
-    if !node_ok {
-        c.detail = "needs Node.js - npm i -g egaki".into();
-        return c;
-    }
-    let npm = find_bin("npm").unwrap_or_else(|| "npm".into());
-    let _ = run_capture(&npm, &["install", "-g", "egaki"], None, 300_000);
-    if let Some(bin) = find_bin("egaki") {
-        c.available = true;
-        c.path = Some(bin.clone());
-        c.version = cmd_version(&bin, &["--version"]);
-        c.detail = "installed via npm i -g egaki".into();
     } else {
-        c.detail = "not found after npm install - try: npm i -g egaki".into();
+        c.detail = "not found after npm install - try: npm i -g egaki@latest".into();
     }
     c
 }
@@ -681,26 +699,25 @@ fn ensure_graphify() -> ComponentStatus {
         name: "graphify".into(),
         ..Default::default()
     };
+    // Prefer upgrading via uv when available so ensure tracks latest graphifyy.
+    if which("uv") || which("uv.exe") {
+        let _ = run_quiet(
+            "uv",
+            &["tool", "install", "--upgrade", "graphifyy"],
+            None,
+            300_000,
+        );
+        if find_bin("graphify").is_none() {
+            let _ = run_quiet("uv", &["tool", "install", "graphifyy"], None, 300_000);
+        }
+    }
     if let Some(bin) = find_bin("graphify") {
         c.available = true;
         c.path = Some(bin.clone());
         c.version = cmd_version(&bin, &["--version"]);
         c.detail = "CLI ready".into();
-        // Keep skill registered for agent discovery.
         let _ = run_quiet(&bin, &["install", "--platform", "agents"], None, 120_000);
         return c;
-    }
-    // Try install via uv.
-    if which("uv") || which("uv.exe") {
-        let _ = run_quiet("uv", &["tool", "install", "graphifyy"], None, 300_000);
-        if let Some(bin) = find_bin("graphify") {
-            c.available = true;
-            c.path = Some(bin.clone());
-            c.version = cmd_version(&bin, &["--version"]);
-            c.detail = "installed via uv tool install graphifyy".into();
-            let _ = run_quiet(&bin, &["install", "--platform", "agents"], None, 120_000);
-            return c;
-        }
     }
     c.detail = "not found - install: uv tool install graphifyy".into();
     c
@@ -717,19 +734,18 @@ fn ensure_plur(node_ok: bool) -> ComponentStatus {
         c.detail = "needs Node.js 18+".into();
         return c;
     }
-    if find_bin("plur").is_none() {
-        let _ = run_quiet(
-            "npm",
-            &[
-                "install",
-                "-g",
-                "@plur-ai/cli@latest",
-                "@plur-ai/mcp@latest",
-            ],
-            None,
-            600_000,
-        );
-    }
+    // Refresh to latest on every ensure (marker TTL / schema bump gated).
+    let _ = run_quiet(
+        "npm",
+        &[
+            "install",
+            "-g",
+            "@plur-ai/cli@latest",
+            "@plur-ai/mcp@latest",
+        ],
+        None,
+        600_000,
+    );
     if let Some(bin) = find_bin("plur") {
         c.available = true;
         c.path = Some(bin.clone());
@@ -780,17 +796,16 @@ fn ensure_ruflo(node_ok: bool) -> ComponentStatus {
         c.detail = "needs Node.js 20+".into();
         return c;
     }
+    // Refresh ruflo to latest on ensure.
+    let npm = find_bin("npm").unwrap_or_else(|| "npm".into());
+    let _ = run_quiet(
+        &npm,
+        &["install", "-g", "ruflo@latest", "--omit=optional"],
+        None,
+        600_000,
+    );
     if find_bin("ruflo").is_none() {
-        // Minimal install (omit optional ML extras) for faster first-run.
-        let _ = run_quiet(
-            "npm",
-            &["install", "-g", "ruflo@latest", "--omit=optional"],
-            None,
-            600_000,
-        );
-        if find_bin("ruflo").is_none() {
-            let _ = run_quiet("npm", &["install", "-g", "ruflo@latest"], None, 600_000);
-        }
+        let _ = run_quiet(&npm, &["install", "-g", "ruflo@latest"], None, 600_000);
     }
     let Some(bin) = find_bin("ruflo") else {
         c.detail = "not found - npm install -g ruflo".into();

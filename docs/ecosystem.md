@@ -10,7 +10,7 @@ NurCLI ships with an auto-provisioned knowledge stack.
 | **PLUR** | Shared engram memory across tools and sessions |
 | **Ruflo** | Vector memory + swarm / hive-mind patterns |
 | **Executor** | MCP / OpenAPI gateway catalog |
-| **omp** | [Oh My Pi](https://omp.sh) coding-agent backend - metered, cancellation-aware `omp -p` delegation with authenticated economy-model discovery and isolated focused prompts (Bun installs require 1.3.14+) |
+| **omp** | [Oh My Pi](https://omp.sh) coding-agent backend - metered, cancellation-aware `omp -p` delegation with authenticated economy-model discovery and isolated focused prompts (requires **omp >= 17.2.0**, Bun >= 1.3.14; `ecosystem ensure` auto-upgrades) |
 | **browser** | [agent-browser-cli](https://github.com/sleepinginsummer/agent-browser-cli) real **default browser** bridge (Arc / Chrome / Edge / Brave / …) — perception + control via the `browser` tool; `nur browser setup` stages the extension once |
 | **Cua** | [trycua/cua](https://github.com/trycua/cua) computer-use driver (`cua-driver`) — full-desktop automation via MCP + CLI. Auto-installed on single-shot install **without** the elevated autostart daemon (`-NoAutoStart`). Toggle the always-on background daemon in-app with **`/cua on`** / **`/cua off`** (`/cua status` to check); or use it on demand with `cua-driver serve` / wire its MCP with `cua-driver mcp-config` |
 | **Skills** | Progressive packs (design-eng, clone-website, cybersecurity, …) via `skill` |

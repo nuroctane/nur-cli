@@ -133,18 +133,16 @@ pub fn ensure_executor(node_ok: bool) -> ComponentStatus {
         return c;
     }
 
-    // Install if missing (use resolved npm path — bare "npm" fails on Windows).
-    if find_bin("executor").is_none() {
-        let npm = find_bin("npm").unwrap_or_else(|| "npm".into());
-        match run_capture(&npm, &["install", "-g", "executor@latest"], None, 300_000) {
-            Ok(_) => {}
-            Err(e) => {
-                c.detail = format!(
-                    "npm install failed: {}",
-                    e.chars().take(200).collect::<String>()
-                );
-                // Still try to locate a partial install.
-            }
+    // Always refresh to @latest on ensure (schema bumps force this).
+    let npm = find_bin("npm").unwrap_or_else(|| "npm".into());
+    match run_capture(&npm, &["install", "-g", "executor@latest"], None, 300_000) {
+        Ok(_) => {}
+        Err(e) => {
+            c.detail = format!(
+                "npm install failed: {}",
+                e.chars().take(200).collect::<String>()
+            );
+            // Still try to locate a partial install.
         }
     }
 
@@ -156,7 +154,7 @@ pub fn ensure_executor(node_ok: bool) -> ComponentStatus {
         let _ = run_quiet(&bin, &["install"], None, 90_000);
         c.detail = "MCP gateway ready (executor · local :4788/mcp)".into();
     } else if c.detail.is_empty() {
-        c.detail = "not found after npm install — try: npm i -g executor".into();
+        c.detail = "not found after npm install - try: npm i -g executor".into();
     }
     c
 }
@@ -192,71 +190,195 @@ pub fn ensure_graphjin() -> ComponentStatus {
 
 /// Oh My Pi (omp.sh) - the coding-agent backend the `omp` tool delegates to.
 /// (headless `omp -p` runs; we deliberately skip its IDE/ACP surface).
-/// Ships on npm as @oh-my-pi/pi-coding-agent but runs on Bun, so install via
-/// bun when present; otherwise report how to get it without failing ensure.
+/// Ships as `@oh-my-pi/pi-coding-agent` (Bun) and as a native installer under
+/// `%LOCALAPPDATA%\omp\`. Auto-upgrades when below the feature floor.
 pub fn ensure_omp() -> ComponentStatus {
     let mut c = ComponentStatus {
         name: "omp".into(),
         ..Default::default()
     };
 
-    if find_bin("omp").is_none() {
-        if let Some(bun) = find_bin("bun") {
-            let bun_version = super::cmd_version_pub(&bun, &["--version"]);
-            if !bun_version.as_deref().is_some_and(bun_meets_omp_floor) {
+    let current = best_omp();
+    let needs_upgrade = match &current {
+        None => true,
+        Some((_, ver)) => !omp_meets_feature_floor(ver),
+    };
+    if needs_upgrade {
+        upgrade_omp(&mut c);
+    }
+
+    match best_omp() {
+        Some((bin, version)) => {
+            c.path = Some(bin);
+            c.version = Some(version.clone());
+            if omp_meets_feature_floor(&version) {
+                c.available = true;
                 c.detail = format!(
-                    "needs Bun >= 1.3.14; found {}",
-                    bun_version.as_deref().unwrap_or("an unreadable version")
+                    "coding-agent backend ready (omp {version}; economy routing + metered delegation)"
                 );
-                return c;
+            } else {
+                c.detail = format!(
+                    "omp {version} is too old; need >= {}.{}.{} - bun i -g @oh-my-pi/pi-coding-agent@latest \
+                     (Windows: irm https://omp.sh/install.ps1 | iex)",
+                    OMP_FEATURE_FLOOR.0, OMP_FEATURE_FLOOR.1, OMP_FEATURE_FLOOR.2
+                );
             }
-            match run_capture(
+        }
+        None => {
+            if c.detail.is_empty() {
+                c.detail =
+                    "not found after install - try: bun i -g @oh-my-pi/pi-coding-agent@latest \
+                     (or irm https://omp.sh/install.ps1 | iex)"
+                        .into();
+            }
+        }
+    }
+    c
+}
+
+const OMP_FEATURE_FLOOR: (u64, u64, u64) = (17, 2, 0);
+const BUN_OMP_FLOOR: (u64, u64, u64) = (1, 3, 14);
+
+fn upgrade_omp(c: &mut ComponentStatus) {
+    if let Some(bun) = find_bin("bun") {
+        let bun_version = super::cmd_version_pub(&bun, &["--version"]);
+        if bun_version.as_deref().is_some_and(bun_meets_omp_floor) {
+            if let Err(e) = run_capture(
                 &bun,
                 &["install", "-g", "@oh-my-pi/pi-coding-agent@latest"],
                 None,
                 300_000,
             ) {
-                Ok(_) => {}
-                Err(e) => {
-                    c.detail = format!(
-                        "bun install failed: {}",
-                        e.chars().take(200).collect::<String>()
-                    );
-                }
+                c.detail = format!(
+                    "bun install failed: {}",
+                    e.chars().take(160).collect::<String>()
+                );
             }
-        } else {
-            c.detail =
-                "needs Bun >= 1.3.14 (bun.sh), or run: irm https://omp.sh/install.ps1 | iex".into();
-            return c;
+        } else if c.detail.is_empty() {
+            c.detail = format!(
+                "needs Bun >= 1.3.14; found {}",
+                bun_version.as_deref().unwrap_or("an unreadable version")
+            );
         }
     }
 
-    if let Some(bin) = find_bin("omp") {
-        c.path = Some(bin.clone());
-        c.version = super::cmd_version_pub(&bin, &["--version"]);
-        if c.version.as_deref().is_some_and(omp_meets_feature_floor) {
-            c.available = true;
-            c.detail = "coding-agent backend ready (economy routing and metered delegation)".into();
-        } else if let Some(version) = c.version.as_deref() {
-            c.detail = format!(
-                "omp {version} is too old; update to >= 16.3.6 for metered economy delegation"
-            );
-        } else {
-            c.detail = "omp executable found but `omp --version` failed".into();
+    #[cfg(windows)]
+    {
+        // Official installer refreshes installers; often lands via Bun now.
+        let ps = "irm https://omp.sh/install.ps1 | iex";
+        let _ = run_capture(
+            "powershell",
+            &["-NoProfile", "-NonInteractive", "-Command", ps],
+            None,
+            300_000,
+        );
+        // Stale native `%LOCALAPPDATA%\omp\omp.exe` can still win PATH over Bun.
+        // Self-update it when below the feature floor.
+        if let Some(home) = dirs::home_dir() {
+            let local = home
+                .join("AppData")
+                .join("Local")
+                .join("omp")
+                .join("omp.exe");
+            if local.is_file() {
+                let path = local.to_string_lossy().into_owned();
+                let ver = super::cmd_version_pub(&path, &["--version"]).unwrap_or_default();
+                if !omp_meets_feature_floor(&ver) {
+                    let _ = run_capture(&path, &["update", "--force"], None, 300_000);
+                }
+            }
         }
-    } else if c.detail.is_empty() {
-        c.detail =
-            "not found after install - try: bun i -g @oh-my-pi/pi-coding-agent@latest".into();
     }
-    c
+
+    #[cfg(not(windows))]
+    {
+        if best_omp().as_ref().is_none_or(|(_, v)| !omp_meets_feature_floor(v)) {
+            let _ = run_capture(
+                "bash",
+                &["-lc", "curl -fsSL https://omp.sh/install.sh | bash"],
+                None,
+                300_000,
+            );
+        }
+    }
+
+    if find_bin("bun").is_none() && best_omp().is_none() && c.detail.is_empty() {
+        c.detail =
+            "needs Bun >= 1.3.14 (bun.sh), or run: irm https://omp.sh/install.ps1 | iex".into();
+    }
+}
+
+/// Prefer the newest omp among Bun global, official Local install, and PATH.
+pub(crate) fn best_omp() -> Option<(String, String)> {
+    use std::collections::HashSet;
+    use std::process::Command;
+
+    let mut seen = HashSet::new();
+    let mut best: Option<(String, String, (u64, u64, u64))> = None;
+
+    let mut consider = |path: String| {
+        let key = path.to_ascii_lowercase();
+        if !seen.insert(key) {
+            return;
+        }
+        if !std::path::Path::new(&path).is_file() {
+            return;
+        }
+        let Some(ver) = super::cmd_version_pub(&path, &["--version"]) else {
+            return;
+        };
+        let Some(trip) = semver_triplet(&ver) else {
+            return;
+        };
+        match &best {
+            None => best = Some((path, ver, trip)),
+            Some((_, _, cur)) if trip > *cur => best = Some((path, ver, trip)),
+            _ => {}
+        }
+    };
+
+    if let Some(home) = dirs::home_dir() {
+        for p in [
+            home.join(".bun").join("bin").join("omp.exe"),
+            home.join(".bun").join("bin").join("omp"),
+            home.join("AppData")
+                .join("Local")
+                .join("omp")
+                .join("omp.exe"),
+            home.join(".local").join("bin").join("omp.exe"),
+            home.join(".local").join("bin").join("omp"),
+        ] {
+            if p.is_file() {
+                consider(p.to_string_lossy().into_owned());
+            }
+        }
+    }
+    if let Some(p) = find_bin("omp") {
+        consider(p);
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(out) = Command::new("where.exe").arg("omp").output() {
+            if out.status.success() {
+                for line in String::from_utf8_lossy(&out.stdout).lines() {
+                    let p = line.trim();
+                    if !p.is_empty() {
+                        consider(p.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    best.map(|(path, ver, _)| (path, ver))
 }
 
 fn bun_meets_omp_floor(version: &str) -> bool {
-    semver_triplet(version).is_some_and(|version| version >= (1, 3, 14))
+    semver_triplet(version).is_some_and(|version| version >= BUN_OMP_FLOOR)
 }
 
 fn omp_meets_feature_floor(version: &str) -> bool {
-    semver_triplet(version).is_some_and(|version| version >= (16, 3, 6))
+    semver_triplet(version).is_some_and(|version| version >= OMP_FEATURE_FLOOR)
 }
 
 fn semver_triplet(version: &str) -> Option<(u64, u64, u64)> {
@@ -292,21 +414,19 @@ pub fn ensure_browser_cli(node_ok: bool) -> ComponentStatus {
         return c;
     }
 
-    if find_bin("agent-browser-cli").is_none() {
-        let npm = find_bin("npm").unwrap_or_else(|| "npm".into());
-        match run_capture(
-            &npm,
-            &["install", "-g", "@sleepinsummer/agent-browser-cli"],
-            None,
-            300_000,
-        ) {
-            Ok(_) => {}
-            Err(e) => {
-                c.detail = format!(
-                    "npm install failed: {}",
-                    e.chars().take(200).collect::<String>()
-                );
-            }
+    let npm = find_bin("npm").unwrap_or_else(|| "npm".into());
+    match run_capture(
+        &npm,
+        &["install", "-g", "@sleepinsummer/agent-browser-cli@latest"],
+        None,
+        300_000,
+    ) {
+        Ok(_) => {}
+        Err(e) => {
+            c.detail = format!(
+                "npm install failed: {}",
+                e.chars().take(200).collect::<String>()
+            );
         }
     }
 
@@ -333,7 +453,7 @@ pub fn ensure_browser_cli(node_ok: bool) -> ComponentStatus {
         };
     } else if c.detail.is_empty() {
         c.detail =
-            "not found after npm install — try: npm i -g @sleepinsummer/agent-browser-cli".into();
+            "not found after npm install - try: npm i -g @sleepinsummer/agent-browser-cli".into();
     }
     c
 }
@@ -738,7 +858,8 @@ mod tests {
     #[test]
     fn omp_feature_floor_is_enforced() {
         assert!(!omp_meets_feature_floor("omp/16.3.5"));
-        assert!(omp_meets_feature_floor("omp/16.3.6"));
-        assert!(omp_meets_feature_floor("omp/17.0.6"));
+        assert!(!omp_meets_feature_floor("omp/17.1.4"));
+        assert!(omp_meets_feature_floor("omp/17.2.0"));
+        assert!(omp_meets_feature_floor("omp/18.0.0"));
     }
 }
