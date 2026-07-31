@@ -51,9 +51,9 @@ nur                 # open the TUI
 nur doctor          # health check
 ```
 
-Or run `nur` and use **`/login`** in the TUI: pick any of **61 providers**
+Or run `nur` and use **`/login`** in the TUI: pick any of **62 providers**
 (OpenAI, Anthropic, Gemini, xAI, Groq, OpenRouter, Requesty, local Ollama/LM Studio, Meta Model API, and so on).
-For **OpenAI, Anthropic, xAI, Kimi Code, Google Gemini, Azure OpenAI, GitHub Models, and GitHub Copilot** you can **sign in with a browser or an official CLI session** (or import an existing Codex / Claude Code / Grok / Kimi CLI session) instead of pasting an API key. OAuth sessions refresh before use, retry once after an authentication rejection, and `/model` detects the models available to the active credential. No credential on launch and login opens automatically.
+For **OpenAI, Anthropic, xAI, Kimi Code, Google Gemini, Azure OpenAI, GitHub Models, GitHub Copilot, and Cursor** you can **sign in with a browser or an official CLI session** (or import an existing Codex / Claude Code / Grok / Kimi / Cursor Agent session) instead of pasting an API key. OAuth sessions refresh before use, retry once after an authentication rejection, and `/model` detects the models available to the active credential. Cursor uses `cursor-agent login` and runs chat through the Agent CLI (no API key required). No credential on launch and login opens automatically.
 
 Keys are kept **per provider**, so switching with `/login` never strands the one you switched away from — it stays available for failover and for subagents running on another provider's model. `/login` itself clears nothing; **`/logout`** is what signs you out of an account. See [docs/authentication.md](docs/authentication.md).
 
@@ -191,7 +191,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 ## Feature map
 
 ### Agent harness
-- **Multi-provider** via `/login` (61); Responses or Chat Completions adapter
+- **Multi-provider** via `/login` (62); Responses or Chat Completions adapter
 - Manual / plan / auto · Shift+Tab mid-turn
 - Tool loop, approvals, Esc cancel, subagents, todos, plan mode
 - Session budgets (`/budget`), tool-result spill, smarter auto-compact
@@ -219,6 +219,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 | vision | `look` · `extract_frames` |
 | web | `web_search` `web_fetch` |
 | browser | real default browser via agent-browser-cli |
+| terminal_browser | in-terminal Chromium ([terminal-browser.com](https://terminal-browser.com/)); Windows host fallback |
 | git | `git_status` `git_diff` |
 | knowledge | `graphify` `plur` `ruflo` `executor` `skill` `memory` |
 | diagrams | `excalidraw` (hand-drawn `.excalidraw` via excalidraw-cli) |
@@ -250,6 +251,7 @@ nur "steal UI design tokens from demo.mp4 and scaffold a matching component"
 | **[Headroom](https://github.com/headroomlabs-ai/headroom)** | Inline tool-result compression (default on; `[headroom] enabled = false` to disable) |
 | **[OptMem](https://github.com/VictorTaelin/OptMem)** | Permanent memory at `~/.optmem` (`/optmem` · `/memo`) |
 | **[egaki](https://github.com/remorses/egaki)** | Image/video gen (`/egaki` · `/image`; ChatGPT-sub login supported) |
+| **[terminal-browser](https://terminal-browser.com/)** | In-terminal Chromium (`/tb`); Windows host fallback via agent-browser-cli |
 | **[penecho](https://github.com/penecho/penecho)** | Infinite thinking canvas run as a sidecar (`/penecho`). AGPL-3.0 |
 | **[t3code](https://github.com/pingdotgg/t3code)** | Vendor-CLI auth delegation — driver probing, env isolation, pairing. MIT |
 

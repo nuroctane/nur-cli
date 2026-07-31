@@ -194,7 +194,9 @@ impl App {
             "/plur" => self.cmd_plur(&arg),
             "/optmem" | "/memo" => self.cmd_optmem(&arg),
             "/headroom" => self.cmd_headroom(&arg),
+            "/prewalk" => self.cmd_prewalk(&arg),
             "/egaki" | "/image" => self.cmd_egaki(&arg),
+            "/tb" | "/terminal-browser" => self.cmd_terminal_browser(&arg),
             "/factory-overnight" => self.cmd_skill_or_unknown("/factory-overnight", &arg),
             "/ruflo" => self.cmd_ruflo(&arg),
             "/akarso" => self.cmd_akarso(&arg),
@@ -449,6 +451,130 @@ impl App {
             r#"{"action":"doctor"}"#.to_string()
         };
         self.run_slash_tool("headroom", &json);
+    }
+
+    /// OMP-style prewalk UI: strong model plans + todos, then smol at first edit.
+    fn cmd_prewalk(&mut self, arg: &str) {
+        let a = arg.trim();
+        let lower = a.to_ascii_lowercase();
+        if lower.is_empty() || lower == "status" || lower == "show" || lower == "help" {
+            let on = if self.cfg.prewalk.enabled { "ON" } else { "OFF" };
+            let into = agent::resolve_prewalk_into(&self.cfg)
+                .unwrap_or_else(|| "(unset - set /prewalk into <model> or OMP modelRoles.smol)".into());
+            let active = self
+                .prewalk_override
+                .lock()
+                .ok()
+                .and_then(|g| g.clone())
+                .unwrap_or_else(|| "(not switched yet this session)".into());
+            let remote = {
+                let ep = self.cfg.compaction.remote_endpoint.trim();
+                if ep.is_empty() {
+                    if self.cfg.compaction.remote_enabled {
+                        "enabled, no endpoint (set compaction.remote_endpoint)".into()
+                    } else {
+                        "off (local summarizer)".into()
+                    }
+                } else {
+                    format!("remote → {ep}")
+                }
+            };
+            self.push_note(
+                Tone::Usage,
+                format!(
+                    "prewalk {on}  ·  into `{into}`  ·  session override `{active}`\n  \
+                     compaction {remote}\n\n  \
+                     /prewalk on|off       enable (persists in config.toml)\n  \
+                     /prewalk into <model> cheap model after first write/edit once todos exist\n  \
+                     /prewalk reset        clear this session's model override\n\n  \
+                     Mirrors Oh My Pi --prewalk: strong model plans, commits todos, starts \
+                     implementation, then hands off. Image snapcompact stays in OMP; nur uses \
+                     optional remote summarization when compaction.remote_endpoint is set."
+                ),
+            );
+            return;
+        }
+        if lower == "on" || lower == "enable" {
+            self.cfg.prewalk.enabled = true;
+            let _ = crate::config::save_config(&self.cfg);
+            self.push_note(
+                Tone::Usage,
+                "prewalk ON · first write/edit after todos → smol/into model (saved)".into(),
+            );
+            return;
+        }
+        if lower == "off" || lower == "disable" {
+            self.cfg.prewalk.enabled = false;
+            let _ = crate::config::save_config(&self.cfg);
+            if let Ok(mut g) = self.prewalk_override.lock() {
+                *g = None;
+            }
+            self.push_note(Tone::Usage, "prewalk OFF · session override cleared (saved)".into());
+            return;
+        }
+        if lower == "reset" || lower == "clear" {
+            if let Ok(mut g) = self.prewalk_override.lock() {
+                *g = None;
+            }
+            self.push_note(
+                Tone::Usage,
+                "prewalk session override cleared · next turn uses /model again".into(),
+            );
+            return;
+        }
+        if let Some(rest) = a.strip_prefix("into ").or_else(|| a.strip_prefix("into\t")) {
+            let model = rest.trim();
+            if model.is_empty() {
+                self.push_error("usage: /prewalk into <model>".into());
+                return;
+            }
+            self.cfg.prewalk.into = model.to_string();
+            let _ = crate::config::save_config(&self.cfg);
+            self.push_note(
+                Tone::Usage,
+                format!("prewalk into `{model}` (saved) · enable with /prewalk on"),
+            );
+            return;
+        }
+        self.push_error(
+            "usage: /prewalk  |  /prewalk on|off  |  /prewalk into <model>  |  /prewalk reset"
+                .into(),
+        );
+    }
+
+    fn cmd_terminal_browser(&mut self, arg: &str) {
+        let arg = arg.trim();
+        let json = if arg.is_empty() || arg == "status" || arg == "doctor" || arg == "help" {
+            r#"{"action":"doctor"}"#.to_string()
+        } else if arg == "ls" || arg.starts_with("ls ") {
+            let json_flag = arg.contains("--json");
+            let all = arg.contains("--all");
+            serde_json::json!({"action":"ls","json": json_flag, "all": all}).to_string()
+        } else if arg == "setup" {
+            r#"{"action":"setup"}"#.to_string()
+        } else if let Some(rest) = arg.strip_prefix("open ") {
+            let rest = rest.trim();
+            // optional trailing --split DIR
+            let (url, split) = if let Some((u, s)) = rest.rsplit_once("--split") {
+                (u.trim(), s.trim().split_whitespace().next().unwrap_or("right"))
+            } else {
+                (rest, "right")
+            };
+            serde_json::json!({"action":"open","url": url, "split": split}).to_string()
+        } else if let Some(rest) = arg.strip_prefix("action ") {
+            let cmd = rest.trim().trim_start_matches("--").trim();
+            serde_json::json!({"action":"action","command": cmd}).to_string()
+        } else if arg.starts_with("http://")
+            || arg.starts_with("https://")
+            || arg.starts_with("localhost")
+            || arg.ends_with(".html")
+        {
+            serde_json::json!({"action":"open","url": arg, "split": "right"}).to_string()
+        } else {
+            // treat as action command shorthand: /tb snapshot
+            serde_json::json!({"action":"action","command": arg}).to_string()
+        };
+        self.run_slash_tool("terminal_browser", &json);
     }
 
     fn cmd_egaki(&mut self, arg: &str) {

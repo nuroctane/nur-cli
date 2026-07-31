@@ -1,6 +1,7 @@
 pub mod anthropic;
 pub mod chat;
 pub mod client;
+pub mod cursor_cli;
 pub mod failover;
 pub mod fusion;
 pub mod gemini;

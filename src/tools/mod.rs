@@ -3,6 +3,8 @@ mod apply_patch;
 mod bash;
 pub mod browser;
 pub mod egaki_tool;
+pub mod terminal_browser;
+pub use terminal_browser::is_read_only_action as terminal_browser_is_read_only;
 pub mod fractal_tool;
 pub mod headroom_tool;
 pub mod optmem_tool;
@@ -89,6 +91,7 @@ pub const SUBAGENT_TOOL_NAMES: &[&str] = &[
     "web_fetch",
     "web_search",
     "browser",
+    "terminal_browser",
     "look",
     "extract_frames",
     "git_status",
@@ -165,6 +168,7 @@ impl ToolHost {
             Box::new(web_fetch::WebFetch),
             Box::new(web_search::WebSearch),
             Box::new(browser::BrowserTool),
+            Box::new(terminal_browser::TerminalBrowser),
             Box::new(media::Look),
             Box::new(media::ExtractFrames),
             Box::new(git_status::GitStatus),
@@ -263,6 +267,7 @@ impl ToolHost {
             "web_fetch" => web_fetch::WebFetch.execute(&args, ctx),
             "web_search" => web_search::WebSearch.execute(&args, ctx),
             "browser" => browser::BrowserTool.execute(&args, ctx),
+            "terminal_browser" => terminal_browser::TerminalBrowser.execute(&args, ctx),
             "look" => media::Look.execute(&args, ctx),
             "extract_frames" => media::ExtractFrames.execute(&args, ctx),
             "git_status" => git_status::GitStatus.execute(&args, ctx),
@@ -422,6 +427,7 @@ mod tests {
             "web_fetch",
             "web_search",
             "browser",
+            "terminal_browser",
             "look",
             "extract_frames",
             "git_status",

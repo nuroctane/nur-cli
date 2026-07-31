@@ -77,6 +77,7 @@ pub fn is_read_only(name: &str, args: &Value) -> bool {
         "executor" => crate::tools::executor_is_read_only(&args.to_string()),
         "omp" => crate::tools::omp::is_read_only_value(args),
         "browser" => crate::tools::browser_is_read_only(&args.to_string()),
+        "terminal_browser" => crate::tools::terminal_browser_is_read_only(&args.to_string()),
         "agent" | "write_file" | "edit_file" | "multi_edit" | "apply_patch" | "bash"
         | "extract_frames" => false,
         _ => false, // fail-closed: unknown tools are not free
@@ -129,6 +130,7 @@ pub fn is_destructive(name: &str, args: &Value) -> bool {
         "egaki" => !is_read_only("egaki", args),
         "omp" => !is_read_only("omp", args),
         "browser" => !is_read_only("browser", args),
+        "terminal_browser" => !is_read_only("terminal_browser", args),
         "executor" => !is_read_only("executor", args),
         _ => false,
     }

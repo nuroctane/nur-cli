@@ -106,7 +106,16 @@ pub fn driver_config_dir(driver: DriverId) -> PathBuf {
                     return p;
                 }
             }
-            home.join(".config").join("opencode")
+            // Credentials live under the data dir (`auth.json`), not config.
+            if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
+                return PathBuf::from(xdg).join("opencode");
+            }
+            let data = home.join(".local").join("share").join("opencode");
+            if data.exists() {
+                data
+            } else {
+                home.join(".config").join("opencode")
+            }
         }
         DriverId::Grok => {
             if let Ok(dir) = std::env::var("XAI_CONFIG_DIR") {
@@ -161,13 +170,13 @@ fn which(name: &str) -> Option<PathBuf> {
         }
         #[cfg(windows)]
         {
-            let exe = dir.join(format!("{name}.exe"));
-            if exe.is_file() {
-                return Some(exe);
-            }
-            let cmd = dir.join(format!("{name}.cmd"));
-            if cmd.is_file() {
-                return Some(cmd);
+            // Prefer .cmd/.exe (CreateProcess-safe). Include .ps1 last so
+            // cursor-agent.ps1 still counts as present for probe status.
+            for ext in [".cmd", ".exe", ".ps1"] {
+                let p = dir.join(format!("{name}{ext}"));
+                if p.is_file() {
+                    return Some(p);
+                }
             }
         }
     }
@@ -192,11 +201,16 @@ pub fn probe_driver(driver: DriverId) -> ProbeStatus {
     let config_dir = driver_config_dir(driver);
     let config_dir_exists = config_dir.exists();
     let binary_present = vendor_cli_exists(driver);
-    let has_credentials = if config_dir_exists {
+    let mut has_credentials = if config_dir_exists || matches!(driver, DriverId::Cursor | DriverId::OpenCode | DriverId::Grok)
+    {
         probes_have_credentials(driver, &config_dir)
     } else {
         false
     };
+    // CLI status when files are keychain-only / missing (Cursor-style).
+    if !has_credentials && binary_present {
+        has_credentials = cli_status_authenticated(driver);
+    }
     ProbeStatus {
         driver,
         binary_present,
@@ -204,6 +218,44 @@ pub fn probe_driver(driver: DriverId) -> ProbeStatus {
         config_dir_exists,
         has_credentials,
         hint: driver.vendor_cli_hint(),
+    }
+}
+
+/// Live vendor-CLI status when credential files are absent or unreadable.
+fn cli_status_authenticated(driver: DriverId) -> bool {
+    match driver {
+        DriverId::Cursor => crate::api::cursor_cli::cli_is_authenticated(),
+        DriverId::Claude => {
+            let Ok(out) = std::process::Command::new("claude")
+                .args(["auth", "status", "--json"])
+                .output()
+            else {
+                return false;
+            };
+            let text = String::from_utf8_lossy(&out.stdout);
+            serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .and_then(|v| v.get("loggedIn")?.as_bool())
+                == Some(true)
+        }
+        DriverId::Codex => {
+            // `codex login status` prints "Logged in …" on stdout/stderr.
+            let Ok(out) = std::process::Command::new("codex")
+                .args(["login", "status"])
+                .output()
+            else {
+                return false;
+            };
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let lower = text.to_ascii_lowercase();
+            lower.contains("logged in") && !lower.contains("not logged")
+        }
+        DriverId::OpenCode => false, // file probe above covers auth.json
+        _ => false,
     }
 }
 
@@ -215,23 +267,53 @@ fn probes_have_credentials(driver: DriverId, dir: &Path) -> bool {
     // is considered has_credentials in probe_driver if file probe fails – handled below).
     match driver {
         DriverId::Claude => {
-            dir.join(".credentials.json").exists() || dir.join("credentials.json").exists()
+            dir.join(".credentials.json").exists()
+                || dir.join("credentials.json").exists()
+                || std::env::var_os("ANTHROPIC_API_KEY").is_some_and(|v| !v.is_empty())
         }
-        DriverId::Codex => dir.join("auth.json").exists(),
-        DriverId::Cursor => {
+        DriverId::Codex => {
             dir.join("auth.json").exists()
-                || dir.join("mcp.json").exists()
-                || dir.join("config.json").exists()
+                || std::env::var_os("OPENAI_API_KEY").is_some_and(|v| !v.is_empty())
+        }
+        DriverId::Cursor => {
+            // auth.json is the session store when present. mcp.json / cli-config
+            // are not credentials. Also probe Windows Agent auth paths and a
+            // live `cursor-agent status` (keychain login, t3code-style).
+            dir.join("auth.json").exists()
+                || dir.join("cursor-auth.json").exists()
+                || std::env::var_os("CURSOR_API_KEY").is_some_and(|v| !v.is_empty())
+                || std::env::var_os("APPDATA").is_some_and(|app| {
+                    let base = PathBuf::from(app);
+                    ["Cursor", "Cursor-agent", "Cursor Agent"].iter().any(|n| {
+                        base.join(n).join("auth.json").exists()
+                            || base.join(n).join("cursor-auth.json").exists()
+                    })
+                })
+                || crate::api::cursor_cli::cli_is_authenticated()
         }
         DriverId::OpenCode => {
+            // Real store: ~/.local/share/opencode/auth.json (map of providers).
+            let data_auth = dirs::home_dir().map(|h| {
+                h.join(".local")
+                    .join("share")
+                    .join("opencode")
+                    .join("auth.json")
+            });
             dir.join("auth.json").exists()
-                || dir.join("config.json").exists()
-                || dir.join("opencode.json").exists()
+                || data_auth.as_ref().is_some_and(|p| p.is_file())
+                || std::env::var_os("OPENCODE_API_KEY").is_some_and(|v| !v.is_empty())
+                || std::env::var_os("XDG_DATA_HOME").is_some_and(|xdg| {
+                    PathBuf::from(xdg)
+                        .join("opencode")
+                        .join("auth.json")
+                        .is_file()
+                })
         }
         DriverId::Grok => {
             dir.join("auth.json").exists()
                 || dirs::home_dir()
                     .is_some_and(|home| home.join(".grok").join("auth.json").exists())
+                || std::env::var_os("XAI_API_KEY").is_some_and(|v| !v.is_empty())
         }
         DriverId::Antigravity => {
             dir.join("settings.json").exists()

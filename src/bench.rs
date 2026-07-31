@@ -323,6 +323,7 @@ pub(crate) async fn run_one(
         permissions: agent::SharedPermissions::load(&wt),
         hooks: agent::hooks::HooksConfig::load(),
         is_subagent: false,
+        prewalk_override: Arc::new(Mutex::new(None)),
     });
     let session = Session::new(model, &wt_str);
     let mut usage = UsageTracker::new(session.id.clone(), model.to_string(), wt.clone());

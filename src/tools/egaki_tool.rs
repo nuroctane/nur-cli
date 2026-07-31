@@ -11,7 +11,10 @@ pub fn is_read_only_action(args: &str) -> bool {
         .ok()
         .and_then(|v| v.get("action")?.as_str().map(|s| s.to_string()))
         .unwrap_or_else(|| "status".into());
-    matches!(action.as_str(), "status" | "doctor" | "probe" | "models")
+    matches!(
+        action.as_str(),
+        "status" | "doctor" | "probe" | "models" | "usage"
+    )
 }
 
 impl Tool for Egaki {
@@ -20,10 +23,11 @@ impl Tool for Egaki {
     }
 
     fn description(&self) -> &str {
-        "egaki image/video generation CLI (https://github.com/remorses/egaki). \
-         actions: status|doctor|login|image|video|models. \
-         ChatGPT subscription auth: login with provider=chatgpt \
-         (`egaki login --provider chatgpt`). Outputs under .nur/media/ - then use look."
+        "egaki image/video/speech CLI (https://github.com/remorses/egaki). \
+         actions: status|doctor|login|image|video|speech|models|usage. \
+         Auth: ChatGPT sub (`login` provider=chatgpt), xAI Grok Build (`xai-oauth`), \
+         Egaki plan (`egaki` key), or BYOK (google/openai/fal/…). \
+         Outputs under .nur/media/ - then use look."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -32,19 +36,23 @@ impl Tool for Egaki {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["status", "doctor", "probe", "login", "image", "video", "models"],
+                    "enum": [
+                        "status", "doctor", "probe", "login",
+                        "image", "video", "speech", "models", "usage"
+                    ],
                     "default": "status"
                 },
                 "provider": {
                     "type": "string",
-                    "description": "For login: chatgpt | google | openai | fal | … (chatgpt = ChatGPT sub path)"
+                    "description": "For login: chatgpt | xai-oauth | egaki | google | openai | fal | vertex | replicate | …"
                 },
-                "prompt": { "type": "string", "description": "Image/video prompt" },
+                "prompt": { "type": "string", "description": "Image/video/speech text" },
                 "output": { "type": "string", "description": "Output path (default .nur/media/...)" },
                 "model": { "type": "string" },
                 "aspect_ratio": { "type": "string" },
                 "input": { "type": "string", "description": "Input image/video path for edit/i2v" },
                 "duration": { "type": "string", "description": "Video duration seconds" },
+                "voice": { "type": "string", "description": "Speech voice id/name" },
                 "n": { "type": "integer", "description": "Number of variants" }
             }
         })
@@ -54,38 +62,60 @@ impl Tool for Egaki {
         let action = arg_str(args, "action").unwrap_or_else(|_| "status".into());
         match action.as_str() {
             "status" | "doctor" | "probe" => Ok(egaki::doctor_report()),
+            "usage" => egaki::run_egaki_cancelled(&["usage"], Some(&ctx.cwd), 30_000, &ctx.cancel)
+                .map_err(MuseError::Tool),
             "models" => egaki::run_egaki_cancelled(
-                &["models"],
+                &["models", "--json"],
                 Some(&ctx.cwd),
                 60_000,
                 &ctx.cancel,
             )
             .or_else(|_| {
-                egaki::run_egaki_cancelled(&["--help"], Some(&ctx.cwd), 15_000, &ctx.cancel)
+                egaki::run_egaki_cancelled(&["models"], Some(&ctx.cwd), 60_000, &ctx.cancel)
             })
             .map_err(MuseError::Tool),
             "login" => {
                 let provider = arg_str(args, "provider").unwrap_or_default();
                 let provider = provider.trim();
                 let mut msg = String::from(
-                    "egaki login is interactive. Run one of these in a real terminal:\n",
+                    "egaki login is interactive (device auth / key paste). Run in a real terminal:\n\n",
                 );
                 if provider.is_empty() || provider.eq_ignore_ascii_case("chatgpt") {
                     msg.push_str("  egaki login --provider chatgpt\n");
                     msg.push_str(
-                        "(ChatGPT subscription path - preferred when using GPT Image via sub)\n",
+                        "    ChatGPT subscription → gpt-image via Codex device auth\n",
                     );
                 }
-                if !provider.is_empty() && !provider.eq_ignore_ascii_case("chatgpt") {
-                    msg.push_str(&format!("  egaki login --provider {provider}\n"));
+                if provider.is_empty() || provider.eq_ignore_ascii_case("xai-oauth") {
+                    msg.push_str("  egaki login --provider xai-oauth\n");
+                    msg.push_str("    xAI Grok Build subscription → image/video\n");
+                }
+                if provider.is_empty() || provider.eq_ignore_ascii_case("egaki") {
+                    msg.push_str("  egaki subscribe --plan pro\n");
+                    msg.push_str("  egaki login --provider egaki --key egaki_…\n");
+                }
+                if !provider.is_empty()
+                    && !matches!(
+                        provider.to_ascii_lowercase().as_str(),
+                        "chatgpt" | "xai-oauth" | "egaki"
+                    )
+                {
+                    msg.push_str(&format!(
+                        "  egaki login --provider {provider} --key <KEY>\n"
+                    ));
                 }
                 msg.push_str("  egaki login\n");
+                msg.push_str("  egaki login --show\n");
                 if let Some(bin) = egaki::find_egaki() {
                     msg.push_str(&format!("\nbinary: {bin}\n"));
                 }
+                if let Some(show) = egaki::login_show_summary() {
+                    msg.push_str("\n--- current ---\n");
+                    msg.push_str(&show);
+                }
                 Ok(msg)
             }
-            "image" | "video" => {
+            "image" | "video" | "speech" => {
                 let prompt = arg_str(args, "prompt")
                     .map_err(|_| MuseError::Tool(format!("{action} requires prompt=")))?;
                 let media = egaki::media_dir(&ctx.cwd);
@@ -94,15 +124,14 @@ impl Tool for Egaki {
                     .map(|d| d.as_millis())
                     .unwrap_or(0);
                 let uniq = uuid::Uuid::new_v4().simple().to_string();
-                let default_name = if action == "video" {
-                    format!("egaki-{stamp}-{uniq}.mp4")
-                } else {
-                    format!("egaki-{stamp}-{uniq}.png")
+                let default_name = match action.as_str() {
+                    "video" => format!("egaki-{stamp}-{uniq}.mp4"),
+                    "speech" => format!("egaki-{stamp}-{uniq}.mp3"),
+                    _ => format!("egaki-{stamp}-{uniq}.png"),
                 };
                 let out = arg_str(args, "output").unwrap_or_else(|_| {
                     media.join(&default_name).to_string_lossy().into_owned()
                 });
-                // Validate before creating directories / writing.
                 let out_path = resolve_output_under_cwd(&ctx.cwd, &out)?;
                 if out_path
                     .symlink_metadata()
@@ -122,6 +151,7 @@ impl Tool for Egaki {
                 let mut argv: Vec<String> = vec![action.to_string(), prompt];
                 argv.push("-o".into());
                 argv.push(out_path.to_string_lossy().into());
+                argv.push("--json".into());
                 if let Ok(m) = arg_str(args, "model") {
                     argv.push("-m".into());
                     argv.push(m);
@@ -139,12 +169,17 @@ impl Tool for Egaki {
                     argv.push("--duration".into());
                     argv.push(d);
                 }
+                if let Ok(voice) = arg_str(args, "voice") {
+                    argv.push("--voice".into());
+                    argv.push(voice);
+                }
                 if let Some(n) = args.get("n").and_then(|v| v.as_u64()) {
                     argv.push("-n".into());
                     argv.push(n.to_string());
                 }
                 let refs: Vec<&str> = argv.iter().map(|s| s.as_str()).collect();
-                let out = egaki::run_egaki_cancelled(&refs, Some(&ctx.cwd), 600_000, &ctx.cancel)
+                let timeout = if action == "video" { 600_000 } else { 300_000 };
+                let out = egaki::run_egaki_cancelled(&refs, Some(&ctx.cwd), timeout, &ctx.cancel)
                     .map_err(MuseError::Tool)?;
                 Ok(format!(
                     "{out}\n\noutput: {}\nTip: use look on that path to attach vision.",
@@ -152,7 +187,7 @@ impl Tool for Egaki {
                 ))
             }
             other => Ok(format!(
-                "unknown egaki action '{other}' - status|login|image|video|models"
+                "unknown egaki action '{other}' - status|login|image|video|speech|models|usage"
             )),
         }
     }
@@ -194,10 +229,8 @@ fn resolve_output_under_cwd(cwd: &Path, out: &str) -> Result<PathBuf> {
     } else {
         cwd.join(out)
     };
-    // Lexical normalize before create so `../outside` is rejected without mkdir.
     let lex = crate::tools::sandbox::normalize_path(&candidate);
     if !path_under_root(&lex, &crate::tools::sandbox::normalize_path(&cwd_canon)) {
-        // Also try if parent of lex would escape.
         return Err(MuseError::Tool(
             "egaki output path must stay under the workspace".into(),
         ));

@@ -247,7 +247,9 @@ pub fn plan_targets(
 /// 1. a browser OAuth session explicitly saved via `/failover` or `/login`,
 /// 2. the provider's own catalog env var (e.g. `OPENAI_API_KEY`),
 /// 3. an API key saved via `/failover` (`auth::load_provider_key`),
-/// 4. t3 vendor CLI session (Claude Code, Codex, agy, gcloud, etc.) when no key on disk,
+/// 4. vendor CLI session (Claude Code, Codex, Cursor, OpenCode, …), then OMP
+///    (`omp token <provider>` / `~/.omp/agent/agent.db`) - only when no key on
+///    disk. Successful OMP imports are persisted so step 1 wins next time,
 /// 5. an empty string for local servers that don't need one.
 ///
 /// None = no credentials, skip this provider.
@@ -270,15 +272,22 @@ pub fn resolve_target_key(p: &Provider) -> Option<String> {
             return Some(k);
         }
     }
-    // t3 fallback: vendor CLI logged-in session. Isolated via run_blocking:
-    // this is called synchronously from the async failover path and can shell
-    // out (e.g. reading an OS credential store), so it must not block a Tokio
-    // worker thread outright.
+    // Last resort: vendor CLI, then OMP. Isolated via run_blocking: this is
+    // called synchronously from the async failover path and can shell out.
     if let Ok(Some(tokens)) =
         crate::oauth::run_blocking(|| crate::oauth::import_existing_session(p.id))
     {
         let tok = tokens.access_token.trim().to_string();
         if !tok.is_empty() {
+            if crate::oauth::omp_bridge::is_omp_import(&tokens) {
+                let _ = crate::auth::save_provider_oauth(
+                    p.id,
+                    &tok,
+                    tokens.refresh_token.clone(),
+                    tokens.expires_at,
+                    tokens.meta.clone(),
+                );
+            }
             return Some(tok);
         }
     }

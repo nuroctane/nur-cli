@@ -28,6 +28,18 @@ tool_result_max_chars = 12000
 compact_keep_user_turns = 4
 compact_tool_body_max_chars = 800
 
+# Optional OMP-compatible remote summarizer (POST {systemPrompt,prompt} → {summary}).
+# Off by default — local model summarization is unchanged. On failure, nur falls back locally.
+# [compaction]
+# remote_enabled = true
+# remote_endpoint = "https://example.com/compact"
+
+# OMP-style prewalk: strong model plans + todos, then switch to a cheap model at
+# the first write/edit. Off by default. Toggle with /prewalk in the TUI.
+# [prewalk]
+# enabled = true
+# into = "openai-codex/gpt-5.6-luna"
+
 # Cost-saver prompt: skip PLUR inject + long memory (tools + skill NL/slash stay full)
 poor_mode = false
 
@@ -54,6 +66,10 @@ auto_update = true
 | `tool_result_max_chars` | integer | `12000` | Max inline tool output chars; larger results spill to disk (`0` = unlimited) |
 | `compact_keep_user_turns` | integer | `4` | Recent user turns kept after compaction |
 | `compact_tool_body_max_chars` | integer | `800` | When compacting, truncate older tool bodies to this many chars (`0` = leave intact) |
+| `compaction.remote_enabled` | bool | `false` | Prefer remote summarizer when an endpoint is set |
+| `compaction.remote_endpoint` | string | unset | OMP-compatible compact URL; setting it opts in. Env: `NUR_COMPACT_REMOTE_ENDPOINT` (+ `NUR_COMPACT_REMOTE=1` if only env) |
+| `prewalk.enabled` | bool | `false` | After todos exist, first write/edit switches to `prewalk.into` / smol |
+| `prewalk.into` | string | unset | Cheap model for prewalk handoff (`/prewalk into …`, or `OMP_SMOL_MODEL` / OMP `modelRoles.smol`) |
 | `poor_mode` | bool | `false` | Skip PLUR auto-inject and long memory (skill NL/slash activation still works) |
 | `ecosystem_auto_ensure` | bool | `true` | Background TTL **repair** of packs on later TUI opens (first install is foreground via one-liner / EXE / `nur install`); set `false` to skip repair |
 | `auto_update` | bool | `true` | On **every** launch (bare TUI, `nur "prompt"`, `nur run …`, gateway), check [GitHub Releases](https://github.com/nuroctane/nur-cli/releases/latest) and install a newer binary when available; it runs on a background thread so it never delays or breaks a run, and the new binary is picked up on the next launch. A 60s floor between network checks stops a script that loops `nur` from hammering the API — tune it with `NUR_AUTO_UPDATE_TTL_SECS` (`0` = check every run). Opt out with `false` or env `NUR_SKIP_AUTO_UPDATE=1`. Verify with `nur update --check`; `nur update` always runs the full update path |

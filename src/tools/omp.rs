@@ -74,12 +74,12 @@ impl Tool for OmpTool {
     }
 
     fn description(&self) -> &str {
-        "Delegate a focused coding task to the Oh My Pi backend. Runs are write-class, \
-         approval-gated, cancellation-aware, and included in Nur token/cost budgets. \
-         cost_mode=economy (default) uses an authenticated configured smol role or the \
-         cheapest suitable authenticated model, low thinking, and a focused tool set; \
-         use balanced only when the task needs OMP's configured default model. \
-         Strongest at LSP refactors, debugger-driven diagnosis, and AST rewrites. \
+        "Delegate a focused coding task to the Oh My Pi backend (https://omp.sh). Runs \
+         are write-class, approval-gated, cancellation-aware, and included in Nur \
+         token/cost budgets. cost_mode=economy (default) uses modelRoles.smol or the \
+         cheapest authenticated model, low thinking, and a focused tool set; balanced \
+         uses OMP's default model. Nur also imports OMP credentials via `omp token` as \
+         a universal fallback for every provider (failover + subagents). \
          action=run|status|version."
     }
 

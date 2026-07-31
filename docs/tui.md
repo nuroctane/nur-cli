@@ -202,6 +202,20 @@ are the only ones nur has:
   drift from what actually ran; the renderer re-reads the swarm registry each
   frame for live subagent fan-out.
 
+### Redraw / ghost-cell recovery
+
+Windows ConPTY and image-protocol peeks can leave glyphs behind when the layout
+changes. Nur forces a full `terminal.clear()` (not only a ratatui `Clear`) when:
+
+- the window resizes or focus returns
+- `/sidegraph` opens or closes (horizontal split)
+- a click-to-peek closes (image pixels sit outside the cell buffer)
+- `/theme` preview / commit / cancel
+- a foreground child (`/fractal open`, attach) returns
+
+Steady frames only `Clear` when the layout signature changes (size, busy line,
+input height, sidegraph width) so peeks are not re-uploaded every tick.
+
 ### Knowledge stack
 
 | Command | Purpose |
@@ -275,7 +289,7 @@ The note is appended to your persistent memory file and recalled automatically i
 /login
 ```
 
-Scrollable, **type-to-filter** catalog of 61 providers → masked key → writes
+Scrollable, **type-to-filter** catalog of 62 providers → masked key → writes
 `provider` / `base_url` / `model` to config and hot-swaps the HTTP client.
 
 Opening `/login` clears nothing, and `Esc` out of it changes nothing — your

@@ -36,7 +36,8 @@ const ECOSYSTEM_MARKER: &str = "ecosystem.json";
 /// 12: headroom + optmem + egaki + fractal ensure + infinite-headcount pack.
 /// 13: omp floor 17.2.0 + auto-upgrade for omp/plur/egaki/ruflo/browser/executor/graphify/headroom.
 /// 14: penecho ensure (npm) + auto-config from nur auth + seamless browser launch.
-const ECOSYSTEM_SCHEMA: u32 = 14;
+/// 15: terminal-browser (native/WSL + Windows host fallback via agent-browser-cli).
+const ECOSYSTEM_SCHEMA: u32 = 15;
 /// Re-run ensure at most once per this many seconds unless forced.
 const ENSURE_TTL_SECS: u64 = 86_400;
 
@@ -92,6 +93,9 @@ pub struct EcosystemStatus {
     /// penecho - canvas beyond the chat box (npm AGPL sidecar).
     #[serde(default)]
     pub penecho: ComponentStatus,
+    /// terminal-browser - in-terminal Chromium (native/WSL) or Windows-host fallback.
+    #[serde(default)]
+    pub terminal_browser: ComponentStatus,
     pub skills_installed: Vec<String>,
     #[serde(default)]
     pub packs_installed: Vec<String>,
@@ -110,7 +114,7 @@ impl EcosystemStatus {
             }
         };
         format!(
-            "ecosystem · {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  · packs {}",
+            "ecosystem · {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  · packs {}",
             bit(self.graphify.available, "graphify"),
             bit(self.plur.available, "plur"),
             bit(self.ruflo.available, "ruflo"),
@@ -118,6 +122,7 @@ impl EcosystemStatus {
             bit(self.omp.available, "omp"),
             bit(self.graphjin.available, "graphjin"),
             bit(self.browser.available, "browser"),
+            bit(self.terminal_browser.available, "tb"),
             bit(self.excalidraw.available, "excalidraw"),
             bit(self.skills_cli.available, "skills"),
             bit(self.cua.available, "cua"),
@@ -138,7 +143,7 @@ impl EcosystemStatus {
     pub fn report(&self) -> String {
         let mut s = String::from("Nur ecosystem (auto-provisioned on install / open)\n");
         // Fixed names so older ecosystem.json markers (pre-field) still list every slot.
-        let comps: [(&str, &ComponentStatus); 17] = [
+        let comps: [(&str, &ComponentStatus); 18] = [
             ("graphify", &self.graphify),
             ("plur", &self.plur),
             ("ruflo", &self.ruflo),
@@ -148,6 +153,7 @@ impl EcosystemStatus {
             ("omp", &self.omp),
             ("graphjin", &self.graphjin),
             ("browser", &self.browser),
+            ("terminal_browser", &self.terminal_browser),
             ("excalidraw", &self.excalidraw),
             ("cua", &self.cua),
             ("akarso", &self.akarso),
@@ -215,8 +221,8 @@ impl EcosystemStatus {
             s.push_str(&format!("  note: {n}\n"));
         }
         s.push_str(
-            "\n  slash: /ecosystem /plur /ruflo /graphify /skills /akarso /openseo\n\
-             tools:  graphify plur ruflo akarso executor omp browser excalidraw penecho tldraw skill\n\
+            "\n  slash: /ecosystem /plur /ruflo /graphify /skills /akarso /openseo /tb\n\
+             tools:  graphify plur ruflo akarso executor omp browser terminal_browser excalidraw penecho tldraw skill\n\
              packs:  design · clone-website · cybersecurity · opencode catalog · DCP patterns\n",
         );
         s
@@ -273,6 +279,7 @@ pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
     status.omp = packs::ensure_omp();
     status.graphjin = packs::ensure_graphjin();
     status.browser = packs::ensure_browser_cli(status.node_ok);
+    status.terminal_browser = ensure_terminal_browser(status.node_ok);
     status.excalidraw = ensure_excalidraw(status.node_ok);
     status.penecho = ensure_penecho(status.node_ok);
     status.headroom = ensure_headroom();
@@ -412,6 +419,29 @@ fn ensure_penecho(node_ok: bool) -> ComponentStatus {
     }
     if c.detail.is_empty() {
         c.detail = "not found after npm install - try: npm i -g penecho".into();
+    }
+    c
+}
+
+// ── terminal-browser ──────────────────────────────────────────────────────
+
+fn ensure_terminal_browser(node_ok: bool) -> ComponentStatus {
+    let mut c = ComponentStatus {
+        name: "terminal_browser".into(),
+        ..Default::default()
+    };
+    let _ = node_ok; // host fallback may npm-install agent-browser-cli itself
+    let (ok, detail, path, version) = crate::terminal_browser::ensure_runtime();
+    c.available = ok;
+    c.detail = detail;
+    c.path = path;
+    c.version = version;
+    if c.available && c.version.is_none() {
+        if let Some(bin) = c.path.as_deref() {
+            if !bin.starts_with("wsl:") && !bin.starts_with("host:") {
+                c.version = cmd_version(bin, &["--version"]);
+            }
+        }
     }
     c
 }
@@ -570,7 +600,7 @@ fn ensure_egaki(node_ok: bool) -> ComponentStatus {
         c.path = Some(bin.clone());
         c.version = cmd_version(&bin, &["--version"]);
         c.detail =
-            "CLI ready · egaki login --provider chatgpt for ChatGPT sub path".into();
+            "CLI ready · egaki login --provider chatgpt | xai-oauth | egaki --key …".into();
     } else {
         c.detail = "not found after npm install - try: npm i -g egaki@latest".into();
     }

@@ -142,7 +142,15 @@ pub fn canonical(tool: &str, args_json: &str) -> String {
             .and_then(|c| c.as_str())
             .unwrap_or("")
             .to_string(),
-        "browser" | "graphify" | "plur" | "ruflo" | "akarso" | "omp" | "memory" | "executor" => v
+        "browser"
+        | "terminal_browser"
+        | "graphify"
+        | "plur"
+        | "ruflo"
+        | "akarso"
+        | "omp"
+        | "memory"
+        | "executor" => v
             .get("action")
             .and_then(|c| c.as_str())
             .unwrap_or("")

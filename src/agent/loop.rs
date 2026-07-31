@@ -103,6 +103,9 @@ pub struct AgentRunner {
     pub hooks: HooksConfig,
     /// Nested subagents cannot spawn further agents (depth limit 1).
     pub is_subagent: bool,
+    /// OMP-style prewalk: once fired, later turns in this TUI session use this
+    /// model (shared Arc so `make_runner` each turn still sees the switch).
+    pub prewalk_override: Arc<Mutex<Option<String>>>,
 }
 
 pub fn spawn_turn(
@@ -219,7 +222,9 @@ impl AgentRunner {
         cancel: &CancellationToken,
     ) -> std::result::Result<(ApiResponse, usize), (MuseError, usize)> {
         let mut deltas = 0usize;
-        if req.stream == Some(true) {
+        // Cursor Agent CLI must honor Esc cancel; always take the streaming path
+        // so the CancellationToken reaches `cursor-agent` (even for subagents).
+        if req.stream == Some(true) || client.uses_cursor_cli() {
             let r = client
                 .create_response_stream(
                     req,
@@ -487,6 +492,8 @@ impl AgentRunner {
         let mut truncation_giving_up = false;
         let mut force_tool_choice = false;
         let mut recovered_default_model: Option<String> = None;
+        // OMP contextPromotion: try a larger-window sibling once before compact.
+        let mut context_promoted = false;
 
         loop {
             if cancel.is_cancelled() {
@@ -556,15 +563,24 @@ impl AgentRunner {
                 )));
             }
 
-            // OMP-style dynamic context pruning: when the model reads the same
-            // target again, the newer observation supersedes the old body.
-            // Keep both tool pairs valid, but stop paying for stale duplicate
-            // read/search output on every later request.
+            // OMP-style dynamic context pruning (supersedeReads + dropUseless):
+            // when the model reads the same target again, the newer observation
+            // supersedes the old body; empty/error tool bodies outside the live
+            // suffix are collapsed so they stop paying rent every turn.
             let superseded = prune_superseded_observations(&mut session.input_items);
-            if superseded > 0 {
+            let dropped = prune_useless_observations(&mut session.input_items);
+            if superseded + dropped > 0 {
                 self.persist_session(session);
+                let mut parts = Vec::new();
+                if superseded > 0 {
+                    parts.push(format!("{superseded} superseded read/search"));
+                }
+                if dropped > 0 {
+                    parts.push(format!("{dropped} empty/error tool body"));
+                }
                 let _ = tx.send(AgentEvent::Status(format!(
-                    "context · pruned {superseded} superseded read/search result(s)"
+                    "context · pruned {}",
+                    parts.join(" · ")
                 )));
             }
 
@@ -588,8 +604,15 @@ impl AgentRunner {
             // Lazy /models resolution for local placeholder (llama.cpp proof).
             // If cfg still holds `local-model`, attempt to resolve to a real id
             // from the live local server before we POST.
-            let configured_model = recovered_default_model
+            // Precedence: prewalk override → recovery/promotion → config.model.
+            let prewalk_held = self
+                .prewalk_override
+                .lock()
+                .ok()
+                .and_then(|g| g.clone());
+            let configured_model = prewalk_held
                 .as_deref()
+                .or(recovered_default_model.as_deref())
                 .unwrap_or(&self.config.model);
             let effective_model = if crate::providers::is_placeholder_local_model(configured_model)
             {
@@ -633,10 +656,30 @@ impl AgentRunner {
             let (resp, text_deltas, served): (ApiResponse, usize, Served) =
                 match self.request_with_failover(&req, tx, cancel).await {
                     Ok(response) => response,
-                    Err(error)
-                        if is_context_limit_error(&error)
-                            && emergency_compactions < MAX_EMERGENCY_COMPACTIONS =>
-                    {
+                    Err(error) if is_context_limit_error(&error) => {
+                        // OMP contextPromotion: switch to a larger sibling *before*
+                        // compaction when the API rejects the window (e.g. *-spark).
+                        if !context_promoted {
+                            context_promoted = true;
+                            let current = recovered_default_model
+                                .as_deref()
+                                .unwrap_or(&self.config.model);
+                            if let Ok(models) = self.client.live_model_ids().await {
+                                if let Some(model) =
+                                    pick_context_promotion_target(&models, current)
+                                {
+                                    let _ = tx.send(AgentEvent::Status(format!(
+                                        "context overflow · promoting `{current}` → `{model}` \
+                                         (OMP-style contextPromotion before compact)"
+                                    )));
+                                    recovered_default_model = Some(model);
+                                    continue;
+                                }
+                            }
+                        }
+                        if emergency_compactions >= MAX_EMERGENCY_COMPACTIONS {
+                            return Err(error);
+                        }
                         emergency_compactions += 1;
                         let _ = tx.send(AgentEvent::Status(format!(
                             "provider rejected the context window - recovering and retrying \
@@ -1231,6 +1274,19 @@ impl AgentRunner {
             self.hooks
                 .run_post(&call.name, &call.arguments, &self.cwd, &session.id);
             emit_side_effects(tx, &call.name, &body);
+            // OMP prewalk: after todos exist, first successful write/edit hands
+            // off to the cheap/smol model for the rest of the session.
+            // `prewalk_override` on self is enough — next turn's model pick
+            // reads it (same effect as OMP's recoveredDefaultModel).
+            if ok {
+                if let Some(into) = maybe_fire_prewalk(self, &call.name) {
+                    let _ = tx.send(AgentEvent::Status(format!(
+                        "prewalk · todos ready · first `{name}` → switching to `{into}` \
+                         (OMP-style; /prewalk off to disable)",
+                        name = call.name
+                    )));
+                }
+            }
             let _ = tx.send(AgentEvent::ToolEnd {
                 id,
                 name: call.name.clone(),
@@ -1534,6 +1590,11 @@ fn plan_mode_allows(
         return true;
     }
     if name == "browser" && crate::tools::browser::is_plan_safe_action(args) {
+        return true;
+    }
+    if name == "terminal_browser"
+        && crate::tools::terminal_browser::is_plan_safe_action(args)
+    {
         return true;
     }
     if name == "bash" {
@@ -2955,6 +3016,114 @@ fn should_auto_compact(usage: &UsageTracker, cfg: &Config) -> bool {
 /// This mirrors OMP's `supersedeReads`: a second read/grep of the same target is
 /// the current truth, so carrying the earlier full body forward only wastes
 /// context. Mutating and delegated tools are deliberately never touched.
+/// Collapse empty / hard-error tool bodies that sit outside the live suffix.
+/// Mirrors OMP `compaction.dropUseless` without rewriting recent cacheable turns.
+fn prune_useless_observations(items: &mut [Value]) -> usize {
+    const MIN_KEEP_SUFFIX_CHARS: usize = 32_000;
+    let item_chars: Vec<usize> = items
+        .iter()
+        .map(|item| serde_json::to_string(item).map_or(0, |text| text.len()))
+        .collect();
+    let mut suffix_chars = vec![0usize; items.len()];
+    let mut running = 0usize;
+    for index in (0..items.len()).rev() {
+        suffix_chars[index] = running;
+        running = running.saturating_add(item_chars[index]);
+    }
+    let mut pruned = 0;
+    for index in 0..items.len() {
+        if suffix_chars[index] <= MIN_KEEP_SUFFIX_CHARS {
+            continue;
+        }
+        let item = &mut items[index];
+        if item.get("type").and_then(Value::as_str) != Some("function_call_output") {
+            continue;
+        }
+        let Some(output) = item.get_mut("output") else {
+            continue;
+        };
+        let Some(body) = output.as_str() else {
+            continue;
+        };
+        if body.starts_with("[dropped useless") {
+            continue;
+        }
+        let trimmed = body.trim();
+        let useless = trimmed.is_empty()
+            || trimmed == "{}"
+            || trimmed == "null"
+            || trimmed.eq_ignore_ascii_case("error")
+            || trimmed.starts_with("Error:")
+            || trimmed.starts_with("error:")
+            || trimmed.starts_with("failed:")
+            || trimmed.starts_with("FAILED");
+        if !useless {
+            continue;
+        }
+        *output = Value::String(
+            "[dropped useless empty/error tool body to save context]".into(),
+        );
+        pruned += 1;
+    }
+    pruned
+}
+
+/// Prefer a larger-context sibling before compaction (OMP `contextPromotion`).
+///
+/// Heuristics when the live catalog has no window sizes: drop `-spark` /
+/// size-shrink suffixes (`mini`, `nano`, `flash`, `haiku`, `luna`) within the
+/// same family, preferring the longest remaining id match.
+fn pick_context_promotion_target(models: &[String], current: &str) -> Option<String> {
+    let current_lower = current.to_ascii_lowercase();
+    let stem = current_lower
+        .strip_suffix("-spark")
+        .or_else(|| current_lower.strip_suffix("_spark"))
+        .unwrap_or(&current_lower);
+    let shrink = ["-mini", "-nano", "-flash", "-haiku", "-luna", "-lite", "-small"];
+    let mut targets = Vec::new();
+    if stem != current_lower {
+        targets.push(stem.to_string());
+    }
+    for suffix in shrink {
+        if let Some(base) = stem.strip_suffix(suffix) {
+            targets.push(base.to_string());
+            // Also try common full-size siblings on the same provider prefix.
+            if let Some((provider, rest)) = base.rsplit_once('/') {
+                targets.push(format!("{provider}/{rest}"));
+            }
+        }
+    }
+    if targets.is_empty() {
+        return None;
+    }
+    let mut best: Option<&String> = None;
+    for model in models {
+        let lower = model.to_ascii_lowercase();
+        if lower == current_lower {
+            continue;
+        }
+        // Never "promote" into an even smaller shrink tier.
+        if shrink.iter().any(|s| lower.ends_with(s)) || lower.ends_with("-spark") {
+            continue;
+        }
+        let hits = targets.iter().any(|t| lower == *t || lower.starts_with(t) || t.starts_with(&lower));
+        if !hits {
+            // Family match: share first path segment + major version token.
+            let cur_family = stem.split(['/', '-', ':']).take(2).collect::<Vec<_>>().join("-");
+            let cand_family = lower.split(['/', '-', ':']).take(2).collect::<Vec<_>>().join("-");
+            if cur_family.is_empty() || cur_family != cand_family {
+                continue;
+            }
+        }
+        best = match best {
+            None => Some(model),
+            Some(prev) if model.len() >= prev.len() => Some(model),
+            Some(prev) => Some(prev),
+        };
+    }
+    best.cloned()
+}
+
 fn prune_superseded_observations(items: &mut [Value]) -> usize {
     const OBSERVATION_TOOLS: &[&str] = &[
         "read_file",
@@ -3421,47 +3590,42 @@ fn resolve_subagent_target(
     };
     let mut key = key;
     if key.trim().is_empty() && !prov.key_optional {
-        // No stored credential yet. Before popping a /login modal, try to
-        // auto-import the vendor CLI (t3code driver) session for this provider,
-        // persist it into the per-provider OAuth store, and re-resolve. If that
-        // works the subagent "just works" with no user input.
-        if let Some(driver) = driver_for_provider(prov.id) {
-            // Both probe_driver and import_existing_session can shell out
-            // (reading a vendor CLI's credential file/store) — isolate via
-            // run_blocking so a slow probe can't stall the whole runtime.
-            let has_credentials =
-                crate::oauth::run_blocking(|| crate::t3code::probe_driver(driver)).has_credentials;
-            if has_credentials {
-                match crate::oauth::run_blocking(|| crate::oauth::import_existing_session(prov.id))
-                {
-                    Ok(Some(tokens)) if !tokens.access_token.trim().is_empty() => {
-                        // Persist so load_provider_oauth_token can re-resolve it.
-                        let _ = crate::auth::save_provider_oauth(
-                            prov.id,
-                            &tokens.access_token,
-                            tokens.refresh_token.clone(),
-                            tokens.expires_at,
-                            tokens.meta.clone(),
-                        );
-                        // Re-resolve the credential now that a session exists.
-                        let reresolved = match crate::auth::resolve_api_key_for(Some(prov.id)) {
-                            Ok(k) if !k.trim().is_empty() => k,
-                            _ => crate::auth::load_provider_key(prov.id)
-                                .or_else(|| crate::auth::load_provider_oauth_token(prov.id))
-                                .unwrap_or_else(|| tokens.access_token.trim().to_string()),
-                        };
-                        if !reresolved.trim().is_empty() {
-                            let _ = tx.send(AgentEvent::Status(format!(
-                                "subagent · imported {} session from vendor CLI ({})",
-                                prov.name,
-                                driver.as_str()
-                            )));
-                            key = reresolved;
-                        }
-                    }
-                    _ => {}
+        // No stored credential yet. Before popping a /login modal, try vendor
+        // CLI and OMP (universal last resort). Saved nur keys were already
+        // attempted above via resolve_api_key_for / load_provider_*. Persist
+        // whatever we import so the next spawn hits the store first.
+        // import_existing_session can shell out - isolate via run_blocking.
+        match crate::oauth::run_blocking(|| crate::oauth::import_existing_session(prov.id)) {
+            Ok(Some(tokens)) if !tokens.access_token.trim().is_empty() => {
+                let _ = crate::auth::save_provider_oauth(
+                    prov.id,
+                    &tokens.access_token,
+                    tokens.refresh_token.clone(),
+                    tokens.expires_at,
+                    tokens.meta.clone(),
+                );
+                let reresolved = match crate::auth::resolve_api_key_for(Some(prov.id)) {
+                    Ok(k) if !k.trim().is_empty() => k,
+                    _ => crate::auth::load_provider_key(prov.id)
+                        .or_else(|| crate::auth::load_provider_oauth_token(prov.id))
+                        .unwrap_or_else(|| tokens.access_token.trim().to_string()),
+                };
+                if !reresolved.trim().is_empty() {
+                    let source = if crate::oauth::omp_bridge::is_omp_import(&tokens) {
+                        "OMP".to_string()
+                    } else if let Some(driver) = driver_for_provider(prov.id) {
+                        format!("vendor CLI ({})", driver.as_str())
+                    } else {
+                        "imported session".into()
+                    };
+                    let _ = tx.send(AgentEvent::Status(format!(
+                        "subagent · imported {} session from {source}",
+                        prov.name
+                    )));
+                    key = reresolved;
                 }
             }
+            _ => {}
         }
     }
     if key.trim().is_empty() && !prov.key_optional {
@@ -3549,8 +3713,7 @@ fn resolve_provider_alias(raw: &str) -> Option<&'static crate::providers::Provid
 /// credentials via `import_existing_session`. Used to auto-import a logged-in
 /// vendor CLI session before falling back to a `/login` prompt so cross-provider
 /// subagents "just work" when the user is already signed in to the vendor CLI.
-/// Returns `None` for providers with no direct vendor CLI (e.g. cursor has no
-/// nur provider of its own).
+/// Returns `None` for providers with no direct vendor CLI.
 fn driver_for_provider(provider_id: &str) -> Option<crate::t3code::DriverId> {
     use crate::t3code::DriverId;
     match provider_id {
@@ -3560,8 +3723,126 @@ fn driver_for_provider(provider_id: &str) -> Option<crate::t3code::DriverId> {
         "antigravity" => Some(DriverId::Antigravity),
         "google" => Some(DriverId::Gemini),
         "opencode" => Some(DriverId::OpenCode),
+        "cursor" => Some(DriverId::Cursor),
         _ => None,
     }
+}
+
+/// Tools that count as "starting implementation" for OMP prewalk.
+fn is_prewalk_mutate_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "write_file" | "edit_file" | "multi_edit" | "apply_patch"
+    )
+}
+
+/// Resolve the cheap/smol target for prewalk (config → env → OMP role).
+pub fn resolve_prewalk_into(cfg: &Config) -> Option<String> {
+    let configured = cfg.prewalk.into.trim();
+    if !configured.is_empty() {
+        return Some(configured.to_string());
+    }
+    for var in ["NUR_PREWALK_MODEL", "OMP_SMOL_MODEL", "PI_SMOL_MODEL"] {
+        if let Ok(v) = std::env::var(var) {
+            let v = v.trim();
+            if !v.is_empty() {
+                return Some(v.to_string());
+            }
+        }
+    }
+    crate::oauth::omp_bridge::omp_model_role("smol")
+}
+
+fn maybe_fire_prewalk(runner: &AgentRunner, tool_name: &str) -> Option<String> {
+    if !runner.config.prewalk.enabled || runner.is_subagent {
+        return None;
+    }
+    if !is_prewalk_mutate_tool(tool_name) {
+        return None;
+    }
+    if runner.tools.todos_snapshot().items.is_empty() {
+        return None;
+    }
+    {
+        let guard = runner.prewalk_override.lock().ok()?;
+        if guard.is_some() {
+            return None; // already switched this session
+        }
+    }
+    let into = resolve_prewalk_into(&runner.config)?;
+    if into.eq_ignore_ascii_case(&runner.config.model) {
+        return None;
+    }
+    if let Ok(mut guard) = runner.prewalk_override.lock() {
+        *guard = Some(into.clone());
+    }
+    Some(into)
+}
+
+/// Resolve OMP-style remote compact URL. Opt-in only:
+/// - `compaction.remote_endpoint` in config.toml (implies want remote), or
+/// - `compaction.remote_enabled = true` plus endpoint / `NUR_COMPACT_REMOTE_ENDPOINT`, or
+/// - `NUR_COMPACT_REMOTE=1` plus `NUR_COMPACT_REMOTE_ENDPOINT`.
+fn remote_compact_endpoint(cfg: &Config) -> Option<String> {
+    let cfg_ep = cfg.compaction.remote_endpoint.trim();
+    let env_ep = std::env::var("NUR_COMPACT_REMOTE_ENDPOINT")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let env_force = std::env::var("NUR_COMPACT_REMOTE")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    if !cfg_ep.is_empty() {
+        // OMP: setting remoteEndpoint is enough.
+        return Some(cfg_ep.to_string());
+    }
+    if cfg.compaction.remote_enabled || env_force {
+        return env_ep;
+    }
+    None
+}
+
+/// OMP `compaction.remoteEndpoint` protocol: POST `{systemPrompt,prompt}` → `{summary}`.
+async fn try_remote_compact_summary(
+    runner: &AgentRunner,
+    system_prompt: &str,
+    items: &[Value],
+    user_prompt: &str,
+) -> Option<String> {
+    let endpoint = remote_compact_endpoint(&runner.config)?;
+
+    // Build a plain-text prompt from thinned items (cap size for the remote).
+    let mut serialized = String::new();
+    for item in items.iter().take(80) {
+        let line = serde_json::to_string(item).unwrap_or_default();
+        if serialized.len() + line.len() > 120_000 {
+            serialized.push_str("\n…[truncated for remote compact]…\n");
+            break;
+        }
+        serialized.push_str(&line);
+        serialized.push('\n');
+    }
+    serialized.push_str(user_prompt);
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .ok()?;
+    let body = serde_json::json!({
+        "systemPrompt": system_prompt,
+        "prompt": serialized,
+    });
+    let resp = client.post(&endpoint).json(&body).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let v: Value = resp.json().await.ok()?;
+    let summary = v
+        .get("summary")
+        .and_then(|s| s.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    Some(summary.to_string())
 }
 
 pub async fn compact_session(
@@ -3578,41 +3859,47 @@ pub async fn compact_session(
         runner.config.compact_tool_body_max_chars as usize,
         runner.config.compact_keep_user_turns as usize,
     );
-    items.push(user_text_item(
-        "Summarize this conversation for a fresh context window. Capture: goals, decisions, \
+    let user_prompt = "Summarize this conversation for a fresh context window. Capture: goals, decisions, \
          files touched, current state, pending next steps. Prefer decisions over raw tool dumps. \
-         Dense bullets.",
-    ));
-    let req = ResponseRequest {
-        model: runner.config.model.clone(),
-        input: Value::Array(items),
-        instructions: Some(
-            "You compress agent conversations into handoff summaries. \
-             Preserve goals, decisions, file paths, and next steps; drop redundant tool noise."
-                .into(),
-        ),
-        tools: None,
-        tool_choice: None,
-        store: Some(false),
-        include: Some(vec!["reasoning.encrypted_content".into()]),
-        reasoning: Some(ReasoningConfig {
-            effort: Some("low".into()),
-            summary: None,
-        }),
-        stream: Some(false),
-        parallel_tool_calls: None,
-        prompt_cache_key: Some(format!("compact:{}", session.id)),
+         Dense bullets.";
+    let system_prompt = "You compress agent conversations into handoff summaries. \
+             Preserve goals, decisions, file paths, and next steps; drop redundant tool noise.";
+    items.push(user_text_item(user_prompt));
+
+    // OMP-compatible remote summarization (compaction.remoteEndpoint). Opt-in;
+    // any failure falls through to the local model path below.
+    let remote_summary = try_remote_compact_summary(runner, system_prompt, &items, user_prompt).await;
+    let summary = if let Some(summary) = remote_summary {
+        summary
+    } else {
+        let req = ResponseRequest {
+            model: runner.config.model.clone(),
+            input: Value::Array(items),
+            instructions: Some(system_prompt.into()),
+            tools: None,
+            tool_choice: None,
+            store: Some(false),
+            include: Some(vec!["reasoning.encrypted_content".into()]),
+            reasoning: Some(ReasoningConfig {
+                effort: Some("low".into()),
+                summary: None,
+            }),
+            stream: Some(false),
+            parallel_tool_calls: None,
+            prompt_cache_key: Some(format!("compact:{}", session.id)),
+        };
+        let resp = runner.client.create_response(&req).await?;
+        if let Some(u) = &resp.usage {
+            let tu: TokenUsage = u.into();
+            usage.record_request(tu.clone(), resp.id.clone());
+            session.usage.add(&tu);
+        }
+        let summary = resp.output_text();
+        if summary.is_empty() {
+            return Err(MuseError::Other("compaction produced no summary".into()));
+        }
+        summary
     };
-    let resp = runner.client.create_response(&req).await?;
-    if let Some(u) = &resp.usage {
-        let tu: TokenUsage = u.into();
-        usage.record_request(tu.clone(), resp.id.clone());
-        session.usage.add(&tu);
-    }
-    let summary = resp.output_text();
-    if summary.is_empty() {
-        return Err(MuseError::Other("compaction produced no summary".into()));
-    }
 
     // New context: summary + last N user/assistant display messages + the tail of
     // the live working items.
@@ -3887,6 +4174,21 @@ mod compact_tail_tests {
     }
 
     #[test]
+    fn context_promotion_prefers_non_spark_sibling() {
+        assert_eq!(
+            pick_context_promotion_target(
+                &[
+                    "openai-codex/gpt-5.3-codex-spark".into(),
+                    "openai-codex/gpt-5.3-codex".into(),
+                ],
+                "openai-codex/gpt-5.3-codex-spark"
+            )
+            .as_deref(),
+            Some("openai-codex/gpt-5.3-codex")
+        );
+    }
+
+    #[test]
     fn repeated_observations_drop_only_the_stale_body_and_keep_pairs() {
         let large = "old ".repeat(200);
         let mut items = vec![
@@ -3973,5 +4275,60 @@ mod compact_tail_tests {
             status: 404,
             message: "file does not exist".into(),
         }));
+    }
+}
+
+#[cfg(test)]
+mod prewalk_remote_compact_tests {
+    use super::*;
+    use crate::config::{CompactionConfig, Config, PrewalkConfig};
+
+    #[test]
+    fn prewalk_mutate_tools_match_omp() {
+        assert!(is_prewalk_mutate_tool("write_file"));
+        assert!(is_prewalk_mutate_tool("edit_file"));
+        assert!(is_prewalk_mutate_tool("multi_edit"));
+        assert!(is_prewalk_mutate_tool("apply_patch"));
+        assert!(!is_prewalk_mutate_tool("read_file"));
+        assert!(!is_prewalk_mutate_tool("bash"));
+    }
+
+    #[test]
+    fn remote_compact_off_by_default() {
+        let cfg = Config {
+            compaction: CompactionConfig::default(),
+            ..Config::default()
+        };
+        assert!(remote_compact_endpoint(&cfg).is_none());
+    }
+
+    #[test]
+    fn remote_compact_endpoint_in_config_opts_in() {
+        let cfg = Config {
+            compaction: CompactionConfig {
+                remote_enabled: false,
+                remote_endpoint: "https://example.test/compact".into(),
+            },
+            ..Config::default()
+        };
+        assert_eq!(
+            remote_compact_endpoint(&cfg).as_deref(),
+            Some("https://example.test/compact")
+        );
+    }
+
+    #[test]
+    fn prewalk_into_from_config() {
+        let cfg = Config {
+            prewalk: PrewalkConfig {
+                enabled: true,
+                into: "gpt-5.4-mini".into(),
+            },
+            ..Config::default()
+        };
+        assert_eq!(
+            resolve_prewalk_into(&cfg).as_deref(),
+            Some("gpt-5.4-mini")
+        );
     }
 }

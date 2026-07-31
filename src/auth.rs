@@ -269,22 +269,14 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
         ) {
             return Ok(k);
         }
-        if mismatched {
-            if let Ok(Some(auth)) = load_auth() {
-                return Err(MuseError::Other(format!(
-                    "saved credentials are for provider '{}' but active provider is '{}'. Run /login (or nur auth logout) and sign in again.",
-                    auth.provider, exp
-                )));
-            }
-        }
-        // t3code-style fallback: try vendor CLI session import before giving up.
-        // Mirrors t3code's import-first probing (zero-secret-storage delegate).
+        // Saved nur credentials (active + per-provider + env) already failed.
+        // Still try vendor CLI / OMP for the *expected* provider even when
+        // auth.json is for a different host - otherwise a leftover openai login
+        // would block anthropic failover/OMP forever.
         //
-        // The imported token is used *transiently* — it is never persisted as an
-        // `Auth`, so `ensure_fresh_oauth` never refreshes it. That makes honoring
-        // `expires_at` mandatory: an expired vendor session would otherwise be
-        // handed to the API on every request forever, producing an endless 401
-        // loop with a misleading error instead of a clean "run /login".
+        // Vendor CLI imports stay transient (not written to auth.json). OMP
+        // imports are persisted into the per-provider store so the next resolve
+        // hits saved credentials before shelling out to `omp token` again.
         // Isolated via run_blocking: this can shell out (e.g. reading Windows
         // Credential Manager for a vendor-CLI session), and resolve_api_key_for
         // is reachable directly from the async main() / turn-1 startup path, so
@@ -295,6 +287,15 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
         {
             let tok = tokens.access_token.trim().to_string();
             if !tok.is_empty() && !oauth_expired(tokens.expires_at) {
+                if crate::oauth::omp_bridge::is_omp_import(&tokens) {
+                    let _ = save_provider_oauth(
+                        exp,
+                        &tok,
+                        tokens.refresh_token.clone(),
+                        tokens.expires_at,
+                        tokens.meta.clone(),
+                    );
+                }
                 return Ok(tok);
             }
             // Stale but refreshable. The vendor CLI would renew this silently on
@@ -356,6 +357,14 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
                 if !tok.is_empty() {
                     return Ok(tok);
                 }
+            }
+        }
+        if mismatched {
+            if let Ok(Some(auth)) = load_auth() {
+                return Err(MuseError::Other(format!(
+                    "saved credentials are for provider '{}' but active provider is '{}'. Run /login (or nur auth logout) and sign in again.",
+                    auth.provider, exp
+                )));
             }
         }
         return Err(MuseError::NotAuthenticated);
@@ -437,6 +446,10 @@ pub fn load_auth() -> Result<Option<Auth>> {
 /// Return OAuth request metadata when `access_token` belongs to a stored OAuth
 /// session for `provider_id`. API keys deliberately return `None`.
 pub fn oauth_request_context(provider_id: &str, access_token: &str) -> Option<OAuthRequestContext> {
+    // Cursor CLI session sentinel is not a Bearer token for HTTP headers.
+    if crate::api::cursor_cli::is_cli_session_token(access_token) {
+        return None;
+    }
     // The google family (google / antigravity / google-oauth) shares one login;
     // a session saved under any of those ids must satisfy a context lookup for
     // any other, or the request goes out WITHOUT `x-goog-user-project` and the
@@ -1102,6 +1115,7 @@ pub fn provider_health_report() -> Vec<String> {
                 "xai" => Some(crate::t3code::DriverId::Grok),
                 "google" => Some(crate::t3code::DriverId::Gemini),
                 "antigravity" => Some(crate::t3code::DriverId::Antigravity),
+                "cursor" => Some(crate::t3code::DriverId::Cursor),
                 _ => None,
             };
             if let Some(driver) = driver {

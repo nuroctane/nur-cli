@@ -65,6 +65,9 @@ pub fn fetch_model_ids(
     provider_id: Option<&str>,
 ) -> Result<Vec<String>, String> {
     let pid = provider_id.unwrap_or("");
+    if pid == "cursor" || crate::api::cursor_cli::is_cli_session_token(api_key) {
+        return crate::api::cursor_cli::list_models().map_err(|e| e.to_string());
+    }
     if api_key.trim().is_empty() {
         // key_optional local servers still answer /models without auth.
         let p = crate::providers::by_id(pid);

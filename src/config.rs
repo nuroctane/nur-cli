@@ -59,7 +59,9 @@ pub const PRICE_OUTPUT_PER_MTOK: f64 = 4.25;
 /// `glm-5.2`, `qwen3.7-max` that were previously pinned with the Zen base now
 /// auto-migrate to the Go endpoint, and any stored `opencode-go/` prefix is
 /// stripped to the canonical bare id.
-pub const CONFIG_SCHEMA: u32 = 9;
+/// Schema ≥10: opt-in OMP-style `[prewalk]` + `[compaction]` remote endpoint
+/// (defaults off - existing installs keep local summarization).
+pub const CONFIG_SCHEMA: u32 = 10;
 
 const RETIRED_PROVIDER_IDS: &[&str] = &[
     "anyscale",
@@ -176,6 +178,64 @@ pub struct Config {
     /// OptMem permanent memory (upstream-pure ~/.optmem; default on).
     #[serde(default)]
     pub optmem: OptmemConfig,
+    /// OMP-style prewalk: strong model plans + todos, then switch to a cheap
+    /// model at the first edit/write. Default **off**.
+    #[serde(default)]
+    pub prewalk: PrewalkConfig,
+    /// Compaction remote summarization (OMP `compaction.remoteEndpoint` shape).
+    /// Default off - local model summarization unchanged.
+    #[serde(default)]
+    pub compaction: CompactionConfig,
+}
+
+/// `[prewalk]` — plan on the active model, implement on a cheap/smol model.
+///
+/// Mirrors Oh My Pi `prewalk.enabled` / `--prewalk-into`. Off by default so
+/// existing sessions never change mid-turn without an explicit opt-in.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrewalkConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Target model after the first write/edit once todos exist. Empty → resolve
+    /// from `NUR_PREWALK_MODEL` / `OMP_SMOL_MODEL` / OMP `modelRoles.smol`.
+    #[serde(default)]
+    pub into: String,
+}
+
+impl Default for PrewalkConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            into: String::new(),
+        }
+    }
+}
+
+/// `[compaction]` — optional remote summary endpoint (OMP-compatible).
+///
+/// When `remote_enabled` and `remote_endpoint` are set, nur POSTs
+/// `{ systemPrompt, prompt }` and expects `{ summary }`. On any failure it
+/// falls back to the local model summarizer - never breaks a turn.
+///
+/// Full image **snapcompact** archival stays in OMP; nur ports the remote
+/// summarization path only.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactionConfig {
+    /// Use `remote_endpoint` when set. Default false.
+    #[serde(default)]
+    pub remote_enabled: bool,
+    /// POST URL for remote summarization. Also `NUR_COMPACT_REMOTE_ENDPOINT`.
+    #[serde(default)]
+    pub remote_endpoint: String,
+}
+
+impl Default for CompactionConfig {
+    fn default() -> Self {
+        Self {
+            remote_enabled: false,
+            remote_endpoint: String::new(),
+        }
+    }
 }
 
 /// `[headroom]` — compress large tool results before they enter model context.
@@ -340,6 +400,8 @@ impl Default for Config {
             theme: None,
             headroom: HeadroomConfig::default(),
             optmem: OptmemConfig::default(),
+            prewalk: PrewalkConfig::default(),
+            compaction: CompactionConfig::default(),
         }
     }
 }

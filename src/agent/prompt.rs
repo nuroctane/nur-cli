@@ -286,7 +286,7 @@ plur, ruflo, skill, memory, todo_write, submit_plan, agent
   (default on; disable via [headroom] enabled=false). Tool: status|doctor|compress.
 - ruflo: vector memory + swarm harness. Global DB at ~/.nur/ruflo/. Prefer plur for preferences,
   ruflo for pattern/embedding memory, graphify for code structure.
-- egaki: generate images/videos (egaki CLI). login --provider chatgpt for ChatGPT sub.
+        - **egaki** - image/video/speech gen (`egaki` CLI). Prefer `egaki login --provider chatgpt` or `xai-oauth`; BYOK via google/openai/fal. Then image|video|speech → `.nur/media/` → look.
   Writes .nur/media/ - then look. Prefer over guessing pixels.
 - fractal: hierarchical agent loops in git worktrees (Unix). Unattended nodes bypass
   approvals - confirm with the user before node start. Factory overnight prefers fractal.

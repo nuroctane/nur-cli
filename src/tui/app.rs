@@ -239,8 +239,11 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/optmem", "OptMem permanent memory (~/.optmem): wake | note | nap | recall"),
     ("/memo", "alias of /optmem"),
     ("/headroom", "context compression status / doctor (inline default on)"),
+    ("/prewalk", "OMP-style: strong model plans, then smol at first edit - on|off|status|into <model>|reset"),
     ("/egaki", "image/video gen via egaki (login --provider chatgpt supported)"),
     ("/image", "alias: egaki image generation"),
+    ("/tb", "terminal-browser: open|ls|action|setup (Windows host fallback ok)"),
+    ("/terminal-browser", "alias of /tb"),
     ("/factory-overnight", "fractal-first overnight factory from HANDOFF.md"),
     ("/ruflo", "vector memory / swarm: status | search | store"),
     ("/ecosystem", "ecosystem readiness (graphify · plur · ruflo · excalidraw · …)"),
@@ -1723,6 +1726,8 @@ pub struct App {
     pub tool_host: ToolHost,
     pub permissions: SharedPermissions,
     pub todos: SharedTodos,
+    /// OMP-style prewalk model override for this TUI session (shared across turns).
+    pub prewalk_override: Arc<Mutex<Option<String>>>,
 
     pub cells: Vec<Cell>,
     tool_cells: HashMap<u64, usize>,
@@ -1969,6 +1974,10 @@ pub struct App {
     /// A foreground child program repainted the screen; ratatui must discard its
     /// previous buffer before the next draw or the diff renders nothing.
     pub needs_full_redraw: bool,
+    /// Last frame's layout fingerprint `(w, h, busy_h, input_body, sg_drawn, sg_w)`.
+    /// When it changes, `ui::draw` Clears the frame so shrinking regions cannot
+    /// leave ghost glyphs (`Block::style` alone does not blank cell symbols).
+    pub last_layout_sig: Option<(u16, u16, u16, u16, bool, u16)>,
 
     pub busy: bool,
     /// True after Esc/Ctrl+C until Done arrives - spinners show "cancelling…".
@@ -2275,6 +2284,7 @@ pub async fn run_tui(
         tool_host: ToolHost::default(),
         permissions,
         todos: agent::shared_empty(),
+        prewalk_override: Arc::new(Mutex::new(None)),
         cells: vec![Cell::Banner],
         tool_cells: HashMap::new(),
         scroll_from_bottom: 0,
@@ -2385,6 +2395,7 @@ pub async fn run_tui(
         sidegraph_body: ratatui::layout::Rect::default(),
         sidegraph_narrow: false,
         needs_full_redraw: false,
+        last_layout_sig: None,
         busy: false,
         cancelling: false,
         turn_kind: TurnMode::Chat,
@@ -2766,7 +2777,12 @@ pub async fn run_tui(
                         app.on_mouse(m);
                         dirty = true;
                     }
-                    Event::Resize(_, _) => dirty = true,
+                    Event::Resize(_, _) => {
+                        // ConPTY / Windows hosts often leave ghost cells after a
+                        // size change unless ratatui discards its prior buffer.
+                        app.needs_full_redraw = true;
+                        dirty = true;
+                    }
                     Event::FocusLost => {
                         // Mouse-up outside the window never arrives - reset
                         // drag/select so hover isn't misread as a held button.
@@ -2775,8 +2791,12 @@ pub async fn run_tui(
                     }
                     Event::FocusGained => {
                         // Re-arm mouse tracking after host/focus quirks.
+                        // Alt-tab / host redraw can desync the cell buffer from
+                        // what is on screen (and leave image-protocol pixels).
                         enable_mouse();
                         last_mouse_rearm = Instant::now();
+                        app.needs_full_redraw = true;
+                        dirty = true;
                     }
                     _ => {}
                 }
@@ -2836,6 +2856,7 @@ pub async fn run_tui(
         // comes back blank until something happens to resize the window.
         if app.needs_full_redraw {
             app.needs_full_redraw = false;
+            app.last_layout_sig = None;
             let _ = terminal.clear();
             dirty = true;
         }
@@ -3299,6 +3320,7 @@ impl App {
     }
 
     fn close_peek(&mut self) {
+        let had_peek = self.peek_open.is_some() || self.peek_swarm.is_some();
         self.peek_open = None;
         self.peek_swarm = None;
         self.peek_frozen = None;
@@ -3310,6 +3332,12 @@ impl App {
         self.peek_trace_expanded.clear();
         self.peek_trace_focus = None;
         self.peek_trace_hits.clear();
+        if had_peek {
+            // Kitty/iTerm image pixels sit outside the cell buffer; drop the
+            // protocol cache and force a terminal clear so they do not linger.
+            self.img_cache.clear();
+            self.needs_full_redraw = true;
+        }
     }
 
     fn open_stable_peek(&mut self, idx: usize) {
@@ -5846,6 +5874,7 @@ impl App {
         if let Some(picker) = &mut self.theme_picker {
             picker.sel = idx;
             let _ = theme::set_theme(picker.chosen());
+            self.needs_full_redraw = true;
         }
     }
 
@@ -5866,6 +5895,7 @@ impl App {
             return;
         };
         let _ = theme::set_theme(&picker.original);
+        self.needs_full_redraw = true;
         if picker.onboarding {
             // Esc means "keep the current/default look", not "block setup".
             self.cfg.theme = Some(picker.original);
@@ -5883,6 +5913,9 @@ impl App {
         let id = picker.chosen().to_string();
         let _ = theme::set_theme(&id);
         self.cfg.theme = Some(id.clone());
+        // Theme restyles every cell; force a buffer reset so ConPTY does not
+        // leave prior-theme glyphs with mismatched attributes.
+        self.needs_full_redraw = true;
         match crate::config::save_config(&self.cfg) {
             Ok(()) => self.push_note(Tone::Mode, format!("theme · {id} · saved")),
             Err(e) => self.push_error(format!("could not save theme: {e}")),
@@ -8132,8 +8165,13 @@ impl App {
                 return;
             }
             "hide" | "close" => {
-                self.sidegraph_open = false;
-                self.sidegraph_live = false;
+                if self.sidegraph_open {
+                    self.sidegraph_open = false;
+                    self.sidegraph_live = false;
+                    self.sidegraph_cache_lines.clear();
+                    self.sidegraph_cache_fp = 0;
+                    self.needs_full_redraw = true;
+                }
                 self.push_note(Tone::Neutral, "sidegraph · panel closed".into());
                 return;
             }
@@ -8213,6 +8251,9 @@ impl App {
         if self.sidegraph_open && arg.is_empty() {
             self.sidegraph_open = false;
             self.sidegraph_live = false;
+            self.sidegraph_cache_lines.clear();
+            self.sidegraph_cache_fp = 0;
+            self.needs_full_redraw = true;
             self.push_note(Tone::Neutral, "sidegraph · panel closed".into());
             return;
         }
@@ -8222,12 +8263,18 @@ impl App {
         let model = self.build_sidegraph_model();
         let has_query = !model.query.is_empty();
         self.sidegraph_model = Some(model);
+        let was_open = self.sidegraph_open;
         self.sidegraph_open = true;
         self.sidegraph_live = true;
         self.sidegraph_scroll = 0;
         self.sidegraph_scroll_x = 0;
         self.sidegraph_user_panned = false;
         self.sidegraph_last_click = None;
+        if !was_open {
+            // Horizontal split changes; force a clean buffer so the old
+            // full-width transcript does not ghost under the new panel.
+            self.needs_full_redraw = true;
+        }
         self.push_note(
             Tone::Neutral,
             if has_query {
@@ -8351,6 +8398,7 @@ impl App {
             permissions: self.permissions.clone(),
             hooks: agent::hooks::HooksConfig::load(),
             is_subagent: false,
+            prewalk_override: self.prewalk_override.clone(),
         }
     }
 

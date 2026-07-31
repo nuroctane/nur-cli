@@ -110,6 +110,18 @@ pub const OPENCODE_ZEN_BASE_URL: &str = "https://opencode.ai/zen/v1";
 pub const OPENCODE_GO_BASE_URL: &str = "https://opencode.ai/zen/go/v1";
 /// Poolside Platform inference. Self-hosted deployments use `https://<domain>/openai/v1`.
 pub const POOLSIDE_BASE_URL: &str = "https://inference.poolside.ai/v1";
+/// Cursor Agent CLI default endpoint (`CURSOR_API_ENDPOINT`). ConnectRPC/agent
+/// surface - not OpenAI Chat Completions. See [`cursor_endpoint_is_agent_rpc`].
+pub const CURSOR_AGENT_ENDPOINT: &str = "https://api2.cursor.sh";
+
+/// True when `base_url` is Cursor's Agent RPC host (cannot serve nur CC chat).
+pub fn cursor_endpoint_is_agent_rpc(base_url: &str) -> bool {
+    let b = base_url.trim().trim_end_matches('/').to_ascii_lowercase();
+    b == CURSOR_AGENT_ENDPOINT
+        || b == "https://api2.cursor.sh/v1"
+        || b.ends_with("api2.cursor.sh")
+        || b.ends_with("api2.cursor.sh/v1")
+}
 
 /// Docs that quote the provider count verbatim. Named here so the assertion in
 /// `catalog_is_well_formed` can tell you exactly what to update when it trips.
@@ -1142,9 +1154,9 @@ pub const PROVIDERS: &[Provider] = &[
         default_model: "claude-sonnet-5",
         env_key: "OPENCODE_API_KEY",
         style: CC,
-        note: "coding-model gateway",
+        note: "coding-model gateway · opencode auth login",
         key_optional: false,
-        browser_auth: false,
+        browser_auth: true,
     },
     Provider {
         id: "github-models",
@@ -1169,6 +1181,20 @@ pub const PROVIDERS: &[Provider] = &[
         env_key: "COPILOT_GITHUB_TOKEN",
         style: CC,
         note: "Copilot subscription · gh OAuth or fine-grained PAT",
+        key_optional: false,
+        browser_auth: true,
+    },
+    Provider {
+        id: "cursor",
+        name: "Cursor",
+        // Catalog placeholder = Cursor Agent host. Nur does not call this as
+        // OpenAI Chat Completions; chat runs through `cursor-agent -p` after
+        // `cursor-agent login` (no pasted API key required).
+        base_url: CURSOR_AGENT_ENDPOINT,
+        default_model: "auto",
+        env_key: "CURSOR_API_KEY",
+        style: CC,
+        note: "cursor-agent login · CLI chat (no API key required)",
         key_optional: false,
         browser_auth: true,
     },
@@ -1396,6 +1422,7 @@ fn resolve_provider_token(q: &str) -> Option<&'static Provider> {
         // Aggregators / routers
         "openrouter" | "or" => "openrouter",
         "opencode" | "zen" => "opencode",
+        "cursor" | "cursor-agent" | "cursoragent" => "cursor",
         "groq" => "groq",
         "cerebras" => "cerebras",
         "together" | "together-ai" | "togetherai" => "together",
@@ -1437,6 +1464,8 @@ const TEXT_SCAN_ALIASES: &[&str] = &[
     "moonshot",
     "anthropic",
     "openai",
+    "cursor-agent",
+    "cursor",
     "gemini",
     "claude",
     "sonnet",
@@ -1737,6 +1766,8 @@ pub fn oauth_browser_provider_ids() -> &'static [&'static str] {
         "azure",
         "github-models",
         "github-copilot",
+        "cursor",
+        "opencode",
     ]
 }
 
@@ -1915,7 +1946,7 @@ mod tests {
         // `PROVIDER_COUNT_DOC_SITES` below too.
         assert_eq!(
             PROVIDERS.len(),
-            61,
+            62,
             "provider count changed — update the docs that quote it: {}",
             PROVIDER_COUNT_DOC_SITES.join(", ")
         );
@@ -2299,6 +2330,20 @@ mod tests {
     }
 
     #[test]
+    fn cursor_default_endpoint_is_agent_rpc_not_openai_compat() {
+        let p = by_id("cursor").expect("cursor");
+        assert!(cursor_endpoint_is_agent_rpc(p.base_url));
+        assert!(cursor_endpoint_is_agent_rpc("https://api2.cursor.sh/"));
+        assert!(!cursor_endpoint_is_agent_rpc("http://127.0.0.1:32124/v1"));
+        assert!(
+            p.note.contains("CLI") || p.note.contains("cursor-agent"),
+            "catalog note should advertise CLI chat via cursor-agent"
+        );
+        assert!(!p.key_optional);
+        assert!(p.browser_auth);
+    }
+
+    #[test]
     fn advertised_browser_auth_is_the_exact_supported_set() {
         assert_eq!(
             oauth_browser_provider_ids(),
@@ -2312,6 +2357,8 @@ mod tests {
                 "azure",
                 "github-models",
                 "github-copilot",
+                "cursor",
+                "opencode",
             ]
         );
         assert!(!by_id("huggingface").unwrap().browser_auth);

@@ -438,7 +438,9 @@ Type these inside the `nur` TUI. Aliases are shown in the same row.
 | `/fractal` | Recursive agent tree — hierarchical loops in git worktrees: `init` · `node list` · `node status <name>` · `node start <name>` · `attach <name>` · `open`. **`open`** launches fractal's own full-screen dashboard: nur hands the terminal over and restores it when you quit. ⚠️ **Unix only** — see below. |
 | `/optmem` · `/memo` | OptMem permanent memory (`~/.optmem`): `wake` · `note` · `nap` · `recall` · `doctor` |
 | `/headroom` | Context compression doctor (inline tool-result compress on by default) |
+| `/prewalk` | OMP-style: strong model plans, then cheap/smol at first edit after todos (`on` \| `off` \| `status` \| `into <model>` \| `reset`). Off by default. |
 | `/egaki` · `/image` | Image/video gen via egaki (`login --provider chatgpt` supported) |
+| `/tb` · `/terminal-browser` | terminal-browser: `open` \| `ls` \| `action` \| `setup` (Windows host fallback via agent-browser-cli) |
 | `/factory-overnight` | Fractal-first overnight factory from `HANDOFF.md` (Unix preferred) |
 | `/pen` · `/drawings` · `/penecho` | Penecho canvas — ink, MathJax, plots, animations; `/drawings` lists saved canvases |
 | `/draw` | Open / build **tldraw offline** boards (`/draw <file.tldraw>`, `/draw install`, `/draw <idea>`). New static boards save to the **Desktop**. Opening a board auto-enables document scripts (canvas API `script-workspace` → applied) for interactive agent-shape files. |

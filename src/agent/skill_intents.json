@@ -26362,6 +26362,30 @@
       ]
     },
     {
+      "name": "terminal-browser",
+      "description": "In-terminal Chromium via terminal-browser. Show a website or local HTML beside the agent, then drive the open tab with snapshot/click/fill. On Windows uses host fallback through agent-browser-cli.",
+      "path": "C:\\Users\\david\\.nur\\skills\\terminal-browser\\SKILL.md",
+      "triggers": [
+        "terminal browser",
+        "/terminal-browser",
+        "/tb",
+        "terminal-browser",
+        "in terminal browser",
+        "side by side browser"
+      ],
+      "keywords": [
+        "terminal",
+        "browser",
+        "chromium",
+        "snapshot",
+        "kitty",
+        "split",
+        "html",
+        "localhost",
+        "tb"
+      ]
+    },
+    {
       "name": "terracotta",
       "description": "A sun-baked, clay-toned editorial interface built on warm cream surfaces, ink-brown headlines set in a display serif, and a single terracotta accent.",
       "path": "C:\\Users\\david\\.nur\\skills\\terracotta\\SKILL.md",

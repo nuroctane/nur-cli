@@ -200,6 +200,7 @@ pub async fn run_gateway(
         permissions: agent::SharedPermissions::load(&cwd),
         hooks: agent::hooks::HooksConfig::load(),
         is_subagent: false,
+        prewalk_override: Arc::new(Mutex::new(None)),
     });
 
     let cancel = tokio_util::sync::CancellationToken::new();

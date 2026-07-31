@@ -59,6 +59,7 @@ pub async fn run_subagent(
         permissions: super::SharedPermissions::load(&cwd),
         hooks: super::hooks::HooksConfig::load(),
         is_subagent: true,
+        prewalk_override: Arc::new(Mutex::new(None)),
     });
 
     let session = Session::new(&cfg.model, &cwd.display().to_string());

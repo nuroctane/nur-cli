@@ -58,6 +58,8 @@ pub fn login_browser(provider_id: &str, tx: ProgressTx, cancel: CancelFlag) {
         "antigravity" => antigravity::login(&tx, &cancel),
         "azure" => azure::login(&tx, &cancel),
         "github-models" | "github-copilot" => github::login(provider_id, &tx, &cancel),
+        "cursor" => cursor::login(&tx, &cancel),
+        "opencode" => opencode::login(&tx, &cancel),
         other => Err(MuseError::Other(format!(
             "browser login not supported for '{other}'"
         ))),
@@ -70,13 +72,16 @@ pub fn login_browser(provider_id: &str, tx: ProgressTx, cancel: CancelFlag) {
     }
 }
 
-/// Import tokens from a first-party CLI session file when present.
+/// Import tokens from a first-party CLI session / OMP when present.
 ///
-/// This is the **t3 fallback** path used by `auth::resolve_api_key_for` when a
-/// provider has no API key configured. If a vendor CLI (Claude, Codex, Cursor,
-/// etc.) is logged in, its session is reused transiently.
+/// Used by `auth::resolve_api_key_for` and failover **only after** nur-saved
+/// credentials (auth.json, per-provider keys/sessions, env) have already been
+/// tried and found empty. Order inside this import path:
+/// 1. Vendor CLI (Claude, Codex, Cursor, OpenCode, Grok, Kimi, Antigravity, …)
+/// 2. **OMP** (`omp token <provider>`) for every catalog id - universal last
+///    resort so a login in Oh My Pi covers nur without re-pasting keys.
 pub fn import_existing_session(provider_id: &str) -> Result<Option<OAuthTokens>> {
-    match provider_id {
+    let specific = match provider_id {
         "openai" => openai::import_codex_cli(),
         "xai" => xai::import_grok_cli(),
         "kimi" => kimi::import_kimi_cli(),
@@ -87,126 +92,557 @@ pub fn import_existing_session(provider_id: &str) -> Result<Option<OAuthTokens>>
         // Google / Antigravity: try Antigravity CLI first (Windows credman + file),
         // then gcloud ADC.
         "google" | "antigravity" | "google-oauth" => {
-            // Antigravity -> more recent than gcloud for Gemini users
             if let Ok(Some(t)) = antigravity::import_existing() {
-                return Ok(Some(t));
-            }
-            // gcloud fallback
-            match google::import_existing() {
-                Ok(Some(t)) => Ok(Some(t)),
-                Ok(None) => Ok(None),
-                Err(_) => Ok(None),
+                Ok(Some(t))
+            } else {
+                match google::import_existing() {
+                    Ok(Some(t)) => Ok(Some(t)),
+                    Ok(None) => Ok(None),
+                    Err(_) => Ok(None),
+                }
             }
         }
         _ => Ok(None),
+    };
+    match specific {
+        Ok(Some(tokens)) => Ok(Some(tokens)),
+        Ok(None) | Err(_) => {
+            // Universal OMP bridge — never fail the import chain on omp errors.
+            match super::omp_bridge::import_omp_token(provider_id) {
+                Ok(Some(tokens)) => Ok(Some(tokens)),
+                _ => Ok(None),
+            }
+        }
     }
 }
 
 pub mod cursor {
     use super::*;
+    use std::io::BufRead;
     use std::path::PathBuf;
 
-    pub fn import_cursor_cli() -> Result<Option<OAuthTokens>> {
-        // t3code-style probing: respect CURSOR_AGENT_HOME, then ~/.cursor, then ~/.config/cursor
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        let candidates = [
-            std::env::var("CURSOR_AGENT_HOME")
-                .ok()
-                .map(PathBuf::from)
-                .unwrap_or_else(|| home.join(".cursor")),
-            home.join(".cursor"),
-            home.join(".config").join("cursor"),
-        ];
-        for dir in candidates {
-            if !dir.exists() {
-                continue;
-            }
-            // Cursor stores auth in various files — probe without reading secrets if possible
-            for file in ["auth.json", "config.json", "mcp.json"] {
-                let p = dir.join(file);
-                if p.exists() {
-                    if let Ok(text) = std::fs::read_to_string(&p) {
-                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-                            // Try to find api key or token
-                            if let Some(key) = v
-                                .get("api_key")
-                                .or_else(|| v.get("apiKey"))
-                                .or_else(|| v.get("token"))
-                                .or_else(|| v.get("access_token"))
-                                .and_then(|x| x.as_str())
-                            {
-                                if !key.trim().is_empty() {
-                                    return Ok(Some(OAuthTokens {
-                                        access_token: key.to_string(),
-                                        refresh_token: None,
-                                        expires_at: None,
-                                        meta: Some(OauthMeta {
-                                            issuer: "cursor".into(),
-                                            client_id: "cursor-cli".into(),
-                                            extra: serde_json::json!({"imported_from": "cursor-cli", "path": p.display().to_string()}),
-                                        }),
-                                    }));
-                                }
-                            }
-                        }
+    /// Prefer `cursor-agent` only. Bare `agent` on PATH is often Grok's binary.
+    /// On Windows prefer `.cmd` / `.exe` over `.ps1` (CreateProcess cannot run
+    /// PowerShell scripts directly).
+    fn cursor_agent_bin() -> Option<PathBuf> {
+        let path = std::env::var_os("PATH")?;
+        for dir in std::env::split_paths(&path) {
+            #[cfg(windows)]
+            {
+                for name in ["cursor-agent.cmd", "cursor-agent.exe", "cursor-agent.ps1"] {
+                    let p = dir.join(name);
+                    if p.is_file() {
+                        return Some(p);
                     }
                 }
             }
+            let c = dir.join("cursor-agent");
+            if c.is_file() {
+                return Some(c);
+            }
+        }
+        None
+    }
+
+    /// Windows-safe spawn: `.cmd`/`.bat` via `cmd /D /C`, `.ps1` via powershell -File.
+    fn spawn_cursor_agent(bin: &PathBuf, args: &[&str]) -> std::io::Result<std::process::Child> {
+        #[cfg(windows)]
+        {
+            let lower = bin.to_string_lossy().to_ascii_lowercase();
+            let mut cmd = if lower.ends_with(".cmd") || lower.ends_with(".bat") {
+                let mut c = Command::new("cmd.exe");
+                c.arg("/D").arg("/C").arg(bin);
+                for a in args {
+                    c.arg(a);
+                }
+                c
+            } else if lower.ends_with(".ps1") {
+                let mut c = Command::new("powershell.exe");
+                c.args([
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                ])
+                .arg(bin);
+                for a in args {
+                    c.arg(a);
+                }
+                c
+            } else {
+                let mut c = Command::new(bin);
+                c.args(args);
+                c
+            };
+            cmd.stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+        }
+        #[cfg(not(windows))]
+        {
+            Command::new(bin)
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+        }
+    }
+
+    fn looks_like_cursor_secret(s: &str) -> bool {
+        let t = s.trim();
+        if t.len() < 20 {
+            return false;
+        }
+        // Documented Agent API keys often use a crsr_ prefix; also accept
+        // long opaque bearer-looking strings from auth.json accessToken fields.
+        t.starts_with("crsr_")
+            || t.starts_with("key_")
+            || (t.len() >= 32 && !t.contains(' ') && !t.contains('\n'))
+    }
+
+    fn token_from_json(v: &serde_json::Value) -> Option<String> {
+        // Prefer explicit API-key / access-token fields; avoid bare `token`
+        // which often holds unrelated IDs in Cursor config blobs.
+        const KEYS: &[&str] = &["api_key", "apiKey", "access_token", "accessToken"];
+        for k in KEYS {
+            if let Some(s) = v.get(*k).and_then(|x| x.as_str()) {
+                if looks_like_cursor_secret(s) {
+                    return Some(s.trim().to_string());
+                }
+            }
+        }
+        for nest in ["auth", "credentials"] {
+            if let Some(inner) = v.get(nest) {
+                if let Some(t) = token_from_json(inner) {
+                    return Some(t);
+                }
+            }
+        }
+        None
+    }
+
+    fn tokens_from_key(access: String, via: &str, path: Option<&str>) -> OAuthTokens {
+        OAuthTokens {
+            access_token: access,
+            // Marker so refresh re-imports from the CLI / env.
+            refresh_token: Some("cursor-agent".into()),
+            expires_at: None,
+            meta: Some(OauthMeta {
+                issuer: "cursor".into(),
+                client_id: "cursor-agent".into(),
+                extra: serde_json::json!({
+                    "imported_from": via,
+                    "path": path.unwrap_or(""),
+                }),
+            }),
+        }
+    }
+
+    /// Stream stdout/stderr line-by-line and open the first https URL promptly.
+    fn watch_login_output(reader: impl Read + Send + 'static, tx: ProgressTx) {
+        thread::spawn(move || {
+            let mut lines = std::io::BufReader::new(reader).lines();
+            while let Some(Ok(line)) = lines.next() {
+                for word in line.split_whitespace() {
+                    let url = word.trim_matches(|c: char| c == ')' || c == '(' || c == '"' || c == '\'');
+                    if url.starts_with("https://") {
+                        send(&tx, BrowserLoginProgress::OpenUrl(url.to_string()));
+                        let _ = open_browser(url);
+                        return;
+                    }
+                }
+                let snippet: String = line.chars().take(160).collect();
+                if !snippet.trim().is_empty() {
+                    send(&tx, BrowserLoginProgress::Status(snippet));
+                }
+            }
+        });
+    }
+
+    /// Import credentials from `CURSOR_API_KEY`, Cursor Agent session files, or
+    /// a live `cursor-agent status` login (OS keychain - no pasted key).
+    ///
+    /// Does **not** treat `mcp.json` / `cli-config.json` as auth (those are
+    /// MCP servers and UI settings).
+    pub fn import_cursor_cli() -> Result<Option<OAuthTokens>> {
+        if let Ok(key) = std::env::var("CURSOR_API_KEY") {
+            let key = key.trim().to_string();
+            if !key.is_empty() {
+                return Ok(Some(tokens_from_key(key, "CURSOR_API_KEY", None)));
+            }
+        }
+
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let mut dirs = Vec::new();
+        if let Ok(dir) = std::env::var("CURSOR_AGENT_HOME") {
+            dirs.push(PathBuf::from(dir));
+        }
+        dirs.push(home.join(".cursor"));
+        dirs.push(home.join(".config").join("cursor"));
+        // Cursor Agent `getAuthFilePath`: Windows → `%APPDATA%\<TitleCase>\auth.json`
+        // (e.g. Cursor / Cursor-agent). macOS → `~/.cursor/auth.json` (already above).
+        if let Some(appdata) = std::env::var_os("APPDATA").map(PathBuf::from) {
+            dirs.push(appdata.join("Cursor"));
+            dirs.push(appdata.join("Cursor-agent"));
+            dirs.push(appdata.join("Cursor Agent"));
+        }
+
+        for dir in dirs {
+            if !dir.exists() {
+                continue;
+            }
+            // auth.json (legacy / post-login) first; skip mcp.json and
+            // cli-config.json (not credential stores).
+            for file in ["auth.json", "cursor-auth.json"] {
+                let p = dir.join(file);
+                if !p.is_file() {
+                    continue;
+                }
+                let Ok(text) = std::fs::read_to_string(&p) else {
+                    continue;
+                };
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+                    continue;
+                };
+                if let Some(key) = token_from_json(&v) {
+                    return Ok(Some(tokens_from_key(
+                        key,
+                        "cursor-cli",
+                        Some(&p.display().to_string()),
+                    )));
+                }
+            }
+        }
+
+        // Keychain / platform login: `cursor-agent status` is enough (t3code).
+        if let Some(tokens) = crate::api::cursor_cli::session_tokens_from_cli() {
+            return Ok(Some(tokens));
         }
         Ok(None)
+    }
+
+    /// Sign in through the official Cursor Agent CLI (`cursor-agent login`).
+    pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
+        if let Ok(Some(t)) = import_cursor_cli() {
+            send(
+                tx,
+                BrowserLoginProgress::Status("using existing Cursor Agent session".into()),
+            );
+            return Ok(t);
+        }
+
+        let bin = cursor_agent_bin().ok_or_else(|| {
+            MuseError::Other(
+                "cursor-agent not found on PATH. Install Cursor Agent (https://cursor.com/docs/cli), open a new terminal, then retry - or paste a CURSOR_API_KEY via /login.".into(),
+            )
+        })?;
+
+        send(
+            tx,
+            BrowserLoginProgress::Status(
+                "launching Cursor browser login (cursor-agent login)…".into(),
+            ),
+        );
+        // Do not hardcode cursor.com/login - wait for the CLI's device/auth URL.
+
+        let mut child = spawn_cursor_agent(&bin, &["login"]).map_err(|e| {
+            MuseError::Other(format!(
+                "failed to launch cursor-agent ({e}). Install Cursor Agent, or paste CURSOR_API_KEY."
+            ))
+        })?;
+
+        if let Some(err) = child.stderr.take() {
+            watch_login_output(err, tx.clone());
+        }
+        if let Some(out) = child.stdout.take() {
+            watch_login_output(out, tx.clone());
+        }
+
+        loop {
+            if cancel.is_cancelled() {
+                let _ = child.kill();
+                return Err(MuseError::Other("login cancelled".into()));
+            }
+            match child.try_wait() {
+                Ok(Some(status)) if status.success() => break,
+                Ok(Some(status)) => {
+                    return Err(MuseError::Other(format!(
+                        "cursor-agent login failed (exit {status}). Paste CURSOR_API_KEY as fallback."
+                    )));
+                }
+                Ok(None) => thread::sleep(Duration::from_millis(200)),
+                Err(e) => return Err(MuseError::Other(e.to_string())),
+            }
+        }
+
+        send(
+            tx,
+            BrowserLoginProgress::Status("importing Cursor Agent session…".into()),
+        );
+        match import_cursor_cli()? {
+            Some(t) => Ok(t),
+            None => Err(MuseError::Other(
+                "cursor-agent login finished, but nur still sees you as logged out \
+                 (`cursor-agent status`). Run `cursor-agent login` again in a terminal, \
+                 or set CURSOR_API_KEY as a fallback."
+                    .into(),
+            )),
+        }
+    }
+
+    pub fn refresh(_auth: &Auth, _refresh: &str) -> Result<OAuthTokens> {
+        import_cursor_cli()?.ok_or_else(|| {
+            MuseError::Other(
+                "Cursor session expired or missing. Run `cursor-agent login`, or set CURSOR_API_KEY."
+                    .into(),
+            )
+        })
     }
 }
 
 pub mod opencode {
     use super::*;
+    use std::io::BufRead;
     use std::path::PathBuf;
 
-    pub fn import_opencode_cli() -> Result<Option<OAuthTokens>> {
-        // t3code-style: OPENCODE_HOME, then ~/.config/opencode
+    /// OpenCode stores credentials at `$XDG_DATA_HOME/opencode/auth.json`
+    /// (default `~/.local/share/opencode/auth.json`) as a map of
+    /// `providerId -> { type: api|oauth|wellknown, key|access|… }`.
+    /// Prefer `opencode` / `opencode-go` for nur's OpenCode gateway provider.
+    fn auth_json_paths() -> Vec<PathBuf> {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        let candidates = [
-            std::env::var("OPENCODE_HOME")
-                .ok()
-                .map(PathBuf::from)
-                .unwrap_or_else(|| home.join(".config").join("opencode")),
-            home.join(".config").join("opencode"),
-            home.join(".opencode"),
-        ];
-        for dir in candidates {
-            if !dir.exists() {
+        let mut out = Vec::new();
+        if let Ok(dir) = std::env::var("OPENCODE_HOME") {
+            out.push(PathBuf::from(dir).join("auth.json"));
+        }
+        if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
+            out.push(PathBuf::from(xdg).join("opencode").join("auth.json"));
+        }
+        out.push(home.join(".local").join("share").join("opencode").join("auth.json"));
+        // Legacy / config-dir guesses (older installs).
+        out.push(home.join(".config").join("opencode").join("auth.json"));
+        out.push(home.join(".opencode").join("auth.json"));
+        out
+    }
+
+    fn token_from_entry(entry: &serde_json::Value) -> Option<(String, Option<String>)> {
+        let ty = entry.get("type").and_then(|t| t.as_str()).unwrap_or("api");
+        match ty {
+            "api" | "wellknown" => {
+                let key = entry
+                    .get("key")
+                    .or_else(|| entry.get("token"))
+                    .and_then(|x| x.as_str())?
+                    .trim();
+                if key.is_empty() {
+                    return None;
+                }
+                Some((key.to_string(), None))
+            }
+            "oauth" => {
+                let access = entry
+                    .get("access")
+                    .or_else(|| entry.get("access_token"))
+                    .and_then(|x| x.as_str())?
+                    .trim();
+                if access.is_empty() {
+                    return None;
+                }
+                let refresh = entry
+                    .get("refresh")
+                    .or_else(|| entry.get("refresh_token"))
+                    .and_then(|x| x.as_str())
+                    .map(|s| s.to_string());
+                Some((access.to_string(), refresh))
+            }
+            _ => None,
+        }
+    }
+
+    pub fn import_opencode_cli() -> Result<Option<OAuthTokens>> {
+        if let Ok(key) = std::env::var("OPENCODE_API_KEY") {
+            let key = key.trim().to_string();
+            if !key.is_empty() {
+                return Ok(Some(OAuthTokens {
+                    access_token: key,
+                    refresh_token: Some("opencode".into()),
+                    expires_at: None,
+                    meta: Some(OauthMeta {
+                        issuer: "opencode".into(),
+                        client_id: "opencode-cli".into(),
+                        extra: serde_json::json!({"imported_from": "OPENCODE_API_KEY"}),
+                    }),
+                }));
+            }
+        }
+
+        for p in auth_json_paths() {
+            if !p.is_file() {
                 continue;
             }
-            for file in ["auth.json", "config.json", "opencode.json"] {
-                let p = dir.join(file);
-                if p.exists() {
-                    if let Ok(text) = std::fs::read_to_string(&p) {
-                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-                            if let Some(key) = v
-                                .get("api_key")
-                                .or_else(|| v.get("apiKey"))
-                                .or_else(|| v.get("token"))
-                                .or_else(|| v.get("access_token"))
-                                .and_then(|x| x.as_str())
-                            {
-                                if !key.trim().is_empty() {
-                                    return Ok(Some(OAuthTokens {
-                                        access_token: key.to_string(),
-                                        refresh_token: None,
-                                        expires_at: None,
-                                        meta: Some(OauthMeta {
-                                            issuer: "opencode".into(),
-                                            client_id: "opencode-cli".into(),
-                                            extra: serde_json::json!({"imported_from": "opencode-cli", "path": p.display().to_string()}),
-                                        }),
-                                    }));
-                                }
-                            }
+            let Ok(text) = std::fs::read_to_string(&p) else {
+                continue;
+            };
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+                continue;
+            };
+            // Modern shape: { "opencode": { "type":"api", "key":"…" }, … }
+            if let Some(map) = v.as_object() {
+                for id in ["opencode", "opencode-go"] {
+                    if let Some(entry) = map.get(id) {
+                        if let Some((access, refresh)) = token_from_entry(entry) {
+                            return Ok(Some(OAuthTokens {
+                                access_token: access,
+                                refresh_token: refresh.or_else(|| Some("opencode".into())),
+                                expires_at: None,
+                                meta: Some(OauthMeta {
+                                    issuer: "opencode".into(),
+                                    client_id: "opencode-cli".into(),
+                                    extra: serde_json::json!({
+                                        "imported_from": "opencode-cli",
+                                        "path": p.display().to_string(),
+                                        "provider_entry": id,
+                                    }),
+                                }),
+                            }));
                         }
                     }
                 }
             }
+            // Legacy flat key
+            if let Some(key) = v
+                .get("api_key")
+                .or_else(|| v.get("apiKey"))
+                .and_then(|x| x.as_str())
+            {
+                if !key.trim().is_empty() {
+                    return Ok(Some(OAuthTokens {
+                        access_token: key.trim().to_string(),
+                        refresh_token: Some("opencode".into()),
+                        expires_at: None,
+                        meta: Some(OauthMeta {
+                            issuer: "opencode".into(),
+                            client_id: "opencode-cli".into(),
+                            extra: serde_json::json!({
+                                "imported_from": "opencode-cli-legacy",
+                                "path": p.display().to_string(),
+                            }),
+                        }),
+                    }));
+                }
+            }
         }
         Ok(None)
+    }
+
+    fn opencode_bin() -> Option<PathBuf> {
+        which_cli("opencode").or_else(|| {
+            #[cfg(windows)]
+            {
+                which_cli("opencode.cmd").or_else(|| which_cli("opencode.exe"))
+            }
+            #[cfg(not(windows))]
+            {
+                None
+            }
+        })
+    }
+
+    /// `opencode auth login` (interactive provider picker / OAuth).
+    pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
+        if let Ok(Some(t)) = import_opencode_cli() {
+            send(
+                tx,
+                BrowserLoginProgress::Status("using existing OpenCode auth.json session".into()),
+            );
+            return Ok(t);
+        }
+        let bin = opencode_bin().ok_or_else(|| {
+            MuseError::Other(
+                "opencode not found on PATH. Install OpenCode (https://opencode.ai), then retry \
+                 or paste an OPENCODE_API_KEY via /login."
+                    .into(),
+            )
+        })?;
+        send(
+            tx,
+            BrowserLoginProgress::Status("launching `opencode auth login`…".into()),
+        );
+        let mut child = Command::new(&bin)
+            .args(["auth", "login"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| {
+                MuseError::Other(format!(
+                    "failed to launch opencode ({e}). Run `opencode auth login` in a terminal, \
+                     or paste OPENCODE_API_KEY."
+                ))
+            })?;
+        if let Some(err) = child.stderr.take() {
+            let tx = tx.clone();
+            thread::spawn(move || {
+                for line in std::io::BufReader::new(err).lines().flatten() {
+                    let snippet: String = line.chars().take(160).collect();
+                    if !snippet.trim().is_empty() {
+                        send(&tx, BrowserLoginProgress::Status(snippet));
+                    }
+                }
+            });
+        }
+        if let Some(out) = child.stdout.take() {
+            let tx = tx.clone();
+            thread::spawn(move || {
+                for line in std::io::BufReader::new(out).lines().flatten() {
+                    for word in line.split_whitespace() {
+                        let url = word.trim_matches(|c: char| {
+                            c == ')' || c == '(' || c == '"' || c == '\''
+                        });
+                        if url.starts_with("https://") {
+                            send(&tx, BrowserLoginProgress::OpenUrl(url.to_string()));
+                            let _ = open_browser(url);
+                            break;
+                        }
+                    }
+                }
+            });
+        }
+        loop {
+            if cancel.is_cancelled() {
+                let _ = child.kill();
+                return Err(MuseError::Other("login cancelled".into()));
+            }
+            match child.try_wait() {
+                Ok(Some(status)) if status.success() => break,
+                Ok(Some(status)) => {
+                    return Err(MuseError::Other(format!(
+                        "opencode auth login failed (exit {status}). Paste OPENCODE_API_KEY as fallback."
+                    )));
+                }
+                Ok(None) => thread::sleep(Duration::from_millis(200)),
+                Err(e) => return Err(MuseError::Other(e.to_string())),
+            }
+        }
+        import_opencode_cli()?.ok_or_else(|| {
+            MuseError::Other(
+                "opencode auth login finished, but nur found no `opencode` / `opencode-go` key in \
+                 ~/.local/share/opencode/auth.json. Run `opencode auth login` and select the \
+                 OpenCode (Zen/Go) provider, or set OPENCODE_API_KEY."
+                    .into(),
+            )
+        })
+    }
+
+    pub fn refresh(_auth: &Auth, _refresh: &str) -> Result<OAuthTokens> {
+        import_opencode_cli()?.ok_or_else(|| {
+            MuseError::Other(
+                "OpenCode session missing. Run `opencode auth login`, or set OPENCODE_API_KEY."
+                    .into(),
+            )
+        })
     }
 }
 

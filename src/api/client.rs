@@ -280,6 +280,12 @@ impl ApiClient {
     /// Used by the agent loop only to heal a catalog default that a provider
     /// retired after this Nur build. User-selected exact ids still fail closed.
     pub async fn live_model_ids(&self) -> std::result::Result<Vec<String>, String> {
+        if self.uses_cursor_cli() {
+            return tokio::task::spawn_blocking(super::cursor_cli::list_models)
+                .await
+                .map_err(|error| format!("model discovery task failed: {error}"))?
+                .map_err(|e| e.to_string());
+        }
         let base_url = self.base_url.clone();
         let api_key = self.api_key_for_request();
         let provider_id = self.provider_id.clone();
@@ -288,6 +294,13 @@ impl ApiClient {
         })
         .await
         .map_err(|error| format!("model discovery task failed: {error}"))?
+    }
+
+    /// Cursor catalog endpoint is Agent RPC; chat goes through `cursor-agent`.
+    pub(crate) fn uses_cursor_cli(&self) -> bool {
+        self.provider_id == "cursor"
+            && (super::cursor_cli::is_cli_session_token(&self.api_key)
+                || crate::providers::cursor_endpoint_is_agent_rpc(&self.base_url))
     }
 
     /// Is this client pointed at an OpenCode gateway (Zen or Go)?
@@ -449,7 +462,51 @@ impl ApiClient {
         req
     }
 
+    async fn create_cursor_cli(&self, req: &ResponseRequest) -> Result<ApiResponse> {
+        let req = req.clone();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        tokio::task::spawn_blocking(move || super::cursor_cli::complete(&req, &cancel))
+            .await
+            .map_err(|e| MuseError::Other(format!("cursor-agent task failed: {e}")))?
+    }
+
+    async fn create_cursor_cli_stream(
+        &self,
+        req: &ResponseRequest,
+        mut on_event: impl FnMut(StreamEvent),
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<ApiResponse> {
+        let req = req.clone();
+        let cancel = cancel.clone();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<StreamEvent>();
+        let handle = tokio::task::spawn_blocking(move || {
+            super::cursor_cli::complete_stream(
+                &req,
+                |ev| {
+                    let _ = tx.send(ev);
+                },
+                &cancel,
+            )
+        });
+        let mut final_resp: Option<ApiResponse> = None;
+        while let Some(ev) = rx.recv().await {
+            match &ev {
+                StreamEvent::Completed(r) => final_resp = Some(r.clone()),
+                _ => {}
+            }
+            on_event(ev);
+        }
+        match handle.await {
+            Ok(Ok(resp)) => Ok(final_resp.unwrap_or(resp)),
+            Ok(Err(e)) => Err(e),
+            Err(e) => Err(MuseError::Other(format!("cursor-agent task failed: {e}"))),
+        }
+    }
+
     pub async fn create_response(&self, req: &ResponseRequest) -> Result<ApiResponse> {
+        if self.uses_cursor_cli() {
+            return self.create_cursor_cli(req).await;
+        }
         match self.style {
             ApiStyle::ChatCompletions => return self.create_chat(req).await,
             ApiStyle::AnthropicMessages => return self.create_anthropic(req).await,
@@ -539,6 +596,9 @@ impl ApiClient {
         mut on_event: impl FnMut(StreamEvent),
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<ApiResponse> {
+        if self.uses_cursor_cli() {
+            return self.create_cursor_cli_stream(req, on_event, cancel).await;
+        }
         match self.style {
             ApiStyle::ChatCompletions => {
                 return self.create_chat_stream(req, on_event, cancel).await

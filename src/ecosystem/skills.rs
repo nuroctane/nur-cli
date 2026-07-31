@@ -193,6 +193,14 @@ const MULTI_FILE_PACKS: &[(&str, &[(&str, &str)])] = &[
         "dialkit",
         &[("SKILL.md", include_str!("../../skills/dialkit/SKILL.md"))],
     ),
+    // terminal-browser — in-terminal Chromium (+ Windows host fallback).
+    (
+        "terminal-browser",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/terminal-browser/SKILL.md"),
+        )],
+    ),
 ];
 
 const PLUR_SKILL: &str = r#"---

@@ -5,6 +5,7 @@
 
 mod browser;
 mod flows;
+pub mod omp_bridge;
 
 use crate::auth::{Auth, AuthMethod};
 use crate::error::{MuseError, Result};
@@ -156,6 +157,8 @@ pub fn refresh_tokens(provider: &str, auth: &Auth, refresh: &str) -> Result<OAut
         "azure" => flows::azure::refresh(),
         "bedrock" => flows::bedrock::refresh(),
         "github-models" | "github-copilot" => flows::github::refresh(auth, refresh),
+        "cursor" => flows::cursor::refresh(auth, refresh),
+        "opencode" => flows::opencode::refresh(auth, refresh),
         _ => Err(MuseError::Other(format!(
             "no OAuth refresh path for provider '{provider}'"
         ))),
@@ -182,6 +185,8 @@ mod tests {
         assert!(supports_browser("anthropic"));
         assert!(supports_browser("google"));
         assert!(supports_browser("github-copilot"));
+        assert!(supports_browser("cursor"));
+        assert!(supports_browser("opencode"));
         assert!(!supports_browser("meta"));
     }
 
@@ -211,6 +216,8 @@ mod tests {
             "azure",
             "github-models",
             "github-copilot",
+            "cursor",
+            "opencode",
         ];
         const REFRESH: &[&str] = &[
             "openai",
@@ -225,6 +232,8 @@ mod tests {
             "bedrock",
             "github-models",
             "github-copilot",
+            "cursor",
+            "opencode",
         ];
         for id in crate::providers::oauth_browser_provider_ids() {
             assert!(

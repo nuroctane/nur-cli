@@ -12,7 +12,7 @@ All native tools available to the NurCLI agent.
 | **vision** | `look` `extract_frames` | pink |
 | **web** | `web_search` `web_fetch` | teal |
 | **git** | `git_status` `git_diff` | cyan |
-| **browser** | `browser` | teal |
+| **browser** | `browser` `terminal_browser` | teal |
 | **knowledge** | `graphify` `graphjin` `plur` `ruflo` `akarso` `executor` `skill` `memory` | indigo / orange |
 | **delegate** | `omp` | - |
 | **agent** | `todo_write` `submit_plan` `agent` | - |
@@ -205,6 +205,23 @@ nur browser status    # detected default browser + extension state
 
 The `browser` tool's own `status` action folds in this local state so the agent
 can self-diagnose a disconnected bridge.
+
+### `terminal_browser`
+
+[terminal-browser.com](https://terminal-browser.com/) - show a site or local HTML
+beside the agent and drive the open tab (`snapshot` / `click` / `fill`).
+
+Actions: `status` · `doctor` · `help` · `ls` · `setup` · `open` · `action`.
+Default `open` uses `split=right`. `action` takes `command` (or `args[]`) after
+`--` in agent-browser form.
+
+**Windows:** when the upstream binary is not installed, Nur uses a **windows-host**
+runtime that maps the same tool API onto `agent-browser-cli` (real Chrome) and
+optionally opens a Windows Terminal split pane. Prefer WSL if
+`terminal-browser` is installed there. Native in-terminal kitty-graphics Chromium
+is still macOS (Apple Silicon) upstream today; Linux is WIP.
+
+Slash: `/tb` · `/terminal-browser`. Skill: `terminal-browser`.
 
 ### `omp`
 

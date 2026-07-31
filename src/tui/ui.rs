@@ -13,12 +13,14 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
-    // Solid Meta-dark canvas so empty regions never flash terminal default.
-    f.render_widget(Block::default().style(theme::style_canvas()), area);
 
     // Too-small terminal: show a terse message instead of crashing.
     if area.width < 20 || area.height < 5 {
-        let msg = "terminal too small — resize to ≥ 20×5";
+        // Full clear: the prior frame may have been a normal layout.
+        f.render_widget(Clear, area);
+        f.render_widget(Block::default().style(theme::style_canvas()), area);
+        app.last_layout_sig = None;
+        let msg = "terminal too small - resize to ≥ 20×5";
         let p = Paragraph::new(Line::from(Span::styled(msg, theme::style_faint())));
         f.render_widget(p, area);
         // Overlays must remain visible even when the base prompt is too small
@@ -69,7 +71,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .split(area);
 
     // `/sidegraph` open: split the transcript row into [main, right sidebar].
-    // Below ~66 cols the panel would crush the transcript — keep it stateful
+    // Below ~66 cols the panel would crush the transcript - keep it stateful
     // but undrawn (noted once) until the window is wide enough again.
     let default_sg_w = (chunks[0].width / 3).clamp(28, 44);
     let max_sg_w = chunks[0].width.saturating_sub(35);
@@ -77,7 +79,35 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .sidegraph_width
         .unwrap_or(default_sg_w)
         .clamp(24, max_sg_w.max(24));
-    if app.sidegraph_open && chunks[0].width >= sg_w + 35 {
+    let sg_drawn = app.sidegraph_open && chunks[0].width >= sg_w + 35;
+    let drawn_sg_w = if sg_drawn { sg_w } else { 0 };
+
+    // `Block::style` restyles cells but does not blank symbols. When a region
+    // shrinks (sidegraph toggle, busy line, input grow/shrink, resize), Clear
+    // the frame once so leftover glyphs cannot ghost into the new layout.
+    // Skip the Clear on steady frames so image-protocol peeks are not forced
+    // to re-upload every tick.
+    let layout_sig = (
+        area.width,
+        area.height,
+        busy_h,
+        input_body,
+        sg_drawn,
+        drawn_sg_w,
+    );
+    if app.last_layout_sig != Some(layout_sig) {
+        f.render_widget(Clear, area);
+        // Image-protocol peeks sit outside the cell buffer. A layout shift
+        // while a peek is open only buffer-Clears unless we also request a
+        // full terminal.clear on the next frame (Windows ConPTY ghosts otherwise).
+        if app.peek_open.is_some() || app.peek_swarm.is_some() {
+            app.needs_full_redraw = true;
+        }
+        app.last_layout_sig = Some(layout_sig);
+    }
+    f.render_widget(Block::default().style(theme::style_canvas()), area);
+
+    if sg_drawn {
         app.sidegraph_narrow = false;
         let row = Layout::default()
             .direction(Direction::Horizontal)
@@ -90,7 +120,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             app.sidegraph_narrow = true;
             app.push_note(
                 theme::Tone::Neutral,
-                "sidegraph · hidden — window too narrow · reappears on resize".into(),
+                "sidegraph · hidden - window too narrow · reappears on resize".into(),
             );
         }
         app.sidegraph_body = Rect::default();
@@ -215,14 +245,14 @@ fn draw_login_method(f: &mut Frame, app: &App, area: Rect) {
     let mut options: Vec<(&str, String)> = vec![
         (
             "Sign in with browser",
-            "URL + code / SSO — no API key to manage".into(),
+            "URL + code / SSO - no API key to manage".into(),
         ),
         ("Enter API key", format!("env {}", provider.env_key)),
     ];
     if m.can_import {
         options.push((
             "Use existing CLI session",
-            "import from Codex / Grok / Kimi / Claude login".into(),
+            "import from Codex / Grok / Kimi / Claude / Cursor login".into(),
         ));
     }
     let mut lines: Vec<Line> = vec![
@@ -3339,8 +3369,12 @@ fn draw_sidegraph_panel(f: &mut Frame, app: &mut App, area: Rect) {
         .take(view as usize)
         .cloned()
         .collect();
+    // Paint every cell: without a canvas style, shorter/panned lines leave
+    // leftover glyphs from the previous frame inside the panel.
     f.render_widget(
-        Paragraph::new(vis).scroll((0, app.sidegraph_scroll_x)),
+        Paragraph::new(vis)
+            .style(theme::style_canvas())
+            .scroll((0, app.sidegraph_scroll_x)),
         inner,
     );
     app.sidegraph_body = area;
@@ -3399,8 +3433,21 @@ impl SgCanvas {
     fn text(&mut self, x: usize, y: usize, s: &str, style: Style) {
         let mut cx = x;
         for ch in s.chars() {
+            let w = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if w == 0 {
+                continue;
+            }
+            if cx + w > self.w {
+                break;
+            }
             self.put(cx, y, ch, style);
-            cx += UnicodeWidthChar::width(ch).unwrap_or(1).max(1);
+            // Blank continuation columns of wide glyphs (CJK, emoji) so they
+            // are not emitted as extra spaces in `to_lines` - that used to
+            // inflate line width, drift box borders, and leave tear artifacts.
+            for pad in 1..w {
+                self.put(cx + pad, y, '\0', style);
+            }
+            cx += w;
         }
     }
 
@@ -3418,13 +3465,16 @@ impl SgCanvas {
             let row = &self.px[y * self.w..(y + 1) * self.w];
             let end = row
                 .iter()
-                .rposition(|p| p.ch != ' ')
+                .rposition(|p| p.ch != ' ' && p.ch != '\0')
                 .map(|i| i + 1)
                 .unwrap_or(0);
             let mut spans: Vec<Span<'static>> = Vec::new();
             let mut cur = String::new();
             let mut cur_style: Option<Style> = None;
             for p in &row[..end] {
+                if p.ch == '\0' {
+                    continue; // continuation column of a wide glyph
+                }
                 match cur_style {
                     Some(s) if s == p.style => cur.push(p.ch),
                     Some(s) => {
@@ -4061,7 +4111,7 @@ fn sg_cat_for_tool(name: &str) -> SgCat {
     match name {
         // search / read
         "read_file" | "list_dir" | "grep" | "glob" | "git_status" | "git_diff" | "web_fetch"
-        | "web_search" | "look" | "browser" => SgCat::Search,
+        | "web_search" | "look" | "browser" | "terminal_browser" => SgCat::Search,
         // editing
         "write_file" | "edit_file" | "multi_edit" | "apply_patch" => SgCat::Edit,
         // execution
@@ -7755,6 +7805,21 @@ mod sidegraph_canvas_tests {
             rows[n.h - 1].contains("0.3s"),
             "duration lost from bottom border"
         );
+    }
+
+    /// Wide glyphs must not inflate emitted line width via leftover spaces in
+    /// continuation columns (that used to tear box borders when panning).
+    #[test]
+    fn sg_canvas_wide_glyphs_do_not_inflate_width() {
+        let mut c = SgCanvas::new(8, 1);
+        c.text(0, 0, "中文", theme::style_canvas());
+        let line = &c.to_lines()[0];
+        let plain: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(plain, "中文");
+        assert_eq!(UnicodeWidthStr::width(plain.as_str()), 4);
+        // Continuation cells stay blank markers, not spaces that would render.
+        assert_eq!(c.px[1].ch, '\0');
+        assert_eq!(c.px[3].ch, '\0');
     }
 
     /// Text must wrap inside the box, never spill past it.

@@ -18,6 +18,8 @@ The active provider, endpoint, and default model are stored in
 | **Anthropic Claude** | `ANTHROPIC_API_KEY` | Claude browser OAuth (`claude.com/cai/…`) or import `~/.claude` |
 | **Google Gemini** | `GEMINI_API_KEY` | Google Cloud ADC via `gcloud auth login --update-adc` |
 | **GitHub Copilot** | `COPILOT_GITHUB_TOKEN` (fine-grained PAT with Copilot Requests) | `gh auth login` (subscription token) |
+| **Cursor** | `CURSOR_API_KEY` (optional) | `cursor-agent login` → nur chat via Agent CLI (no key required) |
+| **OpenCode** | `OPENCODE_API_KEY` | `opencode auth login` (imports `~/.local/share/opencode/auth.json` → `opencode` / `opencode-go`) |
 | **Hugging Face** | `HF_TOKEN` | - |
 | **Azure OpenAI** | `AZURE_OPENAI_API_KEY` | `az login` / Entra device code |
 | **Amazon Bedrock** | `AWS_BEARER_TOKEN_BEDROCK` | - (AWS SSO credentials require SigV4, which this route does not implement) |
@@ -39,7 +41,7 @@ What happens:
 1. **Nothing is cleared.** Opening the picker — and backing out of it with `Esc`
    — leaves your current credential exactly as it was. Credentials are replaced
    only at the moment a new one is committed.
-2. A **scrollable, type-to-filter** picker lists **61 providers** (frontier APIs,
+2. A **scrollable, type-to-filter** picker lists **62 providers** (frontier APIs,
    inference clouds, Chinese labs, OpenAI-compatible routers, local servers).
    Providers with browser sign-in show a 🌐 hint.
 3. If the provider supports browser auth, choose:
@@ -70,6 +72,26 @@ these providers:
 | **Azure OpenAI** | Entra device login via `az` | Azure CLI session | Configured Azure resource |
 | **GitHub Models** | GitHub login via `gh` (`models` scope) | GitHub CLI session | `models.github.ai/inference` |
 | **GitHub Copilot** | GitHub login via `gh` | GitHub CLI session | `api.githubcopilot.com` |
+| **Cursor** | Cursor login via `cursor-agent` | `$CURSOR_AGENT_HOME` or `~/.cursor` / OS keychain | Chat runs through `cursor-agent -p` (nur tool harness by default); optional `CURSOR_API_KEY` |
+| **OpenCode** | `opencode auth login` | `~/.local/share/opencode/auth.json` | Zen/Go gateway key (`opencode` / `opencode-go` entries) |
+
+#### Cursor details (CLI, no pasted key)
+
+Cursor’s public Agent host (`api2.cursor.sh`) is **not** OpenAI Chat Completions.
+Nur drives Cursor the same way t3code does for auth: `cursor-agent login` (session
+in the OS keychain / Agent store). Inference is `cursor-agent -p` with
+`--output-format stream-json`.
+
+After `/login` → Cursor → browser, nur stores a `cursor-cli-session` marker (not a
+scraped secret). `/model` lists models via `cursor-agent models`. Esc cancel kills
+the Agent process.
+
+**Harness (default):** Cursor runs in `--mode ask`. When nur attaches tools, the
+prompt asks the model to emit a fenced `nur-tools` JSON array so nur can run
+**its** tools, approvals, plan mode, and **cross-provider subagents** as usual.
+
+**Native Agent (optional):** set `NUR_CURSOR_NATIVE=1` to use Cursor’s own tools
+with `--force` instead (t3code-style full delegate; nur’s tool loop is skipped).
 
 In `/login`, pick the provider → **Sign in with browser**, or **Use existing CLI
 session** when a local first-party login is detected. API keys remain available as a
@@ -77,10 +99,21 @@ fallback for every one of them.
 
 ### Signed into the vendor CLI = signed into nur
 
-When a provider has no key configured, nur falls back to importing the vendor
-CLI's own session (Claude Code, Codex, Grok, Kimi, Cursor, OpenCode, Antigravity
-/ gcloud). Nothing to run and nothing to paste — if the CLI is logged in, nur is
-logged in.
+Credential resolution order for a catalog provider:
+
+1. **Already saved in nur** - active `/login` session (`auth.json`), per-provider
+   keys/sessions (`provider_keys.json` / `provider_sessions.json`), then the
+   provider's env var (`OPENAI_API_KEY`, …). Saved credentials always win.
+2. **Vendor CLI session** (Claude Code, Codex, Grok, Kimi, Cursor, OpenCode,
+   Antigravity / gcloud) when that provider has a first-party importer.
+3. **Oh My Pi (OMP)** for every catalog provider - `omp token <provider>` reads
+   `~/.omp/agent/agent.db` (see [oh-omp](https://github.com/open-horizon-labs/oh-omp)).
+   Nur maps ids (`openai` → `openai-codex`, `google` → `google-gemini-cli`, …).
+   A successful OMP import is written into the per-provider store so the next
+   resolve hits step 1 instead of shelling out again. The same bridge feeds
+   `/failover`, cross-provider subagents, and doctor probes.
+
+Nothing to paste when nur, the vendor CLI, or OMP already has a login.
 
 Imported tokens are used transiently and never written to `auth.json`. If the
 imported session has gone stale, nur mints a fresh access token from the same
@@ -88,9 +121,10 @@ refresh token the CLI stores, exactly as the CLI would have on its next use — 
 session merely being a few minutes old no longer sends you to `/login`.
 
 Nur respects the official CLI isolation variables when locating those sessions:
-`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `XAI_CONFIG_DIR`, `ANTIGRAVITY_HOME`, and
-`GCLOUD_CONFIG_DIR`. This matters for work profiles and sandboxed CLI installs:
-a valid login outside the default home directory is not treated as signed out.
+`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `XAI_CONFIG_DIR`, `CURSOR_AGENT_HOME`,
+`ANTIGRAVITY_HOME`, and `GCLOUD_CONFIG_DIR`. This matters for work profiles and
+sandboxed CLI installs: a valid login outside the default home directory is not
+treated as signed out.
 
 Kimi Code API keys work against `https://api.kimi.com/coding/v1`. The separate Moonshot
 AI catalog entry remains available for `https://api.moonshot.ai/v1` keys.
