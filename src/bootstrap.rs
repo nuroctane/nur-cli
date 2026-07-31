@@ -241,7 +241,7 @@ pub fn run_full_install() -> Result<()> {
     }
 
     // ── 4. Ecosystem (blocking — this is the whole point) ────────────────
-    step("Provisioning ecosystem (graphify · plur · ruflo · omp · browser · excalidraw · skills)…");
+    step("Provisioning ecosystem (graphify · plur · ruflo · omp · browser · excalidraw · penecho · skills)…");
     theme::print_info("this can take a few minutes the first time — hang tight");
     let st = ecosystem::ensure_ecosystem(true);
     print!("{}", st.report());

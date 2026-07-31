@@ -53,7 +53,7 @@ impl Tool for Tldraw {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["status", "detect", "install", "open", "run", "create", "enable_scripts", "api"],
+                    "enum": ["status", "detect", "install", "open", "run", "create", "enable_scripts", "api", "screenshot", "list_docs", "export_png", "fit_camera"],
                     "default": "status"
                 },
                 "path": {
@@ -66,7 +66,7 @@ impl Tool for Tldraw {
                 },
                 "shapes": {
                     "type": "array",
-                    "description": "For create: list of boxes {x,y,w,h,text,color?,geo?}",
+                    "description": "For create: {x,y,w,h,text,color?,geo?,type?:geo|arrow|frame|note, from?, to?}",
                     "items": { "type": "object" }
                 },
                 "code": {
@@ -75,6 +75,14 @@ impl Tool for Tldraw {
                 },
                 "spec": {
                     "description": "Legacy: ignored if shapes provided"
+                },
+                "background": {
+                    "type": "boolean",
+                    "description": "For install: run as bg job and return id immediately"
+                },
+                "output": {
+                    "type": "string",
+                    "description": "For screenshot/export_png: destination path (default .nur/media/tldraw-*.png)"
                 }
             }
         })
@@ -84,13 +92,30 @@ impl Tool for Tldraw {
         let action = arg_str(args, "action").unwrap_or_else(|_| "status".into());
         match action.as_str() {
             "status" | "detect" => Ok(status_report()),
-            "install" => install(),
+            "install" => {
+                let background = args
+                    .get("background")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                if background {
+                    let id = crate::bg_jobs::spawn("tldraw install", "tldraw", |_c| {
+                        install().map_err(|e| e.to_string())
+                    });
+                    return Ok(format!(
+                        "bg job #{id} · tldraw install\n  continue working — bg(action=result, id={id})\n"
+                    ));
+                }
+                install()
+            }
             "open" | "run" => open_action(args, &ctx.cwd),
             "create" => create_action(args, &ctx.cwd),
             "enable_scripts" => enable_scripts_action(args, &ctx.cwd),
             "api" => api_action(args, &ctx.cwd),
+            "screenshot" | "export_png" => screenshot_action(args, &ctx.cwd),
+            "list_docs" => list_docs_action(),
+            "fit_camera" => fit_camera_action(args, &ctx.cwd),
             other => Err(MuseError::Tool(format!(
-                "unknown tldraw action '{other}' — use status|install|open|create|enable_scripts|api"
+                "unknown tldraw action '{other}' — use status|install|open|create|enable_scripts|api|screenshot|list_docs|fit_camera"
             ))),
         }
     }
@@ -601,7 +626,7 @@ fn validate_or_hint(path: &Path) -> String {
 
 // ── create valid .tldraw ───────────────────────────────────────────────────
 
-fn create_action(args: &Value, _cwd: &Path) -> Result<String> {
+fn create_action(args: &Value, cwd: &Path) -> Result<String> {
     // Always Desktop — not workspace (sandbox would block Desktop otherwise).
     ensure_dark_theme();
     let abs = resolve_create_path(args)?;
@@ -610,13 +635,13 @@ fn create_action(args: &Value, _cwd: &Path) -> Result<String> {
     }
 
     let title = arg_str(args, "title").unwrap_or_else(|_| "Board".into());
-    let shapes = args
+    let raw_shapes = args
         .get("shapes")
         .and_then(|s| s.as_array())
         .cloned()
         .unwrap_or_default();
 
-    if shapes.is_empty() {
+    if raw_shapes.is_empty() {
         // Persist legacy spec for debugging, but still write an empty valid board.
         if let Some(spec) = args.get("spec") {
             let spec_path = abs.with_extension("tldraw.spec.json");
@@ -626,6 +651,29 @@ fn create_action(args: &Value, _cwd: &Path) -> Result<String> {
             );
         }
     }
+
+    // Layout: grow text, de-overlap, reserve UI band for interactive scripts.
+    let layout_mode = arg_str(args, "layout").unwrap_or_else(|_| "auto".into());
+    let ui_reserve = args
+        .get("ui_reserve_bottom")
+        .and_then(|v| v.as_f64())
+        .unwrap_or_else(|| {
+            // If agent is building interactive boards (script= or interactive=true),
+            // keep chrome clear so script buttons do not sit on section headers
+            // (Tunerz IG board failure mode).
+            let interactive = args
+                .get("interactive")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+                || args.get("script").is_some()
+                || arg_str(args, "script_path").is_ok();
+            if interactive {
+                120.0
+            } else {
+                0.0
+            }
+        });
+    let (shapes, lint) = normalize_shapes_layout(&raw_shapes, &layout_mode, ui_reserve);
 
     let doc = build_tldraw_document(&title, &shapes);
     let body = serde_json::to_string_pretty(&doc)
@@ -637,6 +685,7 @@ fn create_action(args: &Value, _cwd: &Path) -> Result<String> {
         shapes.len(),
         abs.display()
     );
+    out.push_str(&lint);
     match launch_on_file(&abs) {
         Ok(launch) => {
             out.push_str(&launch);
@@ -647,6 +696,273 @@ fn create_action(args: &Value, _cwd: &Path) -> Result<String> {
                 "File is on your Desktop — double-click it, or drag onto https://www.tldraw.com/\n",
             );
         }
+    }
+
+    // Optional: inject document script for true interactivity (ZIP path after save).
+    if let Ok(script) = arg_str(args, "script").or_else(|_| {
+        arg_str(args, "script_path").and_then(|p| {
+            let path = resolve_path(cwd, &p)?;
+            std::fs::read_to_string(&path).map_err(|e| {
+                MuseError::Tool(format!("read script_path {}: {e}", path.display()))
+            })
+        })
+    }) {
+        match inject_document_script(&abs, &script) {
+            Ok(msg) => out.push_str(&msg),
+            Err(e) => out.push_str(&format!(
+                "script inject failed: {e}\n  \
+                 Board is open as static — write main.js in script-workspace and re-enable_scripts.\n"
+            )),
+        }
+    }
+
+    // Always try fit_camera so mid-board pans don't hide the title (Tunerz camera y≈-1000).
+    if let Ok(fit) = fit_camera_action(&json!({}), cwd) {
+        out.push_str(&fit);
+    }
+
+    Ok(out)
+}
+
+/// Normalize agent shape lists so boards are not overlapping walls of text.
+///
+/// - Auto-grow height from line count when text is dense
+/// - Optional grid when layout=grid or coords are missing
+/// - De-overlap by pushing down (simple sweep)
+/// - Reserve bottom chrome band for interactive script UI
+fn normalize_shapes_layout(
+    shapes: &[Value],
+    layout_mode: &str,
+    ui_reserve_bottom: f64,
+) -> (Vec<Value>, String) {
+    let mut out: Vec<Value> = Vec::with_capacity(shapes.len());
+    let mut notes: Vec<String> = Vec::new();
+    let mut overlaps_fixed = 0usize;
+    let mut heights_grown = 0usize;
+
+    let force_grid = layout_mode.eq_ignore_ascii_case("grid");
+    let any_coords = shapes.iter().any(|s| s.get("x").is_some() || s.get("y").is_some());
+
+    for (i, s) in shapes.iter().enumerate() {
+        let mut obj = s.clone();
+        if !obj.is_object() {
+            out.push(obj);
+            continue;
+        }
+        let map = obj.as_object_mut().unwrap();
+
+        // Stable id if missing (script hit-tests often hardcode shape:boxN or role ids).
+        if map.get("id").and_then(|v| v.as_str()).is_none() {
+            let slug = map
+                .get("text")
+                .and_then(|v| v.as_str())
+                .map(|t| {
+                    let s: String = t
+                        .chars()
+                        .take(24)
+                        .map(|c| {
+                            if c.is_ascii_alphanumeric() {
+                                c.to_ascii_lowercase()
+                            } else {
+                                '-'
+                            }
+                        })
+                        .collect();
+                    s.trim_matches('-').to_string()
+                })
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| format!("box{i}"));
+            map.insert("id".into(), json!(format!("shape:{slug}")));
+        }
+
+        let text = map
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let lines = text.lines().count().max(1);
+        let w = map
+            .get("w")
+            .or_else(|| map.get("width"))
+            .and_then(|v| v.as_f64())
+            .unwrap_or(200.0)
+            .max(40.0);
+        let mut h = map
+            .get("h")
+            .or_else(|| map.get("height"))
+            .and_then(|v| v.as_f64())
+            .unwrap_or(100.0)
+            .max(40.0);
+
+        // Auto-grow height for multi-line walls of text (Tunerz dens≈1.0 cards).
+        let min_h = (lines as f64 * 22.0 + 28.0).max(48.0);
+        if h + 1.0 < min_h {
+            h = min_h.min(360.0);
+            heights_grown += 1;
+        }
+        map.insert("w".into(), json!(w));
+        map.insert("h".into(), json!(h));
+
+        let (x, y) = if force_grid || !any_coords {
+            let col = i % 4;
+            let row = i / 4;
+            (
+                40.0 + col as f64 * (w + 28.0),
+                40.0 + row as f64 * (h + 28.0),
+            )
+        } else {
+            (
+                map.get("x").and_then(|v| v.as_f64()).unwrap_or(40.0),
+                map.get("y").and_then(|v| v.as_f64()).unwrap_or(40.0),
+            )
+        };
+        map.insert("x".into(), json!(x));
+        map.insert("y".into(), json!(y));
+        out.push(obj);
+    }
+
+    // Sweep de-overlap: if two axis-aligned boxes collide, push the later one down.
+    // O(n^2) is fine for agent boards (typically <80 shapes).
+    for i in 0..out.len() {
+        for j in 0..i {
+            let (ax, ay, aw, ah) = shape_xywh(&out[j]);
+            let (bx, by, bw, bh) = shape_xywh(&out[i]);
+            let overlap = ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+            if overlap {
+                let new_y = ay + ah + 24.0;
+                if let Some(m) = out[i].as_object_mut() {
+                    m.insert("y".into(), json!(new_y));
+                }
+                overlaps_fixed += 1;
+            }
+        }
+    }
+
+    // Reserve bottom chrome for script UI (buttons under decision panel).
+    if ui_reserve_bottom > 0.0 && !out.is_empty() {
+        let mut max_y = 0.0_f64;
+        for s in &out {
+            let (_, y, _, h) = shape_xywh(s);
+            max_y = max_y.max(y + h);
+        }
+        // Marker note so scripts know the reserved band.
+        notes.push(format!(
+            "ui_reserve_bottom={ui_reserve_bottom:.0} — keep script chrome at y>={:.0}",
+            max_y + 24.0
+        ));
+        // Soft: do not place a phantom shape; just report the free band start.
+        let _ = max_y + ui_reserve_bottom;
+    }
+
+    // Final overlap count (should be ~0 after sweep).
+    let mut remaining = 0usize;
+    for i in 0..out.len() {
+        for j in 0..i {
+            let a = shape_xywh(&out[j]);
+            let b = shape_xywh(&out[i]);
+            if a.0 < b.0 + b.2 && a.0 + a.2 > b.0 && a.1 < b.1 + b.3 && a.1 + a.3 > b.1 {
+                remaining += 1;
+            }
+        }
+    }
+
+    let mut lint = String::from("layout lint:\n");
+    lint.push_str(&format!(
+        "  shapes={} grown_h={} deoverlap_moves={} remaining_overlaps={} layout={layout_mode}\n",
+        out.len(),
+        heights_grown,
+        overlaps_fixed,
+        remaining
+    ));
+    for n in notes {
+        lint.push_str(&format!("  · {n}\n"));
+    }
+    if remaining > 0 {
+        lint.push_str(
+            "  ⚠ still overlapping — increase gaps or use layout=grid; scripts must not park UI on static sections\n",
+        );
+    }
+    if heights_grown > 0 {
+        lint.push_str(
+            "  · auto-grew height for dense multi-line labels (prefer short titles + detail panels)\n",
+        );
+    }
+    (out, lint)
+}
+
+fn shape_xywh(s: &Value) -> (f64, f64, f64, f64) {
+    let x = s.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let y = s.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let w = s
+        .get("w")
+        .or_else(|| s.get("width"))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(100.0);
+    let h = s
+        .get("h")
+        .or_else(|| s.get("height"))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(80.0);
+    (x, y, w, h)
+}
+
+/// After open: write main.js into script-workspace and wait until state=applied.
+fn inject_document_script(abs: &Path, script: &str) -> Result<String> {
+    // Ensure scripts workspace is open first.
+    let enable = enable_scripts_for_path(abs, Duration::from_secs(40))?;
+    let server = wait_for_server(Duration::from_secs(8))
+        .ok_or_else(|| MuseError::Tool("canvas API down after enable_scripts".into()))?;
+    let doc_id = find_doc_id(&server, abs)?;
+    let ws = canvas_api_post(
+        &server,
+        &format!("/api/doc/{doc_id}/script-workspace"),
+        &json!({}),
+    )?;
+    let main_js = ws
+        .pointer("/result/mainJsPath")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    if main_js.is_empty() {
+        return Err(MuseError::Tool(
+            "script-workspace did not return mainJsPath".into(),
+        ));
+    }
+    std::fs::write(&main_js, script)
+        .map_err(|e| MuseError::Tool(format!("write main.js {main_js}: {e}")))?;
+
+    // Poll until applied (not mere pending/watching).
+    let mut final_state = "unknown".to_string();
+    for _ in 0..40 {
+        if let Ok(st) = canvas_api_get(&server, &format!("/api/doc/{doc_id}/script-status")) {
+            final_state = st
+                .pointer("/result/state")
+                .and_then(|x| x.as_str())
+                .unwrap_or("?")
+                .to_string();
+            if final_state == "applied" || final_state == "error" {
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(350));
+    }
+    let mut out = format!(
+        "script inject → {main_js}\n  state={final_state}\n  (enable report)\n{enable}"
+    );
+    if final_state == "applied" {
+        out.push_str("  ✓ custom document script applied\n");
+        // Best-effort save so Desktop file becomes ZIP+script archive.
+        let _ = canvas_api_post(
+            &server,
+            "/api/search",
+            &json!({"code": "try { if (api.helpers?.saveDoc) await api.helpers.saveDoc(); else if (api.saveDoc) await api.saveDoc(); return {saved:true}; } catch(e) { return {saved:false, error:String(e)}; }"}),
+        );
+    } else if final_state == "error" {
+        out.push_str("  ✗ script error — open script-workspace error.log\n");
+    } else {
+        out.push_str(
+            "  ⚠ script not yet applied (still pending) — re-run enable_scripts; do not claim interactivity yet\n",
+        );
     }
     Ok(out)
 }
@@ -707,6 +1023,10 @@ fn build_tldraw_document(title: &str, shapes: &[Value]) -> Value {
         // High-contrast under dark theme (pastel solid fills + white text = invisible).
         let (color, label_color, fill) = contrast_style(&color);
         let geo = s.get("geo").and_then(|v| v.as_str()).unwrap_or("rectangle");
+        let shape_type = s
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("geo");
         // Must be a valid tldraw IndexKey. "a10" is REJECTED and blanks the
         // whole canvas with ValidationError — use a1..a9, aA..aZ, b1…
         let index = fractional_index(i);
@@ -716,36 +1036,132 @@ fn build_tldraw_document(title: &str, shapes: &[Value]) -> Value {
         max_x = max_x.max(x + w);
         max_y = max_y.max(y + h);
 
-        records.push(json!({
-            "id": id,
-            "typeName": "shape",
-            "type": "geo",
-            "x": x,
-            "y": y,
-            "rotation": 0,
-            "index": index,
-            "parentId": "page:page",
-            "isLocked": false,
-            "opacity": 1,
-            "props": {
-                "geo": geo,
-                "w": w,
-                "h": h,
-                "growY": 0,
-                "richText": to_rich_text(&text),
-                "labelColor": label_color,
-                "color": color,
-                "fill": fill,
-                "dash": "solid",
-                "size": "m",
-                "font": "sans",
-                "align": "middle",
-                "verticalAlign": "middle",
-                "url": "",
-                "scale": 1
-            },
-            "meta": {}
-        }));
+        match shape_type {
+            "arrow" => {
+                let from = s.get("from").and_then(|v| v.as_str());
+                let to = s.get("to").and_then(|v| v.as_str());
+                // Geometry arrow (bindings added best-effort when from/to given).
+                let mut props = json!({
+                    "kind": "arc",
+                    "elbowMidPoint": 0.5,
+                    "bend": 0,
+                    "start": { "x": 0, "y": 0 },
+                    "end": { "x": w.max(40.0), "y": h },
+                    "arrowheadStart": "none",
+                    "arrowheadEnd": "arrow",
+                    "color": color,
+                    "fill": "none",
+                    "dash": "solid",
+                    "size": "m",
+                    "font": "sans",
+                    "scale": 1,
+                    "labelColor": label_color,
+                    "labelPosition": 0.5,
+                    "richText": to_rich_text(&text)
+                });
+                if let (Some(f), Some(t)) = (from, to) {
+                    // Store meta so agents can rebind live via API if needed.
+                    props["metaFrom"] = json!(f);
+                    props["metaTo"] = json!(t);
+                }
+                records.push(json!({
+                    "id": id,
+                    "typeName": "shape",
+                    "type": "arrow",
+                    "x": x,
+                    "y": y,
+                    "rotation": 0,
+                    "index": index,
+                    "parentId": "page:page",
+                    "isLocked": false,
+                    "opacity": 1,
+                    "props": props,
+                    "meta": {}
+                }));
+            }
+            "frame" => {
+                records.push(json!({
+                    "id": id,
+                    "typeName": "shape",
+                    "type": "frame",
+                    "x": x,
+                    "y": y,
+                    "rotation": 0,
+                    "index": index,
+                    "parentId": "page:page",
+                    "isLocked": false,
+                    "opacity": 1,
+                    "props": {
+                        "w": w.max(80.0),
+                        "h": h.max(80.0),
+                        "name": if text.is_empty() { "Frame".into() } else { text.clone() },
+                        "color": color
+                    },
+                    "meta": {}
+                }));
+            }
+            "note" => {
+                records.push(json!({
+                    "id": id,
+                    "typeName": "shape",
+                    "type": "note",
+                    "x": x,
+                    "y": y,
+                    "rotation": 0,
+                    "index": index,
+                    "parentId": "page:page",
+                    "isLocked": false,
+                    "opacity": 1,
+                    "props": {
+                        "color": color,
+                        "size": "m",
+                        "font": "sans",
+                        "fontSizeAdjustment": 0,
+                        "align": "middle",
+                        "verticalAlign": "middle",
+                        "growY": 0,
+                        "richText": to_rich_text(&text),
+                        "labelColor": label_color,
+                        "scale": 1,
+                        "url": ""
+                    },
+                    "meta": {}
+                }));
+            }
+            _ => {
+                // Default geo (rectangle / ellipse / diamond / …)
+                records.push(json!({
+                    "id": id,
+                    "typeName": "shape",
+                    "type": "geo",
+                    "x": x,
+                    "y": y,
+                    "rotation": 0,
+                    "index": index,
+                    "parentId": "page:page",
+                    "isLocked": false,
+                    "opacity": 1,
+                    "props": {
+                        "geo": geo,
+                        "w": w,
+                        "h": h,
+                        "growY": 0,
+                        "richText": to_rich_text(&text),
+                        "labelColor": label_color,
+                        "color": color,
+                        "fill": fill,
+                        "dash": "solid",
+                        "size": "m",
+                        "font": "sans",
+                        "align": "middle",
+                        "verticalAlign": "middle",
+                        "url": "",
+                        "scale": 1
+                    },
+                    "meta": {}
+                }));
+            }
+        }
     }
 
     // Session records so the viewport shows the shapes (not a blank far-away camera).
@@ -1279,6 +1695,124 @@ fn api_action(args: &Value, cwd: &Path) -> Result<String> {
     ))
 }
 
+fn list_docs_action() -> Result<String> {
+    let server = wait_for_server(Duration::from_secs(10))
+        .ok_or_else(|| MuseError::Tool("canvas API down — open a .tldraw first".into()))?;
+    let docs = canvas_api_post(
+        &server,
+        "/api/search",
+        &json!({"code": "return await api.getDocs()"}),
+    )?;
+    Ok(format!(
+        "open docs:\n{}\n",
+        serde_json::to_string_pretty(&docs).unwrap_or_else(|_| docs.to_string())
+    ))
+}
+
+fn screenshot_action(args: &Value, cwd: &Path) -> Result<String> {
+    let server = wait_for_server(Duration::from_secs(12))
+        .ok_or_else(|| MuseError::Tool("canvas API down — open a .tldraw first".into()))?;
+    let media = cwd.join(".nur").join("media");
+    let _ = std::fs::create_dir_all(&media);
+    let dest = if let Ok(out) = arg_str(args, "output") {
+        resolve_path(cwd, &out)?
+    } else {
+        media.join(format!(
+            "tldraw-{}.png",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0)
+        ))
+    };
+    if let Some(parent) = dest.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // Prefer api.getScreenshot when available; fall back to editor export via JS.
+    let dest_s = dest.to_string_lossy().replace('\\', "/");
+    let code = format!(
+        r#"
+const dest = {dest_json};
+try {{
+  if (typeof api.getScreenshot === 'function') {{
+    const p = await api.getScreenshot();
+    return {{ method: 'getScreenshot', path: p, hint: 'copy to ' + dest }};
+  }}
+}} catch (e) {{ /* fall through */ }}
+try {{
+  const editor = api.editor || (await api.getEditor?.());
+  if (editor?.getSvgString || editor?.toImage) {{
+    return {{ method: 'editor', note: 'use File → Export in app; staged ' + dest }};
+  }}
+}} catch (e) {{}}
+return {{ method: 'manual', staged: dest, note: 'canvas API has no screenshot — export from File menu or browser tool' }};
+"#,
+        dest_json = serde_json::to_string(&dest_s).unwrap_or_else(|_| "\"out.png\"".into())
+    );
+    let resp = canvas_api_post(&server, "/api/search", &json!({ "code": code }))?;
+    // If getScreenshot returned a path, try to copy it.
+    let mut copied = false;
+    if let Some(path) = resp
+        .pointer("/result/path")
+        .and_then(|v| v.as_str())
+        .or_else(|| resp.pointer("/result").and_then(|v| v.as_str()))
+    {
+        let src = PathBuf::from(path);
+        if src.is_file() {
+            if std::fs::copy(&src, &dest).is_ok() {
+                copied = true;
+            }
+        }
+    }
+    let mut out = format!(
+        "tldraw screenshot\n  staged: {}\n  api: {}\n",
+        dest.display(),
+        serde_json::to_string_pretty(&resp).unwrap_or_else(|_| resp.to_string())
+    );
+    if copied {
+        out.push_str(&format!(
+            "  copied to {}\n  next: look(path=\"{}\")\n",
+            dest.display(),
+            dest.display()
+        ));
+    } else {
+        out.push_str(
+            "  If no image file yet: use File→Export PNG in tldraw offline, save to the staged path, then look.\n",
+        );
+    }
+    Ok(out)
+}
+
+fn fit_camera_action(args: &Value, cwd: &Path) -> Result<String> {
+    let _ = args;
+    let _ = cwd;
+    let server = wait_for_server(Duration::from_secs(10))
+        .ok_or_else(|| MuseError::Tool("canvas API down — open a .tldraw first".into()))?;
+    let code = r#"
+const editor = api.editor || (typeof editor !== 'undefined' ? editor : null);
+if (!editor) {
+  // Try getDocs focused doc path
+  try {
+    if (api.zoomToFit) { await api.zoomToFit(); return { ok: true, via: 'api.zoomToFit' }; }
+  } catch (e) {}
+  return { ok: false, error: 'no editor handle' };
+}
+try {
+  if (editor.zoomToFit) { editor.zoomToFit(); return { ok: true, via: 'editor.zoomToFit' }; }
+  if (editor.setCamera) {
+    const bounds = editor.getCurrentPageBounds?.() || editor.getViewportPageBounds?.();
+    return { ok: true, via: 'bounds', bounds };
+  }
+} catch (e) { return { ok: false, error: String(e) }; }
+return { ok: false, error: 'no zoomToFit' };
+"#;
+    let resp = canvas_api_post(&server, "/api/search", &json!({ "code": code }))?;
+    Ok(format!(
+        "fit_camera\n{}\n",
+        serde_json::to_string_pretty(&resp).unwrap_or_else(|_| resp.to_string())
+    ))
+}
+
 fn status_report() -> String {
     let mut s = String::new();
     match app_path() {
@@ -1296,6 +1830,9 @@ fn status_report() -> String {
             );
             s.push_str(
                 "scripts: tldraw(action=enable_scripts, path=…) · api: action=api code=\"return await api.getDocs()\"\n",
+            );
+            s.push_str(
+                "more:    screenshot|list_docs|fit_camera · shapes type=geo|arrow|frame|note\n",
             );
         }
         None => {

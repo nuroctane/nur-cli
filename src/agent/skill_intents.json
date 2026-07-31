@@ -1,6 +1,6 @@
 {
   "generated_at": "2026-07-30T05:47:19.957125",
-  "total_skills": 975,
+  "total_skills": 976,
   "note": "Comprehensive skill intent index - 700+ skills, expanded NL triggers. Must be updated when adding skills per AGENTS.md. Run: python scripts/generate_skill_intents.py",
   "skills": [
     {
@@ -252,7 +252,7 @@
     },
     {
       "name": "ai-sdk",
-      "description": "Vercel AI SDK expert guidance. Use when building AI-powered features \u2014 chat interfaces, text generation, structured output, tool calling, agents, MCP integration, streaming, embeddings, reranking, image generation, or working with any LLM provider.",
+      "description": "Vercel AI SDK expert guidance. Use when building AI-powered features — chat interfaces, text generation, structured output, tool calling, agents, MCP integration, streaming, embeddings, reranking, image generation, or working with any LLM provider.",
       "path": "C:\\Users\\david\\.nur\\skills\\ai-sdk\\SKILL.md",
       "triggers": [
         "vercel expert",
@@ -298,7 +298,7 @@
     },
     {
       "name": "akm-manager",
-      "description": "AKM (Agent Knowledge Management) \u2014 package manager for skills/commands/tools across Claude/OpenCode/Cursor.",
+      "description": "AKM (Agent Knowledge Management) — package manager for skills/commands/tools across Claude/OpenCode/Cursor.",
       "path": "C:\\Users\\david\\.nur\\skills\\akm-manager\\SKILL.md",
       "triggers": [
         "knowledge management",
@@ -2593,7 +2593,7 @@
     },
     {
       "name": "animate",
-      "description": "Motion design pass \u2014 adds purposeful animations or removes excessive ones, respecting MOTION_INTENSITY and the project's animation stack. Use when the user asks to add animation,",
+      "description": "Motion design pass — adds purposeful animations or removes excessive ones, respecting MOTION_INTENSITY and the project's animation stack. Use when the user asks to add animation,",
       "path": "C:\\Users\\david\\.nur\\skills\\animate\\SKILL.md",
       "triggers": [
         "motion design",
@@ -2847,7 +2847,7 @@
     },
     {
       "name": "audit",
-      "description": "Technical UI audit \u2014 a11y, performance, responsive. Produces a prioritized findings table. Invoke when the user asks for audit on their UI, or mentions 'audit' alongside design / UI / frontend work.",
+      "description": "Technical UI audit — a11y, performance, responsive. Produces a prioritized findings table. Invoke when the user asks for audit on their UI, or mentions 'audit' alongside design / UI / frontend work.",
       "path": "C:\\Users\\david\\.nur\\skills\\audit\\SKILL.md",
       "triggers": [
         "technical audit",
@@ -3217,7 +3217,7 @@
     },
     {
       "name": "auth",
-      "description": "Authentication integration guidance \u2014 Clerk (native Vercel Marketplace), Descope, and Auth0 setup for Next.js applications. Covers middleware auth patterns, sign-in/sign-up flows, and Marketplace provisioning. Use when implementing user authentication.",
+      "description": "Authentication integration guidance — Clerk (native Vercel Marketplace), Descope, and Auth0 setup for Next.js applications. Covers middleware auth patterns, sign-in/sign-up flows, and Marketplace provisioning. Use when implementing user authentication.",
       "path": "C:\\Users\\david\\.nur\\skills\\auth\\SKILL.md",
       "triggers": [
         "authentication integration",
@@ -3415,7 +3415,7 @@
     },
     {
       "name": "bolder",
-      "description": "Amplify personality \u2014 raises layout variance and motion, strengthens typography and one signature detail, without slop. Use when the UI works but feels safe, flat, or",
+      "description": "Amplify personality — raises layout variance and motion, strengthens typography and one signature detail, without slop. Use when the UI works but feels safe, flat, or",
       "path": "C:\\Users\\david\\.nur\\skills\\bolder\\SKILL.md",
       "triggers": [
         "amplify personality",
@@ -4743,7 +4743,7 @@
     },
     {
       "name": "cdn-caching",
-      "description": "Debug Vercel CDN caching \u2014 cache hit rate, stale content, revalidation behavior, ISR + PPR, per-request cache reasons (cacheReason), and costs.",
+      "description": "Debug Vercel CDN caching — cache hit rate, stale content, revalidation behavior, ISR + PPR, per-request cache reasons (cacheReason), and costs.",
       "path": "C:\\Users\\david\\.nur\\skills\\cdn-caching\\SKILL.md",
       "triggers": [
         "/cdn caching",
@@ -4767,7 +4767,7 @@
     },
     {
       "name": "chat-sdk",
-      "description": "Vercel Chat SDK expert guidance. Use when building multi-platform chat bots \u2014 Slack, Telegram, Microsoft Teams, Discord, Google Chat, GitHub, Linear \u2014 with a single codebase. Covers the Chat class, adapters, threads, messages, cards, modals, streaming, state management, and webhook setup.",
+      "description": "Vercel Chat SDK expert guidance. Use when building multi-platform chat bots — Slack, Telegram, Microsoft Teams, Discord, Google Chat, GitHub, Linear — with a single codebase. Covers the Chat class, adapters, threads, messages, cards, modals, streaming, state management, and webhook setup.",
       "path": "C:\\Users\\david\\.nur\\skills\\chat-sdk\\SKILL.md",
       "triggers": [
         "vercel chat",
@@ -4822,7 +4822,7 @@
     },
     {
       "name": "clarify",
-      "description": "UX copy review across buttons, errors, empty states, and form hints \u2014 critiques by default, applies only on request. Use when copy feels vague, generic, or AI-sounding, or when the user says",
+      "description": "UX copy review across buttons, errors, empty states, and form hints — critiques by default, applies only on request. Use when copy feels vague, generic, or AI-sounding, or when the user says",
       "path": "C:\\Users\\david\\.nur\\skills\\clarify\\SKILL.md",
       "triggers": [
         "copy review",
@@ -4844,7 +4844,7 @@
     },
     {
       "name": "claude",
-      "description": "A research-journal aesthetic printed on warm stone \u2014 authoritative, editorial, almost achromatic. Pages live on warm ivory parchment (never pure white), with near-black slate as the dominant ink.",
+      "description": "A research-journal aesthetic printed on warm stone — authoritative, editorial, almost achromatic. Pages live on warm ivory parchment (never pure white), with near-black slate as the dominant ink.",
       "path": "C:\\Users\\david\\.nur\\skills\\claude\\SKILL.md",
       "triggers": [
         "research journal",
@@ -4995,7 +4995,7 @@
     },
     {
       "name": "code-review",
-      "description": "Review the changes since a fixed point (commit, branch, tag, or merge-base) along two axes \u2014 Standards (does the code follow this repo's documented coding standards?) and Spec (does the code match what the originating issue/PRD asked for?). Runs both reviews in parallel sub-agents and reports them s",
+      "description": "Review the changes since a fixed point (commit, branch, tag, or merge-base) along two axes — Standards (does the code follow this repo's documented coding standards?) and Spec (does the code match what the originating issue/PRD asked for?). Runs both reviews in parallel sub-agents and reports them s",
       "path": "C:\\Users\\david\\.nur\\skills\\code-review\\SKILL.md",
       "triggers": [
         "review changes",
@@ -5313,7 +5313,7 @@
     },
     {
       "name": "colorize",
-      "description": "Color strategy pass \u2014 introduces a single accent at 3-5 intentional placements, or reduces an over-colored UI back to 90% neutral. Use when the UI has no color identity, uses blue by default, or is shouting with too many competing accents. Invoke when the user asks for colorize on their UI, or menti",
+      "description": "Color strategy pass — introduces a single accent at 3-5 intentional placements, or reduces an over-colored UI back to 90% neutral. Use when the UI has no color identity, uses blue by default, or is shouting with too many competing accents. Invoke when the user asks for colorize on their UI, or menti",
       "path": "C:\\Users\\david\\.nur\\skills\\colorize\\SKILL.md",
       "triggers": [
         "color strategy",
@@ -6752,7 +6752,7 @@
     },
     {
       "name": "craft",
-      "description": "One-shot build pipeline for a complete surface from an outcome recipe \u2014 inputs (or defaults) \u2192 composition \u2192 theme \u2192 build order \u2192 acceptance bar. Use when the user asks for a whole surface (",
+      "description": "One-shot build pipeline for a complete surface from an outcome recipe — inputs (or defaults) → composition → theme → build order → acceptance bar. Use when the user asks for a whole surface (",
       "path": "C:\\Users\\david\\.nur\\skills\\craft\\SKILL.md",
       "triggers": [
         "shot build",
@@ -6796,7 +6796,7 @@
     },
     {
       "name": "critique",
-      "description": "Design lens critique covering visual hierarchy, clarity, and anti-slop patterns \u2014 produces a findings table, no code edits unless asked. Use when the user wants a design review, says",
+      "description": "Design lens critique covering visual hierarchy, clarity, and anti-slop patterns — produces a findings table, no code edits unless asked. Use when the user wants a design review, says",
       "path": "C:\\Users\\david\\.nur\\skills\\critique\\SKILL.md",
       "triggers": [
         "design lens",
@@ -6902,7 +6902,7 @@
     },
     {
       "name": "delight",
-      "description": "Delight pass \u2014 adds one or two memorable micro-interactions (copy specificity, hover choreography, state transitions, one signature detail) without decoration or confetti. Use when the UI works but feels generic, or when the user says",
+      "description": "Delight pass — adds one or two memorable micro-interactions (copy specificity, hover choreography, state transitions, one signature detail) without decoration or confetti. Use when the UI works but feels generic, or when the user says",
       "path": "C:\\Users\\david\\.nur\\skills\\delight\\SKILL.md",
       "triggers": [
         "delight pass",
@@ -7435,7 +7435,7 @@
     },
     {
       "name": "design-system",
-      "description": "Token architecture, component specifications, and slide generation. Three-layer tokens (primitive\u2192semantic\u2192component), CSS variables, spacing/typography scales, component specs, strategic slide creation. Use for design tokens, systematic design, brand-compliant presentations.",
+      "description": "Token architecture, component specifications, and slide generation. Three-layer tokens (primitive→semantic→component), CSS variables, spacing/typography scales, component specs, strategic slide creation. Use for design tokens, systematic design, brand-compliant presentations.",
       "path": "C:\\Users\\david\\.nur\\skills\\design-system\\SKILL.md",
       "triggers": [
         "token architecture",
@@ -10446,7 +10446,7 @@
     },
     {
       "name": "dialkit",
-      "description": "Dial in interface parameters of any kind \u2014 add live, tweakable controls (dials/knobs/sliders/timelines) to a UI so values like animation timing, spacing, colors, and physics can be tuned in real time instead of edit-reload-guess. Use when building or refining an interface and the user wants to tune ",
+      "description": "Dial in interface parameters of any kind — add live, tweakable controls (dials/knobs/sliders/timelines) to a UI so values like animation timing, spacing, colors, and physics can be tuned in real time instead of edit-reload-guess. Use when building or refining an interface and the user wants to tune ",
       "path": "C:\\Users\\david\\.nur\\skills\\dialkit\\SKILL.md",
       "triggers": [
         "dial interface",
@@ -10499,7 +10499,7 @@
     },
     {
       "name": "distill",
-      "description": "Reduction pass \u2014 cuts content, structure, visuals, and dead code that doesn't answer a user question or drive an action, respecting CRAFT_LEVEL. Use when the UI feels cluttered, has too many CTAs, walls of text, or decorative noise, or when the user says",
+      "description": "Reduction pass — cuts content, structure, visuals, and dead code that doesn't answer a user question or drive an action, respecting CRAFT_LEVEL. Use when the UI feels cluttered, has too many CTAs, walls of text, or decorative noise, or when the user says",
       "path": "C:\\Users\\david\\.nur\\skills\\distill\\SKILL.md",
       "triggers": [
         "reduction pass",
@@ -11200,7 +11200,7 @@
     },
     {
       "name": "executor-gateway",
-      "description": "Executor MCP gateway \u2014 one catalog for OpenAPI/GraphQL/MCP integrations shared across agents. Use for external APIs, multi-agent tool routing, policies.",
+      "description": "Executor MCP gateway — one catalog for OpenAPI/GraphQL/MCP integrations shared across agents. Use for external APIs, multi-agent tool routing, policies.",
       "path": "C:\\Users\\david\\.nur\\skills\\executor-gateway\\SKILL.md",
       "triggers": [
         "/executor gateway",
@@ -12220,7 +12220,7 @@
     },
     {
       "name": "extract",
-      "description": "Refactoring pass \u2014 extracts repeated Tailwind class combos and markup into components, and lifts magic values into design tokens. Use when the codebase has obvious duplication, hardcoded hex values or pixel sizes, or when the user says",
+      "description": "Refactoring pass — extracts repeated Tailwind class combos and markup into components, and lifts magic values into design tokens. Use when the codebase has obvious duplication, hardcoded hex values or pixel sizes, or when the user says",
       "path": "C:\\Users\\david\\.nur\\skills\\extract\\SKILL.md",
       "triggers": [
         "refactoring pass",
@@ -12561,7 +12561,7 @@
     },
     {
       "name": "fiction",
-      "description": "A playful, energetic, cartoonesque interface inspired by friendly children's-book illustrations \u2014 warm cream backgrounds, big bold custom display typography, saturated brand color blocks, thick black outlines, generously rounded shapes",
+      "description": "A playful, energetic, cartoonesque interface inspired by friendly children's-book illustrations — warm cream backgrounds, big bold custom display typography, saturated brand color blocks, thick black outlines, generously rounded shapes",
       "path": "C:\\Users\\david\\.nur\\skills\\fiction\\SKILL.md",
       "triggers": [
         "playful energetic",
@@ -12583,7 +12583,7 @@
     },
     {
       "name": "finalize",
-      "description": "Pre-ship gate \u2014 runs detector, verifies brief and tokens, applies the 10-pass finish bar, ranks findings by feedback hierarchy. Use when the user wants to ship, merge, or finalize a surface and needs a verdict (READY / NOT READY / BLOCKED) before committing. Invoke when the user asks for finalize on",
+      "description": "Pre-ship gate — runs detector, verifies brief and tokens, applies the 10-pass finish bar, ranks findings by feedback hierarchy. Use when the user wants to ship, merge, or finalize a surface and needs a verdict (READY / NOT READY / BLOCKED) before committing. Invoke when the user asks for finalize on",
       "path": "C:\\Users\\david\\.nur\\skills\\finalize\\SKILL.md",
       "triggers": [
         "/finalize",
@@ -13247,7 +13247,7 @@
     },
     {
       "name": "harden",
-      "description": "Production-readiness pass \u2014 audits and implements the full non-happy-path matrix: loading skeletons, empty states, error messages, partial data, i18n, offline, permissions, and first-run guidance. Use when preparing a surface for production or when the user says",
+      "description": "Production-readiness pass — audits and implements the full non-happy-path matrix: loading skeletons, empty states, error messages, partial data, i18n, offline, permissions, and first-run guidance. Use when preparing a surface for production or when the user says",
       "path": "C:\\Users\\david\\.nur\\skills\\harden\\SKILL.md",
       "triggers": [
         "production readiness",
@@ -13386,7 +13386,7 @@
     },
     {
       "name": "herdr",
-      "description": "Control herdr from inside it. Manage workspaces and tabs, split panes, spawn agents or subagents, read output, start dev servers, and wait for state changes \u2014 all via CLI commands that talk to the running herdr instance over a local unix socket. Use when running inside herdr (HERDR_ENV=1).",
+      "description": "Control herdr from inside it. Manage workspaces and tabs, split panes, spawn agents or subagents, read output, start dev servers, and wait for state changes — all via CLI commands that talk to the running herdr instance over a local unix socket. Use when running inside herdr (HERDR_ENV=1).",
       "path": "C:\\Users\\david\\.nur\\skills\\herdr\\SKILL.md",
       "triggers": [
         "control herdr",
@@ -14658,7 +14658,7 @@
     },
     {
       "name": "imagegen-frontend-web",
-      "description": "Elite frontend image-direction skill for generating premium, conversion-aware website design references. CRITICAL OUTPUT RULE \u2014 generate ONE separate horizontal image FOR EVERY section. A landing page with 8 sections produces 8 images. Never compress multiple sections into one image. Enforces compos",
+      "description": "Elite frontend image-direction skill for generating premium, conversion-aware website design references. CRITICAL OUTPUT RULE — generate ONE separate horizontal image FOR EVERY section. A landing page with 8 sections produces 8 images. Never compress multiple sections into one image. Enforces compos",
       "path": "C:\\Users\\david\\.nur\\skills\\imagegen-frontend-web\\SKILL.md",
       "triggers": [
         "/imagegen frontend web",
@@ -14711,7 +14711,7 @@
     },
     {
       "name": "impeccable",
-      "description": "A modern, graphic, editorial-poster aesthetic \u2014 warm and confident \u2014 built on alternating cream and burnt orange sections, an amber brand color.",
+      "description": "A modern, graphic, editorial-poster aesthetic — warm and confident — built on alternating cream and burnt orange sections, an amber brand color.",
       "path": "C:\\Users\\david\\.nur\\skills\\impeccable\\SKILL.md",
       "triggers": [
         "modern graphic",
@@ -19711,7 +19711,7 @@
     },
     {
       "name": "improve-animations",
-      "description": "Survey a codebase's animation and motion code as a senior motion advisor, then produce a prioritized audit and self-contained implementation plans for other agents (or cheaper models) to execute. Read-only on source code \u2014 it plans improvements, it does not apply them. Use when the user asks to",
+      "description": "Survey a codebase's animation and motion code as a senior motion advisor, then produce a prioritized audit and self-contained implementation plans for other agents (or cheaper models) to execute. Read-only on source code — it plans improvements, it does not apply them. Use when the user asks to",
       "path": "C:\\Users\\david\\.nur\\skills\\improve-animations\\SKILL.md",
       "triggers": [
         "/improve animations",
@@ -20257,7 +20257,7 @@
     },
     {
       "name": "marketplace",
-      "description": "Vercel Marketplace expert guidance \u2014 discovering, installing, and managing third-party integrations via the `vercel integration` CLI. Use when building any app that needs an external capability without a dedicated skill \u2014 commerce (stores, storefronts, selling products), payments (checkout, subscrip",
+      "description": "Vercel Marketplace expert guidance — discovering, installing, and managing third-party integrations via the `vercel integration` CLI. Use when building any app that needs an external capability without a dedicated skill — commerce (stores, storefronts, selling products), payments (checkout, subscrip",
       "path": "C:\\Users\\david\\.nur\\skills\\marketplace\\SKILL.md",
       "triggers": [
         "vercel marketplace",
@@ -20683,7 +20683,7 @@
     },
     {
       "name": "next-cache-components",
-      "description": "Next.js 16 Cache Components guidance \u2014 PPR, use cache directive, cacheLife, cacheTag, updateTag, and migration from unstable_cache. Use when implementing partial prerendering, caching strategies, or migrating from older Next.js cache patterns.",
+      "description": "Next.js 16 Cache Components guidance — PPR, use cache directive, cacheLife, cacheTag, updateTag, and migration from unstable_cache. Use when implementing partial prerendering, caching strategies, or migrating from older Next.js cache patterns.",
       "path": "C:\\Users\\david\\.nur\\skills\\next-cache-components\\SKILL.md",
       "triggers": [
         "/next cache components",
@@ -20714,7 +20714,7 @@
     },
     {
       "name": "next-forge",
-      "description": "next-forge expert guidance \u2014 production-grade Turborepo monorepo SaaS starter by Vercel. Use when working in a next-forge project, scaffolding with `npx next-forge init`, or editing @repo/* workspace packages.",
+      "description": "next-forge expert guidance — production-grade Turborepo monorepo SaaS starter by Vercel. Use when working in a next-forge project, scaffolding with `npx next-forge init`, or editing @repo/* workspace packages.",
       "path": "C:\\Users\\david\\.nur\\skills\\next-forge\\SKILL.md",
       "triggers": [
         "/next forge",
@@ -20761,7 +20761,7 @@
     },
     {
       "name": "nextjs",
-      "description": "Next.js App Router expert guidance. Use when building, debugging, or architecting Next.js applications \u2014 routing, Server Components, Server Actions, Cache Components, layouts, middleware/proxy, data fetching, rendering strategies, and deployment on Vercel.",
+      "description": "Next.js App Router expert guidance. Use when building, debugging, or architecting Next.js applications — routing, Server Components, Server Actions, Cache Components, layouts, middleware/proxy, data fetching, rendering strategies, and deployment on Vercel.",
       "path": "C:\\Users\\david\\.nur\\skills\\nextjs\\SKILL.md",
       "triggers": [
         "next router",
@@ -20862,7 +20862,7 @@
     },
     {
       "name": "openseo",
-      "description": "SEO research and audits via OpenSEO \u2014 an open-source Semrush/Ahrefs alternative exposed as an MCP server. Use when the user wants keyword research, backlink analysis, rank tracking, site audits, competitor analysis, or search-console insights. Covers connecting the OpenSEO MCP and running the workfl",
+      "description": "SEO research and audits via OpenSEO — an open-source Semrush/Ahrefs alternative exposed as an MCP server. Use when the user wants keyword research, backlink analysis, rank tracking, site audits, competitor analysis, or search-console insights. Covers connecting the OpenSEO MCP and running the workfl",
       "path": "C:\\Users\\david\\.nur\\skills\\openseo\\SKILL.md",
       "triggers": [
         "research audits",
@@ -21109,7 +21109,7 @@
     },
     {
       "name": "penecho",
-      "description": "Integration playbook for penecho (the AI-canvas app) \u2014 its provider abstraction with openai/anthropic auto-detection, CLI/env auth handling, and the patterns nur-cli can adopt, plus the penecho tool actions (status/probe/doctor/export/atlas/launch).",
+      "description": "Integration playbook for penecho (the AI-canvas app) — its provider abstraction with openai/anthropic auto-detection, CLI/env auth handling, and the patterns nur-cli can adopt, plus the penecho tool actions (status/probe/doctor/export/atlas/launch).",
       "path": "C:\\Users\\david\\.nur\\skills\\security\\penecho\\SKILL.md",
       "triggers": [
         "integration playbook",
@@ -24668,7 +24668,7 @@
     },
     {
       "name": "pick-ui-library",
-      "description": "Pick the right library for a given frontend task from a curated, opinionated list \u2014 numbers, OTP inputs, charts, command menus, virtualization, drag and drop, toasts, state, styling, and more. Only runs when explicitly invoked; it does not trigger on its own.",
+      "description": "Pick the right library for a given frontend task from a curated, opinionated list — numbers, OTP inputs, charts, command menus, virtualization, drag and drop, toasts, state, styling, and more. Only runs when explicitly invoked; it does not trigger on its own.",
       "path": "C:\\Users\\david\\.nur\\skills\\pick-ui-library\\SKILL.md",
       "triggers": [
         "/pick ui library",
@@ -24790,7 +24790,7 @@
     },
     {
       "name": "polish",
-      "description": "Final craft pass applying the compound details from the polish checklist \u2014 micro-typography, spacing rhythm, hover states, and a signature detail \u2014 directly to code. Use when the surface is functionally complete but feels unfinished, or when the user says",
+      "description": "Final craft pass applying the compound details from the polish checklist — micro-typography, spacing rhythm, hover states, and a signature detail — directly to code. Use when the surface is functionally complete but feels unfinished, or when the user says",
       "path": "C:\\Users\\david\\.nur\\skills\\polish\\SKILL.md",
       "triggers": [
         "final craft",
@@ -24986,7 +24986,7 @@
     },
     {
       "name": "quieter",
-      "description": "Tone down visual noise \u2014 lowers variance and motion, simplifies layout and color weight, keeps hierarchy clear. Use when the UI feels loud, busy, or over-designed, or when the user says",
+      "description": "Tone down visual noise — lowers variance and motion, simplifies layout and color weight, keeps hierarchy clear. Use when the UI feels loud, busy, or over-designed, or when the user says",
       "path": "C:\\Users\\david\\.nur\\skills\\quieter\\SKILL.md",
       "triggers": [
         "/quieter",
@@ -25093,7 +25093,7 @@
     },
     {
       "name": "redesign",
-      "description": "Redesign an existing site or app without losing what already works \u2014 audits the current surface first, classifies what to preserve (brand, IA, SEO, content), picks a refresh/reskin/rebuild scope, then modernizes deliberately. Use when the user says",
+      "description": "Redesign an existing site or app without losing what already works — audits the current surface first, classifies what to preserve (brand, IA, SEO, content), picks a refresh/reskin/rebuild scope, then modernizes deliberately. Use when the user says",
       "path": "C:\\Users\\david\\.nur\\skills\\redesign\\SKILL.md",
       "triggers": [
         "redesign existing",
@@ -25390,7 +25390,7 @@
     },
     {
       "name": "routing-middleware",
-      "description": "Vercel Routing Middleware guidance \u2014 request interception before cache, rewrites, redirects, personalization. Works with any framework. Supports Edge, Node.js, and Bun runtimes. Use when intercepting requests at the platform level.",
+      "description": "Vercel Routing Middleware guidance — request interception before cache, rewrites, redirects, personalization. Works with any framework. Supports Edge, Node.js, and Bun runtimes. Use when intercepting requests at the platform level.",
       "path": "C:\\Users\\david\\.nur\\skills\\routing-middleware\\SKILL.md",
       "triggers": [
         "/routing middleware",
@@ -25436,7 +25436,7 @@
     },
     {
       "name": "runtime-cache",
-      "description": "Vercel Runtime Cache API guidance \u2014 ephemeral per-region key-value cache with tag-based invalidation. Shared across Functions, Routing Middleware, and Builds. Use when implementing caching strategies beyond framework-level caching.",
+      "description": "Vercel Runtime Cache API guidance — ephemeral per-region key-value cache with tag-based invalidation. Shared across Functions, Routing Middleware, and Builds. Use when implementing caching strategies beyond framework-level caching.",
       "path": "C:\\Users\\david\\.nur\\skills\\runtime-cache\\SKILL.md",
       "triggers": [
         "/runtime cache",
@@ -25501,7 +25501,7 @@
     },
     {
       "name": "sddesign",
-      "description": "Full spec-driven pipeline \u2014 walks brief \u2192 tokens \u2192 shape (spec) \u2192 craft (build) \u2192 converge \u2192 ship in one guided run. Writes `.ui-craft/spec.md`. Run when starting a net-new surface from scratch. Invoke when the user asks for sddesign on their UI, or mentions 'sddesign' alongside design / UI / fronte",
+      "description": "Full spec-driven pipeline — walks brief → tokens → shape (spec) → craft (build) → converge → ship in one guided run. Writes `.ui-craft/spec.md`. Run when starting a net-new surface from scratch. Invoke when the user asks for sddesign on their UI, or mentions 'sddesign' alongside design / UI / fronte",
       "path": "C:\\Users\\david\\.nur\\skills\\sddesign\\SKILL.md",
       "triggers": [
         "/sddesign",
@@ -25553,7 +25553,7 @@
     },
     {
       "name": "sega",
-      "description": "A playful, arcade-inspired interface for games \u2014 built on the VT323 pixel typeface, hard-edged 0px corners, chunky pill buttons that physically press into solid offset blocks",
+      "description": "A playful, arcade-inspired interface for games — built on the VT323 pixel typeface, hard-edged 0px corners, chunky pill buttons that physically press into solid offset blocks",
       "path": "C:\\Users\\david\\.nur\\skills\\sega\\SKILL.md",
       "triggers": [
         "playful arcade",
@@ -25574,7 +25574,7 @@
     },
     {
       "name": "setup-matt-pocock-skills",
-      "description": "Configure this repo for the engineering skills \u2014 set up its issue tracker, triage label vocabulary, and domain doc layout. Run once before first use of the other engineering skills.",
+      "description": "Configure this repo for the engineering skills — set up its issue tracker, triage label vocabulary, and domain doc layout. Run once before first use of the other engineering skills.",
       "path": "C:\\Users\\david\\.nur\\skills\\setup-matt-pocock-skills\\SKILL.md",
       "triggers": [
         "/setup matt pocock skills",
@@ -25636,7 +25636,7 @@
     },
     {
       "name": "setup-ts-deep-modules",
-      "description": "Wire dependency-cruiser into a TypeScript repo so each package is a deep module \u2014 implementation hidden in subfolders, reachable only through its entry-point files. User-invoked.",
+      "description": "Wire dependency-cruiser into a TypeScript repo so each package is a deep module — implementation hidden in subfolders, reachable only through its entry-point files. User-invoked.",
       "path": "C:\\Users\\david\\.nur\\skills\\setup-ts-deep-modules\\SKILL.md",
       "triggers": [
         "/setup ts deep modules",
@@ -25689,7 +25689,7 @@
     },
     {
       "name": "shape",
-      "description": "Wireframe-first pass \u2014 outputs an ASCII layout + state list + content inventory + question list before any code. Use when starting a new screen from scratch or when the user's brief is still ambiguous. Invoke when the user asks for shape on their UI, or mentions 'shape' alongside design / UI / front",
+      "description": "Wireframe-first pass — outputs an ASCII layout + state list + content inventory + question list before any code. Use when starting a new screen from scratch or when the user's brief is still ambiguous. Invoke when the user asks for shape on their UI, or mentions 'shape' alongside design / UI / front",
       "path": "C:\\Users\\david\\.nur\\skills\\shape\\SKILL.md",
       "triggers": [
         "wireframe first",
@@ -26074,7 +26074,7 @@
     },
     {
       "name": "stitch-design-taste",
-      "description": "Semantic Design System Skill for Google Stitch. Generates agent-friendly DESIGN.md files that enforce premium, anti-generic UI standards \u2014 strict typography, calibrated color, asymmetric layouts, perpetual micro-motion, and hardware-accelerated performance.",
+      "description": "Semantic Design System Skill for Google Stitch. Generates agent-friendly DESIGN.md files that enforce premium, anti-generic UI standards — strict typography, calibrated color, asymmetric layouts, perpetual micro-motion, and hardware-accelerated performance.",
       "path": "C:\\Users\\david\\.nur\\skills\\stitch-skill\\SKILL.md",
       "triggers": [
         "/stitch design taste",
@@ -26204,7 +26204,7 @@
     },
     {
       "name": "t3code",
-      "description": "Integration playbook for t3code's BYO-auth model \u2014 vendor-CLI credential delegation, DPoP-secured pairing, and the driver-registry pattern \u2014 plus the concrete auth/env-isolation improvements nur-cli can adopt.",
+      "description": "Integration playbook for t3code's BYO-auth model — vendor-CLI credential delegation, DPoP-secured pairing, and the driver-registry pattern — plus the concrete auth/env-isolation improvements nur-cli can adopt.",
       "path": "C:\\Users\\david\\.nur\\skills\\t3code\\SKILL.md",
       "triggers": [
         "integration playbook",
@@ -26404,7 +26404,7 @@
     },
     {
       "name": "to-spec",
-      "description": "Turn the current conversation into a spec and publish it to the project issue tracker \u2014 no interview, just synthesis of what you've already discussed.",
+      "description": "Turn the current conversation into a spec and publish it to the project issue tracker — no interview, just synthesis of what you've already discussed.",
       "path": "C:\\Users\\david\\.nur\\skills\\to-spec\\SKILL.md",
       "triggers": [
         "turn current",
@@ -26428,7 +26428,7 @@
     },
     {
       "name": "to-tickets",
-      "description": "Break a plan, spec, or the current conversation into a set of tracer-bullet tickets, each declaring its blocking edges, published to the configured tracker \u2014 edges as text in one file per ticket locally, or native blocking links on a real tracker.",
+      "description": "Break a plan, spec, or the current conversation into a set of tracer-bullet tickets, each declaring its blocking edges, published to the configured tracker — edges as text in one file per ticket locally, or native blocking links on a real tracker.",
       "path": "C:\\Users\\david\\.nur\\skills\\to-tickets\\SKILL.md",
       "triggers": [
         "/to tickets",
@@ -26486,7 +26486,7 @@
     },
     {
       "name": "triage",
-      "description": "Move issues and external PRs through a state machine of triage roles \u2014 categorise, verify, grill if needed, and write agent-ready briefs.",
+      "description": "Move issues and external PRs through a state machine of triage roles — categorise, verify, grill if needed, and write agent-ready briefs.",
       "path": "C:\\Users\\david\\.nur\\skills\\triage\\SKILL.md",
       "triggers": [
         "move issues",
@@ -26717,7 +26717,7 @@
     },
     {
       "name": "unhappy",
-      "description": "State-first design pass \u2014 inventories and implements all non-happy states (loading, empty, error, partial, conflict, offline) before the happy path, and refactors impossible boolean state to proper state machines. Use when starting a new screen, reviewing an existing one for edge-case gaps, or when ",
+      "description": "State-first design pass — inventories and implements all non-happy states (loading, empty, error, partial, conflict, offline) before the happy path, and refactors impossible boolean state to proper state machines. Use when starting a new screen, reviewing an existing one for edge-case gaps, or when ",
       "path": "C:\\Users\\david\\.nur\\skills\\unhappy\\SKILL.md",
       "triggers": [
         "state first",
@@ -26825,7 +26825,7 @@
     },
     {
       "name": "vercel-agent",
-      "description": "Vercel Agent guidance \u2014 AI-powered code review, incident investigation, and SDK installation. Automates PR analysis and anomaly debugging. Use when configuring or understanding Vercel's AI development tools.",
+      "description": "Vercel Agent guidance — AI-powered code review, incident investigation, and SDK installation. Automates PR analysis and anomaly debugging. Use when configuring or understanding Vercel's AI development tools.",
       "path": "C:\\Users\\david\\.nur\\skills\\vercel-agent\\SKILL.md",
       "triggers": [
         "vercel guidance",
@@ -26873,7 +26873,7 @@
     },
     {
       "name": "vercel-connect",
-      "description": "Vercel Connect expert guidance \u2014 securely obtain scoped OAuth tokens for third-party services (Slack, GitHub, MCP servers, OAuth, Snowflake) on behalf of apps or users via Vercel OIDC. Use when wiring up third-party API access, connecting to MCP servers, sending Slack messages, accessing GitHub APIs",
+      "description": "Vercel Connect expert guidance — securely obtain scoped OAuth tokens for third-party services (Slack, GitHub, MCP servers, OAuth, Snowflake) on behalf of apps or users via Vercel OIDC. Use when wiring up third-party API access, connecting to MCP servers, sending Slack messages, accessing GitHub APIs",
       "path": "C:\\Users\\david\\.nur\\skills\\vercel-connect\\SKILL.md",
       "triggers": [
         "/vercel connect",
@@ -26896,7 +26896,7 @@
     },
     {
       "name": "vercel-firewall",
-      "description": "Vercel Firewall expert guidance \u2014 automatic DDoS mitigation, the Vercel WAF (custom rules, IP blocking, managed rulesets, rate limiting), Attack Mode, system bypass, bot management, and the `vercel firewall` CLI. Use when configuring platform-level security, responding to attacks, or staging firewal",
+      "description": "Vercel Firewall expert guidance — automatic DDoS mitigation, the Vercel WAF (custom rules, IP blocking, managed rulesets, rate limiting), Attack Mode, system bypass, bot management, and the `vercel firewall` CLI. Use when configuring platform-level security, responding to attacks, or staging firewal",
       "path": "C:\\Users\\david\\.nur\\skills\\vercel-firewall\\SKILL.md",
       "triggers": [
         "/vercel firewall",
@@ -26919,7 +26919,7 @@
     },
     {
       "name": "vercel-functions",
-      "description": "Vercel Functions expert guidance \u2014 Serverless Functions, Edge Functions, Fluid Compute, streaming, Cron Jobs, and runtime configuration. Use when configuring, debugging, or optimizing server-side code running on Vercel.",
+      "description": "Vercel Functions expert guidance — Serverless Functions, Edge Functions, Fluid Compute, streaming, Cron Jobs, and runtime configuration. Use when configuring, debugging, or optimizing server-side code running on Vercel.",
       "path": "C:\\Users\\david\\.nur\\skills\\vercel-functions\\SKILL.md",
       "triggers": [
         "/vercel functions",
@@ -26942,7 +26942,7 @@
     },
     {
       "name": "vercel-sandbox",
-      "description": "Vercel Sandbox guidance \u2014 ephemeral Firecracker microVMs for running untrusted code safely. Supports AI agents, code generation, and experimentation. Use when executing user-generated or AI-generated code in isolation.",
+      "description": "Vercel Sandbox guidance — ephemeral Firecracker microVMs for running untrusted code safely. Supports AI agents, code generation, and experimentation. Use when executing user-generated or AI-generated code in isolation.",
       "path": "C:\\Users\\david\\.nur\\skills\\vercel-sandbox\\SKILL.md",
       "triggers": [
         "/vercel sandbox",
@@ -26965,7 +26965,7 @@
     },
     {
       "name": "vercel-storage",
-      "description": "Vercel storage expert guidance \u2014 Blob, Edge Config, and Marketplace storage (Neon Postgres, Upstash Redis). Use when choosing, configuring, or using data storage with Vercel applications.",
+      "description": "Vercel storage expert guidance — Blob, Edge Config, and Marketplace storage (Neon Postgres, Upstash Redis). Use when choosing, configuring, or using data storage with Vercel applications.",
       "path": "C:\\Users\\david\\.nur\\skills\\vercel-storage\\SKILL.md",
       "triggers": [
         "/vercel storage",
@@ -26988,7 +26988,7 @@
     },
     {
       "name": "verification",
-      "description": "Full-story verification \u2014 infers what the user is building, then verifies the complete flow end-to-end: browser \u2192 API \u2192 data \u2192 response. Triggers on dev server start and 'why isn't this working' signals.",
+      "description": "Full-story verification — infers what the user is building, then verifies the complete flow end-to-end: browser → API → data → response. Triggers on dev server start and 'why isn't this working' signals.",
       "path": "C:\\Users\\david\\.nur\\skills\\verification\\SKILL.md",
       "triggers": [
         "/verification",
@@ -27115,7 +27115,7 @@
     },
     {
       "name": "wayfinder",
-      "description": "Plan a huge chunk of work \u2014 more than one agent session can hold \u2014 as a shared map of decision tickets on your issue tracker, and resolve them one at a time until the way to the destination is clear.",
+      "description": "Plan a huge chunk of work — more than one agent session can hold — as a shared map of decision tickets on your issue tracker, and resolve them one at a time until the way to the destination is clear.",
       "path": "C:\\Users\\david\\.nur\\skills\\wayfinder\\SKILL.md",
       "triggers": [
         "/wayfinder",
@@ -27136,7 +27136,7 @@
     },
     {
       "name": "wizard",
-      "description": "Generate an interactive bash wizard that walks a human through a manual procedure \u2014 third-party setup, a one-off migration, an A\u2192B state transition \u2014 opening URLs, capturing values, confirming each step, and writing .env files and GitHub Actions secrets.",
+      "description": "Generate an interactive bash wizard that walks a human through a manual procedure — third-party setup, a one-off migration, an A→B state transition — opening URLs, capturing values, confirming each step, and writing .env files and GitHub Actions secrets.",
       "path": "C:\\Users\\david\\.nur\\skills\\wizard\\SKILL.md",
       "triggers": [
         "generate interactive",
@@ -27180,7 +27180,7 @@
     },
     {
       "name": "writing-beats",
-      "description": "Writing, exploit \u2014 assemble raw material into a journey of beats, grounding each term before a beat leans on it.",
+      "description": "Writing, exploit — assemble raw material into a journey of beats, grounding each term before a beat leans on it.",
       "path": "C:\\Users\\david\\.nur\\skills\\writing-beats\\SKILL.md",
       "triggers": [
         "writing exploit",
@@ -27204,7 +27204,7 @@
     },
     {
       "name": "writing-fragments",
-      "description": "Writing, explore \u2014 mine raw fragments, no structure yet.",
+      "description": "Writing, explore — mine raw fragments, no structure yet.",
       "path": "C:\\Users\\david\\.nur\\skills\\writing-fragments\\SKILL.md",
       "triggers": [
         "/writing fragments",
@@ -27223,7 +27223,7 @@
     },
     {
       "name": "writing-great-skills",
-      "description": "Reference for writing and editing skills well \u2014 the vocabulary and principles that make a skill predictable.",
+      "description": "Reference for writing and editing skills well — the vocabulary and principles that make a skill predictable.",
       "path": "C:\\Users\\david\\.nur\\skills\\writing-great-skills\\SKILL.md",
       "triggers": [
         "/writing great skills",
@@ -27275,7 +27275,7 @@
     },
     {
       "name": "writing-shape",
-      "description": "Writing, exploit \u2014 shape raw material into an article, paragraph by paragraph.",
+      "description": "Writing, exploit — shape raw material into an article, paragraph by paragraph.",
       "path": "C:\\Users\\david\\.nur\\skills\\writing-shape\\SKILL.md",
       "triggers": [
         "writing exploit",
@@ -27311,6 +27311,32 @@
         "existing",
         "verifying",
         "deployment"
+      ]
+    },
+    {
+      "name": "diagram",
+      "description": "Router for Excalidraw (publishable hand-drawn), tldraw offline (interactive desktop boards), and PenEcho (AI ink/math canvas).",
+      "path": "skills/diagram/SKILL.md",
+      "triggers": [
+        "diagram",
+        "/diagram",
+        "draw diagram",
+        "architecture diagram",
+        "flowchart",
+        "whiteboard",
+        "canvas diagram",
+        "use diagram"
+      ],
+      "keywords": [
+        "diagram",
+        "flowchart",
+        "architecture",
+        "whiteboard",
+        "canvas",
+        "excalidraw",
+        "tldraw",
+        "penecho",
+        "draw"
       ]
     }
   ]

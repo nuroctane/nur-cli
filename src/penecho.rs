@@ -105,6 +105,7 @@ pub enum PenProvider {
     Api,
     CodexCli,
     ClaudeCli,
+    KimiCli,
 }
 
 #[allow(dead_code)]
@@ -114,6 +115,7 @@ impl PenProvider {
             PenProvider::Api => "api",
             PenProvider::CodexCli => "codex-cli",
             PenProvider::ClaudeCli => "claude-cli",
+            PenProvider::KimiCli => "kimi-cli",
         }
     }
 
@@ -121,6 +123,7 @@ impl PenProvider {
         match s.trim().to_ascii_lowercase().as_str() {
             "codex-cli" | "codex" => PenProvider::CodexCli,
             "claude-cli" | "claude" => PenProvider::ClaudeCli,
+            "kimi-cli" | "kimi" => PenProvider::KimiCli,
             _ => PenProvider::Api,
         }
     }
@@ -274,6 +277,9 @@ pub fn find_on_path(name: &str) -> Option<PathBuf> {
 #[derive(Debug, Clone)]
 pub struct ProbeStatus {
     pub binary: Option<PathBuf>,
+    /// Directory holding config.env — kept for future multi-file diagnostics
+    /// (`doctor`/`probe` report `config_file` directly today).
+    #[allow(dead_code)]
     pub config_dir: PathBuf,
     pub config_file: PathBuf,
     pub config_exists: bool,
@@ -357,29 +363,675 @@ pub fn export_to_penecho_env(
     Ok(out)
 }
 
-/// Write penecho config.env atomically (mirrors t3code atomicWrite)
-#[allow(dead_code)]
+/// Default HTTP port used by penecho (`cli.js` DEFAULT_PORT).
+pub const DEFAULT_PORT: u16 = 3888;
+
+/// Write penecho config.env atomically (mirrors t3code atomicWrite).
+/// Callers that write real secrets must never return those contents to the model.
 pub fn write_config_env(contents: &str) -> Result<PathBuf> {
     let dir = penecho_state_dir();
     let file = dir.join("config.env");
     crate::t3code::atomic_write(&file, contents.as_bytes())
         .map_err(|e| MuseError::Other(format!("atomic write penecho config: {e}")))?;
+    // Best-effort owner-only perms on Unix (penecho docs recommend this).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&file, fs::Permissions::from_mode(0o600));
+    }
     Ok(file)
 }
 
-/// Launch penecho server as sidecar — returns child handle.
-/// Does not link AGPL code, spawns via process (compliant).
-#[allow(dead_code)]
+/// Ensure `penecho` is on PATH via `npm i -g penecho` when Node is available.
+/// Idempotent. Returns a short non-secret status string.
+pub fn ensure_installed() -> Result<String> {
+    if let Some(bin) = find_on_path("penecho") {
+        let ver = Command::new(&bin)
+            .arg("--version")
+            .output()
+            .ok()
+            .and_then(|o| {
+                if o.status.success() {
+                    Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+                } else {
+                    None
+                }
+            })
+            .filter(|s| !s.is_empty());
+        return Ok(match ver {
+            Some(v) => format!("penecho ready ({v}) at {}", bin.display()),
+            None => format!("penecho ready at {}", bin.display()),
+        });
+    }
+    let node_ok = find_on_path("node").is_some() || find_on_path("node.exe").is_some();
+    if !node_ok {
+        return Err(MuseError::Other(
+            "penecho needs Node.js 20.3+ — install Node, then re-run (nur auto-installs penecho)".into(),
+        ));
+    }
+    let npm = find_on_path("npm")
+        .or_else(|| find_on_path("npm.cmd"))
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "npm".into());
+    let out = Command::new(&npm)
+        .args(["install", "-g", "penecho@latest"])
+        .output()
+        .map_err(|e| MuseError::Other(format!("npm install -g penecho failed to start: {e}")))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(MuseError::Other(format!(
+            "npm install -g penecho failed: {}",
+            err.chars().take(300).collect::<String>()
+        )));
+    }
+    if let Some(bin) = find_on_path("penecho") {
+        Ok(format!("installed penecho via npm at {}", bin.display()))
+    } else {
+        Err(MuseError::Other(
+            "penecho not found on PATH after npm install — open a new shell or check npm global bin"
+                .into(),
+        ))
+    }
+}
+
+/// Whether ~/.penecho/config.env already looks usable (no placeholders / redacted).
+pub fn config_is_usable() -> bool {
+    let file = penecho_state_dir().join("config.env");
+    let Ok(content) = fs::read_to_string(&file) else {
+        return false;
+    };
+    if content.contains(REDACTED_KEY) {
+        return false;
+    }
+    let provider = content
+        .lines()
+        .find_map(|l| l.strip_prefix("AI_PROVIDER="))
+        .map(str::trim)
+        .unwrap_or("api");
+    match provider {
+        "codex-cli" | "codex" | "claude-cli" | "claude" | "kimi-cli" | "kimi" => {
+            // CLI modes are usable if the matching binary exists (or user configured intentionally).
+            true
+        }
+        _ => {
+            // API mode needs a non-placeholder key + URL + model.
+            let has_key = content.lines().any(|l| {
+                (l.starts_with("AI_API_KEY=") || l.starts_with("OPENAI_API_KEY="))
+                    && !l.contains("your_")
+                    && !l.contains("changeme")
+                    && !l.contains("replace")
+                    && !l.contains("sk-...")
+                    && l.split_once('=').map(|(_, v)| !v.trim().is_empty()).unwrap_or(false)
+            });
+            let has_url = content
+                .lines()
+                .any(|l| (l.starts_with("AI_API_URL=") || l.starts_with("OPENAI_API_URL=")) && l.contains("http"));
+            let has_model = content.lines().any(|l| {
+                (l.starts_with("AI_API_MODEL=") || l.starts_with("OPENAI_MODEL="))
+                    && l.split_once('=')
+                        .map(|(_, v)| !v.trim().is_empty())
+                        .unwrap_or(false)
+            });
+            has_key && has_url && has_model
+        }
+    }
+}
+
+/// Pick the best penecho provider mode from nur auth + available CLIs.
+/// Secrets are written only to disk — never returned.
+#[derive(Debug, Clone)]
+pub enum AutoConfigMode {
+    Api {
+        /// Resolved AI_API_URL — kept for future doctor/report detail beyond
+        /// the format+model already surfaced in launch reports.
+        #[allow(dead_code)]
+        url: String,
+        model: String,
+        format: String,
+    },
+    CodexCli,
+    ClaudeCli,
+    KimiCli,
+}
+
+/// Auto-write `~/.penecho/config.env` from nur auth / detected CLIs.
+/// Returns a **non-secret** summary. Skips rewrite when config is already usable
+/// unless `force` is true.
+pub fn auto_configure_from_nur(force: bool, effort: Effort) -> Result<(AutoConfigMode, String)> {
+    if !force && config_is_usable() {
+        let mode = detect_mode_from_config().unwrap_or(AutoConfigMode::Api {
+            url: "https://api.openai.com/v1".into(),
+            model: "gpt-4o".into(),
+            format: "openai".into(),
+        });
+        return Ok((
+            mode,
+            format!(
+                "config already ready at {}",
+                penecho_state_dir().join("config.env").display()
+            ),
+        ));
+    }
+
+    let cfg = crate::config::load_config().unwrap_or_default();
+    let auth = crate::auth::load_auth().ok().flatten();
+    let is_oauth = auth
+        .as_ref()
+        .map(|a| matches!(a.auth_method, crate::auth::AuthMethod::Oauth))
+        .unwrap_or(false);
+    let auth_provider = auth
+        .as_ref()
+        .map(|a| a.provider.to_ascii_lowercase())
+        .unwrap_or_default();
+
+    // OAuth sessions are often CLI-backed — prefer codex/claude over raw token as API key.
+    if is_oauth {
+        if (auth_provider.contains("anthropic")
+            || auth_provider.contains("claude")
+            || auth_provider == "antigravity")
+            && find_on_path("claude").is_some()
+        {
+            let body = format!(
+                "# Generated by nur-cli penecho bridge (auto)\n\
+                 # Mode: Claude CLI (active nur OAuth session for {auth_provider})\n\
+                 AI_PROVIDER=claude-cli\n\
+                 AI_EFFORT={}\n\
+                 PENECHO_AI_IMAGE_FORMAT=webp\n",
+                effort.as_str()
+            );
+            let path = write_config_env(&body)?;
+            return Ok((
+                AutoConfigMode::ClaudeCli,
+                format!("wrote Claude CLI mode → {}", path.display()),
+            ));
+        }
+        if (auth_provider.contains("openai")
+            || auth_provider.contains("codex")
+            || auth_provider.is_empty())
+            && find_on_path("codex").is_some()
+        {
+            let body = format!(
+                "# Generated by nur-cli penecho bridge (auto)\n\
+                 # Mode: Codex CLI (active nur OAuth session)\n\
+                 AI_PROVIDER=codex-cli\n\
+                 AI_EFFORT={}\n\
+                 PENECHO_AI_IMAGE_FORMAT=webp\n",
+                effort.as_str()
+            );
+            let path = write_config_env(&body)?;
+            return Ok((
+                AutoConfigMode::CodexCli,
+                format!("wrote Codex CLI mode → {}", path.display()),
+            ));
+        }
+    }
+
+    // Prefer a real API key for the active provider (or generic).
+    let key = crate::auth::resolve_api_key_for(Some(cfg.provider.as_str()))
+        .or_else(|_| crate::auth::resolve_api_key())
+        .ok()
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty());
+
+    if let Some(key) = key {
+        // Skip OAuth access tokens for API mode when a matching CLI exists —
+        // ChatGPT/Claude OAuth tokens are not standard AI_API_KEY values.
+        let looks_like_oauth_jwt = key.starts_with("eyJ") || key.len() > 200;
+        if !(is_oauth && looks_like_oauth_jwt) {
+            let url = if cfg.base_url.trim().is_empty() {
+                "https://api.openai.com/v1".to_string()
+            } else {
+                cfg.base_url.clone()
+            };
+            let model = if cfg.model.trim().is_empty() {
+                "gpt-4o".to_string()
+            } else {
+                cfg.model.clone()
+            };
+            // Write REAL key to disk only (redact_key=false). Never return this string.
+            let body = export_to_penecho_env(&url, &key, &model, effort, false)?;
+            let path = write_config_env(&body)?;
+            let format = if url.contains("anthropic") || url.ends_with("/v1/messages") {
+                "anthropic"
+            } else {
+                "openai"
+            };
+            return Ok((
+                AutoConfigMode::Api {
+                    url: url.clone(),
+                    model: model.clone(),
+                    format: format.into(),
+                },
+                format!(
+                    "wrote API mode from nur auth (provider={}, model={}) → {}",
+                    cfg.provider,
+                    model,
+                    path.display()
+                ),
+            ));
+        }
+    }
+
+    // CLI fallbacks when no API key is usable.
+    if find_on_path("codex").is_some() {
+        let body = format!(
+            "# Generated by nur-cli penecho bridge (auto)\n\
+             AI_PROVIDER=codex-cli\n\
+             AI_EFFORT={}\n\
+             PENECHO_AI_IMAGE_FORMAT=webp\n",
+            effort.as_str()
+        );
+        let path = write_config_env(&body)?;
+        return Ok((
+            AutoConfigMode::CodexCli,
+            format!("wrote Codex CLI mode → {}", path.display()),
+        ));
+    }
+    if find_on_path("claude").is_some() {
+        let body = format!(
+            "# Generated by nur-cli penecho bridge (auto)\n\
+             AI_PROVIDER=claude-cli\n\
+             AI_EFFORT={}\n\
+             PENECHO_AI_IMAGE_FORMAT=webp\n",
+            effort.as_str()
+        );
+        let path = write_config_env(&body)?;
+        return Ok((
+            AutoConfigMode::ClaudeCli,
+            format!("wrote Claude CLI mode → {}", path.display()),
+        ));
+    }
+    if find_on_path("kimi").is_some() {
+        let body = format!(
+            "# Generated by nur-cli penecho bridge (auto)\n\
+             AI_PROVIDER=kimi-cli\n\
+             AI_EFFORT={}\n\
+             PENECHO_AI_IMAGE_FORMAT=webp\n",
+            effort.as_str()
+        );
+        let path = write_config_env(&body)?;
+        return Ok((
+            AutoConfigMode::KimiCli,
+            format!("wrote Kimi CLI mode → {}", path.display()),
+        ));
+    }
+
+    Err(MuseError::Other(
+        "no penecho provider available — run /login (API key) or install `codex` / `claude` / `kimi` CLI"
+            .into(),
+    ))
+}
+
+fn detect_mode_from_config() -> Option<AutoConfigMode> {
+    let file = penecho_state_dir().join("config.env");
+    let content = fs::read_to_string(file).ok()?;
+    let provider = content
+        .lines()
+        .find_map(|l| l.strip_prefix("AI_PROVIDER="))
+        .map(str::trim)
+        .unwrap_or("api");
+    match provider {
+        "codex-cli" | "codex" => Some(AutoConfigMode::CodexCli),
+        "claude-cli" | "claude" => Some(AutoConfigMode::ClaudeCli),
+        "kimi-cli" | "kimi" => Some(AutoConfigMode::KimiCli),
+        _ => {
+            let url = content
+                .lines()
+                .find_map(|l| l.strip_prefix("AI_API_URL=").or_else(|| l.strip_prefix("OPENAI_API_URL=")))
+                .unwrap_or("https://api.openai.com/v1")
+                .to_string();
+            let model = content
+                .lines()
+                .find_map(|l| {
+                    l.strip_prefix("AI_API_MODEL=")
+                        .or_else(|| l.strip_prefix("OPENAI_MODEL="))
+                })
+                .unwrap_or("gpt-4o")
+                .to_string();
+            let format = content
+                .lines()
+                .find_map(|l| l.strip_prefix("AI_API_FORMAT="))
+                .unwrap_or(if url.contains("anthropic") {
+                    "anthropic"
+                } else {
+                    "openai"
+                })
+                .to_string();
+            Some(AutoConfigMode::Api { url, model, format })
+        }
+    }
+}
+
+pub fn canvas_url(port: u16) -> String {
+    format!("http://127.0.0.1:{port}")
+}
+
+pub fn port_is_open(port: u16) -> bool {
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::Duration;
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    TcpStream::connect_timeout(&addr, Duration::from_millis(250)).is_ok()
+}
+
+fn wait_for_port(port: u16, timeout_ms: u64) -> bool {
+    use std::time::{Duration, Instant};
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_millis(timeout_ms) {
+        if port_is_open(port) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    false
+}
+
+/// Launch penecho server as a detached sidecar (AGPL-compliant process spawn).
+/// Prefer [`launch_seamless`] for the full ensure → config → open path.
 pub fn launch(extra_args: &[String]) -> Result<std::process::Child> {
     let bin = find_on_path("penecho").ok_or_else(|| {
         MuseError::Other(
-            "penecho binary not found on PATH. Install via `npm i -g penecho` or `nur penecho --install`".into(),
+            "penecho binary not found on PATH. Install via `npm i -g penecho` or ecosystem ensure"
+                .into(),
         )
     })?;
-    let mut cmd = Command::new(bin);
+    let mut cmd = Command::new(&bin);
     cmd.args(extra_args);
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS | CREATE_NO_WINDOW
+        cmd.creation_flags(0x0000_0200 | 0x0000_0008 | 0x0800_0000);
+    }
+    // Unix: null stdio is enough for non-interactive start (skips update Y/N prompts).
     cmd.spawn()
         .map_err(|e| MuseError::Other(format!("spawn penecho: {e}")))
+}
+
+/// Full seamless path on the default port. Prefer [`launch_seamless_on_port`]
+/// when a caller needs a custom port or an inject seed (the `penecho` tool
+/// always does); kept as the simple entry point for direct callers.
+#[allow(dead_code)]
+pub fn launch_seamless(open_browser: bool, effort: Effort) -> Result<String> {
+    let mut notes = Vec::new();
+
+    match ensure_installed() {
+        Ok(msg) => notes.push(msg),
+        Err(e) => return Err(e),
+    }
+
+    let (mode, cfg_msg) = auto_configure_from_nur(false, effort)?;
+    notes.push(cfg_msg);
+
+    let port = DEFAULT_PORT;
+    let url = canvas_url(port);
+
+    if port_is_open(port) {
+        notes.push(format!("already listening on {url}"));
+        if open_browser {
+            match crate::open_uri::open(&url) {
+                Ok(()) => notes.push("opened canvas in your default browser".into()),
+                Err(e) => notes.push(format!(
+                    "could not open browser ({e}) — open {url} manually"
+                )),
+            }
+        }
+        return Ok(format_launch_report(&notes, &mode, &url, true));
+    }
+
+    // Provider flag makes start non-interactive even if config is partial.
+    let flag = match &mode {
+        AutoConfigMode::Api { .. } => "--api",
+        AutoConfigMode::CodexCli => "--codex",
+        AutoConfigMode::ClaudeCli => "--claude",
+        AutoConfigMode::KimiCli => "--kimi",
+    };
+    let args = vec![
+        flag.to_string(),
+        "--port".into(),
+        port.to_string(),
+    ];
+    let _child = launch(&args)?;
+    notes.push(format!("spawned penecho ({flag}) on port {port}"));
+
+    if wait_for_port(port, 12_000) {
+        notes.push("server ready".into());
+    } else {
+        notes.push(
+            "server did not accept connections within 12s — it may still be starting; try the URL"
+                .into(),
+        );
+    }
+
+    if open_browser {
+        match crate::open_uri::open(&url) {
+            Ok(()) => notes.push("opened canvas in your default browser".into()),
+            Err(e) => notes.push(format!(
+                "could not open browser ({e}) — open {url} manually"
+            )),
+        }
+    }
+
+    Ok(format_launch_report(&notes, &mode, &url, false))
+}
+
+/// Launch on a specific port (overrides DEFAULT_PORT for this process).
+pub fn launch_seamless_on_port(
+    open_browser: bool,
+    effort: Effort,
+    port: u16,
+    inject: Option<&str>,
+) -> Result<String> {
+    let mut notes = Vec::new();
+    notes.push(ensure_installed()?);
+    let (mode, cfg_msg) = auto_configure_from_nur(false, effort)?;
+    notes.push(cfg_msg);
+
+    if let Some(text) = inject {
+        let p = write_inject_seed(text)?;
+        notes.push(format!("wrote inject seed → {}", p.display()));
+    }
+
+    let url = canvas_url(port);
+    if port_is_open(port) {
+        notes.push(format!("already listening on {url}"));
+        if open_browser {
+            let _ = crate::open_uri::open(&url);
+            notes.push("opened canvas in your default browser".into());
+        }
+        return Ok(format_launch_report(&notes, &mode, &url, true));
+    }
+
+    let flag = match &mode {
+        AutoConfigMode::Api { .. } => "--api",
+        AutoConfigMode::CodexCli => "--codex",
+        AutoConfigMode::ClaudeCli => "--claude",
+        AutoConfigMode::KimiCli => "--kimi",
+    };
+    let args = vec![flag.to_string(), "--port".into(), port.to_string()];
+    let _ = launch(&args)?;
+    notes.push(format!("spawned penecho ({flag}) on port {port}"));
+    let ready = wait_for_port(port, 12_000);
+    notes.push(if ready {
+        "server ready".into()
+    } else {
+        "server still starting — open URL shortly".into()
+    });
+    if open_browser {
+        let _ = crate::open_uri::open(&url);
+        notes.push("opened canvas in your default browser".into());
+    }
+    Ok(format_launch_report(&notes, &mode, &url, false))
+}
+
+/// Write conversation/context seed for the user (and agents) to paste on canvas.
+pub fn write_inject_seed(text: &str) -> Result<PathBuf> {
+    let dir = penecho_state_dir();
+    let _ = fs::create_dir_all(&dir);
+    let path = dir.join("inject.md");
+    let body = format!(
+        "# Nur → PenEcho inject seed\n\n\
+         Paste this into the canvas text tool or AI action menu.\n\n\
+         ---\n\n{}\n",
+        text.trim()
+    );
+    fs::write(&path, body).map_err(|e| MuseError::Other(format!("write inject seed: {e}")))?;
+    Ok(path)
+}
+
+/// Stop whatever is listening on the penecho port (best-effort).
+pub fn stop(port: u16) -> Result<String> {
+    if !port_is_open(port) {
+        return Ok(format!("penecho not listening on port {port}"));
+    }
+    #[cfg(windows)]
+    {
+        // Find PID owning the port via netstat, then taskkill.
+        let out = Command::new("cmd.exe")
+            .args(["/C", &format!("netstat -ano | findstr :{port}")])
+            .output()
+            .map_err(|e| MuseError::Other(format!("netstat: {e}")))?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        let mut pids = std::collections::BTreeSet::new();
+        for line in text.lines() {
+            if !line.contains(&format!(":{port}")) {
+                continue;
+            }
+            if let Some(pid) = line.split_whitespace().last() {
+                if pid.chars().all(|c| c.is_ascii_digit()) && pid != "0" {
+                    pids.insert(pid.to_string());
+                }
+            }
+        }
+        if pids.is_empty() {
+            return Ok(format!(
+                "port {port} looked open but no PID found — close the penecho window manually"
+            ));
+        }
+        let mut killed = Vec::new();
+        for pid in pids {
+            let _ = Command::new("taskkill")
+                .args(["/PID", &pid, "/F"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+            killed.push(pid);
+        }
+        // Brief wait for port release.
+        for _ in 0..20 {
+            if !port_is_open(port) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        return Ok(format!(
+            "stopped penecho on port {port} (killed PIDs: {})",
+            killed.join(", ")
+        ));
+    }
+    #[cfg(not(windows))]
+    {
+        let out = Command::new("sh")
+            .args([
+                "-c",
+                &format!("lsof -ti tcp:{port} | xargs -r kill -TERM 2>/dev/null; sleep 0.3; lsof -ti tcp:{port} | xargs -r kill -KILL 2>/dev/null; true"),
+            ])
+            .output();
+        let _ = out;
+        Ok(format!("sent stop signals for listeners on port {port}"))
+    }
+}
+
+pub fn restart(open_browser: bool, effort: Effort, port: u16) -> Result<String> {
+    let stop_msg = stop(port).unwrap_or_else(|e| format!("stop: {e}"));
+    let launch_msg = launch_seamless_on_port(open_browser, effort, port, None)?;
+    Ok(format!("{stop_msg}\n{launch_msg}"))
+}
+
+/// Best-effort PNG capture: open canvas URL note + path for browser tool / look.
+/// PenEcho PNG export is client-side; we stage a capture path under `.nur/media`.
+pub fn export_png_hint(cwd: &Path) -> Result<String> {
+    let media = cwd.join(".nur").join("media");
+    let _ = fs::create_dir_all(&media);
+    let dest = media.join(format!(
+        "penecho-canvas-{}.png",
+        now_secs_local()
+    ));
+    let url = canvas_url(DEFAULT_PORT);
+    Ok(format!(
+        "penecho PNG export is canvas-side (ink + 1 tile margin).\n\
+         1. Ensure server is up: penecho(action=launch)\n\
+         2. In the canvas: use the PNG export control\n\
+         3. Or use browser(action=screenshot) on {url} → save to {}\n\
+         4. Then look(path=…) to inspect\n\
+         staged path: {}\n",
+        dest.display(),
+        dest.display()
+    ))
+}
+
+fn now_secs_local() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn format_launch_report(
+    notes: &[String],
+    mode: &AutoConfigMode,
+    url: &str,
+    already: bool,
+) -> String {
+    let mode_s = match mode {
+        AutoConfigMode::Api { model, format, .. } => {
+            format!("api ({format}, model={model})")
+        }
+        AutoConfigMode::CodexCli => "codex-cli".into(),
+        AutoConfigMode::ClaudeCli => "claude-cli".into(),
+        AutoConfigMode::KimiCli => "kimi-cli".into(),
+    };
+    let mut s = String::new();
+    s.push_str("penecho ready\n");
+    s.push_str(&format!("  canvas:  {url}\n"));
+    s.push_str(&format!("  mode:    {mode_s}\n"));
+    s.push_str(&format!(
+        "  state:   {}\n",
+        if already {
+            "already running"
+        } else {
+            "launched"
+        }
+    ));
+    s.push_str(&format!(
+        "  config:  {}\n",
+        penecho_state_dir().join("config.env").display()
+    ));
+    for n in notes {
+        s.push_str(&format!("  · {n}\n"));
+    }
+    s.push_str(
+        "Canvas: 20k×20k ink · MathJax · plots · draft layer · animations.\n\
+         Open policy: browser URL only (no local-file Open-with).\n",
+    );
+    s
+}
+
+/// Ensure install + config without launching (for ecosystem / status).
+pub fn ensure_ready(effort: Effort) -> Result<String> {
+    let install = ensure_installed()?;
+    let (_, cfg) = auto_configure_from_nur(false, effort)?;
+    let st = probe();
+    Ok(format!(
+        "{install}\n{cfg}\n binary={:?}\n config={} usable={}\n listening={}\n canvas={}\n",
+        st.binary,
+        st.config_file.display(),
+        config_is_usable(),
+        port_is_open(DEFAULT_PORT),
+        canvas_url(DEFAULT_PORT)
+    ))
 }
 
 /// Doctor checks — mirrors `cli.js doctor` in penecho.

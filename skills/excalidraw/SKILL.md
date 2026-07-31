@@ -22,6 +22,17 @@ Prefer the **`excalidraw`** tool — do not shell out to bash for diagrams.
 3. Format help: `excalidraw(action=reference)` if stuck on schema
 4. `open=false` only when the user asked not to open anything
 
+## Open policy (critical)
+
+- **Excalidraw = web share only.** `open=true` opens the browser to `https://excalidraw.com/...`.
+- **Never** OS-open a local `.excalidraw` file:
+  - forbidden: `Start-Process path\to\file.excalidraw`
+  - forbidden: `open_uri::open_path(.excalidraw)` / `xdg-open` / `open` on the file
+  - that triggers Windows **"Open with"** when no association exists
+- If export fails or no share URL is printed: leave the file on disk and report the path + error. Do **not** "console open" the local file as a fallback.
+- Prefer the `excalidraw` tool. If you must shell to CLI: `excalidraw export <file>` then open **only** the printed `https://excalidraw.com/...` URL.
+- For interactive offline boards the user can keep editing natively: use **`tldraw`** / `/draw` (desktop app) — not Excalidraw.
+
 ## CLI defaults (omit these in JSON)
 
 roughness=2 · roundness rounded · fontFamily=1 (handwritten) · strokeWidth=2

@@ -15,6 +15,7 @@ mod gepa;
 mod headroom;
 mod local;
 mod oauth;
+mod bg_jobs;
 mod open_uri;
 mod optmem;
 mod penecho;
@@ -152,7 +153,7 @@ async fn real_main() -> Result<()> {
             match action {
                 cli::EcosystemCmd::Ensure { force } => {
                     theme::print_info(
-                        "provisioning graphify · plur · ruflo · browser · excalidraw · skills…",
+                        "provisioning graphify · plur · ruflo · browser · excalidraw · penecho · skills…",
                     );
                     let st = ecosystem::ensure_ecosystem(*force);
                     println!("{}", st.report());

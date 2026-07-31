@@ -224,6 +224,8 @@ impl App {
             // penecho canvas aliases → canonical /penecho skill.
             "/pen" | "/drawings" | "/penecho" => self.cmd_skill_or_unknown("/penecho", &arg),
             "/draw" => self.cmd_draw(&arg),
+            "/diagram" => self.cmd_diagram(&arg),
+            "/bg" | "/jobs" => self.cmd_bg(&arg),
             "/steer" => self.cmd_steer(&arg),
             "/bro" => self.cmd_bro(&arg),
             "/btw" => self.cmd_btw(&arg),
@@ -2176,6 +2178,98 @@ impl App {
         }
     }
 
+    /// `/bg` — list / inspect / cancel / run background jobs without blocking
+    /// the agent turn. Status chip in the footer shows running work.
+    fn cmd_bg(&mut self, arg: &str) {
+        let arg = arg.trim();
+        if arg.is_empty() || arg.eq_ignore_ascii_case("list") {
+            self.push_note(Tone::Neutral, crate::bg_jobs::report());
+            return;
+        }
+        let mut parts = arg.splitn(2, char::is_whitespace);
+        let head = parts.next().unwrap_or("").trim();
+        let rest = parts.next().unwrap_or("").trim();
+        if head.eq_ignore_ascii_case("cancel") {
+            if let Ok(id) = rest.parse::<u64>() {
+                match crate::bg_jobs::cancel(id) {
+                    Ok(m) => self.push_note(Tone::Neutral, m),
+                    Err(e) => self.push_error(e.to_string()),
+                }
+            } else {
+                self.push_error("usage: /bg cancel <id>".into());
+            }
+            return;
+        }
+        if head.eq_ignore_ascii_case("run") {
+            if rest.is_empty() {
+                self.push_error("usage: /bg run <command>".into());
+                return;
+            }
+            #[cfg(windows)]
+            let (prog, argv) = ("cmd.exe".to_string(), vec!["/C".into(), rest.to_string()]);
+            #[cfg(not(windows))]
+            let (prog, argv) = ("sh".to_string(), vec!["-c".into(), rest.to_string()]);
+            let id = crate::bg_jobs::spawn_command(rest, &prog, &argv);
+            self.push_note(
+                Tone::Skill,
+                format!("bg job #{id} started\n  $ {rest}\n  /bg {id} for result · chip in statusline"),
+            );
+            return;
+        }
+        if let Ok(id) = head.parse::<u64>() {
+            match crate::bg_jobs::result(id) {
+                Ok(m) => self.push_note(Tone::Neutral, m),
+                Err(e) => self.push_error(e.to_string()),
+            }
+            return;
+        }
+        self.push_note(
+            Tone::Mode,
+            format!(
+                "unknown /bg arg '{arg}'\n  /bg · /bg list · /bg <id> · /bg cancel <id> · /bg run <cmd>"
+            ),
+        );
+    }
+
+    /// `/diagram` — route to the right canvas product by intent.
+    fn cmd_diagram(&mut self, arg: &str) {
+        let arg = arg.trim();
+        if arg.is_empty() {
+            self.push_note(
+                Tone::Neutral,
+                "diagram router\n  \
+                 architecture / flowchart / publish → excalidraw (browser share URL only)\n  \
+                 offline interactive board / scripts → tldraw (/draw)\n  \
+                 handwriting · math · plots · AI refine → penecho (/pen)\n  \
+                 /diagram <idea>  seeds a turn that picks the right tool"
+                    .into(),
+            );
+            return;
+        }
+        if !self.authed {
+            self.push_error("signed out — /login first".into());
+            return;
+        }
+        if self.busy {
+            self.push_error("busy — finish the current turn first".into());
+            return;
+        }
+        let prompt = format!(
+            "User wants a diagram / canvas for:\n{arg}\n\n\
+             Choose ONE primary tool using this router (do not ask which):\n\
+             1. **excalidraw** — architecture, flowcharts, decision trees, publishable hand-drawn docs.\n\
+                create + open browser share URL ONLY (never OS-open .excalidraw).\n\
+                Prefer output under docs/ or .nur/diagrams/.\n\
+             2. **tldraw** — offline interactive board, agent scripts, live canvas API, Desktop .tldraw.\n\
+                Use /draw path. Never invent .tldraw JSON with write_file.\n\
+             3. **penecho** — handwriting, MathJax, plots, AI ink refine, animations.\n\
+                penecho(action=launch) auto-installs + configures + opens http://127.0.0.1:3888.\n\n\
+             Long installs: use bg(action=run,…) or background=true so the turn stays free.\n\
+             Execute end-to-end so the user *sees* the result. Report which product you picked and why."
+        );
+        self.start_turn_labeled(&format!("/diagram {arg}"), &prompt);
+    }
+
     /// `/draw` — manage the tldraw offline app and open/build interactive
     /// `.tldraw` boards. No arg → status; `install` → fetch the app; a file path
     /// → open it directly; anything else → seed a turn that builds a board.
@@ -2289,9 +2383,9 @@ impl App {
         let arg = arg.trim();
         if arg.is_empty() {
             self.push_info(
-                "steer · /steer <text> feeds a message into the running turn on its next round \
-                 (no cancel). While a turn runs you can also type a follow-up and click \
-                 'steer' on its queued card."
+                "steer · /steer <text> injects mid-turn without cancelling tools, subagents, \
+                 or bg jobs. While busy, Enter also steers (same as send now). \
+                 Queued cards: send now = inject · cut in = cancel + front · dismiss."
                     .into(),
             );
             return;

@@ -31,11 +31,23 @@ Architecture: Browser canvas (sparse tiles + anim scenes) -> cropped visual requ
 - Declarative animation output: Support PenEcho's animation JSON (32 objects/motions) as valid `nur` output type alongside tldraw.
 - AGPL compliance: sidecar spawn / optional sidecar, not linking code.
 
-## Usage
-- `penecho` tool: `action=status|probe|doctor|export|atlas|launch`
-- `export` generates `~/.penecho/config.env` from nur auth.
-- `doctor` mirrors `cli.js doctor`.
-- Skill activation: `/penecho` or "use penecho"
+## Usage (seamless — users never diagnose)
+
+1. **`penecho(action=launch)`** (default) — installs via npm if missing, auto-writes `~/.penecho/config.env` from nur auth (or codex/claude CLI), spawns the server, opens **http://127.0.0.1:3888** in the browser.
+2. `status` / `probe` — auto-ensure install+config, report readiness (never a dead "not found").
+3. `doctor` — health checks after auto-heal.
+4. `export` — redacted config dump for the model (never leaks the real key). Real secrets are written only by launch/ensure to disk.
+5. Skill activation: `/penecho` or "use penecho" → **launch**.
+
+### Provider pick order (automatic)
+1. Active nur OAuth → prefer matching `claude` / `codex` CLI mode
+2. Else nur API key for active provider → `AI_PROVIDER=api` (key written to disk only)
+3. Else any `codex` / `claude` on PATH
+4. Else clear error: run `/login` or install a CLI
+
+### Open policy
+- Opens **browser** to the local canvas URL only.
+- Never OS-opens a local file association dialog.
 
 ## References
 - https://github.com/penecho/penecho

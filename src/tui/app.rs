@@ -196,10 +196,18 @@ pub const COMMANDS: &[(&str, &str)] = &[
         "/fractal",
         "recursive agent tree: node list | status | start | attach | init · hierarchical loops in git worktrees",
     ),
-    ("/steer", "inject a message into the running turn (no cancel): /steer <text>"),
+    ("/steer", "inject mid-turn without cancel (tools/subagents/bg keep running): /steer <text>"),
     (
         "/draw",
         "tldraw offline boards: /draw <file.tldraw> · install · /draw <idea>  (also: /excalidraw · /pen)",
+    ),
+    (
+        "/diagram",
+        "router: architecture→excalidraw · offline board→tldraw · ink/math→penecho",
+    ),
+    (
+        "/bg",
+        "background jobs: list · <id> result · cancel <id> · run <cmd>  (status chip shows running)",
     ),
     (
         "/pen",
@@ -323,9 +331,8 @@ pub enum Cell {
         text: String,
         tone: Tone,
     },
-    /// A follow-up the user typed while a turn was running. Shown in the
-    /// transcript with clickable **send now** / **dismiss** so it can interject
-    /// into context without retyping.
+    /// A follow-up queued with `>> text` while busy. Clickable **send now**
+    /// (inject, no cancel) / **cut in** (cancel turn) / **dismiss**.
     Queued {
         text: String,
     },
@@ -1839,8 +1846,8 @@ pub struct App {
     /// (`▸ expands` / `▾ collapse`) so clicks on those words toggle, not no-op.
     pub hit_expand_phrase: Vec<Option<(usize, usize, usize)>>,
     /// Hitboxes for queued follow-up actions on each wrapped line.
-    /// Entries: (cell_idx, col_lo, col_hi, action) where action 0 = send now, 1 = dismiss.
-    /// Multiple actions can share a line (send now + dismiss).
+    /// Entries: (cell_idx, col_lo, col_hi, action) where action 0 = send now
+    /// (no interrupt), 1 = dismiss, 2 = steer (alias of 0), 3 = cut in (cancel).
     pub hit_queue_actions: Vec<Vec<(usize, usize, usize, u8)>>,
     /// Absolute line → clickable `http(s)://` spans `(col_lo, col_hi, url)`.
     pub hit_urls: Vec<Vec<(usize, usize, String)>>,
@@ -7283,28 +7290,36 @@ impl App {
             return;
         }
         if self.busy {
-            self.queue.push_back(text.clone());
-            // Transcript row with clickable send now / dismiss (not just a note).
-            self.cells.push(Cell::Queued { text: text.clone() });
-            self.scroll_to_bottom();
-            // The queued node belongs in the sidegraph promptly, not at the
-            // next tool event.
-            self.refresh_sidegraph();
-            self.push_note(
-                Tone::Mode,
-                format!(
-                    "queued · {} waiting · click send now to interject next (or after cancel)",
-                    self.queue.len()
-                ),
-            );
+            // `>> text` queues without injecting (for deliberate send now / cut in).
+            // Plain Enter injects mid-turn without cancelling tools / subagents / bg.
+            if let Some(rest) = text
+                .strip_prefix(">>")
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                let rest = rest.to_string();
+                self.queue.push_back(rest.clone());
+                self.cells.push(Cell::Queued { text: rest });
+                self.scroll_to_bottom();
+                self.refresh_sidegraph();
+                self.push_note(
+                    Tone::Mode,
+                    format!(
+                        "queued · {} waiting · send now injects (no cancel) · cut in cancels",
+                        self.queue.len()
+                    ),
+                );
+                return;
+            }
+            self.steer_now(&text);
             return;
         }
         self.start_turn(&text);
     }
 
-    /// Send a queued follow-up now: pull it out of the queue, drop its card, and
-    /// either start a turn (idle) or interrupt + queue front (busy) so it
-    /// becomes the next message with full prior context.
+    /// Send a queued follow-up **without interrupting** the live turn.
+    /// Tools, subagents, and background jobs keep running; the message is
+    /// steered into the next model round. Idle → start a normal turn.
     fn queue_send_now(&mut self, cell_idx: usize) {
         let text = match self.cells.get(cell_idx) {
             Some(Cell::Queued { text }) => text.clone(),
@@ -7318,25 +7333,16 @@ impl App {
         self.remove_cell(cell_idx);
         self.refresh_sidegraph();
         if self.busy {
-            // Interrupt current turn; keep this follow-up at the front so Done
-            // starts it next (full session context already on disk).
-            self.queue.push_front(text.clone());
-            self.preserve_queue_on_interrupt = true;
-            self.interrupt();
-            self.push_note(
-                Tone::Mode,
-                "send now - cancelling current turn; this follow-up goes next with full context"
-                    .into(),
-            );
+            self.steer_now(&text);
         } else {
             self.start_turn(&text);
         }
     }
 
-    /// Steer a queued follow-up into the **running** turn: inject it as a
-    /// mid-turn user message the loop folds into its next round, without
-    /// cancelling. If idle, there's nothing to steer, so it just starts a turn.
-    fn queue_steer(&mut self, cell_idx: usize) {
+    /// Force the follow-up to the front by **cancelling** the current turn.
+    /// Prefer `queue_send_now` / Enter while busy - those do not interrupt.
+    /// Use cut-in only when the running work must stop.
+    fn queue_cut_in(&mut self, cell_idx: usize) {
         let text = match self.cells.get(cell_idx) {
             Some(Cell::Queued { text }) => text.clone(),
             _ => return,
@@ -7345,11 +7351,26 @@ impl App {
             self.queue.remove(i);
         }
         self.remove_cell(cell_idx);
+        self.refresh_sidegraph();
         if self.busy {
-            self.steer_now(&text);
+            self.queue.push_front(text.clone());
+            self.preserve_queue_on_interrupt = true;
+            self.interrupt();
+            self.push_note(
+                Tone::Mode,
+                "cut in · cancelling current turn; this follow-up runs next with full context"
+                    .into(),
+            );
         } else {
             self.start_turn(&text);
         }
+    }
+
+    /// Steer a queued follow-up into the **running** turn (alias of send now):
+    /// inject mid-turn without cancelling. Idle → start a turn.
+    fn queue_steer(&mut self, cell_idx: usize) {
+        // Same non-interrupt path as send now.
+        self.queue_send_now(cell_idx);
     }
 
     /// Push a message into the live steer queue and echo it in the transcript.
@@ -7369,7 +7390,7 @@ impl App {
         self.scroll_to_bottom();
         self.push_note(
             Tone::Mode,
-            "steered · injected into the running turn (no cancel) - lands on the next model round"
+            "steered · injected mid-turn (no cancel) - tools/subagents/bg keep running; lands next model round"
                 .into(),
         );
         // Keep live graphs in sync immediately (was previously only on agent events).
@@ -8766,14 +8787,15 @@ impl App {
         let local_x = col.saturating_sub(body.x) as usize;
         let line_idx = self.transcript_top as usize + local_y;
 
-        // Queued follow-up: send now / dismiss (both may sit on the same line).
+        // Queued follow-up: send now (no cancel) / cut in (cancel) / dismiss.
         if let Some(actions) = self.hit_queue_actions.get(line_idx) {
             for (cell_idx, lo, hi, action) in actions {
                 if local_x >= *lo && local_x < *hi {
                     match action {
-                        0 => self.queue_send_now(*cell_idx),
+                        0 => self.queue_send_now(*cell_idx), // inject mid-turn, no interrupt
                         1 => self.queue_dismiss(*cell_idx),
-                        2 => self.queue_steer(*cell_idx),
+                        2 => self.queue_steer(*cell_idx), // same as send now
+                        3 => self.queue_cut_in(*cell_idx), // explicit cancel + front
                         _ => {}
                     }
                     return;

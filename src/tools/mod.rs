@@ -6,6 +6,7 @@ pub mod egaki_tool;
 pub mod fractal_tool;
 pub mod headroom_tool;
 pub mod optmem_tool;
+pub mod bg_tool;
 pub mod penecho_tool;
 pub mod t3code_tool;
 pub use browser::is_read_only_action as browser_is_read_only;
@@ -177,6 +178,7 @@ impl ToolHost {
             Box::new(akarso::Akarso),
             Box::new(t3code_tool::T3Code),
             Box::new(penecho_tool::Penecho),
+            Box::new(bg_tool::Bg),
             Box::new(fractal_tool::Fractal),
             Box::new(headroom_tool::Headroom),
             Box::new(optmem_tool::OptMem),
@@ -274,6 +276,7 @@ impl ToolHost {
             "akarso" => akarso::Akarso.execute(&args, ctx),
             "t3code" => t3code_tool::T3Code.execute(&args, ctx),
             "penecho" => penecho_tool::Penecho.execute(&args, ctx),
+            "bg" => bg_tool::Bg.execute(&args, ctx),
             "fractal" => fractal_tool::Fractal.execute(&args, ctx),
             "headroom" => headroom_tool::Headroom.execute(&args, ctx),
             "optmem" => optmem_tool::OptMem.execute(&args, ctx),
@@ -432,6 +435,7 @@ mod tests {
             "akarso",
             "t3code",
             "penecho",
+            "bg",
             "fractal",
             "headroom",
             "optmem",

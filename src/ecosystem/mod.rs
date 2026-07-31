@@ -35,7 +35,8 @@ const ECOSYSTEM_MARKER: &str = "ecosystem.json";
 /// 11: session_reader.py gains `--all-cwds` (takeover lists every workspace).
 /// 12: headroom + optmem + egaki + fractal ensure + infinite-headcount pack.
 /// 13: omp floor 17.2.0 + auto-upgrade for omp/plur/egaki/ruflo/browser/executor/graphify/headroom.
-const ECOSYSTEM_SCHEMA: u32 = 13;
+/// 14: penecho ensure (npm) + auto-config from nur auth + seamless browser launch.
+const ECOSYSTEM_SCHEMA: u32 = 14;
 /// Re-run ensure at most once per this many seconds unless forced.
 const ENSURE_TTL_SECS: u64 = 86_400;
 
@@ -88,6 +89,9 @@ pub struct EcosystemStatus {
     /// fractal - hierarchical agent loops (Unix).
     #[serde(default)]
     pub fractal: ComponentStatus,
+    /// penecho - canvas beyond the chat box (npm AGPL sidecar).
+    #[serde(default)]
+    pub penecho: ComponentStatus,
     pub skills_installed: Vec<String>,
     #[serde(default)]
     pub packs_installed: Vec<String>,
@@ -106,7 +110,7 @@ impl EcosystemStatus {
             }
         };
         format!(
-            "ecosystem · {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  · packs {}",
+            "ecosystem · {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  · packs {}",
             bit(self.graphify.available, "graphify"),
             bit(self.plur.available, "plur"),
             bit(self.ruflo.available, "ruflo"),
@@ -122,6 +126,7 @@ impl EcosystemStatus {
             bit(self.optmem.available, "optmem"),
             bit(self.egaki.available, "egaki"),
             bit(self.fractal.available, "fractal"),
+            bit(self.penecho.available, "penecho"),
             if self.packs_installed.is_empty() {
                 "…".into()
             } else {
@@ -133,7 +138,7 @@ impl EcosystemStatus {
     pub fn report(&self) -> String {
         let mut s = String::from("Nur ecosystem (auto-provisioned on install / open)\n");
         // Fixed names so older ecosystem.json markers (pre-field) still list every slot.
-        let comps: [(&str, &ComponentStatus); 16] = [
+        let comps: [(&str, &ComponentStatus); 17] = [
             ("graphify", &self.graphify),
             ("plur", &self.plur),
             ("ruflo", &self.ruflo),
@@ -150,6 +155,7 @@ impl EcosystemStatus {
             ("optmem", &self.optmem),
             ("egaki", &self.egaki),
             ("fractal", &self.fractal),
+            ("penecho", &self.penecho),
         ];
         for (fallback_name, c) in comps {
             let name = if c.name.is_empty() {
@@ -210,7 +216,7 @@ impl EcosystemStatus {
         }
         s.push_str(
             "\n  slash: /ecosystem /plur /ruflo /graphify /skills /akarso /openseo\n\
-             tools:  graphify plur ruflo akarso executor omp browser excalidraw skill\n\
+             tools:  graphify plur ruflo akarso executor omp browser excalidraw penecho tldraw skill\n\
              packs:  design · clone-website · cybersecurity · opencode catalog · DCP patterns\n",
         );
         s
@@ -268,6 +274,7 @@ pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
     status.graphjin = packs::ensure_graphjin();
     status.browser = packs::ensure_browser_cli(status.node_ok);
     status.excalidraw = ensure_excalidraw(status.node_ok);
+    status.penecho = ensure_penecho(status.node_ok);
     status.headroom = ensure_headroom();
     status.optmem = ensure_optmem();
     status.egaki = ensure_egaki(status.node_ok);
@@ -346,6 +353,67 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+// ── penecho (canvas beyond chat) ──────────────────────────────────────────
+
+/// Install penecho via npm and auto-write `~/.penecho/config.env` from nur auth
+/// so `penecho(action=launch)` just opens the browser — no user diagnosis.
+fn ensure_penecho(node_ok: bool) -> ComponentStatus {
+    let mut c = ComponentStatus {
+        name: "penecho".into(),
+        ..Default::default()
+    };
+    if let Some(bin) = find_bin("penecho") {
+        c.available = true;
+        c.path = Some(bin.clone());
+        c.version = cmd_version(&bin, &["--version"]);
+        // Best-effort config so launch never drops into interactive configure.
+        match crate::penecho::auto_configure_from_nur(false, crate::penecho::Effort::Medium) {
+            Ok((_, msg)) => {
+                c.detail = format!("CLI ready · {msg} · penecho tool opens browser canvas");
+            }
+            Err(e) => {
+                c.detail = format!(
+                    "CLI ready · config deferred ({e}) · launch will retry /login or CLI mode"
+                );
+            }
+        }
+        return c;
+    }
+    if !node_ok {
+        c.detail = "needs Node.js 20.3+ - npm i -g penecho".into();
+        return c;
+    }
+    let npm = find_bin("npm").unwrap_or_else(|| "npm".into());
+    match run_capture(&npm, &["install", "-g", "penecho@latest"], None, 300_000) {
+        Ok(_) => {}
+        Err(e) => {
+            c.detail = format!(
+                "npm install failed: {}",
+                e.chars().take(200).collect::<String>()
+            );
+            return c;
+        }
+    }
+    if let Some(bin) = find_bin("penecho") {
+        c.available = true;
+        c.path = Some(bin.clone());
+        c.version = cmd_version(&bin, &["--version"]);
+        match crate::penecho::auto_configure_from_nur(false, crate::penecho::Effort::Medium) {
+            Ok((_, msg)) => {
+                c.detail = format!("installed via npm · {msg}");
+            }
+            Err(e) => {
+                c.detail = format!("installed via npm · config deferred ({e})");
+            }
+        }
+        return c;
+    }
+    if c.detail.is_empty() {
+        c.detail = "not found after npm install - try: npm i -g penecho".into();
+    }
+    c
 }
 
 // ── Excalidraw CLI ────────────────────────────────────────────────────────

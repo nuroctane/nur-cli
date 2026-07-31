@@ -7,11 +7,12 @@ use std::path::PathBuf;
 pub fn is_read_only_action(args_json: &str) -> bool {
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(args_json) {
         if let Some(action) = v.get("action").and_then(|a| a.as_str()) {
-            // export writes config (mutating), launch spawns
-            return matches!(action, "status" | "probe" | "doctor" | "atlas");
+            return matches!(
+                action,
+                "status" | "probe" | "doctor" | "atlas" | "export_png"
+            );
         }
     }
-    // Fail CLOSED — see `t3code_tool::is_read_only_action`.
     false
 }
 
@@ -23,67 +24,85 @@ impl Tool for Penecho {
     }
 
     fn description(&self) -> &str {
-        "penecho integration — Think with AI beyond the chat box (20k x 20k canvas, ink, MathJax, plots, animations). Provider abstraction: AI_PROVIDER=api|codex-cli|claude-cli, auto-detect openai vs anthropic from URL suffix, effort mapping, CLI path resolution with Windows handling, placeholder detection, sidecar launch. Repo: https://github.com/penecho/penecho (AGPL-3.0). Actions: status|probe|doctor|export|atlas|launch. Bridge nur auth to penecho config.env."
+        "penecho — AI canvas beyond chat (20k×20k ink, MathJax, plots, animations, flowchart plugins). \
+         Auto-installs via npm, auto-writes ~/.penecho/config.env from nur auth (or codex/claude/kimi CLI), \
+         opens browser to http://127.0.0.1:3888. \
+         Actions: launch|open|restart|stop|status|probe|doctor|export|export_png|inject|atlas. \
+         Optional: port=, inject= text, effort=, open=bool, background=true (install in bg job). \
+         Never ask the user to diagnose — launch just works. AGPL sidecar."
     }
 
     fn parameters_schema(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "action": {"type": "string", "description": "status|probe|doctor|export|atlas|launch", "default": "status"},
-                "api_url": {"type": "string", "description": "AI_API_URL for export"},
-                "api_key": {"type": "string", "description": "AI_API_KEY for export"},
-                "model": {"type": "string", "description": "model for export"},
-                "effort": {"type": "string", "description": "config|none|low|medium|high|max|xhigh", "default": "medium"},
-                "image_path": {"type": "string", "description": "path for atlas description"}
+                "action": {
+                    "type": "string",
+                    "description": "launch|open|restart|stop|status|probe|doctor|export|export_png|inject|atlas",
+                    "default": "launch"
+                },
+                "api_url": {"type": "string"},
+                "api_key": {"type": "string"},
+                "model": {"type": "string"},
+                "effort": {"type": "string", "default": "medium"},
+                "image_path": {"type": "string"},
+                "open": {"type": "boolean", "description": "Open browser (default true for launch)"},
+                "port": {"type": "integer", "description": "HTTP port (default 3888)"},
+                "inject": {"type": "string", "description": "Conversation/context seed to write + open canvas"},
+                "background": {
+                    "type": "boolean",
+                    "description": "For heavy install: spawn bg job and return id immediately"
+                }
             },
             "required": []
         })
     }
 
-    fn execute(&self, args: &Value, _ctx: &ToolContext) -> Result<String> {
-        let action = arg_str(args, "action").unwrap_or_else(|_| "status".into());
+    fn execute(&self, args: &Value, ctx: &ToolContext) -> Result<String> {
+        let action = arg_str(args, "action").unwrap_or_else(|_| "launch".into());
         let api_url =
             arg_str(args, "api_url").unwrap_or_else(|_| "https://api.openai.com/v1".into());
         let api_key = arg_str(args, "api_key").unwrap_or_else(|_| "".into());
         let model = arg_str(args, "model").unwrap_or_else(|_| "gpt-4o".into());
         let effort_s = arg_str(args, "effort").unwrap_or_else(|_| "medium".into());
         let image_path = arg_str(args, "image_path").unwrap_or_else(|_| "".into());
-
+        let open_browser = args.get("open").and_then(|v| v.as_bool()).unwrap_or(true);
+        let port = args
+            .get("port")
+            .and_then(|v| v.as_u64())
+            .map(|p| p as u16)
+            .unwrap_or(crate::penecho::DEFAULT_PORT);
+        let inject = arg_str(args, "inject").ok();
+        let background = args
+            .get("background")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let effort = crate::penecho::Effort::parse(&effort_s);
 
         match action.as_str() {
-            "probe" => {
-                let st = crate::penecho::probe();
-                Ok(format!(
-                    "penecho probe:\n binary={:?} exists={}\n config_dir={} file={} exists={} has_key={}\n doctor: run action=doctor\n",
-                    st.binary,
-                    st.binary.is_some(),
-                    st.config_dir.display(),
-                    st.config_file.display(),
-                    st.config_exists,
-                    st.has_api_key
-                ))
-            }
+            "status" | "probe" => match crate::penecho::ensure_ready(effort) {
+                Ok(msg) => Ok(format!("penecho status (auto-ensured):\n{msg}")),
+                Err(e) => Ok(format!("penecho status (partial): {e}")),
+            },
             "doctor" => {
+                let _ = crate::penecho::ensure_installed();
+                let _ = crate::penecho::auto_configure_from_nur(false, effort);
                 let rep = crate::penecho::doctor();
                 Ok(format!(
-                    "penecho doctor (mirrors cli.js doctor):\n penecho_binary={} config_exists={} api_url_valid={} api_key_present={} codex_binary={} claude_binary={}\n\
-                    Checks: penecho bin on PATH, ~/.penecho/config.env, AI_API_URL http(s), placeholder detection your_/replace/changeme, codex --version, claude --version\n",
+                    "penecho doctor:\n binary={} config={} usable={} url_ok={} key={} codex={} claude={} kimi={} listening={}\n canvas={}\n",
                     rep.penecho_binary,
                     rep.config_exists,
+                    crate::penecho::config_is_usable(),
                     rep.api_url_valid,
                     rep.api_key_present,
                     rep.codex_binary,
-                    rep.claude_binary
+                    rep.claude_binary,
+                    crate::penecho::find_on_path("kimi").is_some(),
+                    crate::penecho::port_is_open(port),
+                    crate::penecho::canvas_url(port)
                 ))
             }
             "export" => {
-                // Never harvest a live key from the environment here. This
-                // result is returned to the model and persisted to the session
-                // file, so a resolved key would be exfiltrated by a tool call
-                // whose approval prompt reads as a harmless config dump.
-                // Validation only needs a non-placeholder string.
                 let key = if api_key.trim().is_empty() {
                     "sk-local".to_string()
                 } else {
@@ -91,13 +110,13 @@ impl Tool for Penecho {
                 };
                 match crate::penecho::export_to_penecho_env(&api_url, &key, &model, effort, true) {
                     Ok(s) => Ok(format!(
-                        "penecho config.env export (maps nur auth to AI_PROVIDER=api):\n{s}\n\n\
-                         The key is redacted on purpose — fill AI_API_KEY in \
-                         ~/.penecho/config.env yourself."
+                        "penecho config.env export (redacted):\n{s}\n\
+                         Real secrets: penecho(action=launch) writes them locally only."
                     )),
                     Err(e) => Ok(format!("export failed: {e}")),
                 }
             }
+            "export_png" => crate::penecho::export_png_hint(&ctx.cwd),
             "atlas" => {
                 let p = if image_path.trim().is_empty() {
                     PathBuf::from("/tmp/canvas.png")
@@ -106,59 +125,66 @@ impl Tool for Penecho {
                 };
                 Ok(crate::penecho::describe_atlas(&p, None))
             }
-            "launch" => {
-                let st = crate::penecho::probe();
-                if let Some(binary) = st.binary.as_ref() {
-                    Ok(format!(
-                        "penecho binary found at {:?}. To launch as sidecar: `penecho` (or `penecho --port 3000`). Config at {}. Use export action to generate config.env from nur auth. Canvas: 20k x 20k, sparse 512 tiles, draft layer, MathJax, plots, animation scenes (max 32 objects).",
-                        binary,
-                        st.config_file.display()
-                    ))
-                } else {
-                    Ok("penecho binary not found on PATH. Install via `npm i -g penecho` (Node >=18.17). Then run `penecho --help`. Integration via sidecar spawn (AGPL-compliant, no linking).".into())
+            "inject" => {
+                let text = inject.unwrap_or_default();
+                if text.trim().is_empty() {
+                    return Ok(
+                        "inject requires inject= text (conversation/context seed)".into(),
+                    );
                 }
+                let path = crate::penecho::write_inject_seed(&text)?;
+                // Ensure canvas is up and open.
+                let launch = crate::penecho::launch_seamless_on_port(
+                    open_browser,
+                    effort,
+                    port,
+                    Some(&text),
+                )?;
+                Ok(format!(
+                    "inject seed → {}\n\
+                     Paste into canvas text tool or AI menu (also on clipboard if available).\n\
+                     {launch}",
+                    path.display()
+                ))
             }
-            _ => {
-                let st = crate::penecho::probe();
-                let doc = crate::penecho::doctor();
-                let mut out = String::new();
-                out.push_str("penecho integration — Think beyond chat box (https://github.com/penecho/penecho)\n");
-                out.push_str("Tech: Node >=18.17, 2 deps only (@inquirer/prompts + sharp), no bundler, vanilla JS, 20k x 20k canvas, draft layer, MathJax, plots, declarative animations (32 objs).\n\n");
-                out.push_str("Provider abstraction (api-config.js):\n");
-                out.push_str("- AI_PROVIDER=api|codex-cli|claude-cli\n");
-                out.push_str("- API mode: AI_API_URL, AI_API_KEY, AI_API_MODEL, AI_API_FORMAT openai|anthropic auto-detect from suffix /chat/completions vs /v1/messages\n");
-                out.push_str("- Codex CLI: CODEX_CLI_PATH, findOnPath with .exe/.cmd handling, codex --version, login status, debug models --bundled\n");
-                out.push_str(
-                    "- Claude CLI: CLAUDE_CLI_PATH, .js/.cjs/.mjs => node prefix, .ps1 on win\n",
-                );
-                out.push_str("- Effort: unified config|none|low|medium|high|max|xhigh → anthropic thinking adaptive/disabled + tokens, openai reasoning_effort\n\n");
-                out.push_str(&format!(
-                    "Current probe: binary={:?} config_exists={} has_key={} codex={} claude={}\n",
-                    st.binary,
-                    st.config_exists,
-                    st.has_api_key,
-                    doc.codex_binary,
-                    doc.claude_binary
-                ));
-                out.push_str("\nWhat nur-cli can learn:\n");
-                out.push_str("- Auto-detect openai vs anthropic from URL suffix (cleaner than per-provider flags)\n");
-                out.push_str("- Effort mapping unified (nur has ad-hoc flags)\n");
-                out.push_str("- Robust findOnPath with Windows .js wrapper detection\n");
-                out.push_str("- Placeholder detection your_/replace/changeme for doctor\n");
-                out.push_str(
-                    "- Prompt headroom reservation (4096 + 7000 thinking) to avoid truncation\n",
-                );
-                out.push_str("- No-deps minimalism (vanilla JS, 2 deps) — nur already minimal Rust binary\n\n");
-                out.push_str("Full integration plan:\n");
-                out.push_str("- `nur penecho` command / skill: wrapper that spawns penecho, auto-detects AI_PROVIDER from nur auth list\n");
-                out.push_str("- Provider bridge: Map nur's unified auth to penecho's AI_API_* env via export action (implemented)\n");
-                out.push_str("- Canvas skill: /penecho skill opens penecho + injects conversation context as ink\n");
-                out.push_str("- Atlas concept: cropped visual request + focus insets could inspire nur draw/canvas with image crate\n");
-                out.push_str("- Declarative animation JSON (32 objects) as valid nur output type alongside tldraw\n");
-                out.push_str("- AGPL compliance: sidecar spawn, not linking\n\n");
-                out.push_str("Actions: probe, doctor, export, atlas, launch\n");
-                Ok(out)
+            "stop" => crate::penecho::stop(port),
+            "restart" => crate::penecho::restart(open_browser, effort, port),
+            "launch" | "open" | "start" | "run" => {
+                if background {
+                    let id = crate::bg_jobs::spawn(
+                        format!("penecho launch :{port}"),
+                        "penecho",
+                        move |_c| {
+                            crate::penecho::launch_seamless_on_port(
+                                open_browser,
+                                effort,
+                                port,
+                                inject.as_deref(),
+                            )
+                            .map_err(|e| e.to_string())
+                        },
+                    );
+                    return Ok(format!(
+                        "bg job #{id} · penecho launch on :{port}\n  \
+                         continue working — bg(action=result, id={id}) when ready\n  \
+                         canvas will be {}\n",
+                        crate::penecho::canvas_url(port)
+                    ));
+                }
+                crate::penecho::launch_seamless_on_port(
+                    open_browser,
+                    effort,
+                    port,
+                    inject.as_deref(),
+                )
             }
+            _ => match crate::penecho::ensure_ready(effort) {
+                Ok(msg) => Ok(format!(
+                    "penecho (action '{action}' → status):\n{msg}\n\
+                     Actions: launch|open|restart|stop|status|doctor|export|export_png|inject|atlas"
+                )),
+                Err(e) => Ok(format!("penecho: {e}")),
+            },
         }
     }
 }

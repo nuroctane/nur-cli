@@ -1928,17 +1928,23 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
                 }
                 found
             };
-            // Queued follow-up actions (send now + dismiss may share one line).
+            // Queued follow-up actions (send now / cut in / dismiss).
             let mut qa: Vec<(usize, usize, usize, u8)> = Vec::new();
             if matches!(cell, Cell::Queued { .. }) {
-                if let Some(byte_i) = plain.find("steer") {
-                    let start = UnicodeWidthStr::width(&plain[..byte_i]);
-                    let end = start + UnicodeWidthStr::width("steer");
-                    qa.push((cell_idx, start, end, 2u8));
-                }
                 if let Some(byte_i) = plain.find("send now") {
                     let start = UnicodeWidthStr::width(&plain[..byte_i]);
                     let end = start + UnicodeWidthStr::width("send now");
+                    qa.push((cell_idx, start, end, 0u8)); // no interrupt
+                }
+                if let Some(byte_i) = plain.find("cut in") {
+                    let start = UnicodeWidthStr::width(&plain[..byte_i]);
+                    let end = start + UnicodeWidthStr::width("cut in");
+                    qa.push((cell_idx, start, end, 3u8)); // cancel + front
+                }
+                // Back-compat if an older card still shows "steer"
+                if let Some(byte_i) = plain.find("steer") {
+                    let start = UnicodeWidthStr::width(&plain[..byte_i]);
+                    let end = start + UnicodeWidthStr::width("steer");
                     qa.push((cell_idx, start, end, 0u8));
                 }
                 if let Some(byte_i) = plain.find("dismiss") {
@@ -2781,18 +2787,18 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
             out.push(Line::from(vec![
                 Span::raw("  ".to_string()),
                 Span::styled(
-                    "steer".to_string(),
-                    Style::default()
-                        .fg(theme::BG())
-                        .bg(theme::WARN())
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled("  ·  ".to_string(), theme::style_faint()),
-                Span::styled(
                     "send now".to_string(),
                     Style::default()
                         .fg(theme::BG())
                         .bg(theme::META_BLUE())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("  ·  ".to_string(), theme::style_faint()),
+                Span::styled(
+                    "cut in".to_string(),
+                    Style::default()
+                        .fg(theme::BG())
+                        .bg(theme::WARN())
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled("  ·  ".to_string(), theme::style_faint()),
@@ -2803,7 +2809,7 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                         .add_modifier(Modifier::UNDERLINED),
                 ),
                 Span::styled(
-                    "  ·  inject mid-turn, or cancel + restart".to_string(),
+                    "  ·  send now keeps tools/subagents/bg running; cut in cancels".to_string(),
                     theme::style_faint(),
                 ),
             ]));
@@ -6358,7 +6364,7 @@ fn draw_statusline(f: &mut Frame, app: &App, area: Rect) {
         format!("ctx {ctx_pct:.0}%")
     };
 
-    let left = vec![
+    let mut left = vec![
         Span::raw(" ".to_string()),
         state_dot,
         Span::styled(tok_label, Style::default().fg(theme::BLUE_200())),
@@ -6367,6 +6373,16 @@ fn draw_statusline(f: &mut Frame, app: &App, area: Rect) {
         sep(),
         Span::styled(ctx_label, ctx_style),
     ];
+    // Background jobs chip — seamless so users never lose track of long work.
+    if let Some(chip) = crate::bg_jobs::status_chip() {
+        left.push(sep());
+        left.push(Span::styled(
+            chip,
+            Style::default()
+                .fg(theme::NUR_GOLD())
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
 
     let quitting = app
         .quit_armed

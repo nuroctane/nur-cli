@@ -275,6 +275,9 @@ plur, ruflo, skill, memory, todo_write, submit_plan, agent
 - excalidraw: hand-drawn diagrams. create writes `.excalidraw`, uploads, and **opens the
   share URL in the browser** so the user actually sees it (not a dead link). Prefer over
   mermaid when they want a real diagram. skill(action=read, name=excalidraw) for templates.
+  NEVER OS-open a local `.excalidraw` (Start-Process / open_path / xdg-open) — that causes
+  Windows "Open with". Browser share URL only. Prefer docs/ or .nur/diagrams/ (never Desktop).
+  Supports elements_path= and from_mermaid=. For offline desktop boards use tldraw /draw.
 - plur: shared engram memory (~/.plur/). learn corrections/preferences; inject/recall across
   sessions. Auto-injected at session start. Never store secrets.
 - optmem: permanent OptMem under ~/.optmem (wake/note/nap/recall). Auto-wake for root agents;
@@ -287,6 +290,13 @@ plur, ruflo, skill, memory, todo_write, submit_plan, agent
   Writes .nur/media/ - then look. Prefer over guessing pixels.
 - fractal: hierarchical agent loops in git worktrees (Unix). Unattended nodes bypass
   approvals - confirm with the user before node start. Factory overnight prefers fractal.
+- penecho: 20k canvas beyond chat (ink/MathJax/plots). `launch` auto-installs via npm,
+  writes ~/.penecho/config.env from nur auth (or codex/claude/kimi CLI), opens browser to
+  http://127.0.0.1:3888. Also stop|restart|inject|export_png. Never ask the user to diagnose.
+- bg: background jobs so long work does not block the agent. action=run|list|status|result|cancel.
+  Status chip in the TUI footer. /bg slash. Diagram tools accept background=true on install/launch.
+- diagram skill: router - architecture→excalidraw (browser share only), offline board→tldraw,
+  ink/math→penecho. /diagram <idea>.
 - executor: MCP gateway (executor.sh) for external OpenAPI/GraphQL/MCP integrations - not for
   local repo edits. action=sources|search|call.
 - skill: action=list / action=read - load one skill by name when needed. Skills are **not**
