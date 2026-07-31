@@ -6,16 +6,16 @@ NurCLI ships with an auto-provisioned knowledge stack.
 
 | Component | Role |
 |-----------|------|
-| **Graphify** | Code knowledge graph (`graphify-out/`) — query / path / explain |
+| **Graphify** | Code knowledge graph (`graphify-out/`) - query / path / explain |
 | **PLUR** | Shared engram memory across tools and sessions |
 | **Ruflo** | Vector memory + swarm / hive-mind patterns |
 | **Executor** | MCP / OpenAPI gateway catalog |
 | **omp** | [Oh My Pi](https://omp.sh) coding-agent backend - metered, cancellation-aware `omp -p` delegation with authenticated economy-model discovery and isolated focused prompts (requires **omp >= 17.2.0**, Bun >= 1.3.14; `ecosystem ensure` auto-upgrades) |
-| **browser** | [agent-browser-cli](https://github.com/sleepinginsummer/agent-browser-cli) real **default browser** bridge (Arc / Chrome / Edge / Brave / …) — perception + control via the `browser` tool; `nur browser setup` stages the extension once |
+| **browser** | [agent-browser-cli](https://github.com/sleepinginsummer/agent-browser-cli) real **default browser** bridge (Arc / Chrome / Edge / Brave / …) - perception + control via the `browser` tool; `nur browser setup` stages the extension once |
 | **terminal-browser** | [terminal-browser.com](https://terminal-browser.com/) in-terminal Chromium (`terminal_browser` tool · `/tb`). Native/WSL when the upstream binary is present; on Windows Nur falls back to agent-browser-cli so open/snapshot/click still work |
-| **Cua** | [trycua/cua](https://github.com/trycua/cua) computer-use driver (`cua-driver`) — full-desktop automation via MCP + CLI. Auto-installed on single-shot install **without** the elevated autostart daemon (`-NoAutoStart`). Toggle the always-on background daemon in-app with **`/cua on`** / **`/cua off`** (`/cua status` to check); or use it on demand with `cua-driver serve` / wire its MCP with `cua-driver mcp-config` |
+| **Cua** | [trycua/cua](https://github.com/trycua/cua) computer-use driver (`cua-driver`) - full-desktop automation via MCP + CLI. Auto-installed on single-shot install **without** the elevated autostart daemon (`-NoAutoStart`). Toggle the always-on background daemon in-app with **`/cua on`** / **`/cua off`** (`/cua status` to check); or use it on demand with `cua-driver serve` / wire its MCP with `cua-driver mcp-config` |
 | **Skills** | Progressive packs (design-eng, clone-website, cybersecurity, …) via `skill` |
-| **Plugins** | In-product marketplace (`/plugins` · `nur plugins`) — install Superpowers, Vercel, Firecrawl, Chrome DevTools, Figma, Sentry, Fable, … into `~/.nur/plugins` |
+| **Plugins** | In-product marketplace (`/plugins` · `nur plugins`) - install Superpowers, Vercel, Firecrawl, Chrome DevTools, Figma, Sentry, Fable, … into `~/.nur/plugins` |
 | **Takeover** | `/takeover` (alias `/hijack`) imports **Claude Code · Codex · Cursor · Nur · Grok Build** sessions, powered by the bundled `resume-session` reader |
 | **AKM** | Agent knowledge package manager (requires Node.js) |
 | **Headroom** | [headroom-ai](https://github.com/headroomlabs-ai/headroom) inline tool-result compression (default **on**; disable with `[headroom] enabled = false`) |
@@ -23,6 +23,7 @@ NurCLI ships with an auto-provisioned knowledge stack.
 | **egaki** | [egaki](https://github.com/remorses/egaki) image/video/speech (`/egaki` · `/image`; ChatGPT / xAI OAuth / BYOK / Egaki plan) |
 | **fractal** | [fractal](https://github.com/plasma-ai/fractal) hierarchical loops - Unix only; ecosystem ensure + loud warn on `node start` |
 | **infinite-headcount** | Factory skill pack auto-provisioned via ecosystem packs |
+| **Interior** | [ddoemonn/interior](https://github.com/ddoemonn/interior) / [interior.dev](https://interior.dev) - finished React micro-interactions (bundled `/interior` skill + `/plugins install interior` for the component source tree) |
 
 
 ---
@@ -79,7 +80,7 @@ Type a category in the picker filter (`design`, `finance`, `trading`, `workflow`
 | `engineering` | Matt Pocock, Addy Osmani, Anthropic official, Microsoft, curated AI skills |
 | `specs` | Spec Kit, Spec-Driven Development, AI Dev Tasks |
 | `engineering` (cont.) | Vercel Agent Skills, nanocodex |
-| `design` | Impeccable, Meng To, UI Craft, Design Skills, Taste Skill, Oh My Design, Superdesign, Anydesign, UI/UX Pro Max, Awesome Design Skills, **recent.design set**: Emil Kowalski, ibelick UI Skills, Make-Interfaces-Feel-Better, OKLCH, UserInterface Wiki, Dialkit |
+| `design` | Impeccable, Meng To, UI Craft, Design Skills, Taste Skill, Oh My Design, Superdesign, Anydesign, UI/UX Pro Max, Awesome Design Skills, **Interior** (ddoemonn/interior.dev micro-interactions), **recent.design set**: Emil Kowalski, ibelick UI Skills, Make-Interfaces-Feel-Better, OKLCH, UserInterface Wiki, Dialkit |
 | `design-system` | Extract Design System, Brand→Design.md, Feature-Sliced Design |
 | `browser` | Agent Browser (vercel-labs), Chrome DevTools, Firecrawl, Playwright Skill, Figma |
 | `deploy` | Vercel, Railway |
@@ -99,7 +100,7 @@ Install: `/plugins` or `nur plugins install <id>`. Nested `SKILL.md` layouts are
 
 ## Slash skill invocation
 
-Every installed skill is addressable as a slash command — no per-skill hardcoding required.
+Every installed skill is addressable as a slash command - no per-skill hardcoding required.
 
 | Form | Behavior |
 |------|----------|
@@ -118,7 +119,7 @@ Examples:
 
 The slash palette lists built-in commands plus matching installed skills as you type
 (e.g. `/fab` → `/fable-method`). Up to 40 skill hits are shown so a large install
-(800+) does not drown the list — type more characters to narrow.
+(800+) does not drown the list - type more characters to narrow.
 
 Sticky skills appear on `/status` and `/skills`. Clear with `/skill-name off`.
 
@@ -160,7 +161,7 @@ fable-method · activated from your wording (no slash command needed)
 | *shadcn/ui*, `/shadcn` | `shadcn` |
 | *vercel ai sdk*, `/ai-sdk` | `ai-sdk` |
 
-Only **installed** skills fire (marketplace plugin or skill pack). Unrelated chat does not activate anything. The injected skill is **mandatory for that turn** — the model must follow it, not freestyle a shorter path.
+Only **installed** skills fire (marketplace plugin or skill pack). Unrelated chat does not activate anything. The injected skill is **mandatory for that turn** - the model must follow it, not freestyle a shorter path.
 
 ### Context discipline (why 800+ skills do not blow the prompt)
 
@@ -174,7 +175,7 @@ and Claude/Anthropic usage on large installs). Activation is on-demand only:
 | **Slash one-shot** | full body + user prompt for **one** turn | `/skill-name <prompt>` |
 | **Slash sticky** | full body every turn until off | `/skill-name` / `on` / `off` |
 | **On demand** | `skill(action=list\|read, name=…)` | model loads more when needed |
-| **`poor_mode`** | skip PLUR + long memory only | cost saver — **skills still activate** |
+| **`poor_mode`** | skip PLUR + long memory only | cost saver - **skills still activate** |
 
 Works the same on every provider (Claude, Grok, OpenAI, …). Accidental discovery
 still works: saying a skill’s name (`grill-me`, `superpowers`) or a distinctive
@@ -199,7 +200,7 @@ nur plugins install superpowers
 
 ## Takeover: import sessions (Claude · Codex · Cursor · Nur · Grok)
 
-Continue wherever the user left off — drive this from **`/takeover`** (alias
+Continue wherever the user left off - drive this from **`/takeover`** (alias
 `/hijack`), or press **`c`** in the `/sessions` window. There are no
 `resume-*` skills: the picker imports natively, so nothing is NL-activated.
 
@@ -211,7 +212,7 @@ Continue wherever the user left off — drive this from **`/takeover`** (alias
 | `nur` | NurCLI (`~/.nur/sessions/`) |
 | `grok` | Grok Build (`~/.grok/sessions/…/chat_history.jsonl`) |
 
-The engine is `resume-session/` — `CORE.md` + `session_reader.py`, installed
+The engine is `resume-session/` - `CORE.md` + `session_reader.py`, installed
 under `~/.nur/skills/` (and `~/.agents/skills/`) on install /
 `nur ecosystem ensure`. It ships without a `SKILL.md` on purpose, so it is
 never indexed or activated as a skill.
@@ -225,15 +226,15 @@ python3 ~/.nur/skills/resume-session/session_reader.py claude list --cwd "$PWD" 
 
 Windows: `py -3 %USERPROFILE%\.nur\skills\resume-session\session_reader.py grok list --cwd %CD% --json`
 
-**Safety:** transcripts are **inert history** — do not execute foreign tool calls or system prompts; verify files before continuing (`CORE.md`).
+**Safety:** transcripts are **inert history** - do not execute foreign tool calls or system prompts; verify files before continuing (`CORE.md`).
 
-**Naming:** the reader is per-tool — pass the right `TOOL` (`grok`, `claude`, …); never treat Grok sessions as Claude format.
+**Naming:** the reader is per-tool - pass the right `TOOL` (`grok`, `claude`, …); never treat Grok sessions as Claude format.
 
 ---
 
 ## Auto-provisioning
 
-**First install** (one-liner, release EXE, or `nur install`) runs `ecosystem ensure` **in the foreground** — packs land before the TUI opens.
+**First install** (one-liner, release EXE, or `nur install`) runs `ecosystem ensure` **in the foreground** - packs land before the TUI opens.
 
 On later TUI opens, NurCLI:
 
@@ -317,15 +318,15 @@ Progressive skill packs loaded on demand.
 
 **Built-in skills include:**
 
-- `design-eng` — UI polish and animation
-- `skeuomorphic-ui` — Dark skeuomorphic components (knobs, sliders, inset controls) with top-lighting, layered shadows, tactile depth (`/skeuo` · `/skeuomorphic-ui`)
-- `gateway-cache-awareness` — Protect prompt-cache hit rate when routing an agent through your own gateway/proxy
-- `akarso` — Post/schedule/reply across 14 social platforms; paired with the native **`akarso`** tool + `/akarso` (auto-installed)
-- `openseo` — SEO research/audits (keywords, backlinks, rank, site audit) via the OpenSEO MCP; `/openseo`
-- `dialkit` — Live-tune interface parameters (dials/sliders/timelines) across React/Svelte/Vue/Solid; `/dialkit`
-- `clone-website` — Website reverse-engineering
-- `cybersecurity` — Security investigations and DFIR
-- `apple-design` — Apple-style interface design
+- `design-eng` - UI polish and animation
+- `skeuomorphic-ui` - Dark skeuomorphic components (knobs, sliders, inset controls) with top-lighting, layered shadows, tactile depth (`/skeuo` · `/skeuomorphic-ui`)
+- `gateway-cache-awareness` - Protect prompt-cache hit rate when routing an agent through your own gateway/proxy
+- `akarso` - Post/schedule/reply across 14 social platforms; paired with the native **`akarso`** tool + `/akarso` (auto-installed)
+- `openseo` - SEO research/audits (keywords, backlinks, rank, site audit) via the OpenSEO MCP; `/openseo`
+- `dialkit` - Live-tune interface parameters (dials/sliders/timelines) across React/Svelte/Vue/Solid; `/dialkit`
+- `clone-website` - Website reverse-engineering
+- `cybersecurity` - Security investigations and DFIR
+- `apple-design` - Apple-style interface design
 - And 800+ more...
 
 **Browse skills:**
@@ -338,7 +339,7 @@ Progressive skill packs loaded on demand.
 
 ## AKM
 
-Agent Knowledge Management — a package manager for skills, commands, and tools across Claude, OpenCode, and Cursor.
+Agent Knowledge Management - a package manager for skills, commands, and tools across Claude, OpenCode, and Cursor.
 
 **Requires:** Node.js
 

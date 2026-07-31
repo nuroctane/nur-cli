@@ -201,6 +201,11 @@ const MULTI_FILE_PACKS: &[(&str, &[(&str, &str)])] = &[
             include_str!("../../skills/terminal-browser/SKILL.md"),
         )],
     ),
+    // ddoemonn/interior — finished React micro-interactions (half-second craft).
+    (
+        "interior",
+        &[("SKILL.md", include_str!("../../skills/interior/SKILL.md"))],
+    ),
 ];
 
 const PLUR_SKILL: &str = r#"---

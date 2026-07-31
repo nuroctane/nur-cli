@@ -47,6 +47,13 @@ def gen_triggers(name, desc):
         "fable-loop": ["fable loop", "run the fable loop"],
         "fable-judge": ["fable judge", "fable judge this"],
         "scan": ["codebase scan"],
+        "interior": [
+            "interior.dev",
+            "micro interaction",
+            "micro-interactions",
+            "half second",
+            "half-second",
+        ],
     }
     if name in ALIASES:
         for a in ALIASES[name]:

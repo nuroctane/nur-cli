@@ -9,7 +9,7 @@ pub struct PluginEntry {
     pub id: &'static str,
     pub name: &'static str,
     pub description: &'static str,
-    /// Browse facet — keep short (shown in the picker). See [`CATEGORIES`].
+    /// Browse facet - keep short (shown in the picker). See [`CATEGORIES`].
     pub category: &'static str,
     /// Git clone URL (https).
     pub source_url: &'static str,
@@ -46,7 +46,7 @@ pub const CATALOG: &[PluginEntry] = &[
     PluginEntry {
         id: "superpowers",
         name: "Superpowers",
-        description: "TDD, systematic debugging, brainstorming, subagent workflows — the default agent methodology",
+        description: "TDD, systematic debugging, brainstorming, subagent workflows - the default agent methodology",
         category: "workflow",
         source_url: "https://github.com/obra/superpowers.git",
         path_in_repo: None,
@@ -70,7 +70,7 @@ pub const CATALOG: &[PluginEntry] = &[
     PluginEntry {
         id: "compound-engineering",
         name: "Compound Engineering",
-        description: "Every Inc compound-engineering plugin — multi-step agent workflows teams love",
+        description: "Every Inc compound-engineering plugin - multi-step agent workflows teams love",
         category: "workflow",
         source_url: "https://github.com/EveryInc/compound-engineering-plugin.git",
         path_in_repo: None,
@@ -78,7 +78,7 @@ pub const CATALOG: &[PluginEntry] = &[
     PluginEntry {
         id: "gstack",
         name: "gstack",
-        description: "Snarktank gstack — stacked agent workflows / AI engineering task graphs",
+        description: "Snarktank gstack - stacked agent workflows / AI engineering task graphs",
         category: "workflow",
         source_url: "https://github.com/snarktank/gstack.git",
         path_in_repo: None,
@@ -86,7 +86,7 @@ pub const CATALOG: &[PluginEntry] = &[
     PluginEntry {
         id: "wshobson-agents",
         name: "wshobson Agents",
-        description: "Large Claude agent ecosystem — 100+ specialized skills across plugins",
+        description: "Large Claude agent ecosystem - 100+ specialized skills across plugins",
         category: "workflow",
         source_url: "https://github.com/wshobson/agents.git",
         path_in_repo: None,
@@ -153,7 +153,7 @@ pub const CATALOG: &[PluginEntry] = &[
     PluginEntry {
         id: "nanocodex",
         name: "nanocodex",
-        description: "Minimal Rust coding agent (gakonst) — reference tools incl. a lean web_search",
+        description: "Minimal Rust coding agent (gakonst) - reference tools incl. a lean web_search",
         category: "engineering",
         source_url: "https://github.com/gakonst/nanocodex.git",
         path_in_repo: None,
@@ -163,7 +163,7 @@ pub const CATALOG: &[PluginEntry] = &[
     PluginEntry {
         id: "spec-kit",
         name: "GitHub Spec Kit",
-        description: "Spec-driven development kit from GitHub — specs before code",
+        description: "Spec-driven development kit from GitHub - specs before code",
         category: "specs",
         source_url: "https://github.com/github/spec-kit.git",
         path_in_repo: None,
@@ -205,7 +205,7 @@ pub const CATALOG: &[PluginEntry] = &[
     PluginEntry {
         id: "ui-craft",
         name: "UI Craft",
-        description: "Design engineering system for AI coding agents — large craft-oriented skill set",
+        description: "Design engineering system for AI coding agents - large craft-oriented skill set",
         category: "design",
         source_url: "https://github.com/educlopez/ui-craft.git",
         path_in_repo: None,
@@ -221,7 +221,7 @@ pub const CATALOG: &[PluginEntry] = &[
     PluginEntry {
         id: "oh-my-design",
         name: "Oh My Design",
-        description: "Give your AI coding agent a design system — one-command design skill pack",
+        description: "Give your AI coding agent a design system - one-command design skill pack",
         category: "design",
         source_url: "https://github.com/kwakseongjae/oh-my-design.git",
         path_in_repo: None,
@@ -229,7 +229,7 @@ pub const CATALOG: &[PluginEntry] = &[
     PluginEntry {
         id: "taste-skill",
         name: "Taste Skill",
-        description: "Stops AI UI slop — taste constraints beloved by frontend engineers (Leonxlnx)",
+        description: "Stops AI UI slop - taste constraints beloved by frontend engineers (Leonxlnx)",
         category: "design",
         source_url: "https://github.com/Leonxlnx/taste-skill.git",
         path_in_repo: None,
@@ -270,7 +270,7 @@ pub const CATALOG: &[PluginEntry] = &[
     PluginEntry {
         id: "emil-skills",
         name: "Emil Kowalski Skills",
-        description: "Skills for Design Engineers — animation, craft, and UI polish (emilkowalski)",
+        description: "Skills for Design Engineers - animation, craft, and UI polish (emilkowalski)",
         category: "design",
         source_url: "https://github.com/emilkowalski/skills.git",
         path_in_repo: None,
@@ -286,15 +286,23 @@ pub const CATALOG: &[PluginEntry] = &[
     PluginEntry {
         id: "make-interfaces-feel-better",
         name: "Make Interfaces Feel Better",
-        description: "Skill that makes your interfaces feel better — micro-interaction taste (jakubkrehel)",
+        description: "Skill that makes your interfaces feel better - micro-interaction taste (jakubkrehel)",
         category: "design",
         source_url: "https://github.com/jakubkrehel/make-interfaces-feel-better.git",
         path_in_repo: None,
     },
     PluginEntry {
+        id: "interior",
+        name: "Interior",
+        description: "Finished React micro-interactions (copy-paste hooks + components) - interior.dev / ddoemonn",
+        category: "design",
+        source_url: "https://github.com/ddoemonn/interior.git",
+        path_in_repo: None,
+    },
+    PluginEntry {
         id: "oklch-skill",
         name: "OKLCH Color Skill",
-        description: "Work with OKLCH colors — perceptual palettes and accessible contrast (jakubkrehel)",
+        description: "Work with OKLCH colors - perceptual palettes and accessible contrast (jakubkrehel)",
         category: "design",
         source_url: "https://github.com/jakubkrehel/oklch-skill.git",
         path_in_repo: None,
@@ -302,7 +310,7 @@ pub const CATALOG: &[PluginEntry] = &[
     PluginEntry {
         id: "userinterface-wiki",
         name: "User Interface Wiki",
-        description: "A living manual for better interfaces — UI patterns and principles (raphaelsalaja)",
+        description: "A living manual for better interfaces - UI patterns and principles (raphaelsalaja)",
         category: "design",
         source_url: "https://github.com/raphaelsalaja/userinterface-wiki.git",
         path_in_repo: None,
@@ -310,7 +318,7 @@ pub const CATALOG: &[PluginEntry] = &[
     PluginEntry {
         id: "dialkit",
         name: "Dialkit",
-        description: "Dial in interface parameters of any kind — tune motion/layout/token knobs (joshpuckett)",
+        description: "Dial in interface parameters of any kind - tune motion/layout/token knobs (joshpuckett)",
         category: "design",
         source_url: "https://github.com/joshpuckett/dialkit.git",
         path_in_repo: None,
@@ -346,7 +354,7 @@ pub const CATALOG: &[PluginEntry] = &[
     PluginEntry {
         id: "agent-browser",
         name: "Agent Browser",
-        description: "Browser automation CLI for AI agents — navigate, act, and extract (vercel-labs)",
+        description: "Browser automation CLI for AI agents - navigate, act, and extract (vercel-labs)",
         category: "browser",
         source_url: "https://github.com/vercel-labs/agent-browser.git",
         path_in_repo: None,
@@ -388,7 +396,7 @@ pub const CATALOG: &[PluginEntry] = &[
     PluginEntry {
         id: "vercel",
         name: "Vercel",
-        description: "Deploy, env vars, Next.js, AI SDK, Marketplace — Vercel platform skills",
+        description: "Deploy, env vars, Next.js, AI SDK, Marketplace - Vercel platform skills",
         category: "deploy",
         source_url: "https://github.com/vercel/vercel-plugin.git",
         path_in_repo: None,
@@ -484,7 +492,7 @@ pub const CATALOG: &[PluginEntry] = &[
     PluginEntry {
         id: "open-seo",
         name: "OpenSEO",
-        description: "Open-source Semrush/Ahrefs alternative — keyword/backlink/rank/audit MCP (every-app)",
+        description: "Open-source Semrush/Ahrefs alternative - keyword/backlink/rank/audit MCP (every-app)",
         category: "marketing",
         source_url: "https://github.com/every-app/open-seo.git",
         path_in_repo: None,
@@ -552,7 +560,7 @@ pub const CATALOG: &[PluginEntry] = &[
     PluginEntry {
         id: "vibe-trade",
         name: "Vibe Trade",
-        description: "AI trading agent skill system — drop a SKILL.md to extend strategy tooling",
+        description: "AI trading agent skill system - drop a SKILL.md to extend strategy tooling",
         category: "trading",
         source_url: "https://github.com/spyderweb47/Vibe-Trade.git",
         path_in_repo: None,
@@ -585,7 +593,7 @@ pub const CATALOG: &[PluginEntry] = &[
     PluginEntry {
         id: "journal-skills",
         name: "Awesome Journal Skills",
-        description: "Academic journal skill packs (AAAI, ACL, AEJ, …) — huge; paper workflows only",
+        description: "Academic journal skill packs (AAAI, ACL, AEJ, …) - huge; paper workflows only",
         category: "science",
         source_url: "https://github.com/brycewang-stanford/Awesome-Journal-Skills.git",
         path_in_repo: None,
@@ -605,7 +613,7 @@ pub const CATALOG: &[PluginEntry] = &[
     PluginEntry {
         id: "claude-skills-mega",
         name: "Claude Skills Mega Pack",
-        description: "Large multi-domain pack (business, agents, growth, ops) — heavy download",
+        description: "Large multi-domain pack (business, agents, growth, ops) - heavy download",
         category: "catalog",
         source_url: "https://github.com/alirezarezvani/claude-skills.git",
         path_in_repo: None,
@@ -621,7 +629,7 @@ pub const CATALOG: &[PluginEntry] = &[
     PluginEntry {
         id: "awesome-claude-skills-travis",
         name: "Awesome Claude Skills (travisvn)",
-        description: "Community-curated Claude skills list — discovery companion",
+        description: "Community-curated Claude skills list - discovery companion",
         category: "catalog",
         source_url: "https://github.com/travisvn/awesome-claude-skills.git",
         path_in_repo: None,
@@ -629,7 +637,7 @@ pub const CATALOG: &[PluginEntry] = &[
     PluginEntry {
         id: "antigravity-skills",
         name: "Antigravity Awesome Skills",
-        description: "Large community skill index (sickn33) — browse then install selectively",
+        description: "Large community skill index (sickn33) - browse then install selectively",
         category: "catalog",
         source_url: "https://github.com/sickn33/antigravity-awesome-skills.git",
         path_in_repo: None,

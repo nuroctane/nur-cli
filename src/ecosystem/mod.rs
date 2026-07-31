@@ -37,7 +37,8 @@ const ECOSYSTEM_MARKER: &str = "ecosystem.json";
 /// 13: omp floor 17.2.0 + auto-upgrade for omp/plur/egaki/ruflo/browser/executor/graphify/headroom.
 /// 14: penecho ensure (npm) + auto-config from nur auth + seamless browser launch.
 /// 15: terminal-browser (native/WSL + Windows host fallback via agent-browser-cli).
-const ECOSYSTEM_SCHEMA: u32 = 15;
+/// 16: interior (ddoemonn/interior.dev) bundled skill + /plugins catalog entry.
+const ECOSYSTEM_SCHEMA: u32 = 16;
 /// Re-run ensure at most once per this many seconds unless forced.
 const ENSURE_TTL_SECS: u64 = 86_400;
 
