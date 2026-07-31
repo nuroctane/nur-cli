@@ -225,6 +225,11 @@ impl App {
             "/pen" | "/drawings" | "/penecho" => self.cmd_skill_or_unknown("/penecho", &arg),
             "/draw" => self.cmd_draw(&arg),
             "/diagram" => self.cmd_diagram(&arg),
+            // Comprehensive diagram-type + interactivity router — same skill
+            // that /draw and /diagram consult internally, addressable directly.
+            "/how-to-illustrate" | "/illustrate" => {
+                self.cmd_skill_or_unknown("/how-to-illustrate", &arg)
+            }
             "/bg" | "/jobs" => self.cmd_bg(&arg),
             "/steer" => self.cmd_steer(&arg),
             "/bro" => self.cmd_bro(&arg),
@@ -2231,13 +2236,15 @@ impl App {
         );
     }
 
-    /// `/diagram` — route to the right canvas product by intent.
+    /// `/diagram` — route to the right canvas product by intent. Always
+    /// consults `how-to-illustrate` first (diagram-type taxonomy + tool
+    /// picker + interactivity/animation mandate).
     fn cmd_diagram(&mut self, arg: &str) {
         let arg = arg.trim();
         if arg.is_empty() {
             self.push_note(
                 Tone::Neutral,
-                "diagram router\n  \
+                "diagram router (see also /how-to-illustrate for the full taxonomy)\n  \
                  architecture / flowchart / publish → excalidraw (browser share URL only)\n  \
                  offline interactive board / scripts → tldraw (/draw)\n  \
                  handwriting · math · plots · AI refine → penecho (/pen)\n  \
@@ -2256,6 +2263,9 @@ impl App {
         }
         let prompt = format!(
             "User wants a diagram / canvas for:\n{arg}\n\n\
+             First consult the `how-to-illustrate` skill (comprehensive diagram-type \
+             taxonomy + tool picker + the interactivity/animation mandate) — \
+             skill(action=read, name=how-to-illustrate) if it is not already active for this turn.\n\n\
              Choose ONE primary tool using this router (do not ask which):\n\
              1. **excalidraw** — architecture, flowcharts, decision trees, publishable hand-drawn docs.\n\
                 create + open browser share URL ONLY (never OS-open .excalidraw).\n\
@@ -2264,6 +2274,8 @@ impl App {
                 Use /draw path. Never invent .tldraw JSON with write_file.\n\
              3. **penecho** — handwriting, MathJax, plots, AI ink refine, animations.\n\
                 penecho(action=launch) auto-installs + configures + opens http://127.0.0.1:3888.\n\n\
+             If the chosen tool supports interactivity or animation (tldraw document scripts, \
+             penecho animation scenes), USE it whenever even remotely useful — do not neglect it.\n\n\
              Long installs: use bg(action=run,…) or background=true so the turn stays free.\n\
              Execute end-to-end so the user *sees* the result. Report which product you picked and why."
         );
@@ -2324,6 +2336,8 @@ impl App {
         }
         let model_prompt = format!(
             "Design / open an interactive tldraw offline board for this request.\n{arg}\n\n\
+             First check the `how-to-illustrate` skill for diagram-type choice and the \
+             interactivity/animation mandate — skill(action=read, name=how-to-illustrate).\n\n\
              Use the `tldraw` tool (and shell only if you need the canvas HTTP API beyond the tool).\n\n\
              Capabilities (official offline app):\n\
              - Static boards: action=create (Desktop .tldraw, dark theme, contrast-safe shapes).\n\
@@ -2337,8 +2351,12 @@ impl App {
              (e.g. C:\\\\Users\\\\david\\\\Scripts\\\\nn-digits.tldraw).\n\
              3. For new static diagrams use create (title + shapes). NEVER write_file fake JSON.\n\
              4. Contrast-aware shapes under dark theme (blue/green/red/… with readable labels).\n\
-             5. After open, confirm scripts line shows state=applied when hasScript boards.\n\
-             6. Report Desktop/path + Alt+Tab for the window.",
+             5. Interactivity mandate: if the board explains a process, state machine, decision, \
+             or option comparison, write a document script (create with script=/script_path=, or \
+             action=open + enable_scripts) so it responds to clicks — do not ship a static board \
+             when interactivity is even remotely useful.\n\
+             6. After open, confirm scripts line shows state=applied when hasScript boards.\n\
+             7. Report Desktop/path + Alt+Tab for the window.",
         );
         self.start_turn_labeled(&format!("/draw {arg}"), &model_prompt);
     }

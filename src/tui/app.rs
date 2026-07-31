@@ -206,6 +206,10 @@ pub const COMMANDS: &[(&str, &str)] = &[
         "router: architecture→excalidraw · offline board→tldraw · ink/math→penecho",
     ),
     (
+        "/how-to-illustrate",
+        "comprehensive diagram-type + tool router (90+ types) with interactivity/animation mandate  (/illustrate)",
+    ),
+    (
         "/bg",
         "background jobs: list · <id> result · cancel <id> · run <cmd>  (status chip shows running)",
     ),

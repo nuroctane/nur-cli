@@ -91,6 +91,7 @@ const BUNDLED: &[(&str, &str)] = &[
     ("ruflo", RUFLO_SKILL),
     ("graphify", GRAPHIFY_SKILL),
     ("excalidraw", EXCALIDRAW_SKILL),
+    ("how-to-illustrate", HOW_TO_ILLUSTRATE_SKILL),
 ];
 
 /// Packs with extra files (Python reader, CORE.md). Paths relative to crate root.
@@ -434,3 +435,6 @@ camera → background zones → shape → its text/label → its arrows → next
 
 Upstream: https://github.com/ahmadawais/excalidraw-cli
 "##;
+
+const HOW_TO_ILLUSTRATE_SKILL: &str =
+    include_str!("../../skills/how-to-illustrate/SKILL.md");
