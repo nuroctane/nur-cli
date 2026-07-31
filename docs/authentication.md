@@ -77,21 +77,30 @@ these providers:
 
 #### Cursor details (CLI, no pasted key)
 
-Cursor’s public Agent host (`api2.cursor.sh`) is **not** OpenAI Chat Completions.
+Cursor's public Agent host (`api2.cursor.sh`) is **not** OpenAI Chat Completions.
 Nur drives Cursor the same way t3code does for auth: `cursor-agent login` (session
 in the OS keychain / Agent store). Inference is `cursor-agent -p` with
-`--output-format stream-json`.
+`--output-format stream-json` (text mode is avoided - redirected pipes can hang
+on Windows).
 
 After `/login` → Cursor → browser, nur stores a `cursor-cli-session` marker (not a
 scraped secret). `/model` lists models via `cursor-agent models`. Esc cancel kills
 the Agent process.
 
+**Windows launch:** nur resolves the versioned `node.exe` + `index.js` under
+`%LOCALAPPDATA%\cursor-agent\versions\…` and spawns Node directly. Going through
+`cursor-agent.cmd` → PowerShell buffers piped stdout and left the TUI stuck on
+"thinking" forever after a successful login. Thinking deltas from stream-json
+are forwarded live so turn 1 is not a silent hang.
+
 **Harness (default):** Cursor runs in `--mode ask`. When nur attaches tools, the
 prompt asks the model to emit a fenced `nur-tools` JSON array so nur can run
 **its** tools, approvals, plan mode, and **cross-provider subagents** as usual.
+Live tokens during that buffered turn go to the thinking cell; final commentary
+lands as normal transcript text after the fence is stripped.
 
-**Native Agent (optional):** set `NUR_CURSOR_NATIVE=1` to use Cursor’s own tools
-with `--force` instead (t3code-style full delegate; nur’s tool loop is skipped).
+**Native Agent (optional):** set `NUR_CURSOR_NATIVE=1` to use Cursor's own tools
+with `--force` instead (t3code-style full delegate; nur's tool loop is skipped).
 
 In `/login`, pick the provider → **Sign in with browser**, or **Use existing CLI
 session** when a local first-party login is detected. API keys remain available as a

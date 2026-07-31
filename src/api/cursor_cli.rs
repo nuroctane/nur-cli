@@ -22,8 +22,30 @@ pub fn is_cli_session_token(token: &str) -> bool {
     t == CURSOR_CLI_SESSION_TOKEN || t.starts_with("cursor-cli:")
 }
 
-/// Resolve `cursor-agent` on PATH (never bare `agent` - that can be Grok).
+/// How to launch Cursor Agent without Windows stdout buffering deadlocks.
+///
+/// `cursor-agent.cmd` shells into PowerShell which buffers piped stdout when
+/// nur captures stream-json - the TUI then sits on "thinking" until the pipe
+/// fills or the process exits (often forever for tool-heavy prompts). Prefer
+/// the versioned `node.exe` + `index.js` pair the wrapper would have run.
+#[derive(Debug, Clone)]
+enum CursorLaunch {
+    /// Direct Node entry (preferred).
+    Node { node: PathBuf, index: PathBuf },
+    /// Fallback wrapper script / binary on PATH.
+    Wrapper(PathBuf),
+}
+
+/// Resolve a path useful for diagnostics (Node `index.js` or wrapper script).
+#[allow(dead_code)]
 pub fn cursor_agent_bin() -> Option<PathBuf> {
+    resolve_launch().map(|l| match l {
+        CursorLaunch::Node { index, .. } => index,
+        CursorLaunch::Wrapper(p) => p,
+    })
+}
+
+fn resolve_launch() -> Option<CursorLaunch> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
         #[cfg(windows)]
@@ -31,60 +53,142 @@ pub fn cursor_agent_bin() -> Option<PathBuf> {
             for name in ["cursor-agent.cmd", "cursor-agent.exe", "cursor-agent.ps1"] {
                 let p = dir.join(name);
                 if p.is_file() {
-                    return Some(p);
+                    if let Some(node) = resolve_node_launch(&dir) {
+                        return Some(node);
+                    }
+                    return Some(CursorLaunch::Wrapper(p));
                 }
             }
         }
         let c = dir.join("cursor-agent");
         if c.is_file() {
-            return Some(c);
+            if let Some(parent) = c.parent() {
+                if let Some(node) = resolve_node_launch(parent) {
+                    return Some(node);
+                }
+            }
+            return Some(CursorLaunch::Wrapper(c));
+        }
+    }
+    // Default install location even if PATH is stale.
+    #[cfg(windows)]
+    {
+        if let Some(local) = dirs::data_local_dir() {
+            let dir = local.join("cursor-agent");
+            if let Some(node) = resolve_node_launch(&dir) {
+                return Some(node);
+            }
         }
     }
     None
 }
 
-fn spawn_agent(bin: &PathBuf, args: &[&str]) -> std::io::Result<std::process::Child> {
-    #[cfg(windows)]
-    {
-        let lower = bin.to_string_lossy().to_ascii_lowercase();
-        let mut cmd = if lower.ends_with(".cmd") || lower.ends_with(".bat") {
-            let mut c = Command::new("cmd.exe");
-            c.arg("/D").arg("/C").arg(bin);
-            for a in args {
-                c.arg(a);
-            }
-            c
-        } else if lower.ends_with(".ps1") {
-            let mut c = Command::new("powershell.exe");
-            c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
-                .arg(bin);
-            for a in args {
-                c.arg(a);
-            }
-            c
-        } else {
-            let mut c = Command::new(bin);
-            c.args(args);
-            c
-        };
-        cmd.stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+/// Match `cursor-agent.ps1`: same-dir node.exe, else newest `versions/*`.
+fn resolve_node_launch(script_dir: &std::path::Path) -> Option<CursorLaunch> {
+    let node = script_dir.join("node.exe");
+    let index = script_dir.join("index.js");
+    if node.is_file() && index.is_file() {
+        return Some(CursorLaunch::Node { node, index });
     }
-    #[cfg(not(windows))]
-    {
-        Command::new(bin)
-            .args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+    let versions = script_dir.join("versions");
+    if !versions.is_dir() {
+        return None;
+    }
+    let mut dirs: Vec<_> = std::fs::read_dir(&versions)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .map(|e| e.path())
+        .filter(|p| {
+            p.join("node.exe").is_file() && p.join("index.js").is_file()
+        })
+        .collect();
+    // Names are YYYY.MM.DD-… — lexicographic descending picks newest.
+    dirs.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+    let best = dirs.into_iter().next()?;
+    Some(CursorLaunch::Node {
+        node: best.join("node.exe"),
+        index: best.join("index.js"),
+    })
+}
+
+fn spawn_agent(args: &[&str]) -> std::io::Result<std::process::Child> {
+    let launch = resolve_launch().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "cursor-agent not found on PATH",
+        )
+    })?;
+    spawn_launch(&launch, args)
+}
+
+fn spawn_launch(launch: &CursorLaunch, args: &[&str]) -> std::io::Result<std::process::Child> {
+    #[cfg(windows)]
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    match launch {
+        CursorLaunch::Node { node, index } => {
+            let mut c = Command::new(node);
+            c.arg(index).args(args);
+            c.stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                c.creation_flags(CREATE_NO_WINDOW);
+            }
+            c.spawn()
+        }
+        CursorLaunch::Wrapper(bin) => {
+            #[cfg(windows)]
+            {
+                let lower = bin.to_string_lossy().to_ascii_lowercase();
+                let mut cmd = if lower.ends_with(".cmd") || lower.ends_with(".bat") {
+                    // Last resort — prefer Node launch above. cmd→ps1 buffers pipes.
+                    let mut c = Command::new("cmd.exe");
+                    c.arg("/D").arg("/C").arg(bin);
+                    for a in args {
+                        c.arg(a);
+                    }
+                    c
+                } else if lower.ends_with(".ps1") {
+                    let mut c = Command::new("powershell.exe");
+                    c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+                        .arg(bin);
+                    for a in args {
+                        c.arg(a);
+                    }
+                    c
+                } else {
+                    let mut c = Command::new(bin);
+                    c.args(args);
+                    c
+                };
+                cmd.stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped());
+                {
+                    use std::os::windows::process::CommandExt;
+                    cmd.creation_flags(CREATE_NO_WINDOW);
+                }
+                cmd.spawn()
+            }
+            #[cfg(not(windows))]
+            {
+                Command::new(bin)
+                    .args(args)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+            }
+        }
     }
 }
 
-fn run_capture(bin: &PathBuf, args: &[&str]) -> Result<String> {
-    let mut child = spawn_agent(bin, args)
+fn run_capture(args: &[&str]) -> Result<String> {
+    let mut child = spawn_agent(args)
         .map_err(|e| MuseError::Other(format!("failed to launch cursor-agent: {e}")))?;
     let _ = child.stdin.take();
     let out = child
@@ -101,15 +205,38 @@ fn run_capture(bin: &PathBuf, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// Brief cache so every chat turn does not pay for a fresh `status` spawn.
+fn auth_cache() -> &'static std::sync::Mutex<(std::time::Instant, bool)> {
+    use std::sync::OnceLock;
+    static CACHE: OnceLock<std::sync::Mutex<(std::time::Instant, bool)>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        std::sync::Mutex::new((
+            std::time::Instant::now()
+                .checked_sub(std::time::Duration::from_secs(120))
+                .unwrap_or_else(std::time::Instant::now),
+            false,
+        ))
+    })
+}
+
 /// `cursor-agent status --format json` → authenticated?
 pub fn cli_is_authenticated() -> bool {
-    let Some(bin) = cursor_agent_bin() else {
+    {
+        let guard = auth_cache().lock().unwrap_or_else(|e| e.into_inner());
+        if guard.0.elapsed() < std::time::Duration::from_secs(60) {
+            return guard.1;
+        }
+    }
+    if resolve_launch().is_none() {
         return false;
-    };
-    let Ok(text) = run_capture(&bin, &["status", "--format", "json"]) else {
-        return false;
-    };
-    parse_status_authenticated(&text)
+    }
+    let ok = run_capture(&["status", "--format", "json"])
+        .map(|text| parse_status_authenticated(&text))
+        .unwrap_or(false);
+    if let Ok(mut guard) = auth_cache().lock() {
+        *guard = (std::time::Instant::now(), ok);
+    }
+    ok
 }
 
 pub fn parse_status_authenticated(text: &str) -> bool {
@@ -154,12 +281,12 @@ pub fn session_tokens_from_cli() -> Option<crate::oauth::OAuthTokens> {
 
 /// List model ids from `cursor-agent models` / `--list-models`.
 pub fn list_models() -> Result<Vec<String>> {
-    let bin = cursor_agent_bin().ok_or_else(|| {
-        MuseError::Other(
+    if resolve_launch().is_none() {
+        return Err(MuseError::Other(
             "cursor-agent not found on PATH. Install Cursor Agent, then run `cursor-agent login`."
                 .into(),
-        )
-    })?;
+        ));
+    }
     if !cli_is_authenticated()
         && std::env::var("CURSOR_API_KEY")
             .ok()
@@ -172,8 +299,8 @@ pub fn list_models() -> Result<Vec<String>> {
                 .into(),
         ));
     }
-    let output = run_capture(&bin, &["models"])
-        .or_else(|_| run_capture(&bin, &["--list-models"]))?;
+    let output =
+        run_capture(&["models"]).or_else(|_| run_capture(&["--list-models"]))?;
     let mut ids = parse_model_list(&output);
     if ids.is_empty() {
         ids.push("auto".into());
@@ -506,13 +633,23 @@ pub fn complete_stream(
     cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<ApiResponse> {
     let parse_tools = tools_wire(req);
-    // When tool-calling is expected, buffer output so the nur-tools fence is not
-    // painted into the transcript; emit commentary (if any) once at the end.
-    let (text, model) = if parse_tools {
-        run_print(req, None, cancel)?
-    } else {
-        run_print(req, Some(&mut on_event), cancel)?
-    };
+    // Always stream progress. When nur owns tools, route live tokens to the
+    // thinking cell so turn 1 is not a silent hang; final commentary lands as
+    // TextDelta after the nur-tools fence is stripped.
+    let (text, model) = run_print(
+        req,
+        Some(&mut |ev| {
+            if parse_tools {
+                match ev {
+                    StreamEvent::TextDelta(d) => on_event(StreamEvent::ReasoningDelta(d)),
+                    other => on_event(other),
+                }
+            } else {
+                on_event(ev);
+            }
+        }),
+        cancel,
+    )?;
     let resp = response_from_cli_text(&model, &text, parse_tools);
     if parse_tools {
         let commentary = resp.output_text();
@@ -529,12 +666,12 @@ fn run_print(
     mut on_event: Option<&mut dyn FnMut(StreamEvent)>,
     cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<(String, String)> {
-    let bin = cursor_agent_bin().ok_or_else(|| {
-        MuseError::Other(
+    if resolve_launch().is_none() {
+        return Err(MuseError::Other(
             "cursor-agent not found on PATH. Install Cursor Agent (https://cursor.com/docs/cli)."
                 .into(),
-        )
-    })?;
+        ));
+    }
     let has_api_key = std::env::var("CURSOR_API_KEY")
         .ok()
         .is_some_and(|k| !k.trim().is_empty());
@@ -560,12 +697,15 @@ fn run_print(
 
     // Default: ask mode so nur owns tools/approvals/subagents via nur-tools fence.
     // NUR_CURSOR_NATIVE=1: full Cursor Agent (`--force`) like t3code delegate.
+    // Always stream-json — text mode + redirected pipes can hang on Windows.
     let mut owned: Vec<String> = vec![
         "-p".into(),
         "--output-format".into(),
         "stream-json".into(),
         "--stream-partial-output".into(),
         "--trust".into(),
+        "--sandbox".into(),
+        "disabled".into(),
         "--workspace".into(),
         cwd_s,
     ];
@@ -590,7 +730,7 @@ fn run_print(
     }
 
     let arg_refs: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
-    let mut child = spawn_agent(&bin, &arg_refs)
+    let mut child = spawn_agent(&arg_refs)
         .map_err(|e| MuseError::Other(format!("failed to launch cursor-agent: {e}")))?;
 
     if let Some(mut stdin) = child.stdin.take() {
@@ -635,6 +775,36 @@ fn run_print(
         };
         let ty = ev.get("type").and_then(|t| t.as_str()).unwrap_or("");
         match ty {
+            "system" => {
+                if ev.get("subtype").and_then(|s| s.as_str()) == Some("init") {
+                    let model_label = ev
+                        .get("model")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("Cursor");
+                    if let Some(cb) = on_event.as_mut() {
+                        cb(StreamEvent::ReasoningDelta(format!(
+                            "cursor-agent · {model_label}\n"
+                        )));
+                    }
+                }
+            }
+            "thinking" | "reasoning" => {
+                // stream-json: {"type":"thinking","subtype":"delta","text":"…"}
+                if ev.get("subtype").and_then(|s| s.as_str()) == Some("completed") {
+                    continue;
+                }
+                let chunk = ev
+                    .get("text")
+                    .or_else(|| ev.get("delta"))
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if !chunk.is_empty() {
+                    if let Some(cb) = on_event.as_mut() {
+                        cb(StreamEvent::ReasoningDelta(chunk));
+                    }
+                }
+            }
             "assistant" => {
                 // With --stream-partial-output, prefer timestamped deltas;
                 // skip buffered duplicates that carry model_call_id.
@@ -724,6 +894,25 @@ mod tests {
         assert!(is_cli_session_token(CURSOR_CLI_SESSION_TOKEN));
         assert!(is_cli_session_token("cursor-cli:abc"));
         assert!(!is_cli_session_token("sk-real-key"));
+    }
+
+    #[test]
+    fn resolve_node_launch_from_install_tree() {
+        let Some(local) = dirs::data_local_dir() else {
+            return;
+        };
+        let dir = local.join("cursor-agent");
+        if !dir.join("versions").is_dir() {
+            return;
+        }
+        let launch = resolve_node_launch(&dir).expect("versioned node launch");
+        match launch {
+            CursorLaunch::Node { node, index } => {
+                assert!(node.is_file(), "{node:?}");
+                assert!(index.is_file(), "{index:?}");
+            }
+            CursorLaunch::Wrapper(_) => panic!("expected Node launch"),
+        }
     }
 
     #[test]

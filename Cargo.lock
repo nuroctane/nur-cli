@@ -1361,7 +1361,7 @@ dependencies = [
 
 [[package]]
 name = "nur-cli"
-version = "0.27.4"
+version = "0.27.5"
 dependencies = [
  "anyhow",
  "arboard",
