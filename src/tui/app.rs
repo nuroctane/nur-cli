@@ -199,7 +199,11 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/steer", "inject mid-turn without cancel (tools/subagents/bg keep running): /steer <text>"),
     (
         "/draw",
-        "tldraw offline boards: /draw <file.tldraw> · install · /draw <idea>  (also: /excalidraw · /pen)",
+        "tldraw offline boards: /draw <file.tldraw> · install · /draw <idea>  · /draw excalidraw|pen <idea> routes to that tool",
+    ),
+    (
+        "/excalidraw",
+        "hand-drawn publishable diagrams: browser share URL · /excalidraw <idea>  (also reachable via /draw excalidraw)",
     ),
     (
         "/diagram",
@@ -207,7 +211,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ),
     (
         "/how-to-illustrate",
-        "comprehensive diagram-type + tool router (90+ types) with interactivity/animation mandate  (/illustrate)",
+        "comprehensive diagram-type + tool router (200+ types) with interactivity/animation mandate  (/illustrate)",
     ),
     (
         "/bg",

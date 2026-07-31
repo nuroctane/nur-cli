@@ -223,6 +223,9 @@ impl App {
             "/fractal" => self.cmd_fractal(&arg),
             // penecho canvas aliases → canonical /penecho skill.
             "/pen" | "/drawings" | "/penecho" => self.cmd_skill_or_unknown("/penecho", &arg),
+            // excalidraw: advertised alongside /draw and /pen but previously
+            // had no route at all — typing it hit "unknown command".
+            "/excalidraw" => self.cmd_skill_or_unknown("/excalidraw", &arg),
             "/draw" => self.cmd_draw(&arg),
             "/diagram" => self.cmd_diagram(&arg),
             // Comprehensive diagram-type + interactivity router — same skill
@@ -2282,18 +2285,48 @@ impl App {
         self.start_turn_labeled(&format!("/diagram {arg}"), &prompt);
     }
 
-    /// `/draw` — manage the tldraw offline app and open/build interactive
-    /// `.tldraw` boards. No arg → status; `install` → fetch the app; a file path
-    /// → open it directly; anything else → seed a turn that builds a board.
+    /// Strip a leading tool-name token (e.g. "excalidraw", "pen") from `arg`
+    /// if it matches one of `names`, returning the remainder. Lets `/draw
+    /// <tool> …` and `/draw <tool>` (no remainder) redirect to that tool
+    /// instead of being swallowed into the tldraw-only flow below.
+    fn strip_tool_prefix<'a>(arg: &'a str, names: &[&str]) -> Option<&'a str> {
+        let mut parts = arg.splitn(2, char::is_whitespace);
+        let head = parts.next().unwrap_or("");
+        if names.iter().any(|n| head.eq_ignore_ascii_case(n)) {
+            Some(parts.next().unwrap_or("").trim())
+        } else {
+            None
+        }
+    }
+
+    /// `/draw` — general canvas entry point. Defaults to the tldraw offline
+    /// app (install / open / build a board), but a leading tool name — `/draw
+    /// excalidraw …`, `/draw pen …`, `/draw penecho …` — routes to that tool
+    /// instead of being force-fed into the tldraw-only prompt below. No arg →
+    /// tldraw status; `install` → fetch the tldraw app; a file path → open it
+    /// directly; anything else → seed a turn that builds a tldraw board.
     fn cmd_draw(&mut self, arg: &str) {
         let arg = arg.trim();
+        if let Some(rest) = Self::strip_tool_prefix(arg, &["excalidraw"]) {
+            self.cmd_skill_or_unknown("/excalidraw", rest);
+            return;
+        }
+        if let Some(rest) = Self::strip_tool_prefix(arg, &["penecho", "pen", "drawings"]) {
+            self.cmd_skill_or_unknown("/penecho", rest);
+            return;
+        }
+        // Explicit "tldraw" prefix just falls through to the default flow
+        // below with the prefix stripped, so "/draw tldraw <idea>" and
+        // "/draw <idea>" behave identically.
+        let arg = Self::strip_tool_prefix(arg, &["tldraw"]).unwrap_or(arg);
         if arg.is_empty() {
             match crate::tools::tldraw::app_path() {
                 Some(p) => self.push_note(
                     Tone::Neutral,
                     format!(
                         "tldraw offline · installed ({})\n  /draw <file.tldraw> open · \
-                         /draw <idea> build a board · /draw install reinstall",
+                         /draw <idea> build a board · /draw install reinstall\n  \
+                         /draw excalidraw <idea> · /draw pen <idea>  route to another tool",
                         p.display()
                     ),
                 ),
@@ -2706,6 +2739,31 @@ fn is_unlimited_token(v: &str) -> bool {
             | "clear"
             | "reset"
     )
+}
+
+#[cfg(test)]
+mod draw_tool_prefix_tests {
+    use super::App;
+
+    #[test]
+    fn routes_named_tools_and_leaves_everything_else_alone() {
+        let strip = App::strip_tool_prefix;
+
+        // Named tool with a request → routes, request preserved.
+        assert_eq!(strip("excalidraw auth flow", &["excalidraw"]), Some("auth flow"));
+        assert_eq!(strip("pen a sine wave", &["penecho", "pen"]), Some("a sine wave"));
+        // Bare tool name → routes with an empty remainder, not None.
+        assert_eq!(strip("excalidraw", &["excalidraw"]), Some(""));
+        // Case-insensitive.
+        assert_eq!(strip("ExcaliDraw x", &["excalidraw"]), Some("x"));
+        // Non-matching leading word must NOT be stripped — this was the bug
+        // class where a normal request got mangled into a tool route.
+        assert_eq!(strip("a flowchart of excalidraw", &["excalidraw"]), None);
+        assert_eq!(strip("pencil sketch", &["pen"]), None);
+        assert_eq!(strip("", &["excalidraw"]), None);
+        // A .tldraw path must stay intact for the open-file branch.
+        assert_eq!(strip("board.tldraw", &["tldraw"]), None);
+    }
 }
 
 #[cfg(test)]
