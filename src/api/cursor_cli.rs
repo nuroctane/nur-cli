@@ -686,7 +686,7 @@ impl TranscriptSnapshot {
                 Some((modified, path))
             })
             .collect();
-        candidates.sort_by(|a, b| b.0.cmp(&a.0));
+        candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.0));
         candidates.into_iter().find_map(|(_, path)| {
             let text = std::fs::read_to_string(path).ok()?;
             parse_completed_transcript(&text, prompt)

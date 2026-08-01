@@ -1,6 +1,6 @@
 //! fractal integration — hierarchical recursive loops in git worktrees
 //!
-//! Fractal (https://github.com/plasma-ai/fractal) spawns child nodes in isolated
+//! Fractal (<https://github.com/plasma-ai/fractal>) spawns child nodes in isolated
 //! git worktrees, each running its own autonomous agent loop. You are one node;
 //! spawn a child to own a subtask that is well-defined, separable, large enough
 //! for its own iteration cycle, and able to be run in parallel.

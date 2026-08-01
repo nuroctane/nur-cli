@@ -122,7 +122,7 @@ pub trait Tool: Send + Sync {
         capabilities::is_read_only(self.name(), args)
     }
 
-    /// May join a concurrent batch. Must imply [`is_read_only`].
+    /// May join a concurrent batch. Must imply `is_read_only`.
     #[allow(dead_code)]
     fn is_concurrency_safe(&self, args: &Value) -> bool {
         capabilities::classify_value(self.name(), args).concurrency_safe

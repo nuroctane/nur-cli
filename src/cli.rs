@@ -166,7 +166,7 @@ pub enum LocalCmd {
 
 #[derive(Subcommand, Debug)]
 pub enum BenchCmd {
-    /// Record a task: nur bench add <name> "<prompt>" [--check "<cmd>"]
+    /// Record a task: `nur bench add <name> "<prompt>" [--check "<cmd>"]`
     Add {
         /// Short task name
         name: String,

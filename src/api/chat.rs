@@ -28,7 +28,7 @@ pub fn build_body_for_provider(req: &ResponseRequest, stream: bool, provider_id:
 /// something was attached) without tripping a text-only server.
 const MEDIA_DROPPED: &str = "[attachment omitted - this model/endpoint has no vision support]";
 
-/// Same as [`build_body_for_provider`], but `drop_media` replaces every image /
+/// Same as `build_body_for_provider`, but `drop_media` replaces every image /
 /// video content part with a short text marker.
 ///
 /// Text-only endpoints (a `llama-server` without an `mmproj`, most local

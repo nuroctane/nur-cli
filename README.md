@@ -298,6 +298,9 @@ nur ecosystem ensure --force
 nur doctor
 ```
 
+`nur doctor` and `nur ecosystem status` are read-only snapshots. Use
+`nur ecosystem ensure --force` when you want Nur to install or upgrade ecosystem tools.
+
 Launching from a drive root (`C:\`) auto-picks a safe workspace (git / last session / Laboratory).
 
 ---

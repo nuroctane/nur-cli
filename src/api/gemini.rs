@@ -108,7 +108,7 @@ fn parse_args(arguments: Option<&Value>) -> Value {
     }
 }
 
-/// Translate a Responses role message ({role, content:[parts]}) into a Gemini
+/// Translate a Responses role message (`{role, content:[parts]}`) into a Gemini
 /// content turn. Returns `None` when there is nothing textual to send.
 fn message_content(item: &Value) -> Option<Value> {
     let role = match item.get("role").and_then(Value::as_str) {
@@ -162,7 +162,7 @@ fn candidate_text(response: &Value) -> String {
 }
 
 /// Collect functionCall parts from the first candidate as chat-shaped tool calls
-/// (`{id, function:{name, arguments}}`) so [`build_response_value_with_status`]
+/// (`{id, function:{name, arguments}}`) so `build_response_value_with_status`
 /// can reconstruct Responses `function_call` items.
 fn candidate_tool_calls(response: &Value) -> Vec<Value> {
     let mut calls = Vec::new();

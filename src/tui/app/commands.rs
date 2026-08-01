@@ -564,10 +564,7 @@ impl App {
             let rest = rest.trim();
             // optional trailing --split DIR
             let (url, split) = if let Some((u, s)) = rest.rsplit_once("--split") {
-                (
-                    u.trim(),
-                    s.trim().split_whitespace().next().unwrap_or("right"),
-                )
+                (u.trim(), s.split_whitespace().next().unwrap_or("right"))
             } else {
                 (rest, "right")
             };

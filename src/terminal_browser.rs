@@ -1,4 +1,4 @@
-//! terminal-browser integration - https://terminal-browser.com/
+//! terminal-browser integration - <https://terminal-browser.com/>
 //!
 //! Upstream ships Apple Silicon macOS builds today (Linux WIP). On Windows we
 //! still wire a full tool surface:
@@ -136,7 +136,7 @@ pub fn doctor_report() -> String {
     lines.push("terminal-browser · https://terminal-browser.com/".into());
     match resolve_runtime() {
         Some(Runtime::Native(p)) => {
-            lines.push(format!("runtime: native"));
+            lines.push("runtime: native".to_string());
             lines.push(format!("binary: {p}"));
             if let Ok(v) = run_capture(&p, &["--version"], None, 10_000) {
                 let first = v.lines().next().unwrap_or(v.trim());
@@ -318,7 +318,6 @@ fn run_host(
         }
         "ls" => {
             let argv = ["tabs"];
-            let _ = rest.iter().any(|a| *a == "--json");
             run_cli(&bin, &argv, cwd, timeout_ms, cancel).map(|out| {
                 format!(
                     "{out}\n\n[windows-host] tab ids above come from agent-browser-cli \

@@ -1,11 +1,12 @@
 //! egaki - terminal image, video, and speech generation CLI.
-//! Upstream: https://github.com/remorses/egaki (npm `egaki` ≥ 0.10).
+//! Upstream: <https://github.com/remorses/egaki> (npm `egaki` ≥ 0.10).
 //!
 //! Auth modes (from upstream docs):
 //! - BYOK keys via `egaki login --provider <name> --key …`
 //! - ChatGPT sub: `egaki login --provider chatgpt` (device auth)
 //! - xAI Grok Build sub: `egaki login --provider xai-oauth`
 //! - Egaki subscription: `egaki subscribe` then `egaki login --provider egaki --key egaki_…`
+//!
 //! Credentials: `~/.config/egaki/credentials.json` (+ env vars).
 
 use crate::ecosystem::{find_bin, run_capture, run_capture_cancelled};

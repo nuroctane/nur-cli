@@ -1,5 +1,5 @@
 //! Real-Chrome perception & control — agent-browser-cli
-//! https://github.com/sleepinginsummer/agent-browser-cli
+//! <https://github.com/sleepinginsummer/agent-browser-cli>
 //!
 //! Unlike `web_fetch` (text-only, no cookies), this drives the user's *actual*
 //! Chrome session through a MV3 extension bridge, so login state is preserved:

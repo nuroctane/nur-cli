@@ -1,6 +1,6 @@
 //! Headroom - local context compression for tool results.
 //!
-//! Upstream: https://github.com/headroomlabs-ai/headroom (`headroom-ai` on PyPI).
+//! Upstream: <https://github.com/headroomlabs-ai/headroom> (`headroom-ai` on PyPI).
 //! Default mode is **inline** compress on tool outputs (config `headroom.enabled`).
 //! Uses a small Python helper that calls `from headroom import compress`.
 

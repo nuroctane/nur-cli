@@ -295,7 +295,7 @@ pub fn user_text_item(text: &str) -> Value {
 /// Multimodal user message: text plus image/video content parts.
 ///
 /// Meta Responses API: `input_image` / `input_video` with `image_url` / `video_url`
-/// (public URL or `data:` URL). See https://dev.meta.ai/docs/features/image-understanding
+/// (public URL or `data:` URL). See <https://dev.meta.ai/docs/features/image-understanding>
 pub fn user_multimodal_item(
     text: &str,
     media: &[(

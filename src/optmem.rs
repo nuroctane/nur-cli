@@ -2,7 +2,7 @@
 //!
 //! Upstream-pure paths: `~/.optmem/memo` and `~/.optmem/memory`.
 //! Honors `$MEMORY_DIR` for the memory tree (upstream behavior).
-//! Repo: https://github.com/VictorTaelin/OptMem
+//! Repo: <https://github.com/VictorTaelin/OptMem>
 
 use crate::ecosystem::{find_bin, run_capture};
 use std::fs;

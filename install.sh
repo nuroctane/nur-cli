@@ -121,6 +121,11 @@ else
 fi
 cp -f "${BUILT}" "${DEST_DIR}/nur"
 chmod +x "${DEST_DIR}/nur"
+# Enforce the single-command install contract on upgrades too.
+rm -f "${DEST_DIR}/muse" "${DEST_DIR}/muse.exe" \
+  "${DEST_DIR}/muse-opencode.cmd" "${DEST_DIR}/muse-opencode.ps1" \
+  "${DEST_DIR}/muse.sha256" "${DEST_DIR}/meta" "${DEST_DIR}/meta.exe" \
+  "${DEST_DIR}/meta.sha256"
 if [[ -n "${BUILT_HASH}" ]]; then
   INSTALLED_HASH="$( (sha256sum "${DEST_DIR}/nur" 2>/dev/null || shasum -a 256 "${DEST_DIR}/nur") | awk '{print $1}' )"
   if [[ "${INSTALLED_HASH}" != "${BUILT_HASH}" ]]; then

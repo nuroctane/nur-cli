@@ -247,10 +247,13 @@ Set `ecosystem_auto_ensure = false` in `~/.nur/config.toml` to skip background r
 ```bash
 nur ecosystem ensure          # install / repair
 nur ecosystem ensure --force  # force re-install
-nur ecosystem status          # check readiness
+nur ecosystem status          # read-only readiness snapshot
 nur browser setup             # stage extension + open default browser extensions page
 nur browser status            # default browser + staging state
 ```
+
+`nur doctor` is read-only as well. Only `ecosystem ensure`, the installer, and
+the configured background TTL repair may change ecosystem state.
 
 ---
 

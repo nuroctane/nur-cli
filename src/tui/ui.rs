@@ -7283,10 +7283,8 @@ mod tests {
         }
     }
 
-    /// Not an assertion — `cargo test swarm_preview -- --ignored --nocapture`
-    /// prints the card at a few sizes so the layout can be eyeballed.
+    /// Representative viewport matrix with semantic and width assertions.
     #[test]
-    #[ignore]
     fn swarm_preview() {
         let _g = crate::agent::swarm::test_lock();
         for (n, width) in [
@@ -7300,9 +7298,17 @@ mod tests {
             (5, 20),
         ] {
             seed_swarm(n);
-            println!("\n──── {n} agents @ {width} cols ────");
-            for row in swarm_rows(width, true, false) {
-                println!("{row}");
+            let rows = swarm_rows(width, true, false);
+            assert!(!rows.is_empty(), "n={n} width={width} rendered nothing");
+            assert!(
+                rows.iter().any(|row| row.contains("swarm")),
+                "n={n} width={width} lost the card identity: {rows:?}"
+            );
+            for row in rows {
+                assert!(
+                    UnicodeWidthStr::width(row.as_str()) <= width,
+                    "n={n} width={width} overflowed: {row:?}"
+                );
             }
         }
     }

@@ -1755,10 +1755,8 @@ return {{ method: 'manual', staged: dest, note: 'canvas API has no screenshot â€
         .or_else(|| resp.pointer("/result").and_then(|v| v.as_str()))
     {
         let src = PathBuf::from(path);
-        if src.is_file() {
-            if std::fs::copy(&src, &dest).is_ok() {
-                copied = true;
-            }
+        if src.is_file() && std::fs::copy(&src, &dest).is_ok() {
+            copied = true;
         }
     }
     let mut out = format!(

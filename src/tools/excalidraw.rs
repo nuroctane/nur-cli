@@ -116,8 +116,7 @@ fn want_open(args: &Value) -> bool {
 }
 
 fn default_diagrams_dir(cwd: &Path) -> std::path::PathBuf {
-    let preferred = cwd.join(".nur").join("diagrams");
-    preferred
+    cwd.join(".nur").join("diagrams")
 }
 
 fn create(args: &Value, cwd: &Path) -> Result<String> {
@@ -329,6 +328,12 @@ fn elements_to_json_string(args: &Value) -> Result<String> {
 fn mermaid_to_elements_json(mmd: &str) -> Result<String> {
     let mut nodes: Vec<(String, String)> = Vec::new();
     let mut edges: Vec<(String, String, String)> = Vec::new();
+    let re_edge = regex::Regex::new(
+        r#"(?P<a>[A-Za-z0-9_]+)(?:\[(?P<al>[^\]]*)\])?\s*--?>\s*(?:\|(?P<label>[^|]+)\|)?\s*(?P<b>[A-Za-z0-9_]+)(?:\[(?P<bl>[^\]]*)\])?"#,
+    )
+    .map_err(|e| NurError::Tool(format!("mermaid regex: {e}")))?;
+    let re_node = regex::Regex::new(r#"^(?P<a>[A-Za-z0-9_]+)\[(?P<al>[^\]]*)\]"#)
+        .map_err(|e| NurError::Tool(format!("mermaid node regex: {e}")))?;
     for raw in mmd.lines() {
         let line = raw.trim();
         if line.is_empty()
@@ -339,10 +344,6 @@ fn mermaid_to_elements_json(mmd: &str) -> Result<String> {
             continue;
         }
         // A[Label] --> B[Label]  or  A --> B
-        let re_edge = regex::Regex::new(
-            r#"(?P<a>[A-Za-z0-9_]+)(?:\[(?P<al>[^\]]*)\])?\s*--?>\s*(?:\|(?P<label>[^|]+)\|)?\s*(?P<b>[A-Za-z0-9_]+)(?:\[(?P<bl>[^\]]*)\])?"#,
-        )
-        .map_err(|e| NurError::Tool(format!("mermaid regex: {e}")))?;
         if let Some(c) = re_edge.captures(line) {
             let a = c.name("a").unwrap().as_str().to_string();
             let b = c.name("b").unwrap().as_str().to_string();
@@ -368,8 +369,6 @@ fn mermaid_to_elements_json(mmd: &str) -> Result<String> {
             continue;
         }
         // Lone node A[Label]
-        let re_node = regex::Regex::new(r#"^(?P<a>[A-Za-z0-9_]+)\[(?P<al>[^\]]*)\]"#)
-            .map_err(|e| NurError::Tool(format!("mermaid node regex: {e}")))?;
         if let Some(c) = re_node.captures(line) {
             let a = c.name("a").unwrap().as_str().to_string();
             let al = c.name("al").unwrap().as_str().to_string();

@@ -1,4 +1,4 @@
-//! Executor MCP gateway wrapper — https://executor.sh/docs
+//! Executor MCP gateway wrapper — <https://executor.sh/docs>
 
 use super::{arg_str, Tool, ToolContext};
 use crate::ecosystem;

@@ -2167,6 +2167,7 @@ fn now_stamp() -> String {
 ///
 /// Mode 1002 (button-event tracking) reports motion only while a button is held
 /// - exactly what drag-select and scrollbar-drag need - plus 1000 (clicks) and
+///
 /// 1006 (SGR coords). We deliberately do NOT enable 1003 (any-motion): it floods
 /// a motion event for every cell the pointer crosses, which - combined with the
 /// ambient repaint - backs up the event queue and makes drags/clicks lag. The
@@ -7715,7 +7716,7 @@ impl App {
     }
 
     /// `/fractal` - recursive agent tree: node list | status | start | attach | init
-    /// Mirrors the upstream `fractal` CLI (https://github.com/plasma-ai/fractal) with worktree safety.
+    /// Mirrors the upstream `fractal` CLI (<https://github.com/plasma-ai/fractal>) with worktree safety.
     /// Empty arg -> status + node list, otherwise forwards to skill or direct CLI when possible.
     pub(crate) fn cmd_fractal(&mut self, arg: &str) {
         let arg_trim = arg.trim();

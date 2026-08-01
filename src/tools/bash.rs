@@ -166,10 +166,7 @@ fn command_segments(cmd: &str) -> Vec<&str> {
 
 fn strip_env_assigns(seg: &str) -> &str {
     let mut s = seg.trim();
-    loop {
-        let Some((key, rest)) = s.split_once('=') else {
-            break;
-        };
+    while let Some((key, rest)) = s.split_once('=') {
         if key.is_empty() || key.contains(' ') || key.contains('/') || key.contains('\\') {
             break;
         }

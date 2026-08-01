@@ -8,6 +8,10 @@ The built-in health check for install, auth, config, and ecosystem:
 nur doctor
 ```
 
+The check is read-only. It reports the last recorded ecosystem state without
+running npm, uv, or any other installer. Use `nur ecosystem ensure --force` to
+repair or upgrade ecosystem components.
+
 ### What it checks
 
 | Check | Shows |

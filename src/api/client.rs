@@ -495,9 +495,8 @@ impl ApiClient {
         });
         let mut final_resp: Option<ApiResponse> = None;
         while let Some(ev) = rx.recv().await {
-            match &ev {
-                StreamEvent::Completed(r) => final_resp = Some(r.clone()),
-                _ => {}
+            if let StreamEvent::Completed(r) = &ev {
+                final_resp = Some(r.clone());
             }
             on_event(ev);
         }

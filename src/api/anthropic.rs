@@ -42,7 +42,7 @@ pub const DEFAULT_SONNET: &str = "claude-sonnet-5";
 
 /// Map retired / short / product names → a Claude API id that still works.
 ///
-/// Source of truth: https://platform.claude.com/docs/en/about-claude/models/overview
+/// Source of truth: <https://platform.claude.com/docs/en/about-claude/models/overview>
 /// (Claude Sonnet 5 = `claude-sonnet-5`, Opus 4.8 = `claude-opus-4-8`, …).
 /// Applies to **both** API keys and Claude OAuth — same Messages model ids.
 pub fn normalize_model_id(model: &str) -> String {

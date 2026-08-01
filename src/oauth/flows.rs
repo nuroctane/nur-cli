@@ -586,7 +586,10 @@ pub mod opencode {
         if let Some(err) = child.stderr.take() {
             let tx = tx.clone();
             thread::spawn(move || {
-                for line in std::io::BufReader::new(err).lines().flatten() {
+                for line in std::io::BufReader::new(err)
+                    .lines()
+                    .map_while(|line| line.ok())
+                {
                     let snippet: String = line.chars().take(160).collect();
                     if !snippet.trim().is_empty() {
                         send(&tx, BrowserLoginProgress::Status(snippet));
@@ -597,7 +600,10 @@ pub mod opencode {
         if let Some(out) = child.stdout.take() {
             let tx = tx.clone();
             thread::spawn(move || {
-                for line in std::io::BufReader::new(out).lines().flatten() {
+                for line in std::io::BufReader::new(out)
+                    .lines()
+                    .map_while(|line| line.ok())
+                {
                     for word in line.split_whitespace() {
                         let url = word
                             .trim_matches(|c: char| c == ')' || c == '(' || c == '"' || c == '\'');

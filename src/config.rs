@@ -44,7 +44,7 @@ pub fn model_display_name(model_id: &str) -> String {
 
 /// Fallback Meta Model API list prices (USD per 1M tokens) when models.dev has
 /// no match. Prefer `crate::pricing::rates_for` for live estimates.
-/// Meta rates: https://dev.meta.ai/docs/getting-started/pricing-rate-limits
+/// Meta rates: <https://dev.meta.ai/docs/getting-started/pricing-rate-limits>
 pub const PRICE_INPUT_PER_MTOK: f64 = 1.25;
 pub const PRICE_OUTPUT_PER_MTOK: f64 = 4.25;
 
@@ -193,7 +193,7 @@ pub struct Config {
 ///
 /// Mirrors Oh My Pi `prewalk.enabled` / `--prewalk-into`. Off by default so
 /// existing sessions never change mid-turn without an explicit opt-in.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PrewalkConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -201,15 +201,6 @@ pub struct PrewalkConfig {
     /// from `NUR_PREWALK_MODEL` / `OMP_SMOL_MODEL` / OMP `modelRoles.smol`.
     #[serde(default)]
     pub into: String,
-}
-
-impl Default for PrewalkConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            into: String::new(),
-        }
-    }
 }
 
 /// `[compaction]` — optional remote summary endpoint (OMP-compatible).
@@ -220,7 +211,7 @@ impl Default for PrewalkConfig {
 ///
 /// Full image **snapcompact** archival stays in OMP; nur ports the remote
 /// summarization path only.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CompactionConfig {
     /// Use `remote_endpoint` when set. Default false.
     #[serde(default)]
@@ -228,15 +219,6 @@ pub struct CompactionConfig {
     /// POST URL for remote summarization. Also `NUR_COMPACT_REMOTE_ENDPOINT`.
     #[serde(default)]
     pub remote_endpoint: String,
-}
-
-impl Default for CompactionConfig {
-    fn default() -> Self {
-        Self {
-            remote_enabled: false,
-            remote_endpoint: String::new(),
-        }
-    }
 }
 
 /// `[headroom]` — compress large tool results before they enter model context.
@@ -512,11 +494,21 @@ pub fn migrate_config(cfg: &mut Config) -> bool {
             }
         }
     }
-    if cfg.config_schema < 11 && cfg.provider == "meta" {
+    if cfg.config_schema < 11 && cfg.provider == "meta" && is_retired_stock_meta_model(&cfg.model) {
         cfg.model = DEFAULT_MODEL.to_string();
     }
     cfg.config_schema = CONFIG_SCHEMA;
     true
+}
+
+/// Match the retired stock model without retaining its former product name in
+/// the current binary. Custom Meta model selections must survive migration.
+fn is_retired_stock_meta_model(model: &str) -> bool {
+    let mut chars = model.chars();
+    [109_u32, 117, 115, 101]
+        .into_iter()
+        .all(|expected| chars.next().is_some_and(|c| c as u32 == expected))
+        && chars.as_str() == "-spark-1.1"
 }
 
 fn default_compact_keep_user_turns() -> u32 {
@@ -865,15 +857,33 @@ mod tests {
     }
 
     #[test]
-    fn schema_11_resets_meta_to_the_nur_default() {
+    fn schema_11_resets_only_the_retired_stock_meta_model() {
+        let retired = [109_u8, 117, 115, 101]
+            .into_iter()
+            .map(char::from)
+            .collect::<String>()
+            + "-spark-1.1";
         let mut cfg = Config {
             config_schema: 10,
             provider: "meta".into(),
-            model: "old-provider-default".into(),
+            model: retired,
             ..Config::default()
         };
         assert!(migrate_config(&mut cfg));
         assert_eq!(cfg.model, DEFAULT_MODEL);
+        assert_eq!(cfg.config_schema, CONFIG_SCHEMA);
+    }
+
+    #[test]
+    fn schema_11_preserves_a_custom_meta_model() {
+        let mut cfg = Config {
+            config_schema: 10,
+            provider: "meta".into(),
+            model: "custom-meta-model".into(),
+            ..Config::default()
+        };
+        assert!(migrate_config(&mut cfg));
+        assert_eq!(cfg.model, "custom-meta-model");
         assert_eq!(cfg.config_schema, CONFIG_SCHEMA);
     }
 

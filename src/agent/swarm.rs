@@ -272,7 +272,7 @@ pub fn tool_start(id: u64, name: &str) {
     tool_start_with(id, name, "");
 }
 
-/// Like [`tool_start`] but captures the call arguments for expandable peek.
+/// Like `tool_start` but captures the call arguments for expandable peek.
 pub fn tool_start_with(id: u64, name: &str, args: &str) {
     with_run(id, |run| {
         let n = clip(name);
@@ -295,7 +295,7 @@ pub fn tool_end(id: u64, ok: bool) {
     tool_end_with(id, ok, "");
 }
 
-/// Like [`tool_end`] but stores the tool result body for expandable peek/copy.
+/// Like `tool_end` but stores the tool result body for expandable peek/copy.
 pub fn tool_end_with(id: u64, ok: bool, result: &str) {
     with_run(id, |run| {
         if let Some(name) = run.tool.take() {

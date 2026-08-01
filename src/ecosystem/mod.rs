@@ -616,7 +616,7 @@ fn ensure_fractal() -> ComponentStatus {
         if let Some(bin) = crate::fractal::find_on_path("fractal") {
             c.path = Some(bin.display().to_string());
         }
-        return c;
+        c
     }
     #[cfg(not(windows))]
     {
@@ -1304,13 +1304,20 @@ pub fn plur_inject(task: &str) -> Option<String> {
     Some(capped)
 }
 
-/// Status for `/ecosystem` and doctor. Heals the marker when schema is old or
-/// a component (e.g. excalidraw) is missing - same path as one-shot install.
+/// Status for `/ecosystem` and doctor. This is deliberately read-only and
+/// never launches package managers or rewrites the ecosystem marker.
 pub fn quick_status() -> String {
-    // Prefer a live ensure so /ecosystem never lies about a stale marker.
-    // Cached when fresh (TTL + all core bits including excalidraw).
-    let st = ensure_ecosystem(false);
-    st.report()
+    let marker = fs::read_to_string(marker_path()).ok();
+    quick_status_from_marker(marker.as_deref())
+}
+
+fn quick_status_from_marker(marker: Option<&str>) -> String {
+    marker
+        .and_then(|text| serde_json::from_str::<EcosystemStatus>(text).ok())
+        .map(|status| status.report())
+        .unwrap_or_else(|| {
+            "ecosystem status unavailable (read-only) - run: nur ecosystem ensure\n".into()
+        })
 }
 
 /// One-line snapshot for TUI open. Instant; no npm/uv.
@@ -1362,5 +1369,17 @@ mod tests {
             elapsed < Duration::from_secs(15),
             "cancel took {elapsed:?} - should not wait out the child's 30s sleep"
         );
+    }
+
+    #[test]
+    fn quick_status_fallback_is_explicitly_read_only() {
+        let fallback = quick_status_from_marker(None);
+        assert!(fallback.contains("read-only"));
+        assert!(fallback.contains("ecosystem ensure"));
+        assert_eq!(quick_status_from_marker(Some("not json")), fallback);
+
+        let marker = serde_json::to_string(&EcosystemStatus::default()).unwrap();
+        let report = quick_status_from_marker(Some(&marker));
+        assert_ne!(report, fallback);
     }
 }

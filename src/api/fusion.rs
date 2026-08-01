@@ -32,7 +32,7 @@ pub fn label(provider_id: &str, model: &str) -> String {
 
 /// A user prompt in the Responses **message-array** shape. Built as an array
 /// (not a bare string) on purpose: the Chat Completions adapter
-/// ([`crate::api::chat::build_body`]) only reads `input` when it is an array of
+/// (`crate::api::chat::build_body`) only reads `input` when it is an array of
 /// items, so a bare string would reach chat providers as an empty prompt.
 fn user_input(text: &str) -> Value {
     json!([{

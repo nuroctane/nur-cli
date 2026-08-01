@@ -1,7 +1,7 @@
 //! t3code compatibility layer — driver probing, env isolation, atomic writes,
 //! delegate mode, and pairing tokens.
 //!
-//! t3code (https://github.com/pingdotgg/t3code) delegates 100% of LLM auth to
+//! t3code (<https://github.com/pingdotgg/t3code>) delegates 100% of LLM auth to
 //! vendor CLIs and never stores API keys. Its control plane uses pairing +
 //! DPoP bearer. NurCLI traditionally stores tokens in `~/.nur/auth.json`.
 //!
@@ -501,7 +501,7 @@ fn parse_duration_to_secs(s: &str) -> Option<u64> {
     })
 }
 
-/// Pairing tokens come from the shared CSPRNG in [`crate::oauth::flows`].
+/// Pairing tokens come from the shared CSPRNG in `crate::oauth::flows`.
 ///
 /// This used to be a local LCG seeded from `DefaultHasher` (fixed-key SipHash).
 /// Because the alphabet is exactly 64 chars, `seed % 64` read only the low six

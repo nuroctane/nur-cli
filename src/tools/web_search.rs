@@ -118,7 +118,7 @@ fn parse_ddg_html(html: &str, max: usize) -> Vec<SearchResult> {
     out
 }
 
-/// DDG wraps results as //duckduckgo.com/l/?uddg=<percent-encoded-url>&…
+/// DDG wraps results as `//duckduckgo.com/l/?uddg=<percent-encoded-url>&…`.
 fn resolve_ddg_href(href: &str) -> String {
     if let Some(pos) = href.find("uddg=") {
         let rest = &href[pos + 5..];

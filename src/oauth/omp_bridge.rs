@@ -1,6 +1,6 @@
 //! Universal Oh My Pi (OMP) credential bridge.
 //!
-//! Upstream: https://github.com/open-horizon-labs/oh-omp · https://omp.sh
+//! Upstream: <https://github.com/open-horizon-labs/oh-omp> · <https://omp.sh>
 //!
 //! OMP stores API keys and OAuth sessions in `~/.omp/agent/agent.db`. The
 //! supported export surface is `omp token <provider>` (see `omp token --help`).
@@ -156,8 +156,7 @@ fn parse_token_output(raw: &str) -> Option<String> {
     let line = trimmed
         .lines()
         .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .next_back()
+        .rfind(|l| !l.is_empty())
         .unwrap_or(trimmed);
     // Nested JSON credential blobs (e.g. github-copilot --raw) — dig for a token.
     if line.starts_with('{') {

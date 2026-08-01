@@ -1,4 +1,4 @@
-//! Oh My Pi backend delegation - https://omp.sh and https://github.com/can1357/oh-my-pi
+//! Oh My Pi backend delegation - <https://omp.sh> and <https://github.com/can1357/oh-my-pi>
 //!
 //! OMP is a coding agent with LSP-wired edits, debugger support, AST rewrites,
 //! and a broad provider catalog. Nur uses its headless one-shot entry point,

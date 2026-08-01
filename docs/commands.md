@@ -246,6 +246,8 @@ In the TUI, bare **`/plugins`** opens the full marketplace picker (provider-pick
 ### `nur doctor`
 
 Diagnose install, auth, config, ecosystem, and plugin marketplace readiness.
+This command is read-only: it never launches a package manager or changes the
+ecosystem marker.
 
 ```bash
 nur doctor
@@ -289,7 +291,9 @@ nur ecosystem ensure [--force]
 
 #### `nur ecosystem status`
 
-Show ecosystem readiness.
+Show the last recorded ecosystem readiness. This is a read-only snapshot and
+never installs, upgrades, or repairs components. Run `nur ecosystem ensure`
+explicitly when you want those changes.
 
 ```bash
 nur ecosystem status

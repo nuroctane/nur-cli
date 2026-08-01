@@ -1,6 +1,6 @@
 //! penecho compatibility — canvas + provider bridge
 //!
-//! penecho (https://github.com/penecho/penecho) is "Think with AI beyond the chat box":
+//! penecho (<https://github.com/penecho/penecho>) is "Think with AI beyond the chat box":
 //! 20k x 20k canvas, pressure-sensitive ink, draft layer, MathJax, plots,
 //! declarative animations. Runtime: Node >=18, 2 deps only (@inquirer/prompts + sharp),
 //! no bundler, vanilla JS client served via http.
@@ -764,10 +764,7 @@ pub fn launch(extra_args: &[String]) -> Result<std::process::Child> {
 pub fn launch_seamless(open_browser: bool, effort: Effort) -> Result<String> {
     let mut notes = Vec::new();
 
-    match ensure_installed() {
-        Ok(msg) => notes.push(msg),
-        Err(e) => return Err(e),
-    }
+    notes.push(ensure_installed()?);
 
     let (mode, cfg_msg) = auto_configure_from_nur(false, effort)?;
     notes.push(cfg_msg);
@@ -929,10 +926,10 @@ pub fn stop(port: u16) -> Result<String> {
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        return Ok(format!(
+        Ok(format!(
             "stopped penecho on port {port} (killed PIDs: {})",
             killed.join(", ")
-        ));
+        ))
     }
     #[cfg(not(windows))]
     {

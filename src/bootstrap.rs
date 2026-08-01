@@ -196,9 +196,8 @@ pub fn run_full_install() -> Result<()> {
         }
         theme::print_ok(&format!("Installed {}", dest.display()));
     }
-    // Product binary is ONLY `nur`. Remove same-hash impostors of this image
-    // under other agent names
-    // (e.g. an old install that overwrote another agent binary).
+    // Product binary is ONLY `nur`. Remove retired launchers and same-hash
+    // impostors under other agent names.
     scrub_impostor_bins(&dest_dir, &dest);
 
     // Prefer the install dir for everything that follows in this process.
@@ -1166,6 +1165,23 @@ fn same_file(a: &Path, b: &Path) -> bool {
 /// Install target is only `nur` / `nur.exe`. Delete any identical copy of this
 /// binary under a foreign agent name.
 fn scrub_impostor_bins(dest_dir: &Path, nur_bin: &Path) {
+    const RETIRED_PRODUCT_FILES: &[&str] = &[
+        "muse.exe",
+        "muse",
+        "muse-opencode.cmd",
+        "muse-opencode.ps1",
+        "muse.sha256",
+        "meta.exe",
+        "meta",
+        "meta.sha256",
+    ];
+    for name in RETIRED_PRODUCT_FILES {
+        let path = dest_dir.join(name);
+        if path.is_file() && fs::remove_file(&path).is_ok() {
+            theme::print_info(&format!("removed retired launcher {name}"));
+        }
+    }
+
     let Some(our_hash) = file_sha256(nur_bin) else {
         return;
     };
@@ -1626,6 +1642,26 @@ mod auto_update_tests {
         assert_eq!(cleanup_stale_update_temps(&dir, 0), 0);
         let _ = fs::remove_dir_all(&dir);
         assert_eq!(cleanup_stale_update_temps(&dir, 0), 0);
+    }
+
+    #[test]
+    fn scrub_removes_retired_launchers_even_when_their_hash_differs() {
+        let dir = std::env::temp_dir().join(format!("nur-retired-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let nur = dir.join(if cfg!(windows) { "nur.exe" } else { "nur" });
+        fs::write(&nur, b"current").unwrap();
+        for name in ["muse.exe", "muse-opencode.cmd", "meta.exe", "meta.sha256"] {
+            fs::write(dir.join(name), b"different").unwrap();
+        }
+
+        scrub_impostor_bins(&dir, &nur);
+
+        assert!(nur.is_file());
+        for name in ["muse.exe", "muse-opencode.cmd", "meta.exe", "meta.sha256"] {
+            assert!(!dir.join(name).exists(), "{name} survived cleanup");
+        }
+        let _ = fs::remove_dir_all(&dir);
     }
 
     // ── partial-download guard ────────────────────────────────────────────
