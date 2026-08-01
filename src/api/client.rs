@@ -136,9 +136,14 @@ pub enum StreamEvent {
 
 impl ApiClient {
     pub fn new(base_url: impl Into<String>, api_key: impl Into<String>) -> Result<Self> {
+        let timeout_secs = std::env::var("NUR_PROVIDER_TURN_TIMEOUT_SECS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .filter(|secs| *secs > 0)
+            .unwrap_or(300);
         let http = Client::builder()
             .user_agent(format!("nur-cli/{}", env!("CARGO_PKG_VERSION")))
-            .timeout(std::time::Duration::from_secs(300))
+            .timeout(std::time::Duration::from_secs(timeout_secs))
             .build()?;
         Ok(Self {
             http,

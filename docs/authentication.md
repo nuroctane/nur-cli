@@ -90,8 +90,11 @@ the Agent process.
 **Windows launch:** nur resolves the versioned `node.exe` + `index.js` under
 `%LOCALAPPDATA%\cursor-agent\versions\…` and spawns Node directly. Going through
 `cursor-agent.cmd` → PowerShell buffers piped stdout and left the TUI stuck on
-"thinking" forever after a successful login. Thinking deltas from stream-json
-are forwarded live so turn 1 is not a silent hang.
+"thinking" forever after a successful login. The stdout reader is polled rather
+than blocked, so Esc and the provider timeout always terminate the child. Cursor
+builds that persist a successful turn while emitting zero redirected stdout are
+recovered from the newly created `~/.cursor/projects/*/agent-transcripts` JSONL
+transcript. Nur never reuses an older transcript.
 
 **Harness (default):** Cursor runs in `--mode ask`. When nur attaches tools, the
 prompt asks the model to emit a fenced `nur-tools` JSON array so nur can run

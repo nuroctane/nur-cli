@@ -9,9 +9,11 @@ use crate::api::types::{ApiResponse, ApiUsage, ContentPart, OutputItem, Response
 use crate::api::StreamEvent;
 use crate::error::{MuseError, Result};
 use serde_json::Value;
+use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 /// Stored in `auth.json` when the user is signed in via `cursor-agent login`.
 /// Not a real Bearer token - ApiClient routes Cursor through this module.
@@ -130,6 +132,12 @@ fn spawn_launch(launch: &CursorLaunch, args: &[&str]) -> std::io::Result<std::pr
         CursorLaunch::Node { node, index } => {
             let mut c = Command::new(node);
             c.arg(index).args(args);
+            c.env("CURSOR_INVOKED_AS", "cursor-agent");
+            if std::env::var_os("NODE_COMPILE_CACHE").is_none() {
+                if let Some(local) = dirs::data_local_dir() {
+                    c.env("NODE_COMPILE_CACHE", local.join("cursor-compile-cache"));
+                }
+            }
             c.stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
@@ -661,6 +669,125 @@ pub fn complete_stream(
     Ok(resp)
 }
 
+/// Cursor's Windows headless CLI has shipped versions that finish a turn and
+/// persist it successfully while emitting zero bytes to redirected stdout.
+/// Snapshot the durable transcript set before launch so that a newly completed
+/// turn can be recovered without ever confusing it with an older session.
+struct TranscriptSnapshot {
+    known: HashSet<PathBuf>,
+}
+
+impl TranscriptSnapshot {
+    fn capture() -> Self {
+        Self {
+            known: cursor_transcript_paths().into_iter().collect(),
+        }
+    }
+
+    fn recover(&self, prompt: &str) -> Option<String> {
+        let mut candidates: Vec<_> = cursor_transcript_paths()
+            .into_iter()
+            .filter(|path| !self.known.contains(path))
+            .filter_map(|path| {
+                let modified = std::fs::metadata(&path).ok()?.modified().ok()?;
+                Some((modified, path))
+            })
+            .collect();
+        candidates.sort_by(|a, b| b.0.cmp(&a.0));
+        candidates.into_iter().find_map(|(_, path)| {
+            let text = std::fs::read_to_string(path).ok()?;
+            parse_completed_transcript(&text, prompt)
+        })
+    }
+}
+
+fn cursor_transcript_paths() -> Vec<PathBuf> {
+    let Some(home) = dirs::home_dir() else {
+        return Vec::new();
+    };
+    let root = home.join(".cursor").join("projects");
+    if !root.is_dir() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let Ok(projects) = std::fs::read_dir(root) else {
+        return out;
+    };
+    for project in projects.flatten() {
+        let transcripts = project.path().join("agent-transcripts");
+        let Ok(sessions) = std::fs::read_dir(transcripts) else {
+            continue;
+        };
+        for session in sessions.flatten() {
+            let name = session.file_name();
+            let path = session.path().join(name).with_extension("jsonl");
+            if path.is_file() {
+                out.push(path);
+            }
+        }
+    }
+    out
+}
+
+fn transcript_message_text(value: &Value) -> String {
+    value
+        .pointer("/message/content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn parse_completed_transcript(jsonl: &str, prompt: &str) -> Option<String> {
+    let signature: String = prompt
+        .trim()
+        .chars()
+        .rev()
+        .take(240)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+    let mut prompt_matches = signature.is_empty();
+    let mut assistant = String::new();
+    let mut completed = false;
+    for line in jsonl.lines() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        match value.get("role").and_then(Value::as_str) {
+            Some("user") => {
+                if transcript_message_text(&value).contains(&signature) {
+                    prompt_matches = true;
+                }
+            }
+            Some("assistant") => assistant.push_str(&transcript_message_text(&value)),
+            _ => {}
+        }
+        if value.get("type").and_then(Value::as_str) == Some("turn_ended")
+            && value.get("status").and_then(Value::as_str) == Some("success")
+        {
+            completed = true;
+        }
+    }
+    if completed && prompt_matches && !assistant.trim().is_empty() {
+        Some(assistant)
+    } else {
+        None
+    }
+}
+
+fn provider_turn_timeout() -> Duration {
+    std::env::var("NUR_PROVIDER_TURN_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| Duration::from_secs(300))
+}
+
 fn run_print(
     req: &ResponseRequest,
     mut on_event: Option<&mut dyn FnMut(StreamEvent)>,
@@ -729,6 +856,7 @@ fn run_print(
         owned.push(prompt.clone());
     }
 
+    let transcript = TranscriptSnapshot::capture();
     let arg_refs: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
     let mut child = spawn_agent(&arg_refs)
         .map_err(|e| MuseError::Other(format!("failed to launch cursor-agent: {e}")))?;
@@ -754,99 +882,149 @@ fn run_print(
         buf
     });
 
+    let (line_tx, line_rx) = std::sync::mpsc::channel();
+    let stdout_handle = std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            if line_tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+
+    let started = Instant::now();
+    let timeout = provider_turn_timeout();
+    let mut next_transcript_probe = Instant::now();
     let mut final_text = String::new();
     let mut streamed = String::new();
-    let reader = BufReader::new(stdout);
-    for line in reader.lines() {
+    let mut recovered = None;
+    let mut cli_error = None;
+    let mut status = None;
+    loop {
         if cancel.is_cancelled() {
             let _ = child.kill();
+            let _ = child.wait();
+            let _ = stdout_handle.join();
             let _ = stderr_handle.join();
-            return Err(MuseError::Other("cancelled".into()));
+            return Err(MuseError::Interrupted);
         }
-        let Ok(line) = line else {
-            continue;
-        };
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
+        if started.elapsed() >= timeout {
+            recovered = transcript.recover(&prompt);
+            let _ = child.kill();
+            let _ = child.wait();
+            if recovered.is_none() {
+                cli_error = Some(format!(
+                    "cursor-agent exceeded the provider turn timeout ({}s)",
+                    timeout.as_secs()
+                ));
+            }
+            break;
         }
-        let Ok(ev) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        let ty = ev.get("type").and_then(|t| t.as_str()).unwrap_or("");
-        match ty {
-            "system" => {
-                if ev.get("subtype").and_then(|s| s.as_str()) == Some("init") {
-                    let model_label = ev
-                        .get("model")
-                        .and_then(|m| m.as_str())
-                        .unwrap_or("Cursor");
-                    if let Some(cb) = on_event.as_mut() {
-                        cb(StreamEvent::ReasoningDelta(format!(
-                            "cursor-agent · {model_label}\n"
-                        )));
+
+        match line_rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(Ok(line)) => {
+                let line = line.trim();
+                if let Ok(ev) = serde_json::from_str::<Value>(line) {
+                    let ty = ev.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                    match ty {
+                        "system" => {
+                            if ev.get("subtype").and_then(|s| s.as_str()) == Some("init") {
+                                let model_label = ev
+                                    .get("model")
+                                    .and_then(|m| m.as_str())
+                                    .unwrap_or("Cursor");
+                                if let Some(cb) = on_event.as_mut() {
+                                    cb(StreamEvent::ReasoningDelta(format!(
+                                        "cursor-agent · {model_label}\n"
+                                    )));
+                                }
+                            }
+                        }
+                        "thinking" | "reasoning" => {
+                            if ev.get("subtype").and_then(|s| s.as_str()) != Some("completed") {
+                                let chunk = ev
+                                    .get("text")
+                                    .or_else(|| ev.get("delta"))
+                                    .and_then(|t| t.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                if !chunk.is_empty() {
+                                    if let Some(cb) = on_event.as_mut() {
+                                        cb(StreamEvent::ReasoningDelta(chunk));
+                                    }
+                                }
+                            }
+                        }
+                        "assistant" => {
+                            let has_ts = ev.get("timestamp_ms").is_some();
+                            let has_mc = ev.get("model_call_id").is_some();
+                            if !(has_mc && !has_ts) {
+                                let chunk = assistant_text(&ev);
+                                if !chunk.is_empty() && (has_ts || streamed.is_empty()) {
+                                    streamed.push_str(&chunk);
+                                    if let Some(cb) = on_event.as_mut() {
+                                        cb(StreamEvent::TextDelta(chunk));
+                                    }
+                                }
+                            }
+                        }
+                        "result" => {
+                            if let Some(result) = ev.get("result").and_then(|r| r.as_str()) {
+                                final_text = result.to_string();
+                            }
+                            if ev.get("is_error").and_then(|x| x.as_bool()) == Some(true) {
+                                cli_error = Some(
+                                    ev.get("result")
+                                        .and_then(|r| r.as_str())
+                                        .unwrap_or("cursor-agent reported an error")
+                                        .to_string(),
+                                );
+                                let _ = child.kill();
+                                let _ = child.wait();
+                                break;
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
-            "thinking" | "reasoning" => {
-                // stream-json: {"type":"thinking","subtype":"delta","text":"…"}
-                if ev.get("subtype").and_then(|s| s.as_str()) == Some("completed") {
-                    continue;
-                }
-                let chunk = ev
-                    .get("text")
-                    .or_else(|| ev.get("delta"))
-                    .and_then(|t| t.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                if !chunk.is_empty() {
-                    if let Some(cb) = on_event.as_mut() {
-                        cb(StreamEvent::ReasoningDelta(chunk));
-                    }
-                }
+            Ok(Err(_)) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                std::thread::sleep(Duration::from_millis(50));
             }
-            "assistant" => {
-                // With --stream-partial-output, prefer timestamped deltas;
-                // skip buffered duplicates that carry model_call_id.
-                let has_ts = ev.get("timestamp_ms").is_some();
-                let has_mc = ev.get("model_call_id").is_some();
-                if has_mc && !has_ts {
-                    continue;
-                }
-                let chunk = assistant_text(&ev);
-                if chunk.is_empty() {
-                    continue;
-                }
-                if has_ts || streamed.is_empty() {
-                    streamed.push_str(&chunk);
-                    if let Some(cb) = on_event.as_mut() {
-                        cb(StreamEvent::TextDelta(chunk));
-                    }
-                }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+        }
+
+        if let Some(exit) = child
+            .try_wait()
+            .map_err(|e| MuseError::Other(format!("cursor-agent wait: {e}")))?
+        {
+            status = Some(exit);
+            break;
+        }
+        // Affected Cursor builds persist a complete JSONL turn but never write
+        // stream-json to the pipe. Poll that durable result while the child is
+        // alive, then terminate its orphan-prone worker cleanly.
+        if Instant::now() >= next_transcript_probe {
+            next_transcript_probe = Instant::now() + Duration::from_millis(500);
+            if let Some(text) = transcript.recover(&prompt) {
+                recovered = Some(text);
+                let _ = child.kill();
+                let _ = child.wait();
+                break;
             }
-            "result" => {
-                if let Some(r) = ev.get("result").and_then(|r| r.as_str()) {
-                    final_text = r.to_string();
-                }
-                if ev.get("is_error").and_then(|x| x.as_bool()) == Some(true) {
-                    let msg = ev
-                        .get("result")
-                        .and_then(|r| r.as_str())
-                        .unwrap_or("cursor-agent reported an error");
-                    let _ = child.kill();
-                    let _ = stderr_handle.join();
-                    return Err(MuseError::Other(msg.into()));
-                }
-            }
-            _ => {}
         }
     }
 
+    let _ = stdout_handle.join();
     let err_text = stderr_handle.join().unwrap_or_default();
-    let status = child
-        .wait()
-        .map_err(|e| MuseError::Other(format!("cursor-agent wait: {e}")))?;
-    if !status.success() && final_text.is_empty() && streamed.is_empty() {
+    if let Some(error) = cli_error {
+        return Err(MuseError::Other(error));
+    }
+    if status.is_some_and(|exit| !exit.success())
+        && final_text.is_empty()
+        && streamed.is_empty()
+        && recovered.is_none()
+    {
+        let status = status.expect("checked above");
         return Err(MuseError::Other(format!(
             "cursor-agent failed (exit {status}){}",
             if err_text.trim().is_empty() {
@@ -859,6 +1037,8 @@ fn run_print(
 
     let text = if !final_text.is_empty() {
         final_text
+    } else if let Some(recovered) = recovered.or_else(|| transcript.recover(&prompt)) {
+        recovered
     } else {
         streamed
     };
@@ -966,5 +1146,84 @@ mod tests {
             resp.output.first(),
             Some(OutputItem::FunctionCall { name: Some(n), .. }) if n == "agent"
         ));
+    }
+
+    #[test]
+    fn completed_transcript_recovers_matching_assistant_text() {
+        let transcript = concat!(
+            r#"{"role":"user","message":{"content":[{"type":"text","text":"<user_query>hello cursor</user_query>"}]}}"#,
+            "\n",
+            r#"{"role":"assistant","message":{"content":[{"type":"text","text":"hello back"}]}}"#,
+            "\n",
+            r#"{"type":"turn_ended","status":"success"}"#,
+        );
+        assert_eq!(
+            parse_completed_transcript(transcript, "hello cursor").as_deref(),
+            Some("hello back")
+        );
+        assert!(parse_completed_transcript(transcript, "different prompt").is_none());
+    }
+
+    #[test]
+    fn incomplete_transcript_is_not_recovered() {
+        let transcript = concat!(
+            r#"{"role":"user","message":{"content":[{"type":"text","text":"hello cursor"}]}}"#,
+            "\n",
+            r#"{"role":"assistant","message":{"content":[{"type":"text","text":"partial"}]}}"#,
+        );
+        assert!(parse_completed_transcript(transcript, "hello cursor").is_none());
+    }
+
+    #[test]
+    #[ignore = "requires an installed, authenticated Cursor Agent"]
+    fn live_cursor_completion_recovers_silent_windows_stdout() {
+        let req = ResponseRequest {
+            model: "composer-2.5-fast".into(),
+            input: json!([{
+                "type":"message",
+                "role":"user",
+                "content":[{"type":"text","text":"Reply with exactly NUR_CURSOR_E2E_OK"}]
+            }]),
+            instructions: None,
+            tools: None,
+            tool_choice: None,
+            store: None,
+            include: None,
+            reasoning: None,
+            stream: Some(true),
+            parallel_tool_calls: None,
+            prompt_cache_key: None,
+        };
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let response = complete(&req, &cancel).expect("live Cursor completion");
+        assert!(response.output_text().contains("NUR_CURSOR_E2E_OK"));
+    }
+
+    #[test]
+    #[ignore = "requires an installed, authenticated Cursor Agent and a 1s timeout env"]
+    fn live_cursor_timeout_terminates_the_child() {
+        if std::env::var("NUR_PROVIDER_TURN_TIMEOUT_SECS").as_deref() != Ok("1") {
+            return;
+        }
+        let req = ResponseRequest {
+            model: "composer-2.5-fast".into(),
+            input: json!([{
+                "type":"message",
+                "role":"user",
+                "content":[{"type":"text","text":"Wait before replying with NUR_TIMEOUT_TEST"}]
+            }]),
+            instructions: None,
+            tools: None,
+            tool_choice: None,
+            store: None,
+            include: None,
+            reasoning: None,
+            stream: Some(true),
+            parallel_tool_calls: None,
+            prompt_cache_key: None,
+        };
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let error = complete(&req, &cancel).expect_err("the 1s live test should time out");
+        assert!(error.to_string().contains("provider turn timeout"));
     }
 }

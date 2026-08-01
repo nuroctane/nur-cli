@@ -3335,6 +3335,7 @@ impl App {
         if had_peek {
             // Kitty/iTerm image pixels sit outside the cell buffer; drop the
             // protocol cache and force a terminal clear so they do not linger.
+            #[cfg(feature = "image-peek")]
             self.img_cache.clear();
             self.needs_full_redraw = true;
         }

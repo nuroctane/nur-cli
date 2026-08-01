@@ -203,6 +203,19 @@ struct Served {
     failover: bool,
 }
 
+fn provider_turn_timeout_from(value: Option<&str>) -> std::time::Duration {
+    value
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .map(std::time::Duration::from_secs)
+        .unwrap_or_else(|| std::time::Duration::from_secs(300))
+}
+
+fn provider_turn_timeout() -> std::time::Duration {
+    let value = std::env::var("NUR_PROVIDER_TURN_TIMEOUT_SECS").ok();
+    provider_turn_timeout_from(value.as_deref())
+}
+
 impl AgentRunner {
     fn persist_session(&self, session: &Session) {
         if !self.is_subagent {
@@ -221,33 +234,64 @@ impl AgentRunner {
         tx: &mpsc::UnboundedSender<AgentEvent>,
         cancel: &CancellationToken,
     ) -> std::result::Result<(ApiResponse, usize), (MuseError, usize)> {
-        let mut deltas = 0usize;
+        let delta_count =
+            std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let turn_cancel = cancel.child_token();
+        let timeout = provider_turn_timeout();
         // Cursor Agent CLI must honor Esc cancel; always take the streaming path
         // so the CancellationToken reaches `cursor-agent` (even for subagents).
         if req.stream == Some(true) || client.uses_cursor_cli() {
-            let r = client
-                .create_response_stream(
-                    req,
-                    |ev| match ev {
-                        StreamEvent::TextDelta(d) => {
-                            deltas += 1;
-                            let _ = tx.send(AgentEvent::TextDelta(d));
-                        }
-                        StreamEvent::ReasoningDelta(d) => {
-                            let _ = tx.send(AgentEvent::ReasoningDelta(d));
-                        }
-                        StreamEvent::Completed(_) => {}
-                    },
-                    cancel,
-                )
-                .await;
+            let streamed_count = delta_count.clone();
+            let request = client.create_response_stream(
+                req,
+                move |ev| match ev {
+                    StreamEvent::TextDelta(d) => {
+                        streamed_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let _ = tx.send(AgentEvent::TextDelta(d));
+                    }
+                    StreamEvent::ReasoningDelta(d) => {
+                        let _ = tx.send(AgentEvent::ReasoningDelta(d));
+                    }
+                    StreamEvent::Completed(_) => {}
+                },
+                &turn_cancel,
+            );
+            tokio::pin!(request);
+            let r = tokio::select! {
+                _ = cancel.cancelled() => {
+                    turn_cancel.cancel();
+                    return Err((
+                        MuseError::Interrupted,
+                        delta_count.load(std::sync::atomic::Ordering::Relaxed),
+                    ));
+                }
+                _ = tokio::time::sleep(timeout) => {
+                    turn_cancel.cancel();
+                    Err(MuseError::Other(format!(
+                        "provider turn exceeded the {}s timeout (set NUR_PROVIDER_TURN_TIMEOUT_SECS to adjust)",
+                        timeout.as_secs()
+                    )))
+                }
+                result = &mut request => result,
+            };
+            let deltas = delta_count.load(std::sync::atomic::Ordering::Relaxed);
             match r {
                 Ok(resp) => Ok((resp, deltas)),
                 Err(e) => Err((e, deltas)),
             }
         } else {
             tokio::select! {
-                _ = cancel.cancelled() => Err((MuseError::Interrupted, 0)),
+                _ = cancel.cancelled() => {
+                    turn_cancel.cancel();
+                    Err((MuseError::Interrupted, 0))
+                },
+                _ = tokio::time::sleep(timeout) => {
+                    turn_cancel.cancel();
+                    Err((MuseError::Other(format!(
+                        "provider turn exceeded the {}s timeout (set NUR_PROVIDER_TURN_TIMEOUT_SECS to adjust)",
+                        timeout.as_secs()
+                    )), 0))
+                },
                 r = client.create_response(req) => match r {
                     Ok(resp) => Ok((resp, 0)),
                     Err(e) => Err((e, 0)),
@@ -1617,6 +1661,14 @@ fn plan_mode_allows(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_turn_timeout_is_bounded_and_configurable() {
+        assert_eq!(provider_turn_timeout_from(None).as_secs(), 300);
+        assert_eq!(provider_turn_timeout_from(Some("17")).as_secs(), 17);
+        assert_eq!(provider_turn_timeout_from(Some("0")).as_secs(), 300);
+        assert_eq!(provider_turn_timeout_from(Some("invalid")).as_secs(), 300);
+    }
 
     fn call(id: &str, name: &str) -> FunctionCallRef {
         FunctionCallRef {

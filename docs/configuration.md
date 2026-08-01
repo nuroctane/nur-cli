@@ -160,6 +160,12 @@ Non-zero **pre_tool** exit blocks the tool. Missing file = no hooks. Check statu
 | `NUR_BASE_URL` | Override API base URL (self-hosted Ollama/vLLM/LiteLLM/gateways); legacy `META_BASE_URL` |
 | `NUR_MODEL` | Override model id; legacy `META_MODEL` / `MUSE_MODEL` |
 
+### Provider reliability
+
+| Variable | Purpose |
+|----------|---------|
+| `NUR_PROVIDER_TURN_TIMEOUT_SECS` | Maximum time for one provider request before Nur cancels it (default `300`). Applies to Responses, Chat Completions, Anthropic Messages, Gemini Cloud Code, and Cursor Agent CLI transports |
+
 ### Paths
 
 | Variable | Purpose |
