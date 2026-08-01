@@ -271,44 +271,25 @@ impl UsageTracker {
             return;
         }
         // Host-panel env (current process; children/hooks can read).
-        // Prefer NUR_*; keep META_* / MUSE_* so older Orca panels and hooks keep working.
         let status = status_path().display().to_string();
         let cost = format!("{:.6}", self.session.estimated_cost_usd());
-        for (nur_k, meta_k, muse_k, val) in [
+        for (key, val) in [
             (
                 "NUR_USAGE_INPUT_TOKENS",
-                "META_USAGE_INPUT_TOKENS",
-                "MUSE_USAGE_INPUT_TOKENS",
                 self.session.input_tokens.to_string(),
             ),
             (
                 "NUR_USAGE_OUTPUT_TOKENS",
-                "META_USAGE_OUTPUT_TOKENS",
-                "MUSE_USAGE_OUTPUT_TOKENS",
                 self.session.output_tokens.to_string(),
             ),
             (
                 "NUR_USAGE_TOTAL_TOKENS",
-                "META_USAGE_TOTAL_TOKENS",
-                "MUSE_USAGE_TOTAL_TOKENS",
                 self.session.total_tokens.to_string(),
             ),
-            (
-                "NUR_USAGE_COST_USD",
-                "META_USAGE_COST_USD",
-                "MUSE_USAGE_COST_USD",
-                cost,
-            ),
-            (
-                "NUR_STATUS_PATH",
-                "META_STATUS_PATH",
-                "MUSE_STATUS_PATH",
-                status,
-            ),
+            ("NUR_USAGE_COST_USD", cost),
+            ("NUR_STATUS_PATH", status),
         ] {
-            std::env::set_var(nur_k, &val);
-            std::env::set_var(meta_k, &val);
-            std::env::set_var(muse_k, &val);
+            std::env::set_var(key, &val);
         }
 
         // Discovery manifest + optional Orca hook ping
@@ -401,7 +382,7 @@ impl UsageTracker {
     }
 }
 
-/// Print human + machine summary (for `muse usage` / `nur usage`).
+/// Print human + machine summary for `nur usage`.
 pub fn print_usage_summary() -> Result<()> {
     let path = status_path();
     if !path.exists() {
@@ -459,7 +440,7 @@ mod tests {
 
     #[test]
     fn stamped_cost_survives_add() {
-        let rates = pricing::builtin_meta_rates("muse-spark-1.1");
+        let rates = pricing::builtin_meta_rates("Llama-4-Maverick-17B-128E-Instruct-FP8");
         let mut a = TokenUsage {
             input_tokens: 1_000_000,
             output_tokens: 0,

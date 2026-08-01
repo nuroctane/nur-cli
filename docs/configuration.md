@@ -9,7 +9,7 @@ The config file lives at `~/.nur/config.toml` and is created on first run.
 ```toml
 # Active provider id from the catalog (set by TUI /login)
 provider = "meta"
-model = "muse-spark-1.1"
+model = "Llama-4-Maverick-17B-128E-Instruct-FP8"
 base_url = "https://api.meta.ai/v1"
 reasoning_effort = "high"
 # 0 = unlimited agent rounds per prompt (default). Set a number to cap.
@@ -55,7 +55,7 @@ auto_update = true
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `provider` | string | `nur` | Catalog id (`nur`, `openai`, `openrouter`, `ollama`, …). Set by TUI **`/login`** with matching `base_url` + `model` |
-| `model` | string | `muse-spark-1.1` | Model id for the active provider |
+| `model` | string | `Llama-4-Maverick-17B-128E-Instruct-FP8` | Model id for the active provider |
 | `base_url` | string | `https://api.meta.ai/v1` | API base (no trailing path); providers use Responses or Chat Completions under this base |
 | `reasoning_effort` | string | `high` | Reasoning depth: `minimal`, `low`, `medium`, `high`, `xhigh` |
 | `max_turns` | integer | `0` | Max agent tool/model rounds per user prompt. **`0` = unlimited** (default). Set via config or `/budget turns` / `/turns` |
@@ -102,7 +102,7 @@ When a ceiling is hit, the agent **refuses new API turns** with a clear status m
 
 ## Permission rules
 
-Optional file: **`~/.nur/permissions.toml`** (and/or project **`.meta/permissions.toml`** — both are merged).
+Optional file: **`~/.nur/permissions.toml`** (and/or project **`.nur/permissions.toml`** - both are merged).
 
 ```toml
 # Patterns: "tool" or "tool:glob"  (* = any sequence)
@@ -134,7 +134,7 @@ post_tool = ""
 timeout_ms = 5000
 ```
 
-Environment for hook commands (legacy `META_*` aliases are also set):
+Environment for hook commands:
 
 | Env | Meaning |
 |-----|---------|
@@ -154,11 +154,9 @@ Non-zero **pre_tool** exit blocks the tool. Missing file = no hooks. Check statu
 | Variable | Purpose |
 |----------|---------|
 | `NUR_API_KEY` | API key (preferred) |
-| `META_API_KEY` | Optional key for Meta Model API provider / legacy installs |
-| `MODEL_API_KEY` | API key (alternative) |
-| `MUSE_API_KEY` | API key (legacy) |
-| `NUR_BASE_URL` | Override API base URL (self-hosted Ollama/vLLM/LiteLLM/gateways); legacy `META_BASE_URL` |
-| `NUR_MODEL` | Override model id; legacy `META_MODEL` / `MUSE_MODEL` |
+| `META_API_KEY` | Optional key for Meta Model API provider |
+| `NUR_BASE_URL` | Override API base URL (self-hosted Ollama/vLLM/LiteLLM/gateways) |
+| `NUR_MODEL` | Override model id |
 
 ### Provider reliability
 
@@ -170,12 +168,12 @@ Non-zero **pre_tool** exit blocks the tool. Missing file = no hooks. Check statu
 
 | Variable | Purpose |
 |----------|---------|
-| `NUR_HOME` | Override data home (default `~/.nur`); legacy `META_HOME` / `MUSE_HOME` |
-| `NUR_CWD` | Default working directory; legacy `META_CWD` |
+| `NUR_HOME` | Override data home (default `~/.nur`) |
+| `NUR_CWD` | Default working directory |
 
 ### Status and usage
 
-Set by NurCLI for host integrations (legacy `META_*` aliases are also exported):
+Set by NurCLI for host integrations:
 
 | Variable | Purpose |
 |----------|---------|
@@ -190,7 +188,7 @@ The release check runs on **every** launch (see `auto_update` above).
 
 | Variable | Purpose |
 |----------|---------|
-| `NUR_SKIP_AUTO_UPDATE` | Set to `1` to skip the launch-time release check for this shell (legacy `META_SKIP_AUTO_UPDATE`) |
+| `NUR_SKIP_AUTO_UPDATE` | Set to `1` to skip the launch-time release check for this shell |
 | `NUR_DISABLE_UPDATES` / `DISABLE_UPDATES` | Set to `1` to disable the launch-time release check |
 | `DISABLE_AUTOUPDATER` | Claude Code's kill switch — also honored. It is injected only inside AI-agent sessions, so nur stays on your last version there instead of swapping its own binary mid-session. Absent from an ordinary terminal, where nur still updates every run |
 | `NUR_AUTO_UPDATE_TTL_SECS` | Minimum seconds between network checks (default `60`; `0` = check every single run). Guards against a script looping `nur` |
@@ -230,15 +228,7 @@ All NurCLI state lives under `~/.nur/` by default:
 └── skill-packs/        # Skill pack metadata
 ```
 
-Override with `META_HOME` (or legacy `MUSE_HOME`).
-
----
-
-## Legacy migration
-
-If you upgraded from a pre-0.5.14 build, NurCLI automatically gap-fills missing files from `~/.muse/` into `~/.nur/`. Existing files are never overwritten. When the same session id exists in both homes, the **richer** copy (more tokens / newer) wins.
-
-`nur auth logout` clears auth from both `~/.nur/` and legacy `~/.muse/`.
+Override with `NUR_HOME`.
 
 ---
 
@@ -251,6 +241,5 @@ NurCLI reads project-level instruction files from your working directory:
 | `NUR.md` | Primary project instructions |
 | `AGENTS.md` | Agent conventions (shared with other tools) |
 | `CLAUDE.md` | Legacy instructions (still loaded) |
-| `MUSE.md` | Legacy instructions (still loaded) |
 
 These are loaded at session start and prepended to the system prompt.

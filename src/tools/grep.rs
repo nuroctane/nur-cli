@@ -1,6 +1,6 @@
 use super::search_util::{is_hard_excluded, rg_grep, walk_builder, SEARCH_BUDGET};
 use super::{arg_str, arg_u64, resolve_path, Tool, ToolContext};
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use regex::RegexBuilder;
 use serde_json::Value;
 use std::fs;
@@ -55,7 +55,7 @@ impl Tool for Grep {
         let re = RegexBuilder::new(&pattern)
             .case_insensitive(case_insensitive)
             .build()
-            .map_err(|e| MuseError::Tool(format!("invalid regex: {e}")))?;
+            .map_err(|e| NurError::Tool(format!("invalid regex: {e}")))?;
 
         let start = Instant::now();
         let mut matches = Vec::new();

@@ -1,6 +1,6 @@
 use super::{arg_str, Tool, ToolContext};
 use crate::egaki;
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -63,7 +63,7 @@ impl Tool for Egaki {
         match action.as_str() {
             "status" | "doctor" | "probe" => Ok(egaki::doctor_report()),
             "usage" => egaki::run_egaki_cancelled(&["usage"], Some(&ctx.cwd), 30_000, &ctx.cancel)
-                .map_err(MuseError::Tool),
+                .map_err(NurError::Tool),
             "models" => egaki::run_egaki_cancelled(
                 &["models", "--json"],
                 Some(&ctx.cwd),
@@ -73,7 +73,7 @@ impl Tool for Egaki {
             .or_else(|_| {
                 egaki::run_egaki_cancelled(&["models"], Some(&ctx.cwd), 60_000, &ctx.cancel)
             })
-            .map_err(MuseError::Tool),
+            .map_err(NurError::Tool),
             "login" => {
                 let provider = arg_str(args, "provider").unwrap_or_default();
                 let provider = provider.trim();
@@ -82,9 +82,7 @@ impl Tool for Egaki {
                 );
                 if provider.is_empty() || provider.eq_ignore_ascii_case("chatgpt") {
                     msg.push_str("  egaki login --provider chatgpt\n");
-                    msg.push_str(
-                        "    ChatGPT subscription → gpt-image via Codex device auth\n",
-                    );
+                    msg.push_str("    ChatGPT subscription → gpt-image via Codex device auth\n");
                 }
                 if provider.is_empty() || provider.eq_ignore_ascii_case("xai-oauth") {
                     msg.push_str("  egaki login --provider xai-oauth\n");
@@ -117,7 +115,7 @@ impl Tool for Egaki {
             }
             "image" | "video" | "speech" => {
                 let prompt = arg_str(args, "prompt")
-                    .map_err(|_| MuseError::Tool(format!("{action} requires prompt=")))?;
+                    .map_err(|_| NurError::Tool(format!("{action} requires prompt=")))?;
                 let media = egaki::media_dir(&ctx.cwd);
                 let stamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -129,22 +127,21 @@ impl Tool for Egaki {
                     "speech" => format!("egaki-{stamp}-{uniq}.mp3"),
                     _ => format!("egaki-{stamp}-{uniq}.png"),
                 };
-                let out = arg_str(args, "output").unwrap_or_else(|_| {
-                    media.join(&default_name).to_string_lossy().into_owned()
-                });
+                let out = arg_str(args, "output")
+                    .unwrap_or_else(|_| media.join(&default_name).to_string_lossy().into_owned());
                 let out_path = resolve_output_under_cwd(&ctx.cwd, &out)?;
                 if out_path
                     .symlink_metadata()
                     .map(|m| m.file_type().is_symlink())
                     .unwrap_or(false)
                 {
-                    return Err(MuseError::Tool(
+                    return Err(NurError::Tool(
                         "egaki output must not be an existing symlink".into(),
                     ));
                 }
                 if let Some(parent) = out_path.parent() {
                     std::fs::create_dir_all(parent).map_err(|e| {
-                        MuseError::Tool(format!("egaki mkdir {}: {e}", parent.display()))
+                        NurError::Tool(format!("egaki mkdir {}: {e}", parent.display()))
                     })?;
                 }
 
@@ -180,7 +177,7 @@ impl Tool for Egaki {
                 let refs: Vec<&str> = argv.iter().map(|s| s.as_str()).collect();
                 let timeout = if action == "video" { 600_000 } else { 300_000 };
                 let out = egaki::run_egaki_cancelled(&refs, Some(&ctx.cwd), timeout, &ctx.cancel)
-                    .map_err(MuseError::Tool)?;
+                    .map_err(NurError::Tool)?;
                 Ok(format!(
                     "{out}\n\noutput: {}\nTip: use look on that path to attach vision.",
                     out_path.display()
@@ -231,7 +228,7 @@ fn resolve_output_under_cwd(cwd: &Path, out: &str) -> Result<PathBuf> {
     };
     let lex = crate::tools::sandbox::normalize_path(&candidate);
     if !path_under_root(&lex, &crate::tools::sandbox::normalize_path(&cwd_canon)) {
-        return Err(MuseError::Tool(
+        return Err(NurError::Tool(
             "egaki output path must stay under the workspace".into(),
         ));
     }
@@ -245,11 +242,11 @@ fn resolve_existing_under_cwd(cwd: &Path, inp: &str) -> Result<PathBuf> {
     } else {
         cwd.join(inp)
     };
-    let canon = candidate.canonicalize().map_err(|_| {
-        MuseError::Tool(format!("egaki input not found: {inp}"))
-    })?;
+    let canon = candidate
+        .canonicalize()
+        .map_err(|_| NurError::Tool(format!("egaki input not found: {inp}")))?;
     if !path_under_root(&canon, &cwd_canon) {
-        return Err(MuseError::Tool(
+        return Err(NurError::Tool(
             "egaki input path must stay under the workspace".into(),
         ));
     }

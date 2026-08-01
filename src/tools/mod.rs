@@ -5,10 +5,10 @@ pub mod browser;
 pub mod egaki_tool;
 pub mod terminal_browser;
 pub use terminal_browser::is_read_only_action as terminal_browser_is_read_only;
+pub mod bg_tool;
 pub mod fractal_tool;
 pub mod headroom_tool;
 pub mod optmem_tool;
-pub mod bg_tool;
 pub mod penecho_tool;
 pub mod t3code_tool;
 pub use browser::is_read_only_action as browser_is_read_only;
@@ -33,10 +33,10 @@ mod read_file;
 pub mod ruflo;
 mod sandbox;
 mod search_util;
+pub(crate) mod sensitive;
 mod shell;
 mod skill_tool;
 pub mod spill;
-pub(crate) mod sensitive;
 mod submit_plan;
 pub mod tldraw;
 mod todo_write;
@@ -47,7 +47,7 @@ mod write_file;
 
 use crate::agent::todos::{shared_empty, SharedTodos, TodoList};
 use crate::api::types::ToolDef;
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -241,12 +241,12 @@ impl ToolHost {
     /// `roster_stays_in_sync` test locks that invariant.
     pub fn dispatch(&self, name: &str, arguments: &str, ctx: &ToolContext) -> Result<String> {
         if name == "agent" {
-            return Err(MuseError::Tool(
+            return Err(NurError::Tool(
                 "agent tool must be executed by the runtime (internal error)".into(),
             ));
         }
         if is_dangerous_workspace(&ctx.cwd) && name != "web_fetch" && name != "memory" {
-            return Err(MuseError::Tool(
+            return Err(NurError::Tool(
                 "workspace is filesystem root — refuse tools. Re-run from a project dir or pass --cwd"
                     .into(),
             ));
@@ -298,7 +298,7 @@ impl ToolHost {
                 plan: self.plan.clone(),
             }
             .execute(&args, ctx),
-            _ => Err(MuseError::Tool(format!("unknown tool: {name}"))),
+            _ => Err(NurError::Tool(format!("unknown tool: {name}"))),
         }
     }
 
@@ -374,7 +374,7 @@ impl Tool for AgentStub {
     }
 
     fn execute(&self, _args: &Value, _ctx: &ToolContext) -> Result<String> {
-        Err(MuseError::Tool("agent is runtime-handled".into()))
+        Err(NurError::Tool("agent is runtime-handled".into()))
     }
 }
 
@@ -386,7 +386,7 @@ pub(crate) fn arg_str(args: &Value, key: &str) -> Result<String> {
     args.get(key)
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
-        .ok_or_else(|| MuseError::Tool(format!("missing string arg: {key}")))
+        .ok_or_else(|| NurError::Tool(format!("missing string arg: {key}")))
 }
 
 pub(crate) fn arg_u64(args: &Value, key: &str) -> Option<u64> {

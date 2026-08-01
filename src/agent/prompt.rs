@@ -5,9 +5,8 @@ use crate::ecosystem;
 use crate::tools::shell_backend;
 use std::path::{Path, PathBuf};
 
-/// Project instruction files (first found wins). NUR.md preferred; META.md/MUSE.md legacy.
-pub const PROJECT_INSTRUCTION_FILES: &[&str] =
-    &["NUR.md", "META.md", "MUSE.md", "AGENTS.md", "CLAUDE.md"];
+/// Project instruction files (first found wins). NUR.md is preferred.
+pub const PROJECT_INSTRUCTION_FILES: &[&str] = &["NUR.md", "AGENTS.md", "CLAUDE.md"];
 
 pub fn find_project_instructions(cwd: &Path) -> Option<(String, String)> {
     for name in PROJECT_INSTRUCTION_FILES {
@@ -199,7 +198,7 @@ Tools auto-approved. Prefer minimal safe diffs; avoid destructive shell.
             format!(
                 "You are **Nur**, the coding agent for **NurCLI** (the user's personal CLI).\n\
 Backend this session: **{}** · model id: `{}`.\n\
-If asked your name or who you are: say you are **Nur** (NurCLI). Do **not** call yourself Meta, Muse, or Claude unless the user is asking about a different product. The backend provider/model above is how requests are routed - not your product name.",
+If asked your name or who you are: say you are **Nur** (NurCLI). The backend provider/model above is how requests are routed - not your product name.",
                 self.provider, self.model
             )
         };
@@ -251,7 +250,7 @@ web_fetch, web_search, look, extract_frames, git_status, git_diff, graphify, exc
 plur, ruflo, skill, memory, todo_write, submit_plan, agent
 
 ## Tool policy - search and failure handling (critical for all backends including Meta)
-- SEARCH - ripgrep only: ALWAYS use `grep` and `glob` tools for any code/content search. NEVER use bash commands like `grep`, `rg`, `ag`, `find`, `ls`, `Get-ChildItem`, etc. for searching. The `grep`/`glob` tools are ripgrep-backed, sandboxed, respect .gitignore, and are the only reliable search path. This applies to ALL models including Meta Llama / Muse Spark - no exceptions.
+- SEARCH - ripgrep only: ALWAYS use `grep` and `glob` tools for any code/content search. NEVER use bash commands like `grep`, `rg`, `ag`, `find`, `ls`, `Get-ChildItem`, etc. for searching. The `grep`/`glob` tools are ripgrep-backed, sandboxed, respect .gitignore, and are the only reliable search path. This applies to all models with no exceptions.
 - FILE IO - dedicated tools only: `list_dir` for directory shape, `read_file` for contents. NEVER use bash `cat`, `type`, `ls`, `dir`, `head`, `tail` to read workspace. Cheaper, faster, and never hangs.
 - GIT - use `git_status` / `git_diff` tools, not `bash git ...` - they are approval-free and structured. Reserve bash git only when the tool does not cover the needed flag.
 - BASH: real shell when available (Git Bash/pwsh); output reports `shell: <backend>` + `exit_code` + stdout/stderr. Prefer non-interactive one-shot commands. Captures truncated at 80k/40k. Default timeout 60s (hard max 180s). Idle (no output ~45s) is killed. The harness refuses identical retries of a failed/timed-out command and refuses hang-prone patterns (dev servers, watch, `read -p`, `while true`).

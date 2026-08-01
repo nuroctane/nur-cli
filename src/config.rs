@@ -1,16 +1,16 @@
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
 pub const DEFAULT_BASE_URL: &str = "https://api.meta.ai/v1";
 /// Default model id when provider is Meta Model API (wire format). Override via
-/// `/model`, `--model`, config, or `NUR_MODEL` / `META_MODEL`.
-pub const DEFAULT_MODEL: &str = "muse-spark-1.1";
+/// `/model`, `--model`, config, or `NUR_MODEL`.
+pub const DEFAULT_MODEL: &str = "Llama-4-Maverick-17B-128E-Instruct-FP8";
 pub const DEFAULT_REASONING: &str = "high";
 
 /// Pretty-print a model id for the splash title / status only.
-/// Example: `muse-spark-1.1` → `Muse Spark 1.1` (vendor model name preserved).
+/// Example: `gpt-5.5` -> `Gpt 5.5`.
 pub fn model_display_name(model_id: &str) -> String {
     let s = model_id.trim();
     if s.is_empty() {
@@ -61,7 +61,8 @@ pub const PRICE_OUTPUT_PER_MTOK: f64 = 4.25;
 /// stripped to the canonical bare id.
 /// Schema ≥10: opt-in OMP-style `[prewalk]` + `[compaction]` remote endpoint
 /// (defaults off - existing installs keep local summarization).
-pub const CONFIG_SCHEMA: u32 = 10;
+/// Schema >=11: replace the former product-branded Meta default model.
+pub const CONFIG_SCHEMA: u32 = 11;
 
 const RETIRED_PROVIDER_IDS: &[&str] = &[
     "anyscale",
@@ -511,6 +512,9 @@ pub fn migrate_config(cfg: &mut Config) -> bool {
             }
         }
     }
+    if cfg.config_schema < 11 && cfg.provider == "meta" {
+        cfg.model = DEFAULT_MODEL.to_string();
+    }
     cfg.config_schema = CONFIG_SCHEMA;
     true
 }
@@ -522,44 +526,18 @@ fn default_compact_tool_body_max() -> u64 {
     800
 }
 
-/// Oldest legacy home (`~/.muse`). Still read for migration.
-pub fn legacy_muse_home() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".muse")
-}
-
-/// Previous product home (`~/.nur`) before NurCLI rebrand. Gap-filled into [`nur_home`].
-pub fn legacy_meta_home() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".meta")
-}
-
 /// NurCLI data home: `~/.nur` (secrets, sessions, status, skills, memory).
-/// Override: `NUR_HOME`, then legacy `META_HOME` / `MUSE_HOME`.
+/// Override with `NUR_HOME`.
 pub fn nur_home() -> PathBuf {
-    for var in ["NUR_HOME", "META_HOME", "MUSE_HOME"] {
-        if let Ok(h) = std::env::var(var) {
-            let h = h.trim();
-            if !h.is_empty() {
-                return PathBuf::from(h);
-            }
+    if let Ok(h) = std::env::var("NUR_HOME") {
+        let h = h.trim();
+        if !h.is_empty() {
+            return PathBuf::from(h);
         }
     }
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".nur")
-}
-
-/// Deprecated alias — always [`nur_home`].
-pub fn meta_home() -> PathBuf {
-    nur_home()
-}
-
-/// Deprecated alias — always [`nur_home`].
-pub fn muse_home() -> PathBuf {
-    nur_home()
 }
 
 pub fn config_path() -> PathBuf {
@@ -597,98 +575,10 @@ pub fn usage_log_path() -> PathBuf {
     nur_home().join("usage.jsonl")
 }
 
-const MIGRATE_FILES: &[&str] = &[
-    "auth.json",
-    "config.toml",
-    "memory.md",
-    "history.jsonl",
-    "latest_session.json",
-    "cwd_sessions.json",
-    "usage.jsonl",
-    "status.json",
-    "ade.json",
-    "ecosystem.json",
-];
-
-/// Gap-fill one legacy root into `dest` (never overwrites existing files).
-fn gap_fill_from(legacy: &std::path::Path, dest: &std::path::Path) {
-    if !legacy.is_dir() || legacy == dest {
-        return;
-    }
-    for name in MIGRATE_FILES {
-        let src = legacy.join(name);
-        let dst = dest.join(name);
-        if src.is_file() && !dst.exists() {
-            let _ = fs::copy(&src, &dst);
-        }
-    }
-    let src_sess = legacy.join("sessions");
-    let dst_sess = dest.join("sessions");
-    if src_sess.is_dir() {
-        let _ = fs::create_dir_all(&dst_sess);
-        if let Ok(entries) = fs::read_dir(&src_sess) {
-            for e in entries.flatten() {
-                let p = e.path();
-                if p.is_file() {
-                    let dst = dst_sess.join(e.file_name());
-                    if !dst.exists() {
-                        let _ = fs::copy(&p, &dst);
-                    }
-                }
-            }
-        }
-    }
-    for name in ["skills", "ruflo", "skill-packs"] {
-        let src = legacy.join(name);
-        let dst = dest.join(name);
-        if src.is_dir() {
-            let _ = copy_dir_recursive(&src, &dst);
-        }
-    }
-}
-
-/// Fill gaps in `~/.nur` from legacy `~/.nur` then `~/.muse` (never overwrites).
-fn migrate_legacy_home_if_needed(dest: &std::path::Path) {
-    gap_fill_from(&legacy_meta_home(), dest);
-    gap_fill_from(&legacy_muse_home(), dest);
-}
-
-/// Copy a single missing file from legacy homes into nur home (auth heal).
-pub fn promote_legacy_file(name: &str) -> bool {
-    let dest = nur_home();
-    for legacy in [legacy_meta_home(), legacy_muse_home()] {
-        let src = legacy.join(name);
-        let dst = dest.join(name);
-        if src.is_file() && !dst.exists() {
-            let _ = fs::create_dir_all(&dest);
-            if fs::copy(&src, &dst).is_ok() {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
-    fs::create_dir_all(dst)?;
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let from = entry.path();
-        let to = dst.join(entry.file_name());
-        if from.is_dir() {
-            copy_dir_recursive(&from, &to)?;
-        } else if !to.exists() {
-            let _ = fs::copy(&from, &to);
-        }
-    }
-    Ok(())
-}
-
 pub fn ensure_dirs() -> Result<()> {
     let home = nur_home();
     fs::create_dir_all(&home)?;
     fs::create_dir_all(sessions_dir())?;
-    migrate_legacy_home_if_needed(&home);
     Ok(())
 }
 
@@ -701,7 +591,7 @@ pub fn load_config() -> Result<Config> {
         cfg
     } else {
         let text = fs::read_to_string(&path)?;
-        toml::from_str(&text).map_err(|e| MuseError::Config(e.to_string()))?
+        toml::from_str(&text).map_err(|e| NurError::Config(e.to_string()))?
     };
     // One-time: older configs → unlimited agent rounds (user sets caps later).
     if migrate_config(&mut cfg) {
@@ -735,15 +625,12 @@ pub fn load_config() -> Result<Config> {
     Ok(cfg)
 }
 
-/// Apply `NUR_BASE_URL` / legacy `META_BASE_URL` env override onto a config.
+/// Apply `NUR_BASE_URL` onto a config.
 pub fn apply_base_url_env(cfg: &mut Config) {
-    for var in ["NUR_BASE_URL", "META_BASE_URL"] {
-        if let Ok(u) = std::env::var(var) {
-            let u = u.trim().trim_end_matches('/').to_string();
-            if !u.is_empty() {
-                cfg.base_url = u;
-                return;
-            }
+    if let Ok(u) = std::env::var("NUR_BASE_URL") {
+        let u = u.trim().trim_end_matches('/').to_string();
+        if !u.is_empty() {
+            cfg.base_url = u;
         }
     }
 }
@@ -775,9 +662,9 @@ pub fn atomic_write(path: &std::path::Path, content: &[u8]) -> std::io::Result<(
 
 pub fn save_config(cfg: &Config) -> Result<()> {
     ensure_dirs()?;
-    let text = toml::to_string_pretty(cfg).map_err(|e| MuseError::Config(e.to_string()))?;
+    let text = toml::to_string_pretty(cfg).map_err(|e| NurError::Config(e.to_string()))?;
     atomic_write(&config_path(), text.as_bytes())
-        .map_err(|e| MuseError::Other(format!("save_config atomic write failed: {e}")))?;
+        .map_err(|e| NurError::Other(format!("save_config atomic write failed: {e}")))?;
     Ok(())
 }
 
@@ -794,7 +681,7 @@ impl Config {
         // config error — otherwise a brand-new rung bricks startup until nur
         // ships a release. Only an empty value is wrong here.
         if self.reasoning_effort.trim().is_empty() {
-            return Err(MuseError::Config(format!(
+            return Err(NurError::Config(format!(
                 "reasoning_effort is empty — use one of {} (or any level your provider accepts)",
                 VALID_EFFORTS.join("|")
             )));
@@ -802,13 +689,13 @@ impl Config {
         // 0 = unlimited. Optional hard ceiling only rejects absurd config typos
         // (u32 max is fine; no artificial 40/200 wall).
         if self.max_turns > 1_000_000 {
-            return Err(MuseError::Config(format!(
+            return Err(NurError::Config(format!(
                 "max_turns {} is unreasonably large (use 0 for unlimited, or a value ≤ 1000000)",
                 self.max_turns
             )));
         }
         if self.context_window < 1000 || self.context_window > 2_000_000 {
-            return Err(MuseError::Config(format!(
+            return Err(NurError::Config(format!(
                 "context_window {} out of allowed range",
                 self.context_window
             )));
@@ -816,20 +703,20 @@ impl Config {
         if self.base_url.is_empty()
             || !(self.base_url.starts_with("http://") || self.base_url.starts_with("https://"))
         {
-            return Err(MuseError::Config(format!(
+            return Err(NurError::Config(format!(
                 "invalid base_url '{}'",
                 self.base_url
             )));
         }
         if let Some(c) = self.max_session_cost_usd {
             if !c.is_finite() || c < 0.0 {
-                return Err(MuseError::Config(
+                return Err(NurError::Config(
                     "max_session_cost_usd must be a non-negative number".into(),
                 ));
             }
         }
         if let Some(0) = self.max_session_tokens {
-            return Err(MuseError::Config(
+            return Err(NurError::Config(
                 "max_session_tokens must be > 0 when set".into(),
             ));
         }
@@ -840,16 +727,6 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn unique_tmp(label: &str) -> PathBuf {
-        let n = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        std::env::temp_dir().join(format!("nur-cli-{label}-{n}"))
-    }
 
     #[test]
     fn provider_base_url_override_is_scoped_and_normalized() {
@@ -988,40 +865,22 @@ mod tests {
     }
 
     #[test]
-    fn migrate_fills_missing_files_without_overwrite() {
-        let root = unique_tmp("migrate");
-        let legacy_muse = root.join(".muse");
-        let legacy_meta = root.join(".meta");
-        let nur = root.join(".nur");
-        fs::create_dir_all(legacy_muse.join("sessions")).unwrap();
-        fs::create_dir_all(&legacy_meta).unwrap();
-        fs::create_dir_all(&nur).unwrap();
-        fs::write(
-            legacy_muse.join("auth.json"),
-            r#"{"api_key":"k","source":"t"}"#,
-        )
-        .unwrap();
-        fs::write(legacy_meta.join("memory.md"), "from-meta\n").unwrap();
-        fs::write(legacy_muse.join("sessions").join("abc.json"), "{}").unwrap();
-        // Pre-existing config in nur must not be overwritten
-        fs::write(nur.join("config.toml"), "model = \"keep-me\"\n").unwrap();
-
-        gap_fill_from(&legacy_meta, &nur);
-        gap_fill_from(&legacy_muse, &nur);
-
-        assert!(fs::read_to_string(nur.join("config.toml"))
-            .unwrap()
-            .contains("keep-me"));
-        assert!(nur.join("auth.json").is_file());
-        assert!(nur.join("memory.md").is_file());
-        assert!(nur.join("sessions").join("abc.json").is_file());
-        let _ = fs::remove_dir_all(root);
+    fn schema_11_resets_meta_to_the_nur_default() {
+        let mut cfg = Config {
+            config_schema: 10,
+            provider: "meta".into(),
+            model: "old-provider-default".into(),
+            ..Config::default()
+        };
+        assert!(migrate_config(&mut cfg));
+        assert_eq!(cfg.model, DEFAULT_MODEL);
+        assert_eq!(cfg.config_schema, CONFIG_SCHEMA);
     }
 
     #[test]
     fn model_display_name_title_cases() {
         assert_eq!(model_display_name(""), "model");
         assert_eq!(model_display_name("  "), "model");
-        assert_eq!(model_display_name("muse-spark-1.1"), "Muse Spark 1.1");
+        assert_eq!(model_display_name("gpt-5.5"), "Gpt 5.5");
     }
 }

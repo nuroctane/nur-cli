@@ -27,7 +27,7 @@
 //! License note: penecho is AGPL-3.0-only. We integrate via process spawn / sidecar,
 //! not linking code, to stay compliant.
 
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -149,11 +149,11 @@ pub fn resolve_api_config(
 ) -> Result<ApiConfig> {
     let url = url.trim();
     if url.is_empty() {
-        return Err(MuseError::Other("AI_API_URL empty".into()));
+        return Err(NurError::Other("AI_API_URL empty".into()));
     }
     // Validate http/https, no user/pass
     if !(url.starts_with("http://") || url.starts_with("https://")) {
-        return Err(MuseError::Other(format!(
+        return Err(NurError::Other(format!(
             "AI_API_URL must be http(s): {url}"
         )));
     }
@@ -162,7 +162,7 @@ pub fn resolve_api_config(
         let after_scheme = url.split("://").nth(1).unwrap_or("");
         if after_scheme.contains('@') && after_scheme.split('@').next().unwrap_or("").contains(':')
         {
-            return Err(MuseError::Other(
+            return Err(NurError::Other(
                 "AI_API_URL must not contain credentials".into(),
             ));
         }
@@ -212,7 +212,7 @@ pub fn resolve_api_config(
         || lower_key.contains("api-key")
         || lower_key.trim() == "sk-..."
     {
-        return Err(MuseError::Other(
+        return Err(NurError::Other(
             "API key looks like placeholder (your_*/replace/changeme)".into(),
         ));
     }
@@ -372,7 +372,7 @@ pub fn write_config_env(contents: &str) -> Result<PathBuf> {
     let dir = penecho_state_dir();
     let file = dir.join("config.env");
     crate::t3code::atomic_write(&file, contents.as_bytes())
-        .map_err(|e| MuseError::Other(format!("atomic write penecho config: {e}")))?;
+        .map_err(|e| NurError::Other(format!("atomic write penecho config: {e}")))?;
     // Best-effort owner-only perms on Unix (penecho docs recommend this).
     #[cfg(unix)]
     {
@@ -405,8 +405,9 @@ pub fn ensure_installed() -> Result<String> {
     }
     let node_ok = find_on_path("node").is_some() || find_on_path("node.exe").is_some();
     if !node_ok {
-        return Err(MuseError::Other(
-            "penecho needs Node.js 20.3+ — install Node, then re-run (nur auto-installs penecho)".into(),
+        return Err(NurError::Other(
+            "penecho needs Node.js 20.3+ — install Node, then re-run (nur auto-installs penecho)"
+                .into(),
         ));
     }
     let npm = find_on_path("npm")
@@ -416,10 +417,10 @@ pub fn ensure_installed() -> Result<String> {
     let out = Command::new(&npm)
         .args(["install", "-g", "penecho@latest"])
         .output()
-        .map_err(|e| MuseError::Other(format!("npm install -g penecho failed to start: {e}")))?;
+        .map_err(|e| NurError::Other(format!("npm install -g penecho failed to start: {e}")))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
-        return Err(MuseError::Other(format!(
+        return Err(NurError::Other(format!(
             "npm install -g penecho failed: {}",
             err.chars().take(300).collect::<String>()
         )));
@@ -427,7 +428,7 @@ pub fn ensure_installed() -> Result<String> {
     if let Some(bin) = find_on_path("penecho") {
         Ok(format!("installed penecho via npm at {}", bin.display()))
     } else {
-        Err(MuseError::Other(
+        Err(NurError::Other(
             "penecho not found on PATH after npm install — open a new shell or check npm global bin"
                 .into(),
         ))
@@ -461,11 +462,14 @@ pub fn config_is_usable() -> bool {
                     && !l.contains("changeme")
                     && !l.contains("replace")
                     && !l.contains("sk-...")
-                    && l.split_once('=').map(|(_, v)| !v.trim().is_empty()).unwrap_or(false)
+                    && l.split_once('=')
+                        .map(|(_, v)| !v.trim().is_empty())
+                        .unwrap_or(false)
             });
-            let has_url = content
-                .lines()
-                .any(|l| (l.starts_with("AI_API_URL=") || l.starts_with("OPENAI_API_URL=")) && l.contains("http"));
+            let has_url = content.lines().any(|l| {
+                (l.starts_with("AI_API_URL=") || l.starts_with("OPENAI_API_URL="))
+                    && l.contains("http")
+            });
             let has_model = content.lines().any(|l| {
                 (l.starts_with("AI_API_MODEL=") || l.starts_with("OPENAI_MODEL="))
                     && l.split_once('=')
@@ -656,7 +660,7 @@ pub fn auto_configure_from_nur(force: bool, effort: Effort) -> Result<(AutoConfi
         ));
     }
 
-    Err(MuseError::Other(
+    Err(NurError::Other(
         "no penecho provider available — run /login (API key) or install `codex` / `claude` / `kimi` CLI"
             .into(),
     ))
@@ -677,7 +681,10 @@ fn detect_mode_from_config() -> Option<AutoConfigMode> {
         _ => {
             let url = content
                 .lines()
-                .find_map(|l| l.strip_prefix("AI_API_URL=").or_else(|| l.strip_prefix("OPENAI_API_URL=")))
+                .find_map(|l| {
+                    l.strip_prefix("AI_API_URL=")
+                        .or_else(|| l.strip_prefix("OPENAI_API_URL="))
+                })
                 .unwrap_or("https://api.openai.com/v1")
                 .to_string();
             let model = content
@@ -729,7 +736,7 @@ fn wait_for_port(port: u16, timeout_ms: u64) -> bool {
 /// Prefer [`launch_seamless`] for the full ensure → config → open path.
 pub fn launch(extra_args: &[String]) -> Result<std::process::Child> {
     let bin = find_on_path("penecho").ok_or_else(|| {
-        MuseError::Other(
+        NurError::Other(
             "penecho binary not found on PATH. Install via `npm i -g penecho` or ecosystem ensure"
                 .into(),
         )
@@ -747,7 +754,7 @@ pub fn launch(extra_args: &[String]) -> Result<std::process::Child> {
     }
     // Unix: null stdio is enough for non-interactive start (skips update Y/N prompts).
     cmd.spawn()
-        .map_err(|e| MuseError::Other(format!("spawn penecho: {e}")))
+        .map_err(|e| NurError::Other(format!("spawn penecho: {e}")))
 }
 
 /// Full seamless path on the default port. Prefer [`launch_seamless_on_port`]
@@ -788,11 +795,7 @@ pub fn launch_seamless(open_browser: bool, effort: Effort) -> Result<String> {
         AutoConfigMode::ClaudeCli => "--claude",
         AutoConfigMode::KimiCli => "--kimi",
     };
-    let args = vec![
-        flag.to_string(),
-        "--port".into(),
-        port.to_string(),
-    ];
+    let args = vec![flag.to_string(), "--port".into(), port.to_string()];
     let _child = launch(&args)?;
     notes.push(format!("spawned penecho ({flag}) on port {port}"));
 
@@ -877,7 +880,7 @@ pub fn write_inject_seed(text: &str) -> Result<PathBuf> {
          ---\n\n{}\n",
         text.trim()
     );
-    fs::write(&path, body).map_err(|e| MuseError::Other(format!("write inject seed: {e}")))?;
+    fs::write(&path, body).map_err(|e| NurError::Other(format!("write inject seed: {e}")))?;
     Ok(path)
 }
 
@@ -892,7 +895,7 @@ pub fn stop(port: u16) -> Result<String> {
         let out = Command::new("cmd.exe")
             .args(["/C", &format!("netstat -ano | findstr :{port}")])
             .output()
-            .map_err(|e| MuseError::Other(format!("netstat: {e}")))?;
+            .map_err(|e| NurError::Other(format!("netstat: {e}")))?;
         let text = String::from_utf8_lossy(&out.stdout);
         let mut pids = std::collections::BTreeSet::new();
         for line in text.lines() {
@@ -955,10 +958,7 @@ pub fn restart(open_browser: bool, effort: Effort, port: u16) -> Result<String> 
 pub fn export_png_hint(cwd: &Path) -> Result<String> {
     let media = cwd.join(".nur").join("media");
     let _ = fs::create_dir_all(&media);
-    let dest = media.join(format!(
-        "penecho-canvas-{}.png",
-        now_secs_local()
-    ));
+    let dest = media.join(format!("penecho-canvas-{}.png", now_secs_local()));
     let url = canvas_url(DEFAULT_PORT);
     Ok(format!(
         "penecho PNG export is canvas-side (ink + 1 tile margin).\n\

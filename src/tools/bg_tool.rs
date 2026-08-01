@@ -4,15 +4,12 @@
 //! `background=true` (handled by those tools via this module's helpers).
 
 use super::{arg_str, Tool, ToolContext};
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde_json::Value;
 
 pub fn is_read_only_action(args_json: &str) -> bool {
     if let Ok(v) = serde_json::from_str::<Value>(args_json) {
-        let action = v
-            .get("action")
-            .and_then(|a| a.as_str())
-            .unwrap_or("list");
+        let action = v.get("action").and_then(|a| a.as_str()).unwrap_or("list");
         return matches!(action, "list" | "status" | "result" | "chip");
     }
     false
@@ -75,7 +72,7 @@ impl Tool for Bg {
                 let id = args
                     .get("id")
                     .and_then(|v| v.as_u64())
-                    .ok_or_else(|| MuseError::Tool("status requires id=".into()))?;
+                    .ok_or_else(|| NurError::Tool("status requires id=".into()))?;
                 match crate::bg_jobs::get(id) {
                     Some(j) => Ok(format!(
                         "bg #{id}\n  label: {}\n  kind:  {}\n  state: {}\n  preview: {}\n  error: {}\n",
@@ -85,21 +82,21 @@ impl Tool for Bg {
                         j.result_preview.unwrap_or_default(),
                         j.error.unwrap_or_default()
                     )),
-                    None => Err(MuseError::Tool(format!("unknown bg job {id}"))),
+                    None => Err(NurError::Tool(format!("unknown bg job {id}"))),
                 }
             }
             "result" => {
                 let id = args
                     .get("id")
                     .and_then(|v| v.as_u64())
-                    .ok_or_else(|| MuseError::Tool("result requires id=".into()))?;
+                    .ok_or_else(|| NurError::Tool("result requires id=".into()))?;
                 crate::bg_jobs::result(id)
             }
             "cancel" => {
                 let id = args
                     .get("id")
                     .and_then(|v| v.as_u64())
-                    .ok_or_else(|| MuseError::Tool("cancel requires id=".into()))?;
+                    .ok_or_else(|| NurError::Tool("cancel requires id=".into()))?;
                 crate::bg_jobs::cancel(id)
             }
             "run" => {
@@ -121,13 +118,10 @@ impl Tool for Bg {
                     ));
                 }
                 let command = arg_str(args, "command").map_err(|_| {
-                    MuseError::Tool("run requires command= or program= + args=".into())
+                    NurError::Tool("run requires command= or program= + args=".into())
                 })?;
                 #[cfg(windows)]
-                let (prog, argv) = (
-                    "cmd.exe".to_string(),
-                    vec!["/C".into(), command.clone()],
-                );
+                let (prog, argv) = ("cmd.exe".to_string(), vec!["/C".into(), command.clone()]);
                 #[cfg(not(windows))]
                 let (prog, argv) = ("sh".to_string(), vec!["-c".into(), command.clone()]);
                 let id = crate::bg_jobs::spawn_command(&label, &prog, &argv);
@@ -136,7 +130,7 @@ impl Tool for Bg {
                      continue working — later: bg(action=result, id={id})  or  /bg {id}\n"
                 ))
             }
-            other => Err(MuseError::Tool(format!(
+            other => Err(NurError::Tool(format!(
                 "unknown bg action '{other}' — use run|list|status|result|cancel"
             ))),
         }

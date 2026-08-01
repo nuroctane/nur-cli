@@ -3,7 +3,7 @@ use super::shell::{
     clamp_timeout_ms, run_in_shell, shell_backend, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS,
 };
 use super::{arg_str, arg_u64, Tool, ToolContext};
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
@@ -54,24 +54,25 @@ impl Tool for Bash {
 
     fn execute(&self, args: &Value, ctx: &ToolContext) -> Result<String> {
         if sandbox::is_dangerous_workspace(&ctx.cwd) {
-            return Err(MuseError::Tool(
-                "refused: workspace is filesystem root — start muse from a project directory \
+            return Err(NurError::Tool(
+                "refused: workspace is filesystem root - start nur from a project directory \
                  (or --cwd) before running shell commands"
                     .into(),
             ));
         }
 
         let command = arg_str(args, "command")?;
-        let timeout_ms = clamp_timeout_ms(arg_u64(args, "timeout_ms").unwrap_or(DEFAULT_TIMEOUT_MS));
+        let timeout_ms =
+            clamp_timeout_ms(arg_u64(args, "timeout_ms").unwrap_or(DEFAULT_TIMEOUT_MS));
 
         if let Some(reason) = check_destructive(&command, &ctx.cwd) {
-            return Err(MuseError::Tool(reason));
+            return Err(NurError::Tool(reason));
         }
         if let Some(reason) = check_hang_prone(&command) {
-            return Err(MuseError::Tool(reason));
+            return Err(NurError::Tool(reason));
         }
         if let Some(reason) = refuse_recent_failure(&ctx.cwd, &command) {
-            return Err(MuseError::Tool(reason));
+            return Err(NurError::Tool(reason));
         }
 
         match run_in_shell(shell_backend(), &command, &ctx.cwd, timeout_ms, &ctx.cancel) {
@@ -208,16 +209,43 @@ fn check_hang_prone(cmd: &str) -> Option<String> {
 
         let starters: &[(&str, &str)] = &[
             ("cargo watch", "use a one-shot `cargo check` / `cargo test`"),
-            ("npm run dev", "dev servers hang forever - use build/test instead"),
-            ("npm start", "start/dev servers hang forever under the agent"),
-            ("pnpm dev", "dev servers hang forever - use build/test instead"),
-            ("pnpm start", "start/dev servers hang forever under the agent"),
-            ("yarn dev", "dev servers hang forever - use build/test instead"),
-            ("yarn start", "start/dev servers hang forever under the agent"),
+            (
+                "npm run dev",
+                "dev servers hang forever - use build/test instead",
+            ),
+            (
+                "npm start",
+                "start/dev servers hang forever under the agent",
+            ),
+            (
+                "pnpm dev",
+                "dev servers hang forever - use build/test instead",
+            ),
+            (
+                "pnpm start",
+                "start/dev servers hang forever under the agent",
+            ),
+            (
+                "yarn dev",
+                "dev servers hang forever - use build/test instead",
+            ),
+            (
+                "yarn start",
+                "start/dev servers hang forever under the agent",
+            ),
             ("next dev", "dev servers hang forever - use `next build`"),
-            ("npx vite", "dev servers hang forever - use a one-shot build"),
-            ("pnpm vite", "dev servers hang forever - use a one-shot build"),
-            ("yarn vite", "dev servers hang forever - use a one-shot build"),
+            (
+                "npx vite",
+                "dev servers hang forever - use a one-shot build",
+            ),
+            (
+                "pnpm vite",
+                "dev servers hang forever - use a one-shot build",
+            ),
+            (
+                "yarn vite",
+                "dev servers hang forever - use a one-shot build",
+            ),
             ("vite ", "dev servers hang forever - use a one-shot build"),
             ("webpack-dev-server", "dev servers hang forever"),
             ("webpack serve", "dev servers hang forever"),
@@ -231,8 +259,14 @@ fn check_hang_prone(cmd: &str) -> Option<String> {
             ("get-credential", "interactive prompts hang"),
             ("while true", "infinite loops hang - use a bounded command"),
             ("while :", "infinite loops hang - use a bounded command"),
-            ("python -m http.server", "servers hang forever under the agent"),
-            ("python3 -m http.server", "servers hang forever under the agent"),
+            (
+                "python -m http.server",
+                "servers hang forever under the agent",
+            ),
+            (
+                "python3 -m http.server",
+                "servers hang forever under the agent",
+            ),
             ("npx serve", "servers hang forever under the agent"),
             ("live-server", "servers hang forever under the agent"),
         ];
@@ -253,8 +287,7 @@ fn check_hang_prone(cmd: &str) -> Option<String> {
         // uvicorn … --reload
         if (s.starts_with("uvicorn ") || s.starts_with("uvicorn\t")) && s.contains("--reload") {
             return Some(
-                "refused hang-prone uvicorn --reload (dev server). Prefer a one-shot check."
-                    .into(),
+                "refused hang-prone uvicorn --reload (dev server). Prefer a one-shot check.".into(),
             );
         }
         if let Some(rest) = s.strip_prefix("npm run ") {

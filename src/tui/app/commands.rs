@@ -458,9 +458,14 @@ impl App {
         let a = arg.trim();
         let lower = a.to_ascii_lowercase();
         if lower.is_empty() || lower == "status" || lower == "show" || lower == "help" {
-            let on = if self.cfg.prewalk.enabled { "ON" } else { "OFF" };
-            let into = agent::resolve_prewalk_into(&self.cfg)
-                .unwrap_or_else(|| "(unset - set /prewalk into <model> or OMP modelRoles.smol)".into());
+            let on = if self.cfg.prewalk.enabled {
+                "ON"
+            } else {
+                "OFF"
+            };
+            let into = agent::resolve_prewalk_into(&self.cfg).unwrap_or_else(|| {
+                "(unset - set /prewalk into <model> or OMP modelRoles.smol)".into()
+            });
             let active = self
                 .prewalk_override
                 .lock()
@@ -509,7 +514,10 @@ impl App {
             if let Ok(mut g) = self.prewalk_override.lock() {
                 *g = None;
             }
-            self.push_note(Tone::Usage, "prewalk OFF · session override cleared (saved)".into());
+            self.push_note(
+                Tone::Usage,
+                "prewalk OFF · session override cleared (saved)".into(),
+            );
             return;
         }
         if lower == "reset" || lower == "clear" {
@@ -556,7 +564,10 @@ impl App {
             let rest = rest.trim();
             // optional trailing --split DIR
             let (url, split) = if let Some((u, s)) = rest.rsplit_once("--split") {
-                (u.trim(), s.trim().split_whitespace().next().unwrap_or("right"))
+                (
+                    u.trim(),
+                    s.trim().split_whitespace().next().unwrap_or("right"),
+                )
             } else {
                 (rest, "right")
             };
@@ -1064,10 +1075,10 @@ impl App {
             let mut session = *session;
             let mut usage = *usage;
             let res = tokio::select! {
-                _ = cancel.cancelled() => Err(crate::error::MuseError::Interrupted),
+                _ = cancel.cancelled() => Err(crate::error::NurError::Interrupted),
                 r = agent::compact_session(&runner, &mut session, &mut usage) => r,
             };
-            let interrupted = matches!(res, Err(crate::error::MuseError::Interrupted));
+            let interrupted = matches!(res, Err(crate::error::NurError::Interrupted));
             let _ = tx.send(AgentEvent::Done {
                 session: Box::new(session),
                 usage: Box::new(usage),
@@ -2278,7 +2289,7 @@ impl App {
             self.cfg.stream,
             fmt_num(self.cfg.context_window),
             self.budget_status_line(),
-            crate::config::muse_home().display(),
+            crate::config::nur_home().display(),
             crate::config::status_path().display(),
             crate::config::usage_log_path().display(),
             crate::config::sessions_dir().display(),
@@ -2346,7 +2357,9 @@ impl App {
             let id = crate::bg_jobs::spawn_command(rest, &prog, &argv);
             self.push_note(
                 Tone::Skill,
-                format!("bg job #{id} started\n  $ {rest}\n  /bg {id} for result · chip in statusline"),
+                format!(
+                    "bg job #{id} started\n  $ {rest}\n  /bg {id} for result · chip in statusline"
+                ),
             );
             return;
         }
@@ -2876,8 +2889,14 @@ mod draw_tool_prefix_tests {
         let strip = App::strip_tool_prefix;
 
         // Named tool with a request → routes, request preserved.
-        assert_eq!(strip("excalidraw auth flow", &["excalidraw"]), Some("auth flow"));
-        assert_eq!(strip("pen a sine wave", &["penecho", "pen"]), Some("a sine wave"));
+        assert_eq!(
+            strip("excalidraw auth flow", &["excalidraw"]),
+            Some("auth flow")
+        );
+        assert_eq!(
+            strip("pen a sine wave", &["penecho", "pen"]),
+            Some("a sine wave")
+        );
         // Bare tool name → routes with an empty remainder, not None.
         assert_eq!(strip("excalidraw", &["excalidraw"]), Some(""));
         // Case-insensitive.

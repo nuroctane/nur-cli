@@ -1,6 +1,6 @@
 use super::{arg_str, Tool, ToolContext};
 use crate::agent::memory::{append_memory, memory_path, read_memory};
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde_json::Value;
 
 pub struct MemoryTool;
@@ -37,21 +37,21 @@ impl Tool for MemoryTool {
             "append" => {
                 let note = arg_str(args, "note")?;
                 if note.trim().is_empty() {
-                    return Err(MuseError::Tool("note required for append".into()));
+                    return Err(NurError::Tool("note required for append".into()));
                 }
                 // Refuse obvious secrets
                 let lower = note.to_ascii_lowercase();
                 for bad in ["api_key", "password", "secret", "bearer ", "sk-", "llm_"] {
                     if lower.contains(bad) {
-                        return Err(MuseError::Tool(
+                        return Err(NurError::Tool(
                             "refused to store possible secret in memory".into(),
                         ));
                     }
                 }
-                append_memory(&note).map_err(|e| MuseError::Tool(e.to_string()))?;
+                append_memory(&note).map_err(|e| NurError::Tool(e.to_string()))?;
                 Ok(format!("appended to {}", memory_path().display()))
             }
-            _ => Err(MuseError::Tool("action must be read or append".into())),
+            _ => Err(NurError::Tool("action must be read or append".into())),
         }
     }
 }

@@ -532,10 +532,10 @@ pub const PROVIDERS: &[Provider] = &[
         id: "meta",
         name: "Meta Model API",
         base_url: "https://api.meta.ai/v1",
-        default_model: "muse-spark-1.1",
+        default_model: "Llama-4-Maverick-17B-128E-Instruct-FP8",
         env_key: "META_API_KEY",
         style: R,
-        note: "muse-spark · Meta vendor default",
+        note: "Llama 4 Maverick · Meta vendor default",
         key_optional: false,
         browser_auth: false,
     },
@@ -1412,7 +1412,7 @@ fn resolve_provider_token(q: &str) -> Option<&'static Provider> {
         "kimi" | "kimi-code" | "k2" | "kimi-k2" => "kimi",
         "moonshot" | "moonshot-ai" => "moonshot",
         // Meta (default vendor)
-        "llama" | "meta" | "muse" | "spark" | "muse-spark" | "meta-ai" => "meta",
+        "llama" | "meta" | "meta-ai" => "meta",
         // Chinese labs
         "qwen" | "dashscope" | "alibaba" | "tongyi" => "qwen",
         "zhipu" | "z.ai" | "zai" | "glm" | "chatglm" => "zhipu",

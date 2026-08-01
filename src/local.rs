@@ -10,8 +10,8 @@
 //! best-effort and platform-dependent.
 
 use crate::cli::LocalCmd;
-use crate::config::muse_home;
-use crate::error::{MuseError, Result};
+use crate::config::nur_home;
+use crate::error::{NurError, Result};
 use crate::theme;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -150,13 +150,13 @@ pub fn server_args(gguf: &Path) -> Vec<String> {
 }
 
 pub fn models_dir() -> PathBuf {
-    muse_home().join("models")
+    nur_home().join("models")
 }
 pub fn bin_dir() -> PathBuf {
-    muse_home().join("bin")
+    nur_home().join("bin")
 }
 fn state_path() -> PathBuf {
-    muse_home().join("local").join("server.json")
+    nur_home().join("local").join("server.json")
 }
 fn server_exe_name() -> &'static str {
     if cfg!(windows) {
@@ -353,16 +353,16 @@ async fn ensure_llama_server() -> Result<PathBuf> {
         .user_agent(format!("nur-cli/{}", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(120))
         .build()
-        .map_err(|e| MuseError::Other(e.to_string()))?;
+        .map_err(|e| NurError::Other(e.to_string()))?;
 
     let rel: serde_json::Value = http
         .get("https://api.github.com/repos/ggml-org/llama.cpp/releases/latest")
         .send()
         .await
-        .map_err(|e| MuseError::Other(format!("could not query llama.cpp releases: {e}")))?
+        .map_err(|e| NurError::Other(format!("could not query llama.cpp releases: {e}")))?
         .json()
         .await
-        .map_err(|e| MuseError::Other(format!("could not parse llama.cpp releases: {e}")))?;
+        .map_err(|e| NurError::Other(format!("could not parse llama.cpp releases: {e}")))?;
 
     let assets: Vec<(String, String)> = rel
         .get("assets")
@@ -389,7 +389,7 @@ async fn ensure_llama_server() -> Result<PathBuf> {
     };
     let arch = std::env::consts::ARCH;
     let pick = pick_release_asset(&names, os, arch).ok_or_else(|| {
-        MuseError::Other(
+        NurError::Other(
             "no matching llama.cpp release asset for this platform — install llama-server manually and put it on PATH"
                 .into(),
         )
@@ -409,7 +409,7 @@ async fn ensure_llama_server() -> Result<PathBuf> {
 
     // Locate llama-server anywhere under bin/ and hoist it to a stable path.
     let found = find_file_recursive(&bin_dir(), server_exe_name())
-        .ok_or_else(|| MuseError::Other("llama-server not found in the release archive".into()))?;
+        .ok_or_else(|| NurError::Other("llama-server not found in the release archive".into()))?;
     let dest = bin_dir().join(server_exe_name());
     if found != dest {
         let _ = std::fs::copy(&found, &dest);
@@ -445,7 +445,7 @@ fn extract_zip(zip: &Path, into: &Path) -> Result<()> {
 
     match status {
         Ok(s) if s.success() => Ok(()),
-        _ => Err(MuseError::Other(
+        _ => Err(NurError::Other(
             "could not extract the llama.cpp archive (need PowerShell/unzip/tar)".into(),
         )),
     }
@@ -475,14 +475,14 @@ async fn download_to(url: &str, dest: &Path) -> Result<()> {
         .user_agent(format!("nur-cli/{}", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(3600))
         .build()
-        .map_err(|e| MuseError::Other(e.to_string()))?;
+        .map_err(|e| NurError::Other(e.to_string()))?;
     let resp = http
         .get(url)
         .send()
         .await
-        .map_err(|e| MuseError::Other(format!("download failed: {e}")))?;
+        .map_err(|e| NurError::Other(format!("download failed: {e}")))?;
     if !resp.status().is_success() {
-        return Err(MuseError::Other(format!(
+        return Err(NurError::Other(format!(
             "download failed: HTTP {} for {url}",
             resp.status().as_u16()
         )));
@@ -493,21 +493,21 @@ async fn download_to(url: &str, dest: &Path) -> Result<()> {
     let tmp = dest.with_extension("part");
     let mut f = tokio::fs::File::create(&tmp)
         .await
-        .map_err(|e| MuseError::Other(e.to_string()))?;
+        .map_err(|e| NurError::Other(e.to_string()))?;
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| MuseError::Other(format!("download interrupted: {e}")))?;
+        let chunk = chunk.map_err(|e| NurError::Other(format!("download interrupted: {e}")))?;
         f.write_all(&chunk)
             .await
-            .map_err(|e| MuseError::Other(e.to_string()))?;
+            .map_err(|e| NurError::Other(e.to_string()))?;
     }
     f.flush()
         .await
-        .map_err(|e| MuseError::Other(e.to_string()))?;
+        .map_err(|e| NurError::Other(e.to_string()))?;
     drop(f);
     tokio::fs::rename(&tmp, dest)
         .await
-        .map_err(|e| MuseError::Other(e.to_string()))?;
+        .map_err(|e| NurError::Other(e.to_string()))?;
     Ok(())
 }
 
@@ -524,7 +524,7 @@ fn spawn_server(server: &Path, gguf: &Path) -> Result<u32> {
     }
     let child = cmd
         .spawn()
-        .map_err(|e| MuseError::Other(format!("could not start llama-server: {e}")))?;
+        .map_err(|e| NurError::Other(format!("could not start llama-server: {e}")))?;
     Ok(child.id())
 }
 

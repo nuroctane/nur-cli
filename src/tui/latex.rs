@@ -7,12 +7,12 @@
 
 #![cfg(feature = "image-peek")]
 
-use crate::config::muse_home;
+use crate::config::nur_home;
 use sha2::{Digest, Sha256};
+use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::collections::VecDeque;
 use std::sync::{Mutex, OnceLock};
 
 static WARM_QUEUE: OnceLock<Mutex<VecDeque<String>>> = OnceLock::new();
@@ -156,18 +156,14 @@ fn iter_display_math(md: &str) -> Vec<String> {
 }
 
 fn cache_dir() -> PathBuf {
-    let d = muse_home().join("cache").join("latex");
+    let d = nur_home().join("cache").join("latex");
     let _ = fs::create_dir_all(&d);
     d
 }
 
 fn hash_tex(tex: &str) -> String {
     let digest = Sha256::digest(tex.as_bytes());
-    digest
-        .iter()
-        .take(8)
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    digest.iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
 
 fn cache_path_for(tex: &str) -> PathBuf {
@@ -236,8 +232,8 @@ fn try_node_katex(tex: &str, dest: &Path) -> bool {
     if !status.success() || !svg_path.is_file() {
         return false;
     }
-    if let Some(magick) = crate::ecosystem::find_bin("magick")
-        .or_else(|| crate::ecosystem::find_bin("convert"))
+    if let Some(magick) =
+        crate::ecosystem::find_bin("magick").or_else(|| crate::ecosystem::find_bin("convert"))
     {
         let mut child = match Command::new(&magick)
             .arg(svg_path.to_string_lossy().as_ref())

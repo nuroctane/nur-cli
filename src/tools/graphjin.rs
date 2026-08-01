@@ -31,7 +31,7 @@
 
 use super::{arg_str, Tool, ToolContext};
 use crate::ecosystem;
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -175,7 +175,7 @@ impl Tool for GraphJin {
             "query" => {
                 let q = arg_str(args, "query")?;
                 if looks_like_write_operation(&q) {
-                    return Err(MuseError::Tool(
+                    return Err(NurError::Tool(
                         "action=query refused a mutation/subscription document - use action=mutate"
                             .into(),
                     ));
@@ -214,7 +214,7 @@ impl Tool for GraphJin {
                 )?;
                 Ok(annotate_agent_result(&out))
             }
-            other => Err(MuseError::Tool(format!(
+            other => Err(NurError::Tool(format!(
                 "unknown graphjin action '{other}' — use \
                  status|catalog|schema|help|explain|query|security|ask|mutate"
             ))),
@@ -346,16 +346,16 @@ fn call_tool(tool: &str, args: &Value, timeout_ms: u64) -> Result<String> {
 }
 
 fn run(args: &[String], timeout_ms: u64) -> Result<String> {
-    let bin = find_bin().ok_or_else(|| MuseError::Tool(INSTALL_HINT.into()))?;
+    let bin = find_bin().ok_or_else(|| NurError::Tool(INSTALL_HINT.into()))?;
     let mut argv: Vec<&str> = args.iter().map(String::as_str).collect();
     // Structured output — the default, but pinned so a config change cannot
     // silently turn results into a human table the model has to parse.
     argv.extend_from_slice(&["--format", "json"]);
     ecosystem::run_capture(&bin, &argv, None::<&Path>, timeout_ms).map_err(|e| {
         if e.contains("cli setup") || e.contains("no GraphJin server") {
-            MuseError::Tool(format!("{e}\n\n{SETUP_HINT}"))
+            NurError::Tool(format!("{e}\n\n{SETUP_HINT}"))
         } else {
-            MuseError::Tool(format!("graphjin {}: {e}", args.join(" ")))
+            NurError::Tool(format!("graphjin {}: {e}", args.join(" ")))
         }
     })
 }

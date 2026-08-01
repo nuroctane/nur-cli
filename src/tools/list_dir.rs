@@ -1,7 +1,7 @@
 //! Directory listing — cheaper and more precise than shelling out to `ls`.
 
 use super::{arg_str, Tool, ToolContext};
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde_json::Value;
 
 pub struct ListDir;
@@ -31,7 +31,7 @@ impl Tool for ListDir {
         let path = arg_str(args, "path").unwrap_or_else(|_| ".".into());
         let full = super::resolve_path(&ctx.cwd, &path)?;
         if !full.is_dir() {
-            return Err(MuseError::Tool(format!(
+            return Err(NurError::Tool(format!(
                 "not a directory: {}",
                 full.display()
             )));
@@ -40,7 +40,7 @@ impl Tool for ListDir {
         let mut dirs: Vec<String> = Vec::new();
         let mut files: Vec<(String, u64)> = Vec::new();
         let entries =
-            std::fs::read_dir(&full).map_err(|e| MuseError::Tool(format!("read_dir: {e}")))?;
+            std::fs::read_dir(&full).map_err(|e| NurError::Tool(format!("read_dir: {e}")))?;
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
             match entry.file_type() {

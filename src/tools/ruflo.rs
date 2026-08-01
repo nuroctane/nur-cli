@@ -3,7 +3,7 @@
 
 use super::{arg_str, arg_u64, Tool, ToolContext};
 use crate::ecosystem;
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde_json::Value;
 use std::path::PathBuf;
 
@@ -36,7 +36,7 @@ impl Tool for Ruflo {
         "Ruflo agent harness: vector memory (AgentDB), swarm coordination, hive-mind status. \
          Memory is global under ~/.nur/ruflo/ (does not pollute project trees). \
          action=status|memory_store|memory_search|memory_stats|memory_list|agent_list|\
-         swarm_init|swarm_status|hive_status|doctor. Auto-installed with meta."
+         swarm_init|swarm_status|hive_status|doctor. Auto-installed with Nur."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -90,7 +90,7 @@ impl Tool for Ruflo {
 
     fn execute(&self, args: &Value, ctx: &ToolContext) -> Result<String> {
         let bin = ecosystem::find_bin("ruflo").ok_or_else(|| {
-            MuseError::Tool(
+            NurError::Tool(
                 "ruflo CLI not found. Meta normally auto-installs it — run: npm install -g ruflo"
                     .into(),
             )
@@ -181,7 +181,7 @@ impl Tool for Ruflo {
                 argv.push("doctor".into());
             }
             other => {
-                return Err(MuseError::Tool(format!(
+                return Err(NurError::Tool(format!(
                     "unknown ruflo action '{other}' — status|memory_store|memory_search|memory_stats|memory_list|agent_list|swarm_init|swarm_status|hive_status|doctor"
                 )));
             }
@@ -189,7 +189,7 @@ impl Tool for Ruflo {
 
         let refs: Vec<&str> = argv.iter().map(|s| s.as_str()).collect();
         let out =
-            ecosystem::run_capture(&bin, &refs, Some(&cwd), 180_000).map_err(MuseError::Tool)?;
+            ecosystem::run_capture(&bin, &refs, Some(&cwd), 180_000).map_err(NurError::Tool)?;
         // Cap verbose ruflo tables.
         if out.chars().count() > 30_000 {
             Ok(out.chars().take(30_000).collect::<String>() + "\n… (truncated)")

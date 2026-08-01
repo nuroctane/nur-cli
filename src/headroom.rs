@@ -4,7 +4,7 @@
 //! Default mode is **inline** compress on tool outputs (config `headroom.enabled`).
 //! Uses a small Python helper that calls `from headroom import compress`.
 
-use crate::config::{muse_home, HeadroomConfig};
+use crate::config::{nur_home, HeadroomConfig};
 use crate::ecosystem::{find_bin, run_capture};
 use crate::tools::sensitive::body_looks_sensitive;
 use std::path::{Path, PathBuf};
@@ -96,7 +96,7 @@ fn python_import_ok_uncached() -> bool {
 
 /// Ensure the compress helper exists under `~/.nur/bin/`.
 pub fn ensure_helper_script() -> PathBuf {
-    let dir = muse_home().join("bin");
+    let dir = nur_home().join("bin");
     let _ = std::fs::create_dir_all(&dir);
     let dest = dir.join(HELPER_NAME);
     // Refuse to follow a pre-existing symlink at the helper path.
@@ -108,10 +108,7 @@ pub fn ensure_helper_script() -> PathBuf {
         return dest;
     }
     let body = include_str!("../scripts/headroom_compress.py");
-    let tmp = dir.join(format!(
-        ".{HELPER_NAME}.{}.tmp",
-        std::process::id()
-    ));
+    let tmp = dir.join(format!(".{HELPER_NAME}.{}.tmp", std::process::id()));
     if std::fs::write(&tmp, body).is_ok() {
         let _ = std::fs::rename(&tmp, &dest).or_else(|_| {
             let _ = std::fs::copy(&tmp, &dest);
@@ -213,7 +210,7 @@ pub fn compress_text(
         return None;
     }
 
-    let tmp_dir = muse_home().join("cache").join("headroom");
+    let tmp_dir = nur_home().join("cache").join("headroom");
     let _ = std::fs::create_dir_all(&tmp_dir);
     let tmp = tmp_dir.join(format!(
         "in-{}-{}.txt",
@@ -327,7 +324,11 @@ mod tests {
     #[test]
     fn secrets_skip_bearer() {
         let cfg = HeadroomConfig::default();
-        let body = format!("Authorization: Bearer {}\n{}", "a".repeat(40), "x".repeat(3000));
+        let body = format!(
+            "Authorization: Bearer {}\n{}",
+            "a".repeat(40),
+            "x".repeat(3000)
+        );
         assert!(!should_compress(&cfg, "bash", &body));
     }
 

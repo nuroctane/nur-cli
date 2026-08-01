@@ -9,7 +9,7 @@
 
 use super::{arg_str, Tool, ToolContext};
 use crate::ecosystem;
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde_json::Value;
 
 pub struct Akarso;
@@ -85,7 +85,7 @@ impl Tool for Akarso {
 
     fn execute(&self, args: &Value, _ctx: &ToolContext) -> Result<String> {
         let bin = ecosystem::find_bin("akarso").ok_or_else(|| {
-            MuseError::Tool(
+            NurError::Tool(
                 "akarso CLI not found. nur normally auto-installs it — run: \
                  npm install -g akarso  then  akarso auth login"
                     .into(),
@@ -168,7 +168,7 @@ impl Tool for Akarso {
                 argv.extend(["posts".into(), "delete".into(), id]);
             }
             other => {
-                return Err(MuseError::Tool(format!(
+                return Err(NurError::Tool(format!(
                     "unknown akarso action '{other}' — auth_check|accounts_list|accounts_health|\
                      accounts_get|accounts_connect|posts_list|posts_get|posts_create|posts_delete|profiles_list"
                 )));
@@ -176,7 +176,7 @@ impl Tool for Akarso {
         }
 
         let refs: Vec<&str> = argv.iter().map(|s| s.as_str()).collect();
-        ecosystem::run_capture(&bin, &refs, None, timeout_ms).map_err(MuseError::Tool)
+        ecosystem::run_capture(&bin, &refs, None, timeout_ms).map_err(NurError::Tool)
     }
 }
 

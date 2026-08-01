@@ -1,10 +1,10 @@
-//! Optional permission rules (`~/.nur/permissions.toml` + project `.meta/permissions.toml`).
+//! Optional permission rules (`~/.nur/permissions.toml` + project `.nur/permissions.toml`).
 //!
 //! Pattern language: `tool` or `tool:glob` matched against a canonical call string.
 //! Evaluation order: **deny > ask > allow > mode default**.
 //! Plan-mode structural blocks (code authoring / VCS) always win over `allow`.
 
-use crate::config::meta_home;
+use crate::config::nur_home;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -43,8 +43,8 @@ impl PermissionRules {
     /// Load home + optional project rules. Missing files = empty (no behavior change).
     pub fn load(cwd: &Path) -> Self {
         let mut out = Self::default();
-        out.merge_file(&meta_home().join("permissions.toml"));
-        out.merge_file(&cwd.join(".meta").join("permissions.toml"));
+        out.merge_file(&nur_home().join("permissions.toml"));
+        out.merge_file(&cwd.join(".nur").join("permissions.toml"));
         out
     }
 
@@ -84,7 +84,7 @@ impl PermissionRules {
         }
         format!(
             "permission rules\n  deny   {} pattern(s)\n  ask    {} pattern(s)\n  allow  {} pattern(s)\n  \
-             files: ~/.nur/permissions.toml · .meta/permissions.toml\n  order: deny > ask > allow > mode",
+             files: ~/.nur/permissions.toml · .nur/permissions.toml\n  order: deny > ask > allow > mode",
             self.deny.len(),
             self.ask.len(),
             self.allow.len()
@@ -142,15 +142,8 @@ pub fn canonical(tool: &str, args_json: &str) -> String {
             .and_then(|c| c.as_str())
             .unwrap_or("")
             .to_string(),
-        "browser"
-        | "terminal_browser"
-        | "graphify"
-        | "plur"
-        | "ruflo"
-        | "akarso"
-        | "omp"
-        | "memory"
-        | "executor" => v
+        "browser" | "terminal_browser" | "graphify" | "plur" | "ruflo" | "akarso" | "omp"
+        | "memory" | "executor" => v
             .get("action")
             .and_then(|c| c.as_str())
             .unwrap_or("")
@@ -226,7 +219,7 @@ fn glob_rec(p: &[char], pi: usize, t: &[char], ti: usize) -> bool {
 }
 
 pub fn home_permissions_path() -> PathBuf {
-    meta_home().join("permissions.toml")
+    nur_home().join("permissions.toml")
 }
 
 #[cfg(test)]

@@ -24,7 +24,7 @@ pub struct Cli {
     #[arg(value_name = "PROMPT")]
     pub prompt: Option<String>,
 
-    /// Model id (default from config / provider). Env: NUR_MODEL or META_MODEL.
+    /// Model id (default from config / provider). Env: NUR_MODEL.
     #[arg(short, long, env = "NUR_MODEL")]
     pub model: Option<String>,
 

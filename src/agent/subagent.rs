@@ -6,7 +6,7 @@ use super::swarm::{self, RunState};
 use super::{AgentEvent, AgentRunner, ApprovalDecision};
 use crate::api::ApiClient;
 use crate::config::Config;
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use crate::tools::ToolHost;
 use crate::usage::{TokenUsage, UsageTracker};
 use std::collections::HashSet;
@@ -147,7 +147,7 @@ pub async fn run_subagent(
                 let tokens = spent.input_tokens + spent.output_tokens;
                 if interrupted {
                     swarm::finish(run_id, RunState::Cancelled, tokens);
-                    return Err(MuseError::Interrupted);
+                    return Err(NurError::Interrupted);
                 }
                 return match result {
                     Ok(s) => {
@@ -176,12 +176,12 @@ pub async fn run_subagent(
 /// Treating partial output as `Ok` made the parent believe the delegated task
 /// completed, so it would continue from an unverified half-result instead of
 /// retrying or reporting the provider/runtime failure.
-fn subagent_failure(error: &str, partial: &str) -> MuseError {
+fn subagent_failure(error: &str, partial: &str) -> NurError {
     let partial = partial.trim();
     if partial.is_empty() {
-        MuseError::Other(format!("subagent failed: {error}"))
+        NurError::Other(format!("subagent failed: {error}"))
     } else {
-        MuseError::Other(format!(
+        NurError::Other(format!(
             "subagent failed: {error}\n\nPartial output before failure:\n{partial}"
         ))
     }

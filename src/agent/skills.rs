@@ -1109,9 +1109,8 @@ pub fn slash_activation_section(sk: &Skill) -> String {
 /// Discover skills from (first match wins per name):
 /// - `$NUR_HOME/skills` (or `~/.nur/skills`) — primary
 /// - enabled marketplace plugins under `~/.nur/plugins/` (skills/ + pack roots)
-/// - legacy `~/.muse/skills`
 /// - `~/.agents/skills` (Agent Skills / graphify install --platform agents)
-/// - `<cwd>/.meta/skills` · `<cwd>/.muse/skills` · `<cwd>/.agents/skills` · `<cwd>/.nur/skills`
+/// - `<cwd>/.agents/skills` · `<cwd>/.nur/skills`
 ///
 /// Max directory depth when walking for nested SKILL.md (category/pack layouts).
 pub(crate) const SKILL_WALK_MAX_DEPTH: usize = 5;

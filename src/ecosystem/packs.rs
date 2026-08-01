@@ -5,7 +5,7 @@
 //! without any manual `npx skills add` steps.
 
 use super::{find_bin, run_capture, run_quiet, which, ComponentStatus};
-use crate::config::muse_home;
+use crate::config::nur_home;
 use std::fs;
 use std::path::PathBuf;
 
@@ -23,7 +23,10 @@ const SKILL_PACKS: &[(&str, &str)] = &[
     ("addyosmani/agent-skills", "addyosmani"),
     ("BuilderIO/skills", "builderio"),
     // Marketing + software factory (factory overnight prefers fractal)
-    ("MikeFishbeinAtherial/infinite-headcount", "infinite-headcount"),
+    (
+        "MikeFishbeinAtherial/infinite-headcount",
+        "infinite-headcount",
+    ),
 ];
 
 pub fn ensure_skills_cli(node_ok: bool) -> ComponentStatus {
@@ -292,7 +295,10 @@ fn upgrade_omp(c: &mut ComponentStatus) {
 
     #[cfg(not(windows))]
     {
-        if best_omp().as_ref().is_none_or(|(_, v)| !omp_meets_feature_floor(v)) {
+        if best_omp()
+            .as_ref()
+            .is_none_or(|(_, v)| !omp_meets_feature_floor(v))
+        {
             let _ = run_capture(
                 "bash",
                 &["-lc", "curl -fsSL https://omp.sh/install.sh | bash"],
@@ -518,7 +524,7 @@ pub fn install_skill_packs(skills_cli: &ComponentStatus) -> (Vec<String>, Vec<St
                     ),
                 );
                 // Mirror into ~/.nur/skills for dual discovery
-                mirror_agents_to_muse();
+                mirror_agents_to_nur();
                 ok.push((*label).into());
             }
             Err(e) => {
@@ -534,7 +540,7 @@ pub fn install_skill_packs(skills_cli: &ComponentStatus) -> (Vec<String>, Vec<St
 }
 
 fn pack_marker(label: &str) -> PathBuf {
-    muse_home().join("skill-packs").join(format!("{label}.ok"))
+    nur_home().join("skill-packs").join(format!("{label}.ok"))
 }
 
 fn chrono_now() -> String {
@@ -547,14 +553,14 @@ fn chrono_now() -> String {
     s.to_string()
 }
 
-fn mirror_agents_to_muse() {
+fn mirror_agents_to_nur() {
     let Some(home) = dirs::home_dir() else { return };
     let agents = home.join(".agents").join("skills");
-    let muse = muse_home().join("skills");
+    let nur = nur_home().join("skills");
     if !agents.is_dir() {
         return;
     }
-    let _ = fs::create_dir_all(&muse);
+    let _ = fs::create_dir_all(&nur);
     // Recursive: cyber is flat, mattpocock is skills/<cat>/<name>/SKILL.md when
     // installed under agents as nested trees.
     for skill_md in crate::agent::skills::find_skill_mds(&agents, 5) {
@@ -565,7 +571,7 @@ fn mirror_agents_to_muse() {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("skill");
-        let dest = muse.join(name);
+        let dest = nur.join(name);
         if dest.exists() {
             continue;
         }
@@ -593,7 +599,7 @@ fn mirror_agents_to_muse() {
 /// Catalog / index skills that point the agent at large packs without loading
 /// 817 full playbooks into every prompt.
 fn write_catalog_skills() -> Result<(), String> {
-    let root = muse_home().join("skills");
+    let root = nur_home().join("skills");
     fs::create_dir_all(&root).map_err(|e| e.to_string())?;
 
     let catalogs: &[(&str, &str)] = &[

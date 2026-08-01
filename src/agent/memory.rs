@@ -1,11 +1,11 @@
 //! Cross-session memory — simple markdown journal under ~/.nur/memory.md
 
-use crate::config::meta_home;
+use crate::config::nur_home;
 use std::fs;
 use std::path::PathBuf;
 
 pub fn memory_path() -> PathBuf {
-    meta_home().join("memory.md")
+    nur_home().join("memory.md")
 }
 
 pub fn read_memory() -> String {

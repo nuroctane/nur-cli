@@ -278,7 +278,7 @@ mod tests {
             &p,
             Event::Model {
                 provider: "meta".into(),
-                model: "muse-spark-1.1".into(),
+                model: "Llama-4-Maverick-17B-128E-Instruct-FP8".into(),
                 privacy: "standard".into(),
                 failover: false,
                 input_tokens: 10,

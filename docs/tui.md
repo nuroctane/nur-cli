@@ -22,7 +22,7 @@ nur -r <session-id>     # resume specific session
 
 The splash is intentionally lean:
 
-1. MUSE art  
+1. NUR art
 2. **`<active provider> loaded · v<cli>`**  
 3. **`model · cwd · session`**  
 4. Purple ecosystem line (**sandbox · subagents · tools** + pack status)  
@@ -241,7 +241,7 @@ The note is appended to your persistent memory file and recalled automatically i
 
 | Command | Purpose |
 |---------|---------|
-| `/model` | Show and switch models. Run bare to open a picker that fetches your provider's live model list (`/models`) — filter, arrow, and ↵ to switch, or type any id. `/model <id>` switches directly (e.g. `/model muse-spark-1.1`) |
+| `/model` | Show and switch models. Run bare to open a picker that fetches your provider's live model list (`/models`) - filter, arrow, and Enter to switch, or type any id. `/model <id>` switches directly (e.g. `/model gpt-5.5`) |
 | `/plugins` | Marketplace picker (same UX as provider/`/login` picker): filter, ↑↓/wheel, ↵ to install or enable/disable. Skills land in `~/.nur/plugins/<id>` and mirror **in full** (incl. `references/`) to `~/.nur/skills`. CLI: `nur plugins list\|install\|enable\|disable\|uninstall`. Natural-language phrases (e.g. *think like fable*) **or** `/skill-name` auto-activate skills — status chip confirms activation |
 | `/effort` | Change reasoning effort |
 | `/compact` | Manually compact context (thins old tool bodies; keeps recent turns; writes `.precompact.bak`) |
@@ -439,7 +439,7 @@ No keyboard shortcuts — move the highlight with the wheel or `↑`/`↓`, choo
 Open with `/sessions` (alias `/resume`). Browse recent sessions with a prompt-first picker — see the first user message of each session to find the one you want.
 
 - Defaults to **all** workspaces (not only the current cwd). Toggle **here** / **all** with Tab or the scope chip.
-- Scans both `~/.nur/sessions` and legacy `~/.muse/sessions`; when the same id exists twice, the **richer** copy wins.
+- Scans `~/.nur/sessions`.
 - Lists show message counts, tokens, and **estimated cost** so high-spend sessions are easy to spot.
 - Session saves write a sidecar **`.json.bak`** before overwrite.
 

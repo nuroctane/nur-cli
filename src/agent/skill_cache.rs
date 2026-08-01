@@ -53,9 +53,8 @@ fn now_secs() -> u64 {
 /// Global roots that are safe to cache (not cwd-specific).
 fn global_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    roots.push(crate::config::meta_home().join("skills"));
+    roots.push(crate::config::nur_home().join("skills"));
     roots.extend(crate::plugins::enabled_skill_roots());
-    roots.push(crate::config::legacy_muse_home().join("skills"));
     if let Some(home) = dirs::home_dir() {
         roots.push(home.join(".agents").join("skills"));
     }
@@ -70,7 +69,6 @@ fn global_roots_existing() -> Vec<PathBuf> {
 fn cwd_roots(cwd: &Path) -> Vec<PathBuf> {
     vec![
         cwd.join(".nur").join("skills"),
-        cwd.join(".meta").join("skills"),
         cwd.join(".claude").join("skills"),
         cwd.join(".agents").join("skills"),
     ]

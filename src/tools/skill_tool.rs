@@ -3,7 +3,7 @@
 
 use super::{arg_str, Tool, ToolContext};
 use crate::agent::skills::{load_skills, skills_prompt_section};
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde_json::Value;
 
 pub struct SkillTool;
@@ -50,7 +50,7 @@ impl Tool for SkillTool {
                     .iter()
                     .find(|s| s.name.eq_ignore_ascii_case(&name))
                     .ok_or_else(|| {
-                        MuseError::Tool(format!(
+                        NurError::Tool(format!(
                             "skill '{name}' not found — action=list to see installed skills"
                         ))
                     })?;
@@ -74,7 +74,7 @@ impl Tool for SkillTool {
                     body
                 ))
             }
-            other => Err(MuseError::Tool(format!(
+            other => Err(NurError::Tool(format!(
                 "unknown action '{other}' — use list or read"
             ))),
         }

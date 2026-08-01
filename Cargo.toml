@@ -1,8 +1,8 @@
 [package]
 name = "nur-cli"
-version = "0.27.7"
+version = "0.27.8"
 edition = "2021"
-description = "NurCLI — fully loaded multi-provider coding agent (TUI, vision, tools, sandbox, Graphify/PLUR/Ruflo/Executor + 976 bundled skills). Optional Meta Model API provider (muse-spark) among many."
+description = "NurCLI - fully loaded multi-provider coding agent (TUI, vision, tools, sandbox, Graphify/PLUR/Ruflo/Executor + 976 bundled skills)."
 license = "GPL-3.0-or-later"
 authors = ["NurCLI contributors"]
 repository = "https://github.com/nuroctane/nur-cli"
@@ -10,7 +10,7 @@ readme = "README.md"
 keywords = ["nur", "nurcli", "ai", "cli", "agent", "tui", "coding-agent", "graphify", "skills"]
 categories = ["command-line-utilities", "development-tools"]
 
-# Single binary: `nur` (no muse alias).
+# Single binary: `nur`.
 [[bin]]
 name = "nur"
 path = "src/main.rs"

@@ -1921,21 +1921,11 @@ def _sort_and_dedupe(sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _nur_home() -> Path:
-    # NurCLI data home. Honor NUR_HOME first, then the legacy META_HOME / MUSE_HOME
-    # overrides. With no override, prefer ~/.nur (current), then fall back to the
-    # pre-rebrand ~/.meta / ~/.muse homes if they still hold un-migrated sessions.
-    configured = (
-        os.environ.get("NUR_HOME")
-        or os.environ.get("META_HOME")
-        or os.environ.get("MUSE_HOME")
-    )
+    # NurCLI data home. NUR_HOME is the only override.
+    configured = os.environ.get("NUR_HOME")
     if configured:
         return Path(configured).expanduser()
-    home = Path.home()
-    for legacy in (home / ".nur", home / ".meta", home / ".muse"):
-        if (legacy / "sessions").is_dir():
-            return legacy
-    return home / ".nur"
+    return Path.home() / ".nur"
 
 
 def _nur_sessions_dir() -> Path:

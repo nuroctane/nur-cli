@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use tokio_util::sync::CancellationToken;
 
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 
 /// fractal data dir at repo root (from fractal/constants.py)
 pub const FRACTAL_FOLDER: &str = ".fractal";
@@ -407,14 +407,14 @@ pub fn run_fractal_args_cancellable(
     args: &[String],
     cancel: &CancellationToken,
 ) -> Result<String> {
-    let bin = find_on_path("fractal").ok_or_else(|| MuseError::Other(NOT_FOUND_HINT.into()))?;
+    let bin = find_on_path("fractal").ok_or_else(|| NurError::Other(NOT_FOUND_HINT.into()))?;
     let argv: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     let cap = run_capture(&bin, &argv, Some(cwd), FRACTAL_TIMEOUT_MS, Some(cancel))
-        .map_err(MuseError::Other)?;
+        .map_err(NurError::Other)?;
     if cap.success {
         Ok(cap.text)
     } else {
-        Err(MuseError::Other(summarize_failure(&cap.text)))
+        Err(NurError::Other(summarize_failure(&cap.text)))
     }
 }
 

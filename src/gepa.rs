@@ -27,8 +27,8 @@
 
 use crate::api::ApiClient;
 use crate::bench::{self, BenchResult, Task};
-use crate::config::{muse_home, Config};
-use crate::error::{MuseError, Result};
+use crate::config::{nur_home, Config};
+use crate::error::{NurError, Result};
 use crate::theme;
 use std::path::PathBuf;
 
@@ -259,7 +259,7 @@ pub fn optimized_path(label: &str) -> PathBuf {
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
-    muse_home()
+    nur_home()
         .join("bench")
         .join("optimized")
         .join(format!("{clean}.md"))
@@ -277,7 +277,7 @@ pub async fn run_optimize(
     cwd: PathBuf,
 ) -> Result<()> {
     if !bench::is_git_repo_pub(&cwd) {
-        return Err(MuseError::Other(
+        return Err(NurError::Other(
             "gepa needs a git repo (it replays in isolated worktrees) — run inside your project"
                 .into(),
         ));
@@ -286,11 +286,11 @@ pub async fn run_optimize(
         bench::list_tasks_pub()
     } else {
         vec![bench::load_task(name).ok_or_else(|| {
-            MuseError::Other(format!("no bench task `{name}` — see nur bench list"))
+            NurError::Other(format!("no bench task `{name}` — see nur bench list"))
         })?]
     };
     if tasks.is_empty() {
-        return Err(MuseError::Other(
+        return Err(NurError::Other(
             "no bench tasks recorded — record one first: nur bench add <name> \"<prompt>\" --check \"<cmd>\"".into(),
         ));
     }
@@ -396,9 +396,7 @@ pub async fn run_optimize(
 
     let front = pareto_front(&scores);
     let Some(best) = best_index(&scores) else {
-        return Err(MuseError::Other(
-            "gepa produced no scored candidates".into(),
-        ));
+        return Err(NurError::Other("gepa produced no scored candidates".into()));
     };
     let winner = &candidates[best];
     print!("{}", optimize_report(name, &candidates, &scores, &front));
@@ -613,7 +611,7 @@ mod tests {
         assert_eq!(name, "all----etc.md", "separators and dots are neutralised");
         assert_eq!(
             p.parent().unwrap(),
-            muse_home().join("bench").join("optimized"),
+            nur_home().join("bench").join("optimized"),
             "the file must land inside the optimized dir, never above it"
         );
         assert_eq!(optimized_path("auth").file_name().unwrap(), "auth.md");

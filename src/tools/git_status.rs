@@ -1,5 +1,5 @@
 use super::{Tool, ToolContext};
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde_json::Value;
 use std::process::Command;
 
@@ -44,10 +44,10 @@ fn git(cwd: &std::path::Path, args: &[&str]) -> Result<String> {
         .args(args)
         .current_dir(cwd)
         .output()
-        .map_err(|e| MuseError::Tool(format!("git failed: {e}")))?;
+        .map_err(|e| NurError::Tool(format!("git failed: {e}")))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
-        return Err(MuseError::Tool(format!("git error: {err}")));
+        return Err(NurError::Tool(format!("git error: {err}")));
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }

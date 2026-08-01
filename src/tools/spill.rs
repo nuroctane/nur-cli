@@ -2,7 +2,7 @@
 //! to disk; the model receives a short preview + path (use `read_file` for more).
 
 use super::sensitive::body_looks_sensitive;
-use crate::config::{atomic_write, muse_home};
+use crate::config::{atomic_write, nur_home};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -15,7 +15,7 @@ pub const DEFAULT_TOOL_RESULT_MAX_CHARS: usize = 12_000;
 const PREVIEW_CHARS: usize = 2_000;
 
 pub fn tool_results_dir() -> PathBuf {
-    muse_home().join("tool-results")
+    nur_home().join("tool-results")
 }
 
 /// True when `path` resolves under the nur tool-results spill directory.
@@ -140,7 +140,11 @@ mod tests {
     #[test]
     fn sensitive_body_does_not_spill_to_disk() {
         let sid = format!("sens-{}", uuid::Uuid::new_v4().simple());
-        let big = format!("Authorization: Bearer {}\n{}", "a".repeat(40), "x".repeat(20_000));
+        let big = format!(
+            "Authorization: Bearer {}\n{}",
+            "a".repeat(40),
+            "x".repeat(20_000)
+        );
         let out = maybe_spill(&sid, "bash", big, 1000);
         assert!(out.contains("truncated"));
         assert!(!out.contains("spilled to disk"));

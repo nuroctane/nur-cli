@@ -182,13 +182,9 @@ fn parse_token_output(raw: &str) -> Option<String> {
 }
 
 fn omp_token_once(bin: &str, omp_provider: &str) -> Option<String> {
-    let output = crate::ecosystem::run_capture(
-        bin,
-        &["token", omp_provider],
-        None,
-        TOKEN_TIMEOUT_MS,
-    )
-    .ok()?;
+    let output =
+        crate::ecosystem::run_capture(bin, &["token", omp_provider], None, TOKEN_TIMEOUT_MS)
+            .ok()?;
     parse_token_output(&output)
 }
 
@@ -277,9 +273,13 @@ pub fn invalidate_omp_token_cache() {
 #[allow(dead_code)] // consumed by omp economy routing / future role sync
 pub fn omp_model_role(role: &str) -> Option<String> {
     let bin = crate::ecosystem::find_omp()?;
-    let output =
-        crate::ecosystem::run_capture(&bin, &["config", "get", "modelRoles", "--json"], None, 15_000)
-            .ok()?;
+    let output = crate::ecosystem::run_capture(
+        &bin,
+        &["config", "get", "modelRoles", "--json"],
+        None,
+        15_000,
+    )
+    .ok()?;
     let value: serde_json::Value = serde_json::from_str(&output).ok()?;
     let roles = value.get("value").unwrap_or(&value);
     roles

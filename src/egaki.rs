@@ -37,7 +37,10 @@ pub fn doctor_report() -> String {
         Some(p) => {
             lines.push(format!("egaki: {p}"));
             if let Ok(v) = run_capture(&p, &["--version"], None, 10_000) {
-                lines.push(format!("version: {}", v.lines().next().unwrap_or(&v).trim()));
+                lines.push(format!(
+                    "version: {}",
+                    v.lines().next().unwrap_or(&v).trim()
+                ));
             }
         }
         None => lines.push(
@@ -66,9 +69,7 @@ pub fn doctor_report() -> String {
     }
     lines.push(String::new());
     lines.push("Outputs default to <workspace>/.nur/media/".into());
-    lines.push(
-        "Commands: image · video · speech · transcribe · models · usage · subscribe".into(),
-    );
+    lines.push("Commands: image · video · speech · transcribe · models · usage · subscribe".into());
     lines.join("\n")
 }
 

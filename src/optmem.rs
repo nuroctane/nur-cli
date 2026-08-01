@@ -199,7 +199,14 @@ pub fn ensure_install() -> Result<String, String> {
     let downloaded = if let Some(curl) = find_bin("curl") {
         run_capture(
             &curl,
-            &["-fsSL", "--max-time", "60", url, "-o", &tmp.to_string_lossy()],
+            &[
+                "-fsSL",
+                "--max-time",
+                "60",
+                url,
+                "-o",
+                &tmp.to_string_lossy(),
+            ],
             None,
             70_000,
         )
@@ -312,8 +319,8 @@ mod tests {
     #[test]
     fn rejects_html_download() {
         assert!(!looks_like_memo_script(b"<!DOCTYPE html><html>404</html>"));
-        let mut ok = b"#!/usr/bin/env python3\n# OptMem memory manager\ndef wake():\n    pass\n"
-            .to_vec();
+        let mut ok =
+            b"#!/usr/bin/env python3\n# OptMem memory manager\ndef wake():\n    pass\n".to_vec();
         while ok.len() < 80 {
             ok.extend_from_slice(b"# pad\n");
         }

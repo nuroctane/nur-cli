@@ -6,7 +6,7 @@
 //! approval in manual mode.
 
 use super::{arg_str, resolve_path, Tool, ToolContext};
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde_json::Value;
 use std::path::Path;
 
@@ -104,7 +104,7 @@ impl Tool for Excalidraw {
             "create" => create(args, &ctx.cwd),
             "export" => export_file(args, &ctx.cwd),
             "checkpoint" => checkpoint(args, &ctx.cwd),
-            other => Err(MuseError::Tool(format!(
+            other => Err(NurError::Tool(format!(
                 "unknown excalidraw action '{other}' — use status|create|export|reference|checkpoint"
             ))),
         }
@@ -154,7 +154,7 @@ fn create(args: &Value, cwd: &Path) -> Result<String> {
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "diagram.excalidraw".into()),
         );
-        return Err(MuseError::Tool(format!(
+        return Err(NurError::Tool(format!(
             "excalidraw output must not be on Desktop (reserved for tldraw boards). \
              Use docs/ or .nur/diagrams/ — e.g. {}",
             alt.display()
@@ -162,7 +162,7 @@ fn create(args: &Value, cwd: &Path) -> Result<String> {
     }
     if let Some(parent) = abs_out.parent() {
         std::fs::create_dir_all(parent)
-            .map_err(|e| MuseError::Tool(format!("create parent dir {}: {e}", parent.display())))?;
+            .map_err(|e| NurError::Tool(format!("create parent dir {}: {e}", parent.display())))?;
     }
 
     let elements_json = if args.get("elements").is_some() {
@@ -170,11 +170,11 @@ fn create(args: &Value, cwd: &Path) -> Result<String> {
     } else if let Ok(path) = arg_str(args, "elements_path") {
         let p = resolve_path(cwd, &path)?;
         std::fs::read_to_string(&p)
-            .map_err(|e| MuseError::Tool(format!("read elements_path {}: {e}", p.display())))?
+            .map_err(|e| NurError::Tool(format!("read elements_path {}: {e}", p.display())))?
     } else if let Ok(mmd) = arg_str(args, "from_mermaid") {
         mermaid_to_elements_json(&mmd)?
     } else {
-        return Err(MuseError::Tool(
+        return Err(NurError::Tool(
             "create requires elements= JSON, elements_path= file, or from_mermaid= text".into(),
         ));
     };
@@ -224,13 +224,10 @@ fn create(args: &Value, cwd: &Path) -> Result<String> {
 fn export_file(args: &Value, cwd: &Path) -> Result<String> {
     let path = arg_str(args, "path")
         .or_else(|_| arg_str(args, "output"))
-        .map_err(|_| MuseError::Tool("export requires path= to a .excalidraw file".into()))?;
+        .map_err(|_| NurError::Tool("export requires path= to a .excalidraw file".into()))?;
     let abs = resolve_path(cwd, &path)?;
     if !abs.is_file() {
-        return Err(MuseError::Tool(format!(
-            "file not found: {}",
-            abs.display()
-        )));
+        return Err(NurError::Tool(format!("file not found: {}", abs.display())));
     }
     export_and_maybe_open(&abs, cwd, want_open(args))
 }
@@ -305,7 +302,7 @@ fn extract_excalidraw_url(text: &str) -> Option<String> {
 
 fn elements_to_json_string(args: &Value) -> Result<String> {
     let el = args.get("elements").ok_or_else(|| {
-        MuseError::Tool("create requires elements= (JSON array of shapes/arrows)".into())
+        NurError::Tool("create requires elements= (JSON array of shapes/arrows)".into())
     })?;
     match el {
         Value::String(s) => {
@@ -314,14 +311,14 @@ fn elements_to_json_string(args: &Value) -> Result<String> {
             if trimmed.starts_with('[') || trimmed.starts_with('{') {
                 Ok(trimmed.to_string())
             } else {
-                Err(MuseError::Tool(
+                Err(NurError::Tool(
                     "elements string must be a JSON array (starts with [)".into(),
                 ))
             }
         }
         Value::Array(_) | Value::Object(_) => serde_json::to_string(el)
-            .map_err(|e| MuseError::Tool(format!("serialize elements: {e}"))),
-        _ => Err(MuseError::Tool(
+            .map_err(|e| NurError::Tool(format!("serialize elements: {e}"))),
+        _ => Err(NurError::Tool(
             "elements must be a JSON array or a JSON string".into(),
         )),
     }
@@ -345,7 +342,7 @@ fn mermaid_to_elements_json(mmd: &str) -> Result<String> {
         let re_edge = regex::Regex::new(
             r#"(?P<a>[A-Za-z0-9_]+)(?:\[(?P<al>[^\]]*)\])?\s*--?>\s*(?:\|(?P<label>[^|]+)\|)?\s*(?P<b>[A-Za-z0-9_]+)(?:\[(?P<bl>[^\]]*)\])?"#,
         )
-        .map_err(|e| MuseError::Tool(format!("mermaid regex: {e}")))?;
+        .map_err(|e| NurError::Tool(format!("mermaid regex: {e}")))?;
         if let Some(c) = re_edge.captures(line) {
             let a = c.name("a").unwrap().as_str().to_string();
             let b = c.name("b").unwrap().as_str().to_string();
@@ -372,7 +369,7 @@ fn mermaid_to_elements_json(mmd: &str) -> Result<String> {
         }
         // Lone node A[Label]
         let re_node = regex::Regex::new(r#"^(?P<a>[A-Za-z0-9_]+)\[(?P<al>[^\]]*)\]"#)
-            .map_err(|e| MuseError::Tool(format!("mermaid node regex: {e}")))?;
+            .map_err(|e| NurError::Tool(format!("mermaid node regex: {e}")))?;
         if let Some(c) = re_node.captures(line) {
             let a = c.name("a").unwrap().as_str().to_string();
             let al = c.name("al").unwrap().as_str().to_string();
@@ -382,7 +379,7 @@ fn mermaid_to_elements_json(mmd: &str) -> Result<String> {
         }
     }
     if nodes.is_empty() {
-        return Err(MuseError::Tool(
+        return Err(NurError::Tool(
             "from_mermaid: no nodes parsed — use flowchart lines like A[Start] --> B[End]".into(),
         ));
     }
@@ -442,7 +439,7 @@ fn mermaid_to_elements_json(mmd: &str) -> Result<String> {
             "label": { "text": label, "strokeColor": "#a0a0a0" }
         }));
     }
-    serde_json::to_string(&elements).map_err(|e| MuseError::Tool(format!("mermaid serialize: {e}")))
+    serde_json::to_string(&elements).map_err(|e| NurError::Tool(format!("mermaid serialize: {e}")))
 }
 
 fn checkpoint(args: &Value, cwd: &Path) -> Result<String> {
@@ -470,7 +467,7 @@ fn checkpoint(args: &Value, cwd: &Path) -> Result<String> {
         "load" => {
             let name = arg_str(args, "name")?;
             let output = arg_str(args, "output")
-                .map_err(|_| MuseError::Tool("checkpoint load requires output= path".into()))?;
+                .map_err(|_| NurError::Tool("checkpoint load requires output= path".into()))?;
             let abs = resolve_path(cwd, &output)?;
             if let Some(parent) = abs.parent() {
                 let _ = std::fs::create_dir_all(parent);
@@ -496,7 +493,7 @@ fn checkpoint(args: &Value, cwd: &Path) -> Result<String> {
                 15_000,
             )
         }
-        other => Err(MuseError::Tool(format!(
+        other => Err(NurError::Tool(format!(
             "unknown checkpoint_action '{other}' — use list|save|load|remove"
         ))),
     }
@@ -535,8 +532,8 @@ fn find_excalidraw_bin() -> Option<String> {
         .or_else(|| crate::ecosystem::find_bin("excalidraw-cli"))
 }
 
-fn missing_cli_err() -> MuseError {
-    MuseError::Tool(
+fn missing_cli_err() -> NurError {
+    NurError::Tool(
         "excalidraw CLI not found on PATH. Install with:\n  \
          npm i -g excalidraw-cli\n\
          Or run: nur ecosystem  (auto-installs when Node.js is present)\n\
@@ -553,7 +550,7 @@ fn run_cli(args: &[&str], cwd: Option<&Path>, timeout_ms: u64) -> Result<String>
 fn run_cli_owned(args: &[String], cwd: Option<&Path>, timeout_ms: u64) -> Result<String> {
     let bin = find_excalidraw_bin().ok_or_else(missing_cli_err)?;
     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    crate::ecosystem::run_capture(&bin, &arg_refs, cwd, timeout_ms).map_err(MuseError::Tool)
+    crate::ecosystem::run_capture(&bin, &arg_refs, cwd, timeout_ms).map_err(NurError::Tool)
 }
 
 #[cfg(test)]
@@ -641,10 +638,7 @@ mod tests {
     fn no_open_path_call_sites_in_excalidraw() {
         let src = include_str!("excalidraw.rs");
         // Strip the tests module so this guard's own prose does not match.
-        let prod = src
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap_or(src);
+        let prod = src.split("#[cfg(test)]").next().unwrap_or(src);
         // Actual call form only — comments may still mention the forbidden API.
         assert!(
             !prod.contains("open_uri::open_path(") && !prod.contains("open_path(&"),

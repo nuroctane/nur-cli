@@ -156,7 +156,7 @@ pub fn detect_default_browser() -> BrowserKind {
 /// Where we stage the unpacked extension so the user (or a launch flag) can
 /// load it without downloading anything.
 pub fn staged_extension_dir() -> PathBuf {
-    super::muse_home()
+    super::nur_home()
         .join("browser-extension")
         .join("tmwd_cdp_bridge")
 }

@@ -1,6 +1,6 @@
 use super::{arg_str, Tool, ToolContext};
 use crate::agent::todos::{TodoItem, TodoList, TodoStatus};
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 
@@ -44,26 +44,26 @@ impl Tool for TodoWrite {
         let arr = args
             .get("items")
             .and_then(|v| v.as_array())
-            .ok_or_else(|| MuseError::Tool("items array required".into()))?;
+            .ok_or_else(|| NurError::Tool("items array required".into()))?;
         let merge = args.get("merge").and_then(|v| v.as_bool()).unwrap_or(true);
         let mut items = Vec::new();
         for v in arr {
             let id = v
                 .get("id")
                 .and_then(|x| x.as_str())
-                .ok_or_else(|| MuseError::Tool("item.id required".into()))?
+                .ok_or_else(|| NurError::Tool("item.id required".into()))?
                 .to_string();
             let content = v
                 .get("content")
                 .and_then(|x| x.as_str())
-                .ok_or_else(|| MuseError::Tool("item.content required".into()))?
+                .ok_or_else(|| NurError::Tool("item.content required".into()))?
                 .to_string();
             let status_s = v
                 .get("status")
                 .and_then(|x| x.as_str())
                 .unwrap_or("pending");
             let status = TodoStatus::parse(status_s)
-                .ok_or_else(|| MuseError::Tool(format!("bad status: {status_s}")))?;
+                .ok_or_else(|| NurError::Tool(format!("bad status: {status_s}")))?;
             items.push(TodoItem {
                 id,
                 content,
@@ -73,7 +73,7 @@ impl Tool for TodoWrite {
         let mut g = self
             .todos
             .lock()
-            .map_err(|_| MuseError::Tool("todos lock".into()))?;
+            .map_err(|_| NurError::Tool("todos lock".into()))?;
         g.apply(items, merge);
         Ok(format!("todos updated\n{}", g.render()))
     }

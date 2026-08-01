@@ -3,7 +3,7 @@
 
 use super::sandbox;
 use super::{arg_str, Tool, ToolContext};
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
@@ -39,7 +39,7 @@ impl Tool for ApplyPatch {
 
         let original = if full.exists() {
             fs::read_to_string(&full)
-                .map_err(|e| MuseError::Tool(format!("read {}: {e}", full.display())))?
+                .map_err(|e| NurError::Tool(format!("read {}: {e}", full.display())))?
         } else {
             String::new()
         };
@@ -47,10 +47,10 @@ impl Tool for ApplyPatch {
         let updated = apply_unified_diff(&original, &patch)?;
         if let Some(parent) = full.parent() {
             fs::create_dir_all(parent)
-                .map_err(|e| MuseError::Tool(format!("mkdir {}: {e}", parent.display())))?;
+                .map_err(|e| NurError::Tool(format!("mkdir {}: {e}", parent.display())))?;
         }
         fs::write(&full, &updated)
-            .map_err(|e| MuseError::Tool(format!("write {}: {e}", full.display())))?;
+            .map_err(|e| NurError::Tool(format!("write {}: {e}", full.display())))?;
 
         Ok(format!(
             "patched {} ({} → {} bytes)",
@@ -204,7 +204,7 @@ fn apply_unified_diff(original: &str, patch: &str) -> Result<String> {
     }
 
     if hunks == 0 {
-        return Err(MuseError::Tool(
+        return Err(NurError::Tool(
             "no unified-diff hunks found (need lines starting with @@)".into(),
         ));
     }
@@ -223,14 +223,14 @@ fn parse_hunk_header(line: &str) -> Result<(usize, usize)> {
     let minus = rest
         .split_whitespace()
         .next()
-        .ok_or_else(|| MuseError::Tool(format!("bad hunk header: {line}")))?;
+        .ok_or_else(|| NurError::Tool(format!("bad hunk header: {line}")))?;
     let minus = minus.trim_start_matches('-');
     let start = minus
         .split(',')
         .next()
         .unwrap_or("0")
         .parse::<usize>()
-        .map_err(|_| MuseError::Tool(format!("bad hunk header: {line}")))?;
+        .map_err(|_| NurError::Tool(format!("bad hunk header: {line}")))?;
     let count = minus
         .split(',')
         .nth(1)
@@ -253,10 +253,10 @@ fn find_slice_unique(lines: &[String], needle: &[&str], hunk_line: usize) -> Res
         .collect();
     match hits.len() {
         1 => Ok(hits[0]),
-        0 => Err(MuseError::Tool(format!(
+        0 => Err(NurError::Tool(format!(
             "hunk context mismatch at line {hunk_line} — file may have changed; re-read and retry"
         ))),
-        n => Err(MuseError::Tool(format!(
+        n => Err(NurError::Tool(format!(
             "hunk context at line {hunk_line} is ambiguous ({n} matches) — \
              include more surrounding context lines in the diff"
         ))),

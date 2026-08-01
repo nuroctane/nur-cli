@@ -13,7 +13,7 @@
 //! - Delegate probe (no secret storage).
 //! - Simplified pairing token generator (TTL, one-time use semantic).
 
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -201,8 +201,11 @@ pub fn probe_driver(driver: DriverId) -> ProbeStatus {
     let config_dir = driver_config_dir(driver);
     let config_dir_exists = config_dir.exists();
     let binary_present = vendor_cli_exists(driver);
-    let mut has_credentials = if config_dir_exists || matches!(driver, DriverId::Cursor | DriverId::OpenCode | DriverId::Grok)
-    {
+    let mut has_credentials = if config_dir_exists
+        || matches!(
+            driver,
+            DriverId::Cursor | DriverId::OpenCode | DriverId::Grok
+        ) {
         probes_have_credentials(driver, &config_dir)
     } else {
         false
@@ -386,7 +389,7 @@ pub fn delegate_check(driver: DriverId) -> Result<()> {
     if st.has_credentials {
         Ok(())
     } else {
-        Err(MuseError::Other(format!(
+        Err(NurError::Other(format!(
             "delegate check failed for {}: no credentials in {} (binary_present={}, config_exists={}). Hint: run `{}` first.",
             driver.as_str(),
             st.config_dir.display(),

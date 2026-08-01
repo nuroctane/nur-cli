@@ -6,12 +6,12 @@
 //! timeout_ms = 5000
 //! ```
 //!
-//! Env for commands: NUR_TOOL, NUR_ARGS_JSON, NUR_CWD, NUR_SESSION (legacy
-//! META_* aliases are also set). Non-zero pre_tool exit blocks the tool.
+//! Env for commands: NUR_TOOL, NUR_ARGS_JSON, NUR_CWD, NUR_SESSION.
+//! Non-zero pre_tool exit blocks the tool.
 //! Missing file = no hooks.
 
-use crate::config::meta_home;
-use crate::error::{MuseError, Result};
+use crate::config::nur_home;
+use crate::error::{NurError, Result};
 use serde::Deserialize;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -33,7 +33,7 @@ fn default_timeout() -> u64 {
 
 impl HooksConfig {
     pub fn load() -> Self {
-        let path = meta_home().join("hooks.toml");
+        let path = nur_home().join("hooks.toml");
         let Ok(text) = std::fs::read_to_string(path) else {
             return Self::default();
         };
@@ -64,10 +64,10 @@ impl HooksConfig {
         };
         match run_hook(cmd, tool, args_json, cwd, session_id, self.timeout_ms) {
             Ok(0) => Ok(()),
-            Ok(code) => Err(MuseError::Tool(format!(
+            Ok(code) => Err(NurError::Tool(format!(
                 "pre_tool hook blocked {tool} (exit {code})"
             ))),
-            Err(e) => Err(MuseError::Tool(format!("pre_tool hook failed: {e}"))),
+            Err(e) => Err(NurError::Tool(format!("pre_tool hook failed: {e}"))),
         }
     }
 
@@ -87,7 +87,7 @@ impl HooksConfig {
         if !self.is_active() {
             return format!(
                 "hooks inactive · optional file {}",
-                meta_home().join("hooks.toml").display()
+                nur_home().join("hooks.toml").display()
             );
         }
         format!(
@@ -95,7 +95,7 @@ impl HooksConfig {
             self.pre_tool.as_deref().unwrap_or("(none)"),
             self.post_tool.as_deref().unwrap_or("(none)"),
             self.timeout_ms,
-            meta_home().join("hooks.toml").display()
+            nur_home().join("hooks.toml").display()
         )
     }
 }
@@ -125,8 +125,8 @@ fn run_hook(
         .env("NUR_SESSION", session_id)
         .env("META_TOOL", tool)
         .env("META_ARGS_JSON", args_json)
-        .env("META_CWD", cwd.display().to_string())
-        .env("META_SESSION", session_id)
+        .env("NUR_CWD", cwd.display().to_string())
+        .env("NUR_SESSION", session_id)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

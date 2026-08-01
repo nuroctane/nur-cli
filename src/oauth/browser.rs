@@ -1,6 +1,6 @@
 //! Open the system default browser to a URL.
 
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use std::process::Command;
 
 /// Best-effort open of `url` in the platform default browser.
@@ -11,9 +11,9 @@ pub fn open_browser(url: &str) -> Result<()> {
         let status = Command::new("cmd")
             .args(["/C", "start", "", url])
             .status()
-            .map_err(|e| MuseError::Other(format!("failed to open browser: {e}")))?;
+            .map_err(|e| NurError::Other(format!("failed to open browser: {e}")))?;
         if !status.success() {
-            return Err(MuseError::Other(
+            return Err(NurError::Other(
                 "browser open command failed — open the URL manually".into(),
             ));
         }
@@ -24,9 +24,9 @@ pub fn open_browser(url: &str) -> Result<()> {
         let status = Command::new("open")
             .arg(url)
             .status()
-            .map_err(|e| MuseError::Other(format!("failed to open browser: {e}")))?;
+            .map_err(|e| NurError::Other(format!("failed to open browser: {e}")))?;
         if !status.success() {
-            return Err(MuseError::Other(
+            return Err(NurError::Other(
                 "browser open command failed — open the URL manually".into(),
             ));
         }
@@ -41,7 +41,7 @@ pub fn open_browser(url: &str) -> Result<()> {
                 }
             }
         }
-        Err(MuseError::Other(
+        Err(NurError::Other(
             "could not open a browser — open the URL manually".into(),
         ))
     }

@@ -2071,7 +2071,7 @@ pub fn run_foreground_program(
                 .map(|c| c.to_string())
                 .unwrap_or_else(|| "signal".into())
         )),
-        Err(e) => Err(crate::error::MuseError::Other(format!(
+        Err(e) => Err(crate::error::NurError::Other(format!(
             "failed to launch {}: {e}",
             bin.display()
         ))),
@@ -2202,21 +2202,21 @@ pub async fn run_tui(
     }
     // Fail clearly if stdin isn't a real console (redirects / dead pipes).
     if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-        return Err(crate::error::MuseError::Other(
+        return Err(crate::error::NurError::Other(
             "nur needs an interactive terminal (stdin is not a TTY).\n\
              Run `nur` from a normal shell window, not a redirected pipe."
                 .into(),
         ));
     }
     enable_raw_mode().map_err(|e| {
-        crate::error::MuseError::Other(format!(
+        crate::error::NurError::Other(format!(
             "cannot enter raw mode (TUI): {e}\n\
              Try a different terminal, or close other full-screen console apps."
         ))
     })?;
     stdout()
         .execute(EnterAlternateScreen)
-        .map_err(|e| crate::error::MuseError::Other(format!("alternate screen: {e}")))?;
+        .map_err(|e| crate::error::NurError::Other(format!("alternate screen: {e}")))?;
     stdout().execute(EnableBracketedPaste)?;
     // Focus events: when the user releases the mouse *outside* the terminal,
     // we never see MouseUp - FocusLost clears stuck drag/select state.
@@ -2234,7 +2234,7 @@ pub async fn run_tui(
     install_tui_panic_hook();
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)
-        .map_err(|e| crate::error::MuseError::Other(format!("terminal init: {e}")))?;
+        .map_err(|e| crate::error::NurError::Other(format!("terminal init: {e}")))?;
 
     // Fast image picker: from_query_stdio blocks 1s on Windows cmd/conhost
     // and many Unix terms (bench 1000ms vs 0.008ms for from_fontsize).
@@ -5252,7 +5252,7 @@ impl App {
     // ── session picker (`/sessions` · `/resume`) ─────────────
     /// Native nur sessions as picker rows. `Err` carries a message to surface.
     fn native_session_rows(&self) -> std::result::Result<Vec<SessionRow>, String> {
-        // Lightweight summaries (no input_items) from ~/.nur + legacy ~/.muse.
+        // Lightweight summaries (no input_items) from ~/.nur.
         let sessions = crate::agent::session::list_session_summaries()
             .map_err(|e| format!("could not list sessions: {e}"))?;
         let here_key = self.cwd.display().to_string().to_lowercase();
@@ -5307,7 +5307,7 @@ impl App {
             self.push_note(
                 Tone::Session,
                 "no past sessions yet - keep chatting, then /sessions to jump back\n\
-                 (searched ~/.nur/sessions and legacy ~/.muse/sessions)"
+                 (searched ~/.nur/sessions)"
                     .into(),
             );
             return;

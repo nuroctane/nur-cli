@@ -6,7 +6,7 @@
 
 use crate::config;
 use crate::ecosystem;
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use crate::theme;
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -67,7 +67,7 @@ pub fn install_binary_path() -> PathBuf {
 }
 
 fn marker_path() -> PathBuf {
-    config::muse_home().join(BOOTSTRAP_MARKER)
+    config::nur_home().join(BOOTSTRAP_MARKER)
 }
 
 /// True when this process was launched as a GitHub Releases artifact
@@ -86,10 +86,6 @@ pub fn looks_like_release_artifact() -> bool {
         || name.starts_with("nur-macos")
         || name.starts_with("nur-darwin")
         || name.contains("nur-windows-x86_64")
-        // Legacy pre-rebrand release-asset names.
-        || name.starts_with("meta-linux")
-        || name.starts_with("meta-macos")
-        || name.starts_with("meta-darwin")
 }
 
 pub fn is_running_from_install() -> bool {
@@ -126,19 +122,19 @@ fn bootstrap_complete() -> bool {
 
 /// Interactive TUI launch should run a full one-stop install first when:
 /// - user double-clicked a **release artifact** (`nur-windows-*.exe`), or
-/// - there is **no** installed `~/.local/bin/meta` yet (first-time cargo binary), or
-/// - `META_FORCE_BOOTSTRAP=1`
+/// - there is **no** installed `~/.local/bin/nur` yet (first-time cargo binary), or
+/// - `NUR_FORCE_BOOTSTRAP=1`
 ///
 /// Already-installed `nur` on PATH must **never** re-enter one-stop install on
-/// every open — that used to rename the running EXE to `meta.old` and brick PATH.
+/// every open because replacing the running executable can brick PATH.
 ///
-/// Skip with `NUR_SKIP_BOOTSTRAP=1` (dev / re-exec after install; legacy
-/// `META_SKIP_BOOTSTRAP` still honored). Force anytime: `nur install`.
+/// Skip with `NUR_SKIP_BOOTSTRAP=1` (dev / re-exec after install).
+/// Force anytime with `nur install`.
 pub fn should_bootstrap_on_launch() -> bool {
-    if env_truthy("NUR_SKIP_BOOTSTRAP") || env_truthy("META_SKIP_BOOTSTRAP") {
+    if env_truthy("NUR_SKIP_BOOTSTRAP") {
         return false;
     }
-    if env_truthy("NUR_FORCE_BOOTSTRAP") || env_truthy("META_FORCE_BOOTSTRAP") {
+    if env_truthy("NUR_FORCE_BOOTSTRAP") {
         return true;
     }
     // Downloads folder / release asset: always one-stop.
@@ -178,7 +174,7 @@ pub fn run_full_install() -> Result<()> {
     step("Installing binary to ~/.local/bin…");
     let dest_dir = install_dir();
     fs::create_dir_all(&dest_dir)?;
-    let src = env::current_exe().map_err(MuseError::Io)?;
+    let src = env::current_exe().map_err(NurError::Io)?;
     let dest = install_binary_path();
 
     if same_file(&src, &dest) {
@@ -200,10 +196,10 @@ pub fn run_full_install() -> Result<()> {
         }
         theme::print_ok(&format!("Installed {}", dest.display()));
     }
-    // Product binary is ONLY `nur`. Remove legacy Meta/Muse names.
-    // Also remove same-hash impostors of *this* image under other agent names
-    // (e.g. an old install that overwrote claude.exe with meta.exe).
-    scrub_legacy_and_impostor_bins(&dest_dir, &dest);
+    // Product binary is ONLY `nur`. Remove same-hash impostors of this image
+    // under other agent names
+    // (e.g. an old install that overwrote another agent binary).
+    scrub_impostor_bins(&dest_dir, &dest);
 
     // Prefer the install dir for everything that follows in this process.
     prepend_path(&dest_dir);
@@ -371,13 +367,13 @@ pub fn run_update() -> Result<()> {
             .args(["build", "--release", "-q"])
             .current_dir(&repo)
             .status()
-            .map_err(|e| MuseError::Other(format!("cargo: {e}")))?;
+            .map_err(|e| NurError::Other(format!("cargo: {e}")))?;
         if !st.success() {
             let _ = Command::new("cargo")
                 .args(["build", "--release"])
                 .current_dir(&repo)
                 .status();
-            return Err(MuseError::Other("cargo build --release failed".into()));
+            return Err(NurError::Other("cargo build --release failed".into()));
         }
         theme::print_ok("cargo build --release ok");
         #[cfg(windows)]
@@ -385,7 +381,7 @@ pub fn run_update() -> Result<()> {
         #[cfg(not(windows))]
         let built = repo.join("target").join("release").join("nur");
         if !built.is_file() {
-            return Err(MuseError::Other(format!(
+            return Err(NurError::Other(format!(
                 "missing built binary at {}",
                 built.display()
             )));
@@ -395,7 +391,7 @@ pub fn run_update() -> Result<()> {
         fs::create_dir_all(&dest_dir)?;
         let dest = install_binary_path();
         install_binary_safe(&built, &dest)?;
-        scrub_legacy_and_impostor_bins(&dest_dir, &dest);
+        scrub_impostor_bins(&dest_dir, &dest);
         theme::print_ok(&format!("Installed {}", dest.display()));
         prepend_path(&dest_dir);
         let _ = ensure_user_path(&dest_dir);
@@ -468,7 +464,6 @@ const UPDATE_TMP_PREFIX: &str = ".nur-update-";
 fn auto_update_opt_out_var() -> Option<&'static str> {
     [
         "NUR_SKIP_AUTO_UPDATE",
-        "META_SKIP_AUTO_UPDATE",
         "NUR_DISABLE_UPDATES",
         "DISABLE_UPDATES",
         "DISABLE_AUTOUPDATER",
@@ -559,7 +554,7 @@ enum UpdateOutcome {
 }
 
 pub(crate) fn auto_update_state_path() -> PathBuf {
-    config::muse_home().join("auto_update.json")
+    config::nur_home().join("auto_update.json")
 }
 
 pub(crate) fn load_auto_update_state() -> AutoUpdateState {
@@ -590,7 +585,7 @@ fn save_auto_update_state(st: &AutoUpdateState) {
 ///
 /// Off when:
 /// - `config.auto_update = false` (caller passes the flag)
-/// - `NUR_SKIP_AUTO_UPDATE` / `META_SKIP_AUTO_UPDATE` / `NUR_DISABLE_UPDATES` /
+/// - `NUR_SKIP_AUTO_UPDATE` / `NUR_DISABLE_UPDATES` /
 ///   `DISABLE_UPDATES` / `DISABLE_AUTOUPDATER` is set (the last is Claude Code's,
 ///   present only inside agent sessions — see [`auto_update_opt_out_var`])
 /// - running a release artifact or an un-installed build (bootstrap owns those)
@@ -711,7 +706,7 @@ pub fn run_update_check() -> Result<()> {
         .trim()
         .to_string();
     if tag.is_empty() {
-        return Err(MuseError::Other("empty release tag".into()));
+        return Err(NurError::Other("empty release tag".into()));
     }
     let remote = strip_v_prefix(&tag).to_string();
     let assets = release_assets(&rel);
@@ -847,11 +842,11 @@ fn fetch_latest_release(timeout_secs: u64) -> Result<serde_json::Value> {
     http.get(GH_RELEASES_LATEST)
         .header("Accept", "application/vnd.github+json")
         .send()
-        .map_err(|e| MuseError::Other(format!("releases API: {e}")))?
+        .map_err(|e| NurError::Other(format!("releases API: {e}")))?
         .error_for_status()
-        .map_err(|e| MuseError::Other(format!("releases API: {e}")))?
+        .map_err(|e| NurError::Other(format!("releases API: {e}")))?
         .json()
-        .map_err(|e| MuseError::Other(format!("releases JSON: {e}")))
+        .map_err(|e| NurError::Other(format!("releases JSON: {e}")))
 }
 
 fn http_client(timeout_secs: u64) -> Result<reqwest::blocking::Client> {
@@ -859,7 +854,7 @@ fn http_client(timeout_secs: u64) -> Result<reqwest::blocking::Client> {
         .user_agent(format!("nur-cli/{}", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(timeout_secs))
         .build()
-        .map_err(|e| MuseError::Other(format!("http client: {e}")))
+        .map_err(|e| NurError::Other(format!("http client: {e}")))
 }
 
 fn release_assets(rel: &serde_json::Value) -> Vec<(String, String)> {
@@ -900,7 +895,7 @@ fn try_install_from_github(force_verbose: bool) -> Result<UpdateOutcome> {
         .unwrap_or("")
         .trim();
     if tag.is_empty() {
-        return Err(MuseError::Other("empty release tag".into()));
+        return Err(NurError::Other("empty release tag".into()));
     }
     let remote = strip_v_prefix(tag);
     if !version_is_newer(remote, local) {
@@ -912,7 +907,7 @@ fn try_install_from_github(force_verbose: bool) -> Result<UpdateOutcome> {
     let assets = release_assets(&rel);
 
     let (name, url) = pick_nur_release_asset(&assets)
-        .ok_or_else(|| MuseError::Other("no matching release asset for this platform".into()))?;
+        .ok_or_else(|| NurError::Other("no matching release asset for this platform".into()))?;
 
     if force_verbose {
         step(&format!("Downloading {name} (v{remote})…"));
@@ -931,35 +926,35 @@ fn try_install_from_github(force_verbose: bool) -> Result<UpdateOutcome> {
     let bytes = http
         .get(&url)
         .send()
-        .map_err(|e| MuseError::Other(format!("download: {e}")))?
+        .map_err(|e| NurError::Other(format!("download: {e}")))?
         .error_for_status()
-        .map_err(|e| MuseError::Other(format!("download: {e}")))?
+        .map_err(|e| NurError::Other(format!("download: {e}")))?
         .bytes()
-        .map_err(|e| MuseError::Other(format!("download body: {e}")))?;
+        .map_err(|e| NurError::Other(format!("download body: {e}")))?;
     // Validate **before** anything touches disk, so a partial or bogus body can
     // never reach `install_binary_safe`. `.bytes()` already errors on a
     // truncated body; these two guards catch the cases that still return 200:
     // a rate-limit/HTML error page, or an asset pointing at the wrong file.
     if bytes.len() < 1_000_000 {
         // Guard against HTML error pages / truncated assets (real EXEs are multi-MB).
-        return Err(MuseError::Other(format!(
+        return Err(NurError::Other(format!(
             "downloaded asset too small ({} bytes) — aborting",
             bytes.len()
         )));
     }
     if !looks_like_native_executable(&bytes) {
-        return Err(MuseError::Other(
+        return Err(NurError::Other(
             "downloaded asset is not a native executable — aborting".into(),
         ));
     }
-    fs::write(&tmp, &bytes).map_err(MuseError::Io)?;
+    fs::write(&tmp, &bytes).map_err(NurError::Io)?;
     // A short write (disk full) would leave a truncated image that passes the
     // guards above purely because they ran on the in-memory buffer.
     match fs::metadata(&tmp) {
         Ok(m) if m.len() as usize == bytes.len() => {}
         other => {
             let _ = fs::remove_file(&tmp);
-            return Err(MuseError::Other(format!(
+            return Err(NurError::Other(format!(
                 "download did not land intact ({} of {} bytes) — aborting",
                 other.map(|m| m.len()).unwrap_or(0),
                 bytes.len()
@@ -978,7 +973,7 @@ fn try_install_from_github(force_verbose: bool) -> Result<UpdateOutcome> {
     let installed = install_binary_safe(&tmp, &dest);
     let _ = fs::remove_file(&tmp);
     installed?;
-    scrub_legacy_and_impostor_bins(&dest_dir, &dest);
+    scrub_impostor_bins(&dest_dir, &dest);
     if let Some(hash) = file_sha256(&dest) {
         let record = format!(
             "{hash}  {}",
@@ -1101,7 +1096,7 @@ fn pick_nur_release_asset(assets: &[(String, String)]) -> Option<(String, String
 pub fn reexec_installed_tui() -> Result<()> {
     let dest = install_binary_path();
     if !dest.is_file() {
-        return Err(MuseError::Other(format!(
+        return Err(NurError::Other(format!(
             "installed binary missing at {}",
             dest.display()
         )));
@@ -1109,14 +1104,13 @@ pub fn reexec_installed_tui() -> Result<()> {
     theme::print_info("Opening NurCLI…");
     let status = Command::new(&dest)
         .env("NUR_SKIP_BOOTSTRAP", "1")
-        .env("META_SKIP_BOOTSTRAP", "1")
         .status()
-        .map_err(|e| MuseError::Other(format!("failed to launch {}: {e}", dest.display())))?;
+        .map_err(|e| NurError::Other(format!("failed to launch {}: {e}", dest.display())))?;
     if status.success() {
         Ok(())
     } else {
         let code = status.code().unwrap_or(1);
-        Err(MuseError::Other(format!("nur exited with status {code}")))
+        Err(NurError::Other(format!("nur exited with status {code}")))
     }
 }
 
@@ -1133,12 +1127,7 @@ fn now_secs() -> u64 {
 }
 
 fn env_api_key() -> Option<String> {
-    for k in [
-        "NUR_API_KEY",
-        "META_API_KEY",
-        "MODEL_API_KEY",
-        "MUSE_API_KEY",
-    ] {
+    for k in ["NUR_API_KEY", "META_API_KEY"] {
         if let Ok(v) = env::var(k) {
             let t = v.trim().to_string();
             if !t.is_empty() {
@@ -1174,14 +1163,9 @@ fn same_file(a: &Path, b: &Path) -> bool {
     paths_equal_loose(a, b)
 }
 
-/// Install target is **only** `nur` / `nur.exe`. Never write ourselves as
-/// `claude`, `codex`, etc. Remove legacy meta/muse names, and delete any
-/// *identical copy* of this binary under foreign agent names (historical bug:
-/// Meta CLI was copied over real Claude Code).
-fn scrub_legacy_and_impostor_bins(dest_dir: &Path, nur_bin: &Path) {
-    for legacy in ["muse.exe", "muse", "meta.exe", "meta"] {
-        let _ = fs::remove_file(dest_dir.join(legacy));
-    }
+/// Install target is only `nur` / `nur.exe`. Delete any identical copy of this
+/// binary under a foreign agent name.
+fn scrub_impostor_bins(dest_dir: &Path, nur_bin: &Path) {
     let Some(our_hash) = file_sha256(nur_bin) else {
         return;
     };
@@ -1211,7 +1195,7 @@ fn scrub_legacy_and_impostor_bins(dest_dir: &Path, nur_bin: &Path) {
             if h == our_hash {
                 let _ = fs::remove_file(&p);
                 theme::print_info(&format!(
-                    "removed impostor {name} (was a copy of nur/meta — restore the real tool if you need it)"
+                    "removed impostor {name} (was a copy of nur - restore the real tool if you need it)"
                 ));
             }
         }
@@ -1226,7 +1210,7 @@ fn install_binary_safe(src: &Path, target: &Path) -> Result<()> {
         return Ok(());
     }
     if !src.is_file() {
-        return Err(MuseError::Other(format!(
+        return Err(NurError::Other(format!(
             "source binary missing: {}",
             src.display()
         )));
@@ -1240,7 +1224,7 @@ fn install_binary_safe(src: &Path, target: &Path) -> Result<()> {
             let _ = fs::remove_file(&bak);
             if target.exists() {
                 fs::rename(target, &bak).map_err(|e| {
-                    MuseError::Other(format!(
+                    NurError::Other(format!(
                         "could not replace {} (close other nur sessions): {e}",
                         target.display()
                     ))
@@ -1251,7 +1235,7 @@ fn install_binary_safe(src: &Path, target: &Path) -> Result<()> {
                 if bak.is_file() {
                     let _ = fs::rename(&bak, target);
                 }
-                return Err(MuseError::Other(format!(
+                return Err(NurError::Other(format!(
                     "source vanished while installing {} — restored previous binary if possible",
                     target.display()
                 )));
@@ -1265,7 +1249,7 @@ fn install_binary_safe(src: &Path, target: &Path) -> Result<()> {
                     if bak.is_file() && !target.is_file() {
                         let _ = fs::rename(&bak, target);
                     }
-                    Err(MuseError::Other(format!(
+                    Err(NurError::Other(format!(
                         "could not install {} (is nur still running?): {e}",
                         target.display()
                     )))

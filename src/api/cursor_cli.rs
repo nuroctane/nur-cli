@@ -7,7 +7,7 @@
 
 use crate::api::types::{ApiResponse, ApiUsage, ContentPart, OutputItem, ResponseRequest};
 use crate::api::StreamEvent;
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -101,9 +101,7 @@ fn resolve_node_launch(script_dir: &std::path::Path) -> Option<CursorLaunch> {
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
         .map(|e| e.path())
-        .filter(|p| {
-            p.join("node.exe").is_file() && p.join("index.js").is_file()
-        })
+        .filter(|p| p.join("node.exe").is_file() && p.join("index.js").is_file())
         .collect();
     // Names are YYYY.MM.DD-… — lexicographic descending picks newest.
     dirs.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
@@ -197,14 +195,14 @@ fn spawn_launch(launch: &CursorLaunch, args: &[&str]) -> std::io::Result<std::pr
 
 fn run_capture(args: &[&str]) -> Result<String> {
     let mut child = spawn_agent(args)
-        .map_err(|e| MuseError::Other(format!("failed to launch cursor-agent: {e}")))?;
+        .map_err(|e| NurError::Other(format!("failed to launch cursor-agent: {e}")))?;
     let _ = child.stdin.take();
     let out = child
         .wait_with_output()
-        .map_err(|e| MuseError::Other(format!("cursor-agent failed: {e}")))?;
+        .map_err(|e| NurError::Other(format!("cursor-agent failed: {e}")))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
-        return Err(MuseError::Other(format!(
+        return Err(NurError::Other(format!(
             "cursor-agent exited {}: {}",
             out.status,
             err.chars().take(300).collect::<String>()
@@ -290,7 +288,7 @@ pub fn session_tokens_from_cli() -> Option<crate::oauth::OAuthTokens> {
 /// List model ids from `cursor-agent models` / `--list-models`.
 pub fn list_models() -> Result<Vec<String>> {
     if resolve_launch().is_none() {
-        return Err(MuseError::Other(
+        return Err(NurError::Other(
             "cursor-agent not found on PATH. Install Cursor Agent, then run `cursor-agent login`."
                 .into(),
         ));
@@ -301,14 +299,13 @@ pub fn list_models() -> Result<Vec<String>> {
             .filter(|k| !k.trim().is_empty())
             .is_none()
     {
-        return Err(MuseError::Other(
+        return Err(NurError::Other(
             "Cursor Agent is not logged in. Run /login → Cursor → Sign in with browser \
              (or `cursor-agent login`)."
                 .into(),
         ));
     }
-    let output =
-        run_capture(&["models"]).or_else(|_| run_capture(&["--list-models"]))?;
+    let output = run_capture(&["models"]).or_else(|_| run_capture(&["--list-models"]))?;
     let mut ids = parse_model_list(&output);
     if ids.is_empty() {
         ids.push("auto".into());
@@ -353,10 +350,9 @@ fn parse_model_list(text: &str) -> Vec<String> {
         if cleaned.is_empty() || cleaned.starts_with("http") {
             continue;
         }
-        if cleaned
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '[' | ']' | '=' | ','))
-            && cleaned.len() < 80
+        if cleaned.chars().all(|c| {
+            c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '[' | ']' | '=' | ',')
+        }) && cleaned.len() < 80
             && !out.iter().any(|x: &String| x == cleaned)
         {
             out.push(cleaned.to_string());
@@ -403,10 +399,7 @@ pub fn flatten_prompt(req: &ResponseRequest) -> String {
             let ty = item.get("type").and_then(|t| t.as_str()).unwrap_or("");
             match ty {
                 "message" => {
-                    let role = item
-                        .get("role")
-                        .and_then(|r| r.as_str())
-                        .unwrap_or("user");
+                    let role = item.get("role").and_then(|r| r.as_str()).unwrap_or("user");
                     let text = message_text(item);
                     if !text.trim().is_empty() {
                         parts.push(format!(
@@ -794,7 +787,7 @@ fn run_print(
     cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<(String, String)> {
     if resolve_launch().is_none() {
-        return Err(MuseError::Other(
+        return Err(NurError::Other(
             "cursor-agent not found on PATH. Install Cursor Agent (https://cursor.com/docs/cli)."
                 .into(),
         ));
@@ -803,7 +796,7 @@ fn run_print(
         .ok()
         .is_some_and(|k| !k.trim().is_empty());
     if !cli_is_authenticated() && !has_api_key {
-        return Err(MuseError::Other(
+        return Err(NurError::Other(
             "Cursor Agent is not logged in. Run /login → Cursor → Sign in with browser \
              (`cursor-agent login`), or set CURSOR_API_KEY."
                 .into(),
@@ -859,7 +852,7 @@ fn run_print(
     let transcript = TranscriptSnapshot::capture();
     let arg_refs: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
     let mut child = spawn_agent(&arg_refs)
-        .map_err(|e| MuseError::Other(format!("failed to launch cursor-agent: {e}")))?;
+        .map_err(|e| NurError::Other(format!("failed to launch cursor-agent: {e}")))?;
 
     if let Some(mut stdin) = child.stdin.take() {
         if !pass_as_arg {
@@ -872,7 +865,7 @@ fn run_print(
     let stdout = child
         .stdout
         .take()
-        .ok_or_else(|| MuseError::Other("cursor-agent stdout missing".into()))?;
+        .ok_or_else(|| NurError::Other("cursor-agent stdout missing".into()))?;
     let stderr_pipe = child.stderr.take();
     let stderr_handle = std::thread::spawn(move || {
         let mut buf = String::new();
@@ -905,7 +898,7 @@ fn run_print(
             let _ = child.wait();
             let _ = stdout_handle.join();
             let _ = stderr_handle.join();
-            return Err(MuseError::Interrupted);
+            return Err(NurError::Interrupted);
         }
         if started.elapsed() >= timeout {
             recovered = transcript.recover(&prompt);
@@ -928,10 +921,8 @@ fn run_print(
                     match ty {
                         "system" => {
                             if ev.get("subtype").and_then(|s| s.as_str()) == Some("init") {
-                                let model_label = ev
-                                    .get("model")
-                                    .and_then(|m| m.as_str())
-                                    .unwrap_or("Cursor");
+                                let model_label =
+                                    ev.get("model").and_then(|m| m.as_str()).unwrap_or("Cursor");
                                 if let Some(cb) = on_event.as_mut() {
                                     cb(StreamEvent::ReasoningDelta(format!(
                                         "cursor-agent · {model_label}\n"
@@ -995,7 +986,7 @@ fn run_print(
 
         if let Some(exit) = child
             .try_wait()
-            .map_err(|e| MuseError::Other(format!("cursor-agent wait: {e}")))?
+            .map_err(|e| NurError::Other(format!("cursor-agent wait: {e}")))?
         {
             status = Some(exit);
             break;
@@ -1017,7 +1008,7 @@ fn run_print(
     let _ = stdout_handle.join();
     let err_text = stderr_handle.join().unwrap_or_default();
     if let Some(error) = cli_error {
-        return Err(MuseError::Other(error));
+        return Err(NurError::Other(error));
     }
     if status.is_some_and(|exit| !exit.success())
         && final_text.is_empty()
@@ -1025,7 +1016,7 @@ fn run_print(
         && recovered.is_none()
     {
         let status = status.expect("checked above");
-        return Err(MuseError::Other(format!(
+        return Err(NurError::Other(format!(
             "cursor-agent failed (exit {status}){}",
             if err_text.trim().is_empty() {
                 String::new()
@@ -1043,7 +1034,7 @@ fn run_print(
         streamed
     };
     if text.is_empty() {
-        return Err(MuseError::Other(
+        return Err(NurError::Other(
             "cursor-agent produced no assistant text. Try `cursor-agent status` and re-login."
                 .into(),
         ));

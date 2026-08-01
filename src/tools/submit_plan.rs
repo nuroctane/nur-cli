@@ -1,5 +1,5 @@
 use super::{arg_str, Tool, ToolContext};
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde_json::Value;
 use std::fs;
 use std::sync::{Arc, Mutex};
@@ -39,11 +39,11 @@ impl Tool for SubmitPlan {
         if let Ok(mut g) = self.plan.lock() {
             *g = Some(text.clone());
         }
-        // Persist under workspace .meta/plan.md when possible
-        let dir = ctx.cwd.join(".meta");
+        // Persist under workspace .nur/plan.md when possible
+        let dir = ctx.cwd.join(".nur");
         let _ = fs::create_dir_all(&dir);
         let path = dir.join("plan.md");
-        fs::write(&path, &text).map_err(|e| MuseError::Tool(e.to_string()))?;
+        fs::write(&path, &text).map_err(|e| NurError::Tool(e.to_string()))?;
         Ok(format!(
             "plan submitted and written to {}\n\nUser can Shift+Tab to manual/auto and say \"implement the plan\".",
             path.display()

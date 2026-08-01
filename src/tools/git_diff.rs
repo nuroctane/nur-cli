@@ -1,7 +1,7 @@
 //! Read-only git diff / log — approval-free repo inspection.
 
 use super::{arg_str, Tool, ToolContext};
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde_json::Value;
 use std::process::Command;
 
@@ -35,7 +35,7 @@ impl Tool for GitDiff {
         // Refuse anything that parses as a flag — this tool is read-only.
         for s in [&path, &ref_].into_iter().flatten() {
             if s.starts_with('-') {
-                return Err(MuseError::Tool(format!("invalid argument: {s}")));
+                return Err(NurError::Tool(format!("invalid argument: {s}")));
             }
         }
 
@@ -59,7 +59,7 @@ impl Tool for GitDiff {
                 cmd.arg(ref_.as_deref().unwrap_or("HEAD"));
             }
             other => {
-                return Err(MuseError::Tool(format!(
+                return Err(NurError::Tool(format!(
                     "unknown mode '{other}' — use diff|staged|log|show"
                 )))
             }
@@ -70,11 +70,11 @@ impl Tool for GitDiff {
 
         let out = cmd
             .output()
-            .map_err(|e| MuseError::Tool(format!("git: {e}")))?;
+            .map_err(|e| NurError::Tool(format!("git: {e}")))?;
         let stdout = String::from_utf8_lossy(&out.stdout);
         let stderr = String::from_utf8_lossy(&out.stderr);
         if !out.status.success() {
-            return Err(MuseError::Tool(format!(
+            return Err(NurError::Tool(format!(
                 "git {mode} failed: {}",
                 stderr.trim()
             )));

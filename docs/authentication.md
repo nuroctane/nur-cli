@@ -193,9 +193,9 @@ prefer **`/login`** in the TUI.
 
 ```bash
 export NUR_API_KEY="your-key-here"
-# or vendor-specific / legacy aliases, e.g.:
+# or a vendor-specific key, e.g.:
 export OPENAI_API_KEY="..."
-export META_API_KEY="..."   # Meta Model API / older installs
+export META_API_KEY="..."   # Meta Model API
 ```
 
 If a key is found in the environment, NurCLI can save it to `~/.nur/auth.json`
@@ -209,10 +209,9 @@ Self-hosted OpenAI-compatible servers (Ollama, vLLM, LiteLLM, custom gateways):
 export NUR_BASE_URL="http://localhost:11434/v1"   # overrides config base_url
 ```
 
-`NUR_BASE_URL` (legacy `META_BASE_URL`) wins over the catalog default after `/login` and on every startup.
+`NUR_BASE_URL` wins over the catalog default after `/login` and on every startup.
 
-!!! note "Legacy variables"
-    `META_API_KEY`, `MODEL_API_KEY`, and `MUSE_API_KEY` are also accepted for backwards compatibility.
+`META_API_KEY` remains the provider-specific key for Meta Model API.
 
 !!! warning "Plaintext secrets on disk"
     `~/.nur/auth.json` stores API keys and OAuth access/refresh tokens in
@@ -243,8 +242,8 @@ nur auth logout
 nur auth logout --revoke   # local delete + best-effort revoke notes (az/aws/gcloud)
 ```
 
-Removes the stored key from `~/.nur/auth.json` (and any migrated key under
-legacy `~/.muse/`). Same effect as TUI `/logout` for the key file. `--revoke`
+Removes the stored key from `~/.nur/auth.json`. Same effect as TUI `/logout`
+for the key file. `--revoke`
 does not call undocumented token revoke APIs for every vendor; for Azure/AWS/Google
 it points you at `az logout` / `aws sso logout` / `gcloud auth revoke`.
 
@@ -312,9 +311,8 @@ Credential resolution order:
 3. `~/.nur/auth.json` (from `nur auth login` or successful `/login`)
 4. Interactive TUI prompt (opens `/login` when no key is found)
 
-Legacy generic variables (`META_API_KEY`, `MODEL_API_KEY`, and `MUSE_API_KEY`) are
-used only by unscoped/headless resolution. They are never sent to a different
-explicitly selected provider.
+`NUR_API_KEY` is the only global override. Provider-specific environment
+variables are never sent to a different explicitly selected provider.
 
 Active **provider id / base URL / model** come from `~/.nur/config.toml`
 (written by `/login`).
@@ -327,8 +325,9 @@ Active **provider id / base URL / model** come from `~/.nur/config.toml`
 |----------|----------|
 | `~/.nur/auth.json` | API key **or** OAuth access/refresh tokens (**plaintext**) |
 | `~/.nur/config.toml` | `provider`, `base_url`, `model`, … (no secret) |
-| Env `NUR_API_KEY` (legacy `META_API_KEY` / `MODEL_API_KEY`) | Optional override (never printed in logs) |
-| Env `NUR_BASE_URL` (legacy `META_BASE_URL`) | Optional API base override (self-hosted) |
+| Env `NUR_API_KEY` | Optional global override (never printed in logs) |
+| Env `META_API_KEY` | Optional key for the Meta Model API provider |
+| Env `NUR_BASE_URL` | Optional API base override (self-hosted) |
 | `~/.nur/sessions/` | Session metadata (no key) |
 | `~/.nur/status.json` | Live token usage (no key) |
 | `~/.nur/usage.jsonl` | Per-request usage log (no key) |

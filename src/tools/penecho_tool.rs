@@ -128,9 +128,7 @@ impl Tool for Penecho {
             "inject" => {
                 let text = inject.unwrap_or_default();
                 if text.trim().is_empty() {
-                    return Ok(
-                        "inject requires inject= text (conversation/context seed)".into(),
-                    );
+                    return Ok("inject requires inject= text (conversation/context seed)".into());
                 }
                 let path = crate::penecho::write_inject_seed(&text)?;
                 // Ensure canvas is up and open.

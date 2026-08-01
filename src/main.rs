@@ -3,6 +3,7 @@ mod agent;
 mod api;
 mod auth;
 mod bench;
+mod bg_jobs;
 mod bootstrap;
 mod cli;
 mod config;
@@ -15,7 +16,6 @@ mod gepa;
 mod headroom;
 mod local;
 mod oauth;
-mod bg_jobs;
 mod open_uri;
 mod optmem;
 mod penecho;
@@ -162,7 +162,7 @@ async fn real_main() -> Result<()> {
                         // Partial success still exits 0 if at least one works;
                         // exit 1 only when everything failed.
                         if !st.graphify.available && !st.plur.available && !st.ruflo.available {
-                            return Err(error::MuseError::Other(
+                            return Err(error::NurError::Other(
                                 "ecosystem ensure failed — install Node.js 20+ and uv, then re-run nur ecosystem ensure"
                                     .into(),
                             ));
@@ -237,10 +237,7 @@ async fn real_main() -> Result<()> {
     let _ = theme::set_theme(selected_theme);
     if let Some(m) = &cli.model {
         cfg.model = m.clone();
-    } else if let Ok(m) = std::env::var("NUR_MODEL")
-        .or_else(|_| std::env::var("META_MODEL"))
-        .or_else(|_| std::env::var("MUSE_MODEL"))
-    {
+    } else if let Ok(m) = std::env::var("NUR_MODEL") {
         if !m.trim().is_empty() {
             cfg.model = m;
         }
@@ -303,11 +300,9 @@ async fn real_main() -> Result<()> {
     let interactive = cli.command.is_none();
     let api_key = match auth::resolve_api_key_for(Some(cfg.provider.as_str())) {
         Ok(k) => k,
-        Err(error::MuseError::NotAuthenticated) => {
+        Err(error::NurError::NotAuthenticated) => {
             let env_key = std::env::var("NUR_API_KEY")
                 .or_else(|_| std::env::var("META_API_KEY"))
-                .or_else(|_| std::env::var("MODEL_API_KEY"))
-                .or_else(|_| std::env::var("MUSE_API_KEY"))
                 .ok()
                 .map(|k| k.trim().to_string())
                 .filter(|k| !k.is_empty());
@@ -318,7 +313,7 @@ async fn real_main() -> Result<()> {
                 // Empty key → TUI opens signed-out and auto-opens /login.
                 String::new()
             } else {
-                return Err(error::MuseError::NotAuthenticated);
+                return Err(error::NurError::NotAuthenticated);
             }
         }
         Err(e) => {
@@ -408,38 +403,15 @@ async fn real_main() -> Result<()> {
     let home_s = config::nur_home().display().to_string();
     let status_s = config::status_path().display().to_string();
     let usage_s = config::usage_log_path().display().to_string();
-    // Prefer NUR_*; keep META_* / MUSE_* aliases so host hooks don't brick.
-    for (nur_k, meta_k, muse_k, val) in [
-        (
-            "NUR_STATUS_PATH",
-            "META_STATUS_PATH",
-            "MUSE_STATUS_PATH",
-            status_s.as_str(),
-        ),
-        (
-            "NUR_USAGE_LOG_PATH",
-            "META_USAGE_LOG_PATH",
-            "MUSE_USAGE_LOG_PATH",
-            usage_s.as_str(),
-        ),
-        (
-            "NUR_SESSION_ID",
-            "META_SESSION_ID",
-            "MUSE_SESSION_ID",
-            session.id.as_str(),
-        ),
-        ("NUR_MODEL", "META_MODEL", "MUSE_MODEL", cfg.model.as_str()),
-        (
-            "NUR_PROVIDER",
-            "META_PROVIDER",
-            "MUSE_PROVIDER",
-            cfg.provider.as_str(),
-        ),
-        ("NUR_HOME", "META_HOME", "MUSE_HOME", home_s.as_str()),
+    for (key, val) in [
+        ("NUR_STATUS_PATH", status_s.as_str()),
+        ("NUR_USAGE_LOG_PATH", usage_s.as_str()),
+        ("NUR_SESSION_ID", session.id.as_str()),
+        ("NUR_MODEL", cfg.model.as_str()),
+        ("NUR_PROVIDER", cfg.provider.as_str()),
+        ("NUR_HOME", home_s.as_str()),
     ] {
-        std::env::set_var(nur_k, val);
-        std::env::set_var(meta_k, val);
-        std::env::set_var(muse_k, val);
+        std::env::set_var(key, val);
     }
     // Ruflo global memory (shared store under nur home).
     std::env::set_var(
@@ -504,7 +476,7 @@ async fn real_main() -> Result<()> {
                 .filter(|s| !s.is_empty())
                 .map(str::to_string);
             let Some(goal) = goal else {
-                return Err(error::MuseError::Other(
+                return Err(error::NurError::Other(
                     "--continuous needs a goal, e.g.  nur \"keep the tests green\" --continuous"
                         .into(),
                 ));
@@ -615,20 +587,20 @@ fn run_plugins_cli(action: Option<&cli::PluginsCmd>) -> Result<()> {
             theme::print_info(&format!("installing {id}…"));
             match plugins::install_plugin(id) {
                 Ok(msg) => theme::print_ok(&msg),
-                Err(e) => return Err(error::MuseError::Other(e)),
+                Err(e) => return Err(error::NurError::Other(e)),
             }
         }
         Some(PluginsCmd::Enable { id }) => {
-            plugins::set_enabled(id, true).map_err(error::MuseError::Other)?;
+            plugins::set_enabled(id, true).map_err(error::NurError::Other)?;
             theme::print_ok(&format!("enabled {id}"));
         }
         Some(PluginsCmd::Disable { id }) => {
-            plugins::set_enabled(id, false).map_err(error::MuseError::Other)?;
+            plugins::set_enabled(id, false).map_err(error::NurError::Other)?;
             theme::print_ok(&format!("disabled {id}"));
         }
         Some(PluginsCmd::Uninstall { id }) => match plugins::uninstall_plugin(id) {
             Ok(msg) => theme::print_ok(&msg),
-            Err(e) => return Err(error::MuseError::Other(e)),
+            Err(e) => return Err(error::NurError::Other(e)),
         },
     }
     Ok(())
@@ -784,7 +756,7 @@ fn run_doctor() -> Result<()> {
     println!();
 
     // Paths
-    theme::print_ok(&format!("home    {}", config::meta_home().display()));
+    theme::print_ok(&format!("home    {}", config::nur_home().display()));
     theme::print_ok(&format!("status  {}", config::status_path().display()));
     theme::print_ok(&format!("usage   {}", config::usage_log_path().display()));
     theme::print_ok(&format!("sessions {}", config::sessions_dir().display()));
@@ -1048,7 +1020,7 @@ async fn run_headless(
                 println!("{text}");
             }
         }
-        Err(e) => return Err(error::MuseError::Other(e)),
+        Err(e) => return Err(error::NurError::Other(e)),
     }
 
     if let Some(usage) = final_usage {

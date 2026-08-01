@@ -10,7 +10,7 @@
 //! correctly. If a file existed but could not be read, undo refuses rather
 //! than deleting it.
 
-use crate::config::{atomic_write, muse_home};
+use crate::config::{atomic_write, nur_home};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -41,7 +41,7 @@ fn session_dir(session_id: &str) -> PathBuf {
             }
         })
         .collect();
-    muse_home().join("undo").join(safe)
+    nur_home().join("undo").join(safe)
 }
 
 fn read_indices(dir: &Path) -> Vec<u64> {
@@ -264,7 +264,10 @@ mod tests {
         let json = serde_json::to_string(&cp).unwrap();
         std::fs::write(cp_dir.join("000001.json"), json).unwrap();
         let err = undo_last_in(&cp_dir).unwrap_err();
-        assert!(err.contains("unreadable") || err.contains("missing"), "{err}");
+        assert!(
+            err.contains("unreadable") || err.contains("missing"),
+            "{err}"
+        );
         assert_eq!(std::fs::read(&file).unwrap(), b"keep-me");
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -308,7 +311,11 @@ mod tests {
             prior_b64: None,
             prior: Some("original".into()),
         };
-        std::fs::write(cp_dir.join("000001.json"), serde_json::to_string(&cp).unwrap()).unwrap();
+        std::fs::write(
+            cp_dir.join("000001.json"),
+            serde_json::to_string(&cp).unwrap(),
+        )
+        .unwrap();
         undo_last_in(&cp_dir).unwrap();
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "original");
         let _ = std::fs::remove_dir_all(&base);

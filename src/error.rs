@@ -35,7 +35,7 @@ fn api_status_label(status: u16) -> String {
 }
 
 #[derive(Error, Debug)]
-pub enum MuseError {
+pub enum NurError {
     #[error("not authenticated: set NUR_API_KEY (or META_API_KEY for Meta provider) or run `nur auth login`")]
     NotAuthenticated,
 
@@ -70,7 +70,7 @@ pub enum MuseError {
     Other(String),
 }
 
-pub type Result<T> = std::result::Result<T, MuseError>;
+pub type Result<T> = std::result::Result<T, NurError>;
 
 #[cfg(test)]
 mod tests {
@@ -80,7 +80,7 @@ mod tests {
     /// fills a hole, it never rewrites what the provider actually said.
     #[test]
     fn a_real_provider_message_is_passed_through() {
-        let e = MuseError::Api {
+        let e = NurError::Api {
             status: 400,
             message: "invalid_request_error: model not found".into(),
         };
@@ -95,7 +95,7 @@ mod tests {
     /// told the user nothing about whose fault it was.
     #[test]
     fn a_mid_stream_failure_is_not_reported_as_status_zero() {
-        let e = MuseError::Api {
+        let e = NurError::Api {
             status: 0,
             message: "ResourceExhausted: Worker local total request limit reached (90/32)".into(),
         };
@@ -107,7 +107,7 @@ mod tests {
         );
 
         // And with no body at all it still explains itself.
-        let bare = MuseError::Api {
+        let bare = NurError::Api {
             status: 0,
             message: String::new(),
         };
@@ -117,7 +117,7 @@ mod tests {
     #[test]
     fn a_bodyless_failure_still_says_something_useful() {
         // Poolside's platform answers a bad key with 403 and no body.
-        let e = MuseError::Api {
+        let e = NurError::Api {
             status: 403,
             message: String::new(),
         };
@@ -127,7 +127,7 @@ mod tests {
         assert!(s.contains("/login"), "must say how to fix it: {s}");
 
         // Whitespace is as empty as empty.
-        let e = MuseError::Api {
+        let e = NurError::Api {
             status: 429,
             message: "   \n".into(),
         };

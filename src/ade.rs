@@ -1,6 +1,6 @@
 //! ADE (Orca, etc.) integration: hooks, terminal titles, usage discovery.
 
-use crate::config::{meta_home, status_path};
+use crate::config::{nur_home, status_path};
 use crate::usage::TokenUsage;
 use serde_json::json;
 use std::fs;
@@ -96,9 +96,9 @@ pub fn write_ade_manifest(
         "busy": state != "idle",
         "updated_at": chrono::Utc::now().to_rfc3339(),
         "status_path": status_path().display().to_string(),
-        "usage_log_path": meta_home().join("usage.jsonl").display().to_string(),
-        "latest_session_path": meta_home().join("latest_session.json").display().to_string(),
-        "home": meta_home().display().to_string(),
+        "usage_log_path": nur_home().join("usage.jsonl").display().to_string(),
+        "latest_session_path": nur_home().join("latest_session.json").display().to_string(),
+        "home": nur_home().display().to_string(),
         "usage": usage,
         "estimated_cost_usd": usage.estimated_cost_usd(),
         "env_keys": [
@@ -112,25 +112,11 @@ pub fn write_ade_manifest(
             "NUR_USAGE_TOTAL_TOKENS",
             "NUR_USAGE_COST_USD",
             "NUR_HOME",
-            "NUR_API_KEY",
-            // Legacy aliases (still dual-exported for older host panels / Orca hooks)
-            "META_STATUS_PATH",
-            "META_USAGE_LOG_PATH",
-            "META_SESSION_ID",
-            "META_MODEL",
-            "META_PROVIDER",
-            "META_USAGE_INPUT_TOKENS",
-            "META_USAGE_OUTPUT_TOKENS",
-            "META_USAGE_TOTAL_TOKENS",
-            "META_USAGE_COST_USD",
-            "META_HOME",
-            "META_API_KEY",
-            "MODEL_API_KEY",
-            "MUSE_API_KEY"
+            "NUR_API_KEY"
         ],
-        "note": "Poll status_path (or this file's `state`/`updated_at`) for live agent state + token usage. state=='idle' means the turn finished. Prefer NUR_* env keys; META_*/MUSE_* are legacy aliases."
+        "note": "Poll status_path (or this file's `state`/`updated_at`) for live agent state + token usage. state=='idle' means the turn finished."
     });
-    let path = meta_home().join("ade.json");
+    let path = nur_home().join("ade.json");
     let _ = fs::write(
         path,
         serde_json::to_string_pretty(&body).unwrap_or_default(),
@@ -195,12 +181,12 @@ fn notify_orca_hook_blocking(payload_json: &str) {
         return;
     }
 
-    let meta_home_s = meta_home().display().to_string();
+    let nur_home_s = nur_home().display().to_string();
     let url = format!("http://127.0.0.1:{port}/hook/meta");
 
     // Prefer packaged hook script if present
     let hook = dirs::home_dir()
-        .map(|h| h.join(".orca").join("agent-hooks").join("meta-hook.cmd"))
+        .map(|h| h.join(".orca").join("agent-hooks").join("nur-hook.cmd"))
         .filter(|p| p.exists());
 
     if let Some(hook) = hook {
@@ -249,7 +235,7 @@ fn notify_orca_hook_blocking(payload_json: &str) {
                 std::env::var("ORCA_WORKTREE_ID").unwrap_or_default()
             ),
             "--data-urlencode",
-            &format!("metaHome={meta_home_s}"),
+            &format!("metaHome={nur_home_s}"),
             "--data-urlencode",
             &format!("statusPath={}", status_path().display()),
             "--data-urlencode",
@@ -262,23 +248,17 @@ fn notify_orca_hook_blocking(payload_json: &str) {
 
 pub fn install_orca_hook() -> crate::error::Result<()> {
     let dir = dirs::home_dir()
-        .ok_or_else(|| crate::error::MuseError::Other("no home dir".into()))?
+        .ok_or_else(|| crate::error::NurError::Other("no home dir".into()))?
         .join(".orca")
         .join("agent-hooks");
     fs::create_dir_all(&dir)?;
-    // Primary name is still meta-hook.cmd (Orca host panels look for it).
-    // nur-hook.cmd / muse-hook.cmd are aliases for newer / older docs.
-    let path = dir.join("meta-hook.cmd");
+    let path = dir.join("nur-hook.cmd");
     fs::write(&path, ORCA_HOOK_CMD)?;
-    let _ = fs::write(dir.join("nur-hook.cmd"), ORCA_HOOK_CMD);
-    let _ = fs::write(dir.join("muse-hook.cmd"), ORCA_HOOK_CMD);
     if let Some(roaming) = dirs::data_dir() {
         let alt = roaming.join("Orca").join("agent-hooks");
         if alt.exists() || roaming.join("Orca").exists() {
             let _ = fs::create_dir_all(&alt);
-            let _ = fs::write(alt.join("meta-hook.cmd"), ORCA_HOOK_CMD);
             let _ = fs::write(alt.join("nur-hook.cmd"), ORCA_HOOK_CMD);
-            let _ = fs::write(alt.join("muse-hook.cmd"), ORCA_HOOK_CMD);
         }
     }
     println!("installed Orca hook: {}", path.display());
@@ -293,11 +273,9 @@ if defined ORCA_AGENT_HOOK_ENDPOINT if exist "%ORCA_AGENT_HOOK_ENDPOINT%" call "
 if "%ORCA_AGENT_HOOK_PORT%"=="" exit /b 0
 if "%ORCA_AGENT_HOOK_TOKEN%"=="" exit /b 0
 if "%ORCA_PANE_KEY%"=="" exit /b 0
-set "ORCA_META_HOME=%USERPROFILE%\.nur"
-REM Match Rust nur_home(): NUR_HOME, then META_HOME, then MUSE_HOME.
-if not "%MUSE_HOME%"=="" set "ORCA_META_HOME=%MUSE_HOME%"
-if not "%META_HOME%"=="" set "ORCA_META_HOME=%META_HOME%"
-if not "%NUR_HOME%"=="" set "ORCA_META_HOME=%NUR_HOME%"
+set "ORCA_NUR_HOME=%USERPROFILE%\.nur"
+REM Match Rust nur_home().
+if not "%NUR_HOME%"=="" set "ORCA_NUR_HOME=%NUR_HOME%"
 "%SystemRoot%\System32\curl.exe" -sS -X POST "http://127.0.0.1:%ORCA_AGENT_HOOK_PORT%/hook/meta" ^
   --connect-timeout 0.5 --max-time 1.5 ^
   -H "Content-Type: application/x-www-form-urlencoded" ^
@@ -308,8 +286,8 @@ if not "%NUR_HOME%"=="" set "ORCA_META_HOME=%NUR_HOME%"
   --data-urlencode "worktreeId=%ORCA_WORKTREE_ID%" ^
   --data-urlencode "env=%ORCA_AGENT_HOOK_ENV%" ^
   --data-urlencode "version=%ORCA_AGENT_HOOK_VERSION%" ^
-  --data-urlencode "metaHome=%ORCA_META_HOME%" ^
-  --data-urlencode "statusPath=%ORCA_META_HOME%\status.json" ^
+  --data-urlencode "metaHome=%ORCA_NUR_HOME%" ^
+  --data-urlencode "statusPath=%ORCA_NUR_HOME%\status.json" ^
   --data-urlencode "payload@-" >nul 2>nul
 exit /b 0
 "#;

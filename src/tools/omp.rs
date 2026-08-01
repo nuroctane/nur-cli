@@ -7,7 +7,7 @@
 
 use super::{arg_str, Tool, ToolContext};
 use crate::ecosystem;
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use crate::usage::TokenUsage;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -129,7 +129,7 @@ impl Tool for OmpTool {
 
     fn execute(&self, args: &Value, ctx: &ToolContext) -> Result<String> {
         let bin = ecosystem::find_omp().ok_or_else(|| {
-            MuseError::Tool(
+            NurError::Tool(
                 "omp CLI not found. Install Bun (bun.sh) then `nur ecosystem ensure`, \
                  or install directly: bun install -g @oh-my-pi/pi-coding-agent@latest \
                  (Windows: irm https://omp.sh/install.ps1 | iex)"
@@ -139,7 +139,7 @@ impl Tool for OmpTool {
 
         match OmpAction::from_value(args) {
             OmpAction::Status => omp_status(&bin),
-            OmpAction::Version => omp_version(&bin).map_err(MuseError::Tool),
+            OmpAction::Version => omp_version(&bin).map_err(NurError::Tool),
             OmpAction::Run => run_omp(&bin, args, ctx),
         }
     }
@@ -165,7 +165,7 @@ fn omp_version(bin: &str) -> std::result::Result<String, String> {
 }
 
 fn omp_status(bin: &str) -> Result<String> {
-    let version = omp_version(bin).map_err(MuseError::Tool)?;
+    let version = omp_version(bin).map_err(NurError::Tool)?;
     let roles = read_model_roles(bin).unwrap_or_else(|_| Value::Object(Default::default()));
     let usage = read_usage(bin);
     let mut warnings = Vec::new();
@@ -190,7 +190,7 @@ fn omp_status(bin: &str) -> Result<String> {
         economy_model,
         warnings,
     };
-    serde_json::to_string_pretty(&status).map_err(|error| MuseError::Tool(error.to_string()))
+    serde_json::to_string_pretty(&status).map_err(|error| NurError::Tool(error.to_string()))
 }
 
 fn read_model_roles(bin: &str) -> std::result::Result<Value, String> {
@@ -404,10 +404,10 @@ fn run_omp(bin: &str, args: &Value, ctx: &ToolContext) -> Result<String> {
     let prompt = arg_str(args, "prompt")?;
     let prompt_chars = prompt.chars().count();
     if prompt.trim().is_empty() {
-        return Err(MuseError::Tool("omp prompt cannot be empty".into()));
+        return Err(NurError::Tool("omp prompt cannot be empty".into()));
     }
     if prompt_chars > MAX_PROMPT_CHARS {
-        return Err(MuseError::Tool(format!(
+        return Err(NurError::Tool(format!(
             "omp prompt is {prompt_chars} characters; keep delegated context under {MAX_PROMPT_CHARS}"
         )));
     }
@@ -417,7 +417,7 @@ fn run_omp(bin: &str, args: &Value, ctx: &ToolContext) -> Result<String> {
         .and_then(Value::as_str)
         .unwrap_or("economy");
     if !matches!(cost_mode, "economy" | "balanced") {
-        return Err(MuseError::Tool(
+        return Err(NurError::Tool(
             "omp cost_mode must be economy or balanced".into(),
         ));
     }
@@ -427,7 +427,7 @@ fn run_omp(bin: &str, args: &Value, ctx: &ToolContext) -> Result<String> {
         .and_then(Value::as_u64)
         .unwrap_or(DEFAULT_TIMEOUT_SECS);
     if !(MIN_TIMEOUT_SECS..=MAX_TIMEOUT_SECS).contains(&timeout_secs) {
-        return Err(MuseError::Tool(format!(
+        return Err(NurError::Tool(format!(
             "omp timeout_seconds must be {MIN_TIMEOUT_SECS}..={MAX_TIMEOUT_SECS}"
         )));
     }
@@ -442,7 +442,7 @@ fn run_omp(bin: &str, args: &Value, ctx: &ToolContext) -> Result<String> {
         .map(str::trim)
         .filter(|model| !model.is_empty());
     let economy_model = if cost_mode == "economy" && explicit_model.is_none() {
-        Some(resolve_economy_model(bin).map_err(MuseError::Tool)?)
+        Some(resolve_economy_model(bin).map_err(NurError::Tool)?)
     } else {
         None
     };
@@ -462,9 +462,9 @@ fn run_omp(bin: &str, args: &Value, ctx: &ToolContext) -> Result<String> {
         wrapper_timeout_ms,
         &ctx.cancel,
     )
-    .map_err(MuseError::Tool)?;
+    .map_err(NurError::Tool)?;
     let envelope = parse_json_run(&output, cost_mode)?;
-    serde_json::to_string_pretty(&envelope).map_err(|error| MuseError::Tool(error.to_string()))
+    serde_json::to_string_pretty(&envelope).map_err(|error| NurError::Tool(error.to_string()))
 }
 
 fn build_run_args(
@@ -580,7 +580,7 @@ fn parse_json_run(output: &str, cost_mode: &str) -> Result<OmpRunEnvelope> {
         } else {
             format!("\n\nPartial OMP output before failure:\n{final_text}")
         };
-        return Err(MuseError::Tool(format!(
+        return Err(NurError::Tool(format!(
             "OMP run failed{route}: {error}{partial}"
         )));
     }
@@ -594,7 +594,7 @@ fn parse_json_run(output: &str, cost_mode: &str) -> Result<OmpRunEnvelope> {
             .chars()
             .rev()
             .collect();
-        return Err(MuseError::Tool(format!(
+        return Err(NurError::Tool(format!(
             "omp returned no final assistant message. Output tail:\n{tail}"
         )));
     }

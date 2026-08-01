@@ -5,7 +5,7 @@
 //! with an agent-browser-compatible `action` CLI.
 
 use super::{arg_str, Tool, ToolContext};
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use crate::terminal_browser;
 use serde_json::Value;
 use std::path::Path;
@@ -128,21 +128,13 @@ impl Tool for TerminalBrowser {
                 &ctx.cancel,
             )
             .or_else(|_| {
-                terminal_browser::run_tb_cancelled(
-                    &["help"],
-                    Some(&ctx.cwd),
-                    15_000,
-                    &ctx.cancel,
-                )
+                terminal_browser::run_tb_cancelled(&["help"], Some(&ctx.cwd), 15_000, &ctx.cancel)
             })
-            .map_err(MuseError::Tool),
-            "help" => terminal_browser::run_tb_cancelled(
-                &["help"],
-                Some(&ctx.cwd),
-                15_000,
-                &ctx.cancel,
-            )
-            .map_err(MuseError::Tool),
+            .map_err(NurError::Tool),
+            "help" => {
+                terminal_browser::run_tb_cancelled(&["help"], Some(&ctx.cwd), 15_000, &ctx.cancel)
+                    .map_err(NurError::Tool)
+            }
             "ls" => {
                 let mut argv = vec!["ls".to_string()];
                 if args.get("all").and_then(|v| v.as_bool()).unwrap_or(false) {
@@ -153,7 +145,7 @@ impl Tool for TerminalBrowser {
                 }
                 let refs: Vec<&str> = argv.iter().map(|s| s.as_str()).collect();
                 terminal_browser::run_tb_cancelled(&refs, Some(&ctx.cwd), 30_000, &ctx.cancel)
-                    .map_err(MuseError::Tool)
+                    .map_err(NurError::Tool)
             }
             "setup" => {
                 // Explicit user/agent opt-in: may run the published installer.
@@ -171,10 +163,10 @@ impl Tool for TerminalBrowser {
                         terminal_browser::INSTALL_HINT
                     )),
                 }
-            },
+            }
             "open" => open_browser(args, &ctx.cwd, &ctx.cancel),
             "action" => run_action(args, &ctx.cwd, &ctx.cancel),
-            other => Err(MuseError::Tool(format!(
+            other => Err(NurError::Tool(format!(
                 "unknown terminal_browser action '{other}'"
             ))),
         }
@@ -197,7 +189,7 @@ fn open_browser(
     }
     if split != "none" && !split.is_empty() {
         if !matches!(split.as_str(), "right" | "left" | "down" | "up") {
-            return Err(MuseError::Tool(format!(
+            return Err(NurError::Tool(format!(
                 "invalid split '{split}' (right|left|down|up|none)"
             )));
         }
@@ -205,7 +197,7 @@ fn open_browser(
         argv.push(split);
         if let Some(size) = args.get("size").and_then(|v| v.as_f64()) {
             if !(0.2..=0.95).contains(&size) {
-                return Err(MuseError::Tool(
+                return Err(NurError::Tool(
                     "size must be a fraction between 0.2 and 0.95".into(),
                 ));
             }
@@ -217,7 +209,7 @@ fn open_browser(
     let refs: Vec<&str> = argv.iter().map(|s| s.as_str()).collect();
     // Opening a pane can take a few seconds while Chromium boots.
     let out = terminal_browser::run_tb_cancelled(&refs, Some(cwd), 60_000, cancel)
-        .map_err(MuseError::Tool)?;
+        .map_err(NurError::Tool)?;
     Ok(format!(
         "{out}\n\nTip: terminal_browser action command=\"snapshot\" then click/fill with @e refs."
     ))
@@ -230,14 +222,14 @@ fn run_action(
 ) -> Result<String> {
     let passthrough = action_passthrough(args);
     if passthrough.is_empty() {
-        return Err(MuseError::Tool(
+        return Err(NurError::Tool(
             "action requires command= or args=[…] after -- (e.g. command=\"snapshot\")".into(),
         ));
     }
     // Mirror upstream guardrails for dangerous agent-browser entrypoints.
     let head = passthrough[0].as_str();
     if matches!(head, "launch" | "install" | "connect" | "disconnect") {
-        return Err(MuseError::Tool(format!(
+        return Err(NurError::Tool(format!(
             "{head} is not available through terminal-browser action - use open for new panes"
         )));
     }
@@ -261,14 +253,18 @@ fn run_action(
             argv.push(target);
         }
     }
-    if args.get("follow").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if args
+        .get("follow")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         argv.push("--follow".into());
     }
     argv.push("--".into());
     argv.extend(passthrough);
 
     let refs: Vec<&str> = argv.iter().map(|s| s.as_str()).collect();
-    terminal_browser::run_tb_cancelled(&refs, Some(cwd), 120_000, cancel).map_err(MuseError::Tool)
+    terminal_browser::run_tb_cancelled(&refs, Some(cwd), 120_000, cancel).map_err(NurError::Tool)
 }
 
 fn action_passthrough(args: &Value) -> Vec<String> {
@@ -317,7 +313,7 @@ fn resolve_open_target(cwd: &Path, url: &str) -> Result<String> {
     if let Some((scheme, rest)) = trimmed.split_once("://") {
         let scheme = scheme.to_ascii_lowercase();
         if !matches!(scheme.as_str(), "http" | "https" | "file") {
-            return Err(MuseError::Other(format!(
+            return Err(NurError::Other(format!(
                 "terminal_browser open: unsupported URL scheme `{scheme}` (use http/https/file)"
             )));
         }
@@ -343,7 +339,7 @@ fn resolve_open_target(cwd: &Path, url: &str) -> Result<String> {
         }
         // Multi-letter alphabetic prefix without :// is a disallowed scheme.
         if host.len() > 1 && host.chars().all(|c| c.is_ascii_alphabetic()) {
-            return Err(MuseError::Other(format!(
+            return Err(NurError::Other(format!(
                 "terminal_browser open: unsupported URL scheme `{}` (use http/https/file)",
                 host.to_ascii_lowercase()
             )));
@@ -361,7 +357,9 @@ mod tests {
     fn read_only_classification() {
         assert!(is_read_only_action(r#"{"action":"ls"}"#));
         assert!(is_read_only_action(r#"{"action":"status"}"#));
-        assert!(!is_read_only_action(r#"{"action":"open","url":"https://x"}"#));
+        assert!(!is_read_only_action(
+            r#"{"action":"open","url":"https://x"}"#
+        ));
         assert!(!is_read_only_action(
             r#"{"action":"action","command":"click @e1"}"#
         ));

@@ -3,7 +3,7 @@
 
 use super::{arg_str, Tool, ToolContext};
 use crate::ecosystem;
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde_json::Value;
 
 pub struct Plur;
@@ -29,7 +29,7 @@ impl Tool for Plur {
         "PLUR shared agent memory (local YAML engrams under ~/.plur/). \
          Persist corrections, preferences, conventions; recall/inject across sessions. \
          action=status|learn|recall|inject|list|capture|timeline|feedback|forget|ingest. \
-         Prefer over ephemeral chat memory. Never store secrets. Auto-installed with meta."
+         Prefer over ephemeral chat memory. Never store secrets. Auto-installed with Nur."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -85,7 +85,7 @@ impl Tool for Plur {
 
     fn execute(&self, args: &Value, _ctx: &ToolContext) -> Result<String> {
         let bin = ecosystem::find_bin("plur").ok_or_else(|| {
-            MuseError::Tool(
+            NurError::Tool(
                 "plur CLI not found. Meta normally auto-installs it — run: \
                  npm install -g @plur-ai/cli @plur-ai/mcp"
                     .into(),
@@ -162,14 +162,14 @@ impl Tool for Plur {
                 argv.push(content);
             }
             other => {
-                return Err(MuseError::Tool(format!(
+                return Err(NurError::Tool(format!(
                     "unknown plur action '{other}' — status|learn|recall|inject|list|capture|timeline|feedback|forget|ingest"
                 )));
             }
         }
 
         let refs: Vec<&str> = argv.iter().map(|s| s.as_str()).collect();
-        ecosystem::run_capture(&bin, &refs, None, 120_000).map_err(MuseError::Tool)
+        ecosystem::run_capture(&bin, &refs, None, 120_000).map_err(NurError::Tool)
     }
 }
 

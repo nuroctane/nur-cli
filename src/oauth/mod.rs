@@ -8,7 +8,7 @@ mod flows;
 pub mod omp_bridge;
 
 use crate::auth::{Auth, AuthMethod};
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -159,7 +159,7 @@ pub fn refresh_tokens(provider: &str, auth: &Auth, refresh: &str) -> Result<OAut
         "github-models" | "github-copilot" => flows::github::refresh(auth, refresh),
         "cursor" => flows::cursor::refresh(auth, refresh),
         "opencode" => flows::opencode::refresh(auth, refresh),
-        _ => Err(MuseError::Other(format!(
+        _ => Err(NurError::Other(format!(
             "no OAuth refresh path for provider '{provider}'"
         ))),
     }

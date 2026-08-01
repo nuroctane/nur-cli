@@ -6,8 +6,8 @@
 //!
 //! **Never store secrets** in job labels or result previews.
 
-use crate::config::muse_home;
-use crate::error::{MuseError, Result};
+use crate::config::nur_home;
+use crate::error::{NurError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -78,7 +78,7 @@ fn now_secs() -> u64 {
 }
 
 fn jobs_dir() -> PathBuf {
-    muse_home().join("bg-jobs")
+    nur_home().join("bg-jobs")
 }
 
 fn job_result_path(id: u64) -> PathBuf {
@@ -197,9 +197,7 @@ pub fn spawn_command(label: &str, program: &str, args: &[String]) -> u64 {
             use std::os::windows::process::CommandExt;
             cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         }
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| format!("spawn {program}: {e}"))?;
+        let mut child = cmd.spawn().map_err(|e| format!("spawn {program}: {e}"))?;
         // Poll until exit or cancel.
         loop {
             if cancel.load(std::sync::atomic::Ordering::SeqCst) {
@@ -218,13 +216,9 @@ pub fn spawn_command(label: &str, program: &str, args: &[String]) -> u64 {
                         .map(|o| String::from_utf8_lossy(&o.stderr).to_string())
                         .unwrap_or_default();
                     if status.success() {
-                        return Ok(format!(
-                            "ok · {program}\n{stdout}{stderr}"
-                        ));
+                        return Ok(format!("ok · {program}\n{stdout}{stderr}"));
                     }
-                    return Err(format!(
-                        "exit {status}\n{stdout}{stderr}"
-                    ));
+                    return Err(format!("exit {status}\n{stdout}{stderr}"));
                 }
                 Ok(None) => thread::sleep(Duration::from_millis(120)),
                 Err(e) => return Err(format!("wait: {e}")),
@@ -263,7 +257,7 @@ pub fn result(id: u64) -> Result<String> {
     let rec = g
         .jobs
         .get(&id)
-        .ok_or_else(|| MuseError::Tool(format!("unknown bg job {id}")))?;
+        .ok_or_else(|| NurError::Tool(format!("unknown bg job {id}")))?;
     match rec.info.state {
         JobState::Running => Ok(format!(
             "job {id} still running · {}\n  use bg(action=status, id={id}) or wait",
@@ -281,9 +275,8 @@ pub fn result(id: u64) -> Result<String> {
             }
             // Fall back to disk.
             drop(g);
-            fs::read_to_string(job_result_path(id)).map_err(|e| {
-                MuseError::Tool(format!("job {id} completed but result missing: {e}"))
-            })
+            fs::read_to_string(job_result_path(id))
+                .map_err(|e| NurError::Tool(format!("job {id} completed but result missing: {e}")))
         }
     }
 }
@@ -294,15 +287,14 @@ pub fn cancel(id: u64) -> Result<String> {
     let rec = g
         .jobs
         .get_mut(&id)
-        .ok_or_else(|| MuseError::Tool(format!("unknown bg job {id}")))?;
+        .ok_or_else(|| NurError::Tool(format!("unknown bg job {id}")))?;
     if rec.info.state != JobState::Running {
         return Ok(format!(
             "job {id} is already {} — nothing to cancel",
             rec.info.state.as_str()
         ));
     }
-    rec.cancel
-        .store(true, std::sync::atomic::Ordering::SeqCst);
+    rec.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
     rec.info.state = JobState::Cancelled;
     rec.info.finished_at = Some(now_secs());
     rec.info.error = Some("cancel requested".into());

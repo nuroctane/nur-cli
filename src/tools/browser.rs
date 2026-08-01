@@ -13,7 +13,7 @@
 
 use super::{arg_str, Tool, ToolContext};
 use crate::ecosystem;
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde_json::Value;
 
 pub struct BrowserTool;
@@ -86,7 +86,7 @@ impl Tool for BrowserTool {
 
     fn execute(&self, args: &Value, ctx: &ToolContext) -> Result<String> {
         let bin = ecosystem::find_bin(BIN).ok_or_else(|| {
-            MuseError::Tool(
+            NurError::Tool(
                 "agent-browser-cli not found. Meta auto-installs it — or run \
                  `nur browser setup` to stage the extension and finish one-time \
                  setup for your default browser."
@@ -140,7 +140,7 @@ impl Tool for BrowserTool {
                 a
             }
             other => {
-                return Err(MuseError::Tool(format!("unknown browser action '{other}'")));
+                return Err(NurError::Tool(format!("unknown browser action '{other}'")));
             }
         };
         if let Ok(tab) = arg_str(args, "tab") {
@@ -151,6 +151,6 @@ impl Tool for BrowserTool {
         }
 
         let refs: Vec<&str> = argv.iter().map(|s| s.as_str()).collect();
-        ecosystem::run_capture(&bin, &refs, Some(&ctx.cwd), 120_000).map_err(MuseError::Tool)
+        ecosystem::run_capture(&bin, &refs, Some(&ctx.cwd), 120_000).map_err(NurError::Tool)
     }
 }

@@ -1,7 +1,7 @@
-//! Install Meta-bundled SKILL packs into `~/.nur/skills/` so the agent
+//! Install Nur-bundled SKILL packs into `~/.nur/skills/` so the agent
 //! discovers them on first launch (also mirrors to `~/.agents/skills`).
 
-use crate::config::muse_home;
+use crate::config::nur_home;
 use crate::error::Result;
 use std::fs;
 use std::path::PathBuf;
@@ -15,7 +15,6 @@ const RETIRED_SKILLS: &[&str] = &[
     "resume-cursor",
     "resume-grok",
     "resume-nur",
-    "resume-meta", // legacy name for resume-nur
 ];
 
 /// Remove retired skill dirs, plus the SKILL.md that used to make the
@@ -29,7 +28,7 @@ fn retire_stale_skills(root: &std::path::Path) {
 }
 
 pub fn install_bundled_skills() -> Result<Vec<String>> {
-    let root = muse_home().join("skills");
+    let root = nur_home().join("skills");
     fs::create_dir_all(&root)?;
     retire_stale_skills(&root);
     let mut installed = Vec::new();
@@ -38,7 +37,7 @@ pub fn install_bundled_skills() -> Result<Vec<String>> {
         let dir = root.join(name);
         fs::create_dir_all(&dir)?;
         let path = dir.join("SKILL.md");
-        // Always refresh so skill docs stay in sync with this meta version.
+        // Always refresh so skill docs stay in sync with this Nur version.
         fs::write(&path, body)?;
         installed.push(name.to_string());
     }
@@ -79,7 +78,7 @@ pub fn install_bundled_skills() -> Result<Vec<String>> {
 
 #[allow(dead_code)]
 pub fn skill_paths() -> Vec<PathBuf> {
-    let mut out = vec![muse_home().join("skills")];
+    let mut out = vec![nur_home().join("skills")];
     if let Some(home) = dirs::home_dir() {
         out.push(home.join(".agents").join("skills"));
     }
@@ -449,5 +448,4 @@ camera → background zones → shape → its text/label → its arrows → next
 Upstream: https://github.com/ahmadawais/excalidraw-cli
 "##;
 
-const HOW_TO_ILLUSTRATE_SKILL: &str =
-    include_str!("../../skills/how-to-illustrate/SKILL.md");
+const HOW_TO_ILLUSTRATE_SKILL: &str = include_str!("../../skills/how-to-illustrate/SKILL.md");

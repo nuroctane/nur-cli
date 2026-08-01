@@ -1,5 +1,5 @@
 use super::{arg_str, resolve_path, Tool, ToolContext};
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
@@ -32,10 +32,10 @@ impl Tool for WriteFile {
         let full = resolve_path(&ctx.cwd, &path)?;
         if let Some(parent) = full.parent() {
             fs::create_dir_all(parent)
-                .map_err(|e| MuseError::Tool(format!("mkdir {}: {e}", parent.display())))?;
+                .map_err(|e| NurError::Tool(format!("mkdir {}: {e}", parent.display())))?;
         }
         fs::write(&full, contents)
-            .map_err(|e| MuseError::Tool(format!("write {}: {e}", full.display())))?;
+            .map_err(|e| NurError::Tool(format!("write {}: {e}", full.display())))?;
         Ok(format!("wrote {}", display_rel(&ctx.cwd, &full)))
     }
 }

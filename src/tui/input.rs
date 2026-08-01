@@ -78,7 +78,7 @@ fn reverse_search_match(history: &[String], query: &str, before: Option<usize>) 
 }
 
 fn history_path() -> PathBuf {
-    crate::config::muse_home().join("history.jsonl")
+    crate::config::nur_home().join("history.jsonl")
 }
 
 pub fn is_paste_sentinel(c: char) -> bool {

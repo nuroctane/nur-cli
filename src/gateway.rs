@@ -9,7 +9,7 @@
 use crate::agent::{self, AgentRunner, Session};
 use crate::api::ApiClient;
 use crate::config::Config;
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use crate::theme;
 use crate::usage::UsageTracker;
 use serde_json::{json, Value};
@@ -171,7 +171,7 @@ pub async fn run_gateway(
         .map(|t| t.trim().to_string())
         .filter(|t| !t.is_empty())
         .ok_or_else(|| {
-            MuseError::Other(
+            NurError::Other(
                 "no Telegram bot token — pass --token or set TELEGRAM_BOT_TOKEN (get one from @BotFather)"
                     .into(),
             )
@@ -185,7 +185,7 @@ pub async fn run_gateway(
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
         .build()
-        .map_err(|e| MuseError::Other(e.to_string()))?;
+        .map_err(|e| NurError::Other(e.to_string()))?;
 
     // Headless → auto-approve tools (sandboxed).
     let permission_mode = agent::SharedMode::new(agent::PermissionMode::Auto);

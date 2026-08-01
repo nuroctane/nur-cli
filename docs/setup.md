@@ -57,7 +57,7 @@ What it does **before** any TUI (console progress):
 | Ecosystem | `ecosystem ensure --force` (graphify · plur · ruflo · omp · browser · skills) |
 | Browser | Stages Chromium extension for your default browser |
 | Hook | Orca hook if present |
-| Auth | Saves `NUR_API_KEY` (or legacy `META_API_KEY` / `MODEL_API_KEY`) if set in the environment |
+| Auth | Saves `NUR_API_KEY` or a Meta-provider `META_API_KEY` if set in the environment |
 | Launch | Opens the installed `nur` TUI |
 
 Re-download + re-run the release EXE to upgrade. Force again anytime: `nur install`.
@@ -177,7 +177,6 @@ Everything is **on your machine only**. Secrets never go into the git checkout. 
 | Piece | Path |
 |-------|------|
 | **`nur`** | `~/.local/bin/nur` · Windows `nur.exe` |
-| **`muse`** | Same binary, legacy alias |
 | **Integrity** | `~/.local/bin/nur.sha256` |
 | **Source tree** (one-liner) | `~/laboratory/nur-cli` (Windows: `%USERPROFILE%\laboratory\nur-cli`) |
 | **PATH** | `~/.local/bin` added to User PATH (Windows) or a shell rc (Unix) |
@@ -223,7 +222,7 @@ External CLIs / packs (not inside the `nur` binary):
 | Piece | Notes |
 |-------|--------|
 | Orca hook | `nur install-hook` when Orca is present |
-| Env-based auth | `NUR_API_KEY` (legacy `META_API_KEY` / `MODEL_API_KEY`) → saved under `~/.nur/auth.json` only |
+| Env-based auth | `NUR_API_KEY` or Meta-provider `META_API_KEY` -> saved under `~/.nur/auth.json` only |
 
 ---
 
@@ -309,13 +308,13 @@ nur doctor   # confirm version + sha256
 === "Windows"
 
     ```powershell
-    Remove-Item -Force "$env:USERPROFILE\.local\bin\nur.exe","$env:USERPROFILE\.local\bin\muse.exe","$env:USERPROFILE\.local\bin\nur.sha256" -ErrorAction SilentlyContinue
+    Remove-Item -Force "$env:USERPROFILE\.local\bin\nur.exe","$env:USERPROFILE\.local\bin\nur.sha256" -ErrorAction SilentlyContinue
     ```
 
 === "macOS / Linux"
 
     ```bash
-    rm -f ~/.local/bin/nur ~/.local/bin/muse ~/.local/bin/meta ~/.local/bin/nur.sha256
+    rm -f ~/.local/bin/nur ~/.local/bin/nur.sha256
     ```
 
 ### Config, sessions, usage (destructive)
@@ -331,10 +330,6 @@ nur doctor   # confirm version + sha256
     ```bash
     rm -rf ~/.nur
     ```
-
-### Legacy home
-
-Older builds used `~/.muse/` — remove the same way if you no longer need it.
 
 ### Build cache / source (optional)
 

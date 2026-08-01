@@ -11,10 +11,10 @@
 
   Steps: ensure Rust → clone if needed → cargo build --release →
   install nur to %USERPROFILE%\.local\bin → PATH → Orca hook →
-  optional auth if NUR_API_KEY (or legacy META_/MODEL_/MUSE_) is set.
+  optional auth if NUR_API_KEY (or META_API_KEY for the Meta provider) is set.
 
   Secrets are NEVER written into the repo. Keys live only in:
-    %USERPROFILE%\.nur\auth.json   or   env NUR_API_KEY (legacy META_/MODEL_/MUSE_)
+    %USERPROFILE%\.nur\auth.json   or   env NUR_API_KEY
 
 .PARAMETER SkipHook
   Skip Orca agent-hook install.
@@ -182,15 +182,6 @@ $builtHash = (Get-FileHash -Algorithm SHA256 -Path $built).Hash.ToLowerInvariant
 if (-not (Install-BinarySafe $built $dest)) {
     throw "Failed to install primary binary: $dest — quit any running nur session and re-run."
 }
-# Drop legacy muse.exe alias if present (rebrand — no muse starter).
-$legacyMuse = Join-Path $destDir "muse.exe"
-if (Test-Path $legacyMuse) {
-    try { Remove-Item -Force $legacyMuse -ErrorAction SilentlyContinue } catch {}
-}
-$legacyMeta = Join-Path $destDir "meta.exe"
-if (Test-Path $legacyMeta) {
-    try { Remove-Item -Force $legacyMeta -ErrorAction SilentlyContinue } catch {}
-}
 $installedHash = (Get-FileHash -Algorithm SHA256 -Path $dest).Hash.ToLowerInvariant()
 if ($installedHash -ne $builtHash) {
     throw "Integrity check failed: installed nur.exe hash does not match build ($builtHash vs $installedHash)"
@@ -245,19 +236,11 @@ if (-not $SkipHook) {
 # ── auth: never print the key ─────────────────────────────────────────────
 $key = $env:NUR_API_KEY
 if (-not $key) { $key = $env:META_API_KEY }
-if (-not $key) { $key = $env:MODEL_API_KEY }
-if (-not $key) { $key = $env:MUSE_API_KEY }
 if (-not $key) {
     $key = [Environment]::GetEnvironmentVariable("NUR_API_KEY", "User")
 }
 if (-not $key) {
     $key = [Environment]::GetEnvironmentVariable("META_API_KEY", "User")
-}
-if (-not $key) {
-    $key = [Environment]::GetEnvironmentVariable("MODEL_API_KEY", "User")
-}
-if (-not $key) {
-    $key = [Environment]::GetEnvironmentVariable("MUSE_API_KEY", "User")
 }
 
 if ($key -and $key.Trim().Length -gt 0) {

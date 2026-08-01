@@ -8,7 +8,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/nuroctane/nur-cli/main/install.sh | bash
 #
 # Secrets are NEVER written into the repo. Keys live only in ~/.nur/auth.json
-# or env NUR_API_KEY (legacy: META_API_KEY / MODEL_API_KEY / MUSE_API_KEY).
+# or env NUR_API_KEY (META_API_KEY for the Meta provider).
 
 set -euo pipefail
 
@@ -106,9 +106,6 @@ export PATH="${HOME}/.bun/bin:${HOME}/.local/bin:${PATH}"
 step "Building release (first time can take a few minutes)…"
 ( cd "${REPO_DIR}" && cargo build --release )
 BUILT="${REPO_DIR}/target/release/nur"
-# Legacy fallbacks for stale checkouts built before the rebrand.
-[[ -f "${BUILT}" ]] || BUILT="${REPO_DIR}/target/release/meta"
-[[ -f "${BUILT}" ]] || BUILT="${REPO_DIR}/target/release/muse"
 [[ -f "${BUILT}" ]] || { echo "missing release binary"; exit 1; }
 
 DEST_DIR="${HOME}/.local/bin"
@@ -124,8 +121,6 @@ else
 fi
 cp -f "${BUILT}" "${DEST_DIR}/nur"
 chmod +x "${DEST_DIR}/nur"
-# Drop legacy muse/meta aliases if present (rebrand — single `nur` command).
-rm -f "${DEST_DIR}/muse" "${DEST_DIR}/meta" 2>/dev/null || true
 if [[ -n "${BUILT_HASH}" ]]; then
   INSTALLED_HASH="$( (sha256sum "${DEST_DIR}/nur" 2>/dev/null || shasum -a 256 "${DEST_DIR}/nur") | awk '{print $1}' )"
   if [[ "${INSTALLED_HASH}" != "${BUILT_HASH}" ]]; then
@@ -161,7 +156,7 @@ if [[ "${SKIP_HOOK}" != "1" ]]; then
   "${DEST_DIR}/nur" install-hook >/dev/null 2>&1 && ok "Orca hook installed (if applicable)" || true
 fi
 
-KEY="${NUR_API_KEY:-${META_API_KEY:-${MODEL_API_KEY:-${MUSE_API_KEY:-}}}}"
+KEY="${NUR_API_KEY:-${META_API_KEY:-}}"
 if [[ -n "${KEY}" ]]; then
   step "API key found in environment — saving to ~/.nur/auth.json (local only)…"
   "${DEST_DIR}/nur" auth login --key "${KEY}" >/dev/null

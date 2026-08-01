@@ -1,5 +1,5 @@
 use crate::config::{auth_path, ensure_dirs};
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
@@ -165,8 +165,8 @@ pub fn resolve_api_key() -> Result<String> {
 }
 
 /// Pure pick order for a *specific* catalog provider. Used by
-/// [`resolve_api_key_for`] and unit-tested so META_/MODEL_ leftovers cannot
-/// outrank provider login for *any* host (xai, openai, anthropic, …).
+/// [`resolve_api_key_for`] and unit-tested so unscoped keys cannot outrank a
+/// provider login.
 ///
 /// Inputs are already trimmed; empty string is treated as absent.
 pub(crate) fn pick_provider_credential(
@@ -176,8 +176,6 @@ pub(crate) fn pick_provider_credential(
     failover_oauth: Option<&str>,
     nur_global: Option<&str>,
     legacy_auth: Option<&str>,
-    // Intentionally ignored for provider-scoped resolve (Meta-era aliases).
-    _meta_model_muse_generic: Option<&str>,
 ) -> Option<String> {
     for cand in [
         provider_env,
@@ -197,13 +195,12 @@ pub(crate) fn pick_provider_credential(
 /// Resolve credentials for a catalog provider.
 ///
 /// **With `Some(provider_id)`** (client init, `/model`, etc.) — provider-scoped
-/// first so a leftover `MODEL_API_KEY` / `META_API_KEY` never gets sent to xAI,
-/// Anthropic, OpenAI, … after you `/login` that provider:
+/// first so a key for one provider never gets sent to another after `/login`:
 /// 1. matching active OAuth session (refreshed), so env cannot replace it after restart
 /// 2. catalog env (`XAI_API_KEY`, `OPENAI_API_KEY`, …)
 /// 3. matching `auth.json` API key
 /// 4. per-provider failover key / OAuth stores
-/// 5. `NUR_API_KEY` only as a true global override (not META_/MODEL_/MUSE_)
+/// 5. `NUR_API_KEY` only as a true global override
 ///
 /// **With `None`** — generic envs then `auth.json` (scripts / headless).
 pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
@@ -248,16 +245,6 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
             .ok()
             .map(|k| k.trim().to_string())
             .filter(|k| !k.is_empty());
-        // Read Meta-era generics only to prove we ignore them (not passed as winners).
-        let meta_era = ["META_API_KEY", "MODEL_API_KEY", "MUSE_API_KEY"]
-            .iter()
-            .find_map(|v| {
-                std::env::var(v)
-                    .ok()
-                    .map(|k| k.trim().to_string())
-                    .filter(|k| !k.is_empty())
-            });
-
         if let Some(k) = pick_provider_credential(
             provider_env.as_deref(),
             matching_auth.as_deref(),
@@ -265,7 +252,6 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
             failover_oauth.as_deref(),
             nur_global.as_deref(),
             legacy_auth.as_deref(),
-            meta_era.as_deref(),
         ) {
             return Ok(k);
         }
@@ -361,22 +347,17 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
         }
         if mismatched {
             if let Ok(Some(auth)) = load_auth() {
-                return Err(MuseError::Other(format!(
+                return Err(NurError::Other(format!(
                     "saved credentials are for provider '{}' but active provider is '{}'. Run /login (or nur auth logout) and sign in again.",
                     auth.provider, exp
                 )));
             }
         }
-        return Err(MuseError::NotAuthenticated);
+        return Err(NurError::NotAuthenticated);
     }
 
     // No expected provider: generic env first (scripts / headless), then auth.json.
-    for var in [
-        "NUR_API_KEY",
-        "META_API_KEY",
-        "MODEL_API_KEY",
-        "MUSE_API_KEY",
-    ] {
+    for var in ["NUR_API_KEY", "META_API_KEY"] {
         if let Ok(k) = std::env::var(var) {
             let k = k.trim().to_string();
             if !k.is_empty() {
@@ -392,36 +373,7 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
             return Ok(k);
         }
     }
-    // Legacy path if migration hasn't run yet — promote into ~/.nur for next time.
-    for legacy_home in [
-        crate::config::legacy_meta_home(),
-        crate::config::legacy_muse_home(),
-    ] {
-        let legacy = legacy_home.join("auth.json");
-        if !legacy.exists() {
-            continue;
-        }
-        let text = fs::read_to_string(&legacy)?;
-        let auth: Auth = serde_json::from_str(&text)?;
-        let k = auth.api_key.trim().to_string();
-        if !k.is_empty() {
-            if let Some(exp) = expected_provider {
-                if provider_mismatch(&auth, exp) {
-                    return Err(MuseError::Other(format!(
-                        "legacy credentials are for provider '{}' but active provider is '{}'. Run /login.",
-                        auth.provider, exp
-                    )));
-                }
-            }
-            let _ = crate::config::promote_legacy_file("auth.json");
-            if !auth_path().exists() {
-                let _ = ensure_dirs();
-                let _ = save_api_key_for(&k, expected_provider);
-            }
-            return Ok(k);
-        }
-    }
-    Err(MuseError::NotAuthenticated)
+    Err(NurError::NotAuthenticated)
 }
 
 pub fn load_auth() -> Result<Option<Auth>> {
@@ -526,7 +478,7 @@ pub fn refresh_oauth_in_place(auth: &mut Auth) -> Result<bool> {
     match refresh_oauth_with_token(auth, &refresh) {
         Ok(refreshed) => Ok(refreshed),
         Err(_) if exp > now => Ok(false),
-        Err(error) => Err(MuseError::Other(format!(
+        Err(error) => Err(NurError::Other(format!(
             "OAuth token expired and refresh failed ({error}). Run /login again."
         ))),
     }
@@ -649,7 +601,7 @@ pub fn save_auth(auth: &Auth) -> Result<()> {
     let text = serde_json::to_string_pretty(auth)?;
     let path = auth_path();
     crate::config::atomic_write(&path, text.as_bytes())
-        .map_err(|e| MuseError::Other(format!("failed to save auth atomically: {e}")))?;
+        .map_err(|e| NurError::Other(format!("failed to save auth atomically: {e}")))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -666,12 +618,12 @@ pub fn save_api_key(key: &str) -> Result<()> {
 pub fn save_api_key_for(key: &str, provider: Option<&str>) -> Result<()> {
     let trimmed = key.trim();
     if trimmed.len() < 8 {
-        return Err(MuseError::Other(
+        return Err(NurError::Other(
             "API key too short — expected at least 8 characters".into(),
         ));
     }
     if trimmed.contains(' ') || trimmed.contains('\n') {
-        return Err(MuseError::Other("API key contains whitespace".into()));
+        return Err(NurError::Other("API key contains whitespace".into()));
     }
     let mut auth = Auth {
         api_key: trimmed.to_string(),
@@ -710,18 +662,18 @@ fn read_keys_at(path: &Path) -> BTreeMap<String, String> {
 fn save_key_at(path: &Path, provider_id: &str, key: &str) -> Result<()> {
     let trimmed = key.trim();
     if trimmed.len() < 8 {
-        return Err(MuseError::Other(
+        return Err(NurError::Other(
             "API key too short — expected at least 8 characters".into(),
         ));
     }
     if trimmed.contains(' ') || trimmed.contains('\n') {
-        return Err(MuseError::Other("API key contains whitespace".into()));
+        return Err(NurError::Other("API key contains whitespace".into()));
     }
     let mut map = read_keys_at(path);
     map.insert(provider_id.to_string(), trimmed.to_string());
     let text = serde_json::to_string_pretty(&map)?;
     crate::config::atomic_write(path, text.as_bytes())
-        .map_err(|e| MuseError::Other(format!("failed to save provider keys: {e}")))?;
+        .map_err(|e| NurError::Other(format!("failed to save provider keys: {e}")))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -828,7 +780,7 @@ fn oauth_auth(
 ) -> Result<Auth> {
     let access = access_token.trim();
     if access.is_empty() {
-        return Err(MuseError::Other("empty OAuth access token".into()));
+        return Err(NurError::Other("empty OAuth access token".into()));
     }
     Ok(Auth {
         api_key: access.to_string(),
@@ -890,7 +842,7 @@ fn read_sessions_at(path: &Path) -> BTreeMap<String, Auth> {
 fn write_sessions_at(path: &Path, map: &BTreeMap<String, Auth>) -> Result<()> {
     let text = serde_json::to_string_pretty(map)?;
     crate::config::atomic_write(path, text.as_bytes())
-        .map_err(|e| MuseError::Other(format!("failed to save provider sessions: {e}")))?;
+        .map_err(|e| NurError::Other(format!("failed to save provider sessions: {e}")))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -902,7 +854,7 @@ fn write_sessions_at(path: &Path, map: &BTreeMap<String, Auth>) -> Result<()> {
 fn save_provider_session_at(path: &Path, auth: &Auth) -> Result<()> {
     let id = auth.provider.trim();
     if id.is_empty() {
-        return Err(MuseError::Other(
+        return Err(NurError::Other(
             "provider session needs a non-empty provider id".into(),
         ));
     }
@@ -1160,10 +1112,6 @@ pub fn logout(revoke: bool) -> Result<()> {
     if path.exists() {
         fs::remove_file(&path)?;
     }
-    let legacy = crate::config::legacy_muse_home().join("auth.json");
-    if legacy.exists() {
-        let _ = fs::remove_file(legacy);
-    }
     Ok(())
 }
 
@@ -1186,17 +1134,7 @@ pub fn auth_status() -> Result<()> {
         .map(|k| !k.trim().is_empty())
         .unwrap_or(false)
     {
-        Some("META_API_KEY env (Meta provider / legacy app)")
-    } else if std::env::var("MODEL_API_KEY")
-        .map(|k| !k.trim().is_empty())
-        .unwrap_or(false)
-    {
-        Some("MODEL_API_KEY env")
-    } else if std::env::var("MUSE_API_KEY")
-        .map(|k| !k.trim().is_empty())
-        .unwrap_or(false)
-    {
-        Some("MUSE_API_KEY env (legacy)")
+        Some("META_API_KEY env (Meta provider)")
     } else {
         None
     };
@@ -1248,16 +1186,6 @@ pub fn auth_status() -> Result<()> {
             Ok(())
         }
         _ => {
-            for (label, home) in [
-                ("~/.meta", crate::config::legacy_meta_home()),
-                ("~/.muse", crate::config::legacy_muse_home()),
-            ] {
-                if home.join("auth.json").exists() {
-                    println!("authenticated: yes (legacy {label} — will promote on use)");
-                    println!("source: {label}/auth.json");
-                    return Ok(());
-                }
-            }
             println!("authenticated: no");
             println!("run: nur auth login");
             println!("or set NUR_API_KEY (or a vendor key env for your provider)");
@@ -1284,7 +1212,7 @@ pub fn login_interactive(key_arg: Option<String>) -> Result<()> {
     };
     let key = key.trim();
     if key.is_empty() {
-        return Err(MuseError::Other("empty API key".into()));
+        return Err(NurError::Other("empty API key".into()));
     }
     save_api_key_for(key, Some("meta"))?;
     println!("saved to {}", auth_path().display());
@@ -1364,19 +1292,10 @@ mod tests {
     }
 
     #[test]
-    fn provider_scoped_pick_ignores_meta_era_generic_keys() {
-        // Leftover MODEL_API_KEY must never beat xAI/OpenAI/Anthropic login.
+    fn provider_scoped_pick_has_stable_precedence() {
         assert_eq!(
-            pick_provider_credential(
-                None,
-                Some("xai-oauth-jwt"),
-                None,
-                None,
-                None,
-                None,
-                Some("meta-or-model-key-leftover"),
-            )
-            .as_deref(),
+            pick_provider_credential(None, Some("xai-oauth-jwt"), None, None, None, None,)
+                .as_deref(),
             Some("xai-oauth-jwt")
         );
         assert_eq!(
@@ -1387,7 +1306,6 @@ mod tests {
                 None,
                 Some("nur-global"),
                 None,
-                Some("model-api-key"),
             )
             .as_deref(),
             Some("sk-openai-from-env"),
@@ -1401,29 +1319,19 @@ mod tests {
                 Some("failover-oauth"),
                 Some("nur-global"),
                 None,
-                Some("model-api-key"),
             )
             .as_deref(),
             Some("failover-key")
         );
-        // Only NUR_API_KEY is a valid last-resort global — META_/MODEL_ ignored.
+        // NUR_API_KEY is the valid last-resort global override.
         assert_eq!(
-            pick_provider_credential(
-                None,
-                None,
-                None,
-                None,
-                Some("nur-global"),
-                None,
-                Some("model-api-key"),
-            )
-            .as_deref(),
+            pick_provider_credential(None, None, None, None, Some("nur-global"), None,).as_deref(),
             Some("nur-global")
         );
         assert_eq!(
-            pick_provider_credential(None, None, None, None, None, None, Some("model-api-key")),
+            pick_provider_credential(None, None, None, None, None, None),
             None,
-            "META_/MODEL_/MUSE_ alone must not satisfy a provider-scoped resolve"
+            "unscoped vendor keys alone must not satisfy a provider-scoped resolve"
         );
         assert_eq!(
             pick_provider_credential(
@@ -1433,7 +1341,6 @@ mod tests {
                 Some("provider-oauth"),
                 None,
                 Some("legacy-providerless-key"),
-                None,
             )
             .as_deref(),
             Some("provider-oauth"),

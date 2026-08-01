@@ -4,7 +4,7 @@
 //! `extract` and `update` write `graphify-out/` and need approval in manual mode.
 
 use super::{arg_str, arg_u64, Tool, ToolContext};
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -165,7 +165,7 @@ impl Tool for Graphify {
                 }
                 run_graphify(&ctx.cwd, &cli_args, 600_000)
             }
-            other => Err(MuseError::Tool(format!(
+            other => Err(NurError::Tool(format!(
                 "unknown graphify action '{other}' — use status|query|path|explain|affected|report|extract|update"
             ))),
         }
@@ -183,7 +183,7 @@ fn status(cwd: &Path) -> Result<String> {
             let out = Command::new(b)
                 .arg("--version")
                 .output()
-                .map_err(|e| MuseError::Tool(format!("graphify --version failed: {e}")))?;
+                .map_err(|e| NurError::Tool(format!("graphify --version failed: {e}")))?;
             String::from_utf8_lossy(&out.stdout).trim().to_string()
         }
         None => String::new(),
@@ -259,12 +259,12 @@ fn status(cwd: &Path) -> Result<String> {
 fn read_report(cwd: &Path) -> Result<String> {
     let report = cwd.join("graphify-out").join("GRAPH_REPORT.md");
     if !report.is_file() {
-        return Err(MuseError::Tool(
+        return Err(NurError::Tool(
             "no graphify-out/GRAPH_REPORT.md — run graphify(action=extract) first".into(),
         ));
     }
     let text = std::fs::read_to_string(&report)
-        .map_err(|e| MuseError::Tool(format!("read report: {e}")))?;
+        .map_err(|e| NurError::Tool(format!("read report: {e}")))?;
     // Cap so we don't blow the context window.
     let capped: String = text.chars().take(12_000).collect();
     if text.chars().count() > 12_000 {
@@ -279,7 +279,7 @@ fn read_report(cwd: &Path) -> Result<String> {
 
 fn run_graphify(cwd: &Path, args: &[String], timeout_ms: u64) -> Result<String> {
     let bin = find_graphify_bin().ok_or_else(|| {
-        MuseError::Tool(
+        NurError::Tool(
             "graphify CLI not found on PATH. Install with:\n  \
              uv tool install graphifyy\n  \
              graphify install --platform agents\n\
@@ -309,7 +309,7 @@ fn run_graphify(cwd: &Path, args: &[String], timeout_ms: u64) -> Result<String> 
 
     let mut child = cmd
         .spawn()
-        .map_err(|e| MuseError::Tool(format!("failed to spawn graphify: {e}")))?;
+        .map_err(|e| NurError::Tool(format!("failed to spawn graphify: {e}")))?;
 
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
@@ -345,14 +345,14 @@ fn run_graphify(cwd: &Path, args: &[String], timeout_ms: u64) -> Result<String> 
                     }
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(MuseError::Tool(format!(
+                    return Err(NurError::Tool(format!(
                         "graphify timed out after {}ms (killed) — try narrowing path or run: graphify extract . --code-only",
                         timeout_ms
                     )));
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
-            Err(e) => return Err(MuseError::Tool(format!("graphify wait failed: {e}"))),
+            Err(e) => return Err(NurError::Tool(format!("graphify wait failed: {e}"))),
         }
     };
 
@@ -375,7 +375,7 @@ fn run_graphify(cwd: &Path, args: &[String], timeout_ms: u64) -> Result<String> 
         if out.is_empty() {
             out = format!("graphify exited with {}", status);
         }
-        return Err(MuseError::Tool(out));
+        return Err(NurError::Tool(out));
     }
     if out.is_empty() {
         out = "(graphify produced no output)".into();

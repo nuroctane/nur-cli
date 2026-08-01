@@ -1,6 +1,6 @@
 use super::sandbox;
 use super::{arg_str, Tool, ToolContext};
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde_json::Value;
 use std::fs;
 
@@ -44,32 +44,32 @@ impl Tool for MultiEdit {
         let edits = args
             .get("edits")
             .and_then(|v| v.as_array())
-            .ok_or_else(|| MuseError::Tool("edits array required".into()))?;
+            .ok_or_else(|| NurError::Tool("edits array required".into()))?;
         if edits.is_empty() {
-            return Err(MuseError::Tool("edits empty".into()));
+            return Err(NurError::Tool("edits empty".into()));
         }
         let mut content = fs::read_to_string(&full)
-            .map_err(|e| MuseError::Tool(format!("read {}: {e}", full.display())))?;
+            .map_err(|e| NurError::Tool(format!("read {}: {e}", full.display())))?;
         let mut total = 0usize;
         for (i, ed) in edits.iter().enumerate() {
             let old = ed
                 .get("old_string")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| MuseError::Tool(format!("edits[{i}].old_string required")))?;
+                .ok_or_else(|| NurError::Tool(format!("edits[{i}].old_string required")))?;
             let new = ed
                 .get("new_string")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| MuseError::Tool(format!("edits[{i}].new_string required")))?;
+                .ok_or_else(|| NurError::Tool(format!("edits[{i}].new_string required")))?;
             let replace_all = ed
                 .get("replace_all")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             let count = content.matches(old).count();
             if count == 0 {
-                return Err(MuseError::Tool(format!("edits[{i}]: old_string not found")));
+                return Err(NurError::Tool(format!("edits[{i}]: old_string not found")));
             }
             if count > 1 && !replace_all {
-                return Err(MuseError::Tool(format!(
+                return Err(NurError::Tool(format!(
                     "edits[{i}]: old_string matched {count} times; set replace_all=true or make unique"
                 )));
             }
@@ -81,7 +81,7 @@ impl Tool for MultiEdit {
             total += if replace_all { count } else { 1 };
         }
         fs::write(&full, content)
-            .map_err(|e| MuseError::Tool(format!("write {}: {e}", full.display())))?;
+            .map_err(|e| NurError::Tool(format!("write {}: {e}", full.display())))?;
         Ok(format!(
             "multi_edit {} — {total} replacement(s) in {} edit(s)",
             full.display(),

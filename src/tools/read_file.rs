@@ -1,5 +1,5 @@
 use super::{arg_str, arg_u64, Tool, ToolContext};
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde_json::Value;
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -31,7 +31,7 @@ impl Tool for ReadFile {
         let path = arg_str(args, "path")?;
         let full = super::sandbox::resolve_for_read(&ctx.cwd, &path)?;
         if !full.exists() {
-            return Err(MuseError::Tool(format!(
+            return Err(NurError::Tool(format!(
                 "file not found: {}",
                 full.display()
             )));
@@ -43,7 +43,7 @@ impl Tool for ReadFile {
         const MAX_OUT_BYTES: usize = 200_000;
 
         let file = fs::File::open(&full)
-            .map_err(|e| MuseError::Tool(format!("read {}: {e}", full.display())))?;
+            .map_err(|e| NurError::Tool(format!("read {}: {e}", full.display())))?;
         let reader = BufReader::new(file);
 
         let start = offset.saturating_sub(1);
@@ -61,8 +61,8 @@ impl Tool for ReadFile {
             if i >= end {
                 break;
             }
-            let line = line_res
-                .map_err(|e| MuseError::Tool(format!("read {}: {e}", full.display())))?;
+            let line =
+                line_res.map_err(|e| NurError::Tool(format!("read {}: {e}", full.display())))?;
             let numbered = format!("{:>6}|{}\n", i + 1, line);
             if out.len().saturating_add(numbered.len()) > MAX_OUT_BYTES {
                 truncated = true;
@@ -74,9 +74,7 @@ impl Tool for ReadFile {
         if out.is_empty() && !truncated {
             out = String::from("(empty file)");
         } else if truncated {
-            out.push_str(
-                "\n… truncated (hit 200k output cap; raise offset or lower limit)\n",
-            );
+            out.push_str("\n… truncated (hit 200k output cap; raise offset or lower limit)\n");
         }
         Ok(out)
     }
@@ -131,7 +129,10 @@ mod tests {
         let out = tool.execute(&args, &ctx).unwrap();
         assert!(out.contains("line-40"), "{out}");
         assert!(out.contains("line-44"), "{out}");
-        assert!(!out.contains("line-1\n") && !out.contains("|line-1\n"), "{out}");
+        assert!(
+            !out.contains("line-1\n") && !out.contains("|line-1\n"),
+            "{out}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

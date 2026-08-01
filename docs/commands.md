@@ -38,7 +38,7 @@ nur -c                                  # continue last session
 nur -r abc123                           # resume session abc123
 nur --mode plan "explain this"         # plan: explore + shell, no edits/commits
 nur --effort xhigh "deep analysis"     # maximum reasoning
-nur --model muse-spark-1.1 "hello"     # explicit model
+nur --model gpt-5.5 "hello"            # explicit model
 nur run "add tests" -y                 # headless + auto-approve
 ```
 
@@ -103,7 +103,7 @@ nur auth status
 
 #### `nur auth logout`
 
-Remove saved key from `~/.nur/auth.json` and legacy `~/.muse/`.
+Remove the saved key from `~/.nur/auth.json`.
 
 ```bash
 nur auth logout
@@ -114,7 +114,7 @@ nur auth logout --revoke   # local delete + best-effort revoke notes for az/aws/
 
 ### `nur sessions`
 
-List recent sessions (prompt-first summaries from `~/.nur/sessions` and legacy `~/.muse/sessions`).
+List recent sessions from `~/.nur/sessions`.
 
 ```bash
 nur sessions [--limit <N>]
@@ -488,8 +488,6 @@ NurCLI loads project-level instructions from your working directory at session s
 | `NUR.md` | Primary project instructions |
 | `AGENTS.md` | Agent conventions |
 | `CLAUDE.md` | Also loaded |
-| `META.md` | Legacy (still loaded) |
-| `MUSE.md` | Legacy (still loaded) |
 
 ---
 

@@ -25,7 +25,6 @@ pub enum Runtime {
     Host(String),
 }
 
-
 /// Prefer native → WSL → agent-browser-cli host fallback.
 pub fn resolve_runtime() -> Option<Runtime> {
     if let Some(bin) = find_native_bin() {
@@ -55,7 +54,11 @@ fn find_native_bin() -> Option<String> {
     }
     #[cfg(windows)]
     {
-        for name in ["terminal-browser.exe", "terminal-browser.cmd", "terminal-browser.ps1"] {
+        for name in [
+            "terminal-browser.exe",
+            "terminal-browser.cmd",
+            "terminal-browser.ps1",
+        ] {
             if let Some(bin) = find_bin(name) {
                 return Some(bin);
             }
@@ -209,9 +212,7 @@ pub fn run_tb_cancelled(
     cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<String, String> {
     match resolve_runtime() {
-        Some(Runtime::Native(bin)) => {
-            run_capture_cancelled(&bin, args, cwd, timeout_ms, cancel)
-        }
+        Some(Runtime::Native(bin)) => run_capture_cancelled(&bin, args, cwd, timeout_ms, cancel),
         Some(Runtime::Wsl) => run_wsl(args, cwd, timeout_ms, Some(cancel)),
         Some(Runtime::Host(_)) => run_host(args, cwd, timeout_ms, Some(cancel)),
         None => Err(missing_msg()),
@@ -339,8 +340,8 @@ fn host_open(
     timeout_ms: u64,
     cancel: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<String, String> {
-    let bin = find_bin("agent-browser-cli")
-        .ok_or_else(|| String::from("agent-browser-cli missing"))?;
+    let bin =
+        find_bin("agent-browser-cli").ok_or_else(|| String::from("agent-browser-cli missing"))?;
     let mut url = None;
     let mut split = Some("right");
     let mut i = 0;
@@ -418,8 +419,8 @@ fn host_action(
     timeout_ms: u64,
     cancel: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<String, String> {
-    let bin = find_bin("agent-browser-cli")
-        .ok_or_else(|| String::from("agent-browser-cli missing"))?;
+    let bin =
+        find_bin("agent-browser-cli").ok_or_else(|| String::from("agent-browser-cli missing"))?;
     // Strip selectors + `--`, keep agent-browser passthrough.
     let mut passthrough = Vec::new();
     let mut i = 0;
@@ -506,8 +507,8 @@ fn map_agent_cmd_to_cli(cmd: &[&str]) -> Result<Vec<String>, String> {
                 }
             }
         }
-        "get" | "is" | "wait" | "hover" | "select" | "check" | "uncheck" | "scroll"
-        | "network" | "console" => {
+        "get" | "is" | "wait" | "hover" | "select" | "check" | "uncheck" | "scroll" | "network"
+        | "console" => {
             // Pass through best-effort; CLI may reject unknown verbs.
             out.push((*head).into());
             out.extend(rest.iter().map(|s| (*s).to_string()));
@@ -587,7 +588,10 @@ pub fn try_install_native() -> Option<String> {
     {
         return run_capture(
             "bash",
-            &["-lc", "curl -fsSL https://terminal-browser.sh/install | bash"],
+            &[
+                "-lc",
+                "curl -fsSL https://terminal-browser.sh/install | bash",
+            ],
             None,
             600_000,
         )
@@ -652,7 +656,10 @@ pub fn ensure_runtime() -> (bool, String, Option<String>, Option<String>) {
         if find_native_bin().is_none() {
             let _ = run_capture(
                 "bash",
-                &["-lc", "curl -fsSL https://terminal-browser.sh/install | bash"],
+                &[
+                    "-lc",
+                    "curl -fsSL https://terminal-browser.sh/install | bash",
+                ],
                 None,
                 600_000,
             );
@@ -663,7 +670,10 @@ pub fn ensure_runtime() -> (bool, String, Option<String>, Option<String>) {
         if find_native_bin().is_none() {
             let _ = run_capture(
                 "bash",
-                &["-lc", "curl -fsSL https://terminal-browser.sh/install | bash"],
+                &[
+                    "-lc",
+                    "curl -fsSL https://terminal-browser.sh/install | bash",
+                ],
                 None,
                 600_000,
             );
@@ -685,15 +695,13 @@ pub fn ensure_runtime() -> (bool, String, Option<String>, Option<String>) {
         ),
         Some(Runtime::Host(p)) => (
             true,
-            "windows-host ready · agent-browser-cli fallback (same open/snapshot/click API)"
-                .into(),
+            "windows-host ready · agent-browser-cli fallback (same open/snapshot/click API)".into(),
             Some(p),
             None,
         ),
         None => (
             false,
-            "not found - Windows: nur ecosystem ensure (host fallback); macOS: curl install"
-                .into(),
+            "not found - Windows: nur ecosystem ensure (host fallback); macOS: curl install".into(),
             None,
             None,
         ),

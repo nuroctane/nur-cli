@@ -10,8 +10,8 @@
 use crate::agent::{self, AgentRunner, Session};
 use crate::api::ApiClient;
 use crate::cli::BenchCmd;
-use crate::config::{muse_home, Config};
-use crate::error::{MuseError, Result};
+use crate::config::{nur_home, Config};
+use crate::error::{NurError, Result};
 use crate::theme;
 use crate::usage::UsageTracker;
 use serde::{Deserialize, Serialize};
@@ -97,7 +97,7 @@ pub fn scoreboard(task: &str, results: &[BenchResult]) -> String {
 }
 
 pub fn bench_dir() -> PathBuf {
-    muse_home().join("bench")
+    nur_home().join("bench")
 }
 fn worktrees_dir() -> PathBuf {
     bench_dir().join("worktrees")
@@ -228,7 +228,7 @@ async fn run_tasks(
     cwd: PathBuf,
 ) -> Result<()> {
     if !is_git_repo(&cwd) {
-        return Err(MuseError::Other(
+        return Err(NurError::Other(
             "bench run needs a git repo (it replays in isolated worktrees) — run inside your project".into(),
         ));
     }
@@ -236,18 +236,18 @@ async fn run_tasks(
         list_tasks()
     } else {
         vec![load_task(name).ok_or_else(|| {
-            MuseError::Other(format!("no bench task `{name}` — see nur bench list"))
+            NurError::Other(format!("no bench task `{name}` — see nur bench list"))
         })?]
     };
     if tasks.is_empty() {
-        return Err(MuseError::Other("no bench tasks recorded".into()));
+        return Err(NurError::Other("no bench tasks recorded".into()));
     }
     let model_list = match models {
         Some(m) => parse_models(m),
         None => vec![cfg.model.clone()],
     };
     if model_list.is_empty() {
-        return Err(MuseError::Other(
+        return Err(NurError::Other(
             "no models to compare (--models a,b)".into(),
         ));
     }
@@ -307,7 +307,7 @@ pub(crate) async fn run_one(
     let wt_str = wt.display().to_string();
 
     git(repo, &["worktree", "add", "-b", &branch, &wt_str])
-        .map_err(|e| MuseError::Other(format!("git worktree add failed: {e}")))?;
+        .map_err(|e| NurError::Other(format!("git worktree add failed: {e}")))?;
 
     // Run the agent in the worktree with this model (auto-approve, sandboxed).
     let mut cfg_m = cfg.clone();
@@ -376,11 +376,11 @@ fn git(cwd: &Path, args: &[&str]) -> Result<()> {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
-        .map_err(|e| MuseError::Other(e.to_string()))?;
+        .map_err(|e| NurError::Other(e.to_string()))?;
     if status.success() {
         Ok(())
     } else {
-        Err(MuseError::Other(format!("git {} failed", args.join(" "))))
+        Err(NurError::Other(format!("git {} failed", args.join(" "))))
     }
 }
 

@@ -1,5 +1,5 @@
 use super::{arg_str, resolve_path, Tool, ToolContext};
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde_json::Value;
 use std::fs;
 
@@ -38,13 +38,13 @@ impl Tool for EditFile {
 
         let full = resolve_path(&ctx.cwd, &path)?;
         let file_content = fs::read_to_string(&full)
-            .map_err(|e| MuseError::Tool(format!("read {}: {e}", full.display())))?;
+            .map_err(|e| NurError::Tool(format!("read {}: {e}", full.display())))?;
 
         // First try exact match (fast path)
         let count = file_content.matches(&old).count();
         if count > 0 {
             if count > 1 && !replace_all {
-                return Err(MuseError::Tool(format!(
+                return Err(NurError::Tool(format!(
                     "old_string matched {count} times; set replace_all=true or make old_string unique"
                 )));
             }
@@ -54,7 +54,7 @@ impl Tool for EditFile {
                 file_content.replacen(&old, &new, 1)
             };
             fs::write(&full, updated)
-                .map_err(|e| MuseError::Tool(format!("write {}: {e}", full.display())))?;
+                .map_err(|e| NurError::Tool(format!("write {}: {e}", full.display())))?;
             return Ok(format!(
                 "edited {} ({} replacement{})",
                 full.display(),
@@ -70,7 +70,7 @@ impl Tool for EditFile {
         let count_n = content_n.matches(&old_n).count();
         if count_n > 0 {
             if count_n > 1 && !replace_all {
-                return Err(MuseError::Tool(format!(
+                return Err(NurError::Tool(format!(
                     "old_string matched {count_n} times after normalizing line endings; make it unique"
                 )));
             }
@@ -83,7 +83,7 @@ impl Tool for EditFile {
             // whole-file diff.
             let updated = splice_normalized(&file_content, &content_n, &old_n, &new, replace_all);
             fs::write(&full, updated)
-                .map_err(|e| MuseError::Tool(format!("write {}: {e}", full.display())))?;
+                .map_err(|e| NurError::Tool(format!("write {}: {e}", full.display())))?;
             return Ok(format!(
                 "edited {} ({} replacement{} via line-ending normalization)",
                 full.display(),
@@ -108,7 +108,7 @@ impl Tool for EditFile {
             if count_trim == 1 && !replace_all {
                 let updated = file_content.replacen(old_trim, new_trim, 1);
                 fs::write(&full, updated)
-                    .map_err(|e| MuseError::Tool(format!("write {}: {e}", full.display())))?;
+                    .map_err(|e| NurError::Tool(format!("write {}: {e}", full.display())))?;
                 return Ok(format!(
                     "edited {} (1 replacement — FUZZY: matched after trimming surrounding \
                      whitespace from old_string, and trimmed new_string to match. Verify the \
@@ -122,7 +122,7 @@ impl Tool for EditFile {
                 let updated =
                     splice_normalized(&file_content, &content_n, &old_trim_n, new_trim, false);
                 fs::write(&full, updated)
-                    .map_err(|e| MuseError::Tool(format!("write {}: {e}", full.display())))?;
+                    .map_err(|e| NurError::Tool(format!("write {}: {e}", full.display())))?;
                 return Ok(format!(
                     "edited {} (1 replacement — FUZZY: matched after trimming whitespace and \
                      normalizing line endings. Verify the result)",
@@ -175,7 +175,7 @@ impl Tool for EditFile {
             hint.push_str("old_string appears empty or whitespace-only after trimming — provide a non-empty unique block and read the file first.");
         }
 
-        Err(MuseError::Tool(hint))
+        Err(NurError::Tool(hint))
     }
 }
 

@@ -22,8 +22,8 @@
 
 use crate::agent::session::{Session, SessionMessage, UiLogItem};
 use crate::api::types::user_text_item;
-use crate::config::meta_home;
-use crate::error::{MuseError, Result};
+use crate::config::nur_home;
+use crate::error::{NurError, Result};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::Value;
@@ -159,7 +159,7 @@ pub struct Migration {
 /// Path to the bundled reader script. Installed by `ecosystem::skills` under
 /// `~/.nur/skills/resume-session/`, mirrored to `~/.agents/skills/`.
 fn reader_script() -> Option<PathBuf> {
-    let mut candidates = vec![meta_home()
+    let mut candidates = vec![nur_home()
         .join("skills")
         .join("resume-session")
         .join("session_reader.py")];
@@ -200,14 +200,14 @@ fn python_argv() -> Option<Vec<String>> {
 /// Run the reader with `args` appended to `<tool> <action> …`, returning stdout.
 fn run_reader(args: &[String]) -> Result<String> {
     let script = reader_script().ok_or_else(|| {
-        MuseError::Other(
+        NurError::Other(
             "resume-session reader not installed yet — run /ecosystem (or restart) to \
              provision ~/.nur/skills, then retry"
                 .into(),
         )
     })?;
     let py = python_argv().ok_or_else(|| {
-        MuseError::Other(
+        NurError::Other(
             "Python 3 not found on PATH (need python3 / python / py -3) for chagent".into(),
         )
     })?;
@@ -217,12 +217,12 @@ fn run_reader(args: &[String]) -> Result<String> {
         .arg(&script)
         .args(args)
         .output()
-        .map_err(|e| MuseError::Other(format!("chagent: failed to launch reader: {e}")))?;
+        .map_err(|e| NurError::Other(format!("chagent: failed to launch reader: {e}")))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
         let err = err.trim();
         let first = err.lines().next().unwrap_or("reader failed");
-        return Err(MuseError::Other(format!("chagent reader: {first}")));
+        return Err(NurError::Other(format!("chagent reader: {first}")));
     }
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
@@ -236,7 +236,7 @@ pub fn list_foreign(
     all_cwds: bool,
 ) -> Result<Vec<ForeignSession>> {
     if !is_foreign_tool(tool) {
-        return Err(MuseError::Other(format!(
+        return Err(NurError::Other(format!(
             "chagent: unsupported agent '{tool}'"
         )));
     }
@@ -257,7 +257,7 @@ pub fn list_foreign(
     }
     let stdout = run_reader(&args)?;
     let parsed: ListOut = serde_json::from_str(&stdout)
-        .map_err(|e| MuseError::Other(format!("chagent: bad reader list JSON: {e}")))?;
+        .map_err(|e| NurError::Other(format!("chagent: bad reader list JSON: {e}")))?;
     let mut sessions = parsed.sessions;
     for s in &mut sessions {
         if s.tool.is_empty() {
@@ -290,7 +290,7 @@ pub fn list_all(
 /// Read one foreign session's normalised IR (`show`).
 fn show_foreign(tool: &str, reference: &str, cwd: &str) -> Result<ShowOut> {
     if !is_foreign_tool(tool) {
-        return Err(MuseError::Other(format!(
+        return Err(NurError::Other(format!(
             "chagent: unsupported agent '{tool}'"
         )));
     }
@@ -304,7 +304,7 @@ fn show_foreign(tool: &str, reference: &str, cwd: &str) -> Result<ShowOut> {
     ];
     let stdout = run_reader(&args)?;
     serde_json::from_str(&stdout)
-        .map_err(|e| MuseError::Other(format!("chagent: bad reader show JSON: {e}")))
+        .map_err(|e| NurError::Other(format!("chagent: bad reader show JSON: {e}")))
 }
 
 /// Cap on imported turns so a giant foreign transcript can't bloat the native

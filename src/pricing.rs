@@ -540,7 +540,7 @@ mod tests {
 
     #[test]
     fn meta_builtin_matches_constants() {
-        let r = builtin_meta_rates("muse-spark-1.1");
+        let r = builtin_meta_rates("Llama-4-Maverick-17B-128E-Instruct-FP8");
         assert_eq!(r.input_per_mtok_usd, PRICE_INPUT_PER_MTOK);
         assert_eq!(r.output_per_mtok_usd, PRICE_OUTPUT_PER_MTOK);
     }

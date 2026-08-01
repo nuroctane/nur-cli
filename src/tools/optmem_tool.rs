@@ -1,5 +1,5 @@
 use super::{arg_str, Tool, ToolContext};
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use crate::optmem;
 use serde_json::Value;
 
@@ -9,10 +9,7 @@ pub fn is_read_only_action(args: &str) -> bool {
     let Ok(v) = serde_json::from_str::<Value>(args) else {
         return false;
     };
-    let action = v
-        .get("action")
-        .and_then(|a| a.as_str())
-        .unwrap_or("status");
+    let action = v.get("action").and_then(|a| a.as_str()).unwrap_or("status");
     match action {
         "status" | "doctor" | "wake" | "recall" | "zoom" => true,
         "config" => v
@@ -58,41 +55,41 @@ impl Tool for OptMem {
         let action = arg_str(args, "action").unwrap_or_else(|_| "status".into());
         match action.as_str() {
             "status" | "doctor" => Ok(optmem::doctor_report()),
-            "wake" => optmem::run_memo(&["wake"], 15_000).map_err(MuseError::Tool),
+            "wake" => optmem::run_memo(&["wake"], 15_000).map_err(NurError::Tool),
             "note" => {
                 let text = arg_str(args, "text")
-                    .map_err(|_| MuseError::Tool("note requires text=".into()))?;
-                optmem::note(&text).map_err(MuseError::Tool)
+                    .map_err(|_| NurError::Tool("note requires text=".into()))?;
+                optmem::note(&text).map_err(NurError::Tool)
             }
             "nap" => {
-                let out = optmem::run_memo(&["nap"], 120_000).map_err(MuseError::Tool)?;
+                let out = optmem::run_memo(&["nap"], 120_000).map_err(NurError::Tool)?;
                 optmem::invalidate_wake_cache();
                 Ok(out)
             }
             "recall" => {
                 let q = arg_str(args, "query")
-                    .map_err(|_| MuseError::Tool("recall requires query=".into()))?;
-                optmem::run_memo(&["recall", &q], 30_000).map_err(MuseError::Tool)
+                    .map_err(|_| NurError::Tool("recall requires query=".into()))?;
+                optmem::run_memo(&["recall", &q], 30_000).map_err(NurError::Tool)
             }
             "zoom" => {
                 let r = arg_str(args, "range")
-                    .map_err(|_| MuseError::Tool("zoom requires range=a-b".into()))?;
-                optmem::run_memo(&["zoom", &r], 15_000).map_err(MuseError::Tool)
+                    .map_err(|_| NurError::Tool("zoom requires range=a-b".into()))?;
+                optmem::run_memo(&["zoom", &r], 15_000).map_err(NurError::Tool)
             }
             "forget" => {
                 let r = arg_str(args, "range")
-                    .map_err(|_| MuseError::Tool("forget requires range=a-b".into()))?;
-                let out = optmem::run_memo(&["forget", &r], 15_000).map_err(MuseError::Tool)?;
+                    .map_err(|_| NurError::Tool("forget requires range=a-b".into()))?;
+                let out = optmem::run_memo(&["forget", &r], 15_000).map_err(NurError::Tool)?;
                 optmem::invalidate_wake_cache();
                 Ok(out)
             }
             "config" => {
                 if let Ok(kv) = arg_str(args, "config_kv") {
-                    let out = optmem::run_memo(&["config", &kv], 10_000).map_err(MuseError::Tool)?;
+                    let out = optmem::run_memo(&["config", &kv], 10_000).map_err(NurError::Tool)?;
                     optmem::invalidate_wake_cache();
                     Ok(out)
                 } else {
-                    optmem::run_memo(&["config"], 10_000).map_err(MuseError::Tool)
+                    optmem::run_memo(&["config"], 10_000).map_err(NurError::Tool)
                 }
             }
             other => Ok(format!(
@@ -109,7 +106,9 @@ mod tests {
     #[test]
     fn config_read_is_ro_write_is_not() {
         assert!(is_read_only_action(r#"{"action":"config"}"#));
-        assert!(!is_read_only_action(r#"{"action":"config","config_kv":"WAKE_LINES=10"}"#));
+        assert!(!is_read_only_action(
+            r#"{"action":"config","config_kv":"WAKE_LINES=10"}"#
+        ));
         assert!(!is_read_only_action(r#"{"action":"note","text":"x"}"#));
         assert!(!is_read_only_action(r#"{"action":"forget","range":"a-b"}"#));
         assert!(is_read_only_action(r#"{"action":"wake"}"#));

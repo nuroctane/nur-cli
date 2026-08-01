@@ -2,7 +2,7 @@
 
 use super::{expires_in_to_at, open_browser, CancelFlag};
 use crate::auth::{Auth, OauthMeta};
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use serde::Deserialize;
@@ -60,7 +60,7 @@ pub fn login_browser(provider_id: &str, tx: ProgressTx, cancel: CancelFlag) {
         "github-models" | "github-copilot" => github::login(provider_id, &tx, &cancel),
         "cursor" => cursor::login(&tx, &cancel),
         "opencode" => opencode::login(&tx, &cancel),
-        other => Err(MuseError::Other(format!(
+        other => Err(NurError::Other(format!(
             "browser login not supported for '{other}'"
         ))),
     };
@@ -158,13 +158,8 @@ pub mod cursor {
                 c
             } else if lower.ends_with(".ps1") {
                 let mut c = Command::new("powershell.exe");
-                c.args([
-                    "-NoProfile",
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-File",
-                ])
-                .arg(bin);
+                c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+                    .arg(bin);
                 for a in args {
                     c.arg(a);
                 }
@@ -246,7 +241,8 @@ pub mod cursor {
             let mut lines = std::io::BufReader::new(reader).lines();
             while let Some(Ok(line)) = lines.next() {
                 for word in line.split_whitespace() {
-                    let url = word.trim_matches(|c: char| c == ')' || c == '(' || c == '"' || c == '\'');
+                    let url =
+                        word.trim_matches(|c: char| c == ')' || c == '(' || c == '"' || c == '\'');
                     if url.starts_with("https://") {
                         send(&tx, BrowserLoginProgress::OpenUrl(url.to_string()));
                         let _ = open_browser(url);
@@ -334,7 +330,7 @@ pub mod cursor {
         }
 
         let bin = cursor_agent_bin().ok_or_else(|| {
-            MuseError::Other(
+            NurError::Other(
                 "cursor-agent not found on PATH. Install Cursor Agent (https://cursor.com/docs/cli), open a new terminal, then retry - or paste a CURSOR_API_KEY via /login.".into(),
             )
         })?;
@@ -348,7 +344,7 @@ pub mod cursor {
         // Do not hardcode cursor.com/login - wait for the CLI's device/auth URL.
 
         let mut child = spawn_cursor_agent(&bin, &["login"]).map_err(|e| {
-            MuseError::Other(format!(
+            NurError::Other(format!(
                 "failed to launch cursor-agent ({e}). Install Cursor Agent, or paste CURSOR_API_KEY."
             ))
         })?;
@@ -363,17 +359,17 @@ pub mod cursor {
         loop {
             if cancel.is_cancelled() {
                 let _ = child.kill();
-                return Err(MuseError::Other("login cancelled".into()));
+                return Err(NurError::Other("login cancelled".into()));
             }
             match child.try_wait() {
                 Ok(Some(status)) if status.success() => break,
                 Ok(Some(status)) => {
-                    return Err(MuseError::Other(format!(
+                    return Err(NurError::Other(format!(
                         "cursor-agent login failed (exit {status}). Paste CURSOR_API_KEY as fallback."
                     )));
                 }
                 Ok(None) => thread::sleep(Duration::from_millis(200)),
-                Err(e) => return Err(MuseError::Other(e.to_string())),
+                Err(e) => return Err(NurError::Other(e.to_string())),
             }
         }
 
@@ -383,7 +379,7 @@ pub mod cursor {
         );
         match import_cursor_cli()? {
             Some(t) => Ok(t),
-            None => Err(MuseError::Other(
+            None => Err(NurError::Other(
                 "cursor-agent login finished, but nur still sees you as logged out \
                  (`cursor-agent status`). Run `cursor-agent login` again in a terminal, \
                  or set CURSOR_API_KEY as a fallback."
@@ -394,7 +390,7 @@ pub mod cursor {
 
     pub fn refresh(_auth: &Auth, _refresh: &str) -> Result<OAuthTokens> {
         import_cursor_cli()?.ok_or_else(|| {
-            MuseError::Other(
+            NurError::Other(
                 "Cursor session expired or missing. Run `cursor-agent login`, or set CURSOR_API_KEY."
                     .into(),
             )
@@ -420,7 +416,12 @@ pub mod opencode {
         if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
             out.push(PathBuf::from(xdg).join("opencode").join("auth.json"));
         }
-        out.push(home.join(".local").join("share").join("opencode").join("auth.json"));
+        out.push(
+            home.join(".local")
+                .join("share")
+                .join("opencode")
+                .join("auth.json"),
+        );
         // Legacy / config-dir guesses (older installs).
         out.push(home.join(".config").join("opencode").join("auth.json"));
         out.push(home.join(".opencode").join("auth.json"));
@@ -560,7 +561,7 @@ pub mod opencode {
             return Ok(t);
         }
         let bin = opencode_bin().ok_or_else(|| {
-            MuseError::Other(
+            NurError::Other(
                 "opencode not found on PATH. Install OpenCode (https://opencode.ai), then retry \
                  or paste an OPENCODE_API_KEY via /login."
                     .into(),
@@ -577,7 +578,7 @@ pub mod opencode {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| {
-                MuseError::Other(format!(
+                NurError::Other(format!(
                     "failed to launch opencode ({e}). Run `opencode auth login` in a terminal, \
                      or paste OPENCODE_API_KEY."
                 ))
@@ -598,9 +599,8 @@ pub mod opencode {
             thread::spawn(move || {
                 for line in std::io::BufReader::new(out).lines().flatten() {
                     for word in line.split_whitespace() {
-                        let url = word.trim_matches(|c: char| {
-                            c == ')' || c == '(' || c == '"' || c == '\''
-                        });
+                        let url = word
+                            .trim_matches(|c: char| c == ')' || c == '(' || c == '"' || c == '\'');
                         if url.starts_with("https://") {
                             send(&tx, BrowserLoginProgress::OpenUrl(url.to_string()));
                             let _ = open_browser(url);
@@ -613,21 +613,21 @@ pub mod opencode {
         loop {
             if cancel.is_cancelled() {
                 let _ = child.kill();
-                return Err(MuseError::Other("login cancelled".into()));
+                return Err(NurError::Other("login cancelled".into()));
             }
             match child.try_wait() {
                 Ok(Some(status)) if status.success() => break,
                 Ok(Some(status)) => {
-                    return Err(MuseError::Other(format!(
+                    return Err(NurError::Other(format!(
                         "opencode auth login failed (exit {status}). Paste OPENCODE_API_KEY as fallback."
                     )));
                 }
                 Ok(None) => thread::sleep(Duration::from_millis(200)),
-                Err(e) => return Err(MuseError::Other(e.to_string())),
+                Err(e) => return Err(NurError::Other(e.to_string())),
             }
         }
         import_opencode_cli()?.ok_or_else(|| {
-            MuseError::Other(
+            NurError::Other(
                 "opencode auth login finished, but nur found no `opencode` / `opencode-go` key in \
                  ~/.local/share/opencode/auth.json. Run `opencode auth login` and select the \
                  OpenCode (Zen/Go) provider, or set OPENCODE_API_KEY."
@@ -638,7 +638,7 @@ pub mod opencode {
 
     pub fn refresh(_auth: &Auth, _refresh: &str) -> Result<OAuthTokens> {
         import_opencode_cli()?.ok_or_else(|| {
-            MuseError::Other(
+            NurError::Other(
                 "OpenCode session missing. Run `opencode auth login`, or set OPENCODE_API_KEY."
                     .into(),
             )
@@ -671,7 +671,7 @@ fn http() -> Result<reqwest::blocking::Client> {
         .timeout(Duration::from_secs(60))
         .user_agent(format!("nur-cli/{}", env!("CARGO_PKG_VERSION")))
         .build()
-        .map_err(|e| MuseError::Other(e.to_string()))
+        .map_err(|e| NurError::Other(e.to_string()))
 }
 
 /// Resolve a vendor CLI binary: PATH first, then common Windows/macOS install dirs.
@@ -834,14 +834,14 @@ fn wait_localhost_code_on(
 ) -> Result<String> {
     listener
         .set_nonblocking(true)
-        .map_err(|e| MuseError::Other(e.to_string()))?;
+        .map_err(|e| NurError::Other(e.to_string()))?;
     let start = std::time::Instant::now();
     loop {
         if cancel.is_cancelled() {
-            return Err(MuseError::Other("login cancelled".into()));
+            return Err(NurError::Other("login cancelled".into()));
         }
         if start.elapsed() > timeout {
-            return Err(MuseError::Other("browser login timed out".into()));
+            return Err(NurError::Other("browser login timed out".into()));
         }
         match listener.accept() {
             Ok((mut stream, _)) => {
@@ -878,7 +878,7 @@ fn wait_localhost_code_on(
                 if let Some(c) = code {
                     if let (Some(exp), Some(got)) = (expected_state, state.as_deref()) {
                         if exp != got {
-                            return Err(MuseError::Other("OAuth state mismatch".into()));
+                            return Err(NurError::Other("OAuth state mismatch".into()));
                         }
                     }
                     return Ok(c);
@@ -887,7 +887,7 @@ fn wait_localhost_code_on(
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(150));
             }
-            Err(e) => return Err(MuseError::Other(format!("callback accept: {e}"))),
+            Err(e) => return Err(NurError::Other(format!("callback accept: {e}"))),
         }
     }
 }
@@ -1002,7 +1002,7 @@ pub mod openai {
                     .map(|listener| (listener, *port))
             })
             .ok_or_else(|| {
-                MuseError::Other(
+                NurError::Other(
                     "OpenAI login needs localhost port 1455 or 1457, but both are in use. Close Codex or free those ports, or run `codex login` and choose “Use existing CLI session”.".into(),
                 )
             })?;
@@ -1049,7 +1049,7 @@ pub mod openai {
             )
             .form(&form)
             .send()
-            .map_err(|error| MuseError::Other(format!("OpenAI token exchange failed: {error}")))?;
+            .map_err(|error| NurError::Other(format!("OpenAI token exchange failed: {error}")))?;
         parse_token_response(response, None, None)
     }
 
@@ -1063,7 +1063,7 @@ pub mod openai {
             .post(format!("{ISSUER}/oauth/token"))
             .json(&body)
             .send()
-            .map_err(|error| MuseError::Other(format!("OpenAI token refresh failed: {error}")))?;
+            .map_err(|error| NurError::Other(format!("OpenAI token refresh failed: {error}")))?;
         parse_token_response(response, Some(refresh_token), auth.oauth_meta.clone())
     }
 
@@ -1101,10 +1101,10 @@ pub mod openai {
 
     pub(super) fn codex_tokens_from_json(text: &str) -> Result<OAuthTokens> {
         let parsed: CodexAuthFile = serde_json::from_str(text)
-            .map_err(|error| MuseError::Other(format!("invalid Codex auth file: {error}")))?;
+            .map_err(|error| NurError::Other(format!("invalid Codex auth file: {error}")))?;
         let access_token = parsed.tokens.access_token.trim().to_string();
         if access_token.is_empty() {
-            return Err(MuseError::Other(
+            return Err(NurError::Other(
                 "Codex auth file has no access token; run `codex login` again".into(),
             ));
         }
@@ -1143,7 +1143,7 @@ pub mod openai {
         let status = response.status();
         let body = response.text().unwrap_or_default();
         let parsed: TokenResp = serde_json::from_str(&body).map_err(|error| {
-            MuseError::Other(format!(
+            NurError::Other(format!(
                 "OpenAI returned an invalid token response ({status}): {error}"
             ))
         })?;
@@ -1152,13 +1152,13 @@ pub mod openai {
                 .error
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| format!("HTTP {}", status.as_u16()));
-            return Err(MuseError::Other(format!("OpenAI OAuth failed: {detail}")));
+            return Err(NurError::Other(format!("OpenAI OAuth failed: {detail}")));
         }
         let access_token = parsed
             .access_token
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| {
-                MuseError::Other("OpenAI OAuth response did not include an access token".into())
+                NurError::Other("OpenAI OAuth response did not include an access token".into())
             })?;
         let refresh_token = parsed
             .refresh_token
@@ -1261,7 +1261,7 @@ pub mod xai {
             }
         }
         let device = device.ok_or_else(|| {
-            MuseError::Other(format!(
+            NurError::Other(format!(
                 "xAI device code failed ({last_err}). Paste an XAI_API_KEY or sign in with the Grok CLI first."
             ))
         })?;
@@ -1308,7 +1308,7 @@ pub mod xai {
 
         while std::time::Instant::now() < deadline {
             if cancel.is_cancelled() {
-                return Err(MuseError::Other("login cancelled".into()));
+                return Err(NurError::Other("login cancelled".into()));
             }
             thread::sleep(crate::oauth::device_poll_sleep(
                 base_interval,
@@ -1345,7 +1345,7 @@ pub mod xai {
                     if err == "parse" {
                         continue;
                     }
-                    return Err(MuseError::Other(format!(
+                    return Err(NurError::Other(format!(
                         "xAI token error: {err} {}",
                         parsed.error_description.unwrap_or_default()
                     )));
@@ -1368,7 +1368,7 @@ pub mod xai {
                 BrowserLoginProgress::Status("waiting for browser approval…".into()),
             );
         }
-        Err(MuseError::Other("xAI device login timed out".into()))
+        Err(NurError::Other("xAI device login timed out".into()))
     }
 
     pub fn refresh(auth: &Auth, refresh: &str) -> Result<OAuthTokens> {
@@ -1388,13 +1388,13 @@ pub mod xai {
             .post(format!("{ISSUER}/oauth/token"))
             .form(&form)
             .send()
-            .map_err(|e| MuseError::Other(e.to_string()))?;
+            .map_err(|e| NurError::Other(e.to_string()))?;
         let body = res.text().unwrap_or_default();
         let parsed: TokenResp =
-            serde_json::from_str(&body).map_err(|e| MuseError::Other(format!("{e}: {body}")))?;
+            serde_json::from_str(&body).map_err(|e| NurError::Other(format!("{e}: {body}")))?;
         let access = parsed
             .access_token
-            .ok_or_else(|| MuseError::Other(format!("refresh failed: {body}")))?;
+            .ok_or_else(|| NurError::Other(format!("refresh failed: {body}")))?;
         Ok(OAuthTokens {
             access_token: access,
             refresh_token: parsed.refresh_token.or_else(|| Some(refresh.to_string())),
@@ -1545,7 +1545,7 @@ pub mod kimi {
         }
         let value = Uuid::new_v4().to_string();
         crate::config::atomic_write(&path, value.as_bytes())
-            .map_err(|e| MuseError::Other(format!("failed to save Kimi device id: {e}")))?;
+            .map_err(|e| NurError::Other(format!("failed to save Kimi device id: {e}")))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -1618,7 +1618,7 @@ pub mod kimi {
         let access_token = parsed
             .access_token
             .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| MuseError::Other("Kimi token response omitted access_token".into()))?;
+            .ok_or_else(|| NurError::Other("Kimi token response omitted access_token".into()))?;
         let refresh_token = parsed
             .refresh_token
             .filter(|value| !value.trim().is_empty())
@@ -1653,19 +1653,19 @@ pub mod kimi {
         )?;
         let response = request
             .send()
-            .map_err(|e| MuseError::Other(format!("Kimi device authorization failed: {e}")))?;
+            .map_err(|e| NurError::Other(format!("Kimi device authorization failed: {e}")))?;
         let status = response.status();
         let body = response.text().unwrap_or_default();
         if !status.is_success() {
-            return Err(MuseError::Other(format!(
+            return Err(NurError::Other(format!(
                 "Kimi device authorization failed (HTTP {})",
                 status.as_u16()
             )));
         }
         let device: DeviceCodeResp = serde_json::from_str(&body)
-            .map_err(|e| MuseError::Other(format!("invalid Kimi device response: {e}")))?;
+            .map_err(|e| NurError::Other(format!("invalid Kimi device response: {e}")))?;
         if device.device_code.trim().is_empty() || device.user_code.trim().is_empty() {
-            return Err(MuseError::Other(
+            return Err(NurError::Other(
                 "Kimi device response omitted the authorization code".into(),
             ));
         }
@@ -1675,7 +1675,7 @@ pub mod kimi {
             device.verification_uri.clone()
         };
         if verification_url.trim().is_empty() {
-            return Err(MuseError::Other(
+            return Err(NurError::Other(
                 "Kimi device response omitted the verification URL".into(),
             ));
         }
@@ -1699,7 +1699,7 @@ pub mod kimi {
         let mut slow_down = false;
         while std::time::Instant::now() < deadline {
             if cancel.is_cancelled() {
-                return Err(MuseError::Other("login cancelled".into()));
+                return Err(NurError::Other("login cancelled".into()));
             }
             thread::sleep(crate::oauth::device_poll_sleep(
                 interval, slow_down, attempt,
@@ -1721,7 +1721,7 @@ pub mod kimi {
                 if status >= 500 {
                     continue;
                 }
-                return Err(MuseError::Other(format!(
+                return Err(NurError::Other(format!(
                     "invalid Kimi token response (HTTP {status})"
                 )));
             };
@@ -1736,16 +1736,16 @@ pub mod kimi {
                 Some("authorization_pending") | None => {}
                 Some("slow_down") => slow_down = true,
                 Some("expired_token") => {
-                    return Err(MuseError::Other(
+                    return Err(NurError::Other(
                         "Kimi device code expired; start browser sign-in again".into(),
                     ));
                 }
                 Some("access_denied") => {
-                    return Err(MuseError::Other("Kimi authorization was denied".into()));
+                    return Err(NurError::Other("Kimi authorization was denied".into()));
                 }
                 Some(_) if status >= 500 || status == 429 => continue,
                 Some(_) => {
-                    return Err(MuseError::Other(format!(
+                    return Err(NurError::Other(format!(
                         "Kimi token error: {}",
                         token_error(&parsed, status)
                     )));
@@ -1756,7 +1756,7 @@ pub mod kimi {
                 BrowserLoginProgress::Status("waiting for Kimi browser approval…".into()),
             );
         }
-        Err(MuseError::Other("Kimi device login timed out".into()))
+        Err(NurError::Other("Kimi device login timed out".into()))
     }
 
     pub fn refresh(auth: &Auth, refresh: &str) -> Result<OAuthTokens> {
@@ -1769,14 +1769,14 @@ pub mod kimi {
         ]))?;
         let response = request
             .send()
-            .map_err(|e| MuseError::Other(format!("Kimi token refresh failed: {e}")))?;
+            .map_err(|e| NurError::Other(format!("Kimi token refresh failed: {e}")))?;
         let status = response.status().as_u16();
         let body = response.text().unwrap_or_default();
         let parsed: TokenResp = serde_json::from_str(&body).map_err(|_| {
-            MuseError::Other(format!("invalid Kimi refresh response (HTTP {status})"))
+            NurError::Other(format!("invalid Kimi refresh response (HTTP {status})"))
         })?;
         if !(200..300).contains(&status) || parsed.access_token.is_none() {
-            return Err(MuseError::Other(format!(
+            return Err(NurError::Other(format!(
                 "Kimi token refresh failed: {}",
                 token_error(&parsed, status)
             )));
@@ -1956,7 +1956,7 @@ pub mod claude {
             }
             last = body;
         }
-        Err(MuseError::Other(format!(
+        Err(NurError::Other(format!(
             "Claude token exchange failed: {last}"
         )))
     }
@@ -2044,11 +2044,11 @@ pub mod claude {
         loop {
             if cancel.is_cancelled() {
                 let _ = std::fs::remove_file(&path);
-                return Err(MuseError::Other("login cancelled".into()));
+                return Err(NurError::Other("login cancelled".into()));
             }
             if start.elapsed() > timeout {
                 let _ = std::fs::remove_file(&path);
-                return Err(MuseError::Other(
+                return Err(NurError::Other(
                     "Claude login timed out waiting for pasted code".into(),
                 ));
             }
@@ -2098,7 +2098,7 @@ pub mod claude {
                 }
             }
         }
-        Err(MuseError::Other("Claude token refresh failed".into()))
+        Err(NurError::Other("Claude token refresh failed".into()))
     }
 
     pub fn import_claude_cli() -> Result<Option<OAuthTokens>> {
@@ -2207,7 +2207,7 @@ pub mod google {
             BrowserLoginProgress::OpenUrl("https://accounts.google.com/".into()),
         );
         let gcloud = gcloud_bin().ok_or_else(|| {
-            MuseError::Other(
+            NurError::Other(
                 "gcloud not found on PATH (and not under common install dirs). Install Google Cloud SDK from https://cloud.google.com/sdk/docs/install, open a new terminal, then retry — or paste a Gemini API key via /login."
                     .into(),
             )
@@ -2223,7 +2223,7 @@ pub mod google {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| {
-                MuseError::Other(format!(
+                NurError::Other(format!(
                     "failed to launch gcloud ({e}). Install Google Cloud SDK, or choose “Enter API key” with a Gemini key."
                 ))
             })?;
@@ -2252,7 +2252,7 @@ pub mod google {
         loop {
             if cancel.is_cancelled() {
                 let _ = child.kill();
-                return Err(MuseError::Other("login cancelled".into()));
+                return Err(NurError::Other("login cancelled".into()));
             }
             match child.try_wait() {
                 Ok(Some(status)) if status.success() => break,
@@ -2260,10 +2260,10 @@ pub mod google {
                     let message = format!(
                         "gcloud auth login failed (exit {status}). Paste a Gemini API key as fallback."
                     );
-                    return Err(MuseError::Other(message));
+                    return Err(NurError::Other(message));
                 }
                 Ok(None) => thread::sleep(Duration::from_millis(200)),
-                Err(e) => return Err(MuseError::Other(e.to_string())),
+                Err(e) => return Err(NurError::Other(e.to_string())),
             }
         }
         send(
@@ -2285,7 +2285,7 @@ pub mod google {
 
     pub(crate) fn fetch_access_token() -> Result<OAuthTokens> {
         let gcloud = gcloud_bin().ok_or_else(|| {
-            MuseError::Other(
+            NurError::Other(
                 "gcloud not found. Install Google Cloud SDK (https://cloud.google.com/sdk/docs/install) and ensure it is on PATH."
                     .into(),
             )
@@ -2293,16 +2293,16 @@ pub mod google {
         let out = Command::new(&gcloud)
             .args(["auth", "application-default", "print-access-token"])
             .output()
-            .map_err(|e| MuseError::Other(format!("gcloud ADC print-access-token: {e}")))?;
+            .map_err(|e| NurError::Other(format!("gcloud ADC print-access-token: {e}")))?;
         if !out.status.success() {
-            return Err(MuseError::Other(format!(
+            return Err(NurError::Other(format!(
                 "gcloud application-default print-access-token failed: {}",
                 String::from_utf8_lossy(&out.stderr)
             )));
         }
         let access = String::from_utf8_lossy(&out.stdout).trim().to_string();
         if access.is_empty() {
-            return Err(MuseError::Other("empty token from gcloud".into()));
+            return Err(NurError::Other("empty token from gcloud".into()));
         }
         let project_id = std::env::var("GOOGLE_CLOUD_PROJECT")
             .ok()
@@ -2320,7 +2320,7 @@ pub mod google {
                 (!value.is_empty() && value != "(unset)").then_some(value)
             })
             .ok_or_else(|| {
-                MuseError::Other(
+                NurError::Other(
                     "Google OAuth needs a quota project. Run `gcloud config set project PROJECT_ID` or set GOOGLE_CLOUD_PROJECT, then retry /login."
                         .into(),
                 )
@@ -2351,7 +2351,7 @@ pub mod google {
 /// Google OAuth with the Antigravity client ID, then loadCodeAssist + onboard
 /// to obtain a quota project. Also imports existing agy credentials from
 /// Windows Credential Manager (`gemini:antigravity`) and from Gemini CLI
-/// `~/.muse/oauth_creds.json` locations.
+/// supported local credential locations.
 pub mod antigravity {
     use super::*;
     use std::path::PathBuf;
@@ -2744,12 +2744,12 @@ foreach ($t in $targets) {
         // does. Fail here with something actionable rather than after the user
         // has already been sent through a consent screen.
         if !oauth_app_configured() {
-            return Err(MuseError::Other(OAUTH_APP_UNSET.into()));
+            return Err(NurError::Other(OAUTH_APP_UNSET.into()));
         }
 
         // Loopback server
         let listener = TcpListener::bind(("127.0.0.1", 0))
-            .map_err(|e| MuseError::Other(format!("failed to bind loopback: {e}")))?;
+            .map_err(|e| NurError::Other(format!("failed to bind loopback: {e}")))?;
         let port = listener.local_addr().map(|a| a.port()).unwrap_or(8080);
         let redirect_uri = format!("http://localhost:{port}/callback");
         let state = random_urlsafe(32);
@@ -2841,7 +2841,7 @@ foreach ($t in $targets) {
     fn exchange_code(code: &str, redirect_uri: &str) -> Result<OAuthTokens> {
         let (cid, csecret) = (client_id(), client_secret());
         if cid.is_empty() || csecret.is_empty() {
-            return Err(MuseError::Other(OAUTH_APP_UNSET.into()));
+            return Err(NurError::Other(OAUTH_APP_UNSET.into()));
         }
         let form = [
             ("grant_type", "authorization_code"),
@@ -2854,25 +2854,25 @@ foreach ($t in $targets) {
             .post(TOKEN_URL)
             .form(&form)
             .send()
-            .map_err(|e| MuseError::Other(format!("Antigravity token exchange failed: {e}")))?;
+            .map_err(|e| NurError::Other(format!("Antigravity token exchange failed: {e}")))?;
 
         let status = resp.status();
         let text = resp
             .text()
-            .map_err(|e| MuseError::Other(format!("read token response failed: {e}")))?;
+            .map_err(|e| NurError::Other(format!("read token response failed: {e}")))?;
 
         if !status.is_success() {
-            return Err(MuseError::Other(format!(
+            return Err(NurError::Other(format!(
                 "Antigravity token exchange failed ({}): {}",
                 status, text
             )));
         }
 
         let parsed: TokenResponse = serde_json::from_str(&text)
-            .map_err(|e| MuseError::Other(format!("invalid token JSON: {e}: {text}")))?;
+            .map_err(|e| NurError::Other(format!("invalid token JSON: {e}: {text}")))?;
 
         if let Some(err) = parsed.error {
-            return Err(MuseError::Other(format!(
+            return Err(NurError::Other(format!(
                 "Antigravity OAuth error: {} - {}",
                 err,
                 parsed.error_description.unwrap_or_default()
@@ -2880,7 +2880,7 @@ foreach ($t in $targets) {
         }
 
         if parsed.access_token.trim().is_empty() {
-            return Err(MuseError::Other(
+            return Err(NurError::Other(
                 "empty access token from Antigravity".into(),
             ));
         }
@@ -2921,22 +2921,22 @@ foreach ($t in $targets) {
             .header("Client-Metadata", CLIENT_METADATA)
             .json(&body)
             .send()
-            .map_err(|e| MuseError::Other(format!("loadCodeAssist request failed: {e}")))?;
+            .map_err(|e| NurError::Other(format!("loadCodeAssist request failed: {e}")))?;
 
         let status = resp.status();
         let text = resp
             .text()
-            .map_err(|e| MuseError::Other(format!("read loadCodeAssist response failed: {e}")))?;
+            .map_err(|e| NurError::Other(format!("read loadCodeAssist response failed: {e}")))?;
 
         if !status.is_success() {
-            return Err(MuseError::Other(format!(
+            return Err(NurError::Other(format!(
                 "loadCodeAssist failed ({}): {}",
                 status, text
             )));
         }
 
         serde_json::from_str(&text)
-            .map_err(|e| MuseError::Other(format!("invalid loadCodeAssist JSON: {e}")))
+            .map_err(|e| NurError::Other(format!("invalid loadCodeAssist JSON: {e}")))
     }
 
     /// Full Code Assist setup matching gemini-cli `setupUser`:
@@ -3046,12 +3046,12 @@ foreach ($t in $targets) {
                     .collect::<Vec<_>>()
                     .join("; ");
                 if !msg.is_empty() {
-                    return Err(MuseError::Other(format!(
+                    return Err(NurError::Other(format!(
                         "Code Assist ineligible: {msg}. Set GOOGLE_CLOUD_PROJECT for a paid/workspace project, or fix the account at the validation URL. Or run `/login antigravity` after signing into the Antigravity/Gemini CLI."
                     )));
                 }
             }
-            return Err(MuseError::Other(
+            return Err(NurError::Other(
                 "Code Assist setup returned no project id. Run `/login antigravity`, enable the Cloud Code API, or set GOOGLE_CLOUD_PROJECT to a project where Code Assist is available.".into(),
             ));
         }
@@ -3105,7 +3105,7 @@ foreach ($t in $targets) {
     pub fn resolve_project_id(access_token: &str) -> Result<String> {
         let setup = setup_code_assist(access_token, None)?;
         if setup.project_id.is_empty() {
-            return Err(MuseError::Other(
+            return Err(NurError::Other(
                 "Code Assist setup returned no cloudaicompanionProject".into(),
             ));
         }
@@ -3192,7 +3192,7 @@ foreach ($t in $targets) {
         }
 
         if !last_err.is_empty() {
-            return Err(MuseError::Other(format!(
+            return Err(NurError::Other(format!(
                 "onboardUser did not complete: {last_err}"
             )));
         }
@@ -3223,7 +3223,7 @@ foreach ($t in $targets) {
                     return Ok(fresh);
                 }
             }
-            return Err(MuseError::Other(OAUTH_APP_UNSET.into()));
+            return Err(NurError::Other(OAUTH_APP_UNSET.into()));
         }
         let form = [
             ("grant_type", "refresh_token"),
@@ -3236,25 +3236,25 @@ foreach ($t in $targets) {
             .post(TOKEN_URL)
             .form(&form)
             .send()
-            .map_err(|e| MuseError::Other(format!("Antigravity refresh failed: {e}")))?;
+            .map_err(|e| NurError::Other(format!("Antigravity refresh failed: {e}")))?;
 
         let status = resp.status();
         let text = resp
             .text()
-            .map_err(|e| MuseError::Other(format!("read refresh response failed: {e}")))?;
+            .map_err(|e| NurError::Other(format!("read refresh response failed: {e}")))?;
 
         if !status.is_success() {
-            return Err(MuseError::Other(format!(
+            return Err(NurError::Other(format!(
                 "Antigravity refresh failed ({}): {}",
                 status, text
             )));
         }
 
         let parsed: TokenResponse = serde_json::from_str(&text)
-            .map_err(|e| MuseError::Other(format!("invalid refresh JSON: {e}")))?;
+            .map_err(|e| NurError::Other(format!("invalid refresh JSON: {e}")))?;
 
         if parsed.access_token.trim().is_empty() {
-            return Err(MuseError::Other("empty access token on refresh".into()));
+            return Err(NurError::Other("empty access token on refresh".into()));
         }
 
         // Preserve existing meta; re-run setup when project is missing so free-tier
@@ -3449,7 +3449,7 @@ pub mod github {
         // `--web` opens the device flow; feed newlines so the "press Enter to
         // open the browser" prompt proceeds without a TTY.
         let gh = gh_bin().ok_or_else(|| {
-            MuseError::Other(
+            NurError::Other(
                 "gh not found on PATH. Install GitHub CLI (https://cli.github.com/), open a new terminal, then retry — or paste a GitHub PAT (models:read) via /login."
                     .into(),
             )
@@ -3485,7 +3485,7 @@ pub mod github {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| {
-                MuseError::Other(format!(
+                NurError::Other(format!(
                     "failed to launch gh ({e}). Install GitHub CLI, or paste a GitHub PAT (models:read)."
                 ))
             })?;
@@ -3515,17 +3515,17 @@ pub mod github {
         loop {
             if cancel.is_cancelled() {
                 let _ = child.kill();
-                return Err(MuseError::Other("login cancelled".into()));
+                return Err(NurError::Other("login cancelled".into()));
             }
             match child.try_wait() {
                 Ok(Some(status)) if status.success() => break,
                 Ok(Some(status)) => {
-                    return Err(MuseError::Other(format!(
+                    return Err(NurError::Other(format!(
                         "gh auth login failed (exit {status}). Paste a GitHub PAT (models:read) as fallback."
                     )))
                 }
                 Ok(None) => thread::sleep(Duration::from_millis(200)),
-                Err(e) => return Err(MuseError::Other(e.to_string())),
+                Err(e) => return Err(NurError::Other(e.to_string())),
             }
         }
         send(
@@ -3537,7 +3537,7 @@ pub mod github {
 
     fn fetch_token(provider_id: &str) -> Result<OAuthTokens> {
         let gh = gh_bin().ok_or_else(|| {
-            MuseError::Other(
+            NurError::Other(
                 "gh not found. Install GitHub CLI (https://cli.github.com/) and ensure it is on PATH."
                     .into(),
             )
@@ -3545,16 +3545,16 @@ pub mod github {
         let out = Command::new(&gh)
             .args(["auth", "token", "--hostname", "github.com"])
             .output()
-            .map_err(|e| MuseError::Other(format!("gh auth token: {e}")))?;
+            .map_err(|e| NurError::Other(format!("gh auth token: {e}")))?;
         if !out.status.success() {
-            return Err(MuseError::Other(format!(
+            return Err(NurError::Other(format!(
                 "gh auth token failed: {}",
                 String::from_utf8_lossy(&out.stderr)
             )));
         }
         let access = String::from_utf8_lossy(&out.stdout).trim().to_string();
         if access.is_empty() {
-            return Err(MuseError::Other("empty token from gh".into()));
+            return Err(NurError::Other("empty token from gh".into()));
         }
         Ok(OAuthTokens {
             access_token: access,
@@ -3578,7 +3578,7 @@ pub mod github {
                     .bearer_auth(token)
                     .header("Accept", "application/vnd.github+json")
                     .send()
-                    .map_err(|error| MuseError::Other(error.to_string()))
+                    .map_err(|error| NurError::Other(error.to_string()))
             })
             .is_ok_and(|response| response.status().is_success())
     }
@@ -3722,7 +3722,7 @@ pub mod huggingface {
             let mut slow = false;
             while std::time::Instant::now() < deadline {
                 if cancel.is_cancelled() {
-                    return Err(MuseError::Other("login cancelled".into()));
+                    return Err(NurError::Other("login cancelled".into()));
                 }
                 thread::sleep(crate::oauth::device_poll_sleep(
                     base_interval,
@@ -3779,13 +3779,13 @@ pub mod huggingface {
                     BrowserLoginProgress::Status("waiting for Hugging Face approval…".into()),
                 );
             }
-            return Err(MuseError::Other("Hugging Face login timed out".into()));
+            return Err(NurError::Other("Hugging Face login timed out".into()));
         }
 
         // Fallback: open token page and instruct user to use API key path.
         let url = "https://huggingface.co/settings/tokens";
         send(tx, BrowserLoginProgress::OpenUrl(url.into()));
-        Err(MuseError::Other(format!(
+        Err(NurError::Other(format!(
             "HF device flow unavailable ({last}). Open {url}, create a token (or set HF_TOKEN), then choose “Enter API key” in /login. Optional: register an OAuth app and set NUR_HF_OAUTH_CLIENT_ID for browser device flow."
         )))
     }
@@ -3838,7 +3838,7 @@ pub mod huggingface {
         if let Some(t) = import_hf_token() {
             return Ok(t);
         }
-        Err(MuseError::Other(
+        Err(NurError::Other(
             "Hugging Face token refresh not available — re-run browser login or paste HF_TOKEN"
                 .into(),
         ))
@@ -3872,7 +3872,7 @@ pub mod azure {
         );
         let _ = open_browser("https://microsoft.com/devicelogin");
         let az = az_bin().ok_or_else(|| {
-            MuseError::Other(
+            NurError::Other(
                 "Azure CLI (`az`) not found on PATH. Install from https://aka.ms/installazurecliwindows, open a new terminal, then retry — or paste AZURE_OPENAI_API_KEY via /login."
                     .into(),
             )
@@ -3883,7 +3883,7 @@ pub mod azure {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| {
-                MuseError::Other(format!(
+                NurError::Other(format!(
                     "failed to launch az ({e}). Install Azure CLI or paste AZURE_OPENAI_API_KEY."
                 ))
             })?; // Best-effort parse device code from az stderr/stdout while waiting.
@@ -3920,17 +3920,17 @@ pub mod azure {
         loop {
             if cancel.is_cancelled() {
                 let _ = child.kill();
-                return Err(MuseError::Other("login cancelled".into()));
+                return Err(NurError::Other("login cancelled".into()));
             }
             match child.try_wait() {
                 Ok(Some(status)) if status.success() => break,
                 Ok(Some(status)) => {
-                    return Err(MuseError::Other(format!(
+                    return Err(NurError::Other(format!(
                         "az login failed (exit {status}). Paste AZURE_OPENAI_API_KEY as fallback."
                     )))
                 }
                 Ok(None) => thread::sleep(Duration::from_millis(200)),
-                Err(e) => return Err(MuseError::Other(e.to_string())),
+                Err(e) => return Err(NurError::Other(e.to_string())),
             }
         }
         send(
@@ -3942,7 +3942,7 @@ pub mod azure {
 
     fn fetch_token() -> Result<OAuthTokens> {
         let az = az_bin().ok_or_else(|| {
-            MuseError::Other(
+            NurError::Other(
                 "Azure CLI (`az`) not found. Install from https://aka.ms/installazurecliwindows or paste AZURE_OPENAI_API_KEY."
                     .into(),
             )
@@ -3958,13 +3958,13 @@ pub mod azure {
             ])
             .output()
             .map_err(|e| {
-                MuseError::Other(format!(
+                NurError::Other(format!(
                     "Azure CLI not available ({e}). Install `az`, run `az login`, or paste AZURE_OPENAI_API_KEY."
                 ))
             })?;
         if !out.status.success() {
             let err = String::from_utf8_lossy(&out.stderr);
-            return Err(MuseError::Other(format!(
+            return Err(NurError::Other(format!(
                 "az get-access-token failed: {err}. Fix: `az login` then retry, or paste AZURE_OPENAI_API_KEY in /login."
             )));
         }
@@ -3979,7 +3979,7 @@ pub mod azure {
             expires_on_ts: Option<String>,
         }
         let parsed: AzToken = serde_json::from_slice(&out.stdout).map_err(|e| {
-            MuseError::Other(format!(
+            NurError::Other(format!(
                 "could not parse az JSON token output ({e}). Update Azure CLI or use API key path."
             ))
         })?;
@@ -3987,7 +3987,7 @@ pub mod azure {
             .access_token
             .filter(|s| !s.is_empty())
             .ok_or_else(|| {
-                MuseError::Other(
+                NurError::Other(
                     "az returned empty accessToken. Run `az login` or paste AZURE_OPENAI_API_KEY."
                         .into(),
                 )
@@ -4042,7 +4042,7 @@ pub mod bedrock {
         let aws = match aws_bin() {
             Some(p) => p,
             None => {
-                return Err(MuseError::Other(
+                return Err(NurError::Other(
                     "AWS CLI (`aws`) not found on PATH. Install AWS CLI v2 (https://aws.amazon.com/cli/), configure SSO, then retry — or paste a Bedrock bearer/API key."
                         .into(),
                 ));
@@ -4084,7 +4084,7 @@ pub mod bedrock {
             loop {
                 if cancel.is_cancelled() {
                     let _ = child.kill();
-                    return Err(MuseError::Other("login cancelled".into()));
+                    return Err(NurError::Other("login cancelled".into()));
                 }
                 match child.try_wait() {
                     Ok(Some(s)) if s.success() => {
@@ -4107,7 +4107,7 @@ pub mod bedrock {
             }
         }
         if !ok {
-            return Err(MuseError::Other(format!(
+            return Err(NurError::Other(format!(
                 "AWS SSO login failed ({last}). Install AWS CLI v2, configure SSO, or paste a bearer/token if you use a Bedrock gateway."
             )));
         }
@@ -4135,7 +4135,7 @@ pub mod bedrock {
             }
         }
 
-        Err(MuseError::Other(
+        Err(NurError::Other(
             "AWS SSO completed, but SSO credentials require SigV4 and cannot be sent as a bearer token. Generate a short-term Bedrock API key, set AWS_BEARER_TOKEN_BEDROCK, then retry /login; or paste a Bedrock API key. The AWS CLI SSO session remains active."
                 .into(),
         ))
@@ -4152,7 +4152,7 @@ pub mod bedrock {
                 });
             }
         }
-        Err(MuseError::Other(
+        Err(NurError::Other(
             "AWS Bedrock refresh: re-run /login browser (aws sso login)".into(),
         ))
     }

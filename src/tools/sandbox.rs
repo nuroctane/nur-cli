@@ -1,6 +1,6 @@
 //! Workspace sandbox: keep tools inside the session cwd and refuse drive-root walks.
 
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use std::path::{Component, Path, PathBuf};
 
 /// Windows `canonicalize` returns verbatim (`\\?\C:\...`) paths; strip the
@@ -78,7 +78,7 @@ pub fn resolve_in_workspace(cwd: &Path, path: &str) -> Result<PathBuf> {
         let real = lexical
             .canonicalize()
             .map(|p| strip_verbatim(&p))
-            .map_err(|e| MuseError::Tool(format!("resolve {}: {e}", lexical.display())))?;
+            .map_err(|e| NurError::Tool(format!("resolve {}: {e}", lexical.display())))?;
         if !path_is_within(&real, &cwd_canon) && !path_is_within(&real, &cwd_norm) {
             return Err(escape_err(&real, &cwd_norm));
         }
@@ -93,7 +93,7 @@ pub fn resolve_in_workspace(cwd: &Path, path: &str) -> Result<PathBuf> {
             let real_parent = parent
                 .canonicalize()
                 .map(|p| strip_verbatim(&p))
-                .map_err(|e| MuseError::Tool(format!("resolve {}: {e}", parent.display())))?;
+                .map_err(|e| NurError::Tool(format!("resolve {}: {e}", parent.display())))?;
             if !path_is_within(&real_parent, &cwd_canon) && !path_is_within(&real_parent, &cwd_norm)
             {
                 return Err(escape_err(&real_parent, &cwd_norm));
@@ -135,8 +135,8 @@ pub fn resolve_for_read(cwd: &Path, path: &str) -> Result<PathBuf> {
     }
 }
 
-fn escape_err(path: &Path, root: &Path) -> MuseError {
-    MuseError::Tool(format!(
+fn escape_err(path: &Path, root: &Path) -> NurError {
+    NurError::Tool(format!(
         "path escapes workspace sandbox\n  path: {}\n  workspace: {}\n\
          Refuse: tools only operate under the session cwd.",
         path.display(),
@@ -221,7 +221,7 @@ pub fn resolve_safe_workspace(
 
     // Explicit --cwd C:\ is still refused (user forced an unsafe root).
     if explicit_cwd {
-        return Err(MuseError::Other(format!(
+        return Err(NurError::Other(format!(
             "refusing --cwd at filesystem root ({})\n\
              Pick a project folder, e.g.\n\
                nur --cwd C:\\Users\\{}\\Laboratory\\nur-cli\n\
@@ -246,7 +246,7 @@ pub fn resolve_safe_workspace(
     }
 
     // 2) Env override
-    for var in ["NUR_CWD", "META_CWD", "MUSE_CWD"] {
+    for var in ["NUR_CWD"] {
         if let Ok(v) = std::env::var(var) {
             let p = PathBuf::from(v.trim());
             if p.is_dir() && !is_dangerous_workspace(&p) {
@@ -311,7 +311,7 @@ pub fn resolve_safe_workspace(
         }
     }
 
-    Err(MuseError::Other(format!(
+    Err(NurError::Other(format!(
         "refusing to run with workspace at filesystem root ({})\n\
          In the TUI:  /cd path\\to\\repo\n\
          Or launch with:  nur --cwd C:\\Users\\you\\path\\to\\repo\n\
@@ -321,7 +321,7 @@ pub fn resolve_safe_workspace(
 }
 
 fn last_session_cwd() -> Option<PathBuf> {
-    let path = crate::config::muse_home().join("latest_session.json");
+    let path = crate::config::nur_home().join("latest_session.json");
     let text = std::fs::read_to_string(path).ok()?;
     let v: serde_json::Value = serde_json::from_str(&text).ok()?;
     let s = v.get("cwd")?.as_str()?;

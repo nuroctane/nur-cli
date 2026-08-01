@@ -33,7 +33,7 @@ nur doctor
 nur doctor · v0.13.2
 
 binary  C:\Users\you\.local\bin\nur.exe
-config  model=muse-spark-1.1 effort=high max_turns=∞ budget=∞$/∞tok  (C:\Users\you\.nur\config.toml)
+config  model=Llama-4-Maverick-17B-128E-Instruct-FP8 effort=high max_turns=∞ budget=∞$/∞tok  (C:\Users\you\.nur\config.toml)
 auth    key set (…abcd)
 home    C:\Users\you\.nur
 status  C:\Users\you\.nur\status.json
@@ -116,7 +116,7 @@ No API key found.
 nur auth login
 # or
 export NUR_API_KEY="your-key-here"
-# Meta Model API / older installs also accept META_API_KEY / MODEL_API_KEY
+# Meta Model API accepts META_API_KEY
 ```
 
 ### Missing session in `/sessions`
@@ -126,7 +126,7 @@ Sessions are never auto-deleted. If a chat “vanished”:
 1. Toggle the sessions picker scope to **all** (not only this cwd) — Tab or the scope chip.
 2. CLI: `nur sessions --limit 50` and look at the **COST** column for high-spend chats.
 3. Resume by id: `nur -r <prefix>` (first 8 chars of the UUID are enough when unique).
-4. Check both `~/.nur/sessions/` and legacy `~/.muse/sessions/`. Sidecar `*.json.bak` may hold the previous save.
+4. Check `~/.nur/sessions/`. Sidecar `*.json.bak` may hold the previous save.
 
 ### Session budget stopped the agent
 
@@ -258,21 +258,6 @@ config  invalid reasoning_effort 'super' — use minimal|low|medium|high|xhigh
 ```
 
 **Fix:** Edit `~/.nur/config.toml` and set a valid effort level.
-
----
-
-## Legacy migration
-
-If you upgraded from a pre-0.5.14 build (using `~/.muse/`), NurCLI automatically gap-fills missing files into `~/.nur/`. Existing files are never overwritten.
-
-To manually migrate:
-
-```bash
-# Files are copied automatically on first run.
-# To force a clean start:
-nur auth logout     # clears both ~/.nur and ~/.muse
-nur auth login      # re-authenticate
-```
 
 ---
 

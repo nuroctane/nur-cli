@@ -2,7 +2,7 @@
 
 use super::{arg_str, Tool, ToolContext};
 use crate::ecosystem;
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde_json::Value;
 
 pub struct ExecutorTool;
@@ -27,7 +27,7 @@ impl Tool for ExecutorTool {
         "Executor MCP gateway (executor.sh): unified catalog of OpenAPI/GraphQL/MCP \
          integrations. action=status|sources|search|call|install. \
          Prefer for external SaaS/APIs; use native Meta tools for local repo work. \
-         Auto-installed with meta."
+         Auto-installed with Nur."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -61,7 +61,7 @@ impl Tool for ExecutorTool {
 
     fn execute(&self, args: &Value, _ctx: &ToolContext) -> Result<String> {
         let bin = ecosystem::find_bin("executor").ok_or_else(|| {
-            MuseError::Tool(
+            NurError::Tool(
                 "executor CLI not found. Meta auto-installs it — npm i -g executor \
                  then nur ecosystem ensure"
                     .into(),
@@ -87,12 +87,10 @@ impl Tool for ExecutorTool {
                 a
             }
             other => {
-                return Err(MuseError::Tool(format!(
-                    "unknown executor action '{other}'"
-                )));
+                return Err(NurError::Tool(format!("unknown executor action '{other}'")));
             }
         };
         let refs: Vec<&str> = argv.iter().map(|s| s.as_str()).collect();
-        ecosystem::run_capture(&bin, &refs, None, 120_000).map_err(MuseError::Tool)
+        ecosystem::run_capture(&bin, &refs, None, 120_000).map_err(NurError::Tool)
     }
 }

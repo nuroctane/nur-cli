@@ -1,6 +1,6 @@
 //! Honest shell selection — never claim "bash" when running cmd.exe.
 
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -92,7 +92,7 @@ pub fn shell_backend() -> &'static ShellBackend {
 /// Detect the best available shell (prefer `shell_backend()` — this probes disk).
 pub fn detect_shell() -> ShellBackend {
     // 1) Explicit override
-    if let Ok(p) = std::env::var("META_SHELL").or_else(|_| std::env::var("MUSE_SHELL")) {
+    if let Ok(p) = std::env::var("NUR_SHELL") {
         let pb = PathBuf::from(&p);
         if pb.is_file() || which_exists(&p) {
             let kind = if p.to_ascii_lowercase().contains("bash") {
@@ -107,7 +107,7 @@ pub fn detect_shell() -> ShellBackend {
             return ShellBackend {
                 kind,
                 program: pb,
-                label: format!("META_SHELL={p}"),
+                label: format!("NUR_SHELL={p}"),
             };
         }
     }
@@ -266,7 +266,7 @@ pub fn run_in_shell(
 
     let mut child = cmd
         .spawn()
-        .map_err(|e| MuseError::Tool(format!("command failed to start: {e}")))?;
+        .map_err(|e| NurError::Tool(format!("command failed to start: {e}")))?;
 
     // Drain pipes on threads so a chatty child can't deadlock on a full pipe.
     let progress = Arc::new(AtomicU64::new(now_ms()));
@@ -287,7 +287,7 @@ pub fn run_in_shell(
                     kill_tree(&mut child);
                     let _ = join_with_timeout(out_h, JOIN_AFTER_KILL_MS);
                     let _ = join_with_timeout(err_h, JOIN_AFTER_KILL_MS);
-                    return Err(MuseError::Tool(
+                    return Err(NurError::Tool(
                         "command cancelled by user (process tree killed)".into(),
                     ));
                 }
@@ -295,7 +295,7 @@ pub fn run_in_shell(
                     kill_tree(&mut child);
                     let _ = join_with_timeout(out_h, JOIN_AFTER_KILL_MS);
                     let _ = join_with_timeout(err_h, JOIN_AFTER_KILL_MS);
-                    return Err(MuseError::Tool(format!(
+                    return Err(NurError::Tool(format!(
                         "command timed out after {timeout_ms}ms (process tree killed). \
                          Do not retry the same command with a longer timeout - use \
                          list_dir/read_file/grep/glob, or a narrower non-interactive command."
@@ -309,7 +309,7 @@ pub fn run_in_shell(
                         kill_tree(&mut child);
                         let _ = join_with_timeout(out_h, JOIN_AFTER_KILL_MS);
                         let _ = join_with_timeout(err_h, JOIN_AFTER_KILL_MS);
-                        return Err(MuseError::Tool(format!(
+                        return Err(NurError::Tool(format!(
                             "command idle for {idle_for}ms with no output (process tree killed). \
                              Likely waiting for interactive input or stuck. Do not retry the \
                              identical command - switch to a dedicated tool or a non-interactive form."
@@ -322,7 +322,7 @@ pub fn run_in_shell(
                 kill_tree(&mut child);
                 let _ = join_with_timeout(out_h, JOIN_AFTER_KILL_MS);
                 let _ = join_with_timeout(err_h, JOIN_AFTER_KILL_MS);
-                return Err(MuseError::Tool(format!("command wait failed: {e}")));
+                return Err(NurError::Tool(format!("command wait failed: {e}")));
             }
         }
     };
@@ -356,7 +356,7 @@ pub fn run_in_shell(
     if kind == ShellKind::Cmd {
         out.push_str(
             "note: shell is cmd.exe — use Windows syntax (dir, type, findstr). \
-             Install Git Bash or set META_SHELL for real bash.\n",
+             Install Git Bash or set NUR_SHELL for real bash.\n",
         );
     }
     Ok(out)

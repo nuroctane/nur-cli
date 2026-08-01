@@ -6,8 +6,8 @@
 //! Gateways: Executor MCP · skills CLI · AKM
 //! Patterns: DCP-style context pruning (native + docs)
 
-use crate::config::muse_home;
-use crate::error::{MuseError, Result};
+use crate::config::nur_home;
+use crate::error::{NurError, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -231,7 +231,7 @@ impl EcosystemStatus {
 }
 
 pub fn ruflo_home() -> PathBuf {
-    muse_home().join("ruflo")
+    nur_home().join("ruflo")
 }
 
 pub fn ruflo_db_path() -> PathBuf {
@@ -239,13 +239,13 @@ pub fn ruflo_db_path() -> PathBuf {
 }
 
 pub fn marker_path() -> PathBuf {
-    muse_home().join(ECOSYSTEM_MARKER)
+    nur_home().join(ECOSYSTEM_MARKER)
 }
 
 /// Ensure the full Meta ecosystem is installed and initialised.
 /// Safe to call on every launch - skips heavy work when the marker is fresh.
 pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
-    // Always heal ~/.muse → ~/.nur gaps before creating empty ruflo/skills dirs.
+    // Ensure the Nur home exists before creating ecosystem directories.
     let _ = crate::config::ensure_dirs();
 
     if !force {
@@ -350,8 +350,8 @@ fn load_marker_if_fresh() -> Option<EcosystemStatus> {
 }
 
 fn save_marker(st: &EcosystemStatus) -> Result<()> {
-    let _ = fs::create_dir_all(muse_home());
-    let text = serde_json::to_string_pretty(st).map_err(|e| MuseError::Config(e.to_string()))?;
+    let _ = fs::create_dir_all(nur_home());
+    let text = serde_json::to_string_pretty(st).map_err(|e| NurError::Config(e.to_string()))?;
     fs::write(marker_path(), text)?;
     Ok(())
 }
@@ -517,20 +517,15 @@ fn ensure_headroom() -> ComponentStatus {
         c.available = true;
         c.path = Some(bin.clone());
         c.version = cmd_version(&bin, &["--version"]);
-        c.detail = "CLI ready · inline tool-result compress (disable: [headroom] enabled=false)".into();
+        c.detail =
+            "CLI ready · inline tool-result compress (disable: [headroom] enabled=false)".into();
         return c;
     }
     // Best-effort install via uv / pip
     if let Some(uv) = find_bin("uv") {
         let _ = run_capture(
             &uv,
-            &[
-                "tool",
-                "install",
-                "--python",
-                "3.13",
-                "headroom-ai[all]",
-            ],
+            &["tool", "install", "--python", "3.13", "headroom-ai[all]"],
             None,
             600_000,
         );
@@ -600,8 +595,7 @@ fn ensure_egaki(node_ok: bool) -> ComponentStatus {
         c.available = true;
         c.path = Some(bin.clone());
         c.version = cmd_version(&bin, &["--version"]);
-        c.detail =
-            "CLI ready · egaki login --provider chatgpt | xai-oauth | egaki --key …".into();
+        c.detail = "CLI ready · egaki login --provider chatgpt | xai-oauth | egaki --key …".into();
     } else {
         c.detail = "not found after npm install - try: npm i -g egaki@latest".into();
     }

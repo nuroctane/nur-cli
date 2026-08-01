@@ -292,7 +292,7 @@ impl GeminiAccumulator {
 /// Parse a whole non-streamed `:generateContent` body into an `ApiResponse`.
 pub fn parse_completion(body: &str) -> crate::error::Result<ApiResponse> {
     let v: Value = serde_json::from_str(body)
-        .map_err(|e| crate::error::MuseError::Other(format!("invalid Cloud Code JSON: {e}")))?;
+        .map_err(|e| crate::error::NurError::Other(format!("invalid Cloud Code JSON: {e}")))?;
     // Non-stream returns an array of chunks for streamGenerateContent without
     // `alt=sse`, or a single object for `:generateContent`.
     let mut acc = GeminiAccumulator::new();
@@ -308,7 +308,7 @@ pub fn parse_completion(body: &str) -> crate::error::Result<ApiResponse> {
     }
     let value = acc.into_response_value();
     serde_json::from_value(value)
-        .map_err(|e| crate::error::MuseError::Other(format!("map Cloud Code response failed: {e}")))
+        .map_err(|e| crate::error::NurError::Other(format!("map Cloud Code response failed: {e}")))
 }
 
 #[cfg(test)]

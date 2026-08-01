@@ -16,11 +16,9 @@ graphify-out/
 *.p12
 auth.json
 **/auth.json
-# Project-local agent state (use .nur — never .muse)
+# Project-local Nur agent state
 .nur/
 **/.nur/
-.muse/
-**/.muse/
 credentials*
 **/credentials*
 secrets*

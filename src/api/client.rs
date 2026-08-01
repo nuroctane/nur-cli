@@ -1,5 +1,5 @@
 use super::types::{ApiResponse, ResponseRequest};
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use crate::providers::ApiStyle;
 use futures_util::StreamExt;
 use reqwest::Client;
@@ -472,7 +472,7 @@ impl ApiClient {
         let cancel = tokio_util::sync::CancellationToken::new();
         tokio::task::spawn_blocking(move || super::cursor_cli::complete(&req, &cancel))
             .await
-            .map_err(|e| MuseError::Other(format!("cursor-agent task failed: {e}")))?
+            .map_err(|e| NurError::Other(format!("cursor-agent task failed: {e}")))?
     }
 
     async fn create_cursor_cli_stream(
@@ -504,7 +504,7 @@ impl ApiClient {
         match handle.await {
             Ok(Ok(resp)) => Ok(final_resp.unwrap_or(resp)),
             Ok(Err(e)) => Err(e),
-            Err(e) => Err(MuseError::Other(format!("cursor-agent task failed: {e}"))),
+            Err(e) => Err(NurError::Other(format!("cursor-agent task failed: {e}"))),
         }
     }
 
@@ -547,7 +547,7 @@ impl ApiClient {
                         tokio::time::sleep(backoff).await;
                         continue;
                     }
-                    return Err(MuseError::Other(format!(
+                    return Err(NurError::Other(format!(
                         "request failed after {attempt} attempts: {e}"
                     )));
                 }
@@ -582,7 +582,7 @@ impl ApiClient {
                     continue;
                 }
                 let msg = parse_error_message(&body).unwrap_or(body.clone());
-                return Err(MuseError::Api {
+                return Err(NurError::Api {
                     status: status.as_u16(),
                     message: msg,
                 });
@@ -625,7 +625,7 @@ impl ApiClient {
         sanitize_media_for_provider(&mut stream_req.input, &self.provider_id);
         let url = format!("{}/responses", self.base_url);
         let mut attempt = 0u32;
-        let mut last_err: Option<MuseError> = None;
+        let mut last_err: Option<NurError> = None;
         let mut oauth_refreshed = false;
 
         loop {
@@ -646,10 +646,10 @@ impl ApiClient {
                     if attempt < 3 {
                         tokio::time::sleep(std::time::Duration::from_millis(400 * attempt as u64))
                             .await;
-                        last_err = Some(MuseError::Other(e.to_string()));
+                        last_err = Some(NurError::Other(e.to_string()));
                         continue;
                     }
-                    return Err(MuseError::Other(format!(
+                    return Err(NurError::Other(format!(
                         "stream connect failed after {attempt}: {e}"
                     )));
                 }
@@ -675,7 +675,7 @@ impl ApiClient {
                 if is_retryable_error(status.as_u16(), &msg, self.is_opencode_route())
                     && attempt < 3
                 {
-                    last_err = Some(MuseError::Api {
+                    last_err = Some(NurError::Api {
                         status: status.as_u16(),
                         message: msg,
                     });
@@ -683,7 +683,7 @@ impl ApiClient {
                     tokio::time::sleep(backoff).await;
                     continue;
                 }
-                return Err(MuseError::Api {
+                return Err(NurError::Api {
                     status: status.as_u16(),
                     message: msg,
                 });
@@ -716,7 +716,7 @@ impl ApiClient {
 
             loop {
                 let chunk = tokio::select! {
-                    _ = cancel.cancelled() => return Err(MuseError::Interrupted),
+                    _ = cancel.cancelled() => return Err(NurError::Interrupted),
                     c = stream.next() => c,
                 };
                 let Some(chunk) = chunk else {
@@ -762,10 +762,10 @@ impl ApiClient {
                     Ok(c) => c,
                     Err(e) => {
                         if attempt < 3 {
-                            last_err = Some(MuseError::Other(format!("stream chunk error: {e}")));
+                            last_err = Some(NurError::Other(format!("stream chunk error: {e}")));
                             break;
                         } else {
-                            return Err(MuseError::Other(format!("stream chunk error: {e}")));
+                            return Err(NurError::Other(format!("stream chunk error: {e}")));
                         }
                     }
                 };
@@ -863,7 +863,7 @@ impl ApiClient {
             // Fallback: stream ended without completed response — if we saw deltas, try one more time non-streaming?
             if attempt >= 3 {
                 return Err(last_err.unwrap_or_else(|| {
-                    MuseError::Other(format!(
+                    NurError::Other(format!(
                         "stream ended without a completed response (saw_data={saw_any_data})"
                     ))
                 }));
@@ -901,7 +901,7 @@ impl ApiClient {
                     let _ = e;
                     continue;
                 }
-                Err(e) => return Err(MuseError::Other(format!("request failed: {e}"))),
+                Err(e) => return Err(NurError::Other(format!("request failed: {e}"))),
             };
             let status = res.status();
             let text = res.text().await.unwrap_or_default();
@@ -928,16 +928,16 @@ impl ApiClient {
                     .await;
                     continue;
                 }
-                return Err(MuseError::Api {
+                return Err(NurError::Api {
                     status: status.as_u16(),
                     message,
                 });
             }
             let v: serde_json::Value = serde_json::from_str(&text)
-                .map_err(|e| MuseError::Other(format!("bad chat response: {e}; body={text}")))?;
+                .map_err(|e| NurError::Other(format!("bad chat response: {e}; body={text}")))?;
             let shaped = super::chat::parse_completion(&v);
             return super::chat::to_api_response(shaped)
-                .map_err(|e| MuseError::Other(format!("chat response map failed: {e}")));
+                .map_err(|e| NurError::Other(format!("chat response map failed: {e}")));
         }
     }
 
@@ -968,7 +968,7 @@ impl ApiClient {
                         .json(&body)
                 })
                 .await
-                .map_err(|e| MuseError::Other(format!("stream connect failed: {e}")))?;
+                .map_err(|e| NurError::Other(format!("stream connect failed: {e}")))?;
 
             let status = res.status();
             let content_type = res
@@ -1002,7 +1002,7 @@ impl ApiClient {
                     .await;
                     continue;
                 }
-                return Err(MuseError::Api {
+                return Err(NurError::Api {
                     status: status.as_u16(),
                     message,
                 });
@@ -1014,10 +1014,10 @@ impl ApiClient {
         if !content_type.contains("text/event-stream") {
             let text = res.text().await?;
             let v: serde_json::Value = serde_json::from_str(&text)
-                .map_err(|e| MuseError::Other(format!("bad chat response: {e}; body={text}")))?;
+                .map_err(|e| NurError::Other(format!("bad chat response: {e}; body={text}")))?;
             let shaped = super::chat::parse_completion(&v);
             return super::chat::to_api_response(shaped)
-                .map_err(|e| MuseError::Other(format!("chat response map failed: {e}")));
+                .map_err(|e| NurError::Other(format!("chat response map failed: {e}")));
         }
 
         let mut stream = res.bytes_stream();
@@ -1026,7 +1026,7 @@ impl ApiClient {
 
         loop {
             let chunk = tokio::select! {
-                _ = cancel.cancelled() => return Err(MuseError::Interrupted),
+                _ = cancel.cancelled() => return Err(NurError::Interrupted),
                 c = stream.next() => c,
             };
             // A body that ends without a final blank line still has one whole
@@ -1036,7 +1036,7 @@ impl ApiClient {
             let events = match chunk {
                 Some(chunk) => {
                     let chunk =
-                        chunk.map_err(|e| MuseError::Other(format!("stream chunk error: {e}")))?;
+                        chunk.map_err(|e| NurError::Other(format!("stream chunk error: {e}")))?;
                     parser.push(&chunk)
                 }
                 None => parser.finish().into_iter().collect(),
@@ -1062,7 +1062,7 @@ impl ApiClient {
                             }
                         });
                     if let Some(msg) = error_message {
-                        return Err(MuseError::Api {
+                        return Err(NurError::Api {
                             status: 0,
                             message: msg.to_string(),
                         });
@@ -1088,14 +1088,14 @@ impl ApiClient {
         let shaped = acc.finish();
         let saw_reasoning = !acc.reasoning.is_empty();
         let resp = super::chat::to_api_response(shaped)
-            .map_err(|e| MuseError::Other(format!("chat stream map failed: {e}")))?;
+            .map_err(|e| NurError::Other(format!("chat stream map failed: {e}")))?;
         // An OpenCode gateway that loses its upstream mid-turn can close a 200
         // stream having sent nothing usable. Reporting that as a completed
         // (empty) turn looked like a hang; as an error the agent loop can retry
         // or fail over. Scoped to OpenCode so no other provider's empty reply
         // changes meaning.
         if self.is_opencode_route() && resp.output.is_empty() && !saw_reasoning {
-            return Err(MuseError::Api {
+            return Err(NurError::Api {
                 status: 0,
                 message: "OpenCode returned an empty stream (upstream request failed \
                           before any content) — retry or /model to another route"
@@ -1132,7 +1132,7 @@ impl ApiClient {
                     let _ = e;
                     continue;
                 }
-                Err(e) => return Err(MuseError::Other(format!("request failed: {e}"))),
+                Err(e) => return Err(NurError::Other(format!("request failed: {e}"))),
             };
             let status = res.status();
             let text = res.text().await.unwrap_or_default();
@@ -1179,17 +1179,17 @@ impl ApiClient {
                 // (No second transient-upstream retry here: `retryable` above
                 // already covers it, and re-checking the same needles after the
                 // attempt budget is spent only delayed the error.)
-                return Err(MuseError::Api {
+                return Err(NurError::Api {
                     status: code,
                     message: msg,
                 });
             }
             let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
-                MuseError::Other(format!("bad anthropic response: {e}; body={text}"))
+                NurError::Other(format!("bad anthropic response: {e}; body={text}"))
             })?;
             let shaped = super::anthropic::parse_message(&v);
             return super::chat::to_api_response(shaped)
-                .map_err(|e| MuseError::Other(format!("anthropic response map failed: {e}")));
+                .map_err(|e| NurError::Other(format!("anthropic response map failed: {e}")));
         }
     }
 
@@ -1233,7 +1233,7 @@ impl ApiClient {
                     let _ = e;
                     continue;
                 }
-                Err(e) => return Err(MuseError::Other(format!("stream connect failed: {e}"))),
+                Err(e) => return Err(NurError::Other(format!("stream connect failed: {e}"))),
             };
 
             let status = res.status();
@@ -1248,7 +1248,7 @@ impl ApiClient {
                     continue;
                 }
                 let text = res.text().await.unwrap_or_default();
-                return Err(MuseError::Api {
+                return Err(NurError::Api {
                     status: code,
                     message: parse_error_message(&text).unwrap_or(text),
                 });
@@ -1268,11 +1268,11 @@ impl ApiClient {
         if !content_type.contains("text/event-stream") {
             let text = res.text().await?;
             let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
-                MuseError::Other(format!("bad anthropic response: {e}; body={text}"))
+                NurError::Other(format!("bad anthropic response: {e}; body={text}"))
             })?;
             let shaped = super::anthropic::parse_message(&v);
             return super::chat::to_api_response(shaped)
-                .map_err(|e| MuseError::Other(format!("anthropic response map failed: {e}")));
+                .map_err(|e| NurError::Other(format!("anthropic response map failed: {e}")));
         }
 
         let mut stream = res.bytes_stream();
@@ -1281,7 +1281,7 @@ impl ApiClient {
 
         loop {
             let chunk = tokio::select! {
-                _ = cancel.cancelled() => return Err(MuseError::Interrupted),
+                _ = cancel.cancelled() => return Err(NurError::Interrupted),
                 c = stream.next() => c,
             };
             // Flush the parser once the body ends — Anthropic's terminal
@@ -1291,7 +1291,7 @@ impl ApiClient {
             let events = match chunk {
                 Some(chunk) => {
                     let chunk =
-                        chunk.map_err(|e| MuseError::Other(format!("stream chunk error: {e}")))?;
+                        chunk.map_err(|e| NurError::Other(format!("stream chunk error: {e}")))?;
                     parser.push(&chunk)
                 }
                 None => parser.finish().into_iter().collect(),
@@ -1306,7 +1306,7 @@ impl ApiClient {
                         .and_then(|m| m.as_str())
                         .or_else(|| v.get("error").and_then(|e| e.as_str()))
                     {
-                        return Err(MuseError::Api {
+                        return Err(NurError::Api {
                             status: 0,
                             message: msg.to_string(),
                         });
@@ -1316,7 +1316,7 @@ impl ApiClient {
                             .pointer("/error/message")
                             .and_then(|m| m.as_str())
                             .unwrap_or("anthropic stream error");
-                        return Err(MuseError::Api {
+                        return Err(NurError::Api {
                             status: 0,
                             message: msg.to_string(),
                         });
@@ -1333,7 +1333,7 @@ impl ApiClient {
 
         let shaped = acc.finish();
         let resp = super::chat::to_api_response(shaped)
-            .map_err(|e| MuseError::Other(format!("anthropic stream map failed: {e}")))?;
+            .map_err(|e| NurError::Other(format!("anthropic stream map failed: {e}")))?;
         on_event(StreamEvent::Completed(resp.clone()));
         Ok(resp)
     }
@@ -1373,7 +1373,7 @@ impl ApiClient {
             }
         });
         resolved.map_err(|e| {
-            MuseError::Other(format!(
+            NurError::Other(format!(
                 "Cloud Code needs a project id and Code Assist setup failed: {e}. \
                  Run /login antigravity (or sign in via the Antigravity/Gemini CLI), \
                  enable the Cloud Code API, or set GOOGLE_CLOUD_PROJECT for a \
@@ -1402,14 +1402,14 @@ impl ApiClient {
             crate::oauth::antigravity_setup_code_assist_force(&token_c, env_for_setup.as_deref())
         })
         .map_err(|e| {
-            MuseError::Other(format!(
+            NurError::Other(format!(
                 "Cloud Code re-onboard failed: {e}. Complete /login antigravity, \
                  enable the Cloud Code API, or set GOOGLE_CLOUD_PROJECT, then retry."
             ))
         })?;
         if project.trim().is_empty() {
             return self.resolve_gemini_project_id(true).map_err(|e| {
-                MuseError::Other(format!(
+                NurError::Other(format!(
                     "Cloud Code re-onboard returned an empty project id ({e})"
                 ))
             });
@@ -1455,7 +1455,7 @@ impl ApiClient {
                     let _ = e;
                     continue;
                 }
-                Err(e) => return Err(MuseError::Other(format!("request failed: {e}"))),
+                Err(e) => return Err(NurError::Other(format!("request failed: {e}"))),
             };
             let status = res.status();
             let text = res.text().await.unwrap_or_default();
@@ -1474,7 +1474,7 @@ impl ApiClient {
                             continue;
                         }
                         Err(e) => {
-                            return Err(MuseError::Api {
+                            return Err(NurError::Api {
                                 status: status.as_u16(),
                                 message: format_cloud_code_403(
                                     &message,
@@ -1497,7 +1497,7 @@ impl ApiClient {
                 } else {
                     message
                 };
-                return Err(MuseError::Api {
+                return Err(NurError::Api {
                     status: status.as_u16(),
                     message,
                 });
@@ -1544,7 +1544,7 @@ impl ApiClient {
                             .await;
                         continue;
                     }
-                    return Err(MuseError::Other(format!(
+                    return Err(NurError::Other(format!(
                         "Cloud Code stream connect failed after {attempt}: {e}"
                     )));
                 }
@@ -1566,7 +1566,7 @@ impl ApiClient {
                             continue;
                         }
                         Err(e) => {
-                            return Err(MuseError::Api {
+                            return Err(NurError::Api {
                                 status: status.as_u16(),
                                 message: format_cloud_code_403(
                                     &msg,
@@ -1587,7 +1587,7 @@ impl ApiClient {
                 } else {
                     msg
                 };
-                return Err(MuseError::Api {
+                return Err(NurError::Api {
                     status: status.as_u16(),
                     message: msg,
                 });
@@ -1599,7 +1599,7 @@ impl ApiClient {
 
             loop {
                 let chunk = tokio::select! {
-                    _ = cancel.cancelled() => return Err(MuseError::Interrupted),
+                    _ = cancel.cancelled() => return Err(NurError::Interrupted),
                     c = stream.next() => c,
                 };
                 let Some(chunk) = chunk else {
@@ -1610,7 +1610,7 @@ impl ApiClient {
                 };
                 let chunk = match chunk {
                     Ok(c) => c,
-                    Err(e) => return Err(MuseError::Other(format!("stream chunk error: {e}"))),
+                    Err(e) => return Err(NurError::Other(format!("stream chunk error: {e}"))),
                 };
                 for data in parser.push(&chunk) {
                     drain_gemini_frame(&data, &mut acc, &mut on_event);
@@ -1619,7 +1619,7 @@ impl ApiClient {
 
             let value = acc.into_response_value();
             let resp: ApiResponse = serde_json::from_value(value)
-                .map_err(|e| MuseError::Other(format!("Cloud Code stream map failed: {e}")))?;
+                .map_err(|e| NurError::Other(format!("Cloud Code stream map failed: {e}")))?;
             on_event(StreamEvent::Completed(resp.clone()));
             return Ok(resp);
         }
@@ -1722,7 +1722,7 @@ fn handle_sse_json(
             .and_then(|m| m.as_str())
             .unwrap_or("stream error")
             .to_string();
-        return Err(MuseError::Api {
+        return Err(NurError::Api {
             status: 0,
             message: msg,
         });
@@ -1790,7 +1790,7 @@ fn consume_sse_text(body: &str, on_event: &mut impl FnMut(StreamEvent)) -> Resul
         });
     }
     final_response.ok_or_else(|| {
-        MuseError::Other(
+        NurError::Other(
             "Codex/Responses SSE ended without response.completed (check auth and model)".into(),
         )
     })
@@ -1915,11 +1915,11 @@ fn format_cloud_code_403(original: &str, project: &str, reonboard_err: Option<&s
 fn parse_response_body(body: &str, status: u16) -> Result<ApiResponse> {
     let parsed: ApiResponse = serde_json::from_str(body).map_err(|e| {
         let snippet: String = body.chars().take(240).collect();
-        MuseError::Other(format!("failed to parse API response: {e}; body={snippet}"))
+        NurError::Other(format!("failed to parse API response: {e}; body={snippet}"))
     })?;
 
     if let Some(err) = &parsed.error {
-        return Err(MuseError::Api {
+        return Err(NurError::Api {
             status,
             message: err
                 .message

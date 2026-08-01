@@ -1,5 +1,5 @@
 use super::{arg_str, Tool, ToolContext};
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use crate::headroom;
 use serde_json::Value;
 
@@ -10,10 +10,7 @@ pub fn is_read_only_action(args: &str) -> bool {
         .ok()
         .and_then(|v| v.get("action")?.as_str().map(|s| s.to_string()))
         .unwrap_or_else(|| "status".into());
-    matches!(
-        action.as_str(),
-        "status" | "doctor" | "probe" | "stats"
-    )
+    matches!(action.as_str(), "status" | "doctor" | "probe" | "stats")
 }
 
 impl Tool for Headroom {
@@ -54,9 +51,8 @@ impl Tool for Headroom {
         match action.as_str() {
             "status" | "doctor" | "probe" | "stats" => Ok(headroom::doctor_report()),
             "compress" => {
-                let text = arg_str(args, "text").map_err(|_| {
-                    MuseError::Tool("compress requires text=".into())
-                })?;
+                let text = arg_str(args, "text")
+                    .map_err(|_| NurError::Tool("compress requires text=".into()))?;
                 let label = arg_str(args, "label").unwrap_or_else(|_| "tool".into());
                 let cfg = crate::config::load_config()
                     .map(|c| c.headroom)

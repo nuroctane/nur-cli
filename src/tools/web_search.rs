@@ -1,7 +1,7 @@
 //! Web search via DuckDuckGo Lite (no API key). Returns title · url · snippet.
 
 use super::{arg_str, arg_u64, Tool, ToolContext};
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde_json::Value;
 
 pub struct WebSearch;
@@ -35,20 +35,20 @@ impl Tool for WebSearch {
             .timeout(std::time::Duration::from_secs(20))
             .user_agent(format!("nur-cli/{}", env!("CARGO_PKG_VERSION")))
             .build()
-            .map_err(|e| MuseError::Tool(e.to_string()))?;
+            .map_err(|e| NurError::Tool(e.to_string()))?;
 
         let resp = client
             .post("https://html.duckduckgo.com/html/")
             .form(&[("q", query.as_str())])
             .send()
-            .map_err(|e| MuseError::Tool(format!("search failed: {e}")))?;
+            .map_err(|e| NurError::Tool(format!("search failed: {e}")))?;
         let status = resp.status();
         if !status.is_success() {
-            return Err(MuseError::Tool(format!("search failed: HTTP {status}")));
+            return Err(NurError::Tool(format!("search failed: HTTP {status}")));
         }
         let body = resp
             .text()
-            .map_err(|e| MuseError::Tool(format!("search read: {e}")))?;
+            .map_err(|e| NurError::Tool(format!("search read: {e}")))?;
 
         let results = parse_ddg_html(&body, max);
         if results.is_empty() {

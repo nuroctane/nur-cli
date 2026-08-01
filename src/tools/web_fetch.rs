@@ -3,7 +3,7 @@
 //! re-validated. Bodies are streamed and capped, never fully buffered.
 
 use super::{arg_str, arg_u64, Tool, ToolContext};
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde_json::Value;
 use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
@@ -52,14 +52,12 @@ impl Tool for WebFetch {
             if let Some((host, addr)) = &pin {
                 builder = builder.resolve(host, *addr);
             }
-            let client = builder
-                .build()
-                .map_err(|e| MuseError::Tool(e.to_string()))?;
+            let client = builder.build().map_err(|e| NurError::Tool(e.to_string()))?;
 
             let resp = client
                 .get(parsed)
                 .send()
-                .map_err(|e| MuseError::Tool(format!("fetch failed: {e}")))?;
+                .map_err(|e| NurError::Tool(format!("fetch failed: {e}")))?;
 
             let status = resp.status();
             if status.is_redirection() {
@@ -67,13 +65,13 @@ impl Tool for WebFetch {
                     .headers()
                     .get(reqwest::header::LOCATION)
                     .and_then(|v| v.to_str().ok())
-                    .ok_or_else(|| MuseError::Tool("redirect without Location".into()))?;
+                    .ok_or_else(|| NurError::Tool("redirect without Location".into()))?;
                 // Resolve relative redirects against the current URL.
                 let base = reqwest::Url::parse(&current)
-                    .map_err(|e| MuseError::Tool(format!("bad url: {e}")))?;
+                    .map_err(|e| NurError::Tool(format!("bad url: {e}")))?;
                 let next = base
                     .join(loc)
-                    .map_err(|e| MuseError::Tool(format!("bad redirect: {e}")))?;
+                    .map_err(|e| NurError::Tool(format!("bad redirect: {e}")))?;
                 current = next.to_string();
                 continue;
             }
@@ -89,7 +87,7 @@ impl Tool for WebFetch {
             let mut buf = Vec::with_capacity(max.min(65_536));
             resp.take(max as u64 + 1)
                 .read_to_end(&mut buf)
-                .map_err(|e| MuseError::Tool(format!("read body: {e}")))?;
+                .map_err(|e| NurError::Tool(format!("read body: {e}")))?;
             let truncated = buf.len() > max;
             let slice = if truncated { &buf[..max] } else { &buf[..] };
             let text = String::from_utf8_lossy(slice);
@@ -101,7 +99,7 @@ impl Tool for WebFetch {
             }
             return Ok(out);
         }
-        Err(MuseError::Tool(format!(
+        Err(NurError::Tool(format!(
             "too many redirects (>{MAX_REDIRECTS}): {url}"
         )))
     }
@@ -112,14 +110,14 @@ impl Tool for WebFetch {
 fn validate_public_url(
     url: &str,
 ) -> Result<(reqwest::Url, Option<(String, std::net::SocketAddr)>)> {
-    let parsed = reqwest::Url::parse(url).map_err(|e| MuseError::Tool(format!("bad url: {e}")))?;
+    let parsed = reqwest::Url::parse(url).map_err(|e| NurError::Tool(format!("bad url: {e}")))?;
     match parsed.scheme() {
         "http" | "https" => {}
-        s => return Err(MuseError::Tool(format!("refused scheme: {s}"))),
+        s => return Err(NurError::Tool(format!("refused scheme: {s}"))),
     }
     let host: String = parsed
         .host_str()
-        .ok_or_else(|| MuseError::Tool("url has no host".into()))?
+        .ok_or_else(|| NurError::Tool("url has no host".into()))?
         .to_string();
     let host = host.as_str();
 
@@ -131,7 +129,7 @@ fn validate_public_url(
         || hl.ends_with(".internal")
         || hl.contains("metadata")
     {
-        return Err(MuseError::Tool(format!(
+        return Err(NurError::Tool(format!(
             "refused local/metadata host: {host}"
         )));
     }
@@ -141,7 +139,7 @@ fn validate_public_url(
     // Handle obfuscated forms: decimal (2130706433), octal (0177.0.0.1), hex (0x7f.0.0.1)
     if let Some(ip) = parse_obfuscated_ip(&hl) {
         if !ip_is_public(ip) {
-            return Err(MuseError::Tool(format!(
+            return Err(NurError::Tool(format!(
                 "refused non-public address: {host} → {ip} (obfuscated)"
             )));
         }
@@ -150,13 +148,13 @@ fn validate_public_url(
     }
     if let Ok(ip) = hl.trim_matches(['[', ']']).parse::<IpAddr>() {
         if !ip_is_public(ip) {
-            return Err(MuseError::Tool(format!(
+            return Err(NurError::Tool(format!(
                 "refused non-public address: {host} → {ip}"
             )));
         }
         // Extra: block 0.0.0.0 explicitly even though is_unspecified covers it
         if ip.is_unspecified() {
-            return Err(MuseError::Tool(format!(
+            return Err(NurError::Tool(format!(
                 "refused unspecified address: {host}"
             )));
         }
@@ -166,14 +164,14 @@ fn validate_public_url(
     let port = parsed.port_or_known_default().unwrap_or(443);
     let sockaddrs: Vec<std::net::SocketAddr> = (host, port)
         .to_socket_addrs()
-        .map_err(|e| MuseError::Tool(format!("dns resolve {host}: {e}")))?
+        .map_err(|e| NurError::Tool(format!("dns resolve {host}: {e}")))?
         .collect();
     if sockaddrs.is_empty() {
-        return Err(MuseError::Tool(format!("dns: no addresses for {host}")));
+        return Err(NurError::Tool(format!("dns: no addresses for {host}")));
     }
     for sa in &sockaddrs {
         if !ip_is_public(sa.ip()) {
-            return Err(MuseError::Tool(format!(
+            return Err(NurError::Tool(format!(
                 "refused non-public address: {host} → {}",
                 sa.ip()
             )));

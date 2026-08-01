@@ -151,8 +151,6 @@ Everything is **local**. Secrets never go into the git repo.
 | `status.json` · `usage.jsonl` · `ade.json` | Live usage + host panels |
 | `nur.log` | Tracing (not painted into the TUI) |
 
-Older builds may still have data under `~/.meta` or `~/.muse`. On first run NurCLI **gap-fills** missing files into `~/.nur/` (never overwrites). Delete the old homes once you're happy everything works.
-
 #### D. Ecosystem packs
 
 Graphify · PLUR · Ruflo · Executor · omp · agent-browser-cli · skill packs. Installed when Node/uv/Bun are available.
@@ -199,7 +197,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 - Session budgets (`/budget`), tool-result spill, smarter auto-compact
 - Optional `permissions.toml` / `hooks.toml`
 - `/poor` cost-saver prompt
-- Project instructions: `NUR.md` · `AGENTS.md` · `CLAUDE.md` (also loads legacy `META.md` / `MUSE.md` if present)
+- Project instructions: `NUR.md` · `AGENTS.md` · `CLAUDE.md`
 - Session resume: `-c`, `-r`, `/sessions` (alias `/resume`)
 - **Takeover** cross-agent migration (`/takeover` · `/hijack`): import a session from **Claude Code · Codex · Cursor · Grok Build** into a native nur session and resume it. Two windows in one modal — press **`c`** to switch between `/sessions` and `/takeover`
 - `/model` opens a live model list for the active provider (or `/model <id>` to set one directly)
@@ -381,7 +379,7 @@ Full list: **[docs/commands.md → TUI slash commands](./docs/commands.md#tui-sl
 
 ```toml
 provider = "meta"              # or openai, openrouter, ollama, ...
-model = "muse-spark-1.1"       # whatever the active provider expects
+model = "Llama-4-Maverick-17B-128E-Instruct-FP8"
 base_url = "https://api.meta.ai/v1"
 reasoning_effort = "high"
 max_turns = 0   # 0 = unlimited agent rounds per prompt

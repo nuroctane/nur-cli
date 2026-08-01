@@ -1,5 +1,5 @@
-use crate::config::{atomic_write, ensure_dirs, legacy_muse_home, muse_home, sessions_dir};
-use crate::error::{MuseError, Result};
+use crate::config::{atomic_write, ensure_dirs, nur_home, sessions_dir};
+use crate::error::{NurError, Result};
 use crate::usage::TokenUsage;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -116,9 +116,9 @@ impl Session {
         }
         let text = serde_json::to_string_pretty(self)?;
         atomic_write(&path, text.as_bytes())
-            .map_err(|e| MuseError::Other(format!("session atomic save failed: {e}")))?;
+            .map_err(|e| NurError::Other(format!("session atomic save failed: {e}")))?;
         // Pointer for --continue and ADEs
-        let latest = muse_home().join("latest_session.json");
+        let latest = nur_home().join("latest_session.json");
         let ptr = serde_json::json!({
             "session_id": self.id,
             "cwd": self.cwd,
@@ -129,10 +129,10 @@ impl Session {
             "estimated_cost_usd": self.usage.estimated_cost_usd(),
         });
         atomic_write(&latest, serde_json::to_string_pretty(&ptr)?.as_bytes())
-            .map_err(|e| MuseError::Other(format!("latest_session atomic write failed: {e}")))?;
+            .map_err(|e| NurError::Other(format!("latest_session atomic write failed: {e}")))?;
 
         // Per-cwd last session map (for continue in same project)
-        let map_path = muse_home().join("cwd_sessions.json");
+        let map_path = nur_home().join("cwd_sessions.json");
         let mut map: serde_json::Map<String, Value> = if map_path.exists() {
             serde_json::from_str(&fs::read_to_string(&map_path).unwrap_or_default())
                 .unwrap_or_default()
@@ -145,7 +145,7 @@ impl Session {
             &map_path,
             serde_json::to_string_pretty(&Value::Object(map))?.as_bytes(),
         )
-        .map_err(|e| MuseError::Other(format!("cwd_sessions atomic write failed: {e}")))?;
+        .map_err(|e| NurError::Other(format!("cwd_sessions atomic write failed: {e}")))?;
         Ok(())
     }
 
@@ -159,29 +159,8 @@ impl Session {
             }
         }
         let path = sessions_dir().join(format!("{id}.json"));
-        let legacy = crate::config::legacy_muse_home()
-            .join("sessions")
-            .join(format!("{id}.json"));
-        // Prefer the **richer** of ~/.nur vs legacy ~/.muse (more tokens wins).
-        // Never silently drop a high-cost chat in favour of a thin twin.
-        if path.is_file() && legacy.is_file() {
-            let prefer_legacy = match (
-                fs::metadata(&path).ok().map(|m| m.len()),
-                fs::metadata(&legacy).ok().map(|m| m.len()),
-            ) {
-                (Some(a), Some(b)) => b > a,
-                _ => false,
-            };
-            if prefer_legacy {
-                let _ = fs::create_dir_all(sessions_dir());
-                let _ = fs::copy(&legacy, &path);
-            }
-        } else if !path.exists() && legacy.is_file() {
-            let _ = fs::create_dir_all(sessions_dir());
-            let _ = fs::copy(&legacy, &path);
-        }
         if !path.exists() {
-            return Err(MuseError::Other(format!("session not found: {id}")));
+            return Err(NurError::Other(format!("session not found: {id}")));
         }
         let text = fs::read_to_string(path)?;
         Ok(serde_json::from_str(&text)?)
@@ -189,7 +168,7 @@ impl Session {
 
     pub fn continue_for_cwd(cwd: &str) -> Result<Self> {
         let key = normalize_cwd(cwd);
-        let map_path = muse_home().join("cwd_sessions.json");
+        let map_path = nur_home().join("cwd_sessions.json");
         if map_path.exists() {
             let map: serde_json::Map<String, Value> =
                 serde_json::from_str(&fs::read_to_string(&map_path)?)?;
@@ -212,7 +191,7 @@ impl Session {
             }
         }
         best.ok_or_else(|| {
-            MuseError::Other(format!(
+            NurError::Other(format!(
                 "no previous session for cwd {cwd}; start a new one without -c"
             ))
         })
@@ -299,7 +278,7 @@ fn find_by_prefix(prefix: &str) -> Result<Option<Session>> {
         return Ok(Some(Session::load(&matches[0])?));
     }
     if matches.len() > 1 {
-        return Err(MuseError::Other(format!(
+        return Err(NurError::Other(format!(
             "ambiguous session prefix '{prefix}' ({} matches)",
             matches.len()
         )));
@@ -338,15 +317,9 @@ pub fn list_sessions() -> Result<Vec<Session>> {
     Ok(out)
 }
 
-/// Fast listing for `/sessions` UI and `nur sessions` — skips `input_items`.
-/// Scans both `~/.nur/sessions` and legacy `~/.muse/sessions`.
-///
-/// When the same id exists in both homes (migration / dual write), **keeps the
-/// richer copy** (more tokens, then newer `updated_at`) — never drops a paid
-/// conversation in favor of a thin/legacy twin.
+/// Fast listing for `/sessions` UI and `nur sessions` - skips `input_items`.
 pub fn list_session_summaries() -> Result<Vec<SessionSummary>> {
     ensure_dirs()?;
-    // Opportunistically heal missing files from legacy home.
     let _ = crate::config::ensure_dirs();
     let mut by_id: std::collections::HashMap<String, SessionSummary> =
         std::collections::HashMap::new();
@@ -385,12 +358,7 @@ pub fn list_session_summaries() -> Result<Vec<SessionSummary>> {
 }
 
 fn session_dirs() -> Vec<PathBuf> {
-    let mut dirs = vec![sessions_dir()];
-    let legacy = legacy_muse_home().join("sessions");
-    if legacy != dirs[0] {
-        dirs.push(legacy);
-    }
-    dirs
+    vec![sessions_dir()]
 }
 
 fn is_session_file(path: &Path) -> bool {
@@ -405,16 +373,16 @@ fn is_session_file(path: &Path) -> bool {
 
 fn summarize_session_file(path: &Path) -> Result<SessionSummary> {
     let text = fs::read_to_string(path)
-        .map_err(|e| MuseError::Other(format!("read {}: {e}", path.display())))?;
+        .map_err(|e| NurError::Other(format!("read {}: {e}", path.display())))?;
     // Cap insane files so a corrupt multi-GB dump can't take us down.
     if text.len() > 32 * 1024 * 1024 {
-        return Err(MuseError::Other(format!(
+        return Err(NurError::Other(format!(
             "session file too large: {}",
             path.display()
         )));
     }
     let lite: SessionLite = serde_json::from_str(&text)
-        .map_err(|e| MuseError::Other(format!("parse {}: {e}", path.display())))?;
+        .map_err(|e| NurError::Other(format!("parse {}: {e}", path.display())))?;
     let preview = lite
         .messages
         .iter()

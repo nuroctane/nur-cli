@@ -11,7 +11,7 @@
 //! session saved via `/failover` (or dual-written from `/login`), or empty for
 //! key-optional local servers — never from the primary's active `auth.json`.
 
-use crate::error::MuseError;
+use crate::error::NurError;
 use crate::providers::{self, ApiStyle, Provider};
 
 /// A resolved failover destination — a fallback provider whose key we actually
@@ -44,9 +44,9 @@ pub struct FailoverTarget {
 /// A plain 400 from a first-party provider is a validation error and must not,
 /// which is why this branch is gated on the provider rather than the message
 /// alone: the needles are generic enough to appear in a genuine bad request.
-pub fn should_failover_for(err: &MuseError, provider_id: &str) -> bool {
+pub fn should_failover_for(err: &NurError, provider_id: &str) -> bool {
     match err {
-        MuseError::Api { status, message } => {
+        NurError::Api { status, message } => {
             if matches!(status, 0 | 429 | 500 | 502 | 503 | 504 | 529) {
                 return true;
             }
@@ -63,7 +63,7 @@ pub fn should_failover_for(err: &MuseError, provider_id: &str) -> bool {
             false
         }
         // Transport/connection/parse failures from the client layer.
-        MuseError::Other(_) => true,
+        NurError::Other(_) => true,
         _ => false,
     }
 }
@@ -121,9 +121,9 @@ fn is_hard_quota_message(message: &str) -> bool {
 /// Deliberately narrower than [`should_failover_for`]: a mid-stream `status: 0`
 /// only qualifies when its body actually names a capacity condition, and
 /// billing exhaustion is excluded because no amount of waiting clears it.
-pub fn is_transient_capacity(err: &MuseError) -> bool {
+pub fn is_transient_capacity(err: &NurError) -> bool {
     match err {
-        MuseError::Api { status, message } => {
+        NurError::Api { status, message } => {
             if is_hard_quota_message(message) {
                 return false;
             }
@@ -303,7 +303,7 @@ mod tests {
 
     /// The provider-agnostic rules — asserted against a provider that gets no
     /// gateway relaxation, so these cases pin the baseline for everyone.
-    fn should_failover(err: &MuseError) -> bool {
+    fn should_failover(err: &NurError) -> bool {
         should_failover_for(err, "")
     }
 
@@ -311,7 +311,7 @@ mod tests {
     fn should_failover_on_server_errors_only() {
         for status in [0u16, 429, 500, 502, 503, 504, 529] {
             assert!(
-                should_failover(&MuseError::Api {
+                should_failover(&NurError::Api {
                     status,
                     message: "x".into()
                 }),
@@ -320,18 +320,16 @@ mod tests {
         }
         for status in [400u16, 401, 403, 404, 422] {
             assert!(
-                !should_failover(&MuseError::Api {
+                !should_failover(&NurError::Api {
                     status,
                     message: "x".into()
                 }),
                 "status {status} should NOT fail over"
             );
         }
-        assert!(should_failover(&MuseError::Other(
-            "connection reset".into()
-        )));
-        assert!(!should_failover(&MuseError::Interrupted));
-        assert!(!should_failover(&MuseError::NotAuthenticated));
+        assert!(should_failover(&NurError::Other("connection reset".into())));
+        assert!(!should_failover(&NurError::Interrupted));
+        assert!(!should_failover(&NurError::NotAuthenticated));
     }
 
     /// The exact string that killed live runs: NVIDIA NIM refuses admission
@@ -340,7 +338,7 @@ mod tests {
     /// original phrase needles.
     #[test]
     fn nim_worker_saturation_is_transient_capacity() {
-        let nim = MuseError::Api {
+        let nim = NurError::Api {
             status: 0,
             message: "ResourceExhausted: Worker local total request limit reached (90/32)".into(),
         };
@@ -359,7 +357,7 @@ mod tests {
             "resource-exhausted",
         ] {
             assert!(
-                is_transient_capacity(&MuseError::Api {
+                is_transient_capacity(&NurError::Api {
                     status: 0,
                     message: format!("{spelling}: try again"),
                 }),
@@ -378,7 +376,7 @@ mod tests {
             "billing hard limit has been reached",
         ] {
             assert!(
-                !is_transient_capacity(&MuseError::Api {
+                !is_transient_capacity(&NurError::Api {
                     status: 429,
                     message: hard.into()
                 }),
@@ -386,17 +384,17 @@ mod tests {
             );
         }
         // A non-capacity mid-stream failure is left to the failover path alone.
-        assert!(!is_transient_capacity(&MuseError::Api {
+        assert!(!is_transient_capacity(&NurError::Api {
             status: 0,
             message: "OpenCode returned an empty stream".into(),
         }));
         // Plain rate limits still retry.
-        assert!(is_transient_capacity(&MuseError::Api {
+        assert!(is_transient_capacity(&NurError::Api {
             status: 429,
             message: "rate limit exceeded".into(),
         }));
         // Non-API errors are never retried in place.
-        assert!(!is_transient_capacity(&MuseError::Interrupted));
+        assert!(!is_transient_capacity(&NurError::Interrupted));
     }
 
     #[test]
@@ -414,7 +412,7 @@ mod tests {
         ];
         for (status, message) in cases {
             assert!(
-                should_failover(&MuseError::Api {
+                should_failover(&NurError::Api {
                     status,
                     message: message.into()
                 }),
@@ -429,7 +427,7 @@ mod tests {
             (403, "permission denied for this organization"),
         ] {
             assert!(
-                !should_failover(&MuseError::Api {
+                !should_failover(&NurError::Api {
                     status,
                     message: message.into()
                 }),
@@ -454,7 +452,7 @@ mod tests {
         ] {
             assert!(
                 should_failover_for(
-                    &MuseError::Api {
+                    &NurError::Api {
                         status,
                         message: message.into()
                     },
@@ -470,7 +468,7 @@ mod tests {
         ] {
             assert!(
                 !should_failover_for(
-                    &MuseError::Api {
+                    &NurError::Api {
                         status,
                         message: message.into()
                     },
@@ -498,7 +496,7 @@ mod tests {
         ] {
             assert!(
                 !should_failover_for(
-                    &MuseError::Api {
+                    &NurError::Api {
                         status: 400,
                         message: message.into()
                     },
@@ -509,7 +507,7 @@ mod tests {
         }
         // A genuine upstream outage still does.
         assert!(should_failover_for(
-            &MuseError::Api {
+            &NurError::Api {
                 status: 400,
                 message: "Error from provider (Console Go): Upstream request failed".into()
             },
@@ -522,7 +520,7 @@ mod tests {
     /// second provider on the same bad request.
     #[test]
     fn gateway_upstream_relaxation_does_not_apply_to_other_providers() {
-        let err = MuseError::Api {
+        let err = NurError::Api {
             status: 400,
             message: "Error from provider (Console Go): Upstream request failed".into(),
         };
@@ -537,7 +535,7 @@ mod tests {
         for provider in ["anthropic", "openai", "opencode", ""] {
             for status in [0u16, 429, 500, 502, 503, 504, 529] {
                 assert!(should_failover_for(
-                    &MuseError::Api {
+                    &NurError::Api {
                         status,
                         message: "upstream error".into()
                     },

@@ -35,9 +35,7 @@ pub fn body_looks_sensitive(body: &str) -> bool {
     }
     // OpenAI-style keys: `sk-` + >=16 alnum (avoids false positives like "task-").
     static SK: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let sk = SK.get_or_init(|| {
-        regex::Regex::new(r"(?i)\bsk-[a-z0-9_-]{16,}").expect("sk pattern")
-    });
+    let sk = SK.get_or_init(|| regex::Regex::new(r"(?i)\bsk-[a-z0-9_-]{16,}").expect("sk pattern"));
     sk.is_match(body)
 }
 

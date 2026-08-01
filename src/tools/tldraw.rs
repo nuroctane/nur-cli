@@ -12,7 +12,7 @@
 //! `write_file` is not a tldraw document and will fail to open usefully.
 
 use super::{arg_str, resolve_path, Tool, ToolContext};
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde_json::{json, Value};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -114,7 +114,7 @@ impl Tool for Tldraw {
             "screenshot" | "export_png" => screenshot_action(args, &ctx.cwd),
             "list_docs" => list_docs_action(),
             "fit_camera" => fit_camera_action(args, &ctx.cwd),
-            other => Err(MuseError::Tool(format!(
+            other => Err(NurError::Tool(format!(
                 "unknown tldraw action '{other}' — use status|install|open|create|enable_scripts|api|screenshot|list_docs|fit_camera"
             ))),
         }
@@ -216,13 +216,13 @@ fn latest_asset_url() -> Result<(String, String)> {
         .user_agent("nur-cli")
         .timeout(Duration::from_secs(30))
         .build()
-        .map_err(|e| MuseError::Tool(format!("http client: {e}")))?;
+        .map_err(|e| NurError::Tool(format!("http client: {e}")))?;
     let body: Value = client
         .get(RELEASES_API)
         .send()
-        .map_err(|e| MuseError::Tool(format!("fetch releases: {e}")))?
+        .map_err(|e| NurError::Tool(format!("fetch releases: {e}")))?
         .json()
-        .map_err(|e| MuseError::Tool(format!("parse releases: {e}")))?;
+        .map_err(|e| NurError::Tool(format!("parse releases: {e}")))?;
     let tag = body
         .get("tag_name")
         .and_then(|t| t.as_str())
@@ -246,7 +246,7 @@ fn latest_asset_url() -> Result<(String, String)> {
             })
         })
         .ok_or_else(|| {
-            MuseError::Tool(format!("no release asset '{want}' found for this platform"))
+            NurError::Tool(format!("no release asset '{want}' found for this platform"))
         })?;
     Ok((tag, url))
 }
@@ -267,21 +267,21 @@ pub fn install() -> Result<String> {
         .user_agent("nur-cli")
         .timeout(Duration::from_secs(600))
         .build()
-        .map_err(|e| MuseError::Tool(format!("http client: {e}")))?;
+        .map_err(|e| NurError::Tool(format!("http client: {e}")))?;
     let bytes = client
         .get(&url)
         .send()
-        .map_err(|e| MuseError::Tool(format!("download installer: {e}")))?
+        .map_err(|e| NurError::Tool(format!("download installer: {e}")))?
         .bytes()
-        .map_err(|e| MuseError::Tool(format!("read installer body: {e}")))?;
+        .map_err(|e| NurError::Tool(format!("read installer body: {e}")))?;
 
     let fname = url.rsplit('/').next().unwrap_or("tldraw-offline-installer");
     let dl = std::env::temp_dir().join(fname);
     {
         let mut f = std::fs::File::create(&dl)
-            .map_err(|e| MuseError::Tool(format!("write installer: {e}")))?;
+            .map_err(|e| NurError::Tool(format!("write installer: {e}")))?;
         f.write_all(&bytes)
-            .map_err(|e| MuseError::Tool(format!("save installer: {e}")))?;
+            .map_err(|e| NurError::Tool(format!("save installer: {e}")))?;
     }
 
     let mut s = format!("downloaded tldraw offline {tag} → {}\n", dl.display());
@@ -314,10 +314,10 @@ pub fn install() -> Result<String> {
 
 fn open_action(args: &Value, cwd: &Path) -> Result<String> {
     let path = arg_str(args, "path")
-        .map_err(|_| MuseError::Tool("open requires path= to a .tldraw file".into()))?;
+        .map_err(|_| NurError::Tool("open requires path= to a .tldraw file".into()))?;
     let abs = resolve_open_path(cwd, &path)?;
     if !abs.is_file() {
-        return Err(MuseError::Tool(format!(
+        return Err(NurError::Tool(format!(
             "file not found: {}\n  (create saves boards to Desktop — try opening from there)",
             abs.display()
         )));
@@ -430,7 +430,7 @@ pub fn launch_on_file(abs: &Path) -> Result<String> {
 
     if app_path().is_none() {
         let _ = crate::open_uri::open_path(&abs);
-        return Err(MuseError::Tool(
+        return Err(NurError::Tool(
             "tldraw offline is not installed — run action=install first, then open again.\n\
              Or drag the file onto https://www.tldraw.com/ in a browser."
                 .into(),
@@ -485,7 +485,7 @@ pub fn launch_on_file(abs: &Path) -> Result<String> {
     }
 
     if !opened {
-        return Err(MuseError::Tool(format!(
+        return Err(NurError::Tool(format!(
             "could not launch tldraw offline for {}\n  tried: {}",
             abs.display(),
             methods.join(" · ")
@@ -677,8 +677,8 @@ fn create_action(args: &Value, cwd: &Path) -> Result<String> {
 
     let doc = build_tldraw_document(&title, &shapes);
     let body = serde_json::to_string_pretty(&doc)
-        .map_err(|e| MuseError::Tool(format!("serialize tldraw: {e}")))?;
-    std::fs::write(&abs, body).map_err(|e| MuseError::Tool(format!("write tldraw: {e}")))?;
+        .map_err(|e| NurError::Tool(format!("serialize tldraw: {e}")))?;
+    std::fs::write(&abs, body).map_err(|e| NurError::Tool(format!("write tldraw: {e}")))?;
 
     let mut out = format!(
         "wrote valid .tldraw ({} shapes) → Desktop\n  {}\n",
@@ -702,9 +702,8 @@ fn create_action(args: &Value, cwd: &Path) -> Result<String> {
     if let Ok(script) = arg_str(args, "script").or_else(|_| {
         arg_str(args, "script_path").and_then(|p| {
             let path = resolve_path(cwd, &p)?;
-            std::fs::read_to_string(&path).map_err(|e| {
-                MuseError::Tool(format!("read script_path {}: {e}", path.display()))
-            })
+            std::fs::read_to_string(&path)
+                .map_err(|e| NurError::Tool(format!("read script_path {}: {e}", path.display())))
         })
     }) {
         match inject_document_script(&abs, &script) {
@@ -741,7 +740,9 @@ fn normalize_shapes_layout(
     let mut heights_grown = 0usize;
 
     let force_grid = layout_mode.eq_ignore_ascii_case("grid");
-    let any_coords = shapes.iter().any(|s| s.get("x").is_some() || s.get("y").is_some());
+    let any_coords = shapes
+        .iter()
+        .any(|s| s.get("x").is_some() || s.get("y").is_some());
 
     for (i, s) in shapes.iter().enumerate() {
         let mut obj = s.clone();
@@ -911,7 +912,7 @@ fn inject_document_script(abs: &Path, script: &str) -> Result<String> {
     // Ensure scripts workspace is open first.
     let enable = enable_scripts_for_path(abs, Duration::from_secs(40))?;
     let server = wait_for_server(Duration::from_secs(8))
-        .ok_or_else(|| MuseError::Tool("canvas API down after enable_scripts".into()))?;
+        .ok_or_else(|| NurError::Tool("canvas API down after enable_scripts".into()))?;
     let doc_id = find_doc_id(&server, abs)?;
     let ws = canvas_api_post(
         &server,
@@ -924,12 +925,12 @@ fn inject_document_script(abs: &Path, script: &str) -> Result<String> {
         .unwrap_or("")
         .to_string();
     if main_js.is_empty() {
-        return Err(MuseError::Tool(
+        return Err(NurError::Tool(
             "script-workspace did not return mainJsPath".into(),
         ));
     }
     std::fs::write(&main_js, script)
-        .map_err(|e| MuseError::Tool(format!("write main.js {main_js}: {e}")))?;
+        .map_err(|e| NurError::Tool(format!("write main.js {main_js}: {e}")))?;
 
     // Poll until applied (not mere pending/watching).
     let mut final_state = "unknown".to_string();
@@ -946,9 +947,8 @@ fn inject_document_script(abs: &Path, script: &str) -> Result<String> {
         }
         std::thread::sleep(Duration::from_millis(350));
     }
-    let mut out = format!(
-        "script inject → {main_js}\n  state={final_state}\n  (enable report)\n{enable}"
-    );
+    let mut out =
+        format!("script inject → {main_js}\n  state={final_state}\n  (enable report)\n{enable}");
     if final_state == "applied" {
         out.push_str("  ✓ custom document script applied\n");
         // Best-effort save so Desktop file becomes ZIP+script archive.
@@ -1023,10 +1023,7 @@ fn build_tldraw_document(title: &str, shapes: &[Value]) -> Value {
         // High-contrast under dark theme (pastel solid fills + white text = invisible).
         let (color, label_color, fill) = contrast_style(&color);
         let geo = s.get("geo").and_then(|v| v.as_str()).unwrap_or("rectangle");
-        let shape_type = s
-            .get("type")
-            .and_then(|v| v.as_str())
-            .unwrap_or("geo");
+        let shape_type = s.get("type").and_then(|v| v.as_str()).unwrap_or("geo");
         // Must be a valid tldraw IndexKey. "a10" is REJECTED and blanks the
         // whole canvas with ValidationError — use a1..a9, aA..aZ, b1…
         let index = fractional_index(i);
@@ -1457,7 +1454,7 @@ fn canvas_api_request(
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
-        .map_err(|e| MuseError::Tool(format!("http client: {e}")))?;
+        .map_err(|e| NurError::Tool(format!("http client: {e}")))?;
     let mut req = match method {
         "GET" => client.get(&url),
         _ => client.post(&url),
@@ -1470,18 +1467,18 @@ fn canvas_api_request(
     }
     let resp = req
         .send()
-        .map_err(|e| MuseError::Tool(format!("canvas API {method} {path}: {e}")))?;
+        .map_err(|e| NurError::Tool(format!("canvas API {method} {path}: {e}")))?;
     let status = resp.status();
     let text = resp
         .text()
-        .map_err(|e| MuseError::Tool(format!("canvas API body: {e}")))?;
+        .map_err(|e| NurError::Tool(format!("canvas API body: {e}")))?;
     if !status.is_success() {
-        return Err(MuseError::Tool(format!(
+        return Err(NurError::Tool(format!(
             "canvas API {status}: {}",
             text.chars().take(300).collect::<String>()
         )));
     }
-    serde_json::from_str(&text).map_err(|e| MuseError::Tool(format!("canvas API json: {e}")))
+    serde_json::from_str(&text).map_err(|e| NurError::Tool(format!("canvas API json: {e}")))
 }
 
 fn canvas_api_post(server: &ServerInfo, path: &str, body: &Value) -> Result<Value> {
@@ -1523,7 +1520,7 @@ fn find_doc_id(server: &ServerInfo, abs: &Path) -> Result<String> {
     let docs = resp.get("result").cloned().unwrap_or(resp.clone());
     let arr = docs
         .as_array()
-        .ok_or_else(|| MuseError::Tool(format!("getDocs unexpected: {docs}")))?;
+        .ok_or_else(|| NurError::Tool(format!("getDocs unexpected: {docs}")))?;
 
     let pick = |d: &Value| -> Option<String> {
         d.get("documentId")
@@ -1555,14 +1552,14 @@ fn find_doc_id(server: &ServerInfo, abs: &Path) -> Result<String> {
     }
     arr.first()
         .and_then(pick)
-        .ok_or_else(|| MuseError::Tool("no open documents on canvas API".into()))
+        .ok_or_else(|| NurError::Tool("no open documents on canvas API".into()))
 }
 
 /// Open script-workspace so document scripts are watched + applied.
 /// Returns a human report. Critical for interactive boards (nn-digits, agent-shapes).
 pub fn enable_scripts_for_path(abs: &Path, timeout: Duration) -> Result<String> {
     let server = wait_for_server(timeout).ok_or_else(|| {
-        MuseError::Tool(
+        NurError::Tool(
             "canvas API not up — is tldraw offline running? (expect %APPDATA%\\tldraw\\server.json)"
                 .into(),
         )
@@ -1650,7 +1647,7 @@ fn enable_scripts_action(args: &Value, cwd: &Path) -> Result<String> {
     }
     if path.is_empty() {
         let server = wait_for_server(Duration::from_secs(10))
-            .ok_or_else(|| MuseError::Tool("canvas API down — open a board first".into()))?;
+            .ok_or_else(|| NurError::Tool("canvas API down — open a board first".into()))?;
         let docs = canvas_api_post(
             &server,
             "/api/search",
@@ -1667,7 +1664,7 @@ fn enable_scripts_action(args: &Value, cwd: &Path) -> Result<String> {
             .or_else(|| arr.first())
             .and_then(|d| d.get("id"))
             .and_then(|x| x.as_str())
-            .ok_or_else(|| MuseError::Tool("no open docs".into()))?;
+            .ok_or_else(|| NurError::Tool("no open docs".into()))?;
         // Fake path for report — call workspace directly
         let dummy = PathBuf::from(id);
         return enable_scripts_for_path(&dummy, Duration::from_secs(20));
@@ -1677,9 +1674,9 @@ fn enable_scripts_action(args: &Value, cwd: &Path) -> Result<String> {
 
 fn api_action(args: &Value, cwd: &Path) -> Result<String> {
     let code = arg_str(args, "code")
-        .map_err(|_| MuseError::Tool("api requires code= JavaScript with await api.…".into()))?;
+        .map_err(|_| NurError::Tool("api requires code= JavaScript with await api.…".into()))?;
     let server = wait_for_server(Duration::from_secs(15))
-        .ok_or_else(|| MuseError::Tool("canvas API not running — open a .tldraw first".into()))?;
+        .ok_or_else(|| NurError::Tool("canvas API not running — open a .tldraw first".into()))?;
     // optional path just to ensure scripts if given
     if let Ok(path) = arg_str(args, "path") {
         if !path.is_empty() {
@@ -1697,7 +1694,7 @@ fn api_action(args: &Value, cwd: &Path) -> Result<String> {
 
 fn list_docs_action() -> Result<String> {
     let server = wait_for_server(Duration::from_secs(10))
-        .ok_or_else(|| MuseError::Tool("canvas API down — open a .tldraw first".into()))?;
+        .ok_or_else(|| NurError::Tool("canvas API down — open a .tldraw first".into()))?;
     let docs = canvas_api_post(
         &server,
         "/api/search",
@@ -1711,7 +1708,7 @@ fn list_docs_action() -> Result<String> {
 
 fn screenshot_action(args: &Value, cwd: &Path) -> Result<String> {
     let server = wait_for_server(Duration::from_secs(12))
-        .ok_or_else(|| MuseError::Tool("canvas API down — open a .tldraw first".into()))?;
+        .ok_or_else(|| NurError::Tool("canvas API down — open a .tldraw first".into()))?;
     let media = cwd.join(".nur").join("media");
     let _ = std::fs::create_dir_all(&media);
     let dest = if let Ok(out) = arg_str(args, "output") {
@@ -1787,7 +1784,7 @@ fn fit_camera_action(args: &Value, cwd: &Path) -> Result<String> {
     let _ = args;
     let _ = cwd;
     let server = wait_for_server(Duration::from_secs(10))
-        .ok_or_else(|| MuseError::Tool("canvas API down — open a .tldraw first".into()))?;
+        .ok_or_else(|| NurError::Tool("canvas API down — open a .tldraw first".into()))?;
     let code = r#"
 const editor = api.editor || (typeof editor !== 'undefined' ? editor : null);
 if (!editor) {

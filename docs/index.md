@@ -50,7 +50,7 @@ That's the normal upgrade. Pulls / rebuilds when you have a Laboratory checkout,
 | **Tools** | read · edit · bash · web · **browser** · **terminal-browser** (`/tb`) · git · knowledge stack · agent (all first-class) |
 | **Ecosystem** | Graphify · PLUR · Ruflo · Executor · **omp** · **browser** · AKM · **800+ skills** · **plugin marketplace** (`~/.nur/plugins`, incl. **Fable**) · **natural-language + slash skill activation** (*think like fable*, *site cli*, *TDD this*, `/fable-method`, `/adhd`, `/<skill>`, …). Full install at setup; later open = TTL repair (`ecosystem_auto_ensure`) |
 | **Hardening** | Sandbox · bash denylist · SSRF blocks · atomic `~/.nur` IO · session **`.json.bak`** · **permissions.toml** · optional **hooks.toml** · API retries · install SHA-256 · `nur doctor` |
-| **Host panels** | Live `status.json` / `usage.jsonl` · dual **`NUR_*` + `META_*`** env exports · Orca hook (`nur-hook.cmd` / `meta-hook.cmd`) |
+| **Host panels** | Live `status.json` / `usage.jsonl` · **`NUR_*`** env exports · Orca hook (`nur-hook.cmd`) |
 
 **Current version: v0.27.7**
 

@@ -11,7 +11,7 @@ use crate::api::types::{
 };
 use crate::api::{ApiClient, ApiResponse, StreamEvent};
 use crate::config::Config;
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use crate::tools::media::{self, MediaAttach};
 use crate::tools::{is_parallel_safe, is_read_only_call, ToolContext, ToolHost};
 use crate::usage::{TokenUsage, UsageTracker};
@@ -124,7 +124,7 @@ pub fn spawn_turn(
         if !runner.is_subagent {
             let _ = session.save();
         }
-        let interrupted = matches!(res, Err(MuseError::Interrupted));
+        let interrupted = matches!(res, Err(NurError::Interrupted));
         let result = res.map_err(|e| e.to_string());
         let _ = tx.send(AgentEvent::Done {
             session: Box::new(session),
@@ -189,7 +189,7 @@ pub async fn run_collect(
     }
     drop(tx);
     let acc = collector.await.unwrap_or_default();
-    let interrupted = matches!(result, Err(MuseError::Interrupted));
+    let interrupted = matches!(result, Err(NurError::Interrupted));
     let result = result
         .map(|text| if text.trim().is_empty() { acc } else { text })
         .map_err(|error| error.to_string());
@@ -233,9 +233,8 @@ impl AgentRunner {
         req: &ResponseRequest,
         tx: &mpsc::UnboundedSender<AgentEvent>,
         cancel: &CancellationToken,
-    ) -> std::result::Result<(ApiResponse, usize), (MuseError, usize)> {
-        let delta_count =
-            std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    ) -> std::result::Result<(ApiResponse, usize), (NurError, usize)> {
+        let delta_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let turn_cancel = cancel.child_token();
         let timeout = provider_turn_timeout();
         // Cursor Agent CLI must honor Esc cancel; always take the streaming path
@@ -261,13 +260,13 @@ impl AgentRunner {
                 _ = cancel.cancelled() => {
                     turn_cancel.cancel();
                     return Err((
-                        MuseError::Interrupted,
+                        NurError::Interrupted,
                         delta_count.load(std::sync::atomic::Ordering::Relaxed),
                     ));
                 }
                 _ = tokio::time::sleep(timeout) => {
                     turn_cancel.cancel();
-                    Err(MuseError::Other(format!(
+                    Err(NurError::Other(format!(
                         "provider turn exceeded the {}s timeout (set NUR_PROVIDER_TURN_TIMEOUT_SECS to adjust)",
                         timeout.as_secs()
                     )))
@@ -283,11 +282,11 @@ impl AgentRunner {
             tokio::select! {
                 _ = cancel.cancelled() => {
                     turn_cancel.cancel();
-                    Err((MuseError::Interrupted, 0))
+                    Err((NurError::Interrupted, 0))
                 },
                 _ = tokio::time::sleep(timeout) => {
                     turn_cancel.cancel();
-                    Err((MuseError::Other(format!(
+                    Err((NurError::Other(format!(
                         "provider turn exceeded the {}s timeout (set NUR_PROVIDER_TURN_TIMEOUT_SECS to adjust)",
                         timeout.as_secs()
                     )), 0))
@@ -348,7 +347,7 @@ impl AgentRunner {
                             wait_ms / 1000
                         )));
                         tokio::select! {
-                            _ = cancel.cancelled() => return Err(MuseError::Interrupted),
+                            _ = cancel.cancelled() => return Err(NurError::Interrupted),
                             _ = tokio::time::sleep(std::time::Duration::from_millis(wait_ms)) => {}
                         }
                         continue;
@@ -541,16 +540,16 @@ impl AgentRunner {
 
         loop {
             if cancel.is_cancelled() {
-                return Err(MuseError::Interrupted);
+                return Err(NurError::Interrupted);
             }
             turns += 1;
             // max_turns == 0 → unlimited (overnight / long agent loops).
             if self.config.max_turns > 0 && turns > self.config.max_turns {
-                return Err(MuseError::MaxTurns(self.config.max_turns));
+                return Err(NurError::MaxTurns(self.config.max_turns));
             }
             if let Some(msg) = session_budget_exceeded(&self.config, usage) {
                 let _ = tx.send(AgentEvent::Status(msg.clone()));
-                return Err(MuseError::Budget(msg));
+                return Err(NurError::Budget(msg));
             }
 
             // Auto-compact whenever the window is under pressure — as often as a
@@ -649,11 +648,7 @@ impl AgentRunner {
             // If cfg still holds `local-model`, attempt to resolve to a real id
             // from the live local server before we POST.
             // Precedence: prewalk override → recovery/promotion → config.model.
-            let prewalk_held = self
-                .prewalk_override
-                .lock()
-                .ok()
-                .and_then(|g| g.clone());
+            let prewalk_held = self.prewalk_override.lock().ok().and_then(|g| g.clone());
             let configured_model = prewalk_held
                 .as_deref()
                 .or(recovered_default_model.as_deref())
@@ -697,92 +692,91 @@ impl AgentRunner {
                 prompt_cache_key: Some(session.id.clone()),
             };
 
-            let (resp, text_deltas, served): (ApiResponse, usize, Served) =
-                match self.request_with_failover(&req, tx, cancel).await {
-                    Ok(response) => response,
-                    Err(error) if is_context_limit_error(&error) => {
-                        // OMP contextPromotion: switch to a larger sibling *before*
-                        // compaction when the API rejects the window (e.g. *-spark).
-                        if !context_promoted {
-                            context_promoted = true;
-                            let current = recovered_default_model
-                                .as_deref()
-                                .unwrap_or(&self.config.model);
-                            if let Ok(models) = self.client.live_model_ids().await {
-                                if let Some(model) =
-                                    pick_context_promotion_target(&models, current)
-                                {
-                                    let _ = tx.send(AgentEvent::Status(format!(
-                                        "context overflow · promoting `{current}` → `{model}` \
+            let (resp, text_deltas, served): (ApiResponse, usize, Served) = match self
+                .request_with_failover(&req, tx, cancel)
+                .await
+            {
+                Ok(response) => response,
+                Err(error) if is_context_limit_error(&error) => {
+                    // OMP contextPromotion: switch to a larger sibling *before*
+                    // compaction when the API rejects the window (e.g. *-spark).
+                    if !context_promoted {
+                        context_promoted = true;
+                        let current = recovered_default_model
+                            .as_deref()
+                            .unwrap_or(&self.config.model);
+                        if let Ok(models) = self.client.live_model_ids().await {
+                            if let Some(model) = pick_context_promotion_target(&models, current) {
+                                let _ = tx.send(AgentEvent::Status(format!(
+                                    "context overflow · promoting `{current}` → `{model}` \
                                          (OMP-style contextPromotion before compact)"
-                                    )));
-                                    recovered_default_model = Some(model);
-                                    continue;
-                                }
+                                )));
+                                recovered_default_model = Some(model);
+                                continue;
                             }
                         }
-                        if emergency_compactions >= MAX_EMERGENCY_COMPACTIONS {
+                    }
+                    if emergency_compactions >= MAX_EMERGENCY_COMPACTIONS {
+                        return Err(error);
+                    }
+                    emergency_compactions += 1;
+                    let _ = tx.send(AgentEvent::Status(format!(
+                        "provider rejected the context window - recovering and retrying \
+                             ({emergency_compactions}/{MAX_EMERGENCY_COMPACTIONS})"
+                    )));
+
+                    match compact_session(self, session, usage).await {
+                        Ok(_) => {
+                            compactions = compactions.saturating_add(1);
+                            let _ = tx.send(AgentEvent::Status(
+                                "emergency context compaction succeeded - continuing".into(),
+                            ));
+                        }
+                        Err(compact_error) => {
+                            // A model-assisted summary can itself exceed the
+                            // provider window. Keep a valid recent working
+                            // set locally so the turn continues instead of
+                            // dying at exactly the point compaction is needed.
+                            let kept = emergency_compact_session(self, session);
+                            compactions = compactions.saturating_add(1);
+                            let _ = tx.send(AgentEvent::Status(format!(
+                                "model compaction failed ({compact_error}); recovered a \
+                                     valid {kept}-item recent context locally - continuing"
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                Err(error)
+                    if recovered_default_model.is_none()
+                        && is_model_unavailable_error(&error)
+                        && is_catalog_default_model(&self.config) =>
+                {
+                    match self.client.live_model_ids().await {
+                        Ok(models) => {
+                            if let Some(model) = pick_replacement_model(&models, &self.config.model)
+                            {
+                                let _ = tx.send(AgentEvent::Status(format!(
+                                    "provider no longer serves default model `{}` - \
+                                         retrying this turn with live model `{model}`",
+                                    self.config.model
+                                )));
+                                recovered_default_model = Some(model);
+                                continue;
+                            }
                             return Err(error);
                         }
-                        emergency_compactions += 1;
-                        let _ = tx.send(AgentEvent::Status(format!(
-                            "provider rejected the context window - recovering and retrying \
-                             ({emergency_compactions}/{MAX_EMERGENCY_COMPACTIONS})"
-                        )));
-
-                        match compact_session(self, session, usage).await {
-                            Ok(_) => {
-                                compactions = compactions.saturating_add(1);
-                                let _ = tx.send(AgentEvent::Status(
-                                    "emergency context compaction succeeded - continuing".into(),
-                                ));
-                            }
-                            Err(compact_error) => {
-                                // A model-assisted summary can itself exceed the
-                                // provider window. Keep a valid recent working
-                                // set locally so the turn continues instead of
-                                // dying at exactly the point compaction is needed.
-                                let kept = emergency_compact_session(self, session);
-                                compactions = compactions.saturating_add(1);
-                                let _ = tx.send(AgentEvent::Status(format!(
-                                    "model compaction failed ({compact_error}); recovered a \
-                                     valid {kept}-item recent context locally - continuing"
-                                )));
-                            }
-                        }
-                        continue;
-                    }
-                    Err(error)
-                        if recovered_default_model.is_none()
-                            && is_model_unavailable_error(&error)
-                            && is_catalog_default_model(&self.config) =>
-                    {
-                        match self.client.live_model_ids().await {
-                            Ok(models) => {
-                                if let Some(model) =
-                                    pick_replacement_model(&models, &self.config.model)
-                                {
-                                    let _ = tx.send(AgentEvent::Status(format!(
-                                        "provider no longer serves default model `{}` - \
-                                         retrying this turn with live model `{model}`",
-                                        self.config.model
-                                    )));
-                                    recovered_default_model = Some(model);
-                                    continue;
-                                }
-                                return Err(error);
-                            }
-                            Err(discovery_error) => {
-                                let _ = tx.send(AgentEvent::Status(format!(
-                                    "default model is unavailable and live model discovery \
+                        Err(discovery_error) => {
+                            let _ = tx.send(AgentEvent::Status(format!(
+                                "default model is unavailable and live model discovery \
                                      failed: {discovery_error}"
-                                )));
-                                return Err(error);
-                            }
+                            )));
+                            return Err(error);
                         }
                     }
-                    Err(error) => return Err(error),
-                };
+                }
+                Err(error) => return Err(error),
+            };
 
             let (in_tok, out_tok) = if let Some(u) = &resp.usage {
                 let tu: TokenUsage = u.into();
@@ -981,7 +975,7 @@ impl AgentRunner {
                 .await
             {
                 let filled = pair_unanswered(&mut session.input_items, &calls, &abort_output(&e));
-                if filled > 0 && !matches!(e, MuseError::Interrupted) {
+                if filled > 0 && !matches!(e, NurError::Interrupted) {
                     let _ = tx.send(AgentEvent::Status(format!(
                         "history · {filled} tool call(s) closed out after: {e}"
                     )));
@@ -1013,7 +1007,7 @@ impl AgentRunner {
         let mut idx = 0usize;
         while idx < calls.len() {
             if cancel.is_cancelled() {
-                return Err(MuseError::Interrupted);
+                return Err(NurError::Interrupted);
             }
 
             // Contiguous parallel-safe batch
@@ -1067,7 +1061,7 @@ impl AgentRunner {
                         // The caller's guard fills this call, the rest of the
                         // batch, and every post-batch call.
                         // Note: other in-flight blocking tasks keep running until drop
-                        _ = cancel.cancelled() => return Err(MuseError::Interrupted),
+                        _ = cancel.cancelled() => return Err(NurError::Interrupted),
                         r = handle => r,
                     };
                     // A panicking tool must not abort the turn mid-batch —
@@ -1204,7 +1198,7 @@ impl AgentRunner {
                             });
                             (s, true)
                         }
-                        Err(MuseError::Interrupted) => return Err(MuseError::Interrupted),
+                        Err(NurError::Interrupted) => return Err(NurError::Interrupted),
                         Err(e) => (format!("error: {e}"), false),
                     }
                 }
@@ -1265,7 +1259,7 @@ impl AgentRunner {
                     )
                 });
                 let (body, ok) = tokio::select! {
-                    _ = cancel.cancelled() => return Err(MuseError::Interrupted),
+                    _ = cancel.cancelled() => return Err(NurError::Interrupted),
                     r = exec => match r {
                         Ok(Ok(s)) => (s, true),
                         Ok(Err(e)) => (format!("error: {e}"), false),
@@ -1421,7 +1415,7 @@ impl AgentRunner {
                 let _permit = permits
                     .acquire()
                     .await
-                    .map_err(|e| MuseError::Other(e.to_string()))?;
+                    .map_err(|e| NurError::Other(e.to_string()))?;
                 let _ = tx_child.send(AgentEvent::Status(format!("subagent · {desc}")));
                 // Cross-provider: if the call named a different provider, build a
                 // client + config for it from that provider's stored credentials.
@@ -1453,7 +1447,7 @@ impl AgentRunner {
                         .await
                     }
                     SubagentTarget::AwaitingLogin { message, .. }
-                    | SubagentTarget::Unavailable { message } => Err(MuseError::Other(message)),
+                    | SubagentTarget::Unavailable { message } => Err(NurError::Other(message)),
                 }
             })));
         }
@@ -1475,7 +1469,7 @@ impl AgentRunner {
                 }
                 (None, Some(handle)) => {
                     let joined = tokio::select! {
-                        _ = cancel.cancelled() => return Err(MuseError::Interrupted),
+                        _ = cancel.cancelled() => return Err(NurError::Interrupted),
                         r = handle => r,
                     };
                     match joined {
@@ -1488,7 +1482,7 @@ impl AgentRunner {
                             });
                             (text, true)
                         }
-                        Ok(Err(MuseError::Interrupted)) => return Err(MuseError::Interrupted),
+                        Ok(Err(NurError::Interrupted)) => return Err(NurError::Interrupted),
                         Ok(Err(e)) => (format!("error: {e}"), false),
                         Err(e) => (format!("error: subagent task failed: {e}"), false),
                     }
@@ -1501,9 +1495,7 @@ impl AgentRunner {
             let model = self.config.model.clone();
             let spill_max = self.config.tool_result_max_chars as usize;
             let body = tokio::task::spawn_blocking(move || {
-                crate::headroom::prepare_tool_body(
-                    &hr, &sid, &tname, body, ok, spill_max, &model,
-                )
+                crate::headroom::prepare_tool_body(&hr, &sid, &tname, body, ok, spill_max, &model)
             })
             .await
             .unwrap_or_else(|e| format!("error: headroom task failed: {e}"));
@@ -1636,9 +1628,7 @@ fn plan_mode_allows(
     if name == "browser" && crate::tools::browser::is_plan_safe_action(args) {
         return true;
     }
-    if name == "terminal_browser"
-        && crate::tools::terminal_browser::is_plan_safe_action(args)
-    {
+    if name == "terminal_browser" && crate::tools::terminal_browser::is_plan_safe_action(args) {
         return true;
     }
     if name == "bash" {
@@ -1698,7 +1688,7 @@ mod tests {
     }
 
     /// The guard `run_turn_events` runs on every non-Ok exit from `execute_calls`.
-    fn close_out(items: &mut Vec<Value>, calls: &[FunctionCallRef], err: &MuseError) -> usize {
+    fn close_out(items: &mut Vec<Value>, calls: &[FunctionCallRef], err: &NurError) -> usize {
         pair_unanswered(items, calls, &abort_output(err))
     }
 
@@ -1725,7 +1715,7 @@ mod tests {
         ];
         // only c and d
         assert_eq!(
-            close_out(&mut items, &calls, &MuseError::Interrupted),
+            close_out(&mut items, &calls, &NurError::Interrupted),
             2,
             "cancel mid-batch must close out the unanswered calls"
         );
@@ -1757,7 +1747,7 @@ mod tests {
             serde_json::json!({"type":"function_call","call_id":"c","name":"grep","arguments":"{}"}),
             function_call_output_item("a", "contents"),
         ];
-        let err = MuseError::Other("tool task panicked".into());
+        let err = NurError::Other("tool task panicked".into());
         assert_eq!(close_out(&mut items, &calls, &err), 2);
         assert_fully_paired(&items, &calls);
         let b = items
@@ -1788,7 +1778,7 @@ mod tests {
             function_call_output_item("a", "contents"),
             function_call_output_item("b", "user denied this tool call"),
         ];
-        assert_eq!(close_out(&mut items, &calls, &MuseError::Interrupted), 1);
+        assert_eq!(close_out(&mut items, &calls, &NurError::Interrupted), 1);
         assert_fully_paired(&items, &calls);
     }
 
@@ -2659,9 +2649,9 @@ pub(crate) fn pair_unanswered(
 }
 
 /// Synthetic result recorded for calls that never ran because the turn aborted.
-fn abort_output(err: &MuseError) -> String {
+fn abort_output(err: &NurError) -> String {
     match err {
-        MuseError::Interrupted => INTERRUPT_OUTPUT.to_string(),
+        NurError::Interrupted => INTERRUPT_OUTPUT.to_string(),
         e => format!("[error: {e}]"),
     }
 }
@@ -2898,7 +2888,6 @@ fn multimodal_user_item(text: &str, media: &[MediaAttach]) -> Value {
 fn empty_turn_hint(provider: &str, model: &str) -> String {
     let openai_oauth = provider == "openai"
         || std::env::var("NUR_PROVIDER")
-            .or_else(|_| std::env::var("META_PROVIDER"))
             .map(|p| p.eq_ignore_ascii_case("openai"))
             .unwrap_or(false);
     // ChatGPT free OAuth often returns reasoning-only on Codex backend.
@@ -2937,9 +2926,9 @@ const MAX_AUTO_COMPACT_FAILURES: u8 = 3;
 /// absent or inaccurate on gateways and OAuth-backed compatibility routes.
 const MAX_EMERGENCY_COMPACTIONS: u8 = 2;
 
-fn is_context_limit_error(error: &MuseError) -> bool {
+fn is_context_limit_error(error: &NurError) -> bool {
     let message = match error {
-        MuseError::Api { message, .. } | MuseError::Other(message) => message,
+        NurError::Api { message, .. } | NurError::Other(message) => message,
         _ => return false,
     }
     .to_ascii_lowercase();
@@ -2961,9 +2950,9 @@ fn is_context_limit_error(error: &MuseError) -> bool {
     NEEDLES.iter().any(|needle| message.contains(needle))
 }
 
-fn is_model_unavailable_error(error: &MuseError) -> bool {
+fn is_model_unavailable_error(error: &NurError) -> bool {
     let message = match error {
-        MuseError::Api { message, .. } | MuseError::Other(message) => message,
+        NurError::Api { message, .. } | NurError::Other(message) => message,
         _ => return false,
     }
     .to_ascii_lowercase();
@@ -3112,9 +3101,7 @@ fn prune_useless_observations(items: &mut [Value]) -> usize {
         if !useless {
             continue;
         }
-        *output = Value::String(
-            "[dropped useless empty/error tool body to save context]".into(),
-        );
+        *output = Value::String("[dropped useless empty/error tool body to save context]".into());
         pruned += 1;
     }
     pruned
@@ -3131,7 +3118,9 @@ fn pick_context_promotion_target(models: &[String], current: &str) -> Option<Str
         .strip_suffix("-spark")
         .or_else(|| current_lower.strip_suffix("_spark"))
         .unwrap_or(&current_lower);
-    let shrink = ["-mini", "-nano", "-flash", "-haiku", "-luna", "-lite", "-small"];
+    let shrink = [
+        "-mini", "-nano", "-flash", "-haiku", "-luna", "-lite", "-small",
+    ];
     let mut targets = Vec::new();
     if stem != current_lower {
         targets.push(stem.to_string());
@@ -3158,11 +3147,21 @@ fn pick_context_promotion_target(models: &[String], current: &str) -> Option<Str
         if shrink.iter().any(|s| lower.ends_with(s)) || lower.ends_with("-spark") {
             continue;
         }
-        let hits = targets.iter().any(|t| lower == *t || lower.starts_with(t) || t.starts_with(&lower));
+        let hits = targets
+            .iter()
+            .any(|t| lower == *t || lower.starts_with(t) || t.starts_with(&lower));
         if !hits {
             // Family match: share first path segment + major version token.
-            let cur_family = stem.split(['/', '-', ':']).take(2).collect::<Vec<_>>().join("-");
-            let cand_family = lower.split(['/', '-', ':']).take(2).collect::<Vec<_>>().join("-");
+            let cur_family = stem
+                .split(['/', '-', ':'])
+                .take(2)
+                .collect::<Vec<_>>()
+                .join("-");
+            let cand_family = lower
+                .split(['/', '-', ':'])
+                .take(2)
+                .collect::<Vec<_>>()
+                .join("-");
             if cur_family.is_empty() || cur_family != cand_family {
                 continue;
             }
@@ -3302,7 +3301,7 @@ fn parse_agent_call(call: &FunctionCallRef) -> Result<ParsedAgentCall> {
         .unwrap_or("")
         .to_string();
     if prompt.is_empty() {
-        return Err(MuseError::Tool("agent.prompt required".into()));
+        return Err(NurError::Tool("agent.prompt required".into()));
     }
     let kind = v
         .get("subagent_type")
@@ -3541,7 +3540,7 @@ async fn run_agent_tool(
         SubagentTarget::AwaitingLogin { message, .. } | SubagentTarget::Unavailable { message } => {
             // Surface as a tool error so the parent model does not treat a
             // parent-provider run as success. LoginRequired was already emitted.
-            Err(MuseError::Other(message))
+            Err(NurError::Other(message))
         }
     }
 }
@@ -3911,7 +3910,8 @@ pub async fn compact_session(
         runner.config.compact_tool_body_max_chars as usize,
         runner.config.compact_keep_user_turns as usize,
     );
-    let user_prompt = "Summarize this conversation for a fresh context window. Capture: goals, decisions, \
+    let user_prompt =
+        "Summarize this conversation for a fresh context window. Capture: goals, decisions, \
          files touched, current state, pending next steps. Prefer decisions over raw tool dumps. \
          Dense bullets.";
     let system_prompt = "You compress agent conversations into handoff summaries. \
@@ -3920,7 +3920,8 @@ pub async fn compact_session(
 
     // OMP-compatible remote summarization (compaction.remoteEndpoint). Opt-in;
     // any failure falls through to the local model path below.
-    let remote_summary = try_remote_compact_summary(runner, system_prompt, &items, user_prompt).await;
+    let remote_summary =
+        try_remote_compact_summary(runner, system_prompt, &items, user_prompt).await;
     let summary = if let Some(summary) = remote_summary {
         summary
     } else {
@@ -3948,7 +3949,7 @@ pub async fn compact_session(
         }
         let summary = resp.output_text();
         if summary.is_empty() {
-            return Err(MuseError::Other("compaction produced no summary".into()));
+            return Err(NurError::Other("compaction produced no summary".into()));
         }
         summary
     };
@@ -4290,18 +4291,18 @@ mod compact_tail_tests {
             "Prompt is too long for this context window",
         ] {
             assert!(
-                is_context_limit_error(&MuseError::Api {
+                is_context_limit_error(&NurError::Api {
                     status: 400,
                     message: message.into(),
                 }),
                 "{message}"
             );
         }
-        assert!(!is_context_limit_error(&MuseError::Api {
+        assert!(!is_context_limit_error(&NurError::Api {
             status: 400,
             message: "invalid tool call id".into(),
         }));
-        assert!(!is_context_limit_error(&MuseError::Api {
+        assert!(!is_context_limit_error(&NurError::Api {
             status: 401,
             message: "invalid api key".into(),
         }));
@@ -4319,11 +4320,11 @@ mod compact_tail_tests {
             pick_replacement_model(&models, "gpt-5.5").as_deref(),
             Some("gpt-5.6-terra")
         );
-        assert!(is_model_unavailable_error(&MuseError::Api {
+        assert!(is_model_unavailable_error(&NurError::Api {
             status: 404,
             message: "model gpt-5.5 does not exist".into(),
         }));
-        assert!(!is_model_unavailable_error(&MuseError::Api {
+        assert!(!is_model_unavailable_error(&NurError::Api {
             status: 404,
             message: "file does not exist".into(),
         }));
@@ -4378,9 +4379,6 @@ mod prewalk_remote_compact_tests {
             },
             ..Config::default()
         };
-        assert_eq!(
-            resolve_prewalk_into(&cfg).as_deref(),
-            Some("gpt-5.4-mini")
-        );
+        assert_eq!(resolve_prewalk_into(&cfg).as_deref(), Some("gpt-5.4-mini"));
     }
 }

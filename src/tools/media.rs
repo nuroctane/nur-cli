@@ -1,6 +1,6 @@
 //! Multimodal media tools — bridge vision into Meta Model API.
 //!
-//! Muse Spark accepts `input_image` / `input_video` on the Responses API.
+//! Responses providers may accept `input_image` / `input_video` content.
 //! These tools load workspace media into a pending queue; the agent loop
 //! attaches them as multimodal content on the next model turn.
 //!
@@ -10,7 +10,7 @@
 //! 3. Implement with design-eng skills
 
 use super::{arg_str, arg_u64, resolve_path, Tool, ToolContext};
-use crate::error::{MuseError, Result};
+use crate::error::{NurError, Result};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -69,9 +69,9 @@ pub fn take_pending_media() -> Vec<MediaAttach> {
 fn push_pending(item: MediaAttach) -> Result<()> {
     let mut g = PENDING
         .lock()
-        .map_err(|_| MuseError::Tool("media queue lock".into()))?;
+        .map_err(|_| NurError::Tool("media queue lock".into()))?;
     if g.len() >= MAX_PENDING {
-        return Err(MuseError::Tool(format!(
+        return Err(NurError::Tool(format!(
             "too many media attachments this turn (max {MAX_PENDING}) — look at fewer files"
         )));
     }
@@ -99,12 +99,12 @@ fn mime_for(path: &Path) -> Result<(&'static str, MediaKind)> {
         "mp4" | "m4v" => Ok(("video/mp4", MediaKind::Video)),
         // ffmpeg can read these, but the API can't attach them directly.
         "webm" | "mov" | "mkv" | "avi" | "wmv" | "flv" | "mpeg" | "mpg" => {
-            Err(MuseError::Tool(format!(
+            Err(NurError::Tool(format!(
                 "'.{ext}' video can't be attached directly (Meta input_video supports mp4 only) — \
                  run extract_frames on it, then look at the JPEG stills"
             )))
         }
-        _ => Err(MuseError::Tool(format!(
+        _ => Err(NurError::Tool(format!(
             "unsupported media extension '.{ext}' — images png/jpg/webp/gif/ico, or mp4 video"
         ))),
     }
@@ -138,16 +138,16 @@ fn is_extractable_video(path: &Path) -> bool {
 /// Load a workspace media file into a data URL (and pending queue if push=true).
 pub fn load_media(path: &Path, push: bool) -> Result<MediaAttach> {
     if !path.is_file() {
-        return Err(MuseError::Tool(format!("not a file: {}", path.display())));
+        return Err(NurError::Tool(format!("not a file: {}", path.display())));
     }
-    let meta = fs::metadata(path).map_err(|e| MuseError::Tool(e.to_string()))?;
+    let meta = fs::metadata(path).map_err(|e| NurError::Tool(e.to_string()))?;
     let (mime, kind) = mime_for(path)?;
     let max = match kind {
         MediaKind::Image => MAX_IMAGE_BYTES,
         MediaKind::Video => MAX_VIDEO_BYTES,
     };
     if meta.len() > max {
-        return Err(MuseError::Tool(format!(
+        return Err(NurError::Tool(format!(
             "{} is too large ({:.1} MB; max {:.0} MB for {:?}). \
              For video, use extract_frames then look on the stills.",
             path.display(),
@@ -156,7 +156,7 @@ pub fn load_media(path: &Path, push: bool) -> Result<MediaAttach> {
             kind
         )));
     }
-    let bytes = fs::read(path).map_err(|e| MuseError::Tool(format!("read media: {e}")))?;
+    let bytes = fs::read(path).map_err(|e| NurError::Tool(format!("read media: {e}")))?;
     let b64 = base64_encode(&bytes);
     let data_url = format!("data:{mime};base64,{b64}");
     let item = MediaAttach {
@@ -279,7 +279,7 @@ fn find_ffmpeg() -> Option<PathBuf> {
 
 // ── tools ─────────────────────────────────────────────────────────────────
 
-/// Attach image(s) or a short video so Muse can *see* them on the next turn.
+/// Attach image(s) or a short video for the active model's next turn.
 pub struct Look;
 
 impl Tool for Look {
@@ -333,10 +333,10 @@ impl Tool for Look {
             }
         }
         if paths.is_empty() {
-            return Err(MuseError::Tool("look requires path or paths".into()));
+            return Err(NurError::Tool("look requires path or paths".into()));
         }
         if paths.len() > 8 {
-            return Err(MuseError::Tool("look: max 8 media files per call".into()));
+            return Err(NurError::Tool("look: max 8 media files per call".into()));
         }
         let note = args
             .get("note")
@@ -406,18 +406,18 @@ impl Tool for ExtractFrames {
         let path = arg_str(args, "path")?;
         let full = resolve_path(&ctx.cwd, &path)?;
         if !full.is_file() {
-            return Err(MuseError::Tool(format!(
+            return Err(NurError::Tool(format!(
                 "video not found: {}",
                 full.display()
             )));
         }
         if !is_extractable_video(&full) {
-            return Err(MuseError::Tool(
+            return Err(NurError::Tool(
                 "extract_frames expects a video file (mp4/webm/mov/mkv/avi/…)".into(),
             ));
         }
         let ffmpeg = find_ffmpeg().ok_or_else(|| {
-            MuseError::Tool(
+            NurError::Tool(
                 "ffmpeg not found on PATH — install ffmpeg to extract frames \
                  (https://ffmpeg.org), or use look on a short video under 20MB"
                     .into(),
@@ -448,9 +448,9 @@ impl Tool for ExtractFrames {
                 }
             })
             .collect();
-        let out_dir = ctx.cwd.join(".meta").join("frames").join(&safe);
+        let out_dir = ctx.cwd.join(".nur").join("frames").join(&safe);
         let _ = fs::remove_dir_all(&out_dir);
-        fs::create_dir_all(&out_dir).map_err(|e| MuseError::Tool(e.to_string()))?;
+        fs::create_dir_all(&out_dir).map_err(|e| NurError::Tool(e.to_string()))?;
 
         let pattern = out_dir.join("frame_%02d.jpg");
         // Scale down wide frames so vision tokens stay reasonable.
@@ -471,10 +471,10 @@ impl Tool for ExtractFrames {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped())
             .status()
-            .map_err(|e| MuseError::Tool(format!("ffmpeg spawn failed: {e}")))?;
+            .map_err(|e| NurError::Tool(format!("ffmpeg spawn failed: {e}")))?;
 
         if !status.success() {
-            return Err(MuseError::Tool(format!(
+            return Err(NurError::Tool(format!(
                 "ffmpeg failed (exit {:?}) extracting frames from {}",
                 status.code(),
                 full.display()
@@ -482,7 +482,7 @@ impl Tool for ExtractFrames {
         }
 
         let mut frames: Vec<PathBuf> = fs::read_dir(&out_dir)
-            .map_err(|e| MuseError::Tool(e.to_string()))?
+            .map_err(|e| NurError::Tool(e.to_string()))?
             .filter_map(|e| e.ok())
             .map(|e| e.path())
             .filter(|p| {
@@ -494,7 +494,7 @@ impl Tool for ExtractFrames {
             .collect();
         frames.sort();
         if frames.is_empty() {
-            return Err(MuseError::Tool(
+            return Err(NurError::Tool(
                 "ffmpeg produced no frames — is the video valid?".into(),
             ));
         }
