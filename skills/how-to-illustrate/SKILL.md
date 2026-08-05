@@ -1,6 +1,6 @@
 ---
 name: how-to-illustrate
-description: "MANDATORY router for ANY request to draw, illustrate, diagram, chart, graph, visualize, or map something. Exhaustive diagram-type taxonomy (30+ categories, 200+ named types, each with what it shows, its structural anatomy, and when to reach for it) + tool selection (excalidraw/tldraw/penecho) + interactivity/animation mandate. Triggers on every drawing/illustration/graph request, not just explicit tool mentions."
+description: "MANDATORY router for ANY request to draw, illustrate, diagram, chart, graph, visualize, or map something. Exhaustive diagram-type taxonomy (30+ categories, 200+ named types) + tool selection (excalidraw/tldraw/penecho/flint-chart) + source-figure extraction mandate + interactivity/animation mandate. Triggers on every drawing/illustration/graph request, not just explicit tool mentions."
 ---
 
 # How to Illustrate
@@ -19,6 +19,26 @@ causal in text, stop and check this skill first. A good diagram answers "where
 does this fit / what does this connect to / what happens next" in a glance;
 prose forces the reader to reconstruct that structure in their head. If the
 content has shape, that shape belongs on the canvas, not in a paragraph.
+
+## Step 0 — Source figures first (non-negotiable when a URL/doc is given)
+
+If the user points at a **URL, article, PDF, slide deck, or doc that already
+contains figures/diagrams/images**, you MUST extract and analyze those visuals
+**before** drawing anything:
+
+1. Enumerate every content figure (skip avatars/ads/logos unless they carry
+   explanatory structure). Download or screenshot each one to disk.
+2. **Read each image** (vision) and note: diagram type, node labels, edge
+   labels, lanes/layers, before↔after pairs, and what claim the figure makes.
+3. Your deliverable must **reflect those figures** — reconstruct each
+   figure-faithful panel (or explicitly improve it while keeping the same
+   information architecture). Do not invent a parallel taxonomy that ignores
+   the source visuals.
+4. Only *after* figure inventory + analysis: pick diagram types (Step 1) and
+   tools (Step 2), then execute.
+
+Skipping figure extraction when the source has diagrams is a failed
+illustration, even if the prose was summarized correctly.
 
 ## Step 1 — Pick the right diagram type
 
@@ -983,13 +1003,31 @@ tells you how to pick.
 
 | Need | Tool | Why |
 |---|---|---|
-| Publishable, shareable, hand-drawn look (docs/PRs/architecture) | **excalidraw** | Browser share URL, versionable `.excalidraw` |
+| Publishable, shareable, hand-drawn look (docs/PRs/architecture, process maps, systems) | **excalidraw** | Browser share URL, versionable `.excalidraw` |
 | Editable offline board, live agent-driven canvas, multi-shape interactive layouts | **tldraw** (`/draw`) | Desktop app, document scripts, Editor API |
 | Handwriting/math/plots/animated explainer, AI-in-the-loop refinement | **penecho** (`/pen`, `/drawings`, `/penecho`) | Ink canvas, MathJax, declarative animation scenes |
+| **Quantitative / statistical data charts** (bar, line, scatter, heatmap, sankey, funnel, KPI, violin, …) from tabular data | **flint-chart** ([microsoft/flint-chart](https://github.com/microsoft/flint-chart)) | Semantic `ChartAssemblyInput` → Vega-Lite / ECharts / Chart.js / Plotly / Excel; MCP via `npx -y flint-chart-mcp` |
 | Quick static reference / no tool available | Inline ASCII, markdown table, or Mermaid-in-code-block | Last resort only |
 
-See `skill(action=read, name=diagram)` for the full routing mechanics and exact
-tool-call shapes.
+**Routing rule — flint vs canvas tools:**
+
+- If the answer is "plot these numbers / compare series / show distribution /
+  part-to-whole of measured quantities" → **flint-chart** (not hand-drawn fake
+  axes in Excalidraw).
+- If the answer is "show architecture, agent loops, swimlanes, decision trees,
+  sequence, system maps" → **excalidraw** / **tldraw** / **penecho**.
+- Mixed briefs get **both**: Flint for the quantitative panels, Excalidraw/
+  tldraw for the systems maps.
+
+**Flint wholly integrated here:** full authoring skill, chartType catalog,
+semantic types, MCP tools, and examples live at
+`references/flint-chart/flint-chart-author.SKILL.md` (plus `INDEX.md`, upstream
+README/API notes in that folder). Read that file whenever Step 2 selects flint.
+Do **not** invent Vega-Lite/ECharts JSON when Flint can own the chartSpec.
+
+See `skill(action=read, name=diagram)` for canvas routing mechanics and exact
+tool-call shapes. For Flint MCP: prefer `create_chart_view`, else
+`render_chart` / `compile_chart` / `validate_chart` / `list_chart_types`.
 
 ## Step 3 — Interactivity and animation mandate (non-negotiable)
 
@@ -1012,6 +1050,11 @@ bind an interactive control is a worse deliverable, not a safer one.
 - **excalidraw**: no runtime interactivity in the file itself, but still bind
   arrows to shapes (`startBinding`/`endBinding`) so the diagram stays coherent
   if reordered, and prefer `boundElements` labels over floating text.
+- **flint-chart**: default to MCP **`create_chart_view`** (interactive live
+  view + customization panel). Fall back to `render_chart` (PNG/SVG) only when
+  App UI is unavailable or a static image was explicitly requested. Author
+  structure in Flint; transform data *before* Flint; style after compile only
+  for presentation tweaks Flint cannot express.
 
 **When to skip interactivity:** a genuinely trivial 2-3 box diagram, a static
 chart export for a document, or when the user explicitly asked for "just a
@@ -1020,9 +1063,16 @@ capability the chosen tool exposes.
 
 ## Step 4 — Execute
 
-1. Pick type (Step 1) + tool (Step 2).
-2. Build the diagram using the tool's own skill for exact syntax:
-   `skill(action=read, name=excalidraw)` / `name=tldraw-offline` / `name=penecho` / `name=diagram`.
-3. Apply the interactivity/animation mandate (Step 3) — do not skip this check.
-4. Actually create + open it. Never stop at "here's what I'd draw" — the tools
+1. If a source URL/doc was given: finish Step 0 (figure inventory + vision pass).
+2. Pick type (Step 1) + tool (Step 2).
+3. Build with the tool's own skill:
+   - canvas: `skill(action=read, name=excalidraw)` / `tldraw-offline` /
+     `penecho` / `diagram`
+   - charts: read `references/flint-chart/flint-chart-author.SKILL.md` and
+     use Flint MCP / `flint-chart` assemblers
+4. Apply the interactivity/animation mandate (Step 3) — do not skip this check.
+5. Actually create + open it. Never stop at "here's what I'd draw" — the tools
    open the result for the user automatically; use them.
+6. For article-faithful map sets: one panel (or linked file) per major source
+   figure, then optional synthesis maps (provider economics, costs) that the
+   source did not include — clearly labeled as extensions.
