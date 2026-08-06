@@ -33,6 +33,21 @@ pub enum Event {
         result_sha256: String,
         ok: bool,
     },
+    /// Shepherd-style run lifecycle markers (finished|failed|exhausted|stopped).
+    RunStatus {
+        status: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
+    /// Cross-provider or same-provider handoff/subagent admission.
+    Handoff {
+        provider: String,
+        model: String,
+        /// explore | general (not named `kind` - conflicts with serde internal tag).
+        subagent_kind: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -152,6 +167,55 @@ pub fn verify(session_id: &str) -> VerifyResult {
     verify_at(&path(session_id))
 }
 
+#[cfg(test)]
+mod export_tests {
+    use super::*;
+
+    #[test]
+    fn spans_from_chain_shapes_each_event() {
+        let sid = format!("spans-{}", uuid::Uuid::new_v4().simple());
+        let mut text = String::new();
+        let e1 = Entry {
+            seq: 1,
+            ts: 1000,
+            event: Event::Model {
+                provider: "xai".into(),
+                model: "grok-4.5".into(),
+                privacy: "standard".into(),
+                failover: false,
+                input_tokens: 5,
+                output_tokens: 9,
+            },
+            prev: String::new(),
+            hash: "h1".into(),
+        };
+        text.push_str(&serde_json::to_string(&e1).unwrap());
+        text.push('\n');
+        let e2 = Entry {
+            seq: 2,
+            ts: 1500,
+            event: Event::Tool {
+                name: "read_file".into(),
+                args_sha256: Some("a".into()),
+                result_sha256: "b".into(),
+                ok: true,
+            },
+            prev: "h1".into(),
+            hash: "h2".into(),
+        };
+        text.push_str(&serde_json::to_string(&e2).unwrap());
+        text.push('\n');
+
+        let spans = spans_from_chain(&sid, &text);
+        assert_eq!(spans.len(), 3, "2 events + stream root");
+        assert_eq!(spans[0]["name"], "model xai/grok-4.5");
+        assert_eq!(spans[0]["span_id"], 1);
+        assert_eq!(spans[1]["name"], "tool read_file");
+        assert_eq!(spans[1]["parent_span_id"], 1);
+        assert_eq!(spans[2]["name"], "stream");
+    }
+}
+
 fn verify_at(p: &Path) -> VerifyResult {
     let text = std::fs::read_to_string(p).unwrap_or_default();
     let mut prev = String::new();
@@ -185,6 +249,148 @@ fn verify_at(p: &Path) -> VerifyResult {
     }
 }
 
+/// Build OTLP-flavoured spans from a receipt chain text (pure, testable).
+fn spans_from_chain(session_id: &str, text: &str) -> Vec<serde_json::Value> {
+    let mut spans: Vec<serde_json::Value> = Vec::new();
+    let mut prev: Option<(u64, u64)> = None; // (seq, ts)
+    let mut stream_start: u64 = u64::MAX;
+    let mut stream_end: u64 = 0;
+    for line in text.lines() {
+        let Ok(e) = serde_json::from_str::<Entry>(line) else {
+            continue;
+        };
+        stream_start = stream_start.min(e.ts);
+        stream_end = stream_end.max(e.ts);
+        let (name, kind, attrs) = match &e.event {
+            Event::Model {
+                provider,
+                model,
+                privacy,
+                failover,
+                input_tokens,
+                output_tokens,
+            } => (
+                format!("model {provider}/{model}"),
+                "server".to_string(),
+                serde_json::json!({
+                    "provider": provider,
+                    "model": model,
+                    "privacy": privacy,
+                    "failover": failover,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                }),
+            ),
+            Event::Tool {
+                name,
+                ok,
+                result_sha256,
+                ..
+            } => (
+                format!("tool {name}"),
+                "internal".to_string(),
+                serde_json::json!({
+                    "tool": name,
+                    "ok": ok,
+                    "result_sha256": result_sha256,
+                }),
+            ),
+            Event::Handoff {
+                provider,
+                model,
+                subagent_kind,
+                reason,
+            } => (
+                format!("handoff {provider}/{model}"),
+                "client".to_string(),
+                serde_json::json!({
+                    "provider": provider,
+                    "model": model,
+                    "kind": subagent_kind,
+                    "reason": reason,
+                }),
+            ),
+            Event::RunStatus { status, detail } => (
+                format!("run {status}"),
+                "internal".to_string(),
+                serde_json::json!({
+                    "status": status,
+                    "detail": detail,
+                }),
+            ),
+        };
+        let parent = prev.map(|(seq, _)| seq).unwrap_or(0);
+        let duration_ms = e
+            .ts
+            .saturating_sub(prev.map(|(_, ts)| ts).unwrap_or(e.ts))
+            .max(1);
+        spans.push(serde_json::json!({
+            "trace_id": session_id,
+            "span_id": e.seq,
+            "parent_span_id": parent,
+            "name": name,
+            "kind": kind,
+            "start_unix_ms": e.ts * 1000,
+            "duration_ms": duration_ms,
+            "attributes": attrs,
+        }));
+        prev = Some((e.seq, e.ts));
+    }
+    if !spans.is_empty() {
+        spans.push(serde_json::json!({
+            "trace_id": session_id,
+            "span_id": 0,
+            "parent_span_id": 0,
+            "name": "stream",
+            "kind": "internal",
+            "start_unix_ms": stream_start * 1000,
+            "duration_ms": stream_end.saturating_sub(stream_start).max(1),
+            "attributes": {"spans": spans.len()},
+        }));
+    }
+    spans
+}
+
+/// OTLP-flavoured span export (OpenAI/tracing port): one JSON object per line,
+/// `~/.nur/receipts/<session>.spans.jsonl`. Pure from the hash chain — no new
+/// dependencies. Columns: trace_id (session), span_id (seq), parent_span_id,
+/// name, kind (internal/server), start/unix_ms + duration_ms, attributes.
+pub fn export_spans(session_id: &str, out_path: Option<&std::path::Path>) -> usize {
+    let p = path(session_id);
+    let text = std::fs::read_to_string(&p).unwrap_or_default();
+    let spans = spans_from_chain(session_id, &text);
+    let sink = out_path
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| export_spans_default_path(session_id));
+    if let Some(parent) = sink.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mut buf = String::new();
+    for s in &spans {
+        if let Ok(line) = serde_json::to_string(s) {
+            buf.push_str(&line);
+            buf.push('\n');
+        }
+    }
+    let _ = atomic_write_compat(&sink, buf.as_bytes());
+    spans.len()
+}
+
+fn export_spans_default_path(session_id: &str) -> PathBuf {
+    let mut p = path(session_id);
+    p.set_extension("spans.jsonl");
+    p
+}
+
+fn atomic_write_compat(p: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let tmp = p.with_extension("tmp");
+    let mut f = std::fs::File::create(&tmp)?;
+    f.write_all(bytes)?;
+    f.sync_all()?;
+    std::fs::rename(&tmp, p)
+}
+
 /// Human-readable receipt with an integrity check line.
 pub fn render(session_id: &str) -> String {
     let p = path(session_id);
@@ -199,6 +405,29 @@ pub fn render(session_id: &str) -> String {
             continue;
         };
         match &e.event {
+            Event::RunStatus { status, detail } => {
+                rows.push(format!(
+                    "  · run {status}{}",
+                    detail
+                        .as_ref()
+                        .map(|d| format!(" ({d})"))
+                        .unwrap_or_default()
+                ));
+            }
+            Event::Handoff {
+                provider,
+                model,
+                subagent_kind,
+                reason,
+            } => {
+                rows.push(format!(
+                    "  · handoff {provider}/{model} ({subagent_kind}){}",
+                    reason
+                        .as_ref()
+                        .map(|r| format!(" — {r}"))
+                        .unwrap_or_default()
+                ));
+            }
             Event::Model {
                 provider,
                 model,

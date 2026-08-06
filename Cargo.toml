@@ -50,10 +50,15 @@ colored = "2"
 arboard = "3"
 sha2 = "0.11.0"
 base64 = "0.22.1"
+# Firecrawl anydoc — local office/PDF → GFM (nickscamara / firecrawl/anydoc).
+# Optional so lean builds can drop the document stack.
+anydoc = { version = "0.1.6", optional = true }
 
 [features]
-default = ["image-peek"]
+default = ["image-peek", "anydoc"]
 # Inline image peeks in the TUI via ratatui-image + the image codecs.
 # Disable (`--no-default-features`) to drop the heavy image stack; peeks then
 # fall back to the text/diff view.
 image-peek = ["dep:ratatui-image", "dep:image"]
+# Local document conversion (PDF/DOCX/PPTX/…) via Firecrawl anydoc.
+anydoc = ["dep:anydoc"]

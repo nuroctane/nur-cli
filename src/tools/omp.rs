@@ -412,25 +412,7 @@ fn run_omp(bin: &str, args: &Value, ctx: &ToolContext) -> Result<String> {
         )));
     }
 
-    let cost_mode = args
-        .get("cost_mode")
-        .and_then(Value::as_str)
-        .unwrap_or("economy");
-    if !matches!(cost_mode, "economy" | "balanced") {
-        return Err(NurError::Tool(
-            "omp cost_mode must be economy or balanced".into(),
-        ));
-    }
-
-    let timeout_secs = args
-        .get("timeout_seconds")
-        .and_then(Value::as_u64)
-        .unwrap_or(DEFAULT_TIMEOUT_SECS);
-    if !(MIN_TIMEOUT_SECS..=MAX_TIMEOUT_SECS).contains(&timeout_secs) {
-        return Err(NurError::Tool(format!(
-            "omp timeout_seconds must be {MIN_TIMEOUT_SECS}..={MAX_TIMEOUT_SECS}"
-        )));
-    }
+    let (cost_mode, timeout_secs) = validate_run_options(args)?;
 
     let handoff = format!(
         "{prompt}\n\nNur handoff contract: stay within the requested scope, avoid unrelated \
@@ -465,6 +447,48 @@ fn run_omp(bin: &str, args: &Value, ctx: &ToolContext) -> Result<String> {
     .map_err(NurError::Tool)?;
     let envelope = parse_json_run(&output, cost_mode)?;
     serde_json::to_string_pretty(&envelope).map_err(|error| NurError::Tool(error.to_string()))
+}
+
+fn validate_run_options(args: &Value) -> Result<(&str, u64)> {
+    let cost_mode = args
+        .get("cost_mode")
+        .and_then(Value::as_str)
+        .unwrap_or("economy");
+    if !matches!(cost_mode, "economy" | "balanced") {
+        return Err(NurError::Tool(
+            "omp cost_mode must be economy or balanced".into(),
+        ));
+    }
+
+    let timeout_secs = args
+        .get("timeout_seconds")
+        .and_then(Value::as_u64)
+        .unwrap_or(DEFAULT_TIMEOUT_SECS);
+    if !(MIN_TIMEOUT_SECS..=MAX_TIMEOUT_SECS).contains(&timeout_secs) {
+        return Err(NurError::Tool(format!(
+            "omp timeout_seconds must be {MIN_TIMEOUT_SECS}..={MAX_TIMEOUT_SECS}"
+        )));
+    }
+
+    if let Some(thinking) = args.get("thinking").and_then(Value::as_str) {
+        if !matches!(
+            thinking,
+            "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "auto"
+        ) {
+            return Err(NurError::Tool(format!(
+                "omp thinking level `{thinking}` is not supported"
+            )));
+        }
+    }
+    if let Some(profile) = args.get("tool_profile").and_then(Value::as_str) {
+        if !matches!(profile, "focused" | "full") {
+            return Err(NurError::Tool(
+                "omp tool_profile must be focused or full".into(),
+            ));
+        }
+    }
+
+    Ok((cost_mode, timeout_secs))
 }
 
 fn build_run_args(
@@ -729,6 +753,22 @@ mod tests {
         assert!(argv.windows(2).any(|v| v == ["--model", "openai/gpt-test"]));
         assert!(argv.windows(2).any(|v| v == ["--thinking", "medium"]));
         assert!(!argv.contains(&"--tools".to_string()));
+    }
+
+    #[test]
+    fn invalid_run_options_fail_closed_instead_of_expanding_the_tool_surface() {
+        for args in [
+            serde_json::json!({"cost_mode":"free"}),
+            serde_json::json!({"thinking":"infinite"}),
+            serde_json::json!({"tool_profile":"everything"}),
+            serde_json::json!({"timeout_seconds": 10}),
+        ] {
+            assert!(validate_run_options(&args).is_err(), "accepted {args}");
+        }
+        assert_eq!(
+            validate_run_options(&serde_json::json!({})).unwrap(),
+            ("economy", DEFAULT_TIMEOUT_SECS)
+        );
     }
 
     #[test]

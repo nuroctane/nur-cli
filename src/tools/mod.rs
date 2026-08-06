@@ -1,15 +1,24 @@
 pub mod akarso;
 mod apply_patch;
+pub mod anydoc_tool;
 mod bash;
 pub mod browser;
 pub mod egaki_tool;
 pub mod terminal_browser;
 pub use terminal_browser::is_read_only_action as terminal_browser_is_read_only;
 pub mod bg_tool;
+mod connectome_tool;
+mod context_tool;
 pub mod fractal_tool;
+mod goal_tool;
+mod harness_tool;
+mod message_tool;
+mod admission_tool;
+mod ipython_tool;
 pub mod headroom_tool;
 pub mod optmem_tool;
 pub mod penecho_tool;
+mod proposal_tool;
 pub mod t3code_tool;
 pub use browser::is_read_only_action as browser_is_read_only;
 pub mod capabilities;
@@ -96,6 +105,13 @@ pub const SUBAGENT_TOOL_NAMES: &[&str] = &[
     "extract_frames",
     "git_status",
     "git_diff",
+    // RLM / Prime / Shepherd / AnyDoc surfaces children need for long context
+    "context",
+    "anydoc",
+    "goal",
+    "proposal",
+    "connectome",
+    "repl",
 ];
 
 pub struct ToolContext {
@@ -173,6 +189,15 @@ impl ToolHost {
             Box::new(media::ExtractFrames),
             Box::new(git_status::GitStatus),
             Box::new(git_diff::GitDiff),
+            Box::new(context_tool::ContextTool),
+            Box::new(anydoc_tool::AnydocTool),
+            Box::new(goal_tool::GoalTool),
+            Box::new(proposal_tool::ProposalTool),
+            Box::new(harness_tool::HarnessTool),
+            Box::new(connectome_tool::ConnectomeTool),
+            Box::new(ipython_tool::ReplTool),
+            Box::new(admission_tool::AdmissionTool),
+            Box::new(message_tool::MessageTool),
             Box::new(graphify::Graphify),
             Box::new(graphjin::GraphJin),
             Box::new(excalidraw::Excalidraw),
@@ -272,6 +297,15 @@ impl ToolHost {
             "extract_frames" => media::ExtractFrames.execute(&args, ctx),
             "git_status" => git_status::GitStatus.execute(&args, ctx),
             "git_diff" => git_diff::GitDiff.execute(&args, ctx),
+            "context" => context_tool::ContextTool.execute(&args, ctx),
+            "anydoc" => anydoc_tool::AnydocTool.execute(&args, ctx),
+            "goal" => goal_tool::GoalTool.execute(&args, ctx),
+            "proposal" => proposal_tool::ProposalTool.execute(&args, ctx),
+            "harness" => harness_tool::HarnessTool.execute(&args, ctx),
+            "connectome" => connectome_tool::ConnectomeTool.execute(&args, ctx),
+            "repl" => ipython_tool::ReplTool.execute(&args, ctx),
+            "admission" => admission_tool::AdmissionTool.execute(&args, ctx),
+            "message" => message_tool::MessageTool.execute(&args, ctx),
             "graphify" => graphify::Graphify.execute(&args, ctx),
             "graphjin" => graphjin::GraphJin.execute(&args, ctx),
             "excalidraw" => excalidraw::Excalidraw.execute(&args, ctx),
@@ -354,7 +388,11 @@ impl Tool for AgentStub {
             "type": "object",
             "properties": {
                 "description": {"type": "string", "description": "Short 3-7 word label"},
-                "prompt": {"type": "string", "description": "Full task for the subagent"},
+                "prompt": {
+                    "type": "string",
+                    "maxLength": crate::agent::r#loop::MAX_SUBAGENT_PROMPT_CHARS,
+                    "description": "Bounded focused task for the subagent; include only the context needed for this delegation"
+                },
                 "subagent_type": {
                     "type": "string",
                     "enum": ["explore", "general"],
@@ -367,6 +405,23 @@ impl Tool for AgentStub {
                 "model": {
                     "type": "string",
                     "description": "Optional: exact model id for the chosen provider. Omit to use that provider's default model (recommended). If you supply a model id it is used as-is, so only pass one you know is valid for that provider."
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Optional handoff reason (OpenAI Agents SDK handoff pattern) - why this specialist is needed"
+                },
+                "handoff_role": {
+                    "type": "string",
+                    "description": "Optional specialist role label for the handoff packet (e.g. security-reviewer, docs)"
+                },
+                "context_files": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional handoff input filter (OpenAI Agents SDK): workspace files to load into the child's prompt so it gets exactly the context it needs. Paths are workspace-relative."
+                },
+                "async": {
+                    "type": "boolean",
+                    "description": "Optional RLM async admission (Prime rlm()): when true, return a handle id immediately and run the subagent in the background; the model keeps working. Retrieve the result with tool `admission` action=get. Default false (blocking report)."
                 }
             },
             "required": ["prompt"]
@@ -432,6 +487,15 @@ mod tests {
             "extract_frames",
             "git_status",
             "git_diff",
+            "context",
+            "anydoc",
+            "goal",
+            "proposal",
+            "harness",
+            "connectome",
+            "repl",
+            "admission",
+            "message",
             "graphify",
             "graphjin",
             "excalidraw",

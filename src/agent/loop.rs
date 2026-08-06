@@ -18,7 +18,7 @@ use crate::usage::{TokenUsage, UsageTracker};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
@@ -101,8 +101,13 @@ pub struct AgentRunner {
     pub permissions: SharedPermissions,
     /// Optional pre/post tool hooks (`hooks.toml`). Inactive when file missing.
     pub hooks: HooksConfig,
-    /// Nested subagents cannot spawn further agents (depth limit 1).
+    /// Nested subagents can spawn further agents up to `config.subagent_depth`
+    /// (default 1 = children only, no grandchildren). This field is the *current*
+    /// runner's nesting level (0 = root). Enables budgeted RLM-style recursion.
     pub is_subagent: bool,
+    /// Current recursion depth of this runner (0 = root). Incremented when a
+    /// subagent spawns children; bounded by `config.subagent_depth`.
+    pub subagent_depth: u32,
     /// OMP-style prewalk: once fired, later turns in this TUI session use this
     /// model (shared Arc so `make_runner` each turn still sees the switch).
     pub prewalk_override: Arc<Mutex<Option<String>>>,
@@ -221,6 +226,19 @@ impl AgentRunner {
         if !self.is_subagent {
             let _ = session.save();
         }
+    }
+
+    /// Session id used for async subagent admissions. The runner does not own a
+    /// session; prefer the ambient `NUR_SESSION_ID`, else a process-global id.
+    fn session_id_for_admission(&self) -> String {
+        if let Ok(sid) = std::env::var("NUR_SESSION_ID") {
+            if !sid.is_empty() {
+                return sid;
+            }
+        }
+        static PROC: OnceLock<String> = OnceLock::new();
+        PROC.get_or_init(|| format!("proc-{}", &uuid::Uuid::new_v4().simple().to_string()[..12]))
+            .clone()
     }
 
     /// Run one model request against `client`, forwarding stream events to the
@@ -428,6 +446,10 @@ impl AgentRunner {
             };
             let mut req2 = req.clone();
             req2.model = t.model.clone();
+            if let Some(reasoning) = req2.reasoning.as_mut() {
+                reasoning.effort =
+                    crate::providers::nearest_effort(&t.provider_id, &self.config.reasoning_effort);
+            }
             match self.stream_one(&client, &req2, tx, cancel).await {
                 Ok((resp, deltas)) => {
                     return Ok((
@@ -464,6 +486,18 @@ impl AgentRunner {
         // ran, then the turn was cancelled before the attach) so a stale image
         // can't bleed onto this unrelated prompt.
         let _ = media::take_pending_media();
+        // Portable input guardrails (OpenAI Agents SDK pattern) - all providers.
+        match super::guardrails::check_input(user_text) {
+            super::guardrails::GuardDecision::Block(msg) => {
+                let _ = tx.send(AgentEvent::Status(format!("guardrail blocked input · {msg}")));
+                return Err(NurError::Other(format!("input guardrail: {msg}")));
+            }
+            super::guardrails::GuardDecision::Warn(w) => {
+                let _ = tx.send(AgentEvent::Status(format!("guardrail · {w}")));
+            }
+            super::guardrails::GuardDecision::Allow => {}
+        }
+        // Track tokens toward a persistent goal when present.
         session.push_user(user_text);
         // Auto-attach media paths mentioned in the user prompt (png/mp4/…).
         let auto_notes = media::auto_attach_from_text(&self.cwd, user_text);
@@ -567,7 +601,7 @@ impl AgentRunner {
             if compactions < MAX_AUTO_COMPACTIONS
                 && compact_failures < MAX_AUTO_COMPACT_FAILURES
                 && input_now > last_compact_input
-                && should_auto_compact(usage, &self.config)
+                && should_auto_compact(usage, &self.config, &session.input_items)
             {
                 last_compact_input = input_now;
                 let _ = tx.send(AgentEvent::Status("auto-compacting context…".into()));
@@ -619,7 +653,7 @@ impl AgentRunner {
                     parts.push(format!("{superseded} superseded read/search"));
                 }
                 if dropped > 0 {
-                    parts.push(format!("{dropped} empty/error tool body"));
+                    parts.push(format!("{dropped} uneventful empty tool body"));
                 }
                 let _ = tx.send(AgentEvent::Status(format!(
                     "context · pruned {}",
@@ -779,8 +813,14 @@ impl AgentRunner {
             };
 
             let (in_tok, out_tok) = if let Some(u) = &resp.usage {
-                let tu: TokenUsage = u.into();
-                usage.record_request(tu.clone(), resp.id.clone());
+                let raw: TokenUsage = u.into();
+                usage.record_request_for_route(
+                    &served.provider,
+                    &served.model,
+                    raw,
+                    resp.id.clone(),
+                );
+                let tu = usage.last_usage().clone();
                 session.usage.add(&tu);
                 let toks = (tu.input_tokens, tu.output_tokens);
                 let _ = tx.send(AgentEvent::Usage {
@@ -951,6 +991,85 @@ impl AgentRunner {
                 } else {
                     text
                 };
+
+                // Output guardrails - warn (do not hard-block final answers).
+                if let super::guardrails::GuardDecision::Warn(w) =
+                    super::guardrails::check_output(&text)
+                {
+                    let _ = tx.send(AgentEvent::Status(format!("guardrail · {w}")));
+                }
+                // Attribute tokens toward persistent goal if any.
+                let spent = usage.last_usage().total_tokens;
+                if spent > 0 {
+                    let _ = super::goal::add_tokens(&session.id, spent);
+                }
+                // M2 light extraction + Connectome chronicle (agent-native memory).
+                if self.config.native_memory && !self.is_subagent && !text.trim().is_empty() {
+                    let mem_scope = {
+                        let proj = std::path::Path::new(&session.cwd)
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("workspace");
+                        format!("{proj}:{}", session.id)
+                    };
+                    let _ = super::chronicle::append(
+                        &mem_scope,
+                        "assistant",
+                        &text.chars().take(500).collect::<String>(),
+                        None,
+                    );
+                    for cand in super::native_memory::extract_candidates(&text) {
+                        let _ = super::native_memory::remember(
+                            &mem_scope,
+                            &cand,
+                            super::native_memory::Tier::Recent,
+                            super::native_memory::Voice::Observed,
+                            &["auto".into()],
+                            0.5,
+                            "turn_end",
+                        );
+                    }
+                    // Model-assisted extraction (Mem0-class, paper M2) - opt-in.
+                    if self.config.memory_model_extract {
+                        let prompt =
+                            super::native_memory::model_extract_prompt(&text, 8_000);
+                        let req = crate::api::types::ResponseRequest {
+                            model: self.config.model.clone(),
+                            input: serde_json::Value::Array(vec![
+                                crate::api::types::user_text_item(&prompt),
+                            ]),
+                            instructions: None,
+                            tools: None,
+                            tool_choice: None,
+                            store: Some(false),
+                            include: None,
+                            reasoning: Some(crate::api::types::ReasoningConfig {
+                                effort: Some("minimal".into()),
+                                summary: None,
+                            }),
+                            stream: Some(false),
+                            parallel_tool_calls: None,
+                            prompt_cache_key: Some(format!("native-mem-extract:{}", session.id)),
+                        };
+                        let resp = self.client.create_response(&req).await;
+                        if let Ok(resp) = resp {
+                            let output = resp.output_text();
+                            for (fact, voice) in
+                                super::native_memory::parse_model_extraction(&output)
+                            {
+                                let _ = super::native_memory::remember(
+                                    &mem_scope,
+                                    &fact,
+                                    super::native_memory::Tier::L1,
+                                    voice,
+                                    &["model".into()],
+                                    0.7,
+                                    "turn_end_model",
+                                );
+                            }
+                        }
+                    }
+                }
 
                 usage.set_state("idle");
                 session.push_assistant(&text);
@@ -1146,7 +1265,9 @@ impl AgentRunner {
             });
 
             let mode_at_gate = self.permission_mode.get();
-            let approved = self.check_approval(&call.name, &call.arguments, tx).await;
+            let approved = self
+                .check_approval(&call.name, &call.arguments, tx, cancel)
+                .await;
             if !approved {
                 let plan_block = mode_at_gate.is_read_only_enforced()
                     && !is_read_only_call(&call.name, &call.arguments);
@@ -1203,6 +1324,27 @@ impl AgentRunner {
                     }
                 }
             } else {
+                // Portable tool-arg guardrails (OpenAI Agents SDK pattern) before hooks.
+                match super::guardrails::check_tool_args(&call.name, &call.arguments) {
+                    super::guardrails::GuardDecision::Block(msg) => {
+                        let msg = format!("error: {msg}");
+                        let _ = tx.send(AgentEvent::ToolEnd {
+                            id,
+                            name: call.name.clone(),
+                            result: msg.clone(),
+                            ok: false,
+                        });
+                        session
+                            .input_items
+                            .push(function_call_output_item(&call.call_id, &msg));
+                        idx += 1;
+                        continue;
+                    }
+                    super::guardrails::GuardDecision::Warn(w) => {
+                        let _ = tx.send(AgentEvent::Status(format!("guardrail · {w}")));
+                    }
+                    super::guardrails::GuardDecision::Allow => {}
+                }
                 // Pre-tool hook (optional) — blocks on non-zero exit.
                 if let Err(e) =
                     self.hooks
@@ -1370,7 +1512,10 @@ impl AgentRunner {
                 args: call.arguments.clone(),
             });
             let mode_at_gate = self.permission_mode.get();
-            let denial = if self.check_approval(&call.name, &call.arguments, tx).await {
+            let denial = if self
+                .check_approval(&call.name, &call.arguments, tx, cancel)
+                .await
+            {
                 None
             } else if mode_at_gate.is_read_only_enforced()
                 && !is_read_only_call(&call.name, &call.arguments)
@@ -1409,13 +1554,27 @@ impl AgentRunner {
             let tx_child = tx.clone();
             let cancel_child = cancel.clone();
             let permits = permits.clone();
+            // RLM recursion depth: children may recurse up to the config budget.
+            let depth = self.subagent_depth;
             handles.push(Some(tokio::spawn(async move {
                 let (prompt, kind, desc, provider_override, model_override) = parsed?;
+                let cfg_limit = config.subagent_depth.max(1);
+                if depth >= cfg_limit {
+                    return Err(NurError::Other(format!(
+                        "subagent recursion limit reached (depth {depth}, max {cfg_limit}) - \
+                         raise config.subagent_depth to allow deeper RLM-style recursion"
+                    )));
+                }
                 // Held for the whole child run: this is the concurrency cap.
-                let _permit = permits
-                    .acquire()
-                    .await
-                    .map_err(|e| NurError::Other(e.to_string()))?;
+                let _permit = tokio::select! {
+                    _ = cancel_child.cancelled() => return Err(NurError::Interrupted),
+                    permit = permits.acquire() => {
+                        permit.map_err(|e| NurError::Other(e.to_string()))?
+                    }
+                };
+                if cancel_child.is_cancelled() {
+                    return Err(NurError::Interrupted);
+                }
                 let _ = tx_child.send(AgentEvent::Status(format!("subagent · {desc}")));
                 // Cross-provider: if the call named a different provider, build a
                 // client + config for it from that provider's stored credentials.
@@ -1441,6 +1600,7 @@ impl AgentRunner {
                             mode,
                             &prompt,
                             &kind,
+                            depth,
                             &cancel_child,
                             &tx_child,
                         )
@@ -1453,8 +1613,12 @@ impl AgentRunner {
         }
 
         // Phase 3 — collect in submission order so `call_id` pairing holds.
-        for (call, ((id, denial), handle)) in batch.iter().zip(gated.into_iter().zip(handles)) {
-            let (body, ok) = match (denial, handle) {
+        for index in 0..batch.len() {
+            let call = &batch[index];
+            let (id, denial) = &gated[index];
+            let id = *id;
+            let denial = denial.clone();
+            let (body, ok) = match (denial, handles[index].take()) {
                 (Some(msg), _) => {
                     let _ = tx.send(AgentEvent::ToolEnd {
                         id,
@@ -1467,10 +1631,14 @@ impl AgentRunner {
                         .push(function_call_output_item(&call.call_id, &msg));
                     continue;
                 }
-                (None, Some(handle)) => {
+                (None, Some(mut handle)) => {
                     let joined = tokio::select! {
-                        _ = cancel.cancelled() => return Err(NurError::Interrupted),
-                        r = handle => r,
+                        _ = cancel.cancelled() => {
+                            handle.abort();
+                            abort_subagent_handles(&mut handles);
+                            return Err(NurError::Interrupted);
+                        },
+                        r = &mut handle => r,
                     };
                     match joined {
                         Ok(Ok((text, spent))) => {
@@ -1482,7 +1650,10 @@ impl AgentRunner {
                             });
                             (text, true)
                         }
-                        Ok(Err(NurError::Interrupted)) => return Err(NurError::Interrupted),
+                        Ok(Err(NurError::Interrupted)) => {
+                            abort_subagent_handles(&mut handles);
+                            return Err(NurError::Interrupted);
+                        }
                         Ok(Err(e)) => (format!("error: {e}"), false),
                         Err(e) => (format!("error: subagent task failed: {e}"), false),
                     }
@@ -1528,6 +1699,7 @@ impl AgentRunner {
         name: &str,
         args: &str,
         tx: &mpsc::UnboundedSender<AgentEvent>,
+        cancel: &CancellationToken,
     ) -> bool {
         let mode = self.permission_mode.get();
         let read_only = is_read_only_call(name, args);
@@ -1548,7 +1720,7 @@ impl AgentRunner {
             }
             // Plan allowed — still honor ask rules (force a prompt).
             if self.permissions.decide(name, args) == Some(RuleDecision::Ask) {
-                return self.prompt_approval(name, args, tx).await;
+                return self.prompt_approval(name, args, tx, cancel).await;
             }
             return true;
         }
@@ -1560,7 +1732,7 @@ impl AgentRunner {
 
         // 4) Ask rule forces a prompt even in auto.
         if self.permissions.decide(name, args) == Some(RuleDecision::Ask) {
-            return self.prompt_approval(name, args, tx).await;
+            return self.prompt_approval(name, args, tx, cancel).await;
         }
 
         // 5) Mode default.
@@ -1576,7 +1748,7 @@ impl AgentRunner {
                         return true;
                     }
                 }
-                self.prompt_approval(name, args, tx).await
+                self.prompt_approval(name, args, tx, cancel).await
             }
         }
     }
@@ -1586,6 +1758,7 @@ impl AgentRunner {
         name: &str,
         args: &str,
         tx: &mpsc::UnboundedSender<AgentEvent>,
+        cancel: &CancellationToken,
     ) -> bool {
         let (otx, orx) = oneshot::channel();
         if tx
@@ -1598,7 +1771,11 @@ impl AgentRunner {
         {
             return false;
         }
-        match orx.await {
+        let decision = tokio::select! {
+            _ = cancel.cancelled() => return false,
+            decision = orx => decision,
+        };
+        match decision {
             Ok(ApprovalDecision::Approve) => true,
             Ok(ApprovalDecision::ApproveAlways) => {
                 if let Ok(mut set) = self.approved_tools.lock() {
@@ -1903,6 +2080,32 @@ mod tests {
         assert!(parse_agent_call(&call("c", "agent")).is_err());
     }
 
+    #[test]
+    fn agent_calls_reject_unbounded_prompts_and_unknown_privilege_classes() {
+        let oversized = FunctionCallRef {
+            call_id: "large".into(),
+            name: "agent".into(),
+            arguments: serde_json::json!({
+                "prompt": "x".repeat(MAX_SUBAGENT_PROMPT_CHARS + 1),
+            })
+            .to_string(),
+        };
+        assert!(parse_agent_call(&oversized)
+            .unwrap_err()
+            .to_string()
+            .contains("keep delegated context"));
+
+        let unknown = FunctionCallRef {
+            call_id: "kind".into(),
+            name: "agent".into(),
+            arguments: r#"{"prompt":"audit","subagent_type":"unrestricted"}"#.into(),
+        };
+        assert!(parse_agent_call(&unknown)
+            .unwrap_err()
+            .to_string()
+            .contains("unsupported subagent_type"));
+    }
+
     /// Cross-provider: the agent call parses optional provider/model overrides,
     /// and natural-language provider names resolve to the right catalog entry.
     #[test]
@@ -2009,6 +2212,12 @@ mod tests {
             "Claude Code session import path — map how it works",
             "Gemini response parsing has a bug, find it",
             "GPT-style tool schemas: audit our converter",
+            // Regression: topical "X agent …" prose used to match the bare
+            // "agent" tail cue and force a cross-provider spawn onto OpenAI
+            // with a stale sk- key (401 Incorrect API key).
+            "OpenAI agent strategies — research official docs for portable patterns",
+            "Study the Claude agent architecture and summarize it",
+            "Compare Gemini agent frameworks with our loop",
         ] {
             let (_, _, _, prov, _) = parse_agent_call(&FunctionCallRef {
                 call_id: "a".into(),
@@ -2047,6 +2256,42 @@ mod tests {
             Some("anthropic"),
             "'<provider> subagent' at the head of a prompt is an explicit route"
         );
+
+        // Role tails that really mean routing still work.
+        for (prompt, expected) in [
+            ("spawn a grok agent to audit failover", "xai"),
+            ("run a claude agent for the auth review", "anthropic"),
+            ("gemini reviewer: map the graphify module", "google"),
+        ] {
+            let (_, _, _, prov, _) = parse_agent_call(&FunctionCallRef {
+                call_id: "d".into(),
+                name: "agent".into(),
+                arguments: serde_json::json!({ "prompt": prompt, "description": "task" })
+                    .to_string(),
+            })
+            .unwrap();
+            assert_eq!(
+                prov.as_deref(),
+                Some(expected),
+                "routing role tail must still work: {prompt:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn tail_is_routing_role_distinguishes_role_from_topic() {
+        assert!(tail_is_routing_role(" subagent to audit"));
+        assert!(tail_is_routing_role(" agent"));
+        assert!(tail_is_routing_role(" agent."));
+        assert!(tail_is_routing_role(" agent to review auth"));
+        assert!(tail_is_routing_role(" reviewer"));
+        assert!(tail_is_routing_role(" review"));
+        assert!(!tail_is_routing_role(" agent strategies"));
+        assert!(!tail_is_routing_role(" agent architecture"));
+        assert!(!tail_is_routing_role(" agentic workflow"));
+        assert!(!tail_is_routing_role(" agents in production"));
+        assert!(!tail_is_routing_role(" agent-based system"));
+        assert!(!tail_is_routing_role(" reviewable design"));
     }
 
     /// "gemini" resolves to catalog id `google` (see `natural_language_provider_names_resolve`),
@@ -3039,16 +3284,73 @@ fn pick_replacement_model(models: &[String], unavailable: &str) -> Option<String
     candidates.first().map(|model| (*model).clone())
 }
 
-fn should_auto_compact(usage: &UsageTracker, cfg: &Config) -> bool {
+const DEFAULT_COMPACTION_RESERVE_TOKENS: u64 = 16_384;
+
+/// Match OMP's reserve-based default instead of compacting at a fixed 55%.
+/// Large windows keep 15% free; smaller windows keep the 16k response/tool
+/// reserve unless that would leave no practical prompt budget.
+fn compaction_threshold_tokens(context_window: u64) -> u64 {
+    let window = context_window.max(1);
+    let proportional = ((window as f64 * 0.15).floor() as u64).max(1);
+    let requested = proportional.max(DEFAULT_COMPACTION_RESERVE_TOKENS);
+    // OMP recovers to the proportional reserve when its default would make the
+    // budget effectively impossible. Nur also applies that recovery when the
+    // fixed reserve would consume more than half of a small provider window;
+    // otherwise a 20k model would compact at only 3.6k tokens.
+    let reserve = if requested >= window.saturating_sub(proportional) || requested >= window / 2 {
+        proportional
+    } else {
+        requested
+    };
+    window.saturating_sub(reserve).min(window.saturating_sub(1))
+}
+
+/// Conservative local context estimate used only as a floor when provider
+/// usage is absent or under-reported. Inline media payloads are represented by
+/// a bounded image allowance rather than charging their base64 byte length as
+/// text tokens.
+fn estimate_context_tokens(items: &[Value]) -> u64 {
+    fn chars(value: &Value, key: Option<&str>) -> u64 {
+        match value {
+            Value::Null => 4,
+            Value::Bool(_) => 5,
+            Value::Number(number) => number.to_string().len() as u64,
+            Value::String(text)
+                if matches!(key, Some("image_url" | "image" | "data"))
+                    && text.starts_with("data:") =>
+            {
+                4_096
+            }
+            Value::String(text) => text.chars().count() as u64,
+            Value::Array(values) => values
+                .iter()
+                .map(|value| chars(value, None).saturating_add(1))
+                .sum(),
+            Value::Object(values) => values
+                .iter()
+                .map(|(key, value)| {
+                    (key.len() as u64)
+                        .saturating_add(chars(value, Some(key)))
+                        .saturating_add(2)
+                })
+                .sum(),
+        }
+    }
+
+    let estimated_chars: u64 = items.iter().map(|item| chars(item, None)).sum();
+    estimated_chars.saturating_add(3) / 4
+}
+
+fn should_auto_compact(usage: &UsageTracker, cfg: &Config, items: &[Value]) -> bool {
     let last = usage.last_usage();
-    // Prefer input tokens (what pressures the next request window).
-    let used = if last.input_tokens > 0 {
+    let provider_used = if last.input_tokens > 0 {
         last.input_tokens
     } else {
         last.total_tokens
     };
     let window = cfg.context_window.max(1);
-    used > (window as f64 * 0.55) as u64 && used > 40_000
+    let used = provider_used.max(estimate_context_tokens(items));
+    used > compaction_threshold_tokens(window)
 }
 
 /// Replace stale bodies from repeated identical observations while preserving
@@ -3060,7 +3362,8 @@ fn should_auto_compact(usage: &UsageTracker, cfg: &Config) -> bool {
 /// Collapse empty / hard-error tool bodies that sit outside the live suffix.
 /// Mirrors OMP `compaction.dropUseless` without rewriting recent cacheable turns.
 fn prune_useless_observations(items: &mut [Value]) -> usize {
-    const MIN_KEEP_SUFFIX_CHARS: usize = 32_000;
+    const CACHE_AWARE_SUFFIX_CHARS: usize = 32_000;
+    const NOTICE: &str = "[uneventful empty tool result elided to save context]";
     let item_chars: Vec<usize> = items
         .iter()
         .map(|item| serde_json::to_string(item).map_or(0, |text| text.len()))
@@ -3073,7 +3376,10 @@ fn prune_useless_observations(items: &mut [Value]) -> usize {
     }
     let mut pruned = 0;
     for index in 0..items.len() {
-        if suffix_chars[index] <= MIN_KEEP_SUFFIX_CHARS {
+        // A prefix cache survives mutations near the live suffix. Rewriting
+        // older entries would invalidate far more cached context than this
+        // tiny optimization can save.
+        if suffix_chars[index] > CACHE_AWARE_SUFFIX_CHARS {
             continue;
         }
         let item = &mut items[index];
@@ -3086,22 +3392,22 @@ fn prune_useless_observations(items: &mut [Value]) -> usize {
         let Some(body) = output.as_str() else {
             continue;
         };
-        if body.starts_with("[dropped useless") {
+        if body == NOTICE {
             continue;
         }
         let trimmed = body.trim();
-        let useless = trimmed.is_empty()
-            || trimmed == "{}"
-            || trimmed == "null"
-            || trimmed.eq_ignore_ascii_case("error")
-            || trimmed.starts_with("Error:")
-            || trimmed.starts_with("error:")
-            || trimmed.starts_with("failed:")
-            || trimmed.starts_with("FAILED");
+        // Nur's current Tool result type has no explicit `useless` bit. Never
+        // infer uselessness from error text: OMP's invariant is that errors
+        // always win and remain available for recovery. Only successful empty
+        // payload shapes qualify, and only when replacing them actually saves.
+        let useless = trimmed.is_empty() || trimmed == "{}" || trimmed == "null";
         if !useless {
             continue;
         }
-        *output = Value::String("[dropped useless empty/error tool body to save context]".into());
+        if body.chars().count() <= NOTICE.chars().count() {
+            continue;
+        }
+        *output = Value::String(NOTICE.into());
         pruned += 1;
     }
     pruned
@@ -3210,7 +3516,7 @@ fn prune_superseded_observations(items: &mut [Value]) -> usize {
         if call_id.is_empty() {
             continue;
         }
-        let key = format!("{name}\0{arguments}");
+        let key = format!("{name}\0{}", canonical_tool_arguments(arguments));
         if !seen.insert(key) {
             superseded.insert(call_id.to_string(), name.to_string());
         }
@@ -3261,6 +3567,32 @@ fn prune_superseded_observations(items: &mut [Value]) -> usize {
     pruned
 }
 
+/// Tool-call JSON object ordering is not semantic. Providers can reorder the
+/// same arguments between rounds, so use a recursively sorted representation
+/// when deciding whether a read/search observation supersedes an older one.
+fn canonical_tool_arguments(arguments: &str) -> String {
+    fn sort_value(value: Value) -> Value {
+        match value {
+            Value::Array(values) => Value::Array(values.into_iter().map(sort_value).collect()),
+            Value::Object(values) => {
+                let mut entries: Vec<_> = values.into_iter().collect();
+                entries.sort_by(|left, right| left.0.cmp(&right.0));
+                let mut sorted = serde_json::Map::new();
+                for (key, value) in entries {
+                    sorted.insert(key, sort_value(value));
+                }
+                Value::Object(sorted)
+            }
+            scalar => scalar,
+        }
+    }
+
+    serde_json::from_str(arguments)
+        .map(sort_value)
+        .and_then(|value| serde_json::to_string(&value))
+        .unwrap_or_else(|_| arguments.trim().to_string())
+}
+
 fn emit_side_effects(tx: &mpsc::UnboundedSender<AgentEvent>, name: &str, body: &str) {
     if name == "todo_write" {
         let _ = tx.send(AgentEvent::TodosChanged(body.to_string()));
@@ -3272,6 +3604,15 @@ fn emit_side_effects(tx: &mpsc::UnboundedSender<AgentEvent>, name: &str, body: &
 
 /// A spawned subagent run: its report text plus the tokens it spent.
 type SubagentHandle = tokio::task::JoinHandle<Result<(String, TokenUsage)>>;
+
+/// Dropping a Tokio join handle detaches the task. Fan-out cancellation must
+/// abort every still-running child explicitly so no queued child can acquire a
+/// permit later and begin resolving credentials or editing after the turn ended.
+fn abort_subagent_handles(handles: &mut [Option<SubagentHandle>]) {
+    for handle in handles.iter_mut().filter_map(Option::take) {
+        handle.abort();
+    }
+}
 
 /// How many times to re-offer a turn to a provider that reported saturation
 /// before giving up on it and falling over. Three attempts spans ~7s of
@@ -3286,16 +3627,16 @@ const CAPACITY_BACKOFF_BASE_MS: u64 = 1000;
 /// rate-limit and context-budget guard as much as a CPU one. The rest of the
 /// batch queues behind the semaphore and starts as slots free up.
 const MAX_CONCURRENT_SUBAGENTS: usize = 4;
+pub const MAX_SUBAGENT_PROMPT_CHARS: usize = 20_000;
 
 /// `{prompt, subagent_type, description, provider?, model?}` out of an `agent`
 /// tool call. Provider/model are optional cross-provider overrides. When the
 /// model forgets `provider` but names one in the description/prompt (common),
 /// we recover it via [`infer_provider_from_agent_text`].
 type ParsedAgentCall = (String, String, String, Option<String>, Option<String>);
-
 fn parse_agent_call(call: &FunctionCallRef) -> Result<ParsedAgentCall> {
     let v: Value = serde_json::from_str(&call.arguments).unwrap_or(serde_json::json!({}));
-    let prompt = v
+    let mut prompt = v
         .get("prompt")
         .and_then(|x| x.as_str())
         .unwrap_or("")
@@ -3303,11 +3644,60 @@ fn parse_agent_call(call: &FunctionCallRef) -> Result<ParsedAgentCall> {
     if prompt.is_empty() {
         return Err(NurError::Tool("agent.prompt required".into()));
     }
+    // OpenAI Agents SDK-style handoff packet fields (portable).
+    let reason = v
+        .get("reason")
+        .and_then(|x| x.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let handoff_role = v
+        .get("handoff_role")
+        .and_then(|x| x.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if reason.is_some() || handoff_role.is_some() {
+        let mut packet = String::from("\n\n[handoff packet]");
+        if let Some(r) = handoff_role {
+            packet.push_str(&format!("\nrole: {r}"));
+        }
+        if let Some(r) = reason {
+            packet.push_str(&format!("\nreason: {r}"));
+        }
+        prompt.push_str(&packet);
+    }
+    // Handoff input filter (OpenAI Agents SDK context-filter port): a list of
+    // workspace files the child should be given directly. Resolved here so the
+    // packet stays usable by `run_agent_tool`; the loop prepends them.
+    if let Some(files) = v.get("context_files").and_then(|x| x.as_array()) {
+        let mut resolved = Vec::new();
+        for f in files.iter().filter_map(|x| x.as_str()).take(16) {
+            if !f.trim().is_empty() {
+                resolved.push(f.trim().to_string());
+            }
+        }
+        if !resolved.is_empty() {
+            prompt.push_str(&format!("\ncontext_files: {}", resolved.join(", ")));
+        }
+    }
+    let prompt_chars = prompt.chars().count();
+    if prompt_chars > MAX_SUBAGENT_PROMPT_CHARS {
+        return Err(NurError::Tool(format!(
+            "agent.prompt is {prompt_chars} characters; keep delegated context under {MAX_SUBAGENT_PROMPT_CHARS}"
+        )));
+    }
     let kind = v
         .get("subagent_type")
         .and_then(|x| x.as_str())
         .unwrap_or("explore")
         .to_string();
+    if !matches!(
+        kind.as_str(),
+        "explore" | "research" | "readonly" | "general"
+    ) {
+        return Err(NurError::Tool(format!(
+            "unsupported subagent_type `{kind}`; use explore or general"
+        )));
+    }
     let desc = v
         .get("description")
         .and_then(|x| x.as_str())
@@ -3489,12 +3879,10 @@ fn extract_provider_routing_phrase(
                 .any(|c| window.ends_with(c.trim_start()) || window.contains(c));
         if !cued {
             // Also allow "…claude subagent" / "…grok agent" immediately after.
-            let tail = &lower[after..];
-            let tail_ok = tail.trim_start().starts_with("subagent")
-                || tail.trim_start().starts_with("agent")
-                || tail.trim_start().starts_with("reviewer")
-                || tail.trim_start().starts_with("review");
-            if !tail_ok {
+            // Bare "agent" is NOT enough: topical prose like "OpenAI agent
+            // strategies" or "Claude agent architecture" must not hijack
+            // routing onto a different provider (and a wrong API key).
+            if !tail_is_routing_role(&lower[after..]) {
                 continue;
             }
         }
@@ -3505,6 +3893,69 @@ fn extract_provider_routing_phrase(
     None
 }
 
+/// True when text immediately after a provider name is a *routing role*
+/// (`subagent`, `agent`, `reviewer`) rather than topical prose.
+///
+/// "claude subagent", "grok agent", "gemini reviewer" → route.
+/// "OpenAI agent strategies", "Claude agent architecture" → do not route.
+fn tail_is_routing_role(tail: &str) -> bool {
+    let t = tail.trim_start();
+    if t.starts_with("subagent") || t.starts_with("reviewer") {
+        return true;
+    }
+    // "review" as a short role label ("claude review"), but not "reviewable".
+    if let Some(rest) = t.strip_prefix("review") {
+        return rest
+            .chars()
+            .next()
+            .map(|ch| !ch.is_alphanumeric() && ch != '-')
+            .unwrap_or(true);
+    }
+    let Some(rest) = t.strip_prefix("agent") else {
+        return false;
+    };
+    // Reject compounds: agentic, agents, agent-based, …
+    if let Some(ch) = rest.chars().next() {
+        if ch.is_alphanumeric() || ch == '-' {
+            return false;
+        }
+    }
+    let rest = rest.trim_start();
+    // "claude agent" / "claude agent." at end of the phrase → route.
+    if rest.is_empty() || rest.chars().all(|c| !c.is_alphanumeric()) {
+        return true;
+    }
+    // "claude agent to review auth" → route. "openai agent strategies" → not.
+    let first = rest
+        .split(|c: char| c.is_whitespace() || matches!(c, ',' | '.' | ';' | ':' | '!' | '?' | ')'))
+        .find(|s| !s.is_empty())
+        .unwrap_or("");
+    matches!(
+        first,
+        "to" | "for"
+            | "on"
+            | "and"
+            | "with"
+            | "that"
+            | "who"
+            | "which"
+            | "please"
+            | "now"
+            | "here"
+            | "review"
+            | "audit"
+            | "research"
+            | "explore"
+            | "implement"
+            | "check"
+            | "fix"
+            | "write"
+            | "run"
+            | "map"
+            | "investigate"
+    )
+}
+
 async fn run_agent_tool(
     runner: &AgentRunner,
     call: &FunctionCallRef,
@@ -3512,6 +3963,75 @@ async fn run_agent_tool(
     tx: &mpsc::UnboundedSender<AgentEvent>,
 ) -> Result<(String, TokenUsage)> {
     let (prompt, kind, desc, provider_override, model_override) = parse_agent_call(call)?;
+    // Async admission (Prime rlm() / RLM model): if the model asked for a
+    // non-blocking child, admit + spawn in the background, return the handle.
+    let want_async = serde_json::from_str::<Value>(&call.arguments)
+        .map(|v| v.get("async").and_then(Value::as_bool).unwrap_or(false))
+        .unwrap_or(false);
+    if want_async && !runner.is_subagent {
+        let sid = runner.session_id_for_admission();
+        let id = crate::agent::admission::admit(&sid, &desc);
+        let client = runner.client.clone();
+        let config = runner.config.clone();
+        let cwd = runner.cwd.clone();
+        let mode = runner.permission_mode.clone();
+        let prompt = prompt.clone();
+        let kind = kind.clone();
+        let desc_for_spawn = desc.clone();
+        let tx2 = tx.clone();
+        let accept = cancel.clone();
+        let depth = runner.subagent_depth;
+        tokio::spawn(async move {
+            // Resolve target like the sync path, then run in background.
+            let outcome = match resolve_subagent_target(
+                &client,
+                &config,
+                provider_override.as_deref(),
+                model_override.as_deref(),
+                Some(prompt.as_str()),
+                Some(desc_for_spawn.as_str()),
+                Some(kind.as_str()),
+                &tx2,
+            ) {
+                SubagentTarget::Ready { client: c, config: cc } => {
+                    crate::agent::subagent::run_subagent(
+                        c,
+                        *cc,
+                        cwd,
+                        mode,
+                        &prompt,
+                        &kind,
+                        depth,
+                        &accept,
+                        &tx2,
+                    )
+                    .await
+                }
+                SubagentTarget::AwaitingLogin { message, .. }
+                | SubagentTarget::Unavailable { message } => {
+                    Err(crate::error::NurError::Other(message))
+                }
+            };
+            match outcome {
+                Ok((text, _)) => {
+                    crate::agent::admission::finish(&sid, id, &text, true)
+                }
+                Err(e) => crate::agent::admission::finish(&sid, id, &e.to_string(), false),
+            }
+        });
+        let _ = tx.send(AgentEvent::Status(format!(
+            "admitted subagent #{id} · {desc} (async; agent can keep working)"
+        )));
+        return Ok((
+            format!(
+                "subagent admitted asynchronously (#{id}). It runs in the background; \
+                 the model can keep working. Get the result with tool `admission` \
+                 action=get id={id} or action=list. This call returns immediately and \
+                 does NOT wait for the child."
+            ),
+            TokenUsage::default(),
+        ));
+    }
     let _ = tx.send(AgentEvent::Status(format!("subagent · {desc}")));
 
     match resolve_subagent_target(
@@ -3532,6 +4052,7 @@ async fn run_agent_tool(
                 runner.permission_mode.clone(),
                 &prompt,
                 &kind,
+                runner.subagent_depth,
                 cancel,
                 tx,
             )
@@ -3717,7 +4238,13 @@ fn resolve_subagent_target(
     // shape, Google `ya29.` → Cloud Code), on a different default model. Aiming
     // the token at the key-only host is an immediate 401, so resolve the real
     // endpoint the same way failover does.
-    let is_oauth = crate::auth::oauth_request_context(prov.id, &key).is_some();
+    //
+    // Prefer the store-linked OAuth context, but also accept a JWT-shaped bearer
+    // for providers that have a dedicated OAuth host (xAI / OpenAI / Kimi). A
+    // cross-provider rebuild that holds a fresh Grok JWT must still hit
+    // cli-chat-proxy, not api.x.ai with Chat Completions.
+    let is_oauth = crate::auth::oauth_request_context(prov.id, &key).is_some()
+        || (crate::providers::oauth_base_url(prov.id).is_some() && key_looks_like_jwt(&key));
     let (base_url, style, default_model) =
         crate::providers::endpoint_for_credential(prov, is_oauth);
     // key_optional local providers may have an empty key.
@@ -3758,6 +4285,20 @@ fn resolve_subagent_target(
 /// deployment and the login modal accept the exact same aliases.
 fn resolve_provider_alias(raw: &str) -> Option<&'static crate::providers::Provider> {
     crate::providers::resolve_provider_alias(raw)
+}
+
+/// JWT-shaped bearer (`eyJ…`.`…`.`…`) — used to pick OAuth endpoints when the
+/// store-linked OAuth context is briefly unavailable during a cross-provider rebuild.
+fn key_looks_like_jwt(token: &str) -> bool {
+    let t = token.trim();
+    if !t.starts_with("eyJ") {
+        return false;
+    }
+    let mut parts = t.split('.');
+    matches!(
+        (parts.next(), parts.next(), parts.next(), parts.next()),
+        (Some(h), Some(p), Some(s), None) if !h.is_empty() && !p.is_empty() && !s.is_empty()
+    )
 }
 
 /// Map a nur provider id to the vendor CLI (t3code) driver that can supply its
@@ -3858,31 +4399,39 @@ async fn try_remote_compact_summary(
     runner: &AgentRunner,
     system_prompt: &str,
     items: &[Value],
-    user_prompt: &str,
 ) -> Option<String> {
     let endpoint = remote_compact_endpoint(&runner.config)?;
 
-    // Build a plain-text prompt from thinned items (cap size for the remote).
-    let mut serialized = String::new();
-    for item in items.iter().take(80) {
-        let line = serde_json::to_string(item).unwrap_or_default();
-        if serialized.len() + line.len() > 120_000 {
-            serialized.push_str("\n…[truncated for remote compact]…\n");
-            break;
-        }
-        serialized.push_str(&line);
-        serialized.push('\n');
-    }
-    serialized.push_str(user_prompt);
+    // Preserve both the original goal and the newest in-flight work. The old
+    // `take(80)` retained only the beginning of long sessions, and appended the
+    // summary instruction a second time even though it is already in `items`.
+    let serialized = bounded_remote_compact_transcript(items, 120_000);
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
         .build()
         .ok()?;
-    let body = serde_json::json!({
-        "systemPrompt": system_prompt,
-        "prompt": serialized,
-    });
+    let openai_compatible = endpoint
+        .split('?')
+        .next()
+        .unwrap_or(&endpoint)
+        .trim_end_matches('/')
+        .ends_with("/chat/completions");
+    let body = if openai_compatible {
+        serde_json::json!({
+            "model": runner.config.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": serialized},
+            ],
+            "stream": false,
+        })
+    } else {
+        serde_json::json!({
+            "systemPrompt": system_prompt,
+            "prompt": serialized,
+        })
+    };
     let resp = client.post(&endpoint).json(&body).send().await.ok()?;
     if !resp.status().is_success() {
         return None;
@@ -3890,10 +4439,40 @@ async fn try_remote_compact_summary(
     let v: Value = resp.json().await.ok()?;
     let summary = v
         .get("summary")
-        .and_then(|s| s.as_str())
+        .and_then(Value::as_str)
+        .or_else(|| {
+            v.pointer("/choices/0/message/content")
+                .and_then(Value::as_str)
+        })
         .map(str::trim)
         .filter(|s| !s.is_empty())?;
     Some(summary.to_string())
+}
+
+fn bounded_remote_compact_transcript(items: &[Value], max_chars: usize) -> String {
+    let full = items
+        .iter()
+        .filter_map(|item| serde_json::to_string(item).ok())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if full.chars().count() <= max_chars {
+        return full;
+    }
+
+    const MARKER: &str = "\n...[middle omitted for bounded remote compaction]...\n";
+    let content_budget = max_chars.saturating_sub(MARKER.chars().count());
+    let head_budget = content_budget / 4;
+    let tail_budget = content_budget.saturating_sub(head_budget);
+    let head: String = full.chars().take(head_budget).collect();
+    let tail: String = full
+        .chars()
+        .rev()
+        .take(tail_budget)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+    format!("{head}{MARKER}{tail}")
 }
 
 pub async fn compact_session(
@@ -3920,8 +4499,7 @@ pub async fn compact_session(
 
     // OMP-compatible remote summarization (compaction.remoteEndpoint). Opt-in;
     // any failure falls through to the local model path below.
-    let remote_summary =
-        try_remote_compact_summary(runner, system_prompt, &items, user_prompt).await;
+    let remote_summary = try_remote_compact_summary(runner, system_prompt, &items).await;
     let summary = if let Some(summary) = remote_summary {
         summary
     } else {
@@ -3943,9 +4521,9 @@ pub async fn compact_session(
         };
         let resp = runner.client.create_response(&req).await?;
         if let Some(u) = &resp.usage {
-            let tu: TokenUsage = u.into();
-            usage.record_request(tu.clone(), resp.id.clone());
-            session.usage.add(&tu);
+            let raw: TokenUsage = u.into();
+            usage.record_request(raw, resp.id.clone());
+            session.usage.add(usage.last_usage());
         }
         let summary = resp.output_text();
         if summary.is_empty() {
@@ -3965,21 +4543,78 @@ pub async fn compact_session(
     // completed turn. A silent stop, right at the token volume where compaction
     // first fires.
     let keep_n = runner.config.compact_keep_user_turns.max(1) as usize;
+    // RLM invariant (Prime): compaction summarizes chat but context_store vars remain.
+    // Connectome: live edge is compacted; deep memory is maintained *localized* (paper M4).
+    let mem_scope = {
+        let proj = std::path::Path::new(&session.cwd)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("workspace");
+        format!("{proj}:{}", session.id)
+    };
+    if runner.config.native_memory {
+        let _ = super::native_memory::consolidate_localized(&mem_scope, 32);
+        let _ = super::chronicle::append(
+            &mem_scope,
+            "compact",
+            "context compacted - recent edge summarized; native memory tiers preserved",
+            None,
+        );
+    }
+    let store_inv = super::context_store::prompt_inventory(&session.id);
+    let mem_inv = if runner.config.native_memory {
+        super::native_memory::prompt_block(&mem_scope, "", 1_200)
+    } else {
+        String::new()
+    };
+    let store_note = {
+        let mut parts = Vec::new();
+        if !store_inv.is_empty() {
+            parts.push(format!(
+                "[RLM context store preserved — tool `context`]\n{store_inv}"
+            ));
+        }
+        if !mem_inv.is_empty() {
+            parts.push(mem_inv);
+        }
+        if parts.is_empty() {
+            String::new()
+        } else {
+            format!("\n\n{}", parts.join("\n"))
+        }
+    };
     let mut new_items = vec![user_text_item(&format!(
-        "[Context compacted. Summary of the conversation so far:]\n\n{summary}"
+        "[Context compacted. Summary of the conversation so far:]\n\n{summary}{store_note}"
     ))];
     let recent = recent_dialogue_items(&session.messages, keep_n);
     let kept = recent.len();
+    // KV-stable (Connectome): the summary is the only new prefix; the recent
+    // dialogue and working tail are carried VERBATIM (never rewritten in
+    // place), so the provider prompt-cache prefix and the model's recent
+    // computed state survive the compaction.
     new_items.extend(recent);
     let tail = safe_tail_after_compact(&session.input_items, COMPACT_KEEP_WORKING_ITEMS);
-    let tail_kept = tail.len();
-    new_items.extend(tail);
+    let tail_kept = extend_unique_items(&mut new_items, tail);
     session.input_items = new_items;
     runner.persist_session(session);
     Ok(format!(
         "{summary}\n\n[compact: thinned {thinned} tool bodies · kept {kept} recent dialogue items · \
-         {tail_kept} working items · precompact bak written]"
+         {tail_kept} working items · precompact bak written · context_store vars preserved · \
+         kv-stable: recent edge carried verbatim]"
     ))
+}
+
+fn extend_unique_items(
+    items: &mut Vec<Value>,
+    additions: impl IntoIterator<Item = Value>,
+) -> usize {
+    let before = items.len();
+    for item in additions {
+        if !items.contains(&item) {
+            items.push(item);
+        }
+    }
+    items.len() - before
 }
 
 /// Keep a request-valid recent context when the provider refuses both the
@@ -4283,6 +4918,74 @@ mod compact_tail_tests {
     }
 
     #[test]
+    fn reordered_json_arguments_still_supersede_the_same_observation() {
+        let large = "old ".repeat(200);
+        let mut items = vec![
+            json!({"type":"function_call","call_id":"old","name":"grep","arguments":"{\"path\":\"src\",\"pattern\":\"auth\"}"}),
+            json!({"type":"function_call_output","call_id":"old","output":large}),
+            json!({"type":"function_call","call_id":"new","name":"grep","arguments":"{ \"pattern\": \"auth\", \"path\": \"src\" }"}),
+            json!({"type":"function_call_output","call_id":"new","output":"current"}),
+        ];
+
+        assert_eq!(prune_superseded_observations(&mut items), 1);
+        assert!(items[1]["output"]
+            .as_str()
+            .unwrap()
+            .starts_with("[superseded by newer"));
+    }
+
+    #[test]
+    fn useless_pruning_never_discards_errors_or_grows_short_results() {
+        let bodies = [
+            "error: provider timed out",
+            "Error: permission denied",
+            "FAILED validation",
+            "{}",
+            "null",
+            "",
+        ];
+        let mut items: Vec<Value> = bodies
+            .iter()
+            .enumerate()
+            .map(|(index, body)| {
+                json!({
+                    "type":"function_call_output",
+                    "call_id":format!("call-{index}"),
+                    "output":body,
+                })
+            })
+            .collect();
+
+        assert_eq!(prune_useless_observations(&mut items), 0);
+        for (item, body) in items.iter().zip(bodies) {
+            assert_eq!(item["output"], body);
+        }
+    }
+
+    #[test]
+    fn reserve_based_compaction_threshold_matches_omp_defaults() {
+        assert_eq!(compaction_threshold_tokens(8_000), 6_800);
+        assert_eq!(compaction_threshold_tokens(16_000), 13_600);
+        assert_eq!(compaction_threshold_tokens(20_000), 17_000);
+        assert_eq!(compaction_threshold_tokens(32_000), 27_200);
+        assert_eq!(compaction_threshold_tokens(64_000), 47_616);
+        assert_eq!(compaction_threshold_tokens(128_000), 108_800);
+        assert_eq!(compaction_threshold_tokens(1_000_000), 850_000);
+    }
+
+    #[test]
+    fn context_estimate_does_not_count_inline_base64_as_text() {
+        let items = vec![json!({
+            "role":"user",
+            "content":[{
+                "type":"input_image",
+                "image_url":format!("data:image/png;base64,{}", "a".repeat(200_000)),
+            }]
+        })];
+        assert!(estimate_context_tokens(&items) < 2_000);
+    }
+
+    #[test]
     fn context_limit_errors_are_detected_without_retrying_validation_errors() {
         for message in [
             "maximum context length is 128000 tokens",
@@ -4380,5 +5083,31 @@ mod prewalk_remote_compact_tests {
             ..Config::default()
         };
         assert_eq!(resolve_prewalk_into(&cfg).as_deref(), Some("gpt-5.4-mini"));
+    }
+
+    #[test]
+    fn bounded_remote_transcript_preserves_goal_and_live_tail() {
+        let items = vec![
+            serde_json::json!({"role":"user","content":"ORIGINAL-GOAL"}),
+            serde_json::json!({"type":"function_call_output","output":"x".repeat(5_000)}),
+            serde_json::json!({"role":"user","content":"LATEST-WORK"}),
+        ];
+        let transcript = bounded_remote_compact_transcript(&items, 1_000);
+        assert!(transcript.contains("ORIGINAL-GOAL"));
+        assert!(transcript.contains("LATEST-WORK"));
+        assert!(transcript.contains("middle omitted"));
+        assert!(transcript.chars().count() <= 1_000);
+    }
+
+    #[test]
+    fn compact_tail_does_not_duplicate_an_identical_recent_user_item() {
+        let duplicate = user_text_item("same task");
+        let mut new_items = vec![duplicate.clone()];
+        let added = extend_unique_items(
+            &mut new_items,
+            vec![duplicate, user_text_item("new detail")],
+        );
+        assert_eq!(added, 1);
+        assert_eq!(new_items.len(), 2);
     }
 }

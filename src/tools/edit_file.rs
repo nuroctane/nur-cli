@@ -2,6 +2,28 @@ use super::{arg_str, resolve_path, Tool, ToolContext};
 use crate::error::{NurError, Result};
 use serde_json::Value;
 use std::fs;
+use std::path::Path;
+
+/// Write edited contents, honoring Shepherd-style proposal mode when enabled.
+fn commit_edit(ctx: &ToolContext, path_arg: &str, full: &Path, updated: String) -> Result<String> {
+    if crate::config::load_config()
+        .map(|c| c.proposal_mode)
+        .unwrap_or(false)
+    {
+        let sid = std::env::var("NUR_SESSION_ID").unwrap_or_else(|_| "default".into());
+        let entry =
+            crate::agent::proposal::stage_write(&sid, &ctx.cwd, path_arg, &updated, "edit_file")
+                .map_err(NurError::Tool)?;
+        return Ok(format!(
+            "proposal staged `{}` ({} bytes) — not written to workspace. \
+             Use tool `proposal` action=list|apply|discard.",
+            entry.rel_path, entry.bytes
+        ));
+    }
+    fs::write(full, updated)
+        .map_err(|e| NurError::Tool(format!("write {}: {e}", full.display())))?;
+    Ok(String::new())
+}
 
 pub struct EditFile;
 
@@ -53,8 +75,10 @@ impl Tool for EditFile {
             } else {
                 file_content.replacen(&old, &new, 1)
             };
-            fs::write(&full, updated)
-                .map_err(|e| NurError::Tool(format!("write {}: {e}", full.display())))?;
+            let staged = commit_edit(ctx, &path, &full, updated)?;
+            if !staged.is_empty() {
+                return Ok(staged);
+            }
             return Ok(format!(
                 "edited {} ({} replacement{})",
                 full.display(),
@@ -82,8 +106,10 @@ impl Tool for EditFile {
             // in a mixed-ending file and turning a one-line edit into a
             // whole-file diff.
             let updated = splice_normalized(&file_content, &content_n, &old_n, &new, replace_all);
-            fs::write(&full, updated)
-                .map_err(|e| NurError::Tool(format!("write {}: {e}", full.display())))?;
+            let staged = commit_edit(ctx, &path, &full, updated)?;
+            if !staged.is_empty() {
+                return Ok(staged);
+            }
             return Ok(format!(
                 "edited {} ({} replacement{} via line-ending normalization)",
                 full.display(),
@@ -107,8 +133,10 @@ impl Tool for EditFile {
             let count_trim = file_content.matches(old_trim).count();
             if count_trim == 1 && !replace_all {
                 let updated = file_content.replacen(old_trim, new_trim, 1);
-                fs::write(&full, updated)
-                    .map_err(|e| NurError::Tool(format!("write {}: {e}", full.display())))?;
+                let staged = commit_edit(ctx, &path, &full, updated)?;
+                if !staged.is_empty() {
+                    return Ok(staged);
+                }
                 return Ok(format!(
                     "edited {} (1 replacement — FUZZY: matched after trimming surrounding \
                      whitespace from old_string, and trimmed new_string to match. Verify the \
@@ -121,8 +149,10 @@ impl Tool for EditFile {
             if content_n.matches(&old_trim_n).count() == 1 && !replace_all {
                 let updated =
                     splice_normalized(&file_content, &content_n, &old_trim_n, new_trim, false);
-                fs::write(&full, updated)
-                    .map_err(|e| NurError::Tool(format!("write {}: {e}", full.display())))?;
+                let staged = commit_edit(ctx, &path, &full, updated)?;
+                if !staged.is_empty() {
+                    return Ok(staged);
+                }
                 return Ok(format!(
                     "edited {} (1 replacement — FUZZY: matched after trimming whitespace and \
                      normalizing line endings. Verify the result)",

@@ -49,6 +49,20 @@ fn effective_base_url(base_url: &str, provider_id: &str, is_oauth: bool) -> Stri
     base_url.trim_end_matches('/').to_string()
 }
 
+/// Rough JWT shape check (`eyJ…`.`…`.`…`) used only to decide whether a Grok
+/// bearer should carry the CLI-proxy fingerprint headers.
+fn looks_like_jwt_bearer(token: &str) -> bool {
+    let t = token.trim();
+    if !t.starts_with("eyJ") {
+        return false;
+    }
+    let mut parts = t.split('.');
+    matches!(
+        (parts.next(), parts.next(), parts.next(), parts.next()),
+        (Some(h), Some(p), Some(s), None) if !h.is_empty() && !p.is_empty() && !s.is_empty()
+    )
+}
+
 /// Provider endpoints that have told us they cannot accept images.
 ///
 /// Learned at runtime from the first rejected request and remembered for the
@@ -340,6 +354,15 @@ impl ApiClient {
         oauth_blocking(|| crate::auth::force_refresh_oauth(provider_id)).unwrap_or(false)
     }
 
+    fn oauth_context_for_request(&self, api_key: &str) -> Option<crate::auth::OAuthRequestContext> {
+        if self.refresh_oauth {
+            crate::auth::oauth_request_context(&self.provider_id, api_key)
+                .or_else(|| self.oauth.clone())
+        } else {
+            self.oauth.clone()
+        }
+    }
+
     async fn send_with_oauth_retry(
         &self,
         build: impl Fn() -> RequestBuilder,
@@ -356,7 +379,8 @@ impl ApiClient {
     /// Anthropic as plain Bearer-only Chat Completions.
     fn auth_headers(&self, mut req: RequestBuilder) -> RequestBuilder {
         let api_key = self.api_key_for_request();
-        let is_claude_oauth = self.oauth.is_some() || super::anthropic::is_oauth_token(&api_key);
+        let oauth = self.oauth_context_for_request(&api_key);
+        let is_claude_oauth = oauth.is_some() || super::anthropic::is_oauth_token(&api_key);
         req = match self.style {
             ApiStyle::AnthropicMessages => {
                 req = req.header("anthropic-version", "2023-06-01");
@@ -381,7 +405,7 @@ impl ApiClient {
             }
         };
         if self.provider_id == "openai" {
-            if let Some(oauth) = &self.oauth {
+            if let Some(oauth) = &oauth {
                 // Codex backend requires a known originator (`codex_cli_rs`) +
                 // account id + OpenAI-Beta; unknown originators are rejected.
                 const OPENAI_ORIGINATOR: &str = "codex_cli_rs";
@@ -414,7 +438,7 @@ impl ApiClient {
         ) && self.style != ApiStyle::GeminiCloudCode
         {
             if let Some(project_id) = self
-                .oauth
+                .oauth_context_for_request(&api_key)
                 .as_ref()
                 .and_then(|context| context.project_id.as_deref())
             {
@@ -431,7 +455,7 @@ impl ApiClient {
                     crate::providers::CLOUD_CODE_CLIENT_METADATA,
                 );
         }
-        if self.provider_id == "kimi" && self.oauth.is_some() {
+        if self.provider_id == "kimi" && oauth.is_some() {
             if let Ok(headers) = crate::oauth::kimi_request_headers() {
                 for (name, value) in headers {
                     req = req.header(name, value);
@@ -440,7 +464,15 @@ impl ApiClient {
         }
         // Grok Build OAuth → cli-chat-proxy enforces a CLI version fingerprint.
         // Missing `x-grok-client-version` is reported as version "(none)" → HTTP 426.
-        if self.provider_id == "xai" && self.oauth.is_some() {
+        // Attach whenever we have an OAuth context *or* a JWT-shaped bearer aimed
+        // at the CLI proxy — cross-provider subagent rebuilds can briefly hold a
+        // valid Grok JWT whose store row hasn't re-linked for context lookup yet,
+        // and dropping the fingerprint makes those spawns look "broken for grok".
+        let xai_oauth_bearer = self.provider_id == "xai"
+            && (oauth.is_some()
+                || self.base_url.contains("cli-chat-proxy.grok.com")
+                || looks_like_jwt_bearer(&api_key));
+        if xai_oauth_bearer {
             let ver = crate::providers::xai_grok_cli_version();
             req = req
                 .header("x-grok-client-version", ver.as_str())
@@ -1349,8 +1381,9 @@ impl ApiClient {
     /// stale companion project id can be replaced by a fresh setup).
     fn resolve_gemini_project_id(&self, force_refresh: bool) -> Result<String> {
         if !force_refresh {
+            let token = self.api_key_for_request();
             if let Some(project_id) = self
-                .oauth
+                .oauth_context_for_request(&token)
                 .as_ref()
                 .and_then(|context| context.project_id.clone())
                 .filter(|p| !p.trim().is_empty())

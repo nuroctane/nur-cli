@@ -53,7 +53,48 @@ pub fn classify_value(name: &str, args: &Value) -> ToolCaps {
 pub fn is_read_only(name: &str, args: &Value) -> bool {
     match name {
         "read_file" | "list_dir" | "grep" | "glob" | "web_fetch" | "web_search" | "look"
-        | "git_status" | "git_diff" | "skill" | "todo_write" | "submit_plan" => true,
+        | "git_status" | "git_diff" | "skill" | "todo_write" | "submit_plan" | "context"
+        | "anydoc" => true,
+        "connectome" => args
+            .get("action")
+            .and_then(|a| a.as_str())
+            .map(|s| {
+                matches!(
+                    s,
+                    "recall" | "list" | "status" | "chronicle_tail" | "restore"
+                )
+            })
+            .unwrap_or(false),
+        "repl" => args
+            .get("action")
+            .and_then(|a| a.as_str())
+            .map(|s| matches!(s, "status" | "list"))
+            .unwrap_or(false),
+        "admission" => args
+            .get("action")
+            .and_then(|a| a.as_str())
+            .map(|s| s == "list")
+            .unwrap_or(false),
+        "message" => args
+            .get("action")
+            .and_then(|a| a.as_str())
+            .map(|s| matches!(s, "recv" | "status"))
+            .unwrap_or(false),
+        "goal" => args
+            .get("action")
+            .and_then(|a| a.as_str())
+            .map(|s| s == "get")
+            .unwrap_or(false),
+        "proposal" => args
+            .get("action")
+            .and_then(|a| a.as_str())
+            .map(|s| s == "list")
+            .unwrap_or(false),
+        "harness" => args
+            .get("action")
+            .and_then(|a| a.as_str())
+            .map(|s| s == "status")
+            .unwrap_or(false),
         "memory" => args
             .get("action")
             .and_then(|a| a.as_str())
@@ -99,6 +140,9 @@ fn is_concurrency_safe_inner(name: &str, _args: &Value) -> bool {
             | "git_status"
             | "git_diff"
             | "skill"
+            | "context"
+            | "anydoc"
+            | "connectome"
             | "graphify"
             | "excalidraw"
             | "plur"

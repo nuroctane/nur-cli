@@ -28,8 +28,9 @@ tool_result_max_chars = 12000
 compact_keep_user_turns = 4
 compact_tool_body_max_chars = 800
 
-# Optional OMP-compatible remote summarizer (POST {systemPrompt,prompt} → {summary}).
-# Off by default — local model summarization is unchanged. On failure, nur falls back locally.
+# Optional OMP-compatible remote summarizer (POST {systemPrompt,prompt} -> {summary}).
+# Setting remote_endpoint opts in. OpenAI /chat/completions endpoints are also supported.
+# On failure, nur falls back to local model summarization.
 # [compaction]
 # remote_enabled = true
 # remote_endpoint = "https://example.com/compact"
@@ -62,12 +63,12 @@ auto_update = true
 | `max_session_cost_usd` | float? | unset (∞) | Optional session $ hard-stop. `/budget cost <usd>` · `/budget clear` |
 | `max_session_tokens` | integer? | unset (∞) | Optional session token hard-stop. `/budget tokens <n>` · `/budget clear` |
 | `stream` | bool | `true` | Stream API responses |
-| `context_window` | integer | `1000000` | Fallback context window in tokens (range: 1000–2000000). The models.dev catalog is authoritative when it knows the active provider/model; this value is used only when it does not. Auto-compaction triggers at 55% of the effective window. |
+| `context_window` | integer | `1000000` | Fallback context window in tokens (range: 1000–2000000). The models.dev catalog is authoritative when it knows the active provider/model; this value is used only when it does not. Auto-compaction keeps an OMP-style response/tool reserve: the larger of 15% or 16,384 tokens on large windows, with a proportional safety clamp on small windows. A local stored-context estimate is used when provider usage is absent or under-reported. |
 | `tool_result_max_chars` | integer | `12000` | Max inline tool output chars; larger results spill to disk (`0` = unlimited) |
 | `compact_keep_user_turns` | integer | `4` | Recent user turns kept after compaction |
 | `compact_tool_body_max_chars` | integer | `800` | When compacting, truncate older tool bodies to this many chars (`0` = leave intact) |
 | `compaction.remote_enabled` | bool | `false` | Prefer remote summarizer when an endpoint is set |
-| `compaction.remote_endpoint` | string | unset | OMP-compatible compact URL; setting it opts in. Env: `NUR_COMPACT_REMOTE_ENDPOINT` (+ `NUR_COMPACT_REMOTE=1` if only env) |
+| `compaction.remote_endpoint` | string | unset | OMP-compatible compact URL; setting it opts in. Supports `{systemPrompt,prompt}` endpoints and OpenAI `/chat/completions`; failures fall back locally. Env: `NUR_COMPACT_REMOTE_ENDPOINT` (+ `NUR_COMPACT_REMOTE=1` if only env) |
 | `prewalk.enabled` | bool | `false` | After todos exist, first write/edit switches to `prewalk.into` / smol |
 | `prewalk.into` | string | unset | Cheap model for prewalk handoff (`/prewalk into …`, or `OMP_SMOL_MODEL` / OMP `modelRoles.smol`) |
 | `poor_mode` | bool | `false` | Skip PLUR auto-inject and long memory (skill NL/slash activation still works) |

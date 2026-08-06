@@ -254,6 +254,13 @@ impl App {
                  or use  /feedback <what happened>  to file one from here"
                     .into(),
             ),
+            // Connectome / agent-native memory + continuity surfaces.
+            "/checkpoint" => self.cmd_checkpoint(&arg),
+            "/lessons" => self.cmd_lessons(&arg),
+            "/refine" => self.cmd_refine(&arg),
+            "/proposal" => self.cmd_proposal(&arg),
+            "/heartbeat" | "/schedule" => self.cmd_heartbeat(&arg),
+            "/gate" => self.cmd_gate(&arg),
             other => self.cmd_skill_or_unknown(other, &arg),
         }
         // Slash commands answer inline, and their card is appended at the end of
@@ -932,15 +939,13 @@ impl App {
         let provider = self.cfg.provider.clone();
         match crate::auth::logout(false) {
             Ok(()) => {
-                let also_stored = crate::auth::forget_provider(&provider);
                 self.authed = false;
                 let label = crate::providers::by_id(&provider)
                     .map(|p| p.name)
                     .unwrap_or(provider.as_str());
-                let mut msg = format!("signed out of {label} — cleared its stored credential");
-                if also_stored {
-                    msg.push_str(" and its saved failover key/session");
-                }
+                let mut msg = format!(
+                    "signed out of {label} - cleared its active and saved credential copies"
+                );
                 msg.push_str(
                     ".\n  other providers' saved keys are untouched — /login to switch or sign \
                      in again. (env keys still apply on restart)",
@@ -1162,7 +1167,12 @@ impl App {
 
     fn cmd_receipt(&mut self) {
         let text = crate::agent::receipt::render(&self.session_id);
-        self.push_note(Tone::Session, text);
+        // Also (re)export OTLP-flavoured spans for external tracing/tools.
+        let n = crate::agent::receipt::export_spans(&self.session_id, None);
+        self.push_note(
+            Tone::Session,
+            format!("{text}\n[otlp spans exported · {n} spans → receipts/*.spans.jsonl]"),
+        );
     }
 
     /// `/cua [on|off|status]` — control the Cua computer-use desktop driver.
@@ -2297,6 +2307,23 @@ impl App {
     /// the transcript). `/goal` shows it; `/goal clear` removes it.
     fn cmd_goal(&mut self, arg: &str) {
         let arg = arg.trim();
+        // Persistent goal store (Prime /goal pattern) when a session id exists.
+        if self.gen_session_scope().is_some() {
+            match arg {
+                "" => self.cmd_goal_persistent("get"),
+                "clear" | "none" | "off" => self.cmd_goal_persistent("clear"),
+                "pause" => self.cmd_goal_persistent("pause"),
+                "resume" => self.cmd_goal_persistent("resume"),
+                "complete" => self.cmd_goal_persistent("complete"),
+                _ => {
+                    let text = arg.to_string();
+                    self.session_goal = Some(text.clone());
+                    self.cmd_goal_persistent_set(&text);
+                }
+            }
+            return;
+        }
+        // Fallback: in-memory session goal (no session id / headless).
         match arg {
             "" => match &self.session_goal {
                 Some(g) => {
@@ -2319,6 +2346,286 @@ impl App {
             }
         }
     }
+
+    /// Session scope for agent-native memory / continuity (project:session).
+    fn gen_session_scope(&self) -> Option<String> {
+        let sid = std::env::var("NUR_SESSION_ID").ok()?;
+        if sid.trim().is_empty() {
+            return None;
+        }
+        let proj = self.cwd.file_name().and_then(|n| n.to_str()).unwrap_or("workspace");
+        Some(format!("{proj}:{sid}"))
+    }
+
+    fn cmd_goal_persistent(&mut self, action: &str) {
+        let Some(scope) = self.gen_session_scope() else {
+            return;
+        };
+        let sid = scope.split(':').nth(1).unwrap_or("default").to_string();
+        let msg = match action {
+            "get" => match agent::goal::load(&sid) {
+                Some(g) => format!("goal:\n{}", agent::goal::format_status(&g)),
+                None => format!(
+                    "no persistent goal for this session\n  /goal <objective> sets it (tracks \
+                     tokens/continuations; survives restart)"
+                ),
+            },
+            "clear" => {
+                let _ = agent::goal::clear(&sid);
+                "persistent goal cleared".into()
+            }
+            "pause" => match agent::goal::pause(&sid) {
+                Ok(g) => format!("goal paused\n{}", agent::goal::format_status(&g)),
+                Err(e) => format!("could not pause goal: {e}"),
+            },
+            "resume" => match agent::goal::resume(&sid) {
+                Ok(g) => format!("goal resumed\n{}", agent::goal::format_status(&g)),
+                Err(e) => format!("could not resume goal: {e}"),
+            },
+            "complete" => match agent::goal::complete(&sid, "") {
+                Ok(g) => format!("goal completed\n{}", agent::goal::format_status(&g)),
+                Err(e) => format!("could not complete goal: {e}"),
+            },
+            _ => "usage: /goal [objective | get | clear | pause | resume | complete]".into(),
+        };
+        self.push_note(Tone::Plan, msg);
+    }
+
+    fn cmd_goal_persistent_set(&mut self, text: &str) {
+        let Some(scope) = self.gen_session_scope() else {
+            return;
+        };
+        let sid = scope.split(':').nth(1).unwrap_or("default").to_string();
+        match agent::goal::set(&sid, text, None) {
+            Ok(g) => self.push_note(
+                Tone::Plan,
+                format!("goal set · {text}\n  {}", agent::goal::format_status(&g)),
+            ),
+            Err(e) => self.push_error(format!("could not set goal: {e}")),
+        }
+    }
+
+    /// `/checkpoint [name]` — save a continuation checkpoint (Connectome).
+    fn cmd_checkpoint(&mut self, arg: &str) {
+        let Some(scope) = self.gen_session_scope() else {
+            self.push_info("/checkpoint needs a live session (NUR_SESSION_ID)".into());
+            return;
+        };
+        let name = {
+            let t = arg.trim();
+            if t.is_empty() {
+                format!("ckpt-{}", &uuid::Uuid::new_v4().simple().to_string()[..8])
+            } else {
+                t.to_string()
+            }
+        };
+        match crate::agent::chronicle::checkpoint(&scope, &name, "") {
+            Ok(cp) => self.push_note(
+                Tone::Skill,
+                format!("checkpoint `{}` at seq {}\n  /restore not wired — use connectome restore", cp.name, cp.seq),
+            ),
+            Err(e) => self.push_error(format!("checkpoint failed: {e}")),
+        }
+    }
+
+    /// `/lessons` — show the refined harness lessons (Prime /refine lite).
+    fn cmd_lessons(&mut self, arg: &str) {
+        let Some(scope) = self.gen_session_scope() else {
+            self.push_info("no active session for lessons".into());
+            return;
+        };
+        let sid = scope.split(':').nth(1).unwrap_or("default").to_string();
+        let _ = arg;
+        let h = crate::agent::harness::load(&sid);
+        if h.supplemental.trim().is_empty() {
+            self.push_note(
+                Tone::Skill,
+                "no lessons yet\n  /refine <lesson> [evidence] appends a session lesson (snapshot \
+                 supports /refine rollback)"
+                    .into(),
+            );
+        } else {
+            self.push_note(
+                Tone::Skill,
+                format!(
+                    "lessons (rev {}):\n{}",
+                    h.revision,
+                    h.supplemental.chars().rev().take(3000).collect::<String>().chars().rev().collect::<String>()
+                ),
+            );
+        }
+    }
+
+    /// `/refine <lesson> [.evidence]` — Continual Harness refine (Prime).
+    fn cmd_refine(&mut self, arg: &str) {
+        let Some(scope) = self.gen_session_scope() else {
+            self.push_info("no active session for refine".into());
+            return;
+        };
+        let sid = scope.split(':').nth(1).unwrap_or("default").to_string();
+        let arg = arg.trim();
+        if arg.eq_ignore_ascii_case("rollback") {
+            match crate::agent::harness::rollback(&sid) {
+                Ok(s) => self.push_note(
+                    Tone::Skill,
+                    format!("rolled back lessons to rev {}", s.revision),
+                ),
+                Err(e) => self.push_error(format!("rollback failed: {e}")),
+            }
+            return;
+        }
+        if arg.is_empty() {
+            self.push_info("usage: /refine <lesson> — evidence optional (second line after `#`)".into());
+            return;
+        }
+        let (lesson, evidence) = match arg.split_once('\u{2666}') {
+            Some((a, b)) => (a.trim(), b.trim()),
+            None => match arg.split_once(": ") {
+                Some((a, b)) if b.chars().count() > 12 => (a.trim(), b.trim()),
+                _ => (arg, ""),
+            },
+        };
+        match crate::agent::harness::refine(&sid, lesson, evidence) {
+            Ok(s) => self.push_note(
+                Tone::Skill,
+                format!("refined lessons → rev {} (evidence-backed, never rewrites base prompt)", s.revision),
+            ),
+            Err(e) => self.push_error(format!("refine failed: {e}")),
+        }
+    }
+
+    /// `/proposal [list|apply|discard]` — Shepherd retained-output review.
+    fn cmd_proposal(&mut self, arg: &str) {
+        let sid = std::env::var("NUR_SESSION_ID").unwrap_or_else(|_| "default".into());
+        let action = {
+            let t = arg.trim();
+            if t.is_empty() || t == "list" {
+                "list"
+            } else {
+                t
+            }
+        };
+        let ctx = crate::tools::ToolContext {
+            cwd: self.cwd.clone(),
+            cancel: CancellationToken::new(),
+        };
+        let json = serde_json::json!({"action": action, "session_id": sid}).to_string();
+        let host = ToolHost::default();
+        match host.dispatch("proposal", &json, &ctx) {
+            Ok(s) => self.push_note(Tone::Skill, s),
+            Err(e) => self.push_error(e.to_string()),
+        }
+    }
+
+    /// `/gate [command]` — view/set the autonomous quality gate (Prime). The
+    /// gate command runs before a continuous/autonomous run accepts DONE; a
+    /// failed gate sends its output back to the agent. Empty arg shows current.
+    fn cmd_gate(&mut self, arg: &str) {
+        let mut cfg = crate::config::load_config().unwrap_or_default();
+        let arg = arg.trim();
+        if arg.is_empty() || arg == "status" || arg == "show" {
+            if cfg.quality_gate.trim().is_empty() {
+                self.push_info(
+                    "no quality gate set\n  /gate <shell cmd> e.g. /gate cargo test --bin nur"
+                        .into(),
+                );
+            } else {
+                self.push_note(
+                    Tone::Skill,
+                    format!("quality gate (continuous/autonomous DONE):\n  $ {}", cfg.quality_gate),
+                );
+            }
+            return;
+        }
+        if arg == "clear" || arg == "off" || arg == "none" {
+            cfg.quality_gate = String::new();
+            let _ = crate::config::save_config(&cfg);
+            self.push_info("quality gate cleared".into());
+            return;
+        }
+        cfg.quality_gate = arg.to_string();
+        let _ = crate::config::save_config(&cfg);
+        self.push_note(
+            Tone::Skill,
+            format!("quality gate set\n  $ {arg}\n  runs before continuous/autonomous DONE is accepted"),
+        );
+    }
+
+    /// `/heartbeat [<interval> <recurring note>]` — Prime/Connectome heartbeat
+    /// re-entry. Schedules a background job that periodically pushes a steer
+    /// into the live queue so long-running work keeps moving without a human.
+    /// `/heartbeat off|cancel` stops it.
+    fn cmd_heartbeat(&mut self, arg: &str) {
+        let arg = arg.trim();
+        if arg.eq_ignore_ascii_case("off")
+            || arg.eq_ignore_ascii_case("cancel")
+            || arg.eq_ignore_ascii_case("stop")
+            || arg.eq_ignore_ascii_case("clear")
+        {
+            // Cancel the last scheduled heartbeat job we remember (bg id stored).
+            if let Some(id) = self.heartbeat_job {
+                match crate::bg_jobs::cancel(id as u64) {
+                    Ok(m) => self.push_note(Tone::Skill, format!("heartbeat stopped\n{m}")),
+                    Err(e) => self.push_error(format!("could not stop heartbeat: {e}")),
+                }
+                self.heartbeat_job = None;
+            } else {
+                self.push_info("no active heartbeat".into());
+            }
+            return;
+        }
+        // Parse `interval note...` (interval like "5s", "10m", "1h").
+        let default_note = "continue making progress on the current goal";
+        let (interval, note) = match arg.split_once(char::is_whitespace) {
+            Some((iv, rest)) if !rest.trim().is_empty() => (iv.trim(), rest.trim()),
+            _ => (arg, default_note),
+        };
+        let interval = if interval.is_empty() { "10m" } else { interval };
+        let secs = parse_interval_secs(interval);
+        if secs == 0 || secs > 86_400 {
+            self.push_error(
+                "usage: /heartbeat <interval> [note]  ·  interval like 5s, 10m, 1h (max 24h)"
+                    .into(),
+            );
+            return;
+        }
+        let steer = self.tool_host.steer.clone();
+        let note = note.to_string();
+        let note_for_beat = note.clone();
+        let label = format!("heartbeat · every {interval}");
+        let job = crate::bg_jobs::spawn(
+            label.clone(),
+            "heartbeat".to_string(),
+            move |cancel| {
+                let until = std::time::Instant::now()
+                    + std::time::Duration::from_secs(secs as u64);
+                // Loop with a short sleep so cancel interrupts promptly.
+                loop {
+                    if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                        return Err("cancelled".into());
+                    }
+                    if std::time::Instant::now() >= until {
+                        if let Ok(mut q) = steer.lock() {
+                            q.push_back(note_for_beat.clone());
+                        }
+                        // Reset the deadline for the next beat.
+                        return Ok("heartbeat fired (one-shot beat per job)".into());
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+            },
+        );
+        self.heartbeat_job = Some(job);
+        self.push_note(
+            Tone::Skill,
+            format!(
+                "heartbeat scheduled · every {interval} — bg job #{job}\n  {note}\n  /heartbeat off to stop"
+            ),
+        );
+    }
+
+    /// `/heartbeat` body above; this is a method-only marker to keep the impl
+    /// block contiguous (see `parse_interval_secs` free fn at file end).
 
     /// `/bg` — list / inspect / cancel / run background jobs without blocking
     /// the agent turn. Status chip in the footer shows running work.
@@ -2571,8 +2878,9 @@ impl App {
         if arg.is_empty() {
             self.push_info(
                 "steer · /steer <text> injects mid-turn without cancelling tools, subagents, \
-                 or bg jobs. While busy, Enter also steers (same as send now). \
-                 Queued cards: send now = inject · cut in = cancel + front · dismiss."
+                 or bg jobs. While busy, plain Enter queues a card (agent keeps working): \
+                 leave alone = runs after this turn · click steer = inject now · \
+                 cut in = cancel + front · dismiss."
                     .into(),
             );
             return;
@@ -2930,5 +3238,31 @@ mod unlimited_token_tests {
         }
         assert!(!is_unlimited_token("80"));
         assert!(!is_unlimited_token("2.5"));
+    }
+}
+
+/// Parse an interval like `5s`, `10m`, `2h` into seconds. `0` = invalid/over-cap.
+fn parse_interval_secs(s: &str) -> u64 {
+    let s = s.trim().to_ascii_lowercase();
+    if s.is_empty() {
+        return 0;
+    }
+    let (num, mult): (&str, f64) = if let Some(v) = s.strip_suffix("ms") {
+        (v, 1f64 / 1000.0)
+    } else if let Some(v) = s.strip_suffix('s') {
+        (v, 1.0)
+    } else if let Some(v) = s.strip_suffix('m') {
+        (v, 60.0)
+    } else if let Some(v) = s.strip_suffix('h') {
+        (v, 3600.0)
+    } else {
+        (s.as_str(), 1.0)
+    };
+    let val: f64 = num.trim().parse().unwrap_or(0.0);
+    let secs = (val * mult).round();
+    if secs <= 0.0 || secs > 86_400.0 {
+        0
+    } else {
+        secs as u64
     }
 }

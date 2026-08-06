@@ -23,6 +23,7 @@ pub async fn run_subagent(
     parent_mode: SharedMode,
     prompt: &str,
     subagent_type: &str,
+    parent_depth: u32,
     cancel: &CancellationToken,
     parent_tx: &mpsc::UnboundedSender<AgentEvent>,
 ) -> Result<(String, TokenUsage)> {
@@ -60,6 +61,7 @@ pub async fn run_subagent(
         hooks: super::hooks::HooksConfig::load(),
         is_subagent: true,
         prewalk_override: Arc::new(Mutex::new(None)),
+        subagent_depth: parent_depth.saturating_add(1),
     });
 
     let session = Session::new(&cfg.model, &cwd.display().to_string());
@@ -76,7 +78,7 @@ pub async fn run_subagent(
          Do not ask the user questions."
     );
 
-    let handle = super::spawn_turn(runner, session, usage, prompt, tx, cancel);
+    let handle = super::spawn_turn(runner, session, usage, prompt, tx, cancel.clone());
 
     // Publish this run to the shared table the inline `/swarm` card reads,
     // including where it was routed — the whole point of a cross-provider
@@ -125,7 +127,7 @@ pub async fn run_subagent(
                 args,
                 respond,
             } => {
-                relay_approval(parent_tx, name, args, respond).await;
+                relay_approval(parent_tx, name, args, respond, &cancel).await;
             }
             AgentEvent::TextDelta(d) => {
                 swarm::thinking(run_id);
@@ -144,7 +146,7 @@ pub async fn run_subagent(
             } => {
                 let _ = handle.await;
                 let spent = usage.session_usage().clone();
-                let tokens = spent.input_tokens + spent.output_tokens;
+                let tokens = spent.total_tokens;
                 if interrupted {
                     swarm::finish(run_id, RunState::Cancelled, tokens);
                     return Err(NurError::Interrupted);
@@ -156,7 +158,15 @@ pub async fn run_subagent(
                     }
                     Err(e) => {
                         swarm::finish(run_id, RunState::Failed, tokens);
-                        Err(subagent_failure(&e, &last_text))
+                        // Always name the route in the failure so a 401 on a
+                        // mis-routed child (stale OpenAI key, wrong host) is
+                        // diagnosable instead of looking like "the parent
+                        // provider is broken".
+                        let detail = format!(
+                            "{e} [routed provider={} model={} base={}]",
+                            cfg.provider, cfg.model, cfg.base_url
+                        );
+                        Err(subagent_failure(&detail, &last_text))
                     }
                 };
             }
@@ -205,7 +215,7 @@ pub async fn relay_approval_for_test(
     args: String,
     respond: tokio::sync::oneshot::Sender<ApprovalDecision>,
 ) {
-    relay_approval(parent_tx, name, args, respond).await
+    relay_approval(parent_tx, name, args, respond, &CancellationToken::new()).await
 }
 
 /// Proxy a child approval through the parent event loop, which is the only
@@ -215,8 +225,23 @@ async fn relay_approval(
     name: String,
     args: String,
     respond: tokio::sync::oneshot::Sender<ApprovalDecision>,
+    cancel: &CancellationToken,
 ) {
-    let _turn = approval_turnstile().lock().await;
+    if cancel.is_cancelled() {
+        let _ = respond.send(ApprovalDecision::Deny);
+        return;
+    }
+    let _turn = tokio::select! {
+        _ = cancel.cancelled() => {
+            let _ = respond.send(ApprovalDecision::Deny);
+            return;
+        }
+        turn = approval_turnstile().lock() => turn,
+    };
+    if cancel.is_cancelled() {
+        let _ = respond.send(ApprovalDecision::Deny);
+        return;
+    }
     let (proxy_tx, proxy_rx) = tokio::sync::oneshot::channel();
     if parent_tx
         .send(AgentEvent::ApprovalRequest {
@@ -228,7 +253,10 @@ async fn relay_approval(
     {
         let _ = respond.send(ApprovalDecision::Deny);
     } else {
-        let decision = proxy_rx.await.unwrap_or(ApprovalDecision::Deny);
+        let decision = tokio::select! {
+            _ = cancel.cancelled() => ApprovalDecision::Deny,
+            decision = proxy_rx => decision.unwrap_or(ApprovalDecision::Deny),
+        };
         let _ = respond.send(decision);
     }
 }
@@ -265,6 +293,7 @@ mod tests {
                 "write_file".into(),
                 "{}".into(),
                 child_tx,
+                &CancellationToken::new(),
             )
             .await;
         });
@@ -276,5 +305,75 @@ mod tests {
         respond.send(ApprovalDecision::Approve).unwrap();
         assert_eq!(child_rx.await.unwrap(), ApprovalDecision::Approve);
         relay.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancelled_child_approval_denies_without_waiting_for_parent() {
+        let (parent_tx, mut parent_rx) = mpsc::unbounded_channel();
+        let (child_tx, child_rx) = tokio::sync::oneshot::channel();
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+
+        relay_approval(
+            &parent_tx,
+            "write_file".into(),
+            "{}".into(),
+            child_tx,
+            &cancel,
+        )
+        .await;
+
+        assert_eq!(child_rx.await.unwrap(), ApprovalDecision::Deny);
+        assert!(parent_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn cancellation_escapes_a_queued_approval_turnstile() {
+        let (first_parent_tx, mut first_parent_rx) = mpsc::unbounded_channel();
+        let (first_child_tx, first_child_rx) = tokio::sync::oneshot::channel();
+        let first = tokio::spawn(async move {
+            relay_approval(
+                &first_parent_tx,
+                "write_file".into(),
+                "{}".into(),
+                first_child_tx,
+                &CancellationToken::new(),
+            )
+            .await;
+        });
+        let first_event = first_parent_rx.recv().await.expect("first approval event");
+
+        let (queued_parent_tx, mut queued_parent_rx) = mpsc::unbounded_channel();
+        let (queued_child_tx, queued_child_rx) = tokio::sync::oneshot::channel();
+        let cancel = CancellationToken::new();
+        let queued_cancel = cancel.clone();
+        let queued = tokio::spawn(async move {
+            relay_approval(
+                &queued_parent_tx,
+                "edit_file".into(),
+                "{}".into(),
+                queued_child_tx,
+                &queued_cancel,
+            )
+            .await;
+        });
+        cancel.cancel();
+
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), queued_child_rx)
+                .await
+                .expect("queued approval cancellation timed out")
+                .unwrap(),
+            ApprovalDecision::Deny
+        );
+        assert!(queued_parent_rx.try_recv().is_err());
+
+        let AgentEvent::ApprovalRequest { respond, .. } = first_event else {
+            panic!("expected approval request");
+        };
+        respond.send(ApprovalDecision::Approve).unwrap();
+        assert_eq!(first_child_rx.await.unwrap(), ApprovalDecision::Approve);
+        first.await.unwrap();
+        queued.await.unwrap();
     }
 }

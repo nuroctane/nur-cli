@@ -187,6 +187,46 @@ pub struct Config {
     /// Default off - local model summarization unchanged.
     #[serde(default)]
     pub compaction: CompactionConfig,
+    /// Shepherd-style retained outputs: `write_file` stages under
+    /// `~/.nur/proposals/<session>/` instead of the workspace until
+    /// `proposal apply`. Default off.
+    #[serde(default)]
+    pub proposal_mode: bool,
+    /// When set, continuous/autonomous mode runs this shell command as a quality
+    /// gate before accepting DONE (Prime Agent autonomous gate). Empty = none.
+    #[serde(default)]
+    pub quality_gate: String,
+    /// Auto-register tool results larger than this many chars into the RLM
+    /// context store (0 = disabled). Default 8000.
+    #[serde(default = "default_context_register_min_chars")]
+    pub context_register_min_chars: u64,
+    /// Agent-native memory + Connectome continuity (arXiv:2606.24775 + animalabs).
+    /// When true (default), inject hierarchical memories into the system prompt
+    /// and run localized maintenance on compact.
+    #[serde(default = "default_true")]
+    pub native_memory: bool,
+    /// RLM-style recursion depth for subagents (Prime: configurable depth).
+    /// 1 = children only (no grandchildren) — the long-standing default.
+    /// 2 = grandchildren allowed, etc. Budget carefully: each level multiplies cost.
+    #[serde(default = "default_subagent_depth")]
+    pub subagent_depth: u32,
+    /// Shepherd-style OS sandbox on Linux (Landlock) for high-risk runs.
+    /// Optional; enforced only on Linux (privileged), no-op on Windows/macOS
+    /// where nur's proposal/approval model is the safety layer.
+    #[serde(default)]
+    pub landlock: bool,
+    /// Model-based memory extraction (Mem0-class, paper M2). When true, the
+    /// active model writes durable first-person memories from assistant turns
+    /// (one cheap low-effort call per turn). Off by default (heuristic+explicit
+    /// remember is the no-cost path).
+    #[serde(default)]
+    pub memory_model_extract: bool,
+    /// KV-stable compaction (Connectome): when true, compaction rebuilds context
+    /// as `[stable summary prefix] + [recent verbatim tail]` and never rewrites
+    /// the recent working edge in place, so the provider prompt-cache prefix and
+    /// the model's recent computed state survive. Default on.
+    #[serde(default = "default_true")]
+    pub kv_stable_compact: bool,
 }
 
 /// `[prewalk]` — plan on the active model, implement on a cheap/smol model.
@@ -205,9 +245,10 @@ pub struct PrewalkConfig {
 
 /// `[compaction]` — optional remote summary endpoint (OMP-compatible).
 ///
-/// When `remote_enabled` and `remote_endpoint` are set, nur POSTs
-/// `{ systemPrompt, prompt }` and expects `{ summary }`. On any failure it
-/// falls back to the local model summarizer - never breaks a turn.
+/// Setting `remote_endpoint` opts in directly. Env-only configuration also
+/// requires `remote_enabled` or `NUR_COMPACT_REMOTE=1`. Nur accepts either the
+/// OMP `{ systemPrompt, prompt }` / `{ summary }` protocol or OpenAI-compatible
+/// `/chat/completions`, then falls back locally on any failure.
 ///
 /// Full image **snapcompact** archival stays in OMP; nur ports the remote
 /// summarization path only.
@@ -352,6 +393,12 @@ fn default_context_window() -> u64 {
 fn default_tool_result_max_chars() -> u64 {
     12_000
 }
+fn default_context_register_min_chars() -> u64 {
+    8_000
+}
+fn default_subagent_depth() -> u32 {
+    1
+}
 fn default_true() -> bool {
     true
 }
@@ -385,6 +432,14 @@ impl Default for Config {
             optmem: OptmemConfig::default(),
             prewalk: PrewalkConfig::default(),
             compaction: CompactionConfig::default(),
+            proposal_mode: false,
+            quality_gate: String::new(),
+            context_register_min_chars: default_context_register_min_chars(),
+            native_memory: true,
+            subagent_depth: default_subagent_depth(),
+            landlock: false,
+            memory_model_extract: false,
+            kv_stable_compact: true,
         }
     }
 }

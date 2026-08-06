@@ -29,6 +29,26 @@ impl Tool for WriteFile {
     fn execute(&self, args: &Value, ctx: &ToolContext) -> Result<String> {
         let path = arg_str(args, "path")?;
         let contents = arg_str(args, "contents")?;
+        // Shepherd retained-output mode: stage instead of mutating workspace.
+        if crate::config::load_config()
+            .map(|c| c.proposal_mode)
+            .unwrap_or(false)
+        {
+            let sid = std::env::var("NUR_SESSION_ID").unwrap_or_else(|_| "default".into());
+            let entry = crate::agent::proposal::stage_write(
+                &sid,
+                &ctx.cwd,
+                &path,
+                &contents,
+                "write_file",
+            )
+            .map_err(NurError::Tool)?;
+            return Ok(format!(
+                "proposal staged `{}` ({} bytes) at {} — not written to workspace. \
+                 Use tool `proposal` action=list|apply|discard.",
+                entry.rel_path, entry.bytes, entry.staged_path
+            ));
+        }
         let full = resolve_path(&ctx.cwd, &path)?;
         if let Some(parent) = full.parent() {
             fs::create_dir_all(parent)

@@ -46,6 +46,18 @@ fn send(tx: &ProgressTx, ev: BrowserLoginProgress) {
     let _ = tx.send(ev);
 }
 
+fn oauth_error_summary(body: &str) -> String {
+    let value = serde_json::from_str::<serde_json::Value>(body).ok();
+    let detail = value.as_ref().and_then(|value| {
+        ["/error_description", "/error/message", "/message", "/error"]
+            .iter()
+            .find_map(|pointer| value.pointer(pointer).and_then(|value| value.as_str()))
+    });
+    detail
+        .map(|detail| detail.chars().take(240).collect())
+        .unwrap_or_else(|| "response details withheld".into())
+}
+
 /// Run browser login for `provider_id` on a background-friendly thread path.
 /// Blocks until success, failure, cancel, or timeout.
 pub fn login_browser(provider_id: &str, tx: ProgressTx, cancel: CancelFlag) {
@@ -831,6 +843,16 @@ fn gh_bin() -> Option<PathBuf> {
     }
     resolve_cli("gh", &["gh.cmd", "gh.exe"], &dirs)
 }
+
+fn validate_callback_state(expected: Option<&str>, received: Option<&str>) -> Result<()> {
+    if let Some(expected) = expected {
+        if received != Some(expected) {
+            return Err(NurError::Other("OAuth state mismatch".into()));
+        }
+    }
+    Ok(())
+}
+
 /// Minimal localhost OAuth callback: waits for `?code=` (and optional state).
 fn wait_localhost_code_on(
     listener: TcpListener,
@@ -870,23 +892,22 @@ fn wait_localhost_code_on(
                         _ => {}
                     }
                 }
-                let body = if code.is_some() {
-                    "<html><body><h2>Signed in — you can close this tab and return to NurCLI.</h2></body></html>"
+                let state_valid = validate_callback_state(expected_state, state.as_deref()).is_ok();
+                let accepted = code.is_some() && state_valid;
+                let body = if accepted {
+                    "<html><body><h2>Signed in - you can close this tab and return to NurCLI.</h2></body></html>"
                 } else {
-                    "<html><body><h2>Missing code — try again from NurCLI.</h2></body></html>"
+                    "<html><body><h2>Login callback rejected - return to NurCLI and try again.</h2></body></html>"
                 };
                 let resp = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    "HTTP/1.1 {}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    if accepted { "200 OK" } else { "400 Bad Request" },
                     body.len(),
                     body
                 );
                 let _ = stream.write_all(resp.as_bytes());
                 if let Some(c) = code {
-                    if let (Some(exp), Some(got)) = (expected_state, state.as_deref()) {
-                        if exp != got {
-                            return Err(NurError::Other("OAuth state mismatch".into()));
-                        }
-                    }
+                    validate_callback_state(expected_state, state.as_deref())?;
                     return Ok(c);
                 }
             }
@@ -1257,10 +1278,10 @@ pub mod xai {
                                 device = Some(d);
                                 break;
                             }
-                            Err(e) => last_err = format!("parse device code: {e} · body={body}"),
+                            Err(e) => last_err = format!("parse device code: {e}"),
                         }
                     } else {
-                        last_err = format!("{url} → {status}: {body}");
+                        last_err = format!("{url} -> {status}: {}", oauth_error_summary(&body));
                     }
                 }
                 Err(e) => last_err = e.to_string(),
@@ -1396,11 +1417,14 @@ pub mod xai {
             .send()
             .map_err(|e| NurError::Other(e.to_string()))?;
         let body = res.text().unwrap_or_default();
-        let parsed: TokenResp =
-            serde_json::from_str(&body).map_err(|e| NurError::Other(format!("{e}: {body}")))?;
-        let access = parsed
-            .access_token
-            .ok_or_else(|| NurError::Other(format!("refresh failed: {body}")))?;
+        let parsed: TokenResp = serde_json::from_str(&body)
+            .map_err(|e| NurError::Other(format!("invalid xAI refresh response: {e}")))?;
+        let access = parsed.access_token.ok_or_else(|| {
+            NurError::Other(format!(
+                "xAI refresh failed: {}",
+                oauth_error_summary(&body)
+            ))
+        })?;
         Ok(OAuthTokens {
             access_token: access,
             refresh_token: parsed.refresh_token.or_else(|| Some(refresh.to_string())),
@@ -1940,7 +1964,7 @@ pub mod claude {
             let parsed: TokenResp = match serde_json::from_str(&body) {
                 Ok(p) => p,
                 Err(e) => {
-                    last = format!("{e}: {body}");
+                    last = format!("invalid token response: {e}");
                     continue;
                 }
             };
@@ -1960,7 +1984,7 @@ pub mod claude {
                     }),
                 });
             }
-            last = body;
+            last = oauth_error_summary(&body);
         }
         Err(NurError::Other(format!(
             "Claude token exchange failed: {last}"
@@ -2875,7 +2899,7 @@ foreach ($t in $targets) {
         }
 
         let parsed: TokenResponse = serde_json::from_str(&text)
-            .map_err(|e| NurError::Other(format!("invalid token JSON: {e}: {text}")))?;
+            .map_err(|e| NurError::Other(format!("invalid token JSON: {e}")))?;
 
         if let Some(err) = parsed.error {
             return Err(NurError::Other(format!(
@@ -3252,7 +3276,8 @@ foreach ($t in $targets) {
         if !status.is_success() {
             return Err(NurError::Other(format!(
                 "Antigravity refresh failed ({}): {}",
-                status, text
+                status,
+                oauth_error_summary(&text)
             )));
         }
 
@@ -4201,6 +4226,26 @@ mod tests {
     fn malformed_openai_id_token_has_no_account_context() {
         assert_eq!(jwt_expiration("not-a-jwt"), None);
         assert_eq!(chatgpt_account_meta("not-a-jwt"), (None, false));
+    }
+
+    #[test]
+    fn oauth_callback_requires_state_when_flow_declares_one() {
+        assert!(validate_callback_state(Some("expected"), Some("expected")).is_ok());
+        assert!(validate_callback_state(Some("expected"), Some("wrong")).is_err());
+        assert!(validate_callback_state(Some("expected"), None).is_err());
+        assert!(validate_callback_state(None, None).is_ok());
+    }
+
+    #[test]
+    fn oauth_error_summary_never_echoes_token_fields() {
+        let body = r#"{"access_token":"secret-access","refresh_token":"secret-refresh","error":{"message":"invalid grant"}}"#;
+        let summary = oauth_error_summary(body);
+        assert_eq!(summary, "invalid grant");
+        assert!(!summary.contains("secret"));
+        assert_eq!(
+            oauth_error_summary(r#"{"access_token":"secret-only"}"#),
+            "response details withheld"
+        );
     }
 
     #[test]

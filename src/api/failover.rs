@@ -280,13 +280,17 @@ pub fn resolve_target_key(p: &Provider) -> Option<String> {
         let tok = tokens.access_token.trim().to_string();
         if !tok.is_empty() {
             if crate::oauth::omp_bridge::is_omp_import(&tokens) {
-                let _ = crate::auth::save_provider_oauth(
-                    p.id,
-                    &tok,
-                    tokens.refresh_token.clone(),
-                    tokens.expires_at,
-                    tokens.meta.clone(),
-                );
+                if crate::oauth::omp_bridge::is_omp_oauth_import(&tokens) {
+                    let _ = crate::auth::save_provider_oauth(
+                        p.id,
+                        &tok,
+                        tokens.refresh_token.clone(),
+                        tokens.expires_at,
+                        tokens.meta.clone(),
+                    );
+                } else {
+                    let _ = crate::auth::save_provider_key(p.id, &tok);
+                }
             }
             return Some(tok);
         }

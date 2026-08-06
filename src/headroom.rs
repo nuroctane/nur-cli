@@ -262,6 +262,10 @@ pub fn compress_text(
 }
 
 /// Compress then spill - shared by all agent-loop tool-result sites.
+///
+/// RLM: large successful tool bodies are also registered in the session
+/// context store so compaction / spill previews do not permanently lose the
+/// full variable (Prime: state outlives one turn).
 pub fn prepare_tool_body(
     headroom: &HeadroomConfig,
     session_id: &str,
@@ -271,6 +275,20 @@ pub fn prepare_tool_body(
     spill_max_chars: usize,
     session_model: &str,
 ) -> String {
+    // Register the full body *before* compress/spill so the variable keeps the original.
+    let mut prefix = String::new();
+    if ok {
+        let min = crate::config::load_config()
+            .map(|c| c.context_register_min_chars as usize)
+            .unwrap_or(8_000);
+        if min > 0 {
+            if let Some(msg) =
+                crate::agent::context_store::maybe_register_tool_result(session_id, tool, &body, min)
+            {
+                prefix = msg;
+            }
+        }
+    }
     let body = if ok {
         match compress_text(headroom, tool, &body, session_model) {
             Some(c) => c,
@@ -279,7 +297,12 @@ pub fn prepare_tool_body(
     } else {
         body
     };
-    crate::tools::spill::maybe_spill(session_id, tool, body, spill_max_chars)
+    let out = crate::tools::spill::maybe_spill(session_id, tool, body, spill_max_chars);
+    if prefix.is_empty() {
+        out
+    } else {
+        format!("{prefix}{out}")
+    }
 }
 
 #[cfg(test)]

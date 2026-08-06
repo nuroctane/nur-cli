@@ -173,7 +173,7 @@ async fn run(
 fn meter(resp: &ApiResponse, session: &mut Session, usage: &mut UsageTracker) {
     if let Some(u) = &resp.usage {
         let tu: TokenUsage = u.into();
-        usage.record_request(tu.clone(), resp.id.clone());
-        session.usage.add(&tu);
+        usage.record_request(tu, resp.id.clone());
+        session.usage.add(usage.last_usage());
     }
 }

@@ -5,7 +5,7 @@
 ### Extremely efficient token spend
 
 **Use fewer paid tokens by default.**
-The harness supersedes stale duplicate reads, spills large tool results, compacts repeatedly under pressure, supports prompt caching and local models, and routes focused Oh My Pi delegation through a verified authenticated economy model. Delegated OMP tokens and cost are included in Nur's session budgets and `/usage` totals.
+The harness supersedes stale duplicate reads, spills large tool results, preserves provider prompt caches, and compacts repeatedly using an OMP-style response reserve instead of a premature fixed percentage. It also supports local context estimates when providers omit usage, prompt caching, local models, and focused Oh My Pi delegation through a verified authenticated economy model. Native failover, cross-provider subagents, and delegated OMP work all report their actual token and cost impact in Nur's session budgets and `/usage` totals.
 
 </div>
 
@@ -57,7 +57,7 @@ For **OpenAI, Anthropic, xAI, Kimi Code, Google Gemini, Azure OpenAI, GitHub Mod
 
 Provider requests have a shared five-minute watchdog by default, immediate Esc cancellation, and clean transport teardown. Set `NUR_PROVIDER_TURN_TIMEOUT_SECS` to adjust the ceiling. On Windows, Nur also recovers successful Cursor Agent turns from Cursor's durable transcript when affected CLI builds emit no redirected stdout.
 
-Keys are kept **per provider**, so switching with `/login` never strands the one you switched away from — it stays available for failover and for subagents running on another provider's model. `/login` itself clears nothing; **`/logout`** is what signs you out of an account. See [docs/authentication.md](docs/authentication.md).
+Keys are kept **per provider**, so switching with `/login` never strands the one you switched away from - it stays available for failover and for subagents running on another provider's model. Imported OMP credentials retain their real kind, so API keys use API endpoints and OAuth subscriptions use their provider-specific OAuth routes. `/login` itself clears nothing; **`/logout`** is what signs you out of an account. See [docs/authentication.md](docs/authentication.md).
 
 ### Update
 

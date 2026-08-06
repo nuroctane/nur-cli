@@ -83,6 +83,12 @@ fn fallback_meta_cost(u: &TokenUsage) -> f64 {
     input + cache + output
 }
 
+fn stamp_for_route(provider: &str, model: &str, mut usage: TokenUsage) -> (TokenUsage, ModelRates) {
+    let rates = pricing::rates_for(provider, model);
+    usage.stamp_cost(&rates);
+    (usage, rates)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusSnapshot {
     pub schema_version: u32,
@@ -259,13 +265,27 @@ impl UsageTracker {
     }
 
     pub fn record_request(&mut self, usage: TokenUsage, response_id: Option<String>) {
+        let provider = self.provider.clone();
+        let model = self.model.clone();
+        self.record_request_for_route(&provider, &model, usage, response_id);
+    }
+
+    /// Record a request served by a different failover route without changing
+    /// the session's configured primary provider/model. Pricing, the append-only
+    /// usage row, and the live hook payload must describe where tokens were
+    /// actually spent.
+    pub fn record_request_for_route(
+        &mut self,
+        provider: &str,
+        model: &str,
+        usage: TokenUsage,
+        response_id: Option<String>,
+    ) {
         self.turn += 1;
-        let rates = self.active_rates();
-        let mut usage = usage;
-        usage.stamp_cost(&rates);
+        let (usage, rates) = stamp_for_route(provider, model, usage);
         self.last = usage.clone();
         self.session.add(&usage);
-        let _ = self.append_log(&usage, response_id, &rates);
+        let _ = self.append_log(&usage, response_id, &rates, provider, model);
         let _ = self.write_status();
         if !self.global {
             return;
@@ -303,8 +323,8 @@ impl UsageTracker {
         let payload = serde_json::json!({
             "type": "meta.usage",
             "session_id": self.session_id,
-            "model": self.model,
-            "provider": self.provider,
+            "model": model,
+            "provider": provider,
             "turn": self.turn,
             "state": self.state,
             "usage": self.session,
@@ -360,13 +380,15 @@ impl UsageTracker {
         usage: &TokenUsage,
         response_id: Option<String>,
         rates: &ModelRates,
+        provider: &str,
+        model: &str,
     ) -> Result<()> {
         ensure_dirs()?;
         let line = UsageLogLine {
             ts: Utc::now(),
             session_id: self.session_id.clone(),
-            model: self.model.clone(),
-            provider: self.provider.clone(),
+            model: model.to_string(),
+            provider: provider.to_string(),
             response_id,
             usage: usage.clone(),
             estimated_cost_usd: usage.estimated_cost_usd(),
@@ -459,5 +481,23 @@ mod tests {
         assert!(a.cost_known);
         let expected = PRICE_INPUT_PER_MTOK + PRICE_OUTPUT_PER_MTOK;
         assert!((a.estimated_cost_usd() - expected).abs() < 1e-9);
+    }
+
+    #[test]
+    fn failover_request_uses_the_serving_routes_rates() {
+        let (usage, rates) = stamp_for_route(
+            "ollama",
+            "local-model",
+            TokenUsage {
+                input_tokens: 10_000,
+                output_tokens: 1_000,
+                total_tokens: 11_000,
+                ..Default::default()
+            },
+        );
+
+        assert!(usage.cost_known);
+        assert_eq!(usage.cost_usd, 0.0);
+        assert_eq!(rates.source, "local-free");
     }
 }

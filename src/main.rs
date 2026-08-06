@@ -112,10 +112,10 @@ async fn real_main() -> Result<()> {
                     logout(*revoke)?;
                     if *revoke {
                         theme::print_ok(
-                            "logged out (local ~/.nur/auth.json removed; see revoke notes above)",
+                            "logged out (active and per-provider copies removed; see revoke notes above)",
                         );
                     } else {
-                        theme::print_ok("logged out (removed ~/.nur/auth.json)");
+                        theme::print_ok("logged out (active and per-provider copies removed)");
                     }
                 }
             }
@@ -907,6 +907,7 @@ async fn run_headless(
         hooks: agent::hooks::HooksConfig::load(),
         is_subagent: false,
         prewalk_override: Arc::new(Mutex::new(None)),
+        subagent_depth: 0,
     });
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1057,6 +1058,7 @@ async fn run_continuous(
 ) -> Result<()> {
     permission_mode.set(PermissionMode::Auto);
     ade::set_terminal_title(&ade::session_window_title(goal));
+    let quality_gate = cfg.quality_gate.clone();
 
     let runner = Arc::new(AgentRunner {
         client,
@@ -1070,6 +1072,7 @@ async fn run_continuous(
         hooks: agent::hooks::HooksConfig::load(),
         is_subagent: false,
         prewalk_override: Arc::new(Mutex::new(None)),
+        subagent_depth: 0,
     });
 
     let cancel = tokio_util::sync::CancellationToken::new();
@@ -1180,9 +1183,24 @@ async fn run_continuous(
                     theme::print_info("continuous · interrupted");
                     break;
                 }
-                if agent::continuous::is_done(&text) {
-                    theme::print_ok("continuous · goal complete (DONE)");
-                    break;
+                match agent::continuous::accept_done(&text, &cwd, &quality_gate) {
+                    Ok(true) => {
+                        theme::print_ok("continuous · goal complete (DONE)");
+                        break;
+                    }
+                    Ok(false) => {}
+                    Err(gate_err) => {
+                        // Prime pattern: failed quality gate returns output to the agent.
+                        theme::print_info(&format!(
+                            "continuous · DONE rejected by quality gate — continuing\n{gate_err}"
+                        ));
+                        if let Some(s) = session.as_mut() {
+                            s.push_user(&format!(
+                                "[harness] Quality gate failed after you said DONE:\n{gate_err}\n\
+                                 Fix the failures and only reply DONE when the gate would pass."
+                            ));
+                        }
+                    }
                 }
             }
             Err(e) => {

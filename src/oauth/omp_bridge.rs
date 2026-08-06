@@ -43,14 +43,23 @@ fn cache() -> &'static Mutex<HashMap<String, (Instant, CacheEntry)>> {
 /// Map a nur catalog provider id to candidate OMP provider ids (tried in order).
 pub fn omp_provider_aliases(nur_provider: &str) -> Vec<&'static str> {
     match nur_provider {
-        "openai" | "openai-cc" => vec!["openai-codex", "openai"],
+        "openai" | "openai-cc" => {
+            vec!["openai-codex", "openai-codex-device", "openai"]
+        }
         "anthropic" => vec!["anthropic"],
-        "google" | "google-oauth" => vec!["google-gemini-cli", "google", "google-generative-ai"],
-        "antigravity" => vec!["google-gemini-cli", "google", "antigravity"],
-        "xai" => vec!["xai", "grok"],
+        "google" | "google-oauth" => {
+            vec!["google-gemini-cli", "google", "google-generative-ai"]
+        }
+        "antigravity" => vec![
+            "google-antigravity",
+            "google-gemini-cli",
+            "antigravity",
+            "google",
+        ],
+        "xai" => vec!["xai-oauth", "xai", "grok"],
         "github-copilot" => vec!["github-copilot", "github"],
         "github-models" => vec!["github-models", "github"],
-        "kimi" => vec!["kimi", "moonshot", "kimi-coding"],
+        "kimi" => vec!["kimi-code", "kimi", "kimi-coding", "moonshot"],
         "moonshot" => vec!["moonshot", "kimi"],
         "azure" => vec!["azure-openai-responses", "azure", "azure-openai"],
         "meta" => vec!["meta"],
@@ -60,14 +69,20 @@ pub fn omp_provider_aliases(nur_provider: &str) -> Vec<&'static str> {
         "huggingface" => vec!["huggingface", "hf"],
         "mistral" => vec!["mistral"],
         "deepseek" => vec!["deepseek"],
-        "zhipu" => vec!["zhipu", "zai"],
-        "qwen" => vec!["qwen", "alibaba"],
-        "minimax" => vec!["minimax"],
+        "zhipu" => vec!["zai-coding-plan", "zhipu-coding-plan", "zai", "zhipu"],
+        "qwen" => vec![
+            "alibaba-coding-plan",
+            "alibaba-token-plan",
+            "qwen-portal",
+            "qwen",
+            "alibaba",
+        ],
+        "minimax" => vec!["minimax-code", "minimax-code-cn", "minimax"],
         "together" => vec!["together"],
         "fireworks" => vec!["fireworks"],
         "cohere" => vec!["cohere"],
         "vercel" => vec!["vercel", "vercel-ai-gateway"],
-        "opencode" => vec!["opencode", "opencode-go"],
+        "opencode" => vec!["opencode-zen", "opencode-go", "opencode"],
         "cursor" => vec!["cursor"],
         "ollama" => vec!["ollama"],
         "lmstudio" => vec!["lm-studio", "lmstudio"],
@@ -90,7 +105,7 @@ pub fn omp_provider_aliases(nur_provider: &str) -> Vec<&'static str> {
         "glama" => vec!["glama"],
         "portkey" => vec!["portkey"],
         "litellm" => vec!["litellm"],
-        "cloudflare" => vec!["cloudflare"],
+        "cloudflare" => vec!["cloudflare-ai-gateway", "cloudflare"],
         "featherless" => vec!["featherless"],
         "nano-gpt" => vec!["nano-gpt", "nanogpt"],
         "helicone" => vec!["helicone"],
@@ -147,7 +162,75 @@ fn looks_like_secret(s: &str) -> bool {
     true
 }
 
-fn parse_token_output(raw: &str) -> Option<String> {
+fn json_secret(value: &serde_json::Value) -> Option<String> {
+    for key in [
+        "access_token",
+        "accessToken",
+        "api_key",
+        "apiKey",
+        "token",
+        "key",
+        "access",
+    ] {
+        if let Some(value) = value.get(key) {
+            if let Some(secret) = value.as_str().filter(|secret| looks_like_secret(secret)) {
+                return Some(secret.trim().to_string());
+            }
+            if let Some(secret) = json_secret(value) {
+                return Some(secret);
+            }
+        }
+    }
+    for key in ["credentials", "credential", "oauth", "auth", "tokens"] {
+        if let Some(secret) = value.get(key).and_then(json_secret) {
+            return Some(secret);
+        }
+    }
+    None
+}
+
+fn json_is_oauth(value: &serde_json::Value) -> bool {
+    value
+        .get("type")
+        .or_else(|| value.get("auth_method"))
+        .or_else(|| value.get("authMethod"))
+        .and_then(|value| value.as_str())
+        .is_some_and(|kind| kind.eq_ignore_ascii_case("oauth"))
+        || [
+            "refresh_token",
+            "refreshToken",
+            "id_token",
+            "idToken",
+            "expires_at",
+            "expiresAt",
+        ]
+        .iter()
+        .any(|key| value.get(*key).is_some())
+        || ["credentials", "credential", "oauth", "auth", "tokens"]
+            .iter()
+            .filter_map(|key| value.get(*key))
+            .any(json_is_oauth)
+}
+
+fn oauth_only_omp_provider(provider: &str) -> bool {
+    matches!(
+        provider,
+        "openai-codex"
+            | "openai-codex-device"
+            | "google-antigravity"
+            | "google-gemini-cli"
+            | "xai-oauth"
+            | "github-copilot"
+    )
+}
+
+fn token_looks_oauth(token: &str) -> bool {
+    token.starts_with("sk-ant-oat")
+        || token.starts_with("ya29.")
+        || (token.matches('.').count() == 2 && token.len() >= 32)
+}
+
+fn parse_token_output(raw: &str, omp_provider: &str) -> Option<(String, bool)> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return None;
@@ -161,30 +244,49 @@ fn parse_token_output(raw: &str) -> Option<String> {
     // Nested JSON credential blobs (e.g. github-copilot --raw) — dig for a token.
     if line.starts_with('{') {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-            for key in [
-                "access_token",
-                "accessToken",
-                "api_key",
-                "apiKey",
-                "token",
-                "key",
-            ] {
-                if let Some(s) = v.get(key).and_then(|x| x.as_str()) {
-                    if looks_like_secret(s) {
-                        return Some(s.trim().to_string());
-                    }
-                }
+            if let Some(secret) = json_secret(&v) {
+                let oauth = json_is_oauth(&v)
+                    || oauth_only_omp_provider(omp_provider)
+                    || token_looks_oauth(&secret);
+                return Some((secret, oauth));
             }
         }
     }
-    looks_like_secret(line).then(|| line.to_string())
+    looks_like_secret(line).then(|| {
+        (
+            line.to_string(),
+            oauth_only_omp_provider(omp_provider) || token_looks_oauth(line),
+        )
+    })
 }
 
-fn omp_token_once(bin: &str, omp_provider: &str) -> Option<String> {
+fn remaining_ms(deadline: Instant) -> u64 {
+    deadline
+        .saturating_duration_since(Instant::now())
+        .as_millis()
+        .min(u64::MAX as u128) as u64
+}
+
+fn omp_token_once(bin: &str, omp_provider: &str, deadline: Instant) -> Option<(String, bool)> {
+    let timeout = remaining_ms(deadline);
+    if timeout == 0 {
+        return None;
+    }
+    match crate::ecosystem::run_capture(bin, &["token", omp_provider, "--raw"], None, timeout) {
+        Ok(output) => return parse_token_output(&output, omp_provider),
+        Err(_) => {
+            // Only old OMP builds that reject `--raw` need the scalar retry.
+            // Recalculate against the same deadline so this fallback cannot
+            // double the documented total import budget.
+        }
+    }
+    let timeout = remaining_ms(deadline);
+    if timeout == 0 {
+        return None;
+    }
     let output =
-        crate::ecosystem::run_capture(bin, &["token", omp_provider], None, TOKEN_TIMEOUT_MS)
-            .ok()?;
-    parse_token_output(&output)
+        crate::ecosystem::run_capture(bin, &["token", omp_provider], None, timeout).ok()?;
+    parse_token_output(&output, omp_provider)
 }
 
 /// True when tokens were produced by [`import_omp_token`] (issuer / refresh marker).
@@ -197,6 +299,38 @@ pub fn is_omp_import(tokens: &OAuthTokens) -> bool {
             .refresh_token
             .as_deref()
             .is_some_and(|r| r.starts_with("omp:"))
+}
+
+/// True only when OMP identified this import as an OAuth credential. Legacy
+/// records without a kind marker are inferred from alias and token shape.
+pub fn is_omp_oauth_import(tokens: &OAuthTokens) -> bool {
+    if !is_omp_import(tokens) {
+        return false;
+    }
+    omp_meta_is_oauth(tokens.meta.as_ref(), &tokens.access_token)
+}
+
+/// Classify current and legacy OMP metadata without exposing the credential.
+/// Legacy records did not store `credential_kind`; infer them from the exact
+/// OMP alias and conservative token shapes so old API keys stop taking OAuth
+/// routes while known subscription aliases remain OAuth.
+pub fn omp_meta_is_oauth(meta: Option<&OauthMeta>, token: &str) -> bool {
+    let Some(meta) = meta.filter(|meta| meta.issuer.eq_ignore_ascii_case("omp")) else {
+        return false;
+    };
+    if let Some(kind) = meta
+        .extra
+        .get("credential_kind")
+        .and_then(|value| value.as_str())
+    {
+        return kind.eq_ignore_ascii_case("oauth");
+    }
+    let omp_provider = meta
+        .extra
+        .get("omp_provider")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    oauth_only_omp_provider(omp_provider) || token_looks_oauth(token)
 }
 
 /// Import a credential from OMP for a nur provider id.
@@ -228,8 +362,12 @@ pub fn import_omp_token(nur_provider: &str) -> Result<Option<OAuthTokens>> {
         return Ok(None);
     };
 
+    let deadline = Instant::now() + Duration::from_millis(TOKEN_TIMEOUT_MS);
     for omp_id in candidate_ids(nur_provider) {
-        if let Some(access) = omp_token_once(&bin, &omp_id) {
+        if remaining_ms(deadline) == 0 {
+            break;
+        }
+        if let Some((access, is_oauth)) = omp_token_once(&bin, &omp_id, deadline) {
             let tokens = OAuthTokens {
                 access_token: access,
                 refresh_token: Some(format!("omp:{omp_id}")),
@@ -241,6 +379,7 @@ pub fn import_omp_token(nur_provider: &str) -> Result<Option<OAuthTokens>> {
                         "imported_from": "omp-token",
                         "omp_provider": omp_id,
                         "nur_provider": nur_provider,
+                        "credential_kind": if is_oauth { "oauth" } else { "api_key" },
                     }),
                 }),
             };
@@ -313,19 +452,28 @@ mod tests {
     }
 
     #[test]
+    fn omp_fallbacks_share_one_deadline() {
+        let deadline = Instant::now() + Duration::from_millis(100);
+        assert!(remaining_ms(deadline) <= 100);
+        assert_eq!(remaining_ms(Instant::now() - Duration::from_millis(1)), 0);
+    }
+
+    #[test]
     fn parse_token_rejects_help_text() {
-        assert!(parse_token_output("Usage\n  $ omp token PROVIDER").is_none());
-        assert!(parse_token_output("No OAuth accounts found for provider \"x\".").is_none());
+        assert!(parse_token_output("Usage\n  $ omp token PROVIDER", "openai").is_none());
+        assert!(
+            parse_token_output("No OAuth accounts found for provider \"x\".", "openai").is_none()
+        );
     }
 
     #[test]
     fn parse_token_accepts_jwt_and_json() {
         let jwt = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxIn0.signaturepaddingvaluehere";
-        assert_eq!(parse_token_output(jwt).as_deref(), Some(jwt));
+        assert_eq!(parse_token_output(jwt, "xai"), Some((jwt.into(), true)));
         let json = r#"{"access_token":"sk-ant-oat-abcdefghijklmnopqrstuvwxyz012345"}"#;
         assert_eq!(
-            parse_token_output(json).as_deref(),
-            Some("sk-ant-oat-abcdefghijklmnopqrstuvwxyz012345")
+            parse_token_output(json, "anthropic"),
+            Some(("sk-ant-oat-abcdefghijklmnopqrstuvwxyz012345".into(), true))
         );
     }
 
@@ -333,8 +481,38 @@ mod tests {
     fn parse_token_takes_last_line() {
         let out = "fetching…\nsk-test-abcdefghijklmnopqrstuvwxyz0123456789";
         assert_eq!(
-            parse_token_output(out).as_deref(),
-            Some("sk-test-abcdefghijklmnopqrstuvwxyz0123456789")
+            parse_token_output(out, "openai"),
+            Some(("sk-test-abcdefghijklmnopqrstuvwxyz0123456789".into(), false))
+        );
+    }
+
+    #[test]
+    fn current_omp_aliases_are_specific_first() {
+        assert_eq!(omp_provider_aliases("antigravity")[0], "google-antigravity");
+        assert_eq!(omp_provider_aliases("xai")[0], "xai-oauth");
+        assert_eq!(omp_provider_aliases("kimi")[0], "kimi-code");
+        assert!(omp_provider_aliases("openai").contains(&"openai-codex-device"));
+        assert_eq!(omp_provider_aliases("opencode")[0], "opencode-zen");
+        assert_eq!(
+            omp_provider_aliases("cloudflare")[0],
+            "cloudflare-ai-gateway"
+        );
+        assert!(omp_provider_aliases("qwen").contains(&"alibaba-coding-plan"));
+        assert!(omp_provider_aliases("zhipu").contains(&"zai-coding-plan"));
+        assert!(omp_provider_aliases("minimax").contains(&"minimax-code"));
+    }
+
+    #[test]
+    fn raw_omp_shape_preserves_api_key_vs_oauth() {
+        let key = r#"{"type":"api","key":"sk-test-abcdefghijklmnopqrstuvwxyz"}"#;
+        assert_eq!(
+            parse_token_output(key, "openai"),
+            Some(("sk-test-abcdefghijklmnopqrstuvwxyz".into(), false))
+        );
+        let oauth = r#"{"type":"oauth","access_token":"opaque-access-token-1234567890","refresh_token":"refresh"}"#;
+        assert_eq!(
+            parse_token_output(oauth, "anthropic"),
+            Some(("opaque-access-token-1234567890".into(), true))
         );
     }
 
@@ -358,5 +536,27 @@ mod tests {
             meta: None,
         };
         assert!(!is_omp_import(&vendor));
+    }
+
+    #[test]
+    fn legacy_omp_kind_is_inferred_without_preserving_api_key_misrouting() {
+        let api_meta = crate::auth::OauthMeta {
+            issuer: "omp".into(),
+            client_id: "omp-token".into(),
+            extra: serde_json::json!({"omp_provider": "openai"}),
+        };
+        assert!(!omp_meta_is_oauth(
+            Some(&api_meta),
+            "sk-test-abcdefghijklmnopqrstuvwxyz"
+        ));
+        let oauth_meta = crate::auth::OauthMeta {
+            issuer: "omp".into(),
+            client_id: "omp-token".into(),
+            extra: serde_json::json!({"omp_provider": "openai-codex"}),
+        };
+        assert!(omp_meta_is_oauth(
+            Some(&oauth_meta),
+            "opaque-access-token-1234567890"
+        ));
     }
 }

@@ -80,6 +80,22 @@ impl Tool for MultiEdit {
             };
             total += if replace_all { count } else { 1 };
         }
+        // Shepherd proposal mode: stage, do not touch the workspace.
+        if crate::config::load_config()
+            .map(|c| c.proposal_mode)
+            .unwrap_or(false)
+        {
+            let sid = std::env::var("NUR_SESSION_ID").unwrap_or_else(|_| "default".into());
+            let entry = crate::agent::proposal::stage_write(
+                &sid, &ctx.cwd, &path, &content, "multi_edit",
+            )
+            .map_err(NurError::Tool)?;
+            return Ok(format!(
+                "proposal staged `{}` ({} bytes) — workspace untouched. \
+                 Use tool `proposal` action=list|apply|discard.",
+                entry.rel_path, entry.bytes
+            ));
+        }
         fs::write(&full, content)
             .map_err(|e| NurError::Tool(format!("write {}: {e}", full.display())))?;
         Ok(format!(

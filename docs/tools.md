@@ -245,6 +245,8 @@ state out of the run and avoids duplicating large prompt catalogs. Use
 capability. Runs use bounded time, ephemeral sessions, and compact result
 contracts. OMP's JSON events supply the concrete provider, model, token counts,
 and cost, which Nur folds into `/usage`, session status, and `/budget` totals.
+Invalid cost, thinking, tool-profile, and timeout options fail closed rather than
+silently widening the delegated tool surface.
 
 `run` is write-class: it needs approval in manual mode and is blocked in plan
 mode. Once Nur approves the delegation, the headless OMP child receives an
@@ -293,6 +295,11 @@ receive a focused core tool schema rather than the parent's full ecosystem
 catalog. Nested delegation and OMP are intentionally absent, so a failed child
 cannot recurse or silently substitute OMP. Partial output from a failed child is
 preserved in the error but never marked successful.
+
+Native fan-out runs at most four children concurrently. Cancellation interrupts
+children waiting for approval, the shared approval prompt, and concurrency
+permits, then aborts every queued or running child so no detached task can begin
+credential resolution, edits, or token spend after the parent turn ends.
 
 **Cross-provider subagents.** An `agent` call may set `provider` (and optionally
 `model`) to run a subagent on a *different* provider than the parent — in natural

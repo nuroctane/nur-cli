@@ -113,24 +113,33 @@ fallback for every one of them.
 
 Credential resolution order for a catalog provider:
 
-1. **Already saved in nur** - active `/login` session (`auth.json`), per-provider
-   keys/sessions (`provider_keys.json` / `provider_sessions.json`), then the
-   provider's env var (`OPENAI_API_KEY`, …). Saved credentials always win.
-2. **Vendor CLI session** (Claude Code, Codex, Grok, Kimi, Cursor, OpenCode,
+1. **Explicit provider environment** - the selected provider's own variable
+   (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and so on) wins for that provider only.
+2. **Already saved in nur** - a matching active `/login` session (`auth.json`),
+   then per-provider keys/sessions (`provider_keys.json` / `provider_sessions.json`),
+   followed by the global `NUR_API_KEY` fallback.
+3. **Vendor CLI session** (Claude Code, Codex, Grok, Kimi, Cursor, OpenCode,
    Antigravity / gcloud) when that provider has a first-party importer.
-3. **Oh My Pi (OMP)** for every catalog provider - `omp token <provider>` reads
-   `~/.omp/agent/agent.db` (see [oh-omp](https://github.com/open-horizon-labs/oh-omp)).
+4. **Oh My Pi (OMP)** for every catalog provider - `omp token <provider>` reads
+   `~/.omp/agent/agent.db` (see [Oh My Pi](https://github.com/can1357/oh-my-pi)).
    Nur maps ids (`openai` → `openai-codex`, `google` → `google-gemini-cli`, …).
    A successful OMP import is written into the per-provider store so the next
    resolve hits step 1 instead of shelling out again. The same bridge feeds
    `/failover`, cross-provider subagents, and doctor probes.
 
+OMP imports preserve the credential type exported by OMP. An API key is saved
+as an API key and uses the catalog provider's normal API endpoint and headers;
+an OAuth subscription session uses that provider's OAuth endpoint and metadata.
+Legacy OMP imports are classified and migrated on read so an old API key cannot
+accidentally take an OAuth-only route. Alias attempts share one bounded deadline.
+
 Nothing to paste when nur, the vendor CLI, or OMP already has a login.
 
-Imported tokens are used transiently and never written to `auth.json`. If the
-imported session has gone stale, nur mints a fresh access token from the same
-refresh token the CLI stores, exactly as the CLI would have on its next use — a
-session merely being a few minutes old no longer sends you to `/login`.
+First-party CLI imports are refreshed from the vendor's local session and saved
+under the selected provider when activated. If the imported session has gone
+stale, nur mints a fresh access token from the same refresh token the CLI stores,
+exactly as the CLI would have on its next use - a session merely being a few
+minutes old no longer sends you to `/login`.
 
 Nur respects the official CLI isolation variables when locating those sessions:
 `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `XAI_CONFIG_DIR`, `CURSOR_AGENT_HOME`,
@@ -305,11 +314,12 @@ documented. If your deployment contract says otherwise, override it - see
 
 Credential resolution order:
 
-1. A matching active OAuth session (refreshed automatically before use)
-2. For provider-scoped API-key sign-ins, the provider variable (such as
-   `OPENAI_API_KEY`), then the matching saved key, then `NUR_API_KEY`
-3. `~/.nur/auth.json` (from `nur auth login` or successful `/login`)
-4. Interactive TUI prompt (opens `/login` when no key is found)
+1. The selected provider's environment variable, such as `OPENAI_API_KEY`
+2. A matching active API-key or OAuth session in `~/.nur/auth.json`
+3. That provider's saved key, then saved OAuth session
+4. The global `NUR_API_KEY` fallback
+5. A supported vendor CLI session, then an OMP credential
+6. Interactive TUI prompt (opens `/login` when no credential is found)
 
 `NUR_API_KEY` is the only global override. Provider-specific environment
 variables are never sent to a different explicitly selected provider.

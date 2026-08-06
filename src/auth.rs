@@ -9,12 +9,67 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 static OAUTH_STORE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static KEY_STORE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 fn oauth_store_guard() -> MutexGuard<'static, ()> {
     OAUTH_STORE_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn key_store_guard() -> MutexGuard<'static, ()> {
+    KEY_STORE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn private_atomic_write(path: &Path, content: &[u8]) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut tmp = path.to_path_buf();
+    tmp.set_extension(format!("tmp.{}", uuid::Uuid::new_v4().simple()));
+    let result = (|| {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&tmp)?;
+        file.write_all(content)?;
+        file.sync_all()?;
+        #[cfg(windows)]
+        if path.exists() {
+            fs::remove_file(path)?;
+        }
+        fs::rename(&tmp, path)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
+}
+
+pub(crate) fn save_manual_oauth_code(code: &str) -> Result<()> {
+    let code = code.trim();
+    if code.is_empty() || code.len() > 8 * 1024 || code.chars().any(|ch| matches!(ch, '\r' | '\n'))
+    {
+        return Err(NurError::Other("invalid OAuth authorization code".into()));
+    }
+    ensure_dirs()?;
+    let path = crate::config::nur_home().join("oauth_paste_code.txt");
+    private_atomic_write(&path, format!("{code}\n").as_bytes())
+        .map_err(|error| NurError::Other(format!("could not save OAuth code: {error}")))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -158,6 +213,26 @@ pub fn provider_mismatch(auth: &Auth, cfg_provider: &str) -> bool {
     true
 }
 
+fn normalize_legacy_omp_credential(auth: &mut Auth) {
+    let is_omp = auth
+        .oauth_meta
+        .as_ref()
+        .is_some_and(|meta| meta.issuer.eq_ignore_ascii_case("omp"))
+        || auth
+            .refresh_token
+            .as_deref()
+            .is_some_and(|refresh| refresh.starts_with("omp:"));
+    if is_omp
+        && matches!(auth.auth_method, AuthMethod::Oauth)
+        && !crate::oauth::omp_bridge::omp_meta_is_oauth(auth.oauth_meta.as_ref(), &auth.api_key)
+    {
+        auth.auth_method = AuthMethod::ApiKey;
+        auth.refresh_token = None;
+        auth.expires_at = None;
+        auth.source = "omp".into();
+    }
+}
+
 /// Resolve a usable bearer credential (any provider / env).
 /// Order: `NUR_API_KEY` → vendor/legacy envs → `~/.nur/auth.json` → legacy homes.
 pub fn resolve_api_key() -> Result<String> {
@@ -169,19 +244,24 @@ pub fn resolve_api_key() -> Result<String> {
 /// provider login.
 ///
 /// Inputs are already trimmed; empty string is treated as absent.
+/// Pick the first non-empty credential from a priority list.
+///
+/// Callers decide priority. [`resolve_api_key_for`] passes
+/// `(env, matching_auth, failover_oauth, failover_key, …)` so a live browser
+/// session outranks a stale API key for non-active providers.
 pub(crate) fn pick_provider_credential(
     provider_env: Option<&str>,
     matching_auth: Option<&str>,
-    failover_key: Option<&str>,
-    failover_oauth: Option<&str>,
+    failover_primary: Option<&str>,
+    failover_secondary: Option<&str>,
     nur_global: Option<&str>,
     legacy_auth: Option<&str>,
 ) -> Option<String> {
     for cand in [
         provider_env,
         matching_auth,
-        failover_key,
-        failover_oauth,
+        failover_primary,
+        failover_secondary,
         nur_global,
         legacy_auth,
     ] {
@@ -199,8 +279,13 @@ pub(crate) fn pick_provider_credential(
 /// 1. matching active OAuth session (refreshed), so env cannot replace it after restart
 /// 2. catalog env (`XAI_API_KEY`, `OPENAI_API_KEY`, …)
 /// 3. matching `auth.json` API key
-/// 4. per-provider failover key / OAuth stores
-/// 5. `NUR_API_KEY` only as a true global override
+/// 4. per-provider OAuth store (browser login for a non-active provider)
+/// 5. per-provider API key store
+/// 6. `NUR_API_KEY` only as a true global override
+///
+/// OAuth is preferred over a stored API key for non-active providers so a stale
+/// `provider_keys.json` entry cannot shadow a live browser session (cross-provider
+/// subagents, failover).
 ///
 /// **With `None`** — generic envs then `auth.json` (scripts / headless).
 pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
@@ -239,8 +324,13 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
         if let Some(k) = matching_oauth {
             return Ok(k);
         }
-        let failover_key = load_provider_key(exp);
+        // Prefer a live per-provider OAuth session over a stored API key. Cross-provider
+        // subagents often hit a stale key in provider_keys.json (shared OpenRouter
+        // scraps, revoked sk-…) while a valid browser login still sits in
+        // provider_sessions.json — using the key first produced 401s that looked
+        // like "grok/openai is broken" when the OAuth path would have worked.
         let failover_oauth = load_provider_oauth_token(exp);
+        let failover_key = load_provider_key(exp);
         let nur_global = std::env::var("NUR_API_KEY")
             .ok()
             .map(|k| k.trim().to_string())
@@ -248,8 +338,8 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
         if let Some(k) = pick_provider_credential(
             provider_env.as_deref(),
             matching_auth.as_deref(),
-            failover_key.as_deref(),
             failover_oauth.as_deref(),
+            failover_key.as_deref(),
             nur_global.as_deref(),
             legacy_auth.as_deref(),
         ) {
@@ -274,13 +364,17 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
             let tok = tokens.access_token.trim().to_string();
             if !tok.is_empty() && !oauth_expired(tokens.expires_at) {
                 if crate::oauth::omp_bridge::is_omp_import(&tokens) {
-                    let _ = save_provider_oauth(
-                        exp,
-                        &tok,
-                        tokens.refresh_token.clone(),
-                        tokens.expires_at,
-                        tokens.meta.clone(),
-                    );
+                    if crate::oauth::omp_bridge::is_omp_oauth_import(&tokens) {
+                        let _ = save_provider_oauth(
+                            exp,
+                            &tok,
+                            tokens.refresh_token.clone(),
+                            tokens.expires_at,
+                            tokens.meta.clone(),
+                        );
+                    } else {
+                        let _ = save_provider_key(exp, &tok);
+                    }
                 }
                 return Ok(tok);
             }
@@ -383,6 +477,7 @@ pub fn load_auth() -> Result<Option<Auth>> {
     }
     let text = fs::read_to_string(&path)?;
     let mut auth: Auth = serde_json::from_str(&text)?;
+    normalize_legacy_omp_credential(&mut auth);
     if auth.provider == "antigravity" {
         auth.provider = "google".into();
     }
@@ -508,7 +603,7 @@ fn refresh_oauth_with_token(auth: &mut Auth, refresh: &str) -> Result<bool> {
 
 /// Refresh OAuth access token if needed and keep the active and provider stores
 /// synchronized. The active login is canonical when both contain this provider.
-pub fn ensure_fresh_oauth(auth: &mut Auth) -> Result<()> {
+fn ensure_fresh_oauth_unlocked(auth: &mut Auth) -> Result<()> {
     if refresh_oauth_in_place(auth)? {
         save_auth(auth)?;
     }
@@ -518,13 +613,18 @@ pub fn ensure_fresh_oauth(auth: &mut Auth) -> Result<()> {
     Ok(())
 }
 
+pub fn ensure_fresh_oauth(auth: &mut Auth) -> Result<()> {
+    let _guard = oauth_store_guard();
+    ensure_fresh_oauth_unlocked(auth)
+}
+
 /// Resolve the current access token for an OAuth-backed client without allowing
 /// environment API keys to change that client's routing or wire protocol.
 pub fn resolve_oauth_access_token(provider_id: &str) -> Result<Option<String>> {
     let _guard = oauth_store_guard();
     if let Some(mut auth) = load_auth()? {
         if matches!(auth.auth_method, AuthMethod::Oauth) && !provider_mismatch(&auth, provider_id) {
-            ensure_fresh_oauth(&mut auth)?;
+            ensure_fresh_oauth_unlocked(&mut auth)?;
             return Ok(non_empty_access_token(&auth));
         }
     }
@@ -600,7 +700,7 @@ pub fn save_auth(auth: &Auth) -> Result<()> {
     ensure_dirs()?;
     let text = serde_json::to_string_pretty(auth)?;
     let path = auth_path();
-    crate::config::atomic_write(&path, text.as_bytes())
+    private_atomic_write(&path, text.as_bytes())
         .map_err(|e| NurError::Other(format!("failed to save auth atomically: {e}")))?;
     #[cfg(unix)]
     {
@@ -622,7 +722,10 @@ pub fn save_api_key_for(key: &str, provider: Option<&str>) -> Result<()> {
             "API key too short — expected at least 8 characters".into(),
         ));
     }
-    if trimmed.contains(' ') || trimmed.contains('\n') {
+    if trimmed.len() > 16 * 1024 {
+        return Err(NurError::Other("API key is unexpectedly large".into()));
+    }
+    if trimmed.chars().any(char::is_whitespace) {
         return Err(NurError::Other("API key contains whitespace".into()));
     }
     let mut auth = Auth {
@@ -666,13 +769,26 @@ fn save_key_at(path: &Path, provider_id: &str, key: &str) -> Result<()> {
             "API key too short — expected at least 8 characters".into(),
         ));
     }
-    if trimmed.contains(' ') || trimmed.contains('\n') {
+    if trimmed.len() > 16 * 1024 {
+        return Err(NurError::Other("API key is unexpectedly large".into()));
+    }
+    if trimmed.chars().any(char::is_whitespace) {
         return Err(NurError::Other("API key contains whitespace".into()));
     }
-    let mut map = read_keys_at(path);
+    let mut map = if path.exists() {
+        let text = fs::read_to_string(path)?;
+        serde_json::from_str(&text).map_err(|error| {
+            NurError::Other(format!(
+                "refusing to overwrite malformed provider key store {}: {error}",
+                path.display()
+            ))
+        })?
+    } else {
+        BTreeMap::new()
+    };
     map.insert(provider_id.to_string(), trimmed.to_string());
     let text = serde_json::to_string_pretty(&map)?;
-    crate::config::atomic_write(path, text.as_bytes())
+    private_atomic_write(path, text.as_bytes())
         .map_err(|e| NurError::Other(format!("failed to save provider keys: {e}")))?;
     #[cfg(unix)]
     {
@@ -704,12 +820,23 @@ pub fn load_provider_key(provider_id: &str) -> Option<String> {
             }
         }
     }
+    // Migration path for OMP API keys that older nur builds persisted in the
+    // OAuth session map. `read_sessions_at` normalizes their method in memory;
+    // treating that entry as a key fixes routing without discarding access if
+    // OMP is temporarily unavailable.
+    let sessions = read_sessions_at(&crate::config::provider_sessions_path());
+    if let Some(auth) = sessions.get(provider_id) {
+        if matches!(auth.auth_method, AuthMethod::ApiKey) {
+            return non_empty_access_token(auth);
+        }
+    }
     None
 }
 
 /// Save a per-provider failover key (validated like a normal API key).
 pub fn save_provider_key(provider_id: &str, key: &str) -> Result<()> {
     ensure_dirs()?;
+    let _guard = key_store_guard();
     save_key_at(&crate::config::provider_keys_path(), provider_id, key)
 }
 
@@ -718,17 +845,43 @@ fn forget_provider_at(keys_path: &Path, sessions_path: &Path, provider_id: &str)
     if id.is_empty() {
         return false;
     }
+    const GOOGLE_FAMILY: &[&str] = &["google", "antigravity", "google-oauth"];
+    let ids: Vec<&str> = if GOOGLE_FAMILY.contains(&id) {
+        GOOGLE_FAMILY.to_vec()
+    } else {
+        vec![id]
+    };
+    // Never turn a parse error into an empty map and overwrite the user's
+    // remaining credentials while trying to remove one entry.
+    for path in [keys_path, sessions_path] {
+        if path.exists()
+            && fs::read_to_string(path)
+                .ok()
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                .is_none()
+        {
+            return false;
+        }
+    }
     let mut removed = false;
 
     let mut keys = read_keys_at(keys_path);
-    if keys.remove(id).is_some() {
+    let mut removed_key = false;
+    for id in &ids {
+        removed_key |= keys.remove(*id).is_some();
+    }
+    if removed_key {
         removed = true;
         let text = serde_json::to_string_pretty(&keys).unwrap_or_else(|_| "{}".into());
-        let _ = crate::config::atomic_write(keys_path, text.as_bytes());
+        let _ = private_atomic_write(keys_path, text.as_bytes());
     }
 
     let mut sessions = read_sessions_at(sessions_path);
-    if sessions.remove(id).is_some() {
+    let mut removed_session = false;
+    for id in &ids {
+        removed_session |= sessions.remove(*id).is_some();
+    }
+    if removed_session {
         removed = true;
         let _ = write_sessions_at(sessions_path, &sessions);
     }
@@ -744,6 +897,9 @@ fn forget_provider_at(keys_path: &Path, sessions_path: &Path, provider_id: &str)
 /// an account has to clear that account's copies too, or "cleared" would leave
 /// a working key behind. Returns whether anything was actually removed.
 pub fn forget_provider(provider_id: &str) -> bool {
+    // Always take locks in OAuth -> API-key order. No other path takes both.
+    let _oauth_guard = oauth_store_guard();
+    let _key_guard = key_store_guard();
     forget_provider_at(
         &crate::config::provider_keys_path(),
         &crate::config::provider_sessions_path(),
@@ -761,6 +917,7 @@ pub fn save_oauth_session(
     expires_at: Option<u64>,
     meta: Option<OauthMeta>,
 ) -> Result<()> {
+    let _guard = oauth_store_guard();
     let mut auth = oauth_auth(provider, access_token, refresh_token, expires_at, meta)?;
     // Imported CLI sessions can already be near expiry. Canonicalize before
     // either store is written so a newly created client never receives a token
@@ -781,6 +938,16 @@ fn oauth_auth(
     let access = access_token.trim();
     if access.is_empty() {
         return Err(NurError::Other("empty OAuth access token".into()));
+    }
+    if access.len() > 1024 * 1024 {
+        return Err(NurError::Other(
+            "OAuth access token is unexpectedly large".into(),
+        ));
+    }
+    if access.chars().any(char::is_whitespace) {
+        return Err(NurError::Other(
+            "OAuth access token contains whitespace".into(),
+        ));
     }
     Ok(Auth {
         api_key: access.to_string(),
@@ -810,6 +977,9 @@ fn read_sessions_at(path: &Path) -> BTreeMap<String, Auth> {
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or_default();
+    for auth in map.values_mut() {
+        normalize_legacy_omp_credential(auth);
+    }
     // Legacy antigravity -> google migration, but keep alias for the still-existing
     // antigravity catalog entry. Without this, a session saved as `antigravity`
     // disappears on read and `resolve_api_key_for("antigravity")` finds nothing,
@@ -841,7 +1011,7 @@ fn read_sessions_at(path: &Path) -> BTreeMap<String, Auth> {
 
 fn write_sessions_at(path: &Path, map: &BTreeMap<String, Auth>) -> Result<()> {
     let text = serde_json::to_string_pretty(map)?;
-    crate::config::atomic_write(path, text.as_bytes())
+    private_atomic_write(path, text.as_bytes())
         .map_err(|e| NurError::Other(format!("failed to save provider sessions: {e}")))?;
     #[cfg(unix)]
     {
@@ -857,6 +1027,15 @@ fn save_provider_session_at(path: &Path, auth: &Auth) -> Result<()> {
         return Err(NurError::Other(
             "provider session needs a non-empty provider id".into(),
         ));
+    }
+    if path.exists() {
+        let text = fs::read_to_string(path)?;
+        serde_json::from_str::<BTreeMap<String, Auth>>(&text).map_err(|error| {
+            NurError::Other(format!(
+                "refusing to overwrite malformed provider session store {}: {error}",
+                path.display()
+            ))
+        })?;
     }
     let mut map = read_sessions_at(path);
     if map.get(id) == Some(auth) {
@@ -876,6 +1055,7 @@ pub fn save_provider_oauth(
     meta: Option<OauthMeta>,
 ) -> Result<()> {
     ensure_dirs()?;
+    let _guard = oauth_store_guard();
     let mut auth = oauth_auth(provider, access_token, refresh_token, expires_at, meta)?;
     refresh_oauth_in_place(&mut auth)?;
     save_provider_session(&auth)
@@ -1094,9 +1274,18 @@ pub fn provider_health_report() -> Vec<String> {
 
 /// Delete local credentials. If `revoke` is true, best-effort remote revoke first.
 pub fn logout(revoke: bool) -> Result<()> {
+    let active = match load_auth() {
+        Ok(active) => active,
+        Err(error) => {
+            if revoke {
+                eprintln!("revoke note: could not parse local auth ({error}); continuing cleanup");
+            }
+            None
+        }
+    };
     if revoke {
-        if let Ok(Some(auth)) = load_auth() {
-            match crate::oauth::revoke_session(&auth) {
+        if let Some(auth) = active.as_ref() {
+            match crate::oauth::revoke_session(auth) {
                 Ok(msg) => {
                     if !msg.is_empty() {
                         eprintln!("{msg}");
@@ -1112,6 +1301,14 @@ pub fn logout(revoke: bool) -> Result<()> {
     if path.exists() {
         fs::remove_file(&path)?;
     }
+    if let Some(provider) = active
+        .as_ref()
+        .map(|auth| auth.provider.trim())
+        .filter(|provider| !provider.is_empty())
+    {
+        forget_provider(provider);
+    }
+    crate::oauth::omp_bridge::invalidate_omp_token_cache();
     Ok(())
 }
 
@@ -1125,22 +1322,40 @@ pub fn key_fingerprint(key: &str) -> String {
 
 pub fn auth_status() -> Result<()> {
     // Status should report mismatch without hard-failing the command.
-    let env_source = if std::env::var("NUR_API_KEY")
+    let cfg_provider = crate::config::load_config()
+        .map(|cfg| cfg.provider)
+        .unwrap_or_default();
+    let active = load_auth()?;
+    let active_matching = active.as_ref().is_some_and(|auth| {
+        !provider_mismatch(auth, &cfg_provider) && !auth.api_key.trim().is_empty()
+    });
+    let provider_env = crate::providers::by_id(&cfg_provider).and_then(|provider| {
+        std::env::var(provider.env_key)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(|_| provider.env_key)
+    });
+    let env_source = if let Some(name) = provider_env {
+        Some(format!("{name} env ({cfg_provider})"))
+    } else if active_matching {
+        None
+    } else if std::env::var("NUR_API_KEY")
         .map(|k| !k.trim().is_empty())
         .unwrap_or(false)
     {
-        Some("NUR_API_KEY env")
-    } else if std::env::var("META_API_KEY")
-        .map(|k| !k.trim().is_empty())
-        .unwrap_or(false)
+        Some("NUR_API_KEY env".to_string())
+    } else if cfg_provider == "meta"
+        && std::env::var("META_API_KEY")
+            .map(|k| !k.trim().is_empty())
+            .unwrap_or(false)
     {
-        Some("META_API_KEY env (Meta provider)")
+        Some("META_API_KEY env (Meta provider)".to_string())
     } else {
         None
     };
 
     if let Some(src) = env_source {
-        let key = resolve_api_key()?;
+        let key = resolve_api_key_for(Some(&cfg_provider))?;
         println!("authenticated: yes");
         println!("source: {src}");
         println!("method: api_key (env)");
@@ -1151,12 +1366,9 @@ pub fn auth_status() -> Result<()> {
         return Ok(());
     }
 
-    match load_auth()? {
+    match active {
         Some(mut auth) if !auth.api_key.trim().is_empty() => {
             let _ = ensure_fresh_oauth(&mut auth);
-            let cfg_provider = crate::config::load_config()
-                .map(|c| c.provider)
-                .unwrap_or_default();
             println!("authenticated: yes");
             println!("source: ~/.nur/auth.json");
             if !auth.provider.is_empty() {
@@ -1214,8 +1426,14 @@ pub fn login_interactive(key_arg: Option<String>) -> Result<()> {
     if key.is_empty() {
         return Err(NurError::Other("empty API key".into()));
     }
-    save_api_key_for(key, Some("meta"))?;
+    let provider = crate::config::load_config()
+        .map(|cfg| cfg.provider)
+        .unwrap_or_else(|_| crate::providers::default_provider().id.to_string());
+    save_api_key_for(key, Some(&provider))?;
+    save_provider_key(&provider, key)?;
+    crate::oauth::omp_bridge::invalidate_omp_token_cache();
     println!("saved to {}", auth_path().display());
+    println!("provider: {provider}");
     println!("key: {}", key_fingerprint(key));
     Ok(())
 }
@@ -1256,6 +1474,13 @@ mod tests {
     }
 
     #[test]
+    fn oauth_access_tokens_reject_whitespace() {
+        assert!(oauth_auth("openai", "valid-token-value", None, None, None).is_ok());
+        assert!(oauth_auth("openai", "token\r\ninjected", None, None, None).is_err());
+        assert!(oauth_auth("openai", "token with spaces", None, None, None).is_err());
+    }
+
+    #[test]
     fn expires_relative_future_and_past() {
         let now = 1_000_000u64;
         assert_eq!(format_expires_relative_at(Some(now + 120), now), "in 2m");
@@ -1292,6 +1517,36 @@ mod tests {
     }
 
     #[test]
+    fn legacy_omp_api_key_is_not_kept_on_oauth_route() {
+        let mut auth = Auth {
+            api_key: "sk-test-abcdefghijklmnopqrstuvwxyz".into(),
+            source: "oauth".into(),
+            auth_method: AuthMethod::Oauth,
+            provider: "openai".into(),
+            refresh_token: Some("omp:openai".into()),
+            expires_at: None,
+            oauth_meta: Some(OauthMeta {
+                issuer: "omp".into(),
+                client_id: "omp-token".into(),
+                extra: serde_json::json!({
+                    "omp_provider": "openai",
+                    "nur_provider": "openai"
+                }),
+            }),
+        };
+        normalize_legacy_omp_credential(&mut auth);
+        assert!(matches!(auth.auth_method, AuthMethod::ApiKey));
+        assert!(auth.refresh_token.is_none());
+        let provider = crate::providers::by_id("openai").unwrap();
+        let (base, _, _) = crate::providers::endpoint_for_credential(
+            provider,
+            matches!(auth.auth_method, AuthMethod::Oauth),
+        );
+        assert_eq!(base, provider.base_url);
+        assert_ne!(base, crate::providers::OPENAI_OAUTH_BASE_URL);
+    }
+
+    #[test]
     fn provider_scoped_pick_has_stable_precedence() {
         assert_eq!(
             pick_provider_credential(None, Some("xai-oauth-jwt"), None, None, None, None,)
@@ -1311,17 +1566,34 @@ mod tests {
             Some("sk-openai-from-env"),
             "catalog env wins first for that provider"
         );
+        // pick_provider_credential arg3 is the higher-priority failover slot and
+        // arg4 the lower one. resolve_api_key_for passes OAuth then API key so a
+        // live browser session outranks a stale provider_keys entry.
         assert_eq!(
             pick_provider_credential(
                 None,
                 None,
-                Some("failover-key"),
                 Some("failover-oauth"),
+                Some("failover-key"),
                 Some("nur-global"),
                 None,
             )
             .as_deref(),
-            Some("failover-key")
+            Some("failover-oauth"),
+            "OAuth failover must outrank a stored API key"
+        );
+        assert_eq!(
+            pick_provider_credential(
+                None,
+                None,
+                None,
+                Some("failover-key"),
+                Some("nur-global"),
+                None,
+            )
+            .as_deref(),
+            Some("failover-key"),
+            "API key still used when no OAuth session exists"
         );
         // NUR_API_KEY is the valid last-resort global override.
         assert_eq!(
@@ -1406,6 +1678,35 @@ mod tests {
     }
 
     #[test]
+    fn forget_google_clears_all_family_aliases() {
+        let dir = std::env::temp_dir().join(format!("nur_forget_google_{}", now_unix()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let keys = dir.join("provider_keys.json");
+        let sessions = dir.join("provider_sessions.json");
+        for id in ["google", "antigravity", "google-oauth"] {
+            save_key_at(&keys, id, &format!("{id}-key-value")).unwrap();
+        }
+        save_key_at(&keys, "openai", "openai-key-value").unwrap();
+        let mut map = BTreeMap::new();
+        for id in ["google", "antigravity"] {
+            map.insert(
+                id.into(),
+                oauth_auth(id, &format!("{id}-oauth-token"), None, None, None).unwrap(),
+            );
+        }
+        write_sessions_at(&sessions, &map).unwrap();
+
+        assert!(forget_provider_at(&keys, &sessions, "google"));
+        let remaining_keys = read_keys_at(&keys);
+        for id in ["google", "antigravity", "google-oauth"] {
+            assert!(!remaining_keys.contains_key(id));
+            assert!(!read_sessions_at(&sessions).contains_key(id));
+        }
+        assert!(remaining_keys.contains_key("openai"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn provider_key_store_roundtrip() {
         use std::sync::atomic::{AtomicU64, Ordering};
         static N: AtomicU64 = AtomicU64::new(0);
@@ -1438,6 +1739,25 @@ mod tests {
         // Too-short keys are rejected.
         assert!(save_key_at(&path, "openai", "short").is_err());
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn malformed_credential_stores_are_never_overwritten() {
+        let dir = std::env::temp_dir().join(format!("nur_bad_auth_store_{}", now_unix()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let keys = dir.join("provider_keys.json");
+        let sessions = dir.join("provider_sessions.json");
+        std::fs::write(&keys, b"{not-json").unwrap();
+        std::fs::write(&sessions, b"{also-not-json").unwrap();
+
+        assert!(save_key_at(&keys, "openai", "sk-valid-key-value").is_err());
+        assert!(!forget_provider_at(&keys, &sessions, "openai"));
+        assert_eq!(std::fs::read(&keys).unwrap(), b"{not-json");
+        assert_eq!(std::fs::read(&sessions).unwrap(), b"{also-not-json");
+        let auth = oauth_auth("openai", "oauth-token-value", None, None, None).unwrap();
+        assert!(save_provider_session_at(&sessions, &auth).is_err());
+        assert_eq!(std::fs::read(&sessions).unwrap(), b"{also-not-json");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

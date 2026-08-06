@@ -45,6 +45,26 @@ impl Tool for ApplyPatch {
         };
 
         let updated = apply_unified_diff(&original, &patch)?;
+        // Shepherd proposal mode: stage instead of mutating the workspace.
+        if crate::config::load_config()
+            .map(|c| c.proposal_mode)
+            .unwrap_or(false)
+        {
+            let sid = std::env::var("NUR_SESSION_ID").unwrap_or_else(|_| "default".into());
+            let entry = crate::agent::proposal::stage_write(
+                &sid,
+                &ctx.cwd,
+                &path,
+                &updated,
+                "apply_patch",
+            )
+            .map_err(NurError::Tool)?;
+            return Ok(format!(
+                "proposal staged `{}` ({} bytes) — not written to workspace. \
+                 Use tool `proposal` action=list|apply|discard.",
+                entry.rel_path, entry.bytes
+            ));
+        }
         if let Some(parent) = full.parent() {
             fs::create_dir_all(parent)
                 .map_err(|e| NurError::Tool(format!("mkdir {}: {e}", parent.display())))?;

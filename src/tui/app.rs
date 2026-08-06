@@ -196,7 +196,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
         "/fractal",
         "recursive agent tree: node list | status | start | attach | init · hierarchical loops in git worktrees",
     ),
-    ("/steer", "inject mid-turn without cancel (tools/subagents/bg keep running): /steer <text>"),
+    ("/steer", "inject mid-turn without cancel (tools/subagents/bg keep running): /steer <text>. While busy, plain Enter queues a choice card instead of steering."),
     (
         "/draw",
         "tldraw offline boards: /draw <file.tldraw> · install · /draw <idea>  · /draw excalidraw|pen <idea> routes to that tool",
@@ -342,8 +342,9 @@ pub enum Cell {
         text: String,
         tone: Tone,
     },
-    /// A follow-up queued with `>> text` while busy. Clickable **send now**
-    /// (inject, no cancel) / **cut in** (cancel turn) / **dismiss**.
+    /// A follow-up queued while busy (plain Enter or `>> text`). Clickable
+    /// **steer** (inject mid-turn, no cancel) / **cut in** (cancel turn) /
+    /// **dismiss**. Leaving the card alone runs the message after the turn ends.
     Queued {
         text: String,
     },
@@ -1776,6 +1777,8 @@ pub struct App {
     /// Standing session goal (`/goal`), prepended to every model turn as context
     /// without appearing in the transcript. Cleared with `/goal clear`.
     session_goal: Option<String>,
+    /// Active heartbeat bg job id (from `/heartbeat`); `None` when stopped.
+    heartbeat_job: Option<u64>,
     /// `/bro` - restate everything in plain, low-jargon language for this session.
     bro: bool,
     /// Sticky skill names (`/adhd`, `/skillname`) injected every turn until off.
@@ -1859,8 +1862,9 @@ pub struct App {
     /// (`▸ expands` / `▾ collapse`) so clicks on those words toggle, not no-op.
     pub hit_expand_phrase: Vec<Option<(usize, usize, usize)>>,
     /// Hitboxes for queued follow-up actions on each wrapped line.
-    /// Entries: (cell_idx, col_lo, col_hi, action) where action 0 = send now
-    /// (no interrupt), 1 = dismiss, 2 = steer (alias of 0), 3 = cut in (cancel).
+    /// Entries: (cell_idx, col_lo, col_hi, action) where action 0 = steer
+    /// (inject mid-turn, no interrupt), 1 = dismiss, 2 = steer (alias of 0),
+    /// 3 = cut in (cancel + run next).
     pub hit_queue_actions: Vec<Vec<(usize, usize, usize, u8)>>,
     /// Absolute line → clickable `http(s)://` spans `(col_lo, col_hi, url)`.
     pub hit_urls: Vec<Vec<(usize, usize, String)>>,
@@ -2308,6 +2312,7 @@ pub async fn run_tui(
         last_raw_len: 0,
         last_raw_text: String::new(),
         session_goal: None,
+        heartbeat_job: None,
         bro: false,
         sticky_skills: Vec::new(),
         skill_palette_cache: Vec::new(),
@@ -5670,10 +5675,9 @@ impl App {
                 m.error = None;
                 m.buf.clear();
                 if p.browser_auth {
-                    m.can_import = crate::oauth::import_existing_session(p.id)
-                        .ok()
-                        .flatten()
-                        .is_some();
+                    // Vendor CLI and OMP discovery can shell out. Always offer
+                    // the explicit import action, then probe in the background.
+                    m.can_import = true;
                     m.method_sel = 0;
                     m.stage = LoginStage::Method;
                 } else {
@@ -5782,10 +5786,7 @@ impl App {
                 m.fallback_key = true;
                 m.error = None;
                 if provider.browser_auth {
-                    m.can_import = crate::oauth::import_existing_session(provider.id)
-                        .ok()
-                        .flatten()
-                        .is_some();
+                    m.can_import = true;
                     m.method_sel = 0;
                     m.stage = LoginStage::Method;
                 } else {
@@ -6430,10 +6431,7 @@ impl App {
             m.error = None;
             m.buf.clear();
             if p.browser_auth {
-                m.can_import = crate::oauth::import_existing_session(p.id)
-                    .ok()
-                    .flatten()
-                    .is_some();
+                m.can_import = true;
                 m.method_sel = 0;
                 m.stage = LoginStage::Method;
             } else {
@@ -6508,60 +6506,34 @@ impl App {
                     m.error = None;
                 }
             }
-            2 if can_import => match crate::oauth::import_existing_session(&provider_id) {
-                Ok(Some(tokens)) => {
-                    if is_fallback {
-                        if let Err(e) = crate::auth::save_provider_oauth(
-                            &provider_id,
-                            &tokens.access_token,
-                            tokens.refresh_token,
-                            tokens.expires_at,
-                            tokens.meta,
-                        ) {
-                            if let Some(m) = &mut self.login {
-                                m.error = Some(e.to_string());
-                            }
-                            return;
-                        }
-                        let name = crate::providers::by_id(&provider_id)
-                            .map(|p| p.name)
-                            .unwrap_or(provider_id.as_str());
-                        self.finish_fallback_credential(format!(
-                            "failover · {name} · browser session saved"
-                        ));
-                        return;
-                    }
-                    if let Err(e) = crate::auth::save_oauth_session(
-                        &provider_id,
-                        &tokens.access_token,
-                        tokens.refresh_token,
-                        tokens.expires_at,
-                        tokens.meta,
-                    ) {
-                        if let Some(m) = &mut self.login {
-                            m.error = Some(e.to_string());
-                        }
-                        return;
-                    }
-                    self.apply_provider_login(
-                        &provider_id,
-                        &{ crate::auth::resolve_api_key().unwrap_or_default() },
-                        true,
-                    );
-                }
-                Ok(None) => {
-                    if let Some(m) = &mut self.login {
-                        m.error = Some("no existing session found".into());
-                    }
-                }
-                Err(e) => {
-                    if let Some(m) = &mut self.login {
-                        m.error = Some(e.to_string());
-                    }
-                }
-            },
+            2 if can_import => self.start_existing_session_import(&provider_id, is_fallback),
             _ => {}
         }
+    }
+
+    fn start_existing_session_import(&mut self, provider_id: &str, is_fallback: bool) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let pid = provider_id.to_string();
+        if let Some(m) = &mut self.login {
+            m.stage = LoginStage::Browser;
+            m.fallback_key = is_fallback;
+            m.browser_status = "checking vendor CLI and OMP credentials...".into();
+            m.browser_url.clear();
+            m.browser_user_code.clear();
+            m.error = None;
+            m.oauth_rx = Some(rx);
+            m.oauth_cancel = None;
+        }
+        std::thread::spawn(move || {
+            let event = match crate::oauth::import_existing_session(&pid) {
+                Ok(Some(tokens)) => crate::oauth::BrowserLoginProgress::Done(tokens),
+                Ok(None) => crate::oauth::BrowserLoginProgress::Failed(
+                    "no existing vendor CLI or OMP credential found".into(),
+                ),
+                Err(error) => crate::oauth::BrowserLoginProgress::Failed(error.to_string()),
+            };
+            let _ = tx.send(event);
+        });
     }
 
     fn start_browser_login(&mut self, provider_id: &str) {
@@ -6612,8 +6584,7 @@ impl App {
                 if code.is_empty() {
                     return;
                 }
-                let path = crate::config::nur_home().join("oauth_paste_code.txt");
-                if let Err(e) = std::fs::write(&path, format!("{code}\n")) {
+                if let Err(e) = crate::auth::save_manual_oauth_code(&code) {
                     if let Some(m) = &mut self.login {
                         m.error = Some(format!("could not write pasted code: {e}"));
                     }
@@ -6690,6 +6661,8 @@ impl App {
                     }
                 }
                 crate::oauth::BrowserLoginProgress::Done(tokens) => {
+                    let imported_as_oauth = !crate::oauth::omp_bridge::is_omp_import(&tokens)
+                        || crate::oauth::omp_bridge::is_omp_oauth_import(&tokens);
                     let (provider_id, is_fallback) = self
                         .login
                         .as_ref()
@@ -6700,15 +6673,20 @@ impl App {
                         m.oauth_cancel = None;
                     }
                     if is_fallback {
-                        // Failover-only: stash OAuth for this provider, stay on
-                        // the manage picker - do not switch active login.
-                        if let Err(e) = crate::auth::save_provider_oauth(
-                            &provider_id,
-                            &tokens.access_token,
-                            tokens.refresh_token,
-                            tokens.expires_at,
-                            tokens.meta,
-                        ) {
+                        // Preserve OMP's credential kind. API keys must not be
+                        // routed as first-party subscription OAuth sessions.
+                        let saved = if imported_as_oauth {
+                            crate::auth::save_provider_oauth(
+                                &provider_id,
+                                &tokens.access_token,
+                                tokens.refresh_token,
+                                tokens.expires_at,
+                                tokens.meta,
+                            )
+                        } else {
+                            crate::auth::save_provider_key(&provider_id, &tokens.access_token)
+                        };
+                        if let Err(e) = saved {
                             if let Some(m) = &mut self.login {
                                 m.error = Some(e.to_string());
                                 m.stage = LoginStage::Method;
@@ -6719,25 +6697,38 @@ impl App {
                             .map(|p| p.name)
                             .unwrap_or(provider_id.as_str());
                         self.finish_fallback_credential(format!(
-                            "failover · {name} · browser session saved"
+                            "failover · {name} · imported credential saved"
                         ));
                     } else {
-                        // Active login: save_oauth_session dual-writes the
-                        // per-provider store for later failover use.
-                        if let Err(e) = crate::auth::save_oauth_session(
-                            &provider_id,
-                            &tokens.access_token,
-                            tokens.refresh_token.clone(),
-                            tokens.expires_at,
-                            tokens.meta.clone(),
-                        ) {
+                        let saved = if imported_as_oauth {
+                            crate::auth::save_oauth_session(
+                                &provider_id,
+                                &tokens.access_token,
+                                tokens.refresh_token.clone(),
+                                tokens.expires_at,
+                                tokens.meta.clone(),
+                            )
+                        } else {
+                            crate::auth::save_api_key_for(&tokens.access_token, Some(&provider_id))
+                                .and_then(|()| {
+                                    crate::auth::save_provider_key(
+                                        &provider_id,
+                                        &tokens.access_token,
+                                    )
+                                })
+                        };
+                        if let Err(e) = saved {
                             if let Some(m) = &mut self.login {
                                 m.error = Some(e.to_string());
                                 m.stage = LoginStage::Method;
                             }
                             continue;
                         }
-                        self.apply_provider_login(&provider_id, "", true);
+                        self.apply_provider_login(
+                            &provider_id,
+                            &tokens.access_token,
+                            imported_as_oauth,
+                        );
                     }
                 }
                 crate::oauth::BrowserLoginProgress::Failed(err) => {
@@ -7230,30 +7221,10 @@ impl App {
         } else {
             key.to_string()
         };
-        if via_oauth {
-            if let Ok(ids) =
-                crate::api::models::fetch_model_ids(&self.cfg.base_url, &bearer, Some(provider.id))
-            {
-                if !ids.iter().any(|id| id == &self.cfg.model) {
-                    let usable = ids.iter().rev().find(|id| {
-                        let id = id.to_ascii_lowercase();
-                        ![
-                            "embedding",
-                            "image",
-                            "audio",
-                            "realtime",
-                            "transcribe",
-                            "tts",
-                        ]
-                        .iter()
-                        .any(|kind| id.contains(kind))
-                    });
-                    if let Some(model) = usable.or_else(|| ids.last()) {
-                        self.cfg.model = model.clone();
-                    }
-                }
-            }
-        }
+        // Do not probe `/models` on the TUI event thread. Some OAuth catalogs
+        // take multiple 15-second endpoint fallbacks, freezing the just-finished
+        // login modal. `/model` already performs the same live lookup on a
+        // background thread, and the agent loop can heal a retired default.
         let _ = crate::config::save_config(&self.cfg);
         if let Some(s) = &mut self.session {
             s.model = self.cfg.model.clone();
@@ -7333,36 +7304,39 @@ impl App {
             return;
         }
         if self.busy {
-            // `>> text` queues without injecting (for deliberate send now / cut in).
-            // Plain Enter injects mid-turn without cancelling tools / subagents / bg.
-            if let Some(rest) = text
+            // Always queue while busy so the user can choose: leave it (runs
+            // after this turn), click **steer** (inject mid-turn, agent keeps
+            // working), **cut in** (cancel + run next), or **dismiss**.
+            // Immediate inject without a card is only `/steer <text>`.
+            // `>> text` is still accepted as an explicit queue prefix.
+            let payload = text
                 .strip_prefix(">>")
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
-            {
-                let rest = rest.to_string();
-                self.queue.push_back(rest.clone());
-                self.cells.push(Cell::Queued { text: rest });
-                self.scroll_to_bottom();
-                self.refresh_sidegraph();
-                self.push_note(
-                    Tone::Mode,
-                    format!(
-                        "queued · {} waiting · send now injects (no cancel) · cut in cancels",
-                        self.queue.len()
-                    ),
-                );
+                .unwrap_or(text.as_str())
+                .to_string();
+            if payload.is_empty() {
                 return;
             }
-            self.steer_now(&text);
+            self.queue.push_back(payload.clone());
+            self.cells.push(Cell::Queued { text: payload });
+            self.scroll_to_bottom();
+            self.refresh_sidegraph();
+            self.push_note(
+                Tone::Mode,
+                format!(
+                    "queued · {} waiting · leave alone = after this turn · steer = inject now (no cancel) · cut in = cancel · dismiss",
+                    self.queue.len()
+                ),
+            );
             return;
         }
         self.start_turn(&text);
     }
 
-    /// Send a queued follow-up **without interrupting** the live turn.
-    /// Tools, subagents, and background jobs keep running; the message is
-    /// steered into the next model round. Idle → start a normal turn.
+    /// Inject a queued follow-up **without interrupting** the live turn (steer).
+    /// Tools, subagents, and background jobs keep running; the message lands
+    /// at the next model round. Idle → start a normal turn.
     fn queue_send_now(&mut self, cell_idx: usize) {
         let text = match self.cells.get(cell_idx) {
             Some(Cell::Queued { text }) => text.clone(),
@@ -7383,7 +7357,7 @@ impl App {
     }
 
     /// Force the follow-up to the front by **cancelling** the current turn.
-    /// Prefer `queue_send_now` / Enter while busy - those do not interrupt.
+    /// Prefer leave-queued (after turn) or **steer** (inject, no cancel).
     /// Use cut-in only when the running work must stop.
     fn queue_cut_in(&mut self, cell_idx: usize) {
         let text = match self.cells.get(cell_idx) {
@@ -8401,6 +8375,7 @@ impl App {
             hooks: agent::hooks::HooksConfig::load(),
             is_subagent: false,
             prewalk_override: self.prewalk_override.clone(),
+            subagent_depth: 0,
         }
     }
 
@@ -8845,15 +8820,15 @@ impl App {
         let local_x = col.saturating_sub(body.x) as usize;
         let line_idx = self.transcript_top as usize + local_y;
 
-        // Queued follow-up: send now (no cancel) / cut in (cancel) / dismiss.
+        // Queued follow-up: steer (no cancel) / cut in (cancel) / dismiss.
         if let Some(actions) = self.hit_queue_actions.get(line_idx) {
             for (cell_idx, lo, hi, action) in actions {
                 if local_x >= *lo && local_x < *hi {
                     match action {
-                        0 => self.queue_send_now(*cell_idx), // inject mid-turn, no interrupt
+                        0 => self.queue_send_now(*cell_idx), // steer: inject mid-turn
                         1 => self.queue_dismiss(*cell_idx),
-                        2 => self.queue_steer(*cell_idx), // same as send now
-                        3 => self.queue_cut_in(*cell_idx), // explicit cancel + front
+                        2 => self.queue_steer(*cell_idx), // alias of steer
+                        3 => self.queue_cut_in(*cell_idx), // cancel + front
                         _ => {}
                     }
                     return;

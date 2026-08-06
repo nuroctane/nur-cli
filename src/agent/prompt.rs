@@ -246,8 +246,10 @@ OS: {} · shell: {}
 {mode_block}
 # Tools
 read_file, list_dir, write_file, edit_file, multi_edit, apply_patch, bash, grep, glob,
-web_fetch, web_search, look, extract_frames, git_status, git_diff, graphify, excalidraw,
-plur, ruflo, skill, memory, todo_write, submit_plan, agent
+web_fetch, web_search, look, extract_frames, git_status, git_diff,
+context (RLM store), anydoc (docs→md), goal, proposal, harness (continual refine),
+connectome (agent-native memory + chronicle continuity), repl (persistent Python REPL),
+graphify, excalidraw, plur, ruflo, skill, memory, todo_write, submit_plan, agent
 
 ## Tool policy - search and failure handling (critical for all backends including Meta)
 - SEARCH - ripgrep only: ALWAYS use `grep` and `glob` tools for any code/content search. NEVER use bash commands like `grep`, `rg`, `ag`, `find`, `ls`, `Get-ChildItem`, etc. for searching. The `grep`/`glob` tools are ripgrep-backed, sandboxed, respect .gitignore, and are the only reliable search path. This applies to all models with no exceptions.
@@ -388,6 +390,38 @@ Direct technical markdown. Fence code with languages.
         s.push_str(&self.memory);
         s.push_str(&self.plur);
         s.push_str(&self.optmem);
+
+        // Prime / RLM / Continual Harness / Connectome session state (outside the chat window).
+        let sid = std::env::var("NUR_SESSION_ID").unwrap_or_default();
+        if !sid.is_empty() {
+            s.push_str(&super::goal::prompt_block(&sid));
+            s.push_str(&super::harness::prompt_block(&sid));
+            let inv = super::context_store::prompt_inventory(&sid);
+            if !inv.is_empty() {
+                s.push('\n');
+                s.push_str(&inv);
+                s.push('\n');
+            }
+        }
+        // Agent-native memory (arXiv:2606.24775) + Connectome continuity scope.
+        // Project-scoped so the same agent persists across sessions on a machine.
+        let cfg = crate::config::load_config().unwrap_or_default();
+        if cfg.native_memory {
+            let mem_scope = {
+                let proj = self
+                    .cwd
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("workspace");
+                if sid.is_empty() {
+                    format!("{proj}:global")
+                } else {
+                    format!("{proj}:{sid}")
+                }
+            };
+            // Route with empty query → recency/confidence ranking (M3).
+            s.push_str(&super::native_memory::prompt_block(&mem_scope, "", 2_500));
+        }
         s
     }
 }
