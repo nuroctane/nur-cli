@@ -232,6 +232,11 @@ pub struct Config {
     /// falls back to the honest local n-gram embedding automatically.
     #[serde(default)]
     pub memory_embed_model: String,
+    /// Embedding mode: `auto` (API, fall back to local on error — default),
+    /// `api` (require API, error if unavailable), or `local` (always the honest
+    /// offline n-gram hash embedding, never calls the provider).
+    #[serde(default = "default_embed_mode")]
+    pub memory_embed_mode: String,
 }
 
 /// `[prewalk]` — plan on the active model, implement on a cheap/smol model.
@@ -401,6 +406,9 @@ fn default_tool_result_max_chars() -> u64 {
 fn default_context_register_min_chars() -> u64 {
     8_000
 }
+fn default_embed_mode() -> String {
+    "auto".to_string()
+}
 fn default_subagent_depth() -> u32 {
     1
 }
@@ -446,6 +454,7 @@ impl Default for Config {
             memory_model_extract: false,
             kv_stable_compact: true,
             memory_embed_model: String::new(),
+            memory_embed_mode: default_embed_mode(),
         }
     }
 }

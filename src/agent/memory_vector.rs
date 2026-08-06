@@ -66,11 +66,9 @@ impl VectorStore {
 
     /// Index (embed + persist) a memory entry's text under its id.
     pub fn index(&mut self, id: &str, text: &str) -> String {
-        // Prefer API embeddings; fall back to honest local if API fails.
-        let (vec, source) = match embed::embed_api(text) {
-            Ok(v) => (v, "api".to_string()),
-            Err(_) => (embed::embed_local(text), "local".to_string()),
-        };
+        // Real embedding; source is honest (api vs local) and reported.
+        let (vec, source) = crate::agent::embed::embed_with_source(text);
+        let source = source.to_string();
         let source_for_return = source.clone();
         self.docs.insert(
             id.to_string(),

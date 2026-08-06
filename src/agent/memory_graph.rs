@@ -69,6 +69,8 @@ const RELATIONS: &[&str] = &[
     "requires",
     "is_part_of",
     "belongs_to",
+    "is_a",
+    "kind_of",
     "causes",
     "blocks",
     "conflicts_with",
@@ -78,6 +80,12 @@ const RELATIONS: &[&str] = &[
     "avoids",
     "disables",
     "enables",
+    "builds",
+    "installs",
+    "owned_by",
+    "managed_by",
+    "replaces",
+    "supersedes",
 ];
 
 /// Token split for entity canonicalization (lowercase alnum, min len 2).

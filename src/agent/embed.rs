@@ -22,12 +22,38 @@ pub const EMBED_DIM: usize = 256;
 /// Default OpenAI-compatible embedding model id.
 pub const DEFAULT_EMBED_MODEL: &str = "text-embedding-3-small";
 
-/// Embed `text` to an L2-normalized vector of length EMBED_DIM using the active
-/// provider's embeddings endpoint. Falls back to `embed_local` on any error so
-/// memory indexing never hard-fails a turn.
+/// Embed `text` to an L2-normalized vector of length EMBED_DIM.
+///
+/// Mode from `nur.memory_embed_mode`:
+/// - `api`: require the API; on error, still return a local vector (we never
+///   store a silent zero) but expose the source so the caller can report it.
+/// - `local`: always the honest offline n-gram hash embedding.
+/// - `auto` (default): API, then local fallback.
 pub fn embed(text: &str) -> Vec<f32> {
-    embed_api(text).unwrap_or_else(|_| embed_local(text))
+    let mode = crate::config::load_config()
+        .map(|c| c.memory_embed_mode.clone())
+        .unwrap_or_else(|_| "auto".to_string());
+    match mode.as_str() {
+        "local" => embed_local(text),
+        _ => embed_api(text).unwrap_or_else(|_| embed_local(text)),
+    }
 }
+
+/// Embed and report which source produced the vector (for honesty/telemetry).
+pub fn embed_with_source(text: &str) -> (Vec<f32>, &'static str) {
+    let mode = crate::config::load_config()
+        .map(|c| c.memory_embed_mode.clone())
+        .unwrap_or_else(|_| "auto".to_string());
+    if mode == "local" {
+        return (embed_local(text), "local");
+    }
+    match embed_api(text) {
+        Ok(v) => (v, "api"),
+        Err(_) => (embed_local(text), "local"),
+    }
+}
+
+
 
 /// API embeddings call (OpenAI-compatible `<base>/embeddings`).
 /// Best-effort; errors mean callers fall back to local.

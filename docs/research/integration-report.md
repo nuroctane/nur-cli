@@ -348,3 +348,35 @@ routing problem is solved with a central router.
 - API embeddings are real semantic vectors when a key/model is available; the
   local fallback is a hash embedding with a documented caveat.
 - KG entity/relation extraction is heuristic; graph STORAGE/TRAVERSAL is real.
+
+## 13. V0.27.11 re-evaluation fixes (post-release audit)
+
+After shipping v0.27.10, a hard re-audit closed these real gaps:
+
+### e1 — embedding honesty / mode
+- Added `nur.memory_embed_mode` = `auto|api|local`. `auto` (default) uses the
+  provider embeddings API and falls back to the honest local n-gram hash embed;
+  `local` never calls the provider. `embed_with_source()` reports api|local per
+  vector for honest telemetry; `vector` tool output shows source distribution.
+
+### e2 — knowledge-graph extraction
+- Expanded relation vocabulary (adds is_a, kind_of, owned_by, managed_by, builds,
+  installs, replaces, supersedes) so more phrasings become edges. Extraction
+  remains heuristic (documented honestly) but the graph storage/traversal is real.
+
+### e3 — routing completeness
+- `mem read` now actually wires `ExactDoc` intent → RLM context_store inventory and
+  `Message` intent → mailbox, instead of only recognizing them in classification.
+
+### e4 — vector/graph coherence
+- `consolidate_localized` now removes vectors for retired entries AND indexes the
+  new L2 era note, so the vector store never surfaces archived/consolidated rows.
+  (Previously retired memories kept stale vectors and the new note wasn't indexed.)
+
+### e5 — efficiency + dedup + bloat
+- `mem write` now semantically dedups (vector above() threshold 0.92) — a
+  near-identical existing memory is reported instead of duplicated.
+- `routing_guidance` prompt block trimmed ~60% to cut per-turn token cost.
+- Full suite 665 passed / 0 failed.
+
+Reshipped as v0.27.11 (patch) so the already-live v0.27.10 release stays immutable.

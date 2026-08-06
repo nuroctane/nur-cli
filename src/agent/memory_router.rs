@@ -58,26 +58,38 @@ fn contains_any(lower: &str, needles: &[&str]) -> bool {
 }
 
 /// Human instruction for the model: which resident to use per intent. Injected
-/// so the model routes by intent instead of guessing.
+/// so the model routes by intent instead of guessing (kept compact to limit
+/// per-turn prompt tokens).
 pub fn routing_guidance() -> &'static str {
-    r#"# Memory routing (use this instead of guessing)
-When recalling or storing, pick the resident by intent:
-- preference / decision / identity  → `connectome remember` (first-person) + vector recall
-- project fact / "what do I know about X"  → `connectome recall` (hierarchical) 
-- SEMANTIC similarity ("find things like X / by meaning")  → `mem` action=vector
-- relationship / "how is X connected to Y / neighbors"  → `mem` action=graph (neighbors|path)
-- exact verbatim doc / tool output I saw  → `context` (peek/slice/search)
-- "what did another agent say"  → `message` recv
-- general memory  → `connectome recall`
-
-Harmonized one-stop: `mem` action=read fans out across vector + graph + hierarchical.
-Never store a memory in more than one resident for the same fact.
+    r#"# Memory routing (use instead of guessing)
+preference/decision → connectome remember (I) · fact → connectome recall
+semantic "like X/by meaning" → mem vector · relationship/neighbors → mem graph
+exact doc/tool output → context · "other agent said" → message recv
+general → connectome recall. One-stop fan-out read: mem action=read.
 "#
 }
 
-/// Unified write: route by intent, write to the right resident(s), dedup.
+/// Unified write: route by intent, write to the right resident(s), dedup (e5).
 pub fn write(scope: &str, text: &str, source: &str) -> String {
     let intent = intent_class(text);
+
+    // Semantic dedup: if the vector store already has a near-identical memory,
+    // don't create a duplicate — report the existing one instead.
+    let vs = memory_vector::VectorStore::open(scope);
+    if !vs.is_empty() {
+        let near = vs.above(text, 0.92, 1);
+        if let Some((existing_id, sim)) = near.into_iter().next() {
+            if let Some(existing) = native_memory::get_by_id(scope, &existing_id) {
+                return format!(
+                    "dedup: already have a nearly-identical memory ({}, sim={sim:.2}) — not \
+                     storing a duplicate. Existing: {}",
+                    existing.id,
+                    existing.text.chars().take(160).collect::<String>()
+                );
+            }
+        }
+    }
+
     let instance = native_memory::remember(
         scope,
         text,
@@ -167,6 +179,34 @@ pub fn read(
         ));
     }
 
+    // 2b) Exact-doc intent → RLM context store (peek/search for the exact text).
+    if intent == Intent::ExactDoc {
+        let sid = std::env::var("NUR_SESSION_ID").unwrap_or_default();
+        if !sid.is_empty() {
+            let inv = crate::agent::context_store::prompt_inventory(&sid);
+            if !inv.is_empty() {
+                out.push("[context_store] exact-doc intent — variables available:".to_string());
+                out.push(inv);
+            } else {
+                out.push("[context_store] no RLM context variables (exact-doc not available)".to_string());
+            }
+        }
+    }
+
+    // 2c) Message intent → mailbox (what another agent said).
+    if intent == Intent::Message {
+        let mailbox = crate::agent::mailbox::receive(scope, "agent", false);
+        if !mailbox.is_empty() {
+            out.push(format!("[mailbox] {} message(s):", mailbox.len()));
+            for m in mailbox.iter().take(5) {
+                let t: String = m.text.chars().take(140).collect();
+                out.push(format!("   · {t}"));
+            }
+        } else {
+            out.push("[mailbox] no messages in this scope".to_string());
+        }
+    }
+
     // 3) Hierarchical memory: intent-weighted keyword+recency recall.
     let hits = native_memory::recall(scope, query, vector_k.max(1));
     if !hits.is_empty() {
@@ -192,6 +232,19 @@ mod tests {
         assert_eq!(intent_class("show me the exact tool result for the audit"), Intent::ExactDoc);
         assert_eq!(intent_class("what did the reviewer agent say"), Intent::Message);
         assert_eq!(intent_class("greetings, tell me broadly something"), Intent::General);
+    }
+
+    #[test]
+    fn write_dedups_near_identical() {
+        let scope = format!("router-dedup-{}", uuid::Uuid::new_v4().simple());
+        let m1 = write(&scope, "I prefer grep over bash find for searching", "t");
+        assert!(m1.contains("stored"), "first write: {m1}");
+        // Near-identical write should be deduped, not stored twice.
+        let m2 = write(&scope, "I prefer grep over bash find for searching", "t");
+        assert!(m2.contains("dedup"), "expected dedup, got: {m2}");
+        let _ = std::fs::remove_dir_all(
+            crate::config::nur_home().join("native-memory").join(&scope),
+        );
     }
 
     #[test]

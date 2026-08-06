@@ -451,6 +451,15 @@ pub fn consolidate_localized(scope: &str, max_l1: usize) -> Result<String, Strin
     };
     all.push(l2.clone());
     rewrite_all(scope, &all)?;
+    // Coherence (e4): drop vectors for the retired entries so the vector store
+    // never surfaces archived/consolidated rows, and index the new L2 era note.
+    {
+        let mut vs = crate::agent::memory_vector::VectorStore::open(scope);
+        for id in &ids {
+            let _ = vs.remove(id);
+        }
+        let _ = vs.index(&l2.id, &l2.text);
+    }
     Ok(format!(
         "localized maintenance: retired {} L1 → new L2 `{}` ({} chars)",
         take,
