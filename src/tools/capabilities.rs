@@ -80,6 +80,11 @@ pub fn is_read_only(name: &str, args: &Value) -> bool {
             .and_then(|a| a.as_str())
             .map(|s| matches!(s, "recv" | "status"))
             .unwrap_or(false),
+        "mem" => args
+            .get("action")
+            .and_then(|a| a.as_str())
+            .map(|s| matches!(s, "read" | "vector" | "graph" | "guidance"))
+            .unwrap_or(false),
         "goal" => args
             .get("action")
             .and_then(|a| a.as_str())

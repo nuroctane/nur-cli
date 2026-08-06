@@ -12,6 +12,7 @@ mod context_tool;
 pub mod fractal_tool;
 mod goal_tool;
 mod harness_tool;
+mod mem_tool;
 mod message_tool;
 mod admission_tool;
 mod ipython_tool;
@@ -112,6 +113,7 @@ pub const SUBAGENT_TOOL_NAMES: &[&str] = &[
     "proposal",
     "connectome",
     "repl",
+    "mem",
 ];
 
 pub struct ToolContext {
@@ -198,6 +200,7 @@ impl ToolHost {
             Box::new(ipython_tool::ReplTool),
             Box::new(admission_tool::AdmissionTool),
             Box::new(message_tool::MessageTool),
+            Box::new(mem_tool::MemTool),
             Box::new(graphify::Graphify),
             Box::new(graphjin::GraphJin),
             Box::new(excalidraw::Excalidraw),
@@ -306,6 +309,7 @@ impl ToolHost {
             "repl" => ipython_tool::ReplTool.execute(&args, ctx),
             "admission" => admission_tool::AdmissionTool.execute(&args, ctx),
             "message" => message_tool::MessageTool.execute(&args, ctx),
+            "mem" => mem_tool::MemTool.execute(&args, ctx),
             "graphify" => graphify::Graphify.execute(&args, ctx),
             "graphjin" => graphjin::GraphJin.execute(&args, ctx),
             "excalidraw" => excalidraw::Excalidraw.execute(&args, ctx),
@@ -496,6 +500,7 @@ mod tests {
             "repl",
             "admission",
             "message",
+            "mem",
             "graphify",
             "graphjin",
             "excalidraw",

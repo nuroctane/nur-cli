@@ -227,6 +227,11 @@ pub struct Config {
     /// the model's recent computed state survive. Default on.
     #[serde(default = "default_true")]
     pub kv_stable_compact: bool,
+    /// Embedding model for the real vector-memory store (m2). Empty → provider
+    /// default (`text-embedding-3-small`). When the API path fails or no key it
+    /// falls back to the honest local n-gram embedding automatically.
+    #[serde(default)]
+    pub memory_embed_model: String,
 }
 
 /// `[prewalk]` — plan on the active model, implement on a cheap/smol model.
@@ -440,6 +445,7 @@ impl Default for Config {
             landlock: false,
             memory_model_extract: false,
             kv_stable_compact: true,
+            memory_embed_model: String::new(),
         }
     }
 }

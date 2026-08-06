@@ -133,6 +133,14 @@ pub fn load_entries(scope: &str) -> Vec<MemoryEntry> {
     out
 }
 
+/// Fetch a single entry by id (including retired — for archive lookups).
+pub fn get_by_id(scope: &str, id: &str) -> Option<MemoryEntry> {
+    let text = std::fs::read_to_string(entries_path(scope)).unwrap_or_default();
+    text.lines()
+        .filter_map(|l| serde_json::from_str::<MemoryEntry>(l).ok())
+        .find(|e| e.id == id)
+}
+
 fn rewrite_all(scope: &str, entries: &[MemoryEntry]) -> Result<(), String> {
     let p = entries_path(scope);
     if let Some(parent) = p.parent() {
@@ -233,6 +241,17 @@ pub fn remember(
     };
     append_entry(scope, &entry)?;
     bump_ops(scope, |o| o.remember_count += 1);
+    // Real vector + graph indexing (m2/m3): embed the memory for semantic
+    // recall and absorb entity relations into the knowledge graph. Never
+    // blocks or fails the write.
+    {
+        let mut vs = crate::agent::memory_vector::VectorStore::open(scope);
+        let _ = vs.index(&entry.id, &entry.text); // api → local fallback
+    }
+    {
+        let mut g = crate::agent::memory_graph::GraphStore::open(scope);
+        let _ = g.absorb(&entry.id, &entry.text);
+    }
     Ok(entry)
 }
 
@@ -369,95 +388,6 @@ impl InvertedIndex {
     fn df(&self, term: &str) -> usize {
         self.df.get(term).copied().unwrap_or(0)
     }
-}
-
-/// M1 graph index (temporal knowledge-graph direction): extract simple
-/// `entity → relation → entity` triples from memory text and expose them so a
-/// model can traverse related facts. Heuristic, no NLP deps.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MemoryTriple {
-    pub subject: String,
-    pub relation: String,
-    pub object: String,
-    pub entry_id: String,
-}
-
-pub fn extract_triples(scope: &str) -> Vec<MemoryTriple> {
-    let mut out = Vec::new();
-    for e in load_entries(scope) {
-        for t in triples_from_text(&e.text) {
-            out.push(MemoryTriple {
-                subject: t.0,
-                relation: t.1,
-                object: t.2,
-                entry_id: e.id.clone(),
-            });
-        }
-    }
-    out
-}
-
-fn triples_from_text(text: &str) -> Vec<(String, String, String)> {
-    const RELS: &[&str] = &[
-        " prefers ",
-        " uses ",
-        " depends on ",
-        " requires ",
-        " is part of ",
-        " belongs to ",
-        " causes ",
-        " blocks ",
-        " conflicts with ",
-        " runs on ",
-        " lives in ",
-        " wants ",
-        " avoids ",
-        " disables ",
-        " enables ",
-    ];
-    let mut out = Vec::new();
-    for rel in RELS {
-        if let Some(idx) = text.find(rel) {
-            let (subj, rest) = text.split_at(idx);
-            let obj = &rest[rel.len()..];
-            let subject = subj
-                .trim_matches(|c: char| !c.is_alphanumeric())
-                .trim()
-                .to_string();
-            let object = obj
-                .split([',', '.', '!', '?', ';', '\n'])
-                .next()
-                .unwrap_or("")
-                .trim_matches(|c: char| !c.is_alphanumeric())
-                .trim()
-                .to_string();
-            if !subject.is_empty()
-                && !object.is_empty()
-                && subject.len() >= 2
-                && object.len() >= 2
-            {
-                out.push((subject, rel.trim().to_string(), object));
-            }
-        }
-    }
-    out
-}
-
-pub fn render_triples(triples: &[MemoryTriple]) -> String {
-    if triples.is_empty() {
-        return "no entity triples extracted (heuristic: look for 'X uses Y' / 'X depends on Y' patterns)".into();
-    }
-    let mut lines = vec![format!("{} entity triple(s):", triples.len())];
-    for t in triples {
-        lines.push(format!(
-            "  {s} -[{r}]-> {o}  (mem {id})",
-            s = t.subject,
-            r = t.relation,
-            o = t.object,
-            id = &t.entry_id[..t.entry_id.len().min(10)]
-        ));
-    }
-    lines.join("\n")
 }
 
 // ─── M4 Maintenance (localized) ──────────────────────────────────────────────
@@ -844,39 +774,6 @@ mod tests {
     }
 
     #[test]
-    fn graph_extracts_entity_triples() {
-        let s = scope();
-        remember(
-            &s,
-            "build agent uses cargo and depends on tokio",
-            Tier::L1,
-            Voice::FirstPerson,
-            &[],
-            0.6,
-            "t",
-        )
-        .unwrap();
-        remember(
-            &s,
-            "deploy job requires secrets",
-            Tier::L1,
-            Voice::Observed,
-            &[],
-            0.6,
-            "t",
-        )
-        .unwrap();
-        let triples = extract_triples(&s);
-        assert!(
-            triples
-                .iter()
-                .any(|t| t.relation == "depends on" && t.object == "tokio"),
-            "expected a depends-on triple: {triples:?}"
-        );
-        let rendered = render_triples(&triples);
-        assert!(rendered.contains("depends on"));
-        let _ = std::fs::remove_dir_all(scope_dir(&s));
-    }
 
     #[test]
     fn extract_picks_decision_lines() {
@@ -886,3 +783,5 @@ mod tests {
         assert!(c.iter().any(|l| l.contains("decided")));
     }
 }
+
+

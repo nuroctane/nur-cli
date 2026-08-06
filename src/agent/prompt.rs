@@ -419,8 +419,22 @@ Direct technical markdown. Fence code with languages.
                     format!("{proj}:{sid}")
                 }
             };
-            // Route with empty query → recency/confidence ranking (M3).
-            s.push_str(&super::native_memory::prompt_block(&mem_scope, "", 2_500));
+            // Central router: give the model the routing table so it stops
+            // guessing which memory resident to use (m4).
+            s.push_str("\n");
+            s.push_str(super::memory_router::routing_guidance());
+            s.push_str("\n\n");
+            // Router snapshot (empty query → recency+confidence ranked). Inject
+            // only when there is real content so the prompt doesn't bloat.
+            let routed = super::memory_router::read(&mem_scope, "", 3, 2);
+            let has_content = routed.contains("[vector] top-")
+                || routed.contains("[hierarchical]")
+                || routed.contains("[graph]");
+            if has_content {
+                s.push_str("\n# Routed memory snapshot\n");
+                s.push_str(&routed);
+                s.push('\n');
+            }
         }
         s
     }

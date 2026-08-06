@@ -218,8 +218,7 @@ pub fn list(session_id: &str) -> Vec<ContextVar> {
         .collect()
 }
 
-pub fn get(session_id: &str, name: &str) -> Option<ContextVar> {
-    let g = global().lock().ok()?;
+pub fn get(session_id: &str, name: &str) -> Option<ContextVar> {    let g = global().lock().ok()?;
     let sess = g.get(session_id)?;
     sess.vars.get(name).cloned()
 }

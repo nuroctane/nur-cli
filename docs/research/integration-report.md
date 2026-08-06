@@ -321,3 +321,30 @@ Closed the two remaining open items and re-verified against source specs.
 - Clippy clean in new code (fixed sort_by_key/clamp/char-compare nits).
 
 Verification: `cargo test --bin nur` = 655 passed / 0 failed; clean build.
+
+## 12. Real embeddings + real knowledge graph + central memory router
+
+The "vector/graph" system is now a genuine embedding/KG system, and the memory
+routing problem is solved with a central router.
+
+### What changed (honest)
+- **Real embeddings** (`embed.rs`): API embeddings via the active provider +
+  honest local n-gram fallback (labeled NOT semantic). L2-normalized, 256-dim,
+  comparable across paths.
+- **Real vector store** (`memory_vector.rs`): persistent cosine top-k per scope.
+- **Real knowledge graph** (`memory_graph.rs`): persistent nodes/edges, neighbors,
+  BFS shortest-path. The old keyword "triple" heuristic was removed as dead code —
+  the graph is now real storage+traversal (extraction remains heuristic, honestly).
+- **Central router** (`memory_router.rs`) + `mem` tool: intent-classified read/write
+  that fans out across vector+graph+hierarchical and auto-indexes on write.
+- `native_memory::remember` auto-embeds + absorbs into the graph.
+- Prompt injects routing_guidance + a bounded routed-memory snapshot.
+
+### Tests
+- embed (3), memory_vector (2), memory_graph (2), memory_router (2) all green.
+- Full suite **664 passed / 0 failed**. Clean build (0 warnings).
+
+### Honesty notes
+- API embeddings are real semantic vectors when a key/model is available; the
+  local fallback is a hash embedding with a documented caveat.
+- KG entity/relation extraction is heuristic; graph STORAGE/TRAVERSAL is real.

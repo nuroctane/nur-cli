@@ -276,8 +276,29 @@ impl Tool for ConnectomeTool {
                 chronicle::describe_at(&scope, &name).map_err(NurError::Tool)
             }
             "graph" => {
-                let triples = native_memory::extract_triples(&scope);
-                Ok(native_memory::render_triples(&triples))
+                // Real knowledge-graph store (m3): neighbors + entity list.
+                let g = crate::agent::memory_graph::GraphStore::open(&scope);
+                if g.node_count() == 0 {
+                    return Ok("knowledge graph empty for this scope (use `mem` or `connectome remember` to build it)".into());
+                }
+                let mut out = vec![format!(
+                    "knowledge graph scope={scope} · {} nodes / {} edges",
+                    g.node_count(),
+                    g.edge_count()
+                )];
+                for label in g.all_entities().into_iter().take(40) {
+                    let nbrs = g.neighbors(&label);
+                    if nbrs.is_empty() {
+                        continue;
+                    }
+                    let rels: Vec<String> = nbrs
+                        .iter()
+                        .map(|(_, r, t)| format!("{r}→{t}"))
+                        .take(6)
+                        .collect();
+                    out.push(format!("  {label}: {}", rels.join(", ")));
+                }
+                Ok(out.join("\n"))
             }
             other => Err(NurError::Tool(format!("unknown connectome action `{other}`"))),
         }
