@@ -970,6 +970,34 @@ pub fn decide_arrow_action(input: &InputState, palette_visible: bool, up: bool) 
     }
 }
 
+/// What pressing Enter with the palette open should do. Pure decision, tested.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum PaletteEnter {
+    /// Submit the given full command text.
+    Submit(String),
+    /// Fill the input with the highlighted match (palette stays open).
+    Fill(String),
+}
+
+/// Decide palette-Enter behavior (fixes the "third enter" flakiness).
+///
+/// If the user's typed text is already an exact full command that appears in the
+/// matches (typed by hand, or just filled by a prior Enter), submit it directly
+/// against ALL matches — not just the highlighted row. Otherwise fill with the
+/// highlighted row so a first Enter completes the command and a second submits.
+pub fn decide_palette_enter(
+    matches: &[(String, String)],
+    input: &str,
+    idx: usize,
+) -> PaletteEnter {
+    let trimmed = input.trim();
+    if matches.iter().any(|(n, _)| trimmed == n.as_str()) {
+        return PaletteEnter::Submit(trimmed.to_string());
+    }
+    let idx = idx.min(matches.len().saturating_sub(1));
+    PaletteEnter::Fill(matches[idx].0.clone())
+}
+
 /// Outcome of a click in the transcript body.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum TranscriptClick {
@@ -2001,6 +2029,12 @@ pub struct App {
 
     pub approval: Option<ApprovalState>,
     pub picker: Option<SessionPicker>,
+    /// When the picker modal opened (Instant). Keys that arrive in the first ~300ms
+    /// of an async-loaded picker (sessions/takeover scan disk + subprocess readers
+    /// synchronously) are treated as stray presses from the loading window and
+    /// ignored — so an impatient Enter does NOT auto-confirm the first row
+    /// before the user could read the modal.
+    pub picker_opened_at: Option<std::time::Instant>,
     pub palette_idx: usize,
     pub palette_scroll: usize,
     pub palette_last_step: std::time::Instant,
@@ -2419,6 +2453,7 @@ pub async fn run_tui(
         palette_idx: 0,
         palette_scroll: 0,
         palette_last_step: std::time::Instant::now(),
+        picker_opened_at: None,
         quit_armed: None,
         tx,
         rx,
@@ -3801,17 +3836,19 @@ impl App {
             KeyCode::Enter => {
                 if self.palette_visible() {
                     let matches = self.palette_matches();
-                    let idx = self.palette_idx.min(matches.len().saturating_sub(1));
-                    let name = matches[idx].0.clone();
                     let text = self.input.text();
-                    // First Enter fills the selected command exactly (no trailing
-                    // space, so the palette stays open). Second Enter submits it
-                    // once the input already equals the selected command.
-                    if text.trim() == name {
-                        self.input.clear();
-                        self.submit_text(&name);
-                    } else {
-                        self.input.set_text(&name);
+                    match decide_palette_enter(&matches, &text, self.palette_idx) {
+                        PaletteEnter::Submit(cmd) => {
+                            self.input.clear();
+                            self.submit_text(&cmd);
+                        }
+                        PaletteEnter::Fill(name) => {
+                            // First Enter fills the selected command exactly (no
+                            // trailing space, so the palette stays open). A second
+                            // Enter then submits (decide_palette_enter sees the
+                            // typed text is already an exact command).
+                            self.input.set_text(&name);
+                        }
                     }
                     self.palette_idx = 0;
                     self.palette_scroll = 0;
@@ -5321,6 +5358,7 @@ impl App {
         // Default to **all** sessions. A "here only" default hid expensive chats
         // opened from another cwd (e.g. C:\ vs a project folder) and looked like
         // data loss. Toggle with Tab / click the scope chip.
+        self.picker_opened_at = Some(Instant::now());
         self.picker = Some(SessionPicker {
             rows,
             idx: 0,
@@ -5397,6 +5435,7 @@ impl App {
             self.push_note(Tone::Session, m);
             return;
         }
+        self.picker_opened_at = Some(Instant::now());
         self.picker = Some(SessionPicker {
             rows,
             idx: 0,
@@ -5431,10 +5470,14 @@ impl App {
         p.idx = 0;
         p.scroll = 0;
         p.clamp_scroll();
+        // Window switch re-reads disk synchronously; reset the debounce so a
+        // stray Enter from before the switch doesn't auto-confirm the new list.
+        self.picker_opened_at = Some(std::time::Instant::now());
     }
 
     fn close_picker(&mut self) {
         self.picker = None;
+        self.picker_opened_at = None;
     }
 
     // ── update modal (opencode-style UX parity with other pickers) ──────────
@@ -5524,6 +5567,27 @@ impl App {
 
     fn on_picker_key(&mut self, code: KeyCode) {
         let Some(p) = &mut self.picker else { return };
+        // Debounce the first ~300ms after a picker opens: sessions/takeover load
+        // synchronously (disk + subprocess scan), so Enters queued while the
+        // user *thought* it hadn't gone through would otherwise auto-confirm the
+        // first row before anyone could read the modal. This is the "I pressed
+        // Enter and it auto-selected session #1" bug.
+        if let Some(opened) = self.picker_opened_at {
+            if opened.elapsed() < std::time::Duration::from_millis(300)
+                && matches!(
+                    code,
+                    KeyCode::Enter
+                        | KeyCode::Up
+                        | KeyCode::Down
+                        | KeyCode::PageUp
+                        | KeyCode::PageDown
+                        | KeyCode::Home
+                        | KeyCode::End
+                )
+            {
+                return;
+            }
+        }
         let count = p.count();
         match code {
             KeyCode::Esc | KeyCode::Char('q') => self.close_picker(),
@@ -10135,6 +10199,36 @@ body"
         i.insert_str("/mo");
         assert_eq!(decide_arrow_action(&i, true, true), ArrowAction::Palette);
         assert_eq!(decide_arrow_action(&i, true, false), ArrowAction::Palette);
+    }
+
+    #[test]
+    fn palette_enter_fills_then_submits_without_a_third_enter() {
+        let matches = vec![
+            ("/sessions".to_string(), "browse".into()),
+            ("/resume".to_string(), "resume".into()),
+        ];
+        // 1st Enter: partial input -> Fill the highlighted command.
+        assert_eq!(
+            decide_palette_enter(&matches, "/sess", 0),
+            PaletteEnter::Fill("/sessions".to_string())
+        );
+        // 2nd Enter: input now equals a full command -> Submit, regardless of
+        // which row is highlighted (this is the bug that forced a 3rd enter).
+        assert_eq!(
+            decide_palette_enter(&matches, "/sessions", 1),
+            PaletteEnter::Submit("/sessions".to_string())
+        );
+        // Even if the highlight moved to a different row, an exact typed command
+        // still submits (checked against ALL matches, not just idx).
+        assert_eq!(
+            decide_palette_enter(&matches, "/resume", 0),
+            PaletteEnter::Submit("/resume".to_string())
+        );
+        // Typed text that matches no full command still fills.
+        assert_eq!(
+            decide_palette_enter(&matches, "/h", 1),
+            PaletteEnter::Fill("/resume".to_string())
+        );
     }
 
     #[test]
