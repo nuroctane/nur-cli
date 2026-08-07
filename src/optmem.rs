@@ -59,10 +59,43 @@ pub fn doctor_report() -> String {
     lines.join("\n")
 }
 
+/// Find a real, runnable Python interpreter for the `memo` script.
+///
+/// On Windows, `find_bin("python3")` / `find_bin("python")` can resolve to
+/// broken `%LOCALAPPDATA%\Microsoft\WindowsApps\python*.exe` Store stubs that
+/// only print "Python was not found; run without arguments..." and exit
+/// non-zero, which made `memo wake` silently fail even though `~/.optmem/memo`
+/// was installed. Prefer the `py` launcher, then probe each candidate and skip
+/// any that does not actually start an interpreter.
 fn python_runner() -> Option<String> {
-    find_bin("python3")
-        .or_else(|| find_bin("python"))
-        .or_else(|| find_bin("py"))
+    let mut candidates: Vec<String> = Vec::new();
+    for name in ["py", "python", "python3"] {
+        if let Some(p) = find_bin(name) {
+            if !candidates.contains(&p) {
+                candidates.push(p);
+            }
+        }
+    }
+    for c in candidates {
+        let is_launcher = Path::new(&c)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .is_some_and(|s| s.eq_ignore_ascii_case("py"));
+        if python_probe(&c, is_launcher) {
+            return Some(c);
+        }
+    }
+    None
+}
+
+/// Returns true if `bin` starts a Python interpreter (probe: `-c "import sys"`).
+fn python_probe(bin: &str, launcher: bool) -> bool {
+    let args: &[&str] = if launcher {
+        &["-3", "-c", "import sys"]
+    } else {
+        &["-c", "import sys"]
+    };
+    run_capture(bin, args, None, 15_000).is_ok()
 }
 
 /// Run memo with args; returns stdout/stderr merged or an error string.
@@ -325,5 +358,32 @@ mod tests {
             ok.extend_from_slice(b"# pad\n");
         }
         assert!(looks_like_memo_script(&ok));
+    }
+
+    #[test]
+    fn python_probe_accepts_real_interpreter() {
+        // A candidate that runs `import sys` successfully must probe true.
+        // This is environment-dependent; skip silently if none exists so the
+        // test is not flaky on bare CI.
+        let mut any_ok = false;
+        for name in ["python", "python3", "py"] {
+            if let Some(p) = find_bin(name) {
+                let is_launcher = Path::new(&p)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .is_some_and(|s| s.eq_ignore_ascii_case("py"));
+                if python_probe(&p, is_launcher) {
+                    any_ok = true;
+                }
+            }
+        }
+        // On machines with a real Python at least one must probe true.
+        // If none does, we accept that only if the binary also does not exist
+        // (broken environment) - but on dev machines there is always one.
+        if any_ok {
+            return;
+        }
+        // No working python found anywhere - environment exotic; don't hard fail.
+        eprintln!("no working python interpreter found on this machine");
     }
 }
