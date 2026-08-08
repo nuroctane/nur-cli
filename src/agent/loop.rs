@@ -482,6 +482,32 @@ impl AgentRunner {
         tx: &mpsc::UnboundedSender<AgentEvent>,
         cancel: &CancellationToken,
     ) -> Result<String> {
+        // Peer lifecycle presence (pi-peer port): make this session addressable
+        // by other sessions and mark it working for the turn. Best-effort and
+        // non-fatal - a registry we cannot write is a discovery problem only.
+        let mut peer_mail = String::new();
+        if !self.is_subagent {
+            let sid = std::env::var("NUR_SESSION_ID").unwrap_or_else(|_| session.id.clone());
+            let cwd = self.cwd.to_string_lossy().into_owned();
+            // Persistent watch lives across turns and drains within the sender's
+            // 1.5s receipt window. Re-assert Working after watch registration.
+            crate::agent::mailbox::ensure_live_watch(&cwd, &sid);
+            crate::agent::mailbox::register_session(
+                &cwd,
+                &sid,
+                None,
+                crate::agent::mailbox::PeerState::Working,
+            );
+            // Existing queued mail may race the just-started watcher: combine a
+            // direct turn-start drain with anything the watcher already queued.
+            peer_mail = crate::agent::mailbox::drain_inbound_for_prompt();
+            peer_mail.push_str(&crate::agent::mailbox::take_pending_peer_prompt());
+            if !peer_mail.is_empty() {
+                let _ = tx.send(AgentEvent::Status(
+                    "peer messages arrived from another session".into(),
+                ));
+            }
+        }
         // Discard any media a prior turn queued but never flushed (e.g. `look`
         // ran, then the turn was cancelled before the attach) so a stale image
         // can't bleed onto this unrelated prompt.
@@ -489,7 +515,9 @@ impl AgentRunner {
         // Portable input guardrails (OpenAI Agents SDK pattern) - all providers.
         match super::guardrails::check_input(user_text) {
             super::guardrails::GuardDecision::Block(msg) => {
-                let _ = tx.send(AgentEvent::Status(format!("guardrail blocked input · {msg}")));
+                let _ = tx.send(AgentEvent::Status(format!(
+                    "guardrail blocked input · {msg}"
+                )));
                 return Err(NurError::Other(format!("input guardrail: {msg}")));
             }
             super::guardrails::GuardDecision::Warn(w) => {
@@ -499,13 +527,20 @@ impl AgentRunner {
         }
         // Track tokens toward a persistent goal when present.
         session.push_user(user_text);
+        // Peer mail from other sessions (real receipt + authority boundary) is
+        // prepended so it arrives mid-turn; see the registration block above.
+        let prompt_text = if peer_mail.is_empty() {
+            user_text.to_string()
+        } else {
+            format!("{user_text}{peer_mail}")
+        };
         // Auto-attach media paths mentioned in the user prompt (png/mp4/…).
-        let auto_notes = media::auto_attach_from_text(&self.cwd, user_text);
+        let auto_notes = media::auto_attach_from_text(&self.cwd, &prompt_text);
         let pending = media::take_pending_media();
         if pending.is_empty() {
-            session.input_items.push(user_text_item(user_text));
+            session.input_items.push(user_text_item(&prompt_text));
         } else {
-            let mut text = user_text.to_string();
+            let mut text = prompt_text.clone();
             if !auto_notes.is_empty() {
                 text.push_str("\n\n[media auto-attached]\n");
                 text.push_str(&auto_notes.join("\n"));
@@ -640,6 +675,22 @@ impl AgentRunner {
                 )));
             }
 
+            // pi-peer live delivery: the persistent inbox watcher drains letters
+            // while this turn runs and queues authority-framed text here. Inject
+            // before the next provider request, just like user steering, so the
+            // recipient model observes mail mid-task and the sender gets a true
+            // consumed-file receipt within its 1.5s window.
+            if !self.is_subagent {
+                let peer_steer = crate::agent::mailbox::take_pending_peer_prompt();
+                if !peer_steer.is_empty() {
+                    session.input_items.push(user_text_item(&peer_steer));
+                    self.persist_session(session);
+                    let _ = tx.send(AgentEvent::Status(
+                        "peer message · injected mid-turn from another session".into(),
+                    ));
+                }
+            }
+
             // OMP-style dynamic context pruning (supersedeReads + dropUseless):
             // when the model reads the same target again, the newer observation
             // supersedes the old body; empty/error tool bodies outside the live
@@ -719,7 +770,11 @@ impl AgentRunner {
                     ),
                     summary: Some("auto".into()),
                 }),
-                stream: Some(self.config.stream && !self.is_subagent),
+                // Native subagents must inherit streaming. ChatGPT/Codex OAuth
+                // rejects Responses requests with `stream:false` (HTTP 400:
+                // "Stream must be set to true"), so force it on that route even
+                // when the user's global stream display preference is off.
+                stream: Some(self.config.stream || self.client.requires_streaming_responses()),
                 parallel_tool_calls: Some(true),
                 // One cache key per session so system instructions + tools can be
                 // prefix-cached across multi-turn agent loops.
@@ -1031,8 +1086,7 @@ impl AgentRunner {
                     }
                     // Model-assisted extraction (Mem0-class, paper M2) - opt-in.
                     if self.config.memory_model_extract {
-                        let prompt =
-                            super::native_memory::model_extract_prompt(&text, 8_000);
+                        let prompt = super::native_memory::model_extract_prompt(&text, 8_000);
                         let req = crate::api::types::ResponseRequest {
                             model: self.config.model.clone(),
                             input: serde_json::Value::Array(vec![
@@ -1073,6 +1127,17 @@ impl AgentRunner {
 
                 usage.set_state("idle");
                 session.push_assistant(&text);
+                // Settle back to idle so peers see this session as idle (not wedged).
+                if !self.is_subagent {
+                    let sid =
+                        std::env::var("NUR_SESSION_ID").unwrap_or_else(|_| session.id.clone());
+                    let cwd = self.cwd.to_string_lossy().into_owned();
+                    crate::agent::mailbox::heartbeat(
+                        &cwd,
+                        &sid,
+                        Some(crate::agent::mailbox::PeerState::Idle),
+                    );
+                }
                 self.persist_session(session);
                 return Ok(text);
             }
@@ -2130,14 +2195,18 @@ mod tests {
     /// in the description or prompt. Recovery must still route correctly.
     #[test]
     fn agent_call_infers_provider_from_description_and_prompt() {
-        // Description is a short NL label naming the provider.
+        // A bare provider label with NO explicit spawn ask ("claude review")
+        // is NOT routing - it names the subject. The child inherits the parent.
         let (_, _, _, prov, _) = parse_agent_call(&FunctionCallRef {
             call_id: "a".into(),
             name: "agent".into(),
             arguments: r#"{"prompt":"review the auth module","description":"claude review","subagent_type":"general"}"#.into(),
         })
         .unwrap();
-        assert_eq!(prov.as_deref(), Some("anthropic"));
+        assert!(
+            prov.is_none(),
+            "bare description label must not route without an explicit spawn ask: {prov:?}"
+        );
 
         // Routing phrase in the prompt.
         let (_, _, _, prov2, _) = parse_agent_call(&FunctionCallRef {
@@ -2207,6 +2276,67 @@ mod tests {
     /// subject, not requesting a backend. Reading it as routing blocks the spawn
     /// behind a /login modal the user never asked for.
     #[test]
+    fn topical_research_descriptions_never_route_cross_provider() {
+        // These are EXACTLY the cases that bit us: research/naming tasks whose
+        // description or prompt merely *contains* a provider word. They describe
+        // the subject, not a backend, and must yield NO provider override (the
+        // child then inherits the parent client verbatim).
+        for (desc, prompt) in [
+            // "x" is a single-char xAI alias — must NOT fire from prose.
+            ("Resolve nicopreme X post content", "resolve the X post"),
+            // "claude" mid-description is the subject, not a backend.
+            (
+                "Research Claude cross-session messaging",
+                "fetch the docs and summarize",
+            ),
+            // "grok" in the description of a research task on grok.
+            (
+                "Research cross-provider subagent grok setup",
+                "report how it works",
+            ),
+            // Leading provider name in the prompt is a subject, not routing.
+            (
+                "audit",
+                "Claude Code session import path - map how it works",
+            ),
+        ] {
+            let (_, _, _, prov, _) = parse_agent_call(&FunctionCallRef {
+                call_id: "a".into(),
+                name: "agent".into(),
+                arguments: serde_json::json!({ "prompt": prompt, "description": desc }).to_string(),
+            })
+            .unwrap();
+            assert!(
+                prov.is_none(),
+                "topical prose must NOT route to a provider: desc={desc:?} prompt={prompt:?} → {prov:?}"
+            );
+        }
+
+        // Explicit asks still route (provider:kv, and verb-cued routing phrases).
+        let (_, _, _, prov_a, _) = parse_agent_call(&FunctionCallRef {
+            call_id: "b".into(),
+            name: "agent".into(),
+            arguments: r#"{"prompt":"x","description":"audit","provider":"grok"}"#.into(),
+        })
+        .unwrap();
+        // parse_agent_call returns the RAW provider field ("grok"); alias
+        // resolution (grok → xai) happens later in resolve_subagent_target.
+        assert_eq!(prov_a.as_deref(), Some("grok"));
+
+        let (_, _, _, prov_b, _) = parse_agent_call(&FunctionCallRef {
+            call_id: "c".into(),
+            name: "agent".into(),
+            arguments: r#"{"prompt":"run this review on claude","description":"review the auth"}"#
+                .into(),
+        })
+        .unwrap();
+        assert_eq!(prov_b.as_deref(), Some("anthropic"));
+    }
+
+    /// A task prompt that merely *starts* with a product name is describing its
+    /// subject, not requesting a backend. Reading it as routing blocks the spawn
+    /// behind a /login modal the user never asked for.
+    #[test]
     fn a_provider_name_leading_the_prompt_is_a_subject_not_a_route() {
         for prompt in [
             "Claude Code session import path — map how it works",
@@ -2232,17 +2362,23 @@ mod tests {
             );
         }
 
-        // The same leading name in the *description* is still routing — that
-        // field is a label the model wrote about the spawn itself.
+        // A leading provider name in the DESCRIPTION is ALSO not routing on its
+        // own — the provider must be tied to an explicit spawn ask ("spawn a
+        // grok agent", "run via claude"). A bare "grok audit" label describes
+        // the subject, not a backend.
         let (_, _, _, prov, _) = parse_agent_call(&FunctionCallRef {
             call_id: "b".into(),
             name: "agent".into(),
             arguments: r#"{"prompt":"audit the failover path","description":"grok audit"}"#.into(),
         })
         .unwrap();
-        assert_eq!(prov.as_deref(), Some("xai"));
+        assert!(
+            prov.is_none(),
+            "bare description label must not route without an explicit spawn ask: {prov:?}"
+        );
 
-        // And an explicit cue inside the prompt still routes.
+        // "<provider> subagent" with no spawn verb/preposition is still a bare
+        // mention, not an explicit ask — route only on a real cue.
         let (_, _, _, prov, _) = parse_agent_call(&FunctionCallRef {
             call_id: "c".into(),
             name: "agent".into(),
@@ -2251,17 +2387,19 @@ mod tests {
                     .into(),
         })
         .unwrap();
-        assert_eq!(
-            prov.as_deref(),
-            Some("anthropic"),
-            "'<provider> subagent' at the head of a prompt is an explicit route"
+        assert!(
+            prov.is_none(),
+            "'<provider> subagent' alone must not route: {prov:?}"
         );
 
-        // Role tails that really mean routing still work.
+        // Explicit spawn-verb asks really route.
         for (prompt, expected) in [
             ("spawn a grok agent to audit failover", "xai"),
             ("run a claude agent for the auth review", "anthropic"),
-            ("gemini reviewer: map the graphify module", "google"),
+            (
+                "deploy a gemini reviewer to map the graphify module",
+                "google",
+            ),
         ] {
             let (_, _, _, prov, _) = parse_agent_call(&FunctionCallRef {
                 call_id: "d".into(),
@@ -2273,25 +2411,9 @@ mod tests {
             assert_eq!(
                 prov.as_deref(),
                 Some(expected),
-                "routing role tail must still work: {prompt:?}"
+                "explicit spawn-verb ask must route: {prompt:?}"
             );
         }
-    }
-
-    #[test]
-    fn tail_is_routing_role_distinguishes_role_from_topic() {
-        assert!(tail_is_routing_role(" subagent to audit"));
-        assert!(tail_is_routing_role(" agent"));
-        assert!(tail_is_routing_role(" agent."));
-        assert!(tail_is_routing_role(" agent to review auth"));
-        assert!(tail_is_routing_role(" reviewer"));
-        assert!(tail_is_routing_role(" review"));
-        assert!(!tail_is_routing_role(" agent strategies"));
-        assert!(!tail_is_routing_role(" agent architecture"));
-        assert!(!tail_is_routing_role(" agentic workflow"));
-        assert!(!tail_is_routing_role(" agents in production"));
-        assert!(!tail_is_routing_role(" agent-based system"));
-        assert!(!tail_is_routing_role(" reviewable design"));
     }
 
     /// "gemini" resolves to catalog id `google` (see `natural_language_provider_names_resolve`),
@@ -3735,27 +3857,24 @@ fn parse_agent_call(call: &FunctionCallRef) -> Result<ParsedAgentCall> {
 /// `deploy … antigravity`) over bare name mentions, so ordinary task text that
 /// merely discusses a provider does not hijack routing.
 fn infer_provider_from_agent_text(desc: &str, prompt: &str) -> Option<(String, Option<String>)> {
-    // 1) Explicit key=value / key:value in either field.
+    // 1) Explicit key=value / key:value in either field ("provider:claude",
+    //    "model:grok-4"). This is the unambiguously-explicit ask.
     for text in [desc, prompt] {
         if let Some(hit) = extract_explicit_provider_kv(text) {
             return Some(hit);
         }
     }
-    // 2) Short description that is itself a provider alias ("claude review",
-    //    "grok audit", "antigravity").
-    if let Some(p) = resolve_provider_alias(desc.trim()) {
-        return Some((p.id.to_string(), None));
-    }
-    // 3) Routing phrases. The description is a label the model wrote *about the
-    //    spawn*, so a provider name at its head ("claude review") is routing.
-    //    The prompt is the task itself, where a leading provider name is usually
-    //    just the subject ("Claude Code session import path") — misreading that
-    //    as routing blocks the spawn behind a /login the user never asked for,
-    //    so the prompt only counts with an explicit cue ("… on claude").
-    if let Some(hit) = extract_provider_routing_phrase(desc, true) {
+    // 2) Routing phrases with an explicit spawn ask — "spawn a claude subagent",
+    //    "run on grok", "deploy through openai". A provider name alone, whether
+    //    in the description label or the prompt subject, is NEVER routing: it
+    //    usually names the thing being discussed, not a backend. Routing on a
+    //    bare mention ("Resolve nicopreme X post content", "Research Claude
+    //    cross-session messaging", "I love gpt 5.6 sol") throws spawns at a
+    //    /login nobody asked for. Omit `provider` → always inherit the parent.
+    if let Some(hit) = extract_provider_routing_phrase(desc) {
         return Some(hit);
     }
-    extract_provider_routing_phrase(prompt, false)
+    extract_provider_routing_phrase(prompt)
 }
 
 /// `provider:claude`, `provider=xai`, `model:grok-4` pairs in free text.
@@ -3789,15 +3908,15 @@ fn extract_explicit_provider_kv(text: &str) -> Option<(String, Option<String>)> 
     Some((prov, model))
 }
 
-/// Phrases like "on claude", "using gemini", "via antigravity", "with grok",
-/// "spawn a claude subagent", "deploy on xai".
+/// Phrases like "spawn a claude subagent", "run via grok", "deploy through
+/// openai", "subagent on xai".
 ///
-/// `lead_counts` allows a bare hit at position 0 to route on its own. True for
-/// the short description label, false for task prose.
-fn extract_provider_routing_phrase(
-    text: &str,
-    lead_counts: bool,
-) -> Option<(String, Option<String>)> {
+/// STRICT RULE: a provider routes ONLY with an explicit routing/spawn ask —
+/// a preposition cue immediately before it ("on/via/through/using/…") OR a
+/// spawn-verb cue ("spawn", "deploy", "run") somewhere in the preceding window.
+/// A bare mention of a provider ("I love gpt", "Research Claude cross-session
+/// messaging") never routes. Omit `provider` → always inherit the parent.
+fn extract_provider_routing_phrase(text: &str) -> Option<(String, Option<String>)> {
     let lower = text.to_ascii_lowercase();
     // Prefer longer / more specific multi-word hits first.
     const PHRASES: &[&str] = &[
@@ -3828,132 +3947,59 @@ fn extract_provider_routing_phrase(
         "flash",
         "gpt",
     ];
-    // Only accept a hit when preceded by a routing cue or "subagent"/"agent".
-    const CUES: &[&str] = &[
-        " on ",
-        " using ",
-        " via ",
-        " with ",
-        " through ",
-        " against ",
-        " onto ",
-        " deploy ",
-        " deploy on ",
-        " spawn ",
-        " run on ",
-        " routed to ",
-        " target ",
-        " provider ",
-        " subagent on ",
-        " subagent ",
-        " agent on ",
-        " agent ",
-    ];
+    // Preposition immediately before the provider ("subagent through openai").
+    // These are the explicit route signals (the user's rule: "spawn a sol
+    // subagent THROUGH openai"). No bare topic words here.
+    const PREP_CUES: &[&str] = &["on", "using", "via", "with", "through", "onto"];
+    // Spawn verbs that, anywhere in the window, mark it as an explicit ask
+    // ("spawn a claude subagent", "deploy a grok subagent", "run a gemini
+    // subagent"). Deliberately NO "subagent"/"agent" keywords here: those are
+    // ordinary topic words ("Research cross-provider subagent grok setup") and
+    // would route on mere mention. Only a real ask-verb routes.
+    const SPAWN_CUES: &[&str] = &["spawn", "deploy", "run ", "invoke", "launch", "route"];
+
     for phrase in PHRASES {
-        let Some(idx) = lower.find(phrase) else {
-            continue;
-        };
-        // Whole-word-ish: char before should be boundary.
-        if idx > 0 {
-            let prev = lower.as_bytes()[idx - 1] as char;
-            if prev.is_alphanumeric() {
+        // First occurrence; a later one with a cue is fine too on a second scan
+        // below, but one cue-hit is enough for strict routing.
+        let mut search_from = 0;
+        while let Some(idx) = lower[search_from..].find(phrase) {
+            let idx = search_from + idx;
+            if idx > 0 {
+                let prev = lower.as_bytes()[idx - 1] as char;
+                if prev.is_alphanumeric() {
+                    search_from = idx + phrase.len();
+                    continue;
+                }
+            }
+            let after = idx + phrase.len();
+            if after < lower.len() {
+                let next = lower.as_bytes()[after] as char;
+                if next.is_alphanumeric() || next == '-' {
+                    search_from = idx + phrase.len();
+                    continue;
+                }
+            }
+            let window_start = idx.saturating_sub(24);
+            let window = &lower[window_start..idx];
+            // Immediate preposition ("… through openai") is the strongest signal.
+            let prep_fire = PREP_CUES.iter().any(|c| {
+                window.ends_with(c)
+                    || window.ends_with(&format!(" {c}"))
+                    || window.ends_with(&format!("{c} "))
+            });
+            // Spawn verb anywhere in the window ("spawn a claude subagent").
+            let spawn_fire = SPAWN_CUES.iter().any(|c| window.contains(c));
+            if !(prep_fire || spawn_fire) {
+                search_from = after;
                 continue;
             }
-        }
-        let after = idx + phrase.len();
-        if after < lower.len() {
-            let next = lower.as_bytes()[after] as char;
-            if next.is_alphanumeric() || next == '-' {
-                continue;
+            if let Some(p) = resolve_provider_alias(phrase) {
+                return Some((p.id.to_string(), None));
             }
-        }
-        // Window before the match for a routing cue.
-        let window_start = idx.saturating_sub(24);
-        let window = &lower[window_start..idx];
-        // A hit at the head of the text routes on its own only where a leading
-        // provider name means routing (the description label), never in prose.
-        let leads = idx == 0 || window.trim().is_empty();
-        let cued = (leads && lead_counts)
-            || CUES
-                .iter()
-                .any(|c| window.ends_with(c.trim_start()) || window.contains(c));
-        if !cued {
-            // Also allow "…claude subagent" / "…grok agent" immediately after.
-            // Bare "agent" is NOT enough: topical prose like "OpenAI agent
-            // strategies" or "Claude agent architecture" must not hijack
-            // routing onto a different provider (and a wrong API key).
-            if !tail_is_routing_role(&lower[after..]) {
-                continue;
-            }
-        }
-        if let Some(p) = resolve_provider_alias(phrase) {
-            return Some((p.id.to_string(), None));
+            search_from = after;
         }
     }
     None
-}
-
-/// True when text immediately after a provider name is a *routing role*
-/// (`subagent`, `agent`, `reviewer`) rather than topical prose.
-///
-/// "claude subagent", "grok agent", "gemini reviewer" → route.
-/// "OpenAI agent strategies", "Claude agent architecture" → do not route.
-fn tail_is_routing_role(tail: &str) -> bool {
-    let t = tail.trim_start();
-    if t.starts_with("subagent") || t.starts_with("reviewer") {
-        return true;
-    }
-    // "review" as a short role label ("claude review"), but not "reviewable".
-    if let Some(rest) = t.strip_prefix("review") {
-        return rest
-            .chars()
-            .next()
-            .map(|ch| !ch.is_alphanumeric() && ch != '-')
-            .unwrap_or(true);
-    }
-    let Some(rest) = t.strip_prefix("agent") else {
-        return false;
-    };
-    // Reject compounds: agentic, agents, agent-based, …
-    if let Some(ch) = rest.chars().next() {
-        if ch.is_alphanumeric() || ch == '-' {
-            return false;
-        }
-    }
-    let rest = rest.trim_start();
-    // "claude agent" / "claude agent." at end of the phrase → route.
-    if rest.is_empty() || rest.chars().all(|c| !c.is_alphanumeric()) {
-        return true;
-    }
-    // "claude agent to review auth" → route. "openai agent strategies" → not.
-    let first = rest
-        .split(|c: char| c.is_whitespace() || matches!(c, ',' | '.' | ';' | ':' | '!' | '?' | ')'))
-        .find(|s| !s.is_empty())
-        .unwrap_or("");
-    matches!(
-        first,
-        "to" | "for"
-            | "on"
-            | "and"
-            | "with"
-            | "that"
-            | "who"
-            | "which"
-            | "please"
-            | "now"
-            | "here"
-            | "review"
-            | "audit"
-            | "research"
-            | "explore"
-            | "implement"
-            | "check"
-            | "fix"
-            | "write"
-            | "run"
-            | "map"
-            | "investigate"
-    )
 }
 
 async fn run_agent_tool(
@@ -3993,17 +4039,12 @@ async fn run_agent_tool(
                 Some(kind.as_str()),
                 &tx2,
             ) {
-                SubagentTarget::Ready { client: c, config: cc } => {
+                SubagentTarget::Ready {
+                    client: c,
+                    config: cc,
+                } => {
                     crate::agent::subagent::run_subagent(
-                        c,
-                        *cc,
-                        cwd,
-                        mode,
-                        &prompt,
-                        &kind,
-                        depth,
-                        &accept,
-                        &tx2,
+                        c, *cc, cwd, mode, &prompt, &kind, depth, &accept, &tx2,
                     )
                     .await
                 }
@@ -4013,9 +4054,7 @@ async fn run_agent_tool(
                 }
             };
             match outcome {
-                Ok((text, _)) => {
-                    crate::agent::admission::finish(&sid, id, &text, true)
-                }
+                Ok((text, _)) => crate::agent::admission::finish(&sid, id, &text, true),
                 Err(e) => crate::agent::admission::finish(&sid, id, &e.to_string(), false),
             }
         });
@@ -4554,6 +4593,9 @@ pub async fn compact_session(
     };
     if runner.config.native_memory {
         let _ = super::native_memory::consolidate_localized(&mem_scope, 32);
+        // closes the tier-ladder gap: age-progress recent→l1 and l2→l3 so deep
+        // tiers are produced automatically, not only by manual remember/consolidate.
+        let _ = super::native_memory::promote_aged(&mem_scope);
         let _ = super::chronicle::append(
             &mem_scope,
             "compact",

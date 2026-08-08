@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-08-07T16:45:34.742418",
-  "total_skills": 1000,
+  "generated_at": "2026-08-08T01:01:49.249708",
+  "total_skills": 1001,
   "note": "Comprehensive skill intent index - 700+ skills, expanded NL triggers. Must be updated when adding skills per AGENTS.md. Run: python scripts/generate_skill_intents.py",
   "skills": [
     {
@@ -10702,6 +10702,28 @@
         "public",
         "apis",
         "shipping"
+      ]
+    },
+    {
+      "name": "dogwood",
+      "description": "AWS Dogwood runtime verification for AI agents - author .dw policies (Cedar extended with temporal logic since formerly once count_within) and evaluate them against an agent tool-call event stream. Use to govern or verify tool calls with temporal policy, validate a .dw policy, or replay a trace agai",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\dogwood\\SKILL.md",
+      "triggers": [
+        "dogwood runtime",
+        "/dogwood",
+        "dogwood"
+      ],
+      "keywords": [
+        "dogwood",
+        "runtime",
+        "verification",
+        "author",
+        "policies",
+        "cedar",
+        "extended",
+        "temporal",
+        "logic",
+        "since"
       ]
     },
     {
@@ -26644,7 +26666,7 @@
     },
     {
       "name": "subagent-orchestration",
-      "description": "Subagent personas + orchestration patterns (port of pi-subagents by @nicopreme). Delegate with the right persona, fan out/sequence with the agent tool, isolate writers with fractal worktrees.",
+      "description": "Subagent personas + orchestration patterns (port of pi-subagents by @nicopreme). Delegate with the right persona, fan out/sequence with the agent tool, isolate writers with fractal worktrees. Includes code mode: scripted orchestration in plain JS that loops, fans out, awaits, branches on real child ",
       "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\subagent-orchestration\\SKILL.md",
       "triggers": [
         "/subagent orchestration",

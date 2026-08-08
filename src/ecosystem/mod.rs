@@ -38,7 +38,8 @@ const ECOSYSTEM_MARKER: &str = "ecosystem.json";
 /// 14: penecho ensure (npm) + auto-config from nur auth + seamless browser launch.
 /// 15: terminal-browser (native/WSL + Windows host fallback via agent-browser-cli).
 /// 16: interior (ddoemonn/interior.dev) bundled skill + /plugins catalog entry.
-const ECOSYSTEM_SCHEMA: u32 = 16;
+/// 17: Dogwood skill/tool detection + pi-peer/subagent orchestration skill updates.
+const ECOSYSTEM_SCHEMA: u32 = 17;
 /// Re-run ensure at most once per this many seconds unless forced.
 const ENSURE_TTL_SECS: u64 = 86_400;
 
@@ -85,6 +86,9 @@ pub struct EcosystemStatus {
     /// OptMem - permanent memory (~/.optmem).
     #[serde(default)]
     pub optmem: ComponentStatus,
+    /// dogwood - AWS "Dogwood" runtime verification for AI agents (on-demand guardrail CLI).
+    #[serde(default)]
+    pub dogwood: ComponentStatus,
     /// egaki - image/video generation CLI.
     #[serde(default)]
     pub egaki: ComponentStatus,
@@ -115,7 +119,7 @@ impl EcosystemStatus {
             }
         };
         format!(
-            "ecosystem · {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  · packs {}",
+            "ecosystem · {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  · packs {}",
             bit(self.graphify.available, "graphify"),
             bit(self.plur.available, "plur"),
             bit(self.ruflo.available, "ruflo"),
@@ -130,6 +134,7 @@ impl EcosystemStatus {
             bit(self.akarso.available, "akarso"),
             bit(self.headroom.available, "headroom"),
             bit(self.optmem.available, "optmem"),
+            bit(self.dogwood.available, "dogwood"),
             bit(self.egaki.available, "egaki"),
             bit(self.fractal.available, "fractal"),
             bit(self.penecho.available, "penecho"),
@@ -144,7 +149,7 @@ impl EcosystemStatus {
     pub fn report(&self) -> String {
         let mut s = String::from("Nur ecosystem (auto-provisioned on install / open)\n");
         // Fixed names so older ecosystem.json markers (pre-field) still list every slot.
-        let comps: [(&str, &ComponentStatus); 18] = [
+        let comps: [(&str, &ComponentStatus); 19] = [
             ("graphify", &self.graphify),
             ("plur", &self.plur),
             ("ruflo", &self.ruflo),
@@ -160,6 +165,7 @@ impl EcosystemStatus {
             ("akarso", &self.akarso),
             ("headroom", &self.headroom),
             ("optmem", &self.optmem),
+            ("dogwood", &self.dogwood),
             ("egaki", &self.egaki),
             ("fractal", &self.fractal),
             ("penecho", &self.penecho),
@@ -223,7 +229,7 @@ impl EcosystemStatus {
         }
         s.push_str(
             "\n  slash: /ecosystem /plur /ruflo /graphify /skills /akarso /openseo /tb\n\
-             tools:  graphify plur ruflo akarso executor omp browser terminal_browser excalidraw penecho tldraw skill\n\
+             tools:  graphify plur ruflo akarso executor omp browser terminal_browser excalidraw penecho tldraw skill dogwood\n\
              packs:  design · clone-website · cybersecurity · opencode catalog · DCP patterns\n",
         );
         s
@@ -285,6 +291,7 @@ pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
     status.penecho = ensure_penecho(status.node_ok);
     status.headroom = ensure_headroom();
     status.optmem = ensure_optmem();
+    status.dogwood = ensure_dogwood();
     status.egaki = ensure_egaki(status.node_ok);
     status.fractal = ensure_fractal();
     status.cua = ensure_cua();
@@ -574,6 +581,26 @@ fn ensure_optmem() -> ComponentStatus {
         Err(e) => {
             c.detail = e;
         }
+    }
+    c
+}
+
+// ── dogwood (AWS "Dogwood" runtime verification for AI agents) ─────────────
+
+fn ensure_dogwood() -> ComponentStatus {
+    let mut c = ComponentStatus {
+        name: "dogwood".into(),
+        ..Default::default()
+    };
+    if let Some(bin) = find_bin("dogwood") {
+        c.available = true;
+        c.path = Some(bin.clone());
+        c.version = cmd_version(&bin, &["--version"]);
+        c.detail =
+            "CLI ready · on-demand guardrail/evaluation layer (not a runtime trust anchor)".into();
+    } else {
+        c.detail =
+            "not installed - cargo install --git https://github.com/dogwood-policy/dogwood amzn-dogwood-cli".into();
     }
     c
 }

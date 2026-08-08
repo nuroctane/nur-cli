@@ -50,7 +50,7 @@ impl Tool for ConnectomeTool {
                 "action": {
                     "type": "string",
                     "enum": [
-                        "remember", "recall", "list", "consolidate", "extract", "supersede",
+                        "remember", "recall", "list", "consolidate", "promote", "extract", "supersede",
                         "chronicle", "chronicle_tail", "checkpoint", "restore", "status",
                         "graph"
                     ]
@@ -146,13 +146,24 @@ impl Tool for ConnectomeTool {
                     .and_then(|v| v.as_f64())
                     .unwrap_or(0.75) as f32;
                 let e = native_memory::remember(
-                    &scope, &text, tier, voice, &tags, conf, "connectome_tool",
+                    &scope,
+                    &text,
+                    tier,
+                    voice,
+                    &tags,
+                    conf,
+                    "connectome_tool",
                 )
                 .map_err(NurError::Tool)?;
                 let _ = chronicle::append(
                     &scope,
                     "remember",
-                    &format!("stored {} {} — {}", e.id, e.tier.as_str(), e.text.chars().take(80).collect::<String>()),
+                    &format!(
+                        "stored {} {} — {}",
+                        e.id,
+                        e.tier.as_str(),
+                        e.text.chars().take(80).collect::<String>()
+                    ),
                     None,
                 );
                 Ok(format!(
@@ -192,6 +203,11 @@ impl Tool for ConnectomeTool {
                 let _ = chronicle::append(&scope, "maintain", &msg, None);
                 Ok(msg)
             }
+            "promote" => {
+                let msg = native_memory::promote_aged(&scope).map_err(NurError::Tool)?;
+                let _ = chronicle::append(&scope, "maintain", &msg, None);
+                Ok(msg)
+            }
             "supersede" => {
                 let text = arg_str(args, "text")?;
                 // Subject = a short noun token the contradiction pivots on (e.g. "grep").
@@ -206,9 +222,8 @@ impl Tool for ConnectomeTool {
                             .unwrap_or(text.as_str())
                             .to_string()
                     });
-                let n =
-                    native_memory::supersede_contradictions(&scope, &subject, &text)
-                        .map_err(NurError::Tool)?;
+                let n = native_memory::supersede_contradictions(&scope, &subject, &text)
+                    .map_err(NurError::Tool)?;
                 Ok(format!(
                     "superseded {n} older contradicting memory/memories (archived, lowered confidence)\\n  recommend: also call remember to store the corrected fact"
                 ))
@@ -217,7 +232,9 @@ impl Tool for ConnectomeTool {
                 let text = arg_str(args, "text")?;
                 let cands = native_memory::extract_candidates(&text);
                 if cands.is_empty() {
-                    return Ok("no extractable durable lines (use remember for explicit notes)".into());
+                    return Ok(
+                        "no extractable durable lines (use remember for explicit notes)".into(),
+                    );
                 }
                 let mut stored = Vec::new();
                 for c in cands {
@@ -233,14 +250,15 @@ impl Tool for ConnectomeTool {
                         stored.push(e.id);
                     }
                 }
-                Ok(format!("extracted {} candidate(s): {}", stored.len(), stored.join(", ")))
+                Ok(format!(
+                    "extracted {} candidate(s): {}",
+                    stored.len(),
+                    stored.join(", ")
+                ))
             }
             "chronicle" => {
                 let text = arg_str(args, "text")?;
-                let kind = args
-                    .get("tier")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("note");
+                let kind = args.get("tier").and_then(|v| v.as_str()).unwrap_or("note");
                 let ev = chronicle::append(&scope, kind, &text, None).map_err(NurError::Tool)?;
                 Ok(format!("chronicle #{} [{}] recorded", ev.seq, ev.kind))
             }
@@ -300,7 +318,9 @@ impl Tool for ConnectomeTool {
                 }
                 Ok(out.join("\n"))
             }
-            other => Err(NurError::Tool(format!("unknown connectome action `{other}`"))),
+            other => Err(NurError::Tool(format!(
+                "unknown connectome action `{other}`"
+            ))),
         }
     }
 }

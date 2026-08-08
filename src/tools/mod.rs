@@ -1,22 +1,23 @@
 pub mod akarso;
-mod apply_patch;
 pub mod anydoc_tool;
+mod apply_patch;
 mod bash;
 pub mod browser;
 pub mod egaki_tool;
 pub mod terminal_browser;
 pub use terminal_browser::is_read_only_action as terminal_browser_is_read_only;
+mod admission_tool;
 pub mod bg_tool;
 mod connectome_tool;
 mod context_tool;
+pub mod dogwood_tool;
 pub mod fractal_tool;
 mod goal_tool;
 mod harness_tool;
+pub mod headroom_tool;
+mod ipython_tool;
 mod mem_tool;
 mod message_tool;
-mod admission_tool;
-mod ipython_tool;
-pub mod headroom_tool;
 pub mod optmem_tool;
 pub mod penecho_tool;
 mod proposal_tool;
@@ -214,6 +215,7 @@ impl ToolHost {
             Box::new(fractal_tool::Fractal),
             Box::new(headroom_tool::Headroom),
             Box::new(optmem_tool::OptMem),
+            Box::new(dogwood_tool::Dogwood),
             Box::new(egaki_tool::Egaki),
             Box::new(executor_tool::ExecutorTool),
             Box::new(omp::OmpTool),
@@ -323,6 +325,7 @@ impl ToolHost {
             "fractal" => fractal_tool::Fractal.execute(&args, ctx),
             "headroom" => headroom_tool::Headroom.execute(&args, ctx),
             "optmem" => optmem_tool::OptMem.execute(&args, ctx),
+            "dogwood" => dogwood_tool::Dogwood.execute(&args, ctx),
             "egaki" => egaki_tool::Egaki.execute(&args, ctx),
             "executor" => executor_tool::ExecutorTool.execute(&args, ctx),
             "omp" => omp::OmpTool.execute(&args, ctx),
@@ -514,6 +517,7 @@ mod tests {
             "fractal",
             "headroom",
             "optmem",
+            "dogwood",
             "egaki",
             "executor",
             "omp",

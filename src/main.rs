@@ -895,6 +895,8 @@ async fn run_headless(
     verbose: bool,
 ) -> Result<()> {
     ade::set_terminal_title(&ade::session_window_title(prompt));
+    let peer_session_id = std::env::var("NUR_SESSION_ID").unwrap_or_else(|_| session.id.clone());
+    let peer_cwd = cwd.to_string_lossy().into_owned();
     let runner = Arc::new(AgentRunner {
         client,
         config: cfg,
@@ -1014,6 +1016,8 @@ async fn run_headless(
             }
         }
     }
+
+    crate::agent::mailbox::stop_live_watch(&peer_cwd, &peer_session_id);
 
     match final_result {
         Ok(text) => {

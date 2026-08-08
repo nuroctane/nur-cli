@@ -322,6 +322,27 @@ impl ApiClient {
                 || crate::providers::cursor_endpoint_is_agent_rpc(&self.base_url))
     }
 
+    /// ChatGPT/Codex OAuth's Responses endpoint requires `stream: true` and
+    /// rejects native subagent requests that send `stream: false` with HTTP 400.
+    /// API-key OpenAI remains configurable; only the OAuth Responses route is
+    /// forced to stream.
+    pub(crate) fn requires_streaming_responses(&self) -> bool {
+        self.oauth.is_some()
+            && matches!(self.provider_id.as_str(), "openai" | "openai-cc")
+            && self.style == ApiStyle::Responses
+    }
+
+    fn response_request_for_wire(&self, req: &ResponseRequest) -> ResponseRequest {
+        let mut wire = req.clone();
+        if self.requires_streaming_responses() {
+            // Central enforcement covers background Responses calls too
+            // (compaction, memory extraction), not only AgentRunner's main loop.
+            wire.stream = Some(true);
+        }
+        sanitize_media_for_provider(&mut wire.input, &self.provider_id);
+        wire
+    }
+
     /// Is this client pointed at an OpenCode gateway (Zen or Go)?
     ///
     /// Only that route opts into the message-based retries below: OpenCode
@@ -549,10 +570,10 @@ impl ApiClient {
             ApiStyle::GeminiCloudCode => return self.create_gemini_cloudcode(req).await,
             ApiStyle::Responses => {}
         }
-        // ChatGPT/Codex OAuth backend often ignores stream:false and returns SSE.
-        // Collect the completed event rather than failing JSON parse on `event:`.
-        let mut req_owned = req.clone();
-        sanitize_media_for_provider(&mut req_owned.input, &self.provider_id);
+        // Normalize all Responses calls at the wire boundary. In particular,
+        // ChatGPT/Codex OAuth rejects `stream:false` rather than merely ignoring
+        // it, and returns SSE when streaming is enabled.
+        let req_owned = self.response_request_for_wire(req);
         let req = &req_owned;
         let url = format!("{}/responses", self.base_url);
         let mut attempt = 0u32;
@@ -2045,6 +2066,48 @@ fn uuid_simple() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chatgpt_oauth_responses_requires_streaming_for_subagents() {
+        let mut oauth = ApiClient::new("https://chatgpt.com/backend-api/codex", "token").unwrap();
+        oauth.provider_id = "openai".into();
+        oauth.oauth = Some(crate::auth::OAuthRequestContext::default());
+        oauth.style = ApiStyle::Responses;
+        assert!(oauth.requires_streaming_responses());
+        let request = ResponseRequest {
+            model: "gpt-test".into(),
+            input: serde_json::json!([]),
+            instructions: None,
+            tools: None,
+            tool_choice: None,
+            store: Some(false),
+            include: None,
+            reasoning: None,
+            stream: Some(false),
+            parallel_tool_calls: None,
+            prompt_cache_key: None,
+        };
+        assert_eq!(
+            oauth.response_request_for_wire(&request).stream,
+            Some(true),
+            "the actual OAuth Responses wire request must force stream=true"
+        );
+
+        let mut api_key = ApiClient::new("https://api.openai.com/v1", "sk-test").unwrap();
+        api_key.provider_id = "openai".into();
+        api_key.style = ApiStyle::Responses;
+        assert!(
+            !api_key.requires_streaming_responses(),
+            "API-key OpenAI honors the user's stream preference"
+        );
+        assert_eq!(
+            api_key.response_request_for_wire(&request).stream,
+            Some(false)
+        );
+
+        oauth.style = ApiStyle::ChatCompletions;
+        assert!(!oauth.requires_streaming_responses());
+    }
 
     #[test]
     fn input_video_is_downgraded_for_non_meta_providers() {

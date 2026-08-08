@@ -78,7 +78,7 @@ pub fn is_read_only(name: &str, args: &Value) -> bool {
         "message" => args
             .get("action")
             .and_then(|a| a.as_str())
-            .map(|s| matches!(s, "recv" | "status"))
+            .map(|s| matches!(s, "recv" | "status" | "peers" | "list"))
             .unwrap_or(false),
         "mem" => args
             .get("action")
@@ -119,6 +119,7 @@ pub fn is_read_only(name: &str, args: &Value) -> bool {
         "fractal" => crate::tools::fractal_tool::is_read_only_action(&args.to_string()),
         "headroom" => crate::tools::headroom_tool::is_read_only_action(&args.to_string()),
         "optmem" => crate::tools::optmem_tool::is_read_only_action(&args.to_string()),
+        "dogwood" => crate::tools::dogwood_tool::is_read_only_action(&args.to_string()),
         "egaki" => crate::tools::egaki_tool::is_read_only_action(&args.to_string()),
         "executor" => crate::tools::executor_is_read_only(&args.to_string()),
         "omp" => crate::tools::omp::is_read_only_value(args),
@@ -176,6 +177,7 @@ pub fn is_destructive(name: &str, args: &Value) -> bool {
         "fractal" => !is_read_only("fractal", args),
         "headroom" => !is_read_only("headroom", args),
         "optmem" => !is_read_only("optmem", args),
+        "dogwood" => !is_read_only("dogwood", args),
         "egaki" => !is_read_only("egaki", args),
         "omp" => !is_read_only("omp", args),
         "browser" => !is_read_only("browser", args),

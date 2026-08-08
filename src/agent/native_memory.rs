@@ -356,7 +356,8 @@ pub fn recall(scope: &str, query: &str, k: usize) -> Vec<(MemoryEntry, f32)> {
 }
 
 fn e_text_has(e: &MemoryEntry, term: &str) -> bool {
-    e.text.to_ascii_lowercase().contains(term) || e.tags.iter().any(|t| t.to_ascii_lowercase() == *term)
+    e.text.to_ascii_lowercase().contains(term)
+        || e.tags.iter().any(|t| t.to_ascii_lowercase() == *term)
 }
 
 /// Thin inverted index (term → doc frequency). Built per recall from the live
@@ -413,9 +414,7 @@ pub fn consolidate_localized(scope: &str, max_l1: usize) -> Result<String, Strin
     let batch: Vec<MemoryEntry> = l1.iter().take(take).map(|e| (*e).clone()).collect();
     let ids: Vec<String> = batch.iter().map(|e| e.id.clone()).collect();
     let merged_body = {
-        let mut lines = vec![
-            "I consolidated older fine memories into an era note:".to_string(),
-        ];
+        let mut lines = vec!["I consolidated older fine memories into an era note:".to_string()];
         for e in &batch {
             let snippet: String = e.text.chars().take(200).collect();
             lines.push(format!("- {snippet}"));
@@ -466,6 +465,137 @@ pub fn consolidate_localized(scope: &str, max_l1: usize) -> Result<String, Strin
         l2.id,
         l2.text.chars().count()
     ))
+}
+
+/// M4 age-based promotion — closes the "tier ladder doesn't climb" gap.
+///
+/// Previously nothing automatically moved a surviving `recent` note up to `L1`,
+/// so on long sessions everything piled into `recent` and the design's four-tier
+/// hierarchy degraded to ~two tiers. This promotes entries by age:
+/// - `recent` older than `recent_age_days` (default 2) with confidence ≥ 0.5 → `L1`
+/// - `L1` older than `l1_age_days` (default 14) → `L2` era note (compact, deduped)
+/// - `L2` older than `l2_age_days` (default 45) → `L3` (the deep tier nothing
+///   ever produced before), as a single lossy summary.
+///
+/// Append-only: rows are never deleted. Recent entries move tiers in place;
+/// folded L1/L2 rows are retained as retired archive entries while a compact era
+/// note is appended.
+pub fn promote_aged(scope: &str) -> Result<String, String> {
+    let text = std::fs::read_to_string(entries_path(scope)).unwrap_or_default();
+    let mut all: Vec<MemoryEntry> = text
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    let now = now_unix();
+    let mut recent_to_l1 = 0usize;
+    let mut into_l2: Vec<MemoryEntry> = Vec::new();
+    let mut into_l3: Vec<MemoryEntry> = Vec::new();
+
+    // Pass 1: age the entries in place (id stays the same; tier/updated flip).
+    for e in &mut all {
+        if e.retired {
+            continue;
+        }
+        let age_days = now.saturating_sub(e.created_unix) as f32 / 86_400.0;
+        match e.tier {
+            Tier::Recent if age_days >= 2.0 && e.confidence >= 0.5 => {
+                e.tier = Tier::L1;
+                e.updated_unix = now;
+                recent_to_l1 += 1;
+            }
+            Tier::L1 if age_days >= 14.0 => into_l2.push(e.clone()),
+            Tier::L2 if age_days >= 45.0 => into_l3.push(e.clone()),
+            _ => {}
+        }
+    }
+
+    let mut report = String::new();
+    if recent_to_l1 > 0 {
+        report.push_str(&format!("recent→l1 x{recent_to_l1}; "));
+    }
+    if !into_l2.is_empty() {
+        report.push_str(&format!("l1→l2 x{}; ", into_l2.len()));
+    }
+    if !into_l3.is_empty() {
+        report.push_str(&format!("l2→l3 x{}; ", into_l3.len()));
+    }
+
+    // Pass 2: fold aged L1/L2 batches into merged era notes, retiring the
+    // verbatim originals (append-only — retire, never delete).
+    all = fold_into_era(all, Tier::L2, &into_l2, now);
+    all = fold_into_era(all, Tier::L3, &into_l3, now);
+
+    rewrite_all(scope, &all)?;
+    // Coherence: index era notes so deep recollection stays searchable by meaning.
+    reindex_era_notes(scope, &all);
+
+    if report.trim().is_empty() {
+        Ok("no aged memories to promote".into())
+    } else {
+        Ok(format!("promote_aged: {report}"))
+    }
+}
+
+/// Retire `batch` (all same new `target` tier) and append one merged note built
+/// from their text. Returns the updated entry list.
+fn fold_into_era(
+    mut all: Vec<MemoryEntry>,
+    target: Tier,
+    batch: &[MemoryEntry],
+    now: u64,
+) -> Vec<MemoryEntry> {
+    if batch.is_empty() {
+        return all;
+    }
+    let batch_ids: std::collections::HashSet<String> = batch.iter().map(|e| e.id.clone()).collect();
+    // Retire originals in place so the append-only archive remains auditable.
+    for e in &mut all {
+        if batch_ids.contains(&e.id) {
+            e.retired = true;
+            e.updated_unix = now;
+        }
+    }
+    let mut lines = Vec::new();
+    for e in batch {
+        lines.push(format!(
+            "- {}",
+            e.text.chars().take(200).collect::<String>()
+        ));
+    }
+    let tier_word = match target {
+        Tier::L2 => "l1",
+        Tier::L3 => "l2",
+        _ => "mem",
+    };
+    let note = MemoryEntry {
+        id: format!("m-{}", &uuid::Uuid::new_v4().simple().to_string()[..12]),
+        tier: target,
+        voice: Voice::FirstPerson,
+        text: format!(
+            "I consolidated {} {} notes into an era recollection:\n{}",
+            batch.len(),
+            tier_word,
+            lines.join("\n")
+        ),
+        tags: vec!["era".into(), "consolidated".into()],
+        confidence: 0.6,
+        created_unix: now,
+        updated_unix: now,
+        source: "maintenance".into(),
+        retired: false,
+    };
+    all.push(note);
+    all
+}
+
+/// Index any era/consolidated note into the vector store (best-effort).
+fn reindex_era_notes(scope: &str, all: &[MemoryEntry]) {
+    let mut vs = crate::agent::memory_vector::VectorStore::open(scope);
+    for e in all {
+        if !e.retired && e.tags.iter().any(|t| t == "era" || t == "consolidated") {
+            let _ = vs.index(&e.id, &e.text);
+        }
+    }
 }
 
 // ─── Prompt injection ────────────────────────────────────────────────────────
@@ -573,7 +703,11 @@ pub fn ops_report(scope: &str) -> String {
 
 /// M4 conflict/supersede: mark contradicting older memories of the same subject
 /// as lower-confidence (soft supersede, archive retained).
-pub fn supersede_contradictions(scope: &str, subject: &str, new_text: &str) -> Result<usize, String> {
+pub fn supersede_contradictions(
+    scope: &str,
+    subject: &str,
+    new_text: &str,
+) -> Result<usize, String> {
     let text = std::fs::read_to_string(entries_path(scope)).unwrap_or_default();
     let mut all: Vec<MemoryEntry> = text
         .lines()
@@ -639,21 +773,28 @@ pub fn model_extract_prompt(turn_text: &str, max_chars: usize) -> String {
 pub fn parse_model_extraction(output: &str) -> Vec<(String, Voice)> {
     let mut out = Vec::new();
     for raw in output.lines() {
-        let t = raw.trim().trim_matches(['-', '*', '1', '.', '2', '3', '4', '5', '6', '7', '8', '9']).trim();
-        if t.is_empty() || t.to_ascii_lowercase().starts_with("facts") || t.to_ascii_lowercase().starts_with("none") {
+        let t = raw
+            .trim()
+            .trim_matches(['-', '*', '1', '.', '2', '3', '4', '5', '6', '7', '8', '9'])
+            .trim();
+        if t.is_empty()
+            || t.to_ascii_lowercase().starts_with("facts")
+            || t.to_ascii_lowercase().starts_with("none")
+        {
             continue;
         }
         if t.len() < 12 || t.len() > 400 || looks_secret(t) {
             continue;
         }
-        let (voice, text) = if let Some(rest) = t.strip_prefix("[I]").or_else(|| t.strip_prefix("[i]")) {
-            (Voice::FirstPerson, rest.trim())
-        } else if let Some(rest) = t.strip_prefix("[O]").or_else(|| t.strip_prefix("[o]")) {
-            (Voice::Observed, rest.trim())
-        } else {
-            // No prefix → observed (conservative).
-            (Voice::Observed, t)
-        };
+        let (voice, text) =
+            if let Some(rest) = t.strip_prefix("[I]").or_else(|| t.strip_prefix("[i]")) {
+                (Voice::FirstPerson, rest.trim())
+            } else if let Some(rest) = t.strip_prefix("[O]").or_else(|| t.strip_prefix("[o]")) {
+                (Voice::Observed, rest.trim())
+            } else {
+                // No prefix → observed (conservative).
+                (Voice::Observed, t)
+            };
         if !text.is_empty() {
             out.push((text.trim().trim_matches('.').to_string(), voice));
         }
@@ -731,7 +872,10 @@ mod tests {
         // storage "I prefer grep..." = +1 (prefer); "never rely on grep" = -1 (never) → contradict.
         assert_eq!(n, 1, "one contradicting memory demoted");
         let ops = load_ops(&s);
-        assert!(ops.remember_count >= 1 && ops.recall_count >= 1, "ops counters record work");
+        assert!(
+            ops.remember_count >= 1 && ops.recall_count >= 1,
+            "ops counters record work"
+        );
         let _ = std::fs::remove_dir_all(scope_dir(&s));
     }
 
@@ -783,6 +927,70 @@ mod tests {
     }
 
     #[test]
+    fn fold_into_era_retires_but_preserves_source_rows() {
+        let source = MemoryEntry {
+            id: "source-memory".into(),
+            tier: Tier::L1,
+            voice: Voice::Observed,
+            text: "A durable source fact that must remain auditable".into(),
+            tags: vec!["fact".into()],
+            confidence: 0.8,
+            created_unix: 1,
+            updated_unix: 1,
+            source: "test".into(),
+            retired: false,
+        };
+        let folded = fold_into_era(vec![source.clone()], Tier::L2, &[source], 100);
+        let archived = folded.iter().find(|e| e.id == "source-memory").unwrap();
+        assert!(archived.retired, "source row remains as a retired archive entry");
+        assert!(folded.iter().any(|e| e.tier == Tier::L2 && !e.retired));
+    }
+
+    #[test]
+    fn promote_aged_climbs_tier_ladder() {
+        let s = scope();
+        // Recent, old enough to promote, high confidence.
+        remember(
+            &s,
+            "I decided to always prefer ripgrep for code search",
+            Tier::Recent,
+            Voice::FirstPerson,
+            &["tools".into()],
+            0.9,
+            "t",
+        )
+        .unwrap();
+        // Backdate it > 2 days so it qualifies for recent→l1. Parse the actual
+        // stored created_unix (not a fresh now_unix(), which can roll over a
+        // second and make the string replace miss → flaky).
+        {
+            let p = entries_path(&s);
+            let text = std::fs::read_to_string(&p).unwrap();
+            // created_unix is the first timestamp field in the serialized entry.
+            let created: u64 = text
+                .split("\"created_unix\":")
+                .nth(1)
+                .and_then(|s| s.split(',').next())
+                .and_then(|s| s.trim().parse().ok())
+                .expect("entry should have a created_unix");
+            let old = created - 5 * 86_400; // 5 days ago
+            let new_text = text.replace(
+                &format!("\"created_unix\":{created}"),
+                &format!("\"created_unix\":{old}"),
+            );
+            std::fs::write(&p, new_text).unwrap();
+        }
+        let msg = promote_aged(&s).unwrap();
+        assert!(msg.contains("recent→l1"), "expected l1 promotion: {msg}");
+        let entries = load_entries(&s);
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.tier == Tier::L1 && e.text.contains("ripgrep")),
+            "aged recent memory should now be L1"
+        );
+        let _ = std::fs::remove_dir_all(scope_dir(&s));
+    }
 
     #[test]
     fn extract_picks_decision_lines() {
@@ -792,5 +1000,3 @@ mod tests {
         assert!(c.iter().any(|l| l.contains("decided")));
     }
 }
-
-

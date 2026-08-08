@@ -8,7 +8,44 @@ disable-model-invocation: false
 
 Takumi is a Rust rendering engine that turns JSX / HTML / node trees into PNG,
 JPEG, WebP, SVG, GIF, and PDF — no headless Chromium (saves ~300MB RAM per card
-vs. a browser). Drop-in compatible with `next/og`.
+vs. a browser). Drop-in compatible with `next/og`. Current: `takumi-js` /
+`takumi` = **2.5.11** (npm + crates.io).
+
+> **Nur CLI note:** bundling `takumi` as a first-class binary tool is blocked by
+> an upstream `takumi-raster` build issue, so there is no `nur render_card`
+> command. But `takumi-js` is a normal npm package you CAN add to any Node
+> project (repo, scratch dir, or `nur` scratch) and render cards with — no
+> browser, no Rust compile. Use that path (below); revisit the crate when
+> upstream fixes takumi-raster.
+
+## Runnable standalone recipe (no browser, no Rust build)
+
+Works in any Node >= 20 project (or a throwaway dir). This is the command the
+agent should actually run when a task wants an OG card / share image:
+
+```ts
+// render-card.ts
+import { render } from "takumi-js";
+import { writeFileSync } from "node:fs";
+
+const png = await render(
+  <div tw="w-full h-full flex items-center justify-center bg-slate-900">
+    <h1 tw="text-6xl font-bold text-white">Hello from Takumi</h1>
+    <p tw="text-2xl text-slate-300">rendered without Chromium</p>
+  </div>,
+  { width: 1200, height: 630 }
+);
+writeFileSync("card.png", png);
+```
+
+```bash
+# in the project/scratch dir:
+npm i takumi-js           # or: bun i takumi-js
+node render-card.ts       # or: bun render-card.ts  → writes card.png
+```
+
+Note: `render` returns a `Buffer`/`Uint8Array` — write it with `writeFileSync`
+rather than `console.log` (binaries become garbled text if printed to stdout).
 
 ## Use it
 
@@ -16,13 +53,6 @@ vs. a browser). Drop-in compatible with `next/og`.
 - Via an **API route** (`next/og`-compatible):
   `import { ImageResponse } from "takumi-js/response"`.
 - As a **Rust crate**: `cargo add takumi` (field `cargo add takumi --features from-html,svg-backend`).
-
-> **Nur CLI note:** nur explored bundling `takumi` as a first-class `render_card`
-> tool. The `takumi-raster 0.4.11` dependency does **not** compile on our toolchain
-> (internal `RenderedImage configured out` in `node_paint.rs` — an upstream bug),
-> so it is NOT wired into the binary yet. Use the CLI/JS paths above, or the
-> `excalidraw`/`tldraw` tools for diagrams. Revisit the crate when upstream fixes
-> takumi-raster.
 
 ## Typical OG card
 

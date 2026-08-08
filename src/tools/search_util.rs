@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Directories almost never useful for agent code search (always skip, even without .gitignore).
 pub const HARD_EXCLUDES: &[&str] = &[
@@ -60,6 +60,14 @@ pub fn find_rg() -> Option<PathBuf> {
     which_bin("rg")
 }
 
+/// Threads for rg parallelism (cap so we don't oversubscribe tiny searches).
+fn rg_threads() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .clamp(2, 16)
+}
+
 fn which_bin(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
@@ -79,6 +87,8 @@ fn which_bin(name: &str) -> Option<PathBuf> {
 }
 
 /// Run ripgrep; return stdout lines or None if rg missing/failed hard.
+/// Optimized for speed: no config, explicit globs, parallel (-j), deterministic
+/// sorted output, per-file -m cap plus a global line cap, and a filesize bound.
 pub fn rg_grep(
     cwd: &Path,
     pattern: &str,
@@ -87,22 +97,26 @@ pub fn rg_grep(
     max_matches: usize,
 ) -> Option<String> {
     let rg = find_rg()?;
+    let j = rg_threads().to_string();
     let mut cmd = Command::new(rg);
     cmd.current_dir(cwd)
+        .arg("--no-config")
         .arg("--line-number")
         .arg("--no-heading")
         .arg("--color=never")
         .arg("--hidden")
+        .arg("-j")
+        .arg(&j)
+        .arg("--sort")
+        .arg("path")
         .arg("--glob=!.git/*")
-        .arg(format!("--max-count={max_matches}"))
-        // Cap total matches via head-limit style: -m is per-file; we also pass --max-filesize
         .arg("--max-filesize=1M")
         .arg("-m")
         .arg(max_matches.to_string());
     if case_insensitive {
         cmd.arg("-i");
     }
-    // Prefer gitignore semantics
+    // Keep the noise out even without a gitignore (mirror HARD_EXCLUDES).
     cmd.arg("--glob=!node_modules/**")
         .arg("--glob=!target/**")
         .arg("--glob=!dist/**")
@@ -113,11 +127,7 @@ pub fn rg_grep(
         .arg("--glob=!vendor/**");
     cmd.arg("-e").arg(pattern).arg(search_path);
 
-    let start = Instant::now();
     let output = cmd.output().ok()?;
-    if start.elapsed() > SEARCH_BUDGET {
-        // still return what we got if any
-    }
     if !output.status.success() && output.stdout.is_empty() {
         // exit 1 = no matches for rg — treat as empty success
         if output.status.code() == Some(1) {

@@ -1533,18 +1533,16 @@ fn contains_whole_phrase(hay: &str, phrase: &str) -> bool {
 /// was toxic UX. Deliberately excludes ultra-generic words ("use", "agent")
 /// that appear constantly in ordinary coding requests.
 const DELEGATION_CUES: &[&str] = &[
-    "subagent",
-    "sub-agent",
-    "subagents",
-    "sub-agents",
+    // Verbs / unmistakable routing phrases only. Nouns such as "subagent",
+    // "delegation", "orchestration", "swarm", and "in parallel" are ordinary
+    // task subjects and caused toxic false routes (e.g. "fix OpenAI subagent
+    // spawning" opened an OpenAI /login even though no delegation was asked).
     "spawn",
     "delegate",
-    "delegation",
     "dispatch",
     "deploy",
     "fan out",
     "fan-out",
-    "in parallel",
     "hand off",
     "hand-off",
     "handoff",
@@ -1552,9 +1550,6 @@ const DELEGATION_CUES: &[&str] = &[
     "route it",
     "farm out",
     "offload",
-    "orchestrate",
-    "orchestration",
-    "swarm",
     "ask claude",
     "ask grok",
     "ask gemini",
@@ -1807,6 +1802,20 @@ mod tests {
         assert!(
             delegated_providers_in_text("5.6 sol is slow, and gemini too").is_empty(),
             "comparisons must not delegate"
+        );
+        assert!(
+            delegated_providers_in_text(
+                "fix the stream must be true issue for openai subagent spawning natively"
+            )
+            .is_empty(),
+            "a bug request ABOUT OpenAI subagent spawning is not a delegation ask"
+        );
+        assert!(
+            delegated_providers_in_text(
+                "I love gpt 5.6 sol. Regardless, spawn me a subagent and do xyz"
+            )
+            .is_empty(),
+            "provider mention in another clause must not route the later generic spawn"
         );
 
         // Explicit delegation — must trigger.

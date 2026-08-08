@@ -1763,7 +1763,7 @@ dependencies = [
 
 [[package]]
 name = "nur-cli"
-version = "0.27.13"
+version = "0.27.14"
 dependencies = [
  "anydoc",
  "anyhow",

@@ -237,6 +237,11 @@ pub struct Config {
     /// offline n-gram hash embedding, never calls the provider).
     #[serde(default = "default_embed_mode")]
     pub memory_embed_mode: String,
+    /// Inbound peer-mail policy (pi-peer `inbound`): `accept` (default) /
+    /// `ask` (flag inbound mail for review, never auto-approve) / `refuse`
+    /// (drop inbound mail). See `~/.nur/peers` and the `message` tool.
+    #[serde(default = "default_message_inbound")]
+    pub message_inbound: String,
 }
 
 /// `[prewalk]` — plan on the active model, implement on a cheap/smol model.
@@ -409,6 +414,9 @@ fn default_context_register_min_chars() -> u64 {
 fn default_embed_mode() -> String {
     "auto".to_string()
 }
+fn default_message_inbound() -> String {
+    "accept".to_string()
+}
 fn default_subagent_depth() -> u32 {
     1
 }
@@ -455,6 +463,7 @@ impl Default for Config {
             kv_stable_compact: true,
             memory_embed_model: String::new(),
             memory_embed_mode: default_embed_mode(),
+            message_inbound: default_message_inbound(),
         }
     }
 }
