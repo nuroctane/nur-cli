@@ -24,6 +24,10 @@ tool_result_max_chars = 12000
 # max_session_cost_usd = 5.0
 # max_session_tokens = 500000
 
+# Per-request completion ceiling and reservation used before every dispatch.
+# 0 restores the provider default and removes this safety reservation.
+request_output_reserve_tokens = 8192
+
 # Compaction (auto under context pressure, or /compact)
 compact_keep_user_turns = 4
 compact_tool_body_max_chars = 800
@@ -62,13 +66,15 @@ auto_update = true
 | `max_turns` | integer | `0` | Max agent tool/model rounds per user prompt. **`0` = unlimited** (default). Set via config or `/budget turns` / `/turns` |
 | `max_session_cost_usd` | float? | unset (∞) | Optional session $ hard-stop. `/budget cost <usd>` · `/budget clear` |
 | `max_session_tokens` | integer? | unset (∞) | Optional session token hard-stop. `/budget tokens <n>` · `/budget clear` |
+| `request_output_reserve_tokens` | integer | `8192` | Conservative per-request completion ceiling/reservation. Nur preflights estimated input + this reserve against context and session budgets, then sends the matching provider output-limit field where supported. `0` uses the provider default and is intentionally less safe. |
 | `stream` | bool | `true` | Stream API responses |
 | `context_window` | integer | `1000000` | Fallback context window in tokens (range: 1000–2000000). The models.dev catalog is authoritative when it knows the active provider/model; this value is used only when it does not. Auto-compaction keeps an OMP-style response/tool reserve: the larger of 15% or 16,384 tokens on large windows, with a proportional safety clamp on small windows. A local stored-context estimate is used when provider usage is absent or under-reported. |
 | `tool_result_max_chars` | integer | `12000` | Max inline tool output chars; larger results spill to disk (`0` = unlimited) |
 | `compact_keep_user_turns` | integer | `4` | Recent user turns kept after compaction |
 | `compact_tool_body_max_chars` | integer | `800` | When compacting, truncate older tool bodies to this many chars (`0` = leave intact) |
+| `kv_stable_compact` | bool | `true` | `true` preserves the recent working edge verbatim after a stable summary for provider prompt-cache reuse. `false` uses a classic reconstructed working-tail order. Compaction status reports the active strategy. |
 | `compaction.remote_enabled` | bool | `false` | Prefer remote summarizer when an endpoint is set |
-| `compaction.remote_endpoint` | string | unset | OMP-compatible compact URL; setting it opts in. Supports `{systemPrompt,prompt}` endpoints and OpenAI `/chat/completions`; failures fall back locally. Env: `NUR_COMPACT_REMOTE_ENDPOINT` (+ `NUR_COMPACT_REMOTE=1` if only env) |
+| `compaction.remote_endpoint` | string | unset | OMP-compatible compact URL; setting it opts in. Supports `{systemPrompt,prompt}` endpoints and OpenAI `/chat/completions`; failures fall back locally. The bounded transcript crosses this configured remote data boundary. Nur records endpoint origin, bounded input estimate, output estimate, and provider usage when returned in the session receipt. Env: `NUR_COMPACT_REMOTE_ENDPOINT` (+ `NUR_COMPACT_REMOTE=1` if only env) |
 | `prewalk.enabled` | bool | `false` | After todos exist, first write/edit switches to `prewalk.into` / smol |
 | `prewalk.into` | string | unset | Cheap model for prewalk handoff (`/prewalk into …`, or `OMP_SMOL_MODEL` / OMP `modelRoles.smol`) |
 | `poor_mode` | bool | `false` | Skip PLUR auto-inject and long memory (skill NL/slash activation still works) |
@@ -98,6 +104,34 @@ In the TUI you can set ceilings without editing the file:
 ```
 
 When a ceiling is hit, the agent **refuses new API turns** with a clear status message.
+
+`max_turns = 0` means unlimited task completion rounds - it does **not** mean
+that spending is safe or capped. On the first unrestricted turn Nur warns about
+this distinction. Provider usage can be absent or subscription-only, so token
+and dollar enforcement remains estimate-based on those routes.
+
+### Conservative budget preset
+
+For unattended or weekly-allowance-sensitive work, start with this explicit
+preset and adjust upward only after inspecting `/usage` and `/receipt`:
+
+```toml
+# Conservative: 40 model/tool rounds, 250k total tokens, $2.00 estimated
+# list-price spend, and an 8k reserve before every request/failover target.
+max_turns = 40
+max_session_tokens = 250000
+max_session_cost_usd = 2.0
+request_output_reserve_tokens = 8192
+
+# Keep fusion/fan-out opt-in. Every configured panel is an additional reserved
+# request; set fusion_panel = [] for the conservative preset.
+fusion_panel = []
+```
+
+The preflight also evaluates each failover destination for context capacity,
+tool capability, parallel-tool safety, output-limit support, and incremental
+catalog-estimated cost. Local OpenAI-compatible servers use conservative serial
+tool behavior because tool support depends on the selected model template.
 
 ---
 

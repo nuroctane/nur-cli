@@ -1,7 +1,7 @@
 use super::hooks::HooksConfig;
 use super::mode::{PermissionMode, SharedMode};
 use super::permissions::{RuleDecision, SharedPermissions};
-use super::prompt::PromptContext;
+use super::prompt::{attribute_request, PromptContext};
 use super::receipt;
 use super::session::Session;
 use super::subagent;
@@ -58,6 +58,15 @@ pub enum AgentEvent {
         retry_kind: Option<String>,
         /// Optional exact model id the original call requested.
         retry_model: Option<String>,
+    },
+    /// `/fusion` named a provider that has no usable saved, environment, local,
+    /// vendor-CLI, or OMP credential. The TUI opens the same provider auth
+    /// window and replays the exact fusion request after authentication.
+    FusionLoginRequired {
+        provider_id: String,
+        provider_name: String,
+        question: String,
+        panel_ids: Vec<String>,
     },
     /// Plan written via submit_plan.
     PlanSubmitted(String),
@@ -325,6 +334,7 @@ impl AgentRunner {
     async fn request_with_failover(
         &self,
         req: &ResponseRequest,
+        usage: &UsageTracker,
         tx: &mpsc::UnboundedSender<AgentEvent>,
         cancel: &CancellationToken,
     ) -> Result<(ApiResponse, usize, Served)> {
@@ -433,9 +443,23 @@ impl AgentRunner {
 
         let mut last = primary_err;
         for t in targets {
+            let preflight =
+                match crate::api::failover::preflight_target(&t, req, &self.config, usage) {
+                    Ok(summary) => summary,
+                    Err(reason) => {
+                        let _ = tx.send(AgentEvent::Status(format!(
+                            "failover skipped {} · {}",
+                            t.provider_id, reason
+                        )));
+                        continue;
+                    }
+                };
             let _ = tx.send(AgentEvent::Status(format!(
                 "provider error ({last}) — failing over to {} · {}",
                 t.provider_id, t.model
+            )));
+            let _ = tx.send(AgentEvent::Status(format!(
+                "failover preflight · {preflight}"
             )));
             let client = match ApiClient::for_provider(&t.base_url, &t.api_key, &t.provider_id) {
                 Ok(c) => c.with_style(t.style),
@@ -449,6 +473,13 @@ impl AgentRunner {
             if let Some(reasoning) = req2.reasoning.as_mut() {
                 reasoning.effort =
                     crate::providers::nearest_effort(&t.provider_id, &self.config.reasoning_effort);
+            }
+            let target_caps = crate::api::failover::route_capabilities(&t.provider_id, t.style);
+            if !target_caps.parallel_tools {
+                req2.parallel_tool_calls = Some(false);
+            }
+            if !target_caps.output_limit {
+                req2.max_output_tokens = None;
             }
             match self.stream_one(&client, &req2, tx, cancel).await {
                 Ok((resp, deltas)) => {
@@ -554,11 +585,6 @@ impl AgentRunner {
             )));
         }
 
-        let tools = if self.is_subagent {
-            self.tools.subagent_tool_defs()
-        } else {
-            self.tools.tool_defs()
-        };
         // Disk-backed prompt parts (skills, NUR.md, memory, shell) — read once
         // per user turn, not once per model request. Pass user_text so natural
         // language (e.g. "think like fable") can auto-activate skills.
@@ -619,6 +645,16 @@ impl AgentRunner {
             if let Some(msg) = session_budget_exceeded(&self.config, usage) {
                 let _ = tx.send(AgentEvent::Status(msg.clone()));
                 return Err(NurError::Budget(msg));
+            }
+            if turns == 1
+                && self.config.max_turns == 0
+                && self.config.max_session_tokens.is_none()
+                && self.config.max_session_cost_usd.is_none()
+            {
+                let _ = tx.send(AgentEvent::Status(
+                    "task completion is unlimited; spend is not capped - set /budget tokens or /budget cost for a hard stop"
+                        .into(),
+                ));
             }
 
             // Auto-compact whenever the window is under pressure — as often as a
@@ -751,6 +787,53 @@ impl AgentRunner {
                 configured_model.to_string()
             };
 
+            let tools = if self.is_subagent {
+                self.tools.subagent_tool_defs()
+            } else {
+                self.tools.root_tool_defs_for_task(user_text, turns > 1)
+            };
+            let attribution = attribute_request(&instructions, &tools, &session.input_items);
+            let output_reserve = self.config.request_output_reserve_tokens;
+            if let Some(msg) = preflight_request_budget(
+                &self.config,
+                usage,
+                &self.config.provider,
+                &effective_model,
+                attribution.estimated_input_tokens(),
+                output_reserve,
+            ) {
+                let _ = tx.send(AgentEvent::Status(msg.clone()));
+                return Err(NurError::Budget(msg));
+            }
+            let _ = tx.send(AgentEvent::Status(format!(
+                "prompt ~{} tok (system {} · tools {} · dialogue {} · tool output {}) · stable-prefix {} · output reserve {}",
+                attribution.estimated_input_tokens(),
+                attribution.system_tokens,
+                attribution.tool_schema_tokens,
+                attribution.dialogue_tokens,
+                attribution.tool_output_tokens,
+                attribution.stable_prefix_fingerprint,
+                output_reserve,
+            )));
+            let primary_style = crate::providers::by_id(&self.config.provider)
+                .map(|provider| provider.style)
+                .unwrap_or(crate::providers::ApiStyle::Responses);
+            let primary_caps =
+                crate::api::failover::route_capabilities(&self.config.provider, primary_style);
+            if !primary_caps.parallel_tools || !primary_caps.output_limit {
+                let mut limits = Vec::new();
+                if !primary_caps.parallel_tools {
+                    limits.push("serial tool calls");
+                }
+                if !primary_caps.output_limit {
+                    limits.push("provider output limit unavailable");
+                }
+                let _ = tx.send(AgentEvent::Status(format!(
+                    "provider capability profile · {}",
+                    limits.join(" · ")
+                )));
+            }
+
             let req = ResponseRequest {
                 model: effective_model,
                 input: Value::Array(session.input_items.clone()),
@@ -775,14 +858,16 @@ impl AgentRunner {
                 // "Stream must be set to true"), so force it on that route even
                 // when the user's global stream display preference is off.
                 stream: Some(self.config.stream || self.client.requires_streaming_responses()),
-                parallel_tool_calls: Some(true),
+                parallel_tool_calls: Some(primary_caps.parallel_tools),
                 // One cache key per session so system instructions + tools can be
                 // prefix-cached across multi-turn agent loops.
                 prompt_cache_key: Some(session.id.clone()),
+                max_output_tokens: (output_reserve > 0 && primary_caps.output_limit)
+                    .then_some(output_reserve),
             };
 
             let (resp, text_deltas, served): (ApiResponse, usize, Served) = match self
-                .request_with_failover(&req, tx, cancel)
+                .request_with_failover(&req, usage, tx, cancel)
                 .await
             {
                 Ok(response) => response,
@@ -867,25 +952,18 @@ impl AgentRunner {
                 Err(error) => return Err(error),
             };
 
-            let (in_tok, out_tok) = if let Some(u) = &resp.usage {
-                let raw: TokenUsage = u.into();
-                usage.record_request_for_route(
-                    &served.provider,
-                    &served.model,
-                    raw,
-                    resp.id.clone(),
-                );
-                let tu = usage.last_usage().clone();
-                session.usage.add(&tu);
-                let toks = (tu.input_tokens, tu.output_tokens);
-                let _ = tx.send(AgentEvent::Usage {
-                    session: usage.session_usage().clone(),
-                    last: tu,
-                });
-                toks
-            } else {
-                (0, 0)
-            };
+            // Every completed request gets a ledger row. `accounting_usage`
+            // prefers provider telemetry and falls back to a local estimate,
+            // so missing usage is never interpreted as free usage.
+            let raw = resp.accounting_usage();
+            usage.record_request_for_route(&served.provider, &served.model, raw, resp.id.clone());
+            let tu = usage.last_usage().clone();
+            session.usage.add(&tu);
+            let (in_tok, out_tok) = (tu.input_tokens, tu.output_tokens);
+            let _ = tx.send(AgentEvent::Usage {
+                session: usage.session_usage().clone(),
+                last: tu,
+            });
 
             // Session receipt: record where this request actually went.
             receipt::record(
@@ -905,8 +983,11 @@ impl AgentRunner {
                 },
             );
 
-            let mut replayed = replay_output_items(&resp.output);
             let mut calls = resp.function_calls();
+            let text = resp.output_text();
+            let suppress_duplicate_preamble =
+                !calls.is_empty() && is_duplicate_tool_preamble(&session.input_items, &text);
+            let mut replayed = replay_output_items(&resp.output);
             // Some gateways number tool calls per *response* (`read_file_5`), so
             // an id can repeat in a later turn. A repeat makes the older
             // `function_call_output` look like this call's answer — the pairing
@@ -921,7 +1002,6 @@ impl AgentRunner {
                 )));
             }
 
-            let text = resp.output_text();
             let unknown_items = resp
                 .output
                 .iter()
@@ -1001,8 +1081,12 @@ impl AgentRunner {
                 truncation_giving_up = false;
             }
 
-            if text_deltas == 0 && !text.is_empty() {
+            if text_deltas == 0 && !text.is_empty() && !suppress_duplicate_preamble {
                 let _ = tx.send(AgentEvent::AssistantMessage(text.clone()));
+            } else if suppress_duplicate_preamble {
+                let _ = tx.send(AgentEvent::Status(
+                    "suppressed duplicate tool rationale in display; durable request transcript retained".into(),
+                ));
             }
 
             if calls.is_empty() {
@@ -1087,39 +1171,74 @@ impl AgentRunner {
                     // Model-assisted extraction (Mem0-class, paper M2) - opt-in.
                     if self.config.memory_model_extract {
                         let prompt = super::native_memory::model_extract_prompt(&text, 8_000);
-                        let req = crate::api::types::ResponseRequest {
-                            model: self.config.model.clone(),
-                            input: serde_json::Value::Array(vec![
-                                crate::api::types::user_text_item(&prompt),
-                            ]),
-                            instructions: None,
-                            tools: None,
-                            tool_choice: None,
-                            store: Some(false),
-                            include: None,
-                            reasoning: Some(crate::api::types::ReasoningConfig {
-                                effort: Some("minimal".into()),
-                                summary: None,
-                            }),
-                            stream: Some(false),
-                            parallel_tool_calls: None,
-                            prompt_cache_key: Some(format!("native-mem-extract:{}", session.id)),
-                        };
-                        let resp = self.client.create_response(&req).await;
-                        if let Ok(resp) = resp {
-                            let output = resp.output_text();
-                            for (fact, voice) in
-                                super::native_memory::parse_model_extraction(&output)
-                            {
-                                let _ = super::native_memory::remember(
-                                    &mem_scope,
-                                    &fact,
-                                    super::native_memory::Tier::L1,
-                                    voice,
-                                    &["model".into()],
-                                    0.7,
-                                    "turn_end_model",
+                        let extract_input_estimate = ((prompt.chars().count() as u64) + 2) / 3;
+                        if let Some(msg) = preflight_request_budget(
+                            &self.config,
+                            usage,
+                            &self.config.provider,
+                            &self.config.model,
+                            extract_input_estimate,
+                            self.config.request_output_reserve_tokens,
+                        ) {
+                            let _ = tx.send(AgentEvent::Status(format!(
+                                "memory extraction skipped - {msg}"
+                            )));
+                        } else {
+                            let req = crate::api::types::ResponseRequest {
+                                model: self.config.model.clone(),
+                                input: serde_json::Value::Array(vec![
+                                    crate::api::types::user_text_item(&prompt),
+                                ]),
+                                instructions: None,
+                                tools: None,
+                                tool_choice: None,
+                                store: Some(false),
+                                include: None,
+                                reasoning: Some(crate::api::types::ReasoningConfig {
+                                    effort: Some("minimal".into()),
+                                    summary: None,
+                                }),
+                                stream: Some(false),
+                                parallel_tool_calls: None,
+                                prompt_cache_key: Some(format!(
+                                    "native-mem-extract:{}",
+                                    session.id
+                                )),
+                                max_output_tokens: (self.config.request_output_reserve_tokens > 0)
+                                    .then_some(self.config.request_output_reserve_tokens),
+                            };
+                            let resp = self.client.create_response(&req).await;
+                            if let Ok(resp) = resp {
+                                let raw = resp.accounting_usage();
+                                usage.record_request_for_route(
+                                    &self.config.provider,
+                                    &self.config.model,
+                                    raw,
+                                    resp.id.clone(),
                                 );
+                                let metered = usage.last_usage().clone();
+                                session.usage.add(&metered);
+                                let _ = tx.send(AgentEvent::Usage {
+                                    session: usage.session_usage().clone(),
+                                    last: metered,
+                                });
+                                let _ = tx.send(AgentEvent::Status(
+                                    "memory extraction · metered auxiliary model request".into(),
+                                ));
+                                let output = resp.output_text();
+                                for (fact, voice) in
+                                    super::native_memory::parse_model_extraction(&output)
+                                {
+                                    let _ = super::native_memory::remember(
+                                        &mem_scope,
+                                        &fact,
+                                        super::native_memory::Tier::L1,
+                                        voice,
+                                        &["model".into()],
+                                        0.7,
+                                        "turn_end_model",
+                                    );
+                                }
                             }
                         }
                     }
@@ -1268,6 +1387,7 @@ impl AgentRunner {
                     })
                     .await
                     .unwrap_or_else(|e| format!("error: headroom task failed: {e}"));
+                    record_auxiliary_telemetry(&session.id);
                     receipt::record(
                         &session.id,
                         receipt::Event::Tool {
@@ -1507,6 +1627,7 @@ impl AgentRunner {
                 // Keep error messages intact (usually short).
                 body
             };
+            record_auxiliary_telemetry(&session.id);
             receipt::record(
                 &session.id,
                 receipt::Event::Tool {
@@ -1735,6 +1856,7 @@ impl AgentRunner {
             })
             .await
             .unwrap_or_else(|e| format!("error: headroom task failed: {e}"));
+            record_auxiliary_telemetry(&session.id);
             receipt::record(
                 &session.id,
                 receipt::Event::Tool {
@@ -2949,6 +3071,35 @@ mod tests {
     }
 
     #[test]
+    fn request_preflight_reserves_output_before_dispatch() {
+        let mut cfg = Config::default();
+        cfg.max_session_tokens = Some(10_000);
+        let usage = UsageTracker::new("preflight".into(), "m".into(), PathBuf::from("."));
+        let err = preflight_request_budget(&cfg, &usage, "meta", "m", 3_000, 8_192)
+            .expect("input plus reserved completion must be checked before dispatch");
+        assert!(err.contains("reserved output"));
+
+        cfg.max_session_tokens = Some(20_000);
+        assert!(preflight_request_budget(&cfg, &usage, "meta", "m", 3_000, 8_192).is_none());
+    }
+
+    #[test]
+    fn duplicate_tool_preamble_only_matches_short_equivalent_text() {
+        let prior = vec![serde_json::json!({
+            "type":"message",
+            "content":[{"type":"output_text","text":"I will inspect the config first."}]
+        })];
+        assert!(is_duplicate_tool_preamble(
+            &prior,
+            "I will inspect the config first!"
+        ));
+        assert!(!is_duplicate_tool_preamble(
+            &prior,
+            "A genuinely different rationale."
+        ));
+    }
+
+    #[test]
     fn browser_perception_is_free_control_is_gated() {
         for free in [
             "tabs", "scan", "snapshot", "tabtree", "status", "console", "network",
@@ -3106,6 +3257,83 @@ pub fn session_budget_exceeded(cfg: &Config, usage: &UsageTracker) -> Option<Str
         }
     }
     None
+}
+
+/// Guard a request before it leaves the machine. Providers often report usage
+/// only after completion (or not at all), so checking the already-spent total
+/// alone leaves one unbounded completion able to cross the user budget.
+pub fn preflight_request_budget(
+    cfg: &Config,
+    usage: &UsageTracker,
+    provider: &str,
+    model: &str,
+    estimated_input_tokens: u64,
+    reserved_output_tokens: u64,
+) -> Option<String> {
+    let requested = estimated_input_tokens.saturating_add(reserved_output_tokens);
+    let context_window =
+        crate::pricing::context_window_for(provider, model).unwrap_or(cfg.context_window);
+    if requested > context_window {
+        return Some(format!(
+            "request preflight blocked: estimated input {estimated_input_tokens} + reserved output {reserved_output_tokens} = {requested} tokens exceeds {provider}/{model} context window {context_window}"
+        ));
+    }
+    let session = usage.session_usage();
+    if let Some(max) = cfg.max_session_tokens {
+        let projected = session.total_tokens.saturating_add(requested);
+        if projected > max {
+            return Some(format!(
+                "request preflight blocked: session tokens {} + estimated input {estimated_input_tokens} + reserved output {reserved_output_tokens} = {projected} would exceed budget {max}",
+                session.total_tokens
+            ));
+        }
+    }
+    if let Some(max) = cfg.max_session_cost_usd {
+        let reserve = TokenUsage {
+            input_tokens: estimated_input_tokens,
+            output_tokens: reserved_output_tokens,
+            total_tokens: requested,
+            ..Default::default()
+        };
+        let projected = session.estimated_cost_usd()
+            + crate::pricing::rates_for(provider, model).cost_for(&reserve);
+        if projected > max {
+            return Some(format!(
+                "request preflight blocked: estimated session cost ${projected:.4} (including this request's ${:.4} reserve) would exceed budget ${max:.4}",
+                crate::pricing::rates_for(provider, model).cost_for(&reserve)
+            ));
+        }
+    }
+    None
+}
+
+/// A display-only suppression predicate for repeated model tool preambles.
+/// The original response remains in `input_items` (including every function
+/// call and id), so no provider transcript or tool pairing is altered.
+fn is_duplicate_tool_preamble(prior_items: &[Value], text: &str) -> bool {
+    let normalized = normalize_tool_preamble(text);
+    if normalized.is_empty() || normalized.len() > 240 {
+        return false;
+    }
+    prior_items.iter().rev().any(|item| {
+        item.get("type").and_then(Value::as_str) == Some("message")
+            && item
+                .pointer("/content/0/text")
+                .and_then(Value::as_str)
+                .map(normalize_tool_preamble)
+                .as_deref()
+                == Some(normalized.as_str())
+    })
+}
+
+fn normalize_tool_preamble(text: &str) -> String {
+    text.to_ascii_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || c.is_ascii_whitespace())
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// In PLAN mode, shell runs freely for reading, parsing, analysis, and scratch
@@ -3724,6 +3952,50 @@ fn emit_side_effects(tx: &mpsc::UnboundedSender<AgentEvent>, name: &str, body: &
     }
 }
 
+/// Drain auxiliary inference receipts created while a tool was running. These
+/// calls are deliberately separate from the primary model ledger because their
+/// provider, model, privacy boundary, and billing provenance can differ.
+fn record_auxiliary_telemetry(session_id: &str) {
+    for event in super::embed::take_embedding_telemetry() {
+        receipt::record(
+            session_id,
+            receipt::Event::AuxiliaryInference {
+                purpose: "embedding".into(),
+                route: event.route,
+                model: event.model,
+                processing: event.processing,
+                input_tokens: event
+                    .input_tokens_reported
+                    .unwrap_or(event.input_tokens_estimate),
+                output_tokens: 0,
+                cost_usd: event.cost_usd_estimate,
+                cost_provenance: event.cost_provenance,
+                outcome: event.outcome,
+            },
+        );
+    }
+    for event in crate::headroom::take_headroom_telemetry() {
+        receipt::record(
+            session_id,
+            receipt::Event::AuxiliaryInference {
+                purpose: "headroom compression".into(),
+                route: event.backend,
+                model: event.model,
+                processing: event.processing,
+                input_tokens: event
+                    .input_tokens
+                    .unwrap_or_else(|| (event.input_chars as u64).div_ceil(4)),
+                output_tokens: event
+                    .output_tokens
+                    .unwrap_or_else(|| (event.output_chars as u64).div_ceil(4)),
+                cost_usd: event.cost_usd,
+                cost_provenance: event.cost_provenance,
+                outcome: "compressed".into(),
+            },
+        );
+    }
+}
+
 /// A spawned subagent run: its report text plus the tokens it spent.
 type SubagentHandle = tokio::task::JoinHandle<Result<(String, TokenUsage)>>;
 
@@ -4200,7 +4472,7 @@ fn resolve_subagent_target(
         }
     };
     let mut key = key;
-    if key.trim().is_empty() && !prov.key_optional {
+    if key.trim().is_empty() && !prov.key_optional && crate::auth::t3_fallback_allowed(prov.id) {
         // No stored credential yet. Before popping a /login modal, try vendor
         // CLI and OMP (universal last resort). Saved nur keys were already
         // attempted above via resolve_api_key_for / load_provider_*. Persist
@@ -4434,11 +4706,19 @@ fn remote_compact_endpoint(cfg: &Config) -> Option<String> {
 }
 
 /// OMP `compaction.remoteEndpoint` protocol: POST `{systemPrompt,prompt}` → `{summary}`.
+struct RemoteCompactSummary {
+    summary: String,
+    endpoint_origin: String,
+    input_tokens_estimate: u64,
+    output_tokens: u64,
+    usage_reported: bool,
+}
+
 async fn try_remote_compact_summary(
     runner: &AgentRunner,
     system_prompt: &str,
     items: &[Value],
-) -> Option<String> {
+) -> Option<RemoteCompactSummary> {
     let endpoint = remote_compact_endpoint(&runner.config)?;
 
     // Preserve both the original goal and the newest in-flight work. The old
@@ -4485,7 +4765,42 @@ async fn try_remote_compact_summary(
         })
         .map(str::trim)
         .filter(|s| !s.is_empty())?;
-    Some(summary.to_string())
+    let input_tokens_estimate = ((serialized.chars().count() as u64) + 2) / 3;
+    let reported_input = v
+        .pointer("/usage/input_tokens")
+        .and_then(Value::as_u64)
+        .or_else(|| v.pointer("/usage/prompt_tokens").and_then(Value::as_u64));
+    let reported_output = v
+        .pointer("/usage/output_tokens")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            v.pointer("/usage/completion_tokens")
+                .and_then(Value::as_u64)
+        });
+    let usage_reported = reported_input.is_some() || reported_output.is_some();
+    Some(RemoteCompactSummary {
+        summary: summary.to_string(),
+        endpoint_origin: compact_endpoint_origin(&endpoint),
+        input_tokens_estimate: reported_input.unwrap_or(input_tokens_estimate),
+        output_tokens: reported_output
+            .unwrap_or_else(|| ((summary.chars().count() as u64) + 2) / 3),
+        usage_reported,
+    })
+}
+
+fn compact_endpoint_origin(endpoint: &str) -> String {
+    let without_scheme = endpoint
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(endpoint);
+    without_scheme
+        .split('/')
+        .next()
+        .unwrap_or("remote-endpoint")
+        .split('?')
+        .next()
+        .unwrap_or("remote-endpoint")
+        .to_string()
 }
 
 fn bounded_remote_compact_transcript(items: &[Value], max_chars: usize) -> String {
@@ -4535,12 +4850,47 @@ pub async fn compact_session(
     let system_prompt = "You compress agent conversations into handoff summaries. \
              Preserve goals, decisions, file paths, and next steps; drop redundant tool noise.";
     items.push(user_text_item(user_prompt));
+    let compact_input_estimate = serde_json::to_string(&items)
+        .map(|text| ((text.chars().count() as u64) + 2) / 3)
+        .unwrap_or(0)
+        .saturating_add(((system_prompt.chars().count() as u64) + 2) / 3);
+    if let Some(msg) = preflight_request_budget(
+        &runner.config,
+        usage,
+        &runner.config.provider,
+        &runner.config.model,
+        compact_input_estimate,
+        runner.config.request_output_reserve_tokens,
+    ) {
+        return Err(NurError::Budget(format!("compaction {msg}")));
+    }
 
     // OMP-compatible remote summarization (compaction.remoteEndpoint). Opt-in;
     // any failure falls through to the local model path below.
     let remote_summary = try_remote_compact_summary(runner, system_prompt, &items).await;
-    let summary = if let Some(summary) = remote_summary {
-        summary
+    let summary = if let Some(remote) = remote_summary {
+        let remote_usage =
+            TokenUsage::estimated(remote.input_tokens_estimate, remote.output_tokens);
+        // The endpoint is an explicit remote boundary, not the active route.
+        // Pricing is necessarily an estimate unless the endpoint reports a
+        // native cost, but tokens still count toward session safeguards.
+        usage.record_request_for_route(
+            "remote-compaction",
+            &remote.endpoint_origin,
+            remote_usage,
+            None,
+        );
+        session.usage.add(usage.last_usage());
+        receipt::record(
+            &session.id,
+            receipt::Event::RemoteCompaction {
+                endpoint_origin: remote.endpoint_origin.clone(),
+                input_tokens_estimate: remote.input_tokens_estimate,
+                output_tokens: remote.output_tokens,
+                usage_reported: remote.usage_reported,
+            },
+        );
+        remote.summary
     } else {
         let req = ResponseRequest {
             model: runner.config.model.clone(),
@@ -4557,13 +4907,13 @@ pub async fn compact_session(
             stream: Some(false),
             parallel_tool_calls: None,
             prompt_cache_key: Some(format!("compact:{}", session.id)),
+            max_output_tokens: (runner.config.request_output_reserve_tokens > 0)
+                .then_some(runner.config.request_output_reserve_tokens),
         };
         let resp = runner.client.create_response(&req).await?;
-        if let Some(u) = &resp.usage {
-            let raw: TokenUsage = u.into();
-            usage.record_request(raw, resp.id.clone());
-            session.usage.add(usage.last_usage());
-        }
+        let raw = resp.accounting_usage();
+        usage.record_request(raw, resp.id.clone());
+        session.usage.add(usage.last_usage());
         let summary = resp.output_text();
         if summary.is_empty() {
             return Err(NurError::Other("compaction produced no summary".into()));
@@ -4630,19 +4980,30 @@ pub async fn compact_session(
     ))];
     let recent = recent_dialogue_items(&session.messages, keep_n);
     let kept = recent.len();
-    // KV-stable (Connectome): the summary is the only new prefix; the recent
-    // dialogue and working tail are carried VERBATIM (never rewritten in
-    // place), so the provider prompt-cache prefix and the model's recent
-    // computed state survive the compaction.
-    new_items.extend(recent);
     let tail = safe_tail_after_compact(&session.input_items, COMPACT_KEEP_WORKING_ITEMS);
-    let tail_kept = extend_unique_items(&mut new_items, tail);
+    let (tail_kept, strategy) = if runner.config.kv_stable_compact {
+        // KV-stable: carry the recent edge verbatim and preserve its ordering,
+        // maximizing a reusable prefix at providers that cache it.
+        new_items.extend(recent);
+        (
+            extend_unique_items(&mut new_items, tail),
+            "kv-stable: recent edge carried verbatim",
+        )
+    } else {
+        // Classic rebuild: put the in-flight work directly after the new
+        // summary, then reconstruct recent dialogue. This deliberately opts
+        // out of retaining the former cacheable edge while preserving valid
+        // tool-call/result pairs for stateless provider loops.
+        let tail_kept = extend_unique_items(&mut new_items, tail);
+        extend_unique_items(&mut new_items, recent);
+        (tail_kept, "classic rebuild: working tail reconstructed")
+    };
     session.input_items = new_items;
     runner.persist_session(session);
     Ok(format!(
         "{summary}\n\n[compact: thinned {thinned} tool bodies · kept {kept} recent dialogue items · \
          {tail_kept} working items · precompact bak written · context_store vars preserved · \
-         kv-stable: recent edge carried verbatim]"
+         {strategy}]"
     ))
 }
 

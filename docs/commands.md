@@ -73,7 +73,8 @@ nur run "explain what this repo does" -v
 Manage the stored API key (`~/.nur/auth.json`).
 
 For **multi-provider** sign-in (pick OpenAI, OpenRouter, Ollama, xAI, … + endpoint
-and default model), use the TUI slash command **`/login`**. See
+and default model), use the TUI slash command **`/provider`** (`/login` is an
+alias). Use **`/auth`** for the scrollable all-provider credential vault. See
 [Authentication](authentication.md). CLI `nur auth login` stores a key for the
 active provider without opening the full catalog picker.
 

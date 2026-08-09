@@ -5,7 +5,8 @@ NurCLI is multi-provider. Sign-in is usually: pick a provider, then enter its AP
 browser** (device code / SSO), same idea as `hf auth login`, `az login`, or `aws sso login`.
 
 The active provider, endpoint, and default model are stored in
-`~/.nur/config.toml`; secrets live only in `~/.nur/auth.json`.
+`~/.nur/config.toml`. Active and provider-scoped credentials live in
+`~/.nur/auth.json`, `provider_keys.json`, and `provider_sessions.json`.
 
 ## Get a key (or browser session)
 
@@ -33,7 +34,8 @@ The active provider, endpoint, and default model are stored in
 ## Log in from the TUI (recommended)
 
 ```text
-/login
+/provider             # choose and activate a provider (/login is an alias)
+/auth                 # manage credentials for every provider without switching
 ```
 
 What happens:

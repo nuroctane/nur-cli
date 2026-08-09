@@ -39,7 +39,10 @@ fn store_path(scope: &str) -> PathBuf {
         })
         .take(80)
         .collect();
-    nur_home().join("native-memory").join(safe).join("vectors.json")
+    nur_home()
+        .join("native-memory")
+        .join(safe)
+        .join("vectors.json")
 }
 
 #[allow(dead_code)] // public API (len/remove/above) used by tests/tools; kept for vector hygiene
@@ -66,9 +69,20 @@ impl VectorStore {
 
     /// Index (embed + persist) a memory entry's text under its id.
     pub fn index(&mut self, id: &str, text: &str) -> String {
-        // Real embedding; source is honest (api vs local) and reported.
-        let (vec, source) = crate::agent::embed::embed_with_source(text);
-        let source = source.to_string();
+        // Auto mode writes a local vector first, then upgrades it remotely in a
+        // detached task when a provider key and an unbudgeted session allow it.
+        // A durable memory write therefore never waits on an embedding network
+        // round trip. Explicit `api` mode keeps its documented synchronous path.
+        let (vec, source, upgrade) = if crate::agent::embed::remote_upgrade_enabled() {
+            (
+                crate::agent::embed::embed_local_with_telemetry(text, "local-pending-remote"),
+                "local-pending-remote".to_string(),
+                true,
+            )
+        } else {
+            let (vec, source) = crate::agent::embed::embed_with_source(text);
+            (vec, source.to_string(), false)
+        };
         let source_for_return = source.clone();
         self.docs.insert(
             id.to_string(),
@@ -79,6 +93,9 @@ impl VectorStore {
             },
         );
         let _ = self.save();
+        if upgrade {
+            schedule_remote_upgrade(self.scope.clone(), id.to_string(), text.to_string());
+        }
         source_for_return
     }
 
@@ -99,10 +116,7 @@ impl VectorStore {
             .values()
             .map(|d| (d.id.clone(), embed::cosine(&q, &d.vec)))
             .collect();
-        scored.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(k.max(1));
         scored
     }
@@ -133,6 +147,24 @@ impl VectorStore {
     }
 }
 
+fn schedule_remote_upgrade(scope: String, id: String, text: String) {
+    let _ = std::thread::Builder::new()
+        .name("nur-memory-embed".into())
+        .spawn(move || {
+            let Ok(vec) = crate::agent::embed::embed_api(&text) else {
+                return;
+            };
+            let mut store = VectorStore::open(&scope);
+            // Do not resurrect entries retired between the local write and the
+            // remote reply. Updating an existing id is safe and idempotent.
+            if let Some(doc) = store.docs.get_mut(&id) {
+                doc.vec = vec;
+                doc.source = "api-background".into();
+                let _ = store.save();
+            }
+        });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,10 +183,7 @@ mod tests {
         // Semantic-ish search should rank mem-a near "which search tool do I prefer".
         let hits = vs.search("how should I search files grep or bash", 2);
         assert_eq!(hits.len(), 2);
-        assert_eq!(
-            hits[0].0, "mem-a",
-            "expected mem-a most similar: {hits:?}"
-        );
+        assert_eq!(hits[0].0, "mem-a", "expected mem-a most similar: {hits:?}");
         assert!(
             hits[0].1 > hits[1].1,
             "mem-a should outrank mem-b: {hits:?}"
@@ -162,11 +191,7 @@ mod tests {
         // Remove
         assert!(vs.remove("mem-b"));
         assert_eq!(vs.len(), 1);
-        let _ = std::fs::remove_dir_all(
-            crate::config::nur_home()
-                .join("native-memory")
-                .join(&s),
-        );
+        let _ = std::fs::remove_dir_all(crate::config::nur_home().join("native-memory").join(&s));
         let _ = src_a;
     }
 
@@ -181,8 +206,6 @@ mod tests {
         assert_eq!(vs.len(), 1);
         let hits = vs.search("what is the weather in tokyo", 1);
         assert_eq!(hits[0].0, "x");
-        let _ = std::fs::remove_dir_all(
-            crate::config::nur_home().join("native-memory").join(&s),
-        );
+        let _ = std::fs::remove_dir_all(crate::config::nur_home().join("native-memory").join(&s));
     }
 }

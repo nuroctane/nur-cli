@@ -13,6 +13,11 @@
 
 use crate::error::NurError;
 use crate::providers::{self, ApiStyle, Provider};
+use crate::{
+    api::types::ResponseRequest,
+    config::Config,
+    usage::{TokenUsage, UsageTracker},
+};
 
 /// A resolved failover destination — a fallback provider whose key we actually
 /// have, ready to build an `ApiClient` from.
@@ -24,6 +29,101 @@ pub struct FailoverTarget {
     /// Wire format from the provider catalog (Responses / Chat / Anthropic Messages).
     pub style: ApiStyle,
     pub model: String,
+}
+
+/// Per-route request facts used before replaying a failed request elsewhere.
+/// The profile is intentionally conservative for self-hosted OpenAI-compatible
+/// servers, where a nominally supported tool field can still depend on the
+/// model template/parser rather than the HTTP API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RouteCapabilities {
+    pub tools: bool,
+    pub parallel_tools: bool,
+    pub output_limit: bool,
+}
+
+pub fn route_capabilities(provider_id: &str, style: ApiStyle) -> RouteCapabilities {
+    let local = matches!(
+        provider_id.trim().to_ascii_lowercase().as_str(),
+        "ollama" | "lmstudio" | "llamacpp" | "vllm" | "local"
+    );
+    RouteCapabilities {
+        // All currently catalogued wire adapters can encode a tool request.
+        // Local compatibility servers retain tools but never get optimistic
+        // parallel dispatch because template/parser support varies by model.
+        tools: true,
+        parallel_tools: !local && !matches!(style, ApiStyle::GeminiCloudCode),
+        output_limit: !matches!(style, ApiStyle::GeminiCloudCode),
+    }
+}
+
+/// Preflight a fallback before it receives a full replay. The error is a
+/// user-visible skip reason, never a transport failure.
+pub fn preflight_target(
+    target: &FailoverTarget,
+    req: &ResponseRequest,
+    cfg: &Config,
+    usage: &UsageTracker,
+) -> std::result::Result<String, String> {
+    let caps = route_capabilities(&target.provider_id, target.style);
+    if req.tools.as_ref().is_some_and(|tools| !tools.is_empty()) && !caps.tools {
+        return Err("does not support requested tool calls".into());
+    }
+    let estimated_input = serde_json::to_string(&req.input)
+        .map(|s| ((s.chars().count() as u64) + 2) / 3)
+        .unwrap_or(0)
+        .saturating_add(
+            req.instructions
+                .as_deref()
+                .map(|s| ((s.chars().count() as u64) + 2) / 3)
+                .unwrap_or(0),
+        )
+        .saturating_add(
+            req.tools
+                .as_ref()
+                .and_then(|tools| serde_json::to_string(tools).ok())
+                .map(|s| ((s.chars().count() as u64) + 2) / 3)
+                .unwrap_or(0),
+        );
+    let reserve = req
+        .max_output_tokens
+        .unwrap_or(cfg.request_output_reserve_tokens);
+    let requested = estimated_input.saturating_add(reserve);
+    let window = crate::pricing::context_window_for(&target.provider_id, &target.model)
+        .unwrap_or(cfg.context_window);
+    if requested > window {
+        return Err(format!(
+            "estimated {estimated_input} input + {reserve} reserved output exceeds context {window}"
+        ));
+    }
+    if let Some(max) = cfg.max_session_tokens {
+        if usage.session_usage().total_tokens.saturating_add(requested) > max {
+            return Err(format!("would exceed remaining session token budget {max}"));
+        }
+    }
+    let reserve_usage = TokenUsage::estimated(estimated_input, reserve);
+    let incremental_cost =
+        crate::pricing::rates_for(&target.provider_id, &target.model).cost_for(&reserve_usage);
+    if let Some(max) = cfg.max_session_cost_usd {
+        if usage.session_usage().estimated_cost_usd() + incremental_cost > max {
+            return Err(format!(
+                "estimated incremental ${incremental_cost:.4} exceeds remaining session cost budget"
+            ));
+        }
+    }
+    Ok(format!(
+        "context {requested}/{window} · reserve ${incremental_cost:.4}{}{}",
+        if caps.parallel_tools {
+            ""
+        } else {
+            " · serial tools"
+        },
+        if caps.output_limit {
+            ""
+        } else {
+            " · output limit unavailable (reservation still enforced)"
+        }
+    ))
 }
 
 /// Whether `err` is worth retrying against a *different* provider.
@@ -245,8 +345,8 @@ pub fn plan_targets(
 
 /// Runtime credential resolver for a fallback provider, in priority order:
 /// 1. a browser OAuth session explicitly saved via `/failover` or `/login`,
-/// 2. the provider's own catalog env var (e.g. `OPENAI_API_KEY`),
-/// 3. an API key saved via `/failover` (`auth::load_provider_key`),
+/// 2. an API key explicitly saved via `/auth` or `/failover`,
+/// 3. the provider's own catalog env var (e.g. `OPENAI_API_KEY`),
 /// 4. vendor CLI session (Claude Code, Codex, Cursor, OpenCode, …), then OMP
 ///    (`omp token <provider>` / `~/.omp/agent/agent.db`) - only when no key on
 ///    disk. Successful OMP imports are persisted so step 1 wins next time,
@@ -260,13 +360,13 @@ pub fn resolve_target_key(p: &Provider) -> Option<String> {
             return Some(k);
         }
     }
-    if let Ok(k) = std::env::var(p.env_key) {
+    if let Some(k) = crate::auth::load_provider_key(p.id) {
         let k = k.trim().to_string();
         if !k.is_empty() {
             return Some(k);
         }
     }
-    if let Some(k) = crate::auth::load_provider_key(p.id) {
+    if let Ok(k) = std::env::var(p.env_key) {
         let k = k.trim().to_string();
         if !k.is_empty() {
             return Some(k);
@@ -274,25 +374,27 @@ pub fn resolve_target_key(p: &Provider) -> Option<String> {
     }
     // Last resort: vendor CLI, then OMP. Isolated via run_blocking: this is
     // called synchronously from the async failover path and can shell out.
-    if let Ok(Some(tokens)) =
-        crate::oauth::run_blocking(|| crate::oauth::import_existing_session(p.id))
-    {
-        let tok = tokens.access_token.trim().to_string();
-        if !tok.is_empty() {
-            if crate::oauth::omp_bridge::is_omp_import(&tokens) {
-                if crate::oauth::omp_bridge::is_omp_oauth_import(&tokens) {
-                    let _ = crate::auth::save_provider_oauth(
-                        p.id,
-                        &tok,
-                        tokens.refresh_token.clone(),
-                        tokens.expires_at,
-                        tokens.meta.clone(),
-                    );
-                } else {
-                    let _ = crate::auth::save_provider_key(p.id, &tok);
+    if crate::auth::t3_fallback_allowed(p.id) {
+        if let Ok(Some(tokens)) =
+            crate::oauth::run_blocking(|| crate::oauth::import_existing_session(p.id))
+        {
+            let tok = tokens.access_token.trim().to_string();
+            if !tok.is_empty() {
+                if crate::oauth::omp_bridge::is_omp_import(&tokens) {
+                    if crate::oauth::omp_bridge::is_omp_oauth_import(&tokens) {
+                        let _ = crate::auth::save_provider_oauth(
+                            p.id,
+                            &tok,
+                            tokens.refresh_token.clone(),
+                            tokens.expires_at,
+                            tokens.meta.clone(),
+                        );
+                    } else {
+                        let _ = crate::auth::save_provider_key(p.id, &tok);
+                    }
                 }
+                return Some(tok);
             }
-            return Some(tok);
         }
     }
     if p.key_optional {
@@ -625,5 +727,70 @@ mod tests {
         let p = providers::by_id("openai").expect("openai in catalog");
         assert!(!p.key_optional);
         assert_eq!(p.env_key, "OPENAI_API_KEY");
+    }
+
+    #[test]
+    fn local_fallbacks_are_serial_tool_conservative() {
+        let caps = route_capabilities("ollama", ApiStyle::ChatCompletions);
+        assert!(caps.tools);
+        assert!(!caps.parallel_tools);
+        assert!(route_capabilities("openai", ApiStyle::ChatCompletions).parallel_tools);
+    }
+
+    #[test]
+    fn every_catalog_provider_has_an_explicit_failover_capability_result() {
+        // This intentionally iterates the full catalog: adding a provider
+        // cannot bypass the preflight capability table by accident.
+        for provider in providers::PROVIDERS {
+            let caps = route_capabilities(provider.id, provider.style);
+            assert!(
+                caps.tools,
+                "{} must declare tool-call behavior",
+                provider.id
+            );
+            if matches!(
+                provider.id,
+                "ollama" | "lmstudio" | "llamacpp" | "vllm" | "local"
+            ) {
+                assert!(
+                    !caps.parallel_tools,
+                    "local route {} must remain conservative",
+                    provider.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn preflight_rejects_fallback_that_cannot_fit_reserved_completion() {
+        let target = FailoverTarget {
+            provider_id: "ollama".into(),
+            base_url: "http://127.0.0.1:11434/v1".into(),
+            api_key: String::new(),
+            style: ApiStyle::ChatCompletions,
+            model: "test".into(),
+        };
+        let req = ResponseRequest {
+            model: "test".into(),
+            input: serde_json::json!([{"role":"user","content":"x".repeat(9000)}]),
+            instructions: None,
+            tools: None,
+            tool_choice: None,
+            store: None,
+            include: None,
+            reasoning: None,
+            stream: None,
+            parallel_tool_calls: None,
+            prompt_cache_key: None,
+            max_output_tokens: Some(8192),
+        };
+        let mut cfg = Config::default();
+        cfg.context_window = 1_000;
+        let usage = UsageTracker::new(
+            "failover-preflight".into(),
+            "test".into(),
+            std::path::PathBuf::from("."),
+        );
+        assert!(preflight_target(&target, &req, &cfg, &usage).is_err());
     }
 }

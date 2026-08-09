@@ -104,7 +104,7 @@ pub fn build_body_opts(
                 }));
                 continue;
             }
-            push_item_messages_opts(&items[index], &mut messages, drop_media);
+            push_item_messages_opts(&items[index], &mut messages, drop_media, provider_id);
             index += 1;
         }
     }
@@ -159,10 +159,83 @@ pub fn build_body_opts(
         // Ask providers that support it to include a final usage frame.
         body["stream_options"] = json!({ "include_usage": true });
     }
+    if let Some(limit) = req.max_output_tokens.filter(|limit| *limit > 0) {
+        // Newer OpenAI/Codex-compatible deployments require the replacement
+        // field; OpenRouter and the broader compatibility ecosystem still use
+        // `max_tokens`. Keep this capability decision localized and opt-in.
+        let field = if matches!(provider_id, "openai" | "openai-cc" | "xai") {
+            "max_completion_tokens"
+        } else {
+            "max_tokens"
+        };
+        body[field] = json!(limit);
+    }
+    if let Some(key) = req
+        .prompt_cache_key
+        .as_deref()
+        .filter(|key| !key.is_empty())
+    {
+        // These providers explicitly document the cache-affinity field on
+        // their Chat Completions surface. Do not spray it at generic servers
+        // that may reject unknown parameters.
+        if matches!(provider_id, "openai-cc" | "deepinfra" | "venice") {
+            body["prompt_cache_key"] = json!(key);
+        }
+    }
+    if provider_id == "openrouter" {
+        apply_openrouter_options(&mut body);
+    }
     if provider_id == "kimi" && req.reasoning.is_some() {
         body["thinking"] = json!({ "type": "enabled" });
     }
     body
+}
+
+/// Explicit OpenRouter controls. Dashboard defaults remain unchanged unless a
+/// user opts in through one of these environment variables:
+/// `NUR_OPENROUTER_PROVIDER_ORDER` (comma-separated),
+/// `NUR_OPENROUTER_ALLOW_FALLBACK` (bool),
+/// `NUR_OPENROUTER_DATA_COLLECTION` (`allow`/`deny`), and
+/// `NUR_OPENROUTER_REQUIRE_PARAMETERS` (bool).
+fn apply_openrouter_options(body: &mut Value) {
+    let mut provider = serde_json::Map::new();
+    if let Ok(order) = std::env::var("NUR_OPENROUTER_PROVIDER_ORDER") {
+        let order: Vec<Value> = order
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| Value::String(value.to_string()))
+            .collect();
+        if !order.is_empty() {
+            provider.insert("order".into(), Value::Array(order));
+        }
+    }
+    for (env, key) in [
+        ("NUR_OPENROUTER_ALLOW_FALLBACK", "allow_fallback"),
+        ("NUR_OPENROUTER_REQUIRE_PARAMETERS", "require_parameters"),
+    ] {
+        if let Some(value) = env_bool(env) {
+            provider.insert(key.into(), Value::Bool(value));
+        }
+    }
+    if let Ok(policy) = std::env::var("NUR_OPENROUTER_DATA_COLLECTION") {
+        let policy = policy.trim().to_ascii_lowercase();
+        if matches!(policy.as_str(), "allow" | "deny") {
+            provider.insert("data_collection".into(), Value::String(policy));
+        }
+    }
+    if !provider.is_empty() {
+        body["provider"] = Value::Object(provider);
+    }
+}
+
+fn env_bool(name: &str) -> Option<bool> {
+    let value = std::env::var(name).ok()?;
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
 }
 
 /// Kimi rejects nested tool properties that omit JSON Schema `type`. Infer a
@@ -214,7 +287,12 @@ fn ensure_kimi_schema_types(schema: &mut Value) {
 }
 
 /// Translate one Responses `input` item into zero or more chat messages.
-fn push_item_messages_opts(item: &Value, out: &mut Vec<Value>, drop_media: bool) {
+fn push_item_messages_opts(
+    item: &Value,
+    out: &mut Vec<Value>,
+    drop_media: bool,
+    provider_id: &str,
+) {
     // function_call_output → a `tool` role message.
     if item.get("type").and_then(|t| t.as_str()) == Some("function_call_output") {
         out.push(json!({
@@ -258,7 +336,13 @@ fn push_item_messages_opts(item: &Value, out: &mut Vec<Value>, drop_media: bool)
         }
         out.push(json!({ "role": role, "content": text }));
     } else if images.is_empty() {
-        out.push(json!({ "role": role, "content": text }));
+        let mut message = json!({ "role": role, "content": text });
+        if role == "assistant" && matches!(provider_id, "kimi" | "moonshot") {
+            if let Some(reasoning) = item.get("reasoning_content").and_then(Value::as_str) {
+                message["reasoning_content"] = Value::String(reasoning.to_string());
+            }
+        }
+        out.push(message);
     } else {
         // Multimodal user message: OpenAI content-parts form.
         let mut parts = vec![json!({"type":"text","text": text})];
@@ -372,14 +456,56 @@ pub fn parse_completion(v: &Value) -> Value {
     let finish_reason = v
         .pointer("/choices/0/finish_reason")
         .and_then(|x| x.as_str());
-    build_response_value_with_status(
+    let mut usage = v.get("usage").cloned();
+    if let Some(usage) = usage.as_mut() {
+        // DeepSeek exposes cache hit/miss counts directly, while llama.cpp
+        // commonly reports its prompt-cache count under `timings.cache_n`.
+        let cached = usage
+            .get("prompt_cache_hit_tokens")
+            .or_else(|| usage.get("cache_read_tokens"))
+            .or_else(|| v.pointer("/timings/cache_n"))
+            .and_then(Value::as_u64);
+        if let Some(cached) = cached {
+            usage["prompt_tokens_details"] = json!({ "cached_tokens": cached });
+        }
+        if usage.get("prompt_tokens").is_none() {
+            let miss = usage
+                .get("prompt_cache_miss_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            if miss > 0 || cached.unwrap_or(0) > 0 {
+                usage["prompt_tokens"] = json!(miss.saturating_add(cached.unwrap_or(0)));
+            }
+        }
+    }
+    let mut shaped = build_response_value_with_status(
         v.get("id").and_then(|x| x.as_str()),
         v.get("model").and_then(|x| x.as_str()),
         &content,
         &tool_calls,
-        v.get("usage"),
+        usage.as_ref(),
         finish_reason,
-    )
+    );
+    attach_reasoning_content(
+        &mut shaped,
+        msg.get("reasoning_content").and_then(Value::as_str),
+    );
+    shaped
+}
+
+fn attach_reasoning_content(shaped: &mut Value, reasoning: Option<&str>) {
+    let Some(reasoning) = reasoning.filter(|text| !text.is_empty()) else {
+        return;
+    };
+    let message = json!({
+        "type": "message",
+        "role": "assistant",
+        "content": [],
+        "reasoning_content": reasoning,
+    });
+    if let Some(output) = shaped.get_mut("output").and_then(Value::as_array_mut) {
+        output.insert(0, message);
+    }
 }
 
 /// Build a Responses-shaped response object (deserialized by the caller).
@@ -430,14 +556,21 @@ pub fn build_response_value_with_status(
                 .and_then(|d| d.get("cached_tokens"))
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
+            let cache_write = u
+                .pointer("/prompt_tokens_details/cache_write_tokens")
+                .or_else(|| u.pointer("/input_tokens_details/cache_write_tokens"))
+                .or_else(|| u.get("cache_write_tokens"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
             json!({
                 "input_tokens": u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
                 "output_tokens": u.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
                 "total_tokens": u.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
                 "input_tokens_details": { "cached_tokens": cached },
+                "cache_write_tokens": cache_write,
             })
         })
-        .unwrap_or(json!({}));
+        .unwrap_or(Value::Null);
     let status = match finish_reason {
         Some("length") => "length",
         Some("content_filter") => "content_filter",
@@ -577,6 +710,10 @@ pub struct StreamAccumulator {
     think: ThinkSplitter,
     /// finish_reason from the provider, e.g. "length" for truncation.
     pub finish_reason: Option<String>,
+    /// OpenRouter may place these on a terminal stream frame rather than in
+    /// `usage`; retain them so the client can preserve native billing facts.
+    pub native_cost_usd: Option<f64>,
+    pub upstream_provider: Option<String>,
 }
 
 impl StreamAccumulator {
@@ -599,6 +736,12 @@ impl StreamAccumulator {
             if u.is_object() {
                 self.usage = Some(u.clone());
             }
+        }
+        if self.native_cost_usd.is_none() {
+            self.native_cost_usd = native_cost(v);
+        }
+        if self.upstream_provider.is_none() {
+            self.upstream_provider = upstream_provider(v);
         }
         // Capture finish_reason for truncation detection (length).
         if self.finish_reason.is_none() {
@@ -713,15 +856,43 @@ impl StreamAccumulator {
                 })
             })
             .collect();
-        build_response_value_with_status(
+        let mut shaped = build_response_value_with_status(
             self.id.as_deref(),
             self.model.as_deref(),
             &self.content,
             &tool_calls,
             self.usage.as_ref(),
             self.finish_reason.as_deref(),
-        )
+        );
+        attach_reasoning_content(
+            &mut shaped,
+            (!self.reasoning.is_empty()).then_some(self.reasoning.as_str()),
+        );
+        shaped
     }
+}
+
+/// Native OpenRouter-like cost, accepting either JSON number or string.
+pub fn native_cost(v: &Value) -> Option<f64> {
+    v.pointer("/usage/cost")
+        .or_else(|| v.get("cost"))
+        .or_else(|| v.pointer("/metadata/cost"))
+        .and_then(|value| {
+            value
+                .as_f64()
+                .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+        })
+}
+
+/// Serving upstream, if a gateway elects to disclose it.
+pub fn upstream_provider(v: &Value) -> Option<String> {
+    v.get("provider")
+        .or_else(|| v.get("provider_name"))
+        .or_else(|| v.pointer("/metadata/provider"))
+        .or_else(|| v.pointer("/metadata/provider_name"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
 }
 
 /// Deserialize a Responses-shaped value into `ApiResponse`.
@@ -757,6 +928,7 @@ mod tests {
             stream: None,
             parallel_tool_calls: None,
             prompt_cache_key: None,
+            max_output_tokens: None,
         }
     }
 
@@ -775,6 +947,23 @@ mod tests {
         assert_eq!(msgs[4]["content"], "done");
         assert_eq!(b["tools"][0]["function"]["name"], "grep");
         assert_eq!(b["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn cache_affinity_is_sent_only_to_documented_chat_routes() {
+        let mut request = req();
+        request.prompt_cache_key = Some("session-42".into());
+        assert_eq!(
+            build_body_for_provider(&request, false, "deepinfra")["prompt_cache_key"],
+            "session-42"
+        );
+        assert_eq!(
+            build_body_for_provider(&request, false, "venice")["prompt_cache_key"],
+            "session-42"
+        );
+        assert!(build_body_for_provider(&request, false, "groq")
+            .get("prompt_cache_key")
+            .is_none());
     }
 
     #[test]
@@ -1239,6 +1428,7 @@ mod tool_choice_tests {
             stream: None,
             parallel_tool_calls: None,
             prompt_cache_key: None,
+            max_output_tokens: None,
         }
     }
 
@@ -1278,5 +1468,61 @@ mod tool_choice_tests {
         let v = build_response_value(Some("id"), Some("m"), "hi", &[], Some(&usage));
         assert_eq!(v["usage"]["input_tokens"], 1000);
         assert_eq!(v["usage"]["input_tokens_details"]["cached_tokens"], 900);
+    }
+
+    #[test]
+    fn deepseek_cache_hits_and_misses_become_standard_usage() {
+        let raw = json!({
+            "id": "deepseek-1",
+            "model": "deepseek-chat",
+            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+            "usage": {
+                "prompt_cache_hit_tokens": 80,
+                "prompt_cache_miss_tokens": 20,
+                "completion_tokens": 5,
+                "total_tokens": 105
+            }
+        });
+        let shaped = parse_completion(&raw);
+        assert_eq!(shaped["usage"]["input_tokens"], 100);
+        assert_eq!(shaped["usage"]["input_tokens_details"]["cached_tokens"], 80);
+    }
+
+    #[test]
+    fn kimi_reasoning_content_replays_with_its_tool_call() {
+        let raw = json!({
+            "choices": [{"message": {
+                "content": null,
+                "reasoning_content": "Need a search.",
+                "tool_calls": [{"id": "call_1", "function": {"name": "search", "arguments": "{}"}}]
+            }}]
+        });
+        let response = to_api_response(parse_completion(&raw)).expect("map response");
+        let replay = crate::api::types::replay_output_items(&response.output);
+        let mut request = req_with_choice(None);
+        request.input = Value::Array(replay);
+        let body = build_body_for_provider(&request, false, "kimi");
+        let assistant = body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|message| message["role"] == "assistant")
+            .expect("assistant replay");
+        assert_eq!(assistant["reasoning_content"], "Need a search.");
+        assert_eq!(assistant["tool_calls"][0]["id"], "call_1");
+    }
+
+    #[test]
+    fn output_cap_uses_compatible_field() {
+        let mut request = req_with_choice(None);
+        request.max_output_tokens = Some(321);
+        assert_eq!(
+            build_body_for_provider(&request, false, "openai")["max_completion_tokens"],
+            321
+        );
+        assert_eq!(
+            build_body_for_provider(&request, false, "ollama")["max_tokens"],
+            321
+        );
     }
 }

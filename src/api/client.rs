@@ -1,4 +1,4 @@
-use super::types::{ApiResponse, ResponseRequest};
+use super::types::{ApiResponse, ResponseAccounting, ResponseRequest};
 use crate::error::{NurError, Result};
 use crate::providers::ApiStyle;
 use futures_util::StreamExt;
@@ -47,6 +47,53 @@ fn effective_base_url(base_url: &str, provider_id: &str, is_oauth: bool) -> Stri
         }
     }
     base_url.trim_end_matches('/').to_string()
+}
+
+/// Exact Chat Completions endpoint for providers whose response schema is
+/// OpenAI-compatible but whose path is not `/chat/completions`.
+fn chat_completions_url(base_url: &str, provider_id: &str) -> String {
+    let base = base_url.trim_end_matches('/');
+    if provider_id == "writer" {
+        // Writer Palmyra's first-party chat endpoint is POST /v1/chat.
+        format!("{base}/chat")
+    } else {
+        format!("{base}/chat/completions")
+    }
+}
+
+/// OpenCode documents a model-specific protocol surface rather than one
+/// universal OpenAI-compatible endpoint: GPT models use `/responses`, Claude
+/// models use `/messages`, and the remaining compatible families use
+/// `/chat/completions`. Keep this routing at the wire boundary so selecting a
+/// different Zen/Go model cannot silently send the wrong request schema.
+fn opencode_style_for_model(model: &str) -> ApiStyle {
+    let model = model
+        .strip_prefix("opencode-go/")
+        .unwrap_or(model)
+        .to_ascii_lowercase();
+    if model.starts_with("claude-")
+        || model.starts_with("qwen3.7-")
+        || model.starts_with("qwen3.6-")
+        || model.starts_with("qwen3.5-")
+    {
+        ApiStyle::AnthropicMessages
+    } else if model.starts_with("gpt-")
+        || model.starts_with("grok-")
+        || matches!(model.as_str(), "o1" | "o3" | "o3-mini" | "o4-mini")
+    {
+        ApiStyle::Responses
+    } else {
+        ApiStyle::ChatCompletions
+    }
+}
+
+fn is_opencode_gemini_model(provider_id: &str, model: &str) -> bool {
+    provider_id == "opencode"
+        && model
+            .strip_prefix("opencode-go/")
+            .unwrap_or(model)
+            .to_ascii_lowercase()
+            .starts_with("gemini-")
 }
 
 /// Rough JWT shape check (`eyJ…`.`…`.`…`) used only to decide whether a Grok
@@ -241,6 +288,69 @@ impl ApiClient {
         matches!(status, 429 | 500 | 502 | 503 | 504)
     }
 
+    /// Only send an idempotency key to routes which document support for it.
+    /// Reusing this key across a connection/status retry lets the provider
+    /// de-duplicate an ambiguous POST without imposing an unknown header on
+    /// every OpenAI-compatible server.
+    fn idempotency_key(&self) -> Option<String> {
+        matches!(
+            self.provider_id.as_str(),
+            "openai" | "openai-cc" | "openrouter"
+        )
+        .then(|| format!("nur-{}", uuid_simple()))
+    }
+
+    fn with_idempotency(&self, request: RequestBuilder, key: Option<&str>) -> RequestBuilder {
+        match key {
+            Some(key) => request.header("Idempotency-Key", key),
+            None => request,
+        }
+    }
+
+    fn attach_openrouter_accounting(
+        &self,
+        mut response: ApiResponse,
+        raw: &serde_json::Value,
+    ) -> ApiResponse {
+        if self.provider_id != "openrouter" {
+            return response;
+        }
+        let native_cost_usd = super::chat::native_cost(raw);
+        let upstream_provider = super::chat::upstream_provider(raw);
+        if native_cost_usd.is_some() || upstream_provider.is_some() {
+            response.accounting = Some(ResponseAccounting {
+                estimated_usage: crate::usage::TokenUsage::default(),
+                native_cost_usd,
+                upstream_provider,
+            });
+        }
+        response
+    }
+
+    fn record_attempt(
+        &self,
+        req: &ResponseRequest,
+        attempt_id: &str,
+        attempt: u32,
+        outcome: &str,
+        status: Option<u16>,
+        reason: Option<&str>,
+        response_id: Option<&str>,
+    ) {
+        crate::usage::record_transport_attempt(
+            attempt_id,
+            req.prompt_cache_key.as_deref(),
+            &self.provider_id,
+            &req.model,
+            attempt,
+            outcome,
+            super::types::estimate_request_input_tokens(req),
+            response_id,
+            status,
+            reason,
+        );
+    }
+
     /// For local providers, `local-model` is a 400 on real servers. Group C
     /// proved `POST {"model":"local-model"}` → 400 on a live llama.cpp instance
     /// while a real id from `GET /v1/models` → 200. Lazily resolve by hitting
@@ -355,6 +465,14 @@ impl ApiClient {
         self.provider_id == "opencode" || self.base_url.contains("opencode.ai")
     }
 
+    fn routed_for_model(&self, model: &str) -> Self {
+        let mut routed = self.clone();
+        if self.provider_id == "opencode" {
+            routed.style = opencode_style_for_model(model);
+        }
+        routed
+    }
+
     fn api_key_for_request(&self) -> String {
         if self.refresh_oauth {
             let provider_id = self.provider_id.as_str();
@@ -405,7 +523,11 @@ impl ApiClient {
         req = match self.style {
             ApiStyle::AnthropicMessages => {
                 req = req.header("anthropic-version", "2023-06-01");
-                if is_claude_oauth {
+                if self.provider_id == "opencode" {
+                    // OpenCode's model-specific Claude endpoint remains a
+                    // gateway route and authenticates with its bearer key.
+                    req = req.bearer_auth(&api_key);
+                } else if is_claude_oauth {
                     // Claude Code sends oauth + claude-code betas and a cli User-Agent.
                     // Bare `nur-cli/…` + only oauth-2025 often surfaces as HTTP 429.
                     req = req
@@ -521,11 +643,14 @@ impl ApiClient {
     }
 
     async fn create_cursor_cli(&self, req: &ResponseRequest) -> Result<ApiResponse> {
+        let estimate_req = req.clone();
         let req = req.clone();
         let cancel = tokio_util::sync::CancellationToken::new();
-        tokio::task::spawn_blocking(move || super::cursor_cli::complete(&req, &cancel))
-            .await
-            .map_err(|e| NurError::Other(format!("cursor-agent task failed: {e}")))?
+        let response =
+            tokio::task::spawn_blocking(move || super::cursor_cli::complete(&req, &cancel))
+                .await
+                .map_err(|e| NurError::Other(format!("cursor-agent task failed: {e}")))?;
+        Ok(response?.with_local_usage_estimate(&estimate_req))
     }
 
     async fn create_cursor_cli_stream(
@@ -534,6 +659,7 @@ impl ApiClient {
         mut on_event: impl FnMut(StreamEvent),
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<ApiResponse> {
+        let estimate_req = req.clone();
         let req = req.clone();
         let cancel = cancel.clone();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<StreamEvent>();
@@ -554,7 +680,9 @@ impl ApiClient {
             on_event(ev);
         }
         match handle.await {
-            Ok(Ok(resp)) => Ok(final_resp.unwrap_or(resp)),
+            Ok(Ok(resp)) => Ok(final_resp
+                .unwrap_or(resp)
+                .with_local_usage_estimate(&estimate_req)),
             Ok(Err(e)) => Err(e),
             Err(e) => Err(NurError::Other(format!("cursor-agent task failed: {e}"))),
         }
@@ -564,10 +692,30 @@ impl ApiClient {
         if self.uses_cursor_cli() {
             return self.create_cursor_cli(req).await;
         }
+        if is_opencode_gemini_model(&self.provider_id, &req.model) {
+            return self.create_opencode_gemini(req).await;
+        }
+        let routed = self.routed_for_model(&req.model);
+        if routed.style != self.style {
+            // Boxing makes the one-step protocol redispatch finite for Rust's
+            // async type system. The routed client's style is already exact,
+            // so the next call cannot recurse again.
+            return Box::pin(routed.create_response(req)).await;
+        }
         match self.style {
             ApiStyle::ChatCompletions => return self.create_chat(req).await,
-            ApiStyle::AnthropicMessages => return self.create_anthropic(req).await,
-            ApiStyle::GeminiCloudCode => return self.create_gemini_cloudcode(req).await,
+            ApiStyle::AnthropicMessages => {
+                return self
+                    .create_anthropic(req)
+                    .await
+                    .map(|r| r.with_local_usage_estimate(req))
+            }
+            ApiStyle::GeminiCloudCode => {
+                return self
+                    .create_gemini_cloudcode(req)
+                    .await
+                    .map(|r| r.with_local_usage_estimate(req))
+            }
             ApiStyle::Responses => {}
         }
         // Normalize all Responses calls at the wire boundary. In particular,
@@ -577,21 +725,38 @@ impl ApiClient {
         let req = &req_owned;
         let url = format!("{}/responses", self.base_url);
         let mut attempt = 0u32;
+        let idempotency_key = self.idempotency_key();
+        let attempt_id = idempotency_key
+            .clone()
+            .unwrap_or_else(|| format!("nur-{}", uuid_simple()));
         let mut oauth_refreshed = false;
         loop {
             attempt += 1;
+            self.record_attempt(req, &attempt_id, attempt, "started", None, None, None);
             let res = match self
                 .auth_headers(
-                    self.http
-                        .post(&url)
-                        .header("Content-Type", "application/json")
-                        .json(req),
+                    self.with_idempotency(
+                        self.http
+                            .post(&url)
+                            .header("Content-Type", "application/json")
+                            .json(req),
+                        idempotency_key.as_deref(),
+                    ),
                 )
                 .send()
                 .await
             {
                 Ok(r) => r,
                 Err(e) => {
+                    self.record_attempt(
+                        req,
+                        &attempt_id,
+                        attempt,
+                        "ambiguous",
+                        None,
+                        Some(&e.to_string()),
+                        None,
+                    );
                     if attempt < 4 {
                         let backoff = std::time::Duration::from_millis(
                             200 * (1 << (attempt - 1)) + rand_jitter(),
@@ -619,6 +784,15 @@ impl ApiClient {
                 let message = parse_error_message(&body).unwrap_or_else(|| body.clone());
                 let retryable =
                     is_retryable_error(status.as_u16(), &message, self.is_opencode_route());
+                self.record_attempt(
+                    req,
+                    &attempt_id,
+                    attempt,
+                    if retryable { "ambiguous" } else { "failed" },
+                    Some(status.as_u16()),
+                    Some(&message),
+                    None,
+                );
                 if retryable && attempt < 4 {
                     let retry_after = headers
                         .get("retry-after")
@@ -640,7 +814,18 @@ impl ApiClient {
                 });
             }
 
-            return parse_success_body(&body, status.as_u16());
+            let response = parse_success_body(&body, status.as_u16())
+                .map(|response| response.with_local_usage_estimate(req))?;
+            self.record_attempt(
+                req,
+                &attempt_id,
+                attempt,
+                "succeeded",
+                Some(status.as_u16()),
+                None,
+                response.id.as_deref(),
+            );
+            return Ok(response);
         }
     }
 
@@ -656,17 +841,30 @@ impl ApiClient {
         if self.uses_cursor_cli() {
             return self.create_cursor_cli_stream(req, on_event, cancel).await;
         }
+        if is_opencode_gemini_model(&self.provider_id, &req.model) {
+            return self
+                .create_opencode_gemini_stream(req, on_event, cancel)
+                .await;
+        }
+        let routed = self.routed_for_model(&req.model);
+        if routed.style != self.style {
+            return Box::pin(routed.create_response_stream(req, on_event, cancel)).await;
+        }
         match self.style {
             ApiStyle::ChatCompletions => {
                 return self.create_chat_stream(req, on_event, cancel).await
             }
             ApiStyle::AnthropicMessages => {
-                return self.create_anthropic_stream(req, on_event, cancel).await
+                return self
+                    .create_anthropic_stream(req, on_event, cancel)
+                    .await
+                    .map(|r| r.with_local_usage_estimate(req))
             }
             ApiStyle::GeminiCloudCode => {
                 return self
                     .create_gemini_cloudcode_stream(req, on_event, cancel)
                     .await
+                    .map(|r| r.with_local_usage_estimate(req))
             }
             ApiStyle::Responses => {}
         }
@@ -679,22 +877,47 @@ impl ApiClient {
         let mut attempt = 0u32;
         let mut last_err: Option<NurError> = None;
         let mut oauth_refreshed = false;
+        let idempotency_key = self.idempotency_key();
+        let attempt_id = idempotency_key
+            .clone()
+            .unwrap_or_else(|| format!("nur-{}", uuid_simple()));
 
         loop {
             attempt += 1;
+            self.record_attempt(
+                &stream_req,
+                &attempt_id,
+                attempt,
+                "started",
+                None,
+                None,
+                None,
+            );
             let res = match self
                 .auth_headers(
-                    self.http
-                        .post(&url)
-                        .header("Content-Type", "application/json")
-                        .header("Accept", "text/event-stream")
-                        .json(&stream_req),
+                    self.with_idempotency(
+                        self.http
+                            .post(&url)
+                            .header("Content-Type", "application/json")
+                            .header("Accept", "text/event-stream")
+                            .json(&stream_req),
+                        idempotency_key.as_deref(),
+                    ),
                 )
                 .send()
                 .await
             {
                 Ok(r) => r,
                 Err(e) => {
+                    self.record_attempt(
+                        &stream_req,
+                        &attempt_id,
+                        attempt,
+                        "ambiguous",
+                        None,
+                        Some(&e.to_string()),
+                        None,
+                    );
                     if attempt < 3 {
                         tokio::time::sleep(std::time::Duration::from_millis(400 * attempt as u64))
                             .await;
@@ -724,9 +947,17 @@ impl ApiClient {
                 // which arrives as a 400 with a transient message.
                 let body_text = res.text().await.unwrap_or_default();
                 let msg = parse_error_message(&body_text).unwrap_or(body_text);
-                if is_retryable_error(status.as_u16(), &msg, self.is_opencode_route())
-                    && attempt < 3
-                {
+                let retryable = is_retryable_error(status.as_u16(), &msg, self.is_opencode_route());
+                self.record_attempt(
+                    &stream_req,
+                    &attempt_id,
+                    attempt,
+                    if retryable { "ambiguous" } else { "failed" },
+                    Some(status.as_u16()),
+                    Some(&msg),
+                    None,
+                );
+                if retryable && attempt < 3 {
                     last_err = Some(NurError::Api {
                         status: status.as_u16(),
                         message: msg,
@@ -752,9 +983,31 @@ impl ApiClient {
             if !use_byte_stream {
                 let body = res.text().await?;
                 if body_looks_like_sse(&body) {
-                    return consume_sse_text(&body, &mut on_event);
+                    let response = consume_sse_text(&body, &mut on_event)
+                        .map(|response| response.with_local_usage_estimate(&stream_req))?;
+                    self.record_attempt(
+                        &stream_req,
+                        &attempt_id,
+                        attempt,
+                        "succeeded",
+                        Some(status.as_u16()),
+                        None,
+                        response.id.as_deref(),
+                    );
+                    return Ok(response);
                 }
-                return parse_success_body(&body, status.as_u16());
+                let response = parse_success_body(&body, status.as_u16())
+                    .map(|response| response.with_local_usage_estimate(&stream_req))?;
+                self.record_attempt(
+                    &stream_req,
+                    &attempt_id,
+                    attempt,
+                    "succeeded",
+                    Some(status.as_u16()),
+                    None,
+                    response.id.as_deref(),
+                );
+                return Ok(response);
             }
 
             let mut stream = res.bytes_stream();
@@ -781,7 +1034,18 @@ impl ApiClient {
                     if maybe_json_only && !buffered.is_empty() {
                         let body = String::from_utf8_lossy(&buffered).into_owned();
                         if !body_looks_like_sse(&body) && body.trim_start().starts_with('{') {
-                            return parse_success_body(&body, status.as_u16());
+                            let response = parse_success_body(&body, status.as_u16())
+                                .map(|response| response.with_local_usage_estimate(&stream_req))?;
+                            self.record_attempt(
+                                &stream_req,
+                                &attempt_id,
+                                attempt,
+                                "succeeded",
+                                Some(status.as_u16()),
+                                None,
+                                response.id.as_deref(),
+                            );
+                            return Ok(response);
                         }
                         tail.extend(parser.push(&buffered));
                         buffered.clear();
@@ -799,7 +1063,7 @@ impl ApiClient {
                                 &mut final_response,
                                 &mut streamed_items,
                             ) {
-                                if attempt < 3 {
+                                if attempt < 3 && !saw_any_data {
                                     last_err = Some(e);
                                     break;
                                 } else {
@@ -813,7 +1077,7 @@ impl ApiClient {
                 let chunk = match chunk {
                     Ok(c) => c,
                     Err(e) => {
-                        if attempt < 3 {
+                        if attempt < 3 && !saw_any_data {
                             last_err = Some(NurError::Other(format!("stream chunk error: {e}")));
                             break;
                         } else {
@@ -839,7 +1103,18 @@ impl ApiClient {
                             buffered.extend_from_slice(&more);
                         }
                         let body = String::from_utf8_lossy(&buffered).into_owned();
-                        return parse_success_body(&body, status.as_u16());
+                        let response = parse_success_body(&body, status.as_u16())
+                            .map(|response| response.with_local_usage_estimate(&stream_req))?;
+                        self.record_attempt(
+                            &stream_req,
+                            &attempt_id,
+                            attempt,
+                            "succeeded",
+                            Some(status.as_u16()),
+                            None,
+                            response.id.as_deref(),
+                        );
+                        return Ok(response);
                     }
                     // Treat buffered prefix as SSE.
                     for data in parser.push(&buffered) {
@@ -854,7 +1129,7 @@ impl ApiClient {
                                 &mut final_response,
                                 &mut streamed_items,
                             ) {
-                                if attempt < 3 {
+                                if attempt < 3 && !saw_any_data {
                                     last_err = Some(e);
                                     break;
                                 } else {
@@ -882,8 +1157,10 @@ impl ApiClient {
                             &mut final_response,
                             &mut streamed_items,
                         ) {
-                            // If server signaled failure but we have partial response, retry
-                            if attempt < 3 {
+                            // An output-bearing stream is ambiguous/billable;
+                            // never replay it unless the provider's idempotency
+                            // contract can prove de-duplication.
+                            if attempt < 3 && !saw_any_data {
                                 last_err = Some(e);
                                 break;
                             } else {
@@ -898,18 +1175,40 @@ impl ApiClient {
             }
 
             if let Some(fr) = final_response {
-                return Ok(fr);
+                let response = fr.with_local_usage_estimate(&stream_req);
+                self.record_attempt(
+                    &stream_req,
+                    &attempt_id,
+                    attempt,
+                    "succeeded",
+                    Some(status.as_u16()),
+                    None,
+                    response.id.as_deref(),
+                );
+                return Ok(response);
             }
             // Stream ended with items but no completed event — still usable.
             if !streamed_items.is_empty() {
-                return Ok(ApiResponse {
+                let response = ApiResponse {
                     id: None,
                     status: Some("completed".into()),
                     model: None,
                     output: streamed_items,
                     usage: None,
                     error: None,
-                });
+                    accounting: None,
+                }
+                .with_local_usage_estimate(&stream_req);
+                self.record_attempt(
+                    &stream_req,
+                    &attempt_id,
+                    attempt,
+                    "ambiguous",
+                    Some(status.as_u16()),
+                    Some("stream ended without completed event"),
+                    response.id.as_deref(),
+                );
+                return Ok(response);
             }
 
             // Fallback: stream ended without completed response — if we saw deltas, try one more time non-streaming?
@@ -927,33 +1226,61 @@ impl ApiClient {
 
     // ── OpenAI Chat Completions adapter ───────────────────────────────────
     async fn create_chat(&self, req: &ResponseRequest) -> Result<ApiResponse> {
-        let url = format!("{}/chat/completions", self.base_url);
+        let url = chat_completions_url(&self.base_url, &self.provider_id);
         let has_media = super::chat::request_has_media(req);
         let mut drop_media =
             has_media && endpoint_is_text_only(&self.provider_id, &self.base_url, &req.model);
         let mut body = super::chat::build_body_opts(req, false, &self.provider_id, drop_media);
         let mut attempt = 0u32;
         let mut oauth_refreshed = false;
+        let idempotency_key = self.idempotency_key();
+        let attempt_id = idempotency_key
+            .clone()
+            .unwrap_or_else(|| format!("nur-{}", uuid_simple()));
         loop {
             attempt += 1;
+            self.record_attempt(req, &attempt_id, attempt, "started", None, None, None);
             let res = self
                 .auth_headers(
-                    self.http
-                        .post(&url)
-                        .header("Content-Type", "application/json")
-                        .json(&body),
+                    self.with_idempotency(
+                        self.http
+                            .post(&url)
+                            .header("Content-Type", "application/json")
+                            .json(&body),
+                        idempotency_key.as_deref(),
+                    ),
                 )
                 .send()
                 .await;
             let res = match res {
                 Ok(r) => r,
                 Err(e) if attempt < 4 => {
+                    self.record_attempt(
+                        req,
+                        &attempt_id,
+                        attempt,
+                        "ambiguous",
+                        None,
+                        Some(&e.to_string()),
+                        None,
+                    );
                     tokio::time::sleep(std::time::Duration::from_millis(300 * attempt as u64))
                         .await;
                     let _ = e;
                     continue;
                 }
-                Err(e) => return Err(NurError::Other(format!("request failed: {e}"))),
+                Err(e) => {
+                    self.record_attempt(
+                        req,
+                        &attempt_id,
+                        attempt,
+                        "ambiguous",
+                        None,
+                        Some(&e.to_string()),
+                        None,
+                    );
+                    return Err(NurError::Other(format!("request failed: {e}")));
+                }
             };
             let status = res.status();
             let text = res.text().await.unwrap_or_default();
@@ -963,6 +1290,17 @@ impl ApiClient {
                     continue;
                 }
                 let message = parse_error_message(&text).unwrap_or(text);
+                let retryable =
+                    is_retryable_error(status.as_u16(), &message, self.is_opencode_route());
+                self.record_attempt(
+                    req,
+                    &attempt_id,
+                    attempt,
+                    if retryable { "ambiguous" } else { "failed" },
+                    Some(status.as_u16()),
+                    Some(&message),
+                    None,
+                );
                 // Text-only endpoint choking on a replayed attachment: strip the
                 // media and try once more before surfacing the failure.
                 if has_media && !drop_media && super::chat::is_media_unsupported_error(&message) {
@@ -971,9 +1309,7 @@ impl ApiClient {
                     body = super::chat::build_body_opts(req, false, &self.provider_id, true);
                     continue;
                 }
-                if is_retryable_error(status.as_u16(), &message, self.is_opencode_route())
-                    && attempt < 4
-                {
+                if retryable && attempt < 4 {
                     tokio::time::sleep(std::time::Duration::from_millis(
                         400 * (1 << (attempt - 1)),
                     ))
@@ -988,8 +1324,21 @@ impl ApiClient {
             let v: serde_json::Value = serde_json::from_str(&text)
                 .map_err(|e| NurError::Other(format!("bad chat response: {e}; body={text}")))?;
             let shaped = super::chat::parse_completion(&v);
-            return super::chat::to_api_response(shaped)
-                .map_err(|e| NurError::Other(format!("chat response map failed: {e}")));
+            let response = super::chat::to_api_response(shaped)
+                .map_err(|e| NurError::Other(format!("chat response map failed: {e}")))?;
+            let response = self
+                .attach_openrouter_accounting(response, &v)
+                .with_local_usage_estimate(req);
+            self.record_attempt(
+                req,
+                &attempt_id,
+                attempt,
+                "succeeded",
+                Some(status.as_u16()),
+                None,
+                response.id.as_deref(),
+            );
+            return Ok(response);
         }
     }
 
@@ -999,7 +1348,7 @@ impl ApiClient {
         mut on_event: impl FnMut(StreamEvent),
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<ApiResponse> {
-        let url = format!("{}/chat/completions", self.base_url);
+        let url = chat_completions_url(&self.base_url, &self.provider_id);
         let has_media = super::chat::request_has_media(req);
         let mut drop_media =
             has_media && endpoint_is_text_only(&self.provider_id, &self.base_url, &req.model);
@@ -1008,19 +1357,41 @@ impl ApiClient {
         // out to be text-only. Nothing has streamed yet at this point, so the
         // retry cannot duplicate output.
         let mut attempt = 0u32;
-        let (res, content_type) = loop {
+        let idempotency_key = self.idempotency_key();
+        let attempt_id = idempotency_key
+            .clone()
+            .unwrap_or_else(|| format!("nur-{}", uuid_simple()));
+        let (res, content_type, status) = loop {
             attempt += 1;
+            self.record_attempt(req, &attempt_id, attempt, "started", None, None, None);
             let body = super::chat::build_body_opts(req, true, &self.provider_id, drop_media);
             let res = self
                 .send_with_oauth_retry(|| {
-                    self.http
-                        .post(&url)
-                        .header("Content-Type", "application/json")
-                        .header("Accept", "text/event-stream")
-                        .json(&body)
+                    self.with_idempotency(
+                        self.http
+                            .post(&url)
+                            .header("Content-Type", "application/json")
+                            .header("Accept", "text/event-stream")
+                            .json(&body),
+                        idempotency_key.as_deref(),
+                    )
                 })
-                .await
-                .map_err(|e| NurError::Other(format!("stream connect failed: {e}")))?;
+                .await;
+            let res = match res {
+                Ok(response) => response,
+                Err(error) => {
+                    self.record_attempt(
+                        req,
+                        &attempt_id,
+                        attempt,
+                        "ambiguous",
+                        None,
+                        Some(&error.to_string()),
+                        None,
+                    );
+                    return Err(NurError::Other(format!("stream connect failed: {error}")));
+                }
+            };
 
             let status = res.status();
             let content_type = res
@@ -1033,6 +1404,17 @@ impl ApiClient {
             if !status.is_success() {
                 let text = res.text().await.unwrap_or_default();
                 let message = parse_error_message(&text).unwrap_or(text);
+                let retryable =
+                    self.is_opencode_route() && is_retryable_error(status.as_u16(), &message, true);
+                self.record_attempt(
+                    req,
+                    &attempt_id,
+                    attempt,
+                    if retryable { "ambiguous" } else { "failed" },
+                    Some(status.as_u16()),
+                    Some(&message),
+                    None,
+                );
                 if has_media && !drop_media && super::chat::is_media_unsupported_error(&message) {
                     mark_text_only(&self.provider_id, &self.base_url, &req.model);
                     drop_media = true;
@@ -1044,10 +1426,7 @@ impl ApiClient {
                 // though nothing had streamed yet. Retry is confined to the
                 // OpenCode route by `is_retryable_error`; other providers keep
                 // failing fast exactly as before.
-                if self.is_opencode_route()
-                    && is_retryable_error(status.as_u16(), &message, true)
-                    && attempt < 3
-                {
+                if retryable && attempt < 3 {
                     tokio::time::sleep(std::time::Duration::from_millis(
                         400 * (1 << (attempt - 1)),
                     ))
@@ -1059,7 +1438,7 @@ impl ApiClient {
                     message,
                 });
             }
-            break (res, content_type);
+            break (res, content_type, status);
         };
 
         // Server ignored stream=true → plain JSON completion.
@@ -1068,8 +1447,21 @@ impl ApiClient {
             let v: serde_json::Value = serde_json::from_str(&text)
                 .map_err(|e| NurError::Other(format!("bad chat response: {e}; body={text}")))?;
             let shaped = super::chat::parse_completion(&v);
-            return super::chat::to_api_response(shaped)
-                .map_err(|e| NurError::Other(format!("chat response map failed: {e}")));
+            let response = super::chat::to_api_response(shaped)
+                .map_err(|e| NurError::Other(format!("chat response map failed: {e}")))?;
+            let response = self
+                .attach_openrouter_accounting(response, &v)
+                .with_local_usage_estimate(req);
+            self.record_attempt(
+                req,
+                &attempt_id,
+                attempt,
+                "succeeded",
+                Some(status.as_u16()),
+                None,
+                response.id.as_deref(),
+            );
+            return Ok(response);
         }
 
         let mut stream = res.bytes_stream();
@@ -1139,8 +1531,19 @@ impl ApiClient {
         // — a legitimate reply silently moved the user to another provider.
         let shaped = acc.finish();
         let saw_reasoning = !acc.reasoning.is_empty();
-        let resp = super::chat::to_api_response(shaped)
-            .map_err(|e| NurError::Other(format!("chat stream map failed: {e}")))?;
+        let mut resp = super::chat::to_api_response(shaped)
+            .map_err(|e| NurError::Other(format!("chat stream map failed: {e}")))?
+            .with_local_usage_estimate(req);
+        if self.provider_id == "openrouter"
+            && (acc.native_cost_usd.is_some() || acc.upstream_provider.is_some())
+        {
+            let prior = resp.accounting.take().unwrap_or_default();
+            resp.accounting = Some(ResponseAccounting {
+                estimated_usage: prior.estimated_usage,
+                native_cost_usd: acc.native_cost_usd,
+                upstream_provider: acc.upstream_provider,
+            });
+        }
         // An OpenCode gateway that loses its upstream mid-turn can close a 200
         // stream having sent nothing usable. Reporting that as a completed
         // (empty) turn looked like a hang; as an error the agent loop can retry
@@ -1155,6 +1558,15 @@ impl ApiClient {
             });
         }
         on_event(StreamEvent::Completed(resp.clone()));
+        self.record_attempt(
+            req,
+            &attempt_id,
+            attempt,
+            "succeeded",
+            Some(status.as_u16()),
+            None,
+            resp.id.as_deref(),
+        );
         Ok(resp)
     }
 
@@ -1475,6 +1887,222 @@ impl ApiClient {
             Some(tier.as_str()),
         );
         Ok(project)
+    }
+
+    /// OpenCode's Gemini models use Google's native GenerateContent protocol;
+    /// the gateway does not expose them through Chat Completions.
+    async fn create_opencode_gemini(&self, req: &ResponseRequest) -> Result<ApiResponse> {
+        let model = req.model.strip_prefix("opencode-go/").unwrap_or(&req.model);
+        let url = format!(
+            "{}/models/{model}:generateContent",
+            self.base_url.trim_end_matches('/')
+        );
+        let wrapped = super::gemini::build_body(req, "", model);
+        let body = wrapped.get("request").cloned().unwrap_or_default();
+        let attempt_id = format!("nur-{}", uuid_simple());
+        for attempt in 1..=3 {
+            self.record_attempt(req, &attempt_id, attempt, "started", None, None, None);
+            let response = self
+                .auth_headers(
+                    self.http
+                        .post(&url)
+                        .header("Content-Type", "application/json")
+                        .json(&body),
+                )
+                .send()
+                .await;
+            let response = match response {
+                Ok(response) => response,
+                Err(error) if attempt < 3 => {
+                    self.record_attempt(
+                        req,
+                        &attempt_id,
+                        attempt,
+                        "ambiguous",
+                        None,
+                        Some(&error.to_string()),
+                        None,
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(300 * attempt as u64))
+                        .await;
+                    continue;
+                }
+                Err(error) => {
+                    self.record_attempt(
+                        req,
+                        &attempt_id,
+                        attempt,
+                        "ambiguous",
+                        None,
+                        Some(&error.to_string()),
+                        None,
+                    );
+                    return Err(NurError::Other(format!(
+                        "OpenCode Gemini request failed: {error}"
+                    )));
+                }
+            };
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            if !status.is_success() {
+                let message = parse_error_message(&text).unwrap_or(text);
+                let retryable = is_retryable_error(status.as_u16(), &message, true);
+                self.record_attempt(
+                    req,
+                    &attempt_id,
+                    attempt,
+                    if retryable { "ambiguous" } else { "failed" },
+                    Some(status.as_u16()),
+                    Some(&message),
+                    None,
+                );
+                if retryable && attempt < 3 {
+                    tokio::time::sleep(std::time::Duration::from_millis(400 * attempt as u64))
+                        .await;
+                    continue;
+                }
+                return Err(NurError::Api {
+                    status: status.as_u16(),
+                    message,
+                });
+            }
+            let response = super::gemini::parse_completion(&text)?.with_local_usage_estimate(req);
+            self.record_attempt(
+                req,
+                &attempt_id,
+                attempt,
+                "succeeded",
+                Some(status.as_u16()),
+                None,
+                response.id.as_deref(),
+            );
+            return Ok(response);
+        }
+        unreachable!("bounded OpenCode Gemini retry loop")
+    }
+
+    async fn create_opencode_gemini_stream(
+        &self,
+        req: &ResponseRequest,
+        mut on_event: impl FnMut(StreamEvent),
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<ApiResponse> {
+        let model = req.model.strip_prefix("opencode-go/").unwrap_or(&req.model);
+        let url = format!(
+            "{}/models/{model}:streamGenerateContent?alt=sse",
+            self.base_url.trim_end_matches('/')
+        );
+        let wrapped = super::gemini::build_body(req, "", model);
+        let body = wrapped.get("request").cloned().unwrap_or_default();
+        let attempt_id = format!("nur-{}", uuid_simple());
+
+        for attempt in 1..=3 {
+            self.record_attempt(req, &attempt_id, attempt, "started", None, None, None);
+            let response = self
+                .auth_headers(
+                    self.http
+                        .post(&url)
+                        .header("Content-Type", "application/json")
+                        .header("Accept", "text/event-stream")
+                        .json(&body),
+                )
+                .send()
+                .await;
+            let response = match response {
+                Ok(response) => response,
+                Err(error) if attempt < 3 => {
+                    self.record_attempt(
+                        req,
+                        &attempt_id,
+                        attempt,
+                        "ambiguous",
+                        None,
+                        Some(&error.to_string()),
+                        None,
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(300 * attempt as u64))
+                        .await;
+                    continue;
+                }
+                Err(error) => {
+                    self.record_attempt(
+                        req,
+                        &attempt_id,
+                        attempt,
+                        "ambiguous",
+                        None,
+                        Some(&error.to_string()),
+                        None,
+                    );
+                    return Err(NurError::Other(format!(
+                        "OpenCode Gemini stream connect failed: {error}"
+                    )));
+                }
+            };
+            let status = response.status();
+            if !status.is_success() {
+                let text = response.text().await.unwrap_or_default();
+                let message = parse_error_message(&text).unwrap_or(text);
+                let retryable = is_retryable_error(status.as_u16(), &message, true);
+                self.record_attempt(
+                    req,
+                    &attempt_id,
+                    attempt,
+                    if retryable { "ambiguous" } else { "failed" },
+                    Some(status.as_u16()),
+                    Some(&message),
+                    None,
+                );
+                if retryable && attempt < 3 {
+                    tokio::time::sleep(std::time::Duration::from_millis(400 * attempt as u64))
+                        .await;
+                    continue;
+                }
+                return Err(NurError::Api {
+                    status: status.as_u16(),
+                    message,
+                });
+            }
+
+            let mut stream = response.bytes_stream();
+            let mut parser = super::sse::SseParser::new();
+            let mut accumulator = super::gemini::GeminiAccumulator::new();
+            loop {
+                let chunk = tokio::select! {
+                    _ = cancel.cancelled() => return Err(NurError::Interrupted),
+                    chunk = stream.next() => chunk,
+                };
+                let Some(chunk) = chunk else {
+                    if let Some(data) = parser.finish() {
+                        drain_gemini_frame(&data, &mut accumulator, &mut on_event);
+                    }
+                    break;
+                };
+                let chunk = chunk.map_err(|error| {
+                    NurError::Other(format!("OpenCode Gemini stream chunk failed: {error}"))
+                })?;
+                for data in parser.push(&chunk) {
+                    drain_gemini_frame(&data, &mut accumulator, &mut on_event);
+                }
+            }
+
+            let value = accumulator.into_response_value();
+            let response: ApiResponse = serde_json::from_value(value)
+                .map_err(|error| NurError::Other(format!("map OpenCode Gemini reply: {error}")))?;
+            let response = response.with_local_usage_estimate(req);
+            self.record_attempt(
+                req,
+                &attempt_id,
+                attempt,
+                "succeeded",
+                Some(status.as_u16()),
+                None,
+                response.id.as_deref(),
+            );
+            on_event(StreamEvent::Completed(response.clone()));
+            return Ok(response);
+        }
+        unreachable!("bounded OpenCode Gemini stream retry loop")
     }
 
     /// Non-streaming Gemini Cloud Code call (`v1internal:generateContent`).
@@ -1840,6 +2468,7 @@ fn consume_sse_text(body: &str, on_event: &mut impl FnMut(StreamEvent)) -> Resul
             output: streamed_items,
             usage: None,
             error: None,
+            accounting: None,
         });
     }
     final_response.ok_or_else(|| {
@@ -2068,6 +2697,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn provider_specific_chat_endpoint_is_exact() {
+        assert_eq!(
+            chat_completions_url("https://api.writer.com/v1/", "writer"),
+            "https://api.writer.com/v1/chat"
+        );
+        assert_eq!(
+            chat_completions_url("https://api.groq.com/openai/v1", "groq"),
+            "https://api.groq.com/openai/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn opencode_selects_the_documented_protocol_per_model() {
+        assert_eq!(
+            opencode_style_for_model("claude-sonnet-5"),
+            ApiStyle::AnthropicMessages
+        );
+        assert_eq!(opencode_style_for_model("gpt-5.6"), ApiStyle::Responses);
+        assert_eq!(
+            opencode_style_for_model("opencode-go/gpt-5.6"),
+            ApiStyle::Responses
+        );
+        assert_eq!(opencode_style_for_model("grok-4.5"), ApiStyle::Responses);
+        assert_eq!(
+            opencode_style_for_model("qwen3.7-max"),
+            ApiStyle::AnthropicMessages
+        );
+        assert_eq!(
+            opencode_style_for_model("kimi-k3"),
+            ApiStyle::ChatCompletions
+        );
+        assert!(is_opencode_gemini_model("opencode", "gemini-3.6-flash"));
+        assert!(!is_opencode_gemini_model("google", "gemini-3.6-flash"));
+
+        let mut zen =
+            ApiClient::for_provider(crate::providers::OPENCODE_ZEN_BASE_URL, "k", "opencode")
+                .unwrap();
+        zen.style = ApiStyle::ChatCompletions;
+        assert_eq!(
+            zen.routed_for_model("claude-sonnet-5").style,
+            ApiStyle::AnthropicMessages
+        );
+    }
+
+    #[test]
     fn chatgpt_oauth_responses_requires_streaming_for_subagents() {
         let mut oauth = ApiClient::new("https://chatgpt.com/backend-api/codex", "token").unwrap();
         oauth.provider_id = "openai".into();
@@ -2086,6 +2760,7 @@ mod tests {
             stream: Some(false),
             parallel_tool_calls: None,
             prompt_cache_key: None,
+            max_output_tokens: None,
         };
         assert_eq!(
             oauth.response_request_for_wire(&request).stream,

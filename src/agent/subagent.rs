@@ -64,7 +64,7 @@ pub async fn run_subagent(
         subagent_depth: parent_depth.saturating_add(1),
     });
 
-    let session = Session::new(&cfg.model, &cwd.display().to_string());
+    let session = Session::new_for_provider(&cfg.model, &cfg.provider, &cwd.display().to_string());
     // Scoped: don't clobber the global status.json / Orca display.
     let mut usage = UsageTracker::scoped(session.id.clone(), cfg.model.clone(), cwd);
     usage.set_provider(cfg.provider.clone());
@@ -122,6 +122,7 @@ pub async fn run_subagent(
                     retry_model,
                 });
             }
+            AgentEvent::FusionLoginRequired { .. } => {}
             AgentEvent::ApprovalRequest {
                 name,
                 args,

@@ -62,7 +62,10 @@ pub const PRICE_OUTPUT_PER_MTOK: f64 = 4.25;
 /// Schema ≥10: opt-in OMP-style `[prewalk]` + `[compaction]` remote endpoint
 /// (defaults off - existing installs keep local summarization).
 /// Schema >=11: replace the former product-branded Meta default model.
-pub const CONFIG_SCHEMA: u32 = 11;
+/// Schema >=12: reserve and cap each inference response by default. This is
+/// intentionally separate from unlimited task rounds: an unlimited task must
+/// not imply an unlimited single completion.
+pub const CONFIG_SCHEMA: u32 = 12;
 
 const RETIRED_PROVIDER_IDS: &[&str] = &[
     "anyscale",
@@ -117,6 +120,12 @@ pub struct Config {
     /// `None` / omitted = unlimited.
     #[serde(default)]
     pub max_session_tokens: Option<u64>,
+    /// Conservative ceiling reserved for every model request. It is sent to
+    /// providers that support an output limit and is included in preflight
+    /// budget/context checks. `0` asks Nur not to send a provider limit, but
+    /// keeps the legacy unbounded-risk behavior and is discouraged.
+    #[serde(default = "default_request_output_reserve_tokens")]
+    pub request_output_reserve_tokens: u64,
     /// When compacting, keep this many recent user turns (messages) after the summary.
     #[serde(default = "default_compact_keep_user_turns")]
     pub compact_keep_user_turns: u32,
@@ -402,6 +411,13 @@ fn default_reasoning() -> String {
 fn default_max_turns() -> u32 {
     0 // unlimited
 }
+/// A small enough response ceiling for ordinary tool rounds while leaving room
+/// for a real final answer. Users doing deliberate long-form generation can
+/// raise this in config; `0` restores the provider default.
+pub const DEFAULT_REQUEST_OUTPUT_RESERVE_TOKENS: u64 = 8_192;
+fn default_request_output_reserve_tokens() -> u64 {
+    DEFAULT_REQUEST_OUTPUT_RESERVE_TOKENS
+}
 fn default_context_window() -> u64 {
     1_000_000
 }
@@ -438,6 +454,7 @@ impl Default for Config {
             tool_result_max_chars: default_tool_result_max_chars(),
             max_session_cost_usd: None,
             max_session_tokens: None,
+            request_output_reserve_tokens: default_request_output_reserve_tokens(),
             compact_keep_user_turns: default_compact_keep_user_turns(),
             compact_tool_body_max_chars: default_compact_tool_body_max(),
             poor_mode: false,
@@ -632,6 +649,14 @@ pub fn provider_sessions_path() -> PathBuf {
     nur_home().join("provider_sessions.json")
 }
 
+/// Per-provider credential policy. A provider explicitly cleared in `/auth`
+/// is tombstoned here so vendor CLI / OMP discovery cannot silently restore a
+/// credential the user just removed. Explicitly saving or importing a new
+/// credential clears the tombstone.
+pub fn credential_policy_path() -> PathBuf {
+    nur_home().join("credential_policy.json")
+}
+
 pub fn sessions_dir() -> PathBuf {
     nur_home().join("sessions")
 }
@@ -791,6 +816,12 @@ impl Config {
                 "max_session_tokens must be > 0 when set".into(),
             ));
         }
+        if self.request_output_reserve_tokens > 131_072 {
+            return Err(NurError::Config(format!(
+                "request_output_reserve_tokens {} is unreasonably large (use 0 for provider default, or a value <= 131072)",
+                self.request_output_reserve_tokens
+            )));
+        }
         Ok(())
     }
 }
@@ -885,6 +916,24 @@ mod tests {
         assert_eq!(Config::default().max_turns, 0);
         assert_eq!(default_max_turns(), 0);
         assert_eq!(Config::default().config_schema, CONFIG_SCHEMA);
+    }
+
+    #[test]
+    fn default_request_output_reserve_is_conservative_and_configurable() {
+        let cfg = Config::default();
+        assert_eq!(
+            cfg.request_output_reserve_tokens,
+            DEFAULT_REQUEST_OUTPUT_RESERVE_TOKENS
+        );
+        let parsed: Config = toml::from_str("request_output_reserve_tokens = 4096").unwrap();
+        assert_eq!(parsed.request_output_reserve_tokens, 4096);
+    }
+
+    #[test]
+    fn kv_stable_compaction_toggle_round_trips_and_is_not_inert() {
+        let parsed: Config = toml::from_str("kv_stable_compact = false").unwrap();
+        assert!(!parsed.kv_stable_compact);
+        assert!(Config::default().kv_stable_compact);
     }
 
     #[test]

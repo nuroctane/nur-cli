@@ -21,6 +21,7 @@ use serde_json::{json, Value};
 /// session's `project_id`); `model` is the already-normalized Gemini id.
 pub fn build_body(req: &ResponseRequest, project: &str, model: &str) -> Value {
     let mut contents: Vec<Value> = Vec::new();
+    let mut call_names = std::collections::HashMap::<String, String>::new();
     // A run of function_call items maps to a single `model` turn whose parts are
     // functionCall entries; function_call_output items become a `user` turn with
     // functionResponse parts, mirroring the Gemini protocol.
@@ -30,6 +31,9 @@ pub fn build_body(req: &ResponseRequest, project: &str, model: &str) -> Value {
                 Some("reasoning") => {} // no Gemini equivalent - drop
                 Some("function_call") => {
                     let name = item.get("name").and_then(Value::as_str).unwrap_or("");
+                    if let Some(call_id) = item.get("call_id").and_then(Value::as_str) {
+                        call_names.insert(call_id.to_string(), name.to_string());
+                    }
                     let args = parse_args(item.get("arguments"));
                     contents.push(json!({
                         "role": "model",
@@ -37,7 +41,15 @@ pub fn build_body(req: &ResponseRequest, project: &str, model: &str) -> Value {
                     }));
                 }
                 Some("function_call_output") => {
-                    let name = item.get("name").and_then(Value::as_str).unwrap_or("");
+                    let name = item
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .or_else(|| {
+                            item.get("call_id")
+                                .and_then(Value::as_str)
+                                .and_then(|id| call_names.get(id).map(String::as_str))
+                        })
+                        .unwrap_or("");
                     let output = item.get("output").and_then(Value::as_str).unwrap_or("");
                     contents.push(json!({
                         "role": "user",
@@ -84,6 +96,10 @@ pub fn build_body(req: &ResponseRequest, project: &str, model: &str) -> Value {
         if !decls.is_empty() {
             request["tools"] = json!([{ "functionDeclarations": decls }]);
         }
+    }
+
+    if let Some(limit) = req.max_output_tokens.filter(|limit| *limit > 0) {
+        request["generationConfig"]["maxOutputTokens"] = json!(limit);
     }
 
     json!({
@@ -336,6 +352,7 @@ mod tests {
             stream: None,
             parallel_tool_calls: None,
             prompt_cache_key: None,
+            max_output_tokens: None,
         }
     }
 
@@ -365,6 +382,22 @@ mod tests {
             body["request"]["tools"][0]["functionDeclarations"][0]["name"],
             "get_time"
         );
+    }
+
+    #[test]
+    fn native_tool_result_recovers_name_and_applies_output_cap() {
+        let mut req = sample_request();
+        req.input = json!([
+            {"type":"function_call","call_id":"call_7","name":"get_time","arguments":"{\"tz\":\"utc\"}"},
+            {"type":"function_call_output","call_id":"call_7","output":"12:00"}
+        ]);
+        req.max_output_tokens = Some(4096);
+        let body = build_body(&req, "project", "gemini-3.6-flash");
+        assert_eq!(
+            body["request"]["contents"][1]["parts"][0]["functionResponse"]["name"],
+            "get_time"
+        );
+        assert_eq!(body["request"]["generationConfig"]["maxOutputTokens"], 4096);
     }
 
     #[test]

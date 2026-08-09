@@ -3,7 +3,79 @@ use super::mode::PermissionMode;
 use super::skills::{load_skills, skill_activation};
 use crate::ecosystem;
 use crate::tools::shell_backend;
+use serde_json::Value;
 use std::path::{Path, PathBuf};
+
+/// Attribution for the outgoing prompt. Counts are deliberately local estimates
+/// (roughly four characters per token) so the budget guard still has a safe
+/// answer when a provider omits usage metadata.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PromptAttribution {
+    pub system_tokens: u64,
+    pub tool_schema_tokens: u64,
+    pub dialogue_tokens: u64,
+    pub tool_output_tokens: u64,
+    pub stable_prefix_fingerprint: String,
+}
+
+impl PromptAttribution {
+    pub fn estimated_input_tokens(&self) -> u64 {
+        self.system_tokens
+            .saturating_add(self.tool_schema_tokens)
+            .saturating_add(self.dialogue_tokens)
+            .saturating_add(self.tool_output_tokens)
+    }
+}
+
+fn estimate_tokens(text: &str) -> u64 {
+    // Four characters/token is intentionally slightly conservative for JSON,
+    // paths, and source snippets, which dominate agent prompts.
+    ((text.chars().count() as u64).saturating_add(3)) / 4
+}
+
+fn stable_fingerprint(parts: &[&str]) -> String {
+    // FNV-1a is deterministic across processes and is only a telemetry label,
+    // not a security primitive. Do not expose prompt material in status text.
+    let mut h: u64 = 0xcbf29ce484222325;
+    for part in parts {
+        for b in part.as_bytes() {
+            h ^= u64::from(*b);
+            h = h.wrapping_mul(0x100000001b3);
+        }
+    }
+    format!("{h:016x}")
+}
+
+/// Attribute a rendered request without retaining or displaying its contents.
+/// Tool outputs are split from ordinary dialogue to make repeated schemas and
+/// large observations visible in request telemetry.
+pub fn attribute_request(
+    instructions: &str,
+    tools: &[crate::api::types::ToolDef],
+    input_items: &[Value],
+) -> PromptAttribution {
+    let tool_json = serde_json::to_string(tools).unwrap_or_default();
+    let mut out = PromptAttribution {
+        system_tokens: estimate_tokens(instructions),
+        tool_schema_tokens: estimate_tokens(&tool_json),
+        stable_prefix_fingerprint: stable_fingerprint(&[instructions, &tool_json]),
+        ..Default::default()
+    };
+    for item in input_items {
+        let serialized = serde_json::to_string(item).unwrap_or_default();
+        let tokens = estimate_tokens(&serialized);
+        let is_tool_output = item
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| kind == "function_call_output");
+        if is_tool_output {
+            out.tool_output_tokens = out.tool_output_tokens.saturating_add(tokens);
+        } else {
+            out.dialogue_tokens = out.dialogue_tokens.saturating_add(tokens);
+        }
+    }
+    out
+}
 
 /// Project instruction files (first found wins). NUR.md is preferred.
 pub const PROJECT_INSTRUCTION_FILES: &[&str] = &["NUR.md", "AGENTS.md", "CLAUDE.md"];
@@ -251,6 +323,10 @@ context (RLM store), anydoc (docs→md), goal, proposal, harness (continual refi
 connectome (agent-native memory + chronicle continuity), repl (persistent Python REPL),
 graphify, excalidraw, plur, ruflo, skill, memory, todo_write, submit_plan, agent
 
+Tool schemas are capability- and task-profiled. The core repository tools are
+always present; specialist schemas are attached when relevant and after the
+first tool round. Never invent a tool call whose schema is not available.
+
 ## Tool policy - search and failure handling (critical for all backends including Meta)
 - SEARCH - ripgrep only: ALWAYS use `grep` and `glob` tools for any code/content search. NEVER use bash commands like `grep`, `rg`, `ag`, `find`, `ls`, `Get-ChildItem`, etc. for searching. The `grep`/`glob` tools are ripgrep-backed, sandboxed, respect .gitignore, and are the only reliable search path. This applies to all models with no exceptions.
 - FILE IO - dedicated tools only: `list_dir` for directory shape, `read_file` for contents. NEVER use bash `cat`, `type`, `ls`, `dir`, `head`, `tail` to read workspace. Cheaper, faster, and never hangs.
@@ -371,6 +447,11 @@ Fan-out: one `agent` call per target provider; set `provider` on every call the 
 3. Implement - smallest correct change; verify with tests/build
 4. Report - what changed, how to verify
 
+# Tool-call rationale
+Before the first tool call for a task, give at most one short sentence explaining
+the next action. Do not repeat a stock preamble before later calls. Keep tool-call
+commentary concise; the tool result is the evidence.
+
 # Style
 Direct technical markdown. Fence code with languages.
 "#,
@@ -456,6 +537,25 @@ pub fn system_instructions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn request_attribution_separates_tool_output_and_fingerprints_stable_prefix() {
+        let tools = vec![crate::api::types::ToolDef {
+            type_: "function".into(),
+            name: "read_file".into(),
+            description: Some("Read a file".into()),
+            parameters: Some(serde_json::json!({"type":"object"})),
+        }];
+        let items = vec![
+            serde_json::json!({"role":"user", "content":"inspect this"}),
+            serde_json::json!({"type":"function_call_output", "call_id":"x", "output":"a long result"}),
+        ];
+        let a = attribute_request("stable system", &tools, &items);
+        let b = attribute_request("stable system", &tools, &items);
+        assert!(a.system_tokens > 0 && a.tool_schema_tokens > 0);
+        assert!(a.dialogue_tokens > 0 && a.tool_output_tokens > 0);
+        assert_eq!(a.stable_prefix_fingerprint, b.stable_prefix_fingerprint);
+    }
 
     #[test]
     fn child_prompt_matches_the_focused_non_recursive_tool_surface() {

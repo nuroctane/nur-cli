@@ -7,9 +7,10 @@
 use crate::config::{nur_home, HeadroomConfig};
 use crate::ecosystem::{find_bin, run_capture};
 use crate::tools::sensitive::body_looks_sensitive;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 const COMPRESS_TIMEOUT_MS: u64 = 8_000;
@@ -27,6 +28,67 @@ const SKIP_TOOLS: &[&str] = &[
 ];
 
 static IMPORT_CACHE: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
+
+/// Compression accounting and privacy provenance returned by a Headroom run.
+/// Headroom's backend is external, so missing fields are always `unknown`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeadroomTelemetry {
+    pub backend: String,
+    pub mode: String,
+    pub model: String,
+    /// local | remote | unknown. Never infer local simply because the Python
+    /// helper runs locally: the helper can call a remote backend.
+    pub processing: String,
+    pub input_chars: usize,
+    pub output_chars: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_saved: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compression_ratio: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
+    pub cost_provenance: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct HeadroomCompression {
+    pub content: String,
+    pub telemetry: HeadroomTelemetry,
+}
+
+fn telemetry_queue() -> &'static Mutex<Vec<HeadroomTelemetry>> {
+    static QUEUE: OnceLock<Mutex<Vec<HeadroomTelemetry>>> = OnceLock::new();
+    QUEUE.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Drain helper usage exposed during this process. The agent/usage owner should
+/// import these into the current session receipt after each tool batch.
+pub fn take_headroom_telemetry() -> Vec<HeadroomTelemetry> {
+    telemetry_queue()
+        .lock()
+        .map(|mut q| std::mem::take(&mut *q))
+        .unwrap_or_default()
+}
+
+/// Concrete runtime availability is detectable; processing is unknown until
+/// Headroom returns an explicit backend/privacy field for a compression run.
+pub fn backend_status() -> String {
+    if !python_import_ok() {
+        return "backend=missing processing=unknown".into();
+    }
+    let cli = if find_headroom_bin().is_some() {
+        "cli-present"
+    } else {
+        "python-package"
+    };
+    format!("backend={cli} mode=inline processing=unknown")
+}
 
 pub fn find_headroom_bin() -> Option<String> {
     find_bin("headroom")
@@ -151,6 +213,7 @@ pub fn doctor_report() -> String {
     lines.push(
         "mode: inline compress on tool results when [headroom] enabled=true (default)".into(),
     );
+    lines.push(format!("provenance: {}", backend_status()));
     lines.join("\n")
 }
 
@@ -201,6 +264,23 @@ pub fn compress_text(
     body: &str,
     session_model: &str,
 ) -> Option<String> {
+    compress_text_with_provenance(cfg, tool, body, session_model).map(|result| {
+        // Touch the receipt here even though the durable consumer drains the
+        // telemetry queue after the tool batch. This keeps the convenience API
+        // honest about having consumed a provenance-bearing result.
+        let _ = &result.telemetry.cost_provenance;
+        result.content
+    })
+}
+
+/// Compress and retain backend/mode/cost provenance when the external helper
+/// exposes it. Callers that only need text can continue using `compress_text`.
+pub fn compress_text_with_provenance(
+    cfg: &HeadroomConfig,
+    tool: &str,
+    body: &str,
+    session_model: &str,
+) -> Option<HeadroomCompression> {
     if !should_compress(cfg, tool, body) {
         return None;
     }
@@ -234,11 +314,12 @@ pub fn compress_text(
     }
     argv.push(helper_s);
     argv.push("--model".into());
-    argv.push(model);
+    argv.push(model.clone());
     argv.push("--label".into());
     argv.push(tool.to_string());
     argv.push("--file".into());
     argv.push(tmp_s);
+    argv.push("--json-out".into());
     let refs: Vec<&str> = argv.iter().map(|s| s.as_str()).collect();
     let captured = run_capture(&py, &refs, None, COMPRESS_TIMEOUT_MS);
     let _ = std::fs::remove_file(&tmp);
@@ -247,18 +328,56 @@ pub fn compress_text(
         Ok(s) => s,
         Err(_) => return None,
     };
-    let trimmed = out.trim().to_string();
+    let raw: serde_json::Value = serde_json::from_str(out.trim()).ok()?;
+    let trimmed = raw["content"].as_str()?.trim().to_string();
     if trimmed.is_empty() || trimmed.len() >= body.len() {
         return None;
     }
+    let processing = raw["processing"]
+        .as_str()
+        .filter(|p| matches!(*p, "local" | "remote" | "unknown"))
+        .unwrap_or("unknown")
+        .to_string();
+    let backend = raw["backend"].as_str().unwrap_or("unknown").to_string();
+    let input_tokens = raw["usage"]["input_tokens"].as_u64();
+    let output_tokens = raw["usage"]["output_tokens"].as_u64();
+    let total_tokens = raw["usage"]["total_tokens"].as_u64();
+    let cost_usd = raw["usage"]["cost_usd"].as_f64();
+    let telemetry = HeadroomTelemetry {
+        backend: backend.clone(),
+        mode: raw["mode"].as_str().unwrap_or("inline").to_string(),
+        model: raw["model"].as_str().unwrap_or(&model).to_string(),
+        processing: processing.clone(),
+        input_chars: body.chars().count(),
+        output_chars: trimmed.chars().count(),
+        tokens_saved: raw["tokens_saved"].as_u64(),
+        compression_ratio: raw["compression_ratio"].as_f64(),
+        input_tokens,
+        output_tokens,
+        total_tokens,
+        cost_usd,
+        cost_provenance: if cost_usd.is_some() {
+            "headroom-reported".into()
+        } else if input_tokens.is_some() || output_tokens.is_some() || total_tokens.is_some() {
+            "headroom-usage-no-cost".into()
+        } else {
+            "unknown".into()
+        },
+    };
+    if let Ok(mut queue) = telemetry_queue().lock() {
+        queue.push(telemetry.clone());
+    }
     let saved = body.len().saturating_sub(trimmed.len());
     let header = format!(
-        "[headroom compressed - {} -> {} chars, ~{saved} chars saved; \
+        "[headroom compressed - {} -> {} chars, ~{saved} chars saved; processing={processing}; backend={backend}; \
          original was not spilled - re-run the tool if you need the full body]\n",
         body.chars().count(),
         trimmed.chars().count()
     );
-    Some(format!("{header}{trimmed}"))
+    Some(HeadroomCompression {
+        content: format!("{header}{trimmed}"),
+        telemetry,
+    })
 }
 
 /// Compress then spill - shared by all agent-loop tool-result sites.
@@ -282,9 +401,9 @@ pub fn prepare_tool_body(
             .map(|c| c.context_register_min_chars as usize)
             .unwrap_or(8_000);
         if min > 0 {
-            if let Some(msg) =
-                crate::agent::context_store::maybe_register_tool_result(session_id, tool, &body, min)
-            {
+            if let Some(msg) = crate::agent::context_store::maybe_register_tool_result(
+                session_id, tool, &body, min,
+            ) {
                 prefix = msg;
             }
         }
@@ -369,5 +488,39 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(resolve_model(&cfg, "gpt-4o"), "claude-opus");
+    }
+
+    #[test]
+    fn backend_status_never_claims_unverified_local_processing() {
+        let status = backend_status();
+        assert!(status.contains("processing=unknown"));
+    }
+
+    #[test]
+    fn telemetry_usage_fields_round_trip() {
+        let telemetry = HeadroomTelemetry {
+            backend: "headroom-python@test".into(),
+            mode: "inline".into(),
+            model: "test".into(),
+            processing: "unknown".into(),
+            input_chars: 100,
+            output_chars: 20,
+            tokens_saved: Some(12),
+            compression_ratio: Some(0.2),
+            input_tokens: Some(20),
+            output_tokens: Some(5),
+            total_tokens: Some(25),
+            cost_usd: Some(0.001),
+            cost_provenance: "headroom-reported".into(),
+        };
+        let value = serde_json::to_value(&telemetry).unwrap();
+        assert_eq!(value["processing"], "unknown");
+        assert_eq!(value["input_tokens"], 20, "flat receipt schema");
+        assert_eq!(
+            serde_json::from_value::<HeadroomTelemetry>(value)
+                .unwrap()
+                .cost_usd,
+            Some(0.001)
+        );
     }
 }

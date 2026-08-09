@@ -32,6 +32,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
+        import headroom  # type: ignore
         from headroom import compress  # type: ignore
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"headroom import failed: {e}\n")
@@ -83,10 +84,41 @@ def main() -> int:
         content = content[len(prefix) :]
 
     if args.json_out:
+        usage_raw = getattr(result, "usage", None)
+        if isinstance(usage_raw, dict):
+            get_usage = usage_raw.get
+        else:
+            get_usage = lambda key, default=None: getattr(usage_raw, key, default)
+
+        def first_usage(*names):
+            for name in names:
+                value = get_usage(name)
+                if value is not None:
+                    return value
+            return None
+
+        processing = getattr(result, "processing", None)
+        if processing not in {"local", "remote", "unknown"}:
+            processing = "unknown"
+        backend = (
+            getattr(result, "backend", None)
+            or getattr(result, "provider", None)
+            or f"headroom-python@{getattr(headroom, '__version__', 'unknown')}"
+        )
         payload = {
             "content": content,
             "tokens_saved": getattr(result, "tokens_saved", None),
             "compression_ratio": getattr(result, "compression_ratio", None),
+            "backend": str(backend),
+            "processing": processing,
+            "mode": "inline",
+            "model": args.model,
+            "usage": {
+                "input_tokens": first_usage("input_tokens", "prompt_tokens"),
+                "output_tokens": first_usage("output_tokens", "completion_tokens"),
+                "total_tokens": first_usage("total_tokens"),
+                "cost_usd": first_usage("cost_usd", "cost"),
+            },
         }
         sys.stdout.write(json.dumps(payload, ensure_ascii=False))
     else:

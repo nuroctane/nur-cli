@@ -292,7 +292,9 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/cs", "fast ripgrep over the workspace  (alias of /codesearch)"),
     ("/mc", "manage MCP servers via the executor gateway  (/mcp)"),
     ("/mcp", "manage MCP servers via the executor gateway  (alias of /mc)"),
-    ("/login", "provider · API key or browser sign-in"),
+    ("/provider", "choose the active provider and sign-in route"),
+    ("/login", "alias of /provider"),
+    ("/auth", "manage saved OAuth, API-key, CLI, and OMP credentials for every provider"),
     ("/logout", "clear the stored API key"),
     ("/config", "show config + data paths"),
     ("/feedback", "file a GitHub issue from here"),
@@ -602,6 +604,13 @@ pub struct PendingSubagentLogin {
     pub kind: Option<String>,
     /// Optional exact model id the original call requested.
     pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PendingFusionLogin {
+    pub provider_id: String,
+    pub question: String,
+    pub panel_ids: Vec<String>,
 }
 
 /// Hit-box for a sidegraph kid (swarm subagent) that maps to a swarm run id.
@@ -985,11 +994,7 @@ pub enum PaletteEnter {
 /// matches (typed by hand, or just filled by a prior Enter), submit it directly
 /// against ALL matches — not just the highlighted row. Otherwise fill with the
 /// highlighted row so a first Enter completes the command and a second submits.
-pub fn decide_palette_enter(
-    matches: &[(String, String)],
-    input: &str,
-    idx: usize,
-) -> PaletteEnter {
+pub fn decide_palette_enter(matches: &[(String, String)], input: &str, idx: usize) -> PaletteEnter {
     let trimmed = input.trim();
     if matches.iter().any(|(n, _)| trimmed == n.as_str()) {
         return PaletteEnter::Submit(trimmed.to_string());
@@ -1053,6 +1058,28 @@ pub enum LoginStage {
     Browser,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoginMethodChoice {
+    Browser,
+    ApiKey,
+    Import,
+}
+
+pub fn login_method_choices(
+    provider: &crate::providers::Provider,
+    can_import: bool,
+) -> Vec<LoginMethodChoice> {
+    let mut choices = Vec::new();
+    if provider.browser_auth {
+        choices.push(LoginMethodChoice::Browser);
+    }
+    choices.push(LoginMethodChoice::ApiKey);
+    if can_import {
+        choices.push(LoginMethodChoice::Import);
+    }
+    choices
+}
+
 /// OpenAI-compatible key logins can point at a custom endpoint (`base_url`);
 /// Anthropic / Gemini-CloudCode cannot. Gates the `/login` base-URL stage.
 pub fn provider_takes_custom_base(p: &crate::providers::Provider) -> bool {
@@ -1100,6 +1127,10 @@ pub struct LoginModal {
     /// providers into `fallback_providers` instead of choosing a new primary,
     /// and never logs the active provider out.
     pub manage_failover: bool,
+    /// Unified credential-vault mode opened by `/auth`.
+    pub manage_auth: bool,
+    /// Cached non-secret provider status labels, refreshed after mutations.
+    pub auth_summaries: std::collections::BTreeMap<String, String>,
     /// The Key stage is capturing a per-provider failover key (saved to the
     /// provider-key store), not an active-provider login.
     pub fallback_key: bool,
@@ -2056,6 +2087,8 @@ pub struct App {
     /// finishes signing in, we can faithfully auto-retry the exact pending
     /// cross-provider subagent instead of making them re-issue it.
     pub pending_subagent_login: Option<PendingSubagentLogin>,
+    /// Exact `/fusion` request blocked on a missing provider credential.
+    pub pending_fusion_login: Option<PendingFusionLogin>,
     /// Model chooser (`/model`) - live provider model list, when open.
     pub model_picker: Option<ModelPicker>,
     /// Runtime theme chooser (`/theme`), also shown before `/login` on first run.
@@ -2463,6 +2496,7 @@ pub async fn run_tui(
         window_base: seed_prompt.clone().unwrap_or_else(|| "ready".into()),
         login: None,
         pending_subagent_login: None,
+        pending_fusion_login: None,
         model_picker: None,
         theme_picker: None,
         plugin_picker: None,
@@ -2511,8 +2545,15 @@ pub async fn run_tui(
     // Open screen is just the banner (splash · model · provider · cwd · session).
     // Ecosystem / mode / feature maps: /ecosystem · /mode · /help.
 
-    // Started without any API key → sign-in required before the first turn.
-    if crate::auth::resolve_api_key().is_err() {
+    // Started without credentials for the selected provider → sign-in required
+    // before the first turn. Local/key-optional providers are valid without a
+    // bearer and must never be presented as signed out.
+    let active_provider = crate::providers::by_id(&app.cfg.provider)
+        .copied()
+        .unwrap_or(*crate::providers::default_provider());
+    if !active_provider.key_optional
+        && crate::auth::resolve_api_key_for(Some(active_provider.id)).is_err()
+    {
         app.authed = false;
         app.push_note(
             Tone::Mode,
@@ -3316,7 +3357,11 @@ impl App {
         // Clone current session → new id, truncated to before this prompt.
         let mut forked = match &self.session {
             Some(s) => (**s).clone(),
-            None => Session::new(&self.cfg.model, &self.cwd.display().to_string()),
+            None => Session::new_for_provider(
+                &self.cfg.model,
+                &self.cfg.provider,
+                &self.cwd.display().to_string(),
+            ),
         };
         forked.id = uuid::Uuid::new_v4().to_string();
         forked.cwd = self.cwd.display().to_string();
@@ -5707,8 +5752,49 @@ impl App {
             oauth_rx: None,
             oauth_cancel: None,
             manage_failover: false,
+            manage_auth: false,
+            auth_summaries: crate::auth::provider_credential_summaries(),
             fallback_key: false,
         });
+    }
+
+    /// Open the unified provider credential vault. This never changes the
+    /// active provider. Enter adds or replaces the selected provider's chosen
+    /// route; Delete removes Nur-managed copies and blocks automatic T3 import
+    /// until the user explicitly chooses CLI/OMP again.
+    fn open_auth_manager(&mut self) {
+        self.cancel_oauth();
+        self.login = Some(LoginModal {
+            stage: LoginStage::Provider,
+            filter: String::new(),
+            sel: 0,
+            scroll: 0,
+            vis_page: 8,
+            hit: PickerHit::default(),
+            last_step_at: Instant::now()
+                .checked_sub(Duration::from_secs(1))
+                .unwrap_or_else(Instant::now),
+            provider_id: self.cfg.provider.clone(),
+            method_sel: 0,
+            can_import: true,
+            buf: String::new(),
+            error: None,
+            browser_status: String::new(),
+            browser_url: String::new(),
+            browser_user_code: String::new(),
+            oauth_rx: None,
+            oauth_cancel: None,
+            manage_failover: false,
+            manage_auth: true,
+            auth_summaries: crate::auth::provider_credential_summaries(),
+            fallback_key: false,
+        });
+    }
+
+    fn refresh_auth_summaries(&mut self) {
+        if let Some(login) = &mut self.login {
+            login.auth_summaries = crate::auth::provider_credential_summaries();
+        }
     }
 
     /// Open the `/login` modal pre-selected to a specific provider. Used both by
@@ -5738,15 +5824,11 @@ impl App {
                 m.provider_id = p.id.to_string();
                 m.error = None;
                 m.buf.clear();
-                if p.browser_auth {
-                    // Vendor CLI and OMP discovery can shell out. Always offer
-                    // the explicit import action, then probe in the background.
-                    m.can_import = true;
-                    m.method_sel = 0;
-                    m.stage = LoginStage::Method;
-                } else {
-                    m.stage = LoginStage::Key;
-                }
+                // Every provider can use the OMP bridge, while a subset also
+                // supports a first-party CLI and/or browser OAuth.
+                m.can_import = true;
+                m.method_sel = 0;
+                m.stage = LoginStage::Method;
             }
             None => {
                 // Unknown alias: leave the picker open, filtered by the raw text.
@@ -5781,6 +5863,8 @@ impl App {
             oauth_rx: None,
             oauth_cancel: None,
             manage_failover: true,
+            manage_auth: false,
+            auth_summaries: crate::auth::provider_credential_summaries(),
             fallback_key: false,
         });
     }
@@ -5849,20 +5933,51 @@ impl App {
                 m.buf.clear();
                 m.fallback_key = true;
                 m.error = None;
-                if provider.browser_auth {
-                    m.can_import = true;
-                    m.method_sel = 0;
-                    m.stage = LoginStage::Method;
-                } else {
-                    m.stage = LoginStage::Key;
-                }
+                m.can_import = true;
+                m.method_sel = 0;
+                m.stage = LoginStage::Method;
             }
         }
     }
 
     /// Finish a failover-only credential capture (key or OAuth) and return to
     /// the manage-failover picker without switching the active provider.
-    fn finish_fallback_credential(&mut self, note: impl Into<String>) {
+    fn finish_scoped_credential(&mut self, provider_id: &str, note: impl Into<String>) {
+        let note = note.into();
+        let pending_fusion = self
+            .pending_fusion_login
+            .as_ref()
+            .is_some_and(|pending| pending.provider_id == provider_id);
+        if pending_fusion {
+            // If the missing credential belongs to the active synthesizer, the
+            // hot client itself must be rebuilt before retry. Panel-only auth
+            // stays scoped and never changes the active provider.
+            if provider_id == self.cfg.provider && !self.authed {
+                let via_oauth = crate::auth::has_provider_oauth(provider_id);
+                self.push_info(note);
+                self.apply_provider_login(provider_id, "", via_oauth);
+                return;
+            }
+            let pending = self.pending_fusion_login.take().unwrap_or_default();
+            self.login = None;
+            self.push_info(note);
+            self.start_fusion_with_panel(&pending.question, pending.panel_ids);
+            return;
+        }
+        let pending_subagent = self
+            .pending_subagent_login
+            .as_ref()
+            .is_some_and(|pending| pending.provider_id == provider_id);
+        if pending_subagent {
+            let provider_name = crate::providers::by_id(provider_id)
+                .map(|provider| provider.name)
+                .unwrap_or(provider_id)
+                .to_string();
+            self.login = None;
+            self.push_info(note);
+            self.maybe_retry_pending_subagent(provider_id, &provider_name);
+            return;
+        }
         if let Some(m) = &mut self.login {
             m.fallback_key = false;
             m.buf.clear();
@@ -5873,9 +5988,9 @@ impl App {
             m.oauth_rx = None;
             m.oauth_cancel = None;
             m.stage = LoginStage::Provider;
-            m.manage_failover = true;
         }
-        self.push_info(note.into());
+        self.refresh_auth_summaries();
+        self.push_info(note);
     }
 
     /// Open the `/model` chooser and kick off a live model-list fetch for the
@@ -6494,22 +6609,28 @@ impl App {
             m.provider_id = p.id.to_string();
             m.error = None;
             m.buf.clear();
-            if p.browser_auth {
-                m.can_import = true;
-                m.method_sel = 0;
-                m.stage = LoginStage::Method;
-            } else {
-                m.stage = LoginStage::Key;
-            }
+            m.can_import = true;
+            m.method_sel = 0;
+            // `/auth` captures a provider-scoped choice without changing the
+            // active provider. `/provider` uses the same method window but
+            // activates the provider after success.
+            m.fallback_key = m.manage_auth;
+            m.stage = LoginStage::Method;
+        }
+    }
+
+    fn open_scoped_login_for(&mut self, requested: &str) {
+        self.open_login_for(requested);
+        if let Some(modal) = &mut self.login {
+            modal.fallback_key = true;
         }
     }
 
     fn method_option_count(m: &LoginModal) -> usize {
-        if m.can_import {
-            3
-        } else {
-            2
-        }
+        let provider = crate::providers::by_id(&m.provider_id)
+            .copied()
+            .unwrap_or(*crate::providers::default_provider());
+        login_method_choices(&provider, m.can_import).len()
     }
 
     fn on_login_method_key(&mut self, key: event::KeyEvent, _ctrl: bool) {
@@ -6561,16 +6682,22 @@ impl App {
             ),
             None => return,
         };
-        match sel {
-            0 => self.start_browser_login(&provider_id),
-            1 => {
+        let provider = crate::providers::by_id(&provider_id)
+            .copied()
+            .unwrap_or(*crate::providers::default_provider());
+        let choices = login_method_choices(&provider, can_import);
+        match choices.get(sel).copied() {
+            Some(LoginMethodChoice::Browser) => self.start_browser_login(&provider_id),
+            Some(LoginMethodChoice::ApiKey) => {
                 if let Some(m) = &mut self.login {
                     m.stage = LoginStage::Key;
                     m.buf.clear();
                     m.error = None;
                 }
             }
-            2 if can_import => self.start_existing_session_import(&provider_id, is_fallback),
+            Some(LoginMethodChoice::Import) => {
+                self.start_existing_session_import(&provider_id, is_fallback)
+            }
             _ => {}
         }
     }
@@ -6740,7 +6867,7 @@ impl App {
                         // Preserve OMP's credential kind. API keys must not be
                         // routed as first-party subscription OAuth sessions.
                         let saved = if imported_as_oauth {
-                            crate::auth::save_provider_oauth(
+                            crate::auth::choose_provider_oauth(
                                 &provider_id,
                                 &tokens.access_token,
                                 tokens.refresh_token,
@@ -6748,7 +6875,7 @@ impl App {
                                 tokens.meta,
                             )
                         } else {
-                            crate::auth::save_provider_key(&provider_id, &tokens.access_token)
+                            crate::auth::choose_provider_key(&provider_id, &tokens.access_token)
                         };
                         if let Err(e) = saved {
                             if let Some(m) = &mut self.login {
@@ -6760,9 +6887,10 @@ impl App {
                         let name = crate::providers::by_id(&provider_id)
                             .map(|p| p.name)
                             .unwrap_or(provider_id.as_str());
-                        self.finish_fallback_credential(format!(
-                            "failover · {name} · imported credential saved"
-                        ));
+                        self.finish_scoped_credential(
+                            &provider_id,
+                            format!("auth · {name} · imported credential saved"),
+                        );
                     } else {
                         let saved = if imported_as_oauth {
                             crate::auth::save_oauth_session(
@@ -6772,10 +6900,19 @@ impl App {
                                 tokens.expires_at,
                                 tokens.meta.clone(),
                             )
+                            .and_then(|()| {
+                                crate::auth::choose_provider_oauth(
+                                    &provider_id,
+                                    &tokens.access_token,
+                                    tokens.refresh_token.clone(),
+                                    tokens.expires_at,
+                                    tokens.meta.clone(),
+                                )
+                            })
                         } else {
                             crate::auth::save_api_key_for(&tokens.access_token, Some(&provider_id))
                                 .and_then(|()| {
-                                    crate::auth::save_provider_key(
+                                    crate::auth::choose_provider_key(
                                         &provider_id,
                                         &tokens.access_token,
                                     )
@@ -6937,6 +7074,7 @@ impl App {
             .as_ref()
             .map(|m| m.manage_failover)
             .unwrap_or(false);
+        let manage_auth = self.login.as_ref().map(|m| m.manage_auth).unwrap_or(false);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let Some(m) = &mut self.login else { return };
         match key.code {
@@ -6975,6 +7113,8 @@ impl App {
                     self.login_picker_confirm();
                 }
             }
+            KeyCode::Delete if manage_auth => self.delete_auth_selected(),
+            KeyCode::Char('d') if manage_auth && ctrl => self.delete_auth_selected(),
             // Space / Tab toggle the selected provider in the failover chain -
             // but only in `/failover`. In `/login` this arm sat above the
             // type-to-filter arm, so typing a provider name with a space in it
@@ -7003,6 +7143,47 @@ impl App {
                 m.scroll = 0;
             }
             _ => {}
+        }
+    }
+
+    fn delete_auth_selected(&mut self) {
+        let provider = {
+            let Some(modal) = &self.login else { return };
+            if !modal.manage_auth || modal.stage != LoginStage::Provider {
+                return;
+            }
+            match modal.filtered().get(modal.sel) {
+                Some(provider) => **provider,
+                None => return,
+            }
+        };
+        match crate::auth::delete_provider_credentials(provider.id) {
+            Ok(removed) => {
+                self.refresh_auth_summaries();
+                if provider.id == self.cfg.provider {
+                    self.authed = provider.key_optional
+                        || crate::auth::resolve_api_key_for(Some(provider.id)).is_ok();
+                }
+                self.push_note(
+                    Tone::Mode,
+                    if removed {
+                        format!(
+                            "auth · {} removed · automatic CLI/OMP re-import blocked until you choose it again",
+                            provider.name
+                        )
+                    } else {
+                        format!(
+                            "auth · {} had no Nur-managed credential · automatic CLI/OMP import blocked",
+                            provider.name
+                        )
+                    },
+                );
+            }
+            Err(error) => {
+                if let Some(modal) = &mut self.login {
+                    modal.error = Some(format!("could not remove {}: {error}", provider.name));
+                }
+            }
         }
     }
 
@@ -7065,19 +7246,18 @@ impl App {
         // - do NOT switch the active provider.
         if is_fallback {
             if !key.is_empty() {
-                if let Err(e) = crate::auth::save_provider_key(&provider_id, &key) {
+                if let Err(e) = crate::auth::choose_provider_key(&provider_id, &key) {
                     if let Some(m) = &mut self.login {
                         m.error = Some(e.to_string());
                     }
                     return;
                 }
             }
-            if let Some(m) = &mut self.login {
-                m.fallback_key = false;
-                m.buf.clear();
-                m.error = None;
-                m.stage = LoginStage::Provider;
-            }
+            let name = provider.name.to_string();
+            self.finish_scoped_credential(
+                &provider_id,
+                format!("auth · {name} · API key saved as the selected credential"),
+            );
             return;
         }
 
@@ -7096,7 +7276,12 @@ impl App {
             // credential at a time, so without this, switching provider stranded
             // the previous one - breaking failover and any subagent pointed at
             // that provider. `/logout` is what removes it.
-            let _ = crate::auth::save_provider_key(&provider_id, &key);
+            if let Err(e) = crate::auth::choose_provider_key(&provider_id, &key) {
+                if let Some(m) = &mut self.login {
+                    m.error = Some(e.to_string());
+                }
+                return;
+            }
         }
 
         // OpenAI-compatible providers get an optional base-URL step so you can
@@ -7250,6 +7435,25 @@ impl App {
         self.submit_text(&prompt);
     }
 
+    fn maybe_retry_pending_fusion(&mut self, authed_provider: &str, provider_name: &str) {
+        let matches = self
+            .pending_fusion_login
+            .as_ref()
+            .map(|pending| pending.provider_id == authed_provider)
+            .unwrap_or(false);
+        if !matches {
+            return;
+        }
+        let Some(pending) = self.pending_fusion_login.take() else {
+            return;
+        };
+        self.push_note(
+            Tone::Mode,
+            format!("signed in to {provider_name} - resuming the exact fusion request"),
+        );
+        self.start_fusion_with_panel(&pending.question, pending.panel_ids);
+    }
+
     fn apply_provider_login(&mut self, provider_id: &str, key: &str, via_oauth: bool) {
         let provider = crate::providers::by_id(provider_id)
             .copied()
@@ -7292,6 +7496,7 @@ impl App {
         let _ = crate::config::save_config(&self.cfg);
         if let Some(s) = &mut self.session {
             s.model = self.cfg.model.clone();
+            s.provider = self.cfg.provider.clone();
         }
         if let Some(u) = &mut self.usage {
             u.set_model(self.cfg.model.clone());
@@ -7322,6 +7527,7 @@ impl App {
                     ),
                 );
                 self.maybe_retry_pending_subagent(provider_id, provider.name);
+                self.maybe_retry_pending_fusion(provider_id, provider.name);
             }
             Err(e) => {
                 if let Some(m) = &mut self.login {
@@ -8682,18 +8888,18 @@ impl App {
                 retry_model,
             } => {
                 // A subagent asked for a provider with no stored credentials.
-                // Surface an actionable note and pop the /login modal pre-selected
-                // to that provider so the user can authenticate and activate it.
+                // Surface an actionable note and pop the same provider auth
+                // window without changing the parent conversation's provider.
                 self.push_note(
                     Tone::Mode,
                     format!(
-                        "sign in to {provider_name} to deploy subagents there - opening /login (or run /login {provider_id}). Spawn is blocked until you authenticate."
+                        "sign in to {provider_name} to deploy subagents there - opening provider-scoped auth. Spawn is blocked until you authenticate."
                     ),
                 );
                 // Only auto-open if no other modal is already up, so we don't
                 // stomp an in-progress login / picker the user is mid-flow on.
                 if self.login.is_none() {
-                    self.open_login_for(&provider_id);
+                    self.open_scoped_login_for(&provider_id);
                 }
                 // Remember the exact request so we can faithfully re-deploy it
                 // once the user finishes signing in (structured agent() recipe).
@@ -8704,6 +8910,27 @@ impl App {
                     kind: retry_kind,
                     model: retry_model,
                 });
+            }
+            AgentEvent::FusionLoginRequired {
+                provider_id,
+                provider_name,
+                question,
+                panel_ids,
+            } => {
+                self.push_note(
+                    Tone::Mode,
+                    format!(
+                        "fusion needs {provider_name} authentication - opening the provider auth window; the exact request is preserved"
+                    ),
+                );
+                self.pending_fusion_login = Some(PendingFusionLogin {
+                    provider_id: provider_id.clone(),
+                    question,
+                    panel_ids,
+                });
+                if self.login.is_none() {
+                    self.open_scoped_login_for(&provider_id);
+                }
             }
             AgentEvent::PlanSubmitted(text) => {
                 self.push_note(
@@ -9773,6 +10000,21 @@ pub fn fmt_num(n: u64) -> String {
 mod tests {
     use super::*;
     use crate::tui::input::InputState;
+
+    #[test]
+    fn auth_manager_exposes_every_supported_credential_path() {
+        let openai = crate::providers::by_id("openai").unwrap();
+        let choices = login_method_choices(openai, true);
+        assert!(choices.contains(&LoginMethodChoice::Browser));
+        assert!(choices.contains(&LoginMethodChoice::ApiKey));
+        assert!(choices.contains(&LoginMethodChoice::Import));
+
+        let deepseek = crate::providers::by_id("deepseek").unwrap();
+        let choices = login_method_choices(deepseek, true);
+        assert!(!choices.contains(&LoginMethodChoice::Browser));
+        assert!(choices.contains(&LoginMethodChoice::ApiKey));
+        assert!(choices.contains(&LoginMethodChoice::Import));
+    }
 
     fn key(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
         KeyEvent::new(code, mods)

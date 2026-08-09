@@ -698,7 +698,9 @@ pub const PROVIDERS: &[Provider] = &[
     Provider {
         id: "upstage",
         name: "Upstage (Solar)",
-        base_url: "https://api.upstage.ai/v1/solar",
+        // Current AI Studio examples use the unified `/v1` OpenAI-compatible
+        // base. The former `/v1/solar` route is the retired pre-unification API.
+        base_url: "https://api.upstage.ai/v1",
         default_model: "solar-pro3",
         env_key: "UPSTAGE_API_KEY",
         style: CC,
@@ -942,7 +944,9 @@ pub const PROVIDERS: &[Provider] = &[
         id: "venice",
         name: "Venice AI",
         base_url: "https://api.venice.ai/api/v1",
-        default_model: "llama-3.3-70b",
+        // Venice's current agent examples use this tool-capable model; the old
+        // bare Llama 3.3 id is no longer a dependable catalog default.
+        default_model: "zai-org-glm-5-1",
         env_key: "VENICE_API_KEY",
         style: CC,
         note: "private · uncensored",
@@ -1000,8 +1004,9 @@ pub const PROVIDERS: &[Provider] = &[
         id: "minimax",
         name: "MiniMax (minimaxi.com)",
         base_url: "https://api.minimaxi.com/anthropic/v1",
-        // Casing is verbatim from MiniMax's Anthropic-API reference for this base.
-        default_model: "MiniMax-M3",
+        // Casing and availability are verbatim from MiniMax's direct model list.
+        // M3 is available through some gateways, not this minimaxi.com route.
+        default_model: "MiniMax-M2.7",
         env_key: "MINIMAX_API_KEY",
         style: AM,
         note: "China API · Anthropic-compatible",
@@ -1011,8 +1016,10 @@ pub const PROVIDERS: &[Provider] = &[
     Provider {
         id: "stepfun",
         name: "StepFun (China)",
-        base_url: "https://api.stepfun.com/v1",
-        default_model: "step-3.7-flash",
+        base_url: "https://api.stepfun.ai/v1",
+        // First-party docs recommend the 2603 agent/coding optimization and do
+        // not list the previously configured step-3.7-flash id.
+        default_model: "step-3.5-flash-2603",
         env_key: "STEPFUN_API_KEY",
         style: CC,
         note: "Step models",
@@ -1056,7 +1063,7 @@ pub const PROVIDERS: &[Provider] = &[
     Provider {
         id: "glama",
         name: "Glama",
-        base_url: "https://glama.ai/api/gateway/openai/v1",
+        base_url: "https://gateway.glama.ai/v1",
         // Glama date-pins OpenAI ids (`openai/gpt-5.5-2026-04-23`); the 5.6 tier
         // is the only undated OpenAI family, so it will not re-rot.
         default_model: "openai/gpt-5.6-terra",
@@ -1107,15 +1114,14 @@ pub const PROVIDERS: &[Provider] = &[
     Provider {
         id: "cloudflare",
         name: "Cloudflare AI Gateway",
-        // Cloudflare's gateway is structurally per-user: /v1/{accountTag}/{gatewayId}.
-        // No static constant can be correct — every account needs its own path.
-        // We ship the templated form so `/login` makes the placeholder obvious
-        // and a plain `https://gateway.ai.cloudflare.com/v1` 400 is never hidden.
-        base_url: "https://gateway.ai.cloudflare.com/v1/YOUR_ACCOUNT_TAG/YOUR_GATEWAY_ID",
+        // Cloudflare's current OpenAI-compatible REST API is account-scoped.
+        // The older gateway.ai.cloudflare.com compatibility API is deprecated.
+        // `/login` exposes the placeholder for editing before the first call.
+        base_url: "https://api.cloudflare.com/client/v4/accounts/YOUR_ACCOUNT_ID/ai/v1",
         default_model: "openai/gpt-5.5",
-        env_key: "CF_AIG_TOKEN",
+        env_key: "CLOUDFLARE_API_TOKEN",
         style: CC,
-        note: "gateway + caching · set ACCOUNT_TAG + GATEWAY_ID in base URL via /login",
+        note: "gateway + caching · set ACCOUNT_ID in base URL via /login",
         key_optional: false,
         browser_auth: false,
     },
@@ -1123,7 +1129,10 @@ pub const PROVIDERS: &[Provider] = &[
         id: "featherless",
         name: "Featherless",
         base_url: "https://api.featherless.ai/v1",
-        default_model: "meta-llama/Meta-Llama-3.1-70B-Instruct",
+        // Featherless documents native function calling for Qwen 3 families.
+        // The previous Llama 3.1 default required a JSON-prompt workaround and
+        // could not reliably drive Nur's tool loop.
+        default_model: "Qwen/Qwen3.5-397B-A17B",
         env_key: "FEATHERLESS_API_KEY",
         style: CC,
         note: "any HF model",
@@ -1229,7 +1238,7 @@ pub const PROVIDERS: &[Provider] = &[
         id: "ollama",
         name: "Ollama (local)",
         base_url: "http://localhost:11434/v1",
-        default_model: "llama3.3",
+        default_model: "local-model",
         env_key: "OLLAMA_API_KEY",
         style: CC,
         note: "localhost:11434",
@@ -2250,7 +2259,7 @@ mod tests {
             ("openai", "gpt-5.5"),
             ("anthropic", "claude-sonnet-4"),
             ("opencode", "grok-4"),
-            ("ollama", "llama3.3"),
+            ("ollama", "local-model"),
             ("", "anything"),
         ] {
             assert_eq!(

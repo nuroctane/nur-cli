@@ -226,9 +226,11 @@ fn draw_login_method(f: &mut Frame, app: &App, area: Rect) {
         rect,
     );
     let phase = modal_phase(app);
-    let failover = m.fallback_key;
-    let title = if failover {
-        format!(" ↻ {} · failover credentials ", provider.name)
+    let scoped = m.fallback_key;
+    let title = if m.manage_auth {
+        format!(" 🔐 {} · choose credential source ", provider.name)
+    } else if scoped {
+        format!(" ↻ {} · required credentials ", provider.name)
     } else {
         format!(" 🔑 {} · how to sign in ", provider.name)
     };
@@ -242,19 +244,24 @@ fn draw_login_method(f: &mut Frame, app: &App, area: Rect) {
         "  ↑↓  ·  ↵ choose  ·  esc back  ",
     );
     let inner = modal_inner(rect);
-    let mut options: Vec<(&str, String)> = vec![
-        (
-            "Sign in with browser",
-            "URL + code / SSO - no API key to manage".into(),
-        ),
-        ("Enter API key", format!("env {}", provider.env_key)),
-    ];
-    if m.can_import {
-        options.push((
-            "Use existing CLI session",
-            "import from Codex / Grok / Kimi / Claude / Cursor login".into(),
-        ));
-    }
+    let options: Vec<(&str, String)> = super::app::login_method_choices(&provider, m.can_import)
+        .into_iter()
+        .map(|choice| match choice {
+            super::app::LoginMethodChoice::Browser => (
+                "Sign in with browser",
+                "OAuth / device code / SSO, stored per provider".into(),
+            ),
+            super::app::LoginMethodChoice::ApiKey => (
+                "Enter or replace API key",
+                format!("provider env: {}", provider.env_key),
+            ),
+            super::app::LoginMethodChoice::Import => (
+                "Use existing CLI or OMP credential",
+                "first-party CLI first, then `omp token`; explicit choice clears a prior block"
+                    .into(),
+            ),
+        })
+        .collect();
     let mut lines: Vec<Line> = vec![
         Line::from(Span::styled(
             format!("  {}", provider.note),
@@ -321,7 +328,10 @@ fn draw_login_browser(f: &mut Frame, app: &App, area: Rect) {
         "◑"
     };
     let title = if m.fallback_key {
-        format!(" {spin} ↻ {} · failover browser sign-in ", provider.name)
+        format!(
+            " {spin} ↻ {} · provider-scoped browser sign-in ",
+            provider.name
+        )
     } else {
         format!(" {spin} {} · browser sign-in ", provider.name)
     };
@@ -422,7 +432,10 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
         .as_ref()
         .map(|m| m.manage_failover)
         .unwrap_or(false);
-    let title = if manage {
+    let manage_auth = app.login.as_ref().map(|m| m.manage_auth).unwrap_or(false);
+    let title = if manage_auth {
+        format!(" 🔐 auth vault · {total} providers ")
+    } else if manage {
         format!(
             " ↻ manage failover  ·  {} in chain ",
             app.cfg.fallback_providers.len()
@@ -430,7 +443,9 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
     } else {
         format!(" 🔑 choose a provider  ·  {total} ")
     };
-    let hint = if manage {
+    let hint = if manage_auth {
+        " ↑↓/wheel · enter add/replace · del remove · type filter · esc done "
+    } else if manage {
         " ↑↓ move  ·  space add failover  ·  alt+p privacy tier  ·  type to filter  ·  esc done  "
     } else {
         " ↑↓ move  ·  enter pick  ·  space add failover  ·  alt+p privacy tier  ·  esc  "
@@ -543,7 +558,17 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
             .map(|i| format!("  ↻#{}", i + 1))
             .unwrap_or_default();
         // Pad name+badge as a unit so notes still align roughly.
-        let text = format!("{marker}{name_col:<25} {}{priv_badge}{fb}", p.note);
+        let auth = app
+            .login
+            .as_ref()
+            .and_then(|modal| modal.auth_summaries.get(p.id))
+            .map(String::as_str)
+            .unwrap_or("add credential");
+        let text = if manage_auth {
+            format!("{marker}{name_col:<25} {auth}")
+        } else {
+            format!("{marker}{name_col:<25} {}{priv_badge}{fb}", p.note)
+        };
         let style = if selected { name_style } else { note_style };
         lines.push(Line::from(Span::styled(truncate(&text, col), style)));
 
@@ -1049,7 +1074,7 @@ fn draw_login_key(f: &mut Frame, app: &App, area: Rect) {
     );
     let phase = modal_phase(app);
     let title = if m.fallback_key {
-        format!(" ↻ {} · failover key ", provider.name)
+        format!(" ↻ {} · provider-scoped key ", provider.name)
     } else {
         format!(" 🔑 {} ", provider.name)
     };
@@ -1097,7 +1122,7 @@ fn draw_login_key(f: &mut Frame, app: &App, area: Rect) {
             ),
             Span::styled(
                 if m.fallback_key {
-                    "   ·   stored in ~/.nur/provider_keys.json".to_string()
+                    "   ·   saved as this provider's selected credential".to_string()
                 } else {
                     "   ·   stored only in ~/.nur/auth.json".to_string()
                 },
@@ -1958,7 +1983,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
                 }
                 found
             };
-                        // Queued follow-up actions (steer / cut in / dismiss; "send now" legacy alias).
+            // Queued follow-up actions (steer / cut in / dismiss; "send now" legacy alias).
             let mut qa: Vec<(usize, usize, usize, u8)> = Vec::new();
             if matches!(cell, Cell::Queued { .. }) {
                 // Prefer the word "steer" when both appear; also accept "send now".

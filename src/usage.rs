@@ -20,6 +20,31 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+/// Whether token counts came from the serving provider or local accounting.
+/// The default preserves historical JSONL rows, which were provider-reported.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageState {
+    #[default]
+    Observed,
+    Estimated,
+    Unknown,
+}
+
+/// What a dollar figure represents. List prices and subscription consumption
+/// are fundamentally different, so they must never share the same label.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CostProvenance {
+    #[default]
+    Unknown,
+    ProviderReported,
+    CatalogEstimate,
+    FallbackEstimate,
+    SubscriptionUnknown,
+    Unmetered,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TokenUsage {
     pub input_tokens: u64,
@@ -29,15 +54,42 @@ pub struct TokenUsage {
     pub reasoning_tokens: u64,
     #[serde(default)]
     pub cached_tokens: u64,
+    /// Cache writes have their own rate on providers which expose them.
+    #[serde(default)]
+    pub cache_write_tokens: u64,
+    #[serde(default)]
+    pub usage_state: UsageState,
     /// Estimated USD for this blob (request or session aggregate).
     #[serde(default)]
     pub cost_usd: f64,
     /// When true, `cost_usd` was computed with model rates (including free = 0).
     #[serde(default)]
     pub cost_known: bool,
+    #[serde(default)]
+    pub cost_provenance: CostProvenance,
+    /// Gateway-selected upstream, when disclosed (for example OpenRouter).
+    #[serde(default)]
+    pub upstream_provider: Option<String>,
 }
 
 impl TokenUsage {
+    pub fn estimated(input_tokens: u64, output_tokens: u64) -> Self {
+        Self {
+            input_tokens,
+            output_tokens,
+            total_tokens: input_tokens.saturating_add(output_tokens),
+            usage_state: UsageState::Estimated,
+            ..Default::default()
+        }
+    }
+
+    pub fn unknown() -> Self {
+        Self {
+            usage_state: UsageState::Unknown,
+            ..Default::default()
+        }
+    }
+
     pub fn add(&mut self, other: &TokenUsage) {
         // Cost first, while we still know both sides' stamp state.
         match (self.cost_known, other.cost_known) {
@@ -54,12 +106,23 @@ impl TokenUsage {
         self.total_tokens += other.total_tokens;
         self.reasoning_tokens += other.reasoning_tokens;
         self.cached_tokens += other.cached_tokens;
+        self.cache_write_tokens += other.cache_write_tokens;
+        self.usage_state = merge_usage_state(self.usage_state, other.usage_state);
+        self.cost_provenance = merge_cost_provenance(self.cost_provenance, other.cost_provenance);
+        if other.upstream_provider.is_some() {
+            self.upstream_provider = other.upstream_provider.clone();
+        }
     }
 
     /// Estimated USD — prefers stamped model-aware cost, else Meta list-price fallback.
     pub fn estimated_cost_usd(&self) -> f64 {
         if self.cost_known {
             self.cost_usd
+        } else if self.cost_provenance == CostProvenance::SubscriptionUnknown {
+            // There is no trustworthy per-request dollar conversion for a
+            // subscription/credit plan. Zero here is a lower bound only; the
+            // accompanying provenance makes that explicit to every consumer.
+            0.0
         } else {
             fallback_meta_cost(self)
         }
@@ -69,6 +132,33 @@ impl TokenUsage {
     pub fn stamp_cost(&mut self, rates: &ModelRates) {
         self.cost_usd = rates.cost_for(self);
         self.cost_known = true;
+        self.cost_provenance = match rates.source.as_str() {
+            "builtin-fallback" => CostProvenance::FallbackEstimate,
+            "local-free" => CostProvenance::Unmetered,
+            _ => CostProvenance::CatalogEstimate,
+        };
+    }
+}
+
+fn merge_usage_state(left: UsageState, right: UsageState) -> UsageState {
+    if matches!(left, UsageState::Unknown) || matches!(right, UsageState::Unknown) {
+        UsageState::Unknown
+    } else if matches!(left, UsageState::Estimated) || matches!(right, UsageState::Estimated) {
+        UsageState::Estimated
+    } else {
+        UsageState::Observed
+    }
+}
+
+fn merge_cost_provenance(left: CostProvenance, right: CostProvenance) -> CostProvenance {
+    use CostProvenance::*;
+    match (left, right) {
+        (ProviderReported, _) | (_, ProviderReported) => ProviderReported,
+        (SubscriptionUnknown, _) | (_, SubscriptionUnknown) => SubscriptionUnknown,
+        (FallbackEstimate, _) | (_, FallbackEstimate) => FallbackEstimate,
+        (CatalogEstimate, _) | (_, CatalogEstimate) => CatalogEstimate,
+        (Unmetered, _) | (_, Unmetered) => Unmetered,
+        _ => Unknown,
     }
 }
 
@@ -85,7 +175,12 @@ fn fallback_meta_cost(u: &TokenUsage) -> f64 {
 
 fn stamp_for_route(provider: &str, model: &str, mut usage: TokenUsage) -> (TokenUsage, ModelRates) {
     let rates = pricing::rates_for(provider, model);
-    usage.stamp_cost(&rates);
+    // A gateway may provide an authoritative cost, whereas Cursor-like
+    // subscriptions explicitly do not expose one. Do not overwrite either
+    // fact with a catalog approximation.
+    if !usage.cost_known && usage.cost_provenance != CostProvenance::SubscriptionUnknown {
+        usage.stamp_cost(&rates);
+    }
     (usage, rates)
 }
 
@@ -104,6 +199,10 @@ pub struct StatusSnapshot {
     pub usage_last_request: TokenUsage,
     pub estimated_cost_usd_session: f64,
     pub estimated_cost_usd_last: f64,
+    #[serde(default)]
+    pub cost_provenance_session: CostProvenance,
+    #[serde(default)]
+    pub cost_provenance_last: CostProvenance,
     pub pricing: PricingInfo,
     /// Absolute path to this status file (for ADE discovery).
     pub status_path: String,
@@ -117,6 +216,8 @@ pub struct PricingInfo {
     pub output_per_mtok_usd: f64,
     #[serde(default)]
     pub cache_read_per_mtok_usd: f64,
+    #[serde(default)]
+    pub cache_write_per_mtok_usd: Option<f64>,
     pub note: String,
     /// `models.dev` | `builtin-meta` | `local-free` | …
     #[serde(default)]
@@ -143,6 +244,65 @@ pub struct UsageLogLine {
     pub turn: u32,
     #[serde(default)]
     pub pricing_source: String,
+    #[serde(default)]
+    pub cost_provenance: CostProvenance,
+    #[serde(default)]
+    pub usage_state: UsageState,
+}
+
+/// Append-only evidence for requests that may have reached a provider but did
+/// not yield a normal completed response. It intentionally lives beside, not
+/// inside, the successful-request JSONL so existing consumers remain valid.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageAttemptLine {
+    pub ts: DateTime<Utc>,
+    pub attempt_id: String,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    pub provider: String,
+    pub model: String,
+    pub attempt: u32,
+    /// `started`, `succeeded`, `failed`, or `ambiguous`.
+    pub outcome: String,
+    pub estimated_input_tokens: u64,
+    #[serde(default)]
+    pub response_id: Option<String>,
+    #[serde(default)]
+    pub status: Option<u16>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+pub fn record_transport_attempt(
+    attempt_id: &str,
+    session_id: Option<&str>,
+    provider: &str,
+    model: &str,
+    attempt: u32,
+    outcome: &str,
+    estimated_input_tokens: u64,
+    response_id: Option<&str>,
+    status: Option<u16>,
+    reason: Option<&str>,
+) {
+    let _ = ensure_dirs();
+    let path = usage_log_path().with_file_name("usage-attempts.jsonl");
+    let line = UsageAttemptLine {
+        ts: Utc::now(),
+        attempt_id: attempt_id.to_string(),
+        session_id: session_id.map(ToString::to_string),
+        provider: provider.to_string(),
+        model: model.to_string(),
+        attempt,
+        outcome: outcome.to_string(),
+        estimated_input_tokens,
+        response_id: response_id.map(ToString::to_string),
+        status,
+        reason: reason.map(|value| value.chars().take(500).collect()),
+    };
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "{}", serde_json::to_string(&line).unwrap_or_default());
+    }
 }
 
 pub struct UsageTracker {
@@ -353,10 +513,13 @@ impl UsageTracker {
             usage_last_request: self.last.clone(),
             estimated_cost_usd_session: self.session.estimated_cost_usd(),
             estimated_cost_usd_last: self.last.estimated_cost_usd(),
+            cost_provenance_session: self.session.cost_provenance,
+            cost_provenance_last: self.last.cost_provenance,
             pricing: PricingInfo {
                 input_per_mtok_usd: rates.input_per_mtok_usd,
                 output_per_mtok_usd: rates.output_per_mtok_usd,
                 cache_read_per_mtok_usd: rates.cache_read_per_mtok_usd,
+                cache_write_per_mtok_usd: rates.cache_write_per_mtok_usd,
                 note: rates.note.clone(),
                 source: rates.source.clone(),
                 estimate: rates.is_estimate(),
@@ -394,6 +557,8 @@ impl UsageTracker {
             estimated_cost_usd: usage.estimated_cost_usd(),
             turn: self.turn,
             pricing_source: rates.source.clone(),
+            cost_provenance: usage.cost_provenance,
+            usage_state: usage.usage_state,
         };
         let mut f = OpenOptions::new()
             .create(true)
@@ -430,13 +595,9 @@ pub fn print_usage_summary() -> Result<()> {
         snap.usage_session.cached_tokens
     );
     println!(
-        "session est. cost USD: ${:.6}  ({})",
+        "session cost USD: ${:.6}  ({})",
         snap.estimated_cost_usd_session,
-        if snap.pricing.estimate {
-            "list-price estimate"
-        } else {
-            "reported"
-        }
+        cost_provenance_label(snap.cost_provenance_session)
     );
     println!(
         "rates: ${:.4}/M in · ${:.4}/M out · ${:.4}/M cache-read  [{}]",
@@ -447,13 +608,25 @@ pub fn print_usage_summary() -> Result<()> {
     );
     println!("pricing note: {}", snap.pricing.note);
     println!(
-        "last request tokens: in={} out={} total={}  est ${:.6}",
+        "last request tokens: in={} out={} total={}  cost ${:.6} ({})",
         snap.usage_last_request.input_tokens,
         snap.usage_last_request.output_tokens,
         snap.usage_last_request.total_tokens,
-        snap.estimated_cost_usd_last
+        snap.estimated_cost_usd_last,
+        cost_provenance_label(snap.cost_provenance_last),
     );
     Ok(())
+}
+
+fn cost_provenance_label(provenance: CostProvenance) -> &'static str {
+    match provenance {
+        CostProvenance::ProviderReported => "provider reported",
+        CostProvenance::CatalogEstimate => "catalog estimate",
+        CostProvenance::FallbackEstimate => "fallback estimate",
+        CostProvenance::SubscriptionUnknown => "subscription unknown",
+        CostProvenance::Unmetered => "unmetered",
+        CostProvenance::Unknown => "unknown",
+    }
 }
 
 #[cfg(test)]
@@ -499,5 +672,26 @@ mod tests {
         assert!(usage.cost_known);
         assert_eq!(usage.cost_usd, 0.0);
         assert_eq!(rates.source, "local-free");
+    }
+
+    #[test]
+    fn ambiguous_attempt_line_preserves_reconciliation_evidence() {
+        let line = UsageAttemptLine {
+            ts: Utc::now(),
+            attempt_id: "nur-attempt".into(),
+            session_id: Some("session".into()),
+            provider: "openrouter".into(),
+            model: "vendor/model".into(),
+            attempt: 2,
+            outcome: "ambiguous".into(),
+            estimated_input_tokens: 123,
+            response_id: None,
+            status: None,
+            reason: Some("connection closed".into()),
+        };
+        let value = serde_json::to_value(&line).expect("serialize attempt");
+        assert_eq!(value["outcome"], "ambiguous");
+        assert_eq!(value["estimated_input_tokens"], 123);
+        assert_eq!(value["session_id"], "session");
     }
 }

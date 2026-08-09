@@ -14,6 +14,10 @@ pub struct Session {
     pub id: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Provider that last owned this conversation. Older sessions deserialize
+    /// with an empty value and are adopted by the current provider on resume.
+    #[serde(default)]
+    pub provider: String,
     pub model: String,
     pub cwd: String,
     pub messages: Vec<SessionMessage>,
@@ -58,6 +62,8 @@ pub struct SessionMessage {
 pub struct SessionSummary {
     pub id: String,
     pub updated_at: DateTime<Utc>,
+    #[serde(default)]
+    pub provider: String,
     pub model: String,
     pub cwd: String,
     pub messages: usize,
@@ -75,6 +81,8 @@ struct SessionLite {
     id: String,
     updated_at: DateTime<Utc>,
     #[serde(default)]
+    provider: String,
+    #[serde(default)]
     model: String,
     #[serde(default)]
     cwd: String,
@@ -91,6 +99,7 @@ impl Session {
             id: Uuid::new_v4().to_string(),
             created_at: now,
             updated_at: now,
+            provider: String::new(),
             model: model.to_string(),
             cwd: cwd.to_string(),
             messages: Vec::new(),
@@ -98,6 +107,12 @@ impl Session {
             input_items: Vec::new(),
             ui_log: Vec::new(),
         }
+    }
+
+    pub fn new_for_provider(model: &str, provider: &str, cwd: &str) -> Self {
+        let mut session = Self::new(model, cwd);
+        session.provider = provider.to_string();
+        session
     }
 
     pub fn path(&self) -> PathBuf {
@@ -124,6 +139,7 @@ impl Session {
             "cwd": self.cwd,
             "updated_at": self.updated_at,
             "path": self.path().display().to_string(),
+            "provider": self.provider,
             "model": self.model,
             "usage": self.usage,
             "estimated_cost_usd": self.usage.estimated_cost_usd(),
@@ -163,7 +179,12 @@ impl Session {
             return Err(NurError::Other(format!("session not found: {id}")));
         }
         let text = fs::read_to_string(path)?;
-        Ok(serde_json::from_str(&text)?)
+        let session: Self = serde_json::from_str(&text)?;
+        // Rehydrate the durable RLM variable index alongside the transcript so
+        // `/continue` and cross-session work can immediately address context
+        // blobs that survived the previous process.
+        let _ = super::context_store::reload_session(&session.id);
+        Ok(session)
     }
 
     pub fn continue_for_cwd(cwd: &str) -> Result<Self> {
@@ -234,6 +255,7 @@ impl Session {
         SessionSummary {
             id: self.id.clone(),
             updated_at: self.updated_at,
+            provider: self.provider.clone(),
             model: self.model.clone(),
             cwd: self.cwd.clone(),
             messages: self.messages.len(),
@@ -400,6 +422,7 @@ fn summarize_session_file(path: &Path) -> Result<SessionSummary> {
     Ok(SessionSummary {
         id: lite.id,
         updated_at: lite.updated_at,
+        provider: lite.provider,
         model: lite.model,
         cwd: lite.cwd,
         messages: lite.messages.len(),
@@ -447,4 +470,27 @@ pub fn print_sessions(limit: usize) -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Session;
+
+    #[test]
+    fn legacy_session_without_provider_remains_loadable() {
+        let session = Session::new("legacy-model", "C:/work");
+        let mut value = serde_json::to_value(session).unwrap();
+        value.as_object_mut().unwrap().remove("provider");
+        let loaded: Session = serde_json::from_value(value).unwrap();
+        assert!(loaded.provider.is_empty());
+        assert_eq!(loaded.model, "legacy-model");
+    }
+
+    #[test]
+    fn provider_aware_session_persists_origin() {
+        let session = Session::new_for_provider("model", "deepseek", "C:/work");
+        let loaded: Session =
+            serde_json::from_str(&serde_json::to_string(&session).unwrap()).unwrap();
+        assert_eq!(loaded.provider, "deepseek");
+    }
 }

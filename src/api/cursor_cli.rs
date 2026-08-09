@@ -5,12 +5,15 @@
 //! binary holds the session (keychain / platform auth), and inference is
 //! `cursor-agent -p --output-format stream-json`.
 
-use crate::api::types::{ApiResponse, ApiUsage, ContentPart, OutputItem, ResponseRequest};
+use crate::api::types::{
+    ApiResponse, ApiUsage, ContentPart, OutputItem, ResponseAccounting, ResponseRequest,
+};
 use crate::api::StreamEvent;
 use crate::error::{NurError, Result};
+use crate::usage::{CostProvenance, TokenUsage};
 use serde_json::Value;
 use std::collections::HashSet;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -24,15 +27,16 @@ pub fn is_cli_session_token(token: &str) -> bool {
     t == CURSOR_CLI_SESSION_TOKEN || t.starts_with("cursor-cli:")
 }
 
-/// How to launch Cursor Agent without Windows stdout buffering deadlocks.
+/// How to launch Cursor Agent without Windows stdout deadlocks.
 ///
-/// `cursor-agent.cmd` shells into PowerShell which buffers piped stdout when
-/// nur captures stream-json - the TUI then sits on "thinking" until the pipe
-/// fills or the process exits (often forever for tool-heavy prompts). Prefer
-/// the versioned `node.exe` + `index.js` pair the wrapper would have run.
+/// Current Cursor builds initialize their stdio/worker bridge in the supported
+/// wrapper. Invoking versioned `node.exe index.js` directly can complete and
+/// persist a turn while emitting zero bytes and leaving the worker alive. Use
+/// the installed wrapper when present; direct Node remains a last-resort path
+/// for incomplete installs.
 #[derive(Debug, Clone)]
 enum CursorLaunch {
-    /// Direct Node entry (preferred).
+    /// Direct Node entry (last-resort fallback).
     Node { node: PathBuf, index: PathBuf },
     /// Fallback wrapper script / binary on PATH.
     Wrapper(PathBuf),
@@ -52,12 +56,12 @@ fn resolve_launch() -> Option<CursorLaunch> {
     for dir in std::env::split_paths(&path) {
         #[cfg(windows)]
         {
-            for name in ["cursor-agent.cmd", "cursor-agent.exe", "cursor-agent.ps1"] {
+            // PowerShell resolves `cursor-agent` to the ps1 wrapper on this
+            // platform. Prefer it over the cmd shim (which merely adds another
+            // shell) and over unsupported direct index.js execution.
+            for name in ["cursor-agent.exe", "cursor-agent.ps1", "cursor-agent.cmd"] {
                 let p = dir.join(name);
                 if p.is_file() {
-                    if let Some(node) = resolve_node_launch(&dir) {
-                        return Some(node);
-                    }
                     return Some(CursorLaunch::Wrapper(p));
                 }
             }
@@ -77,6 +81,12 @@ fn resolve_launch() -> Option<CursorLaunch> {
     {
         if let Some(local) = dirs::data_local_dir() {
             let dir = local.join("cursor-agent");
+            for name in ["cursor-agent.exe", "cursor-agent.ps1", "cursor-agent.cmd"] {
+                let wrapper = dir.join(name);
+                if wrapper.is_file() {
+                    return Some(CursorLaunch::Wrapper(wrapper));
+                }
+            }
             if let Some(node) = resolve_node_launch(&dir) {
                 return Some(node);
             }
@@ -544,15 +554,13 @@ fn message_text(item: &Value) -> String {
     String::new()
 }
 
-fn response_from_cli_text(model: &str, text: &str, parse_tools: bool) -> ApiResponse {
+fn response_from_cli_text(
+    model: &str,
+    text: &str,
+    parse_tools: bool,
+    usage: Option<ApiUsage>,
+) -> ApiResponse {
     let id = format!("cursor-cli-{}", uuid_simple());
-    let usage = Some(ApiUsage {
-        input_tokens: 0,
-        output_tokens: 0,
-        total_tokens: 0,
-        output_tokens_details: None,
-        input_tokens_details: None,
-    });
     if parse_tools {
         if let Some((commentary, calls)) = split_nur_tools(text) {
             let mut output = Vec::new();
@@ -566,6 +574,7 @@ fn response_from_cli_text(model: &str, text: &str, parse_tools: bool) -> ApiResp
                         text: Some(commentary),
                     }],
                     phase: Some("commentary".into()),
+                    reasoning_content: None,
                 });
             }
             for (i, (name, args)) in calls.into_iter().enumerate() {
@@ -585,6 +594,17 @@ fn response_from_cli_text(model: &str, text: &str, parse_tools: bool) -> ApiResp
                 output,
                 usage,
                 error: None,
+                accounting: Some(ResponseAccounting {
+                    // The actual input estimate is attached by ApiClient where
+                    // the full request is available. This placeholder means
+                    // Cursor's subscription usage is unavailable, never zero.
+                    estimated_usage: TokenUsage {
+                        cost_provenance: CostProvenance::SubscriptionUnknown,
+                        ..TokenUsage::unknown()
+                    },
+                    native_cost_usd: None,
+                    upstream_provider: Some("cursor".into()),
+                }),
             };
         }
     }
@@ -601,9 +621,18 @@ fn response_from_cli_text(model: &str, text: &str, parse_tools: bool) -> ApiResp
                 text: Some(text.to_string()),
             }],
             phase: None,
+            reasoning_content: None,
         }],
         usage,
         error: None,
+        accounting: Some(ResponseAccounting {
+            estimated_usage: TokenUsage {
+                cost_provenance: CostProvenance::SubscriptionUnknown,
+                ..TokenUsage::unknown()
+            },
+            native_cost_usd: None,
+            upstream_provider: Some("cursor".into()),
+        }),
     }
 }
 
@@ -623,8 +652,8 @@ pub fn complete(
     cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<ApiResponse> {
     let parse_tools = tools_wire(req);
-    let (text, model) = run_print(req, None, cancel)?;
-    Ok(response_from_cli_text(&model, &text, parse_tools))
+    let (text, model, usage) = run_print(req, None, cancel)?;
+    Ok(response_from_cli_text(&model, &text, parse_tools, usage))
 }
 
 /// Stream Cursor Agent output; `on_event` receives text deltas.
@@ -634,10 +663,16 @@ pub fn complete_stream(
     cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<ApiResponse> {
     let parse_tools = tools_wire(req);
+    // Cursor can spend tens of seconds booting configured MCP servers before
+    // its first JSON event. Give the TUI immediate, honest progress instead of
+    // making turn 1 look dead.
+    on_event(StreamEvent::ReasoningDelta(
+        "cursor-agent · launching\n".into(),
+    ));
     // Always stream progress. When nur owns tools, route live tokens to the
     // thinking cell so turn 1 is not a silent hang; final commentary lands as
     // TextDelta after the nur-tools fence is stripped.
-    let (text, model) = run_print(
+    let (text, model, usage) = run_print(
         req,
         Some(&mut |ev| {
             if parse_tools {
@@ -651,7 +686,7 @@ pub fn complete_stream(
         }),
         cancel,
     )?;
-    let resp = response_from_cli_text(&model, &text, parse_tools);
+    let resp = response_from_cli_text(&model, &text, parse_tools, usage);
     if parse_tools {
         let commentary = resp.output_text();
         if !commentary.is_empty() {
@@ -785,7 +820,7 @@ fn run_print(
     req: &ResponseRequest,
     mut on_event: Option<&mut dyn FnMut(StreamEvent)>,
     cancel: &tokio_util::sync::CancellationToken,
-) -> Result<(String, String)> {
+) -> Result<(String, String, Option<ApiUsage>)> {
     if resolve_launch().is_none() {
         return Err(NurError::Other(
             "cursor-agent not found on PATH. Install Cursor Agent (https://cursor.com/docs/cli)."
@@ -824,6 +859,11 @@ fn run_print(
         "stream-json".into(),
         "--stream-partial-output".into(),
         "--trust".into(),
+        // A configured MCP server otherwise opens an approval prompt that has
+        // no interactive console in `--print` mode and waits forever on turn 1.
+        // This approves server startup only; Nur still owns tool permissions in
+        // ask mode unless NUR_CURSOR_NATIVE explicitly delegates them.
+        "--approve-mcps".into(),
         "--sandbox".into(),
         "disabled".into(),
         "--workspace".into(),
@@ -867,16 +907,19 @@ fn run_print(
         .take()
         .ok_or_else(|| NurError::Other("cursor-agent stdout missing".into()))?;
     let stderr_pipe = child.stderr.take();
-    let stderr_handle = std::thread::spawn(move || {
-        let mut buf = String::new();
+    let (err_tx, err_rx) = std::sync::mpsc::channel();
+    let _stderr_reader = std::thread::spawn(move || {
         if let Some(err) = stderr_pipe {
-            let _ = Read::read_to_string(&mut BufReader::new(err), &mut buf);
+            for line in BufReader::new(err).lines() {
+                if err_tx.send(line).is_err() {
+                    break;
+                }
+            }
         }
-        buf
     });
 
     let (line_tx, line_rx) = std::sync::mpsc::channel();
-    let stdout_handle = std::thread::spawn(move || {
+    let _stdout_reader = std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
             if line_tx.send(line).is_err() {
                 break;
@@ -892,12 +935,21 @@ fn run_print(
     let mut recovered = None;
     let mut cli_error = None;
     let mut status = None;
+    let mut last_stdout = Instant::now();
+    let mut err_text = String::new();
+    let mut native_usage = None;
     loop {
+        for line in err_rx.try_iter() {
+            if let Ok(line) = line {
+                if !err_text.is_empty() {
+                    err_text.push('\n');
+                }
+                err_text.push_str(&line);
+            }
+        }
         if cancel.is_cancelled() {
             let _ = child.kill();
             let _ = child.wait();
-            let _ = stdout_handle.join();
-            let _ = stderr_handle.join();
             return Err(NurError::Interrupted);
         }
         if started.elapsed() >= timeout {
@@ -915,8 +967,12 @@ fn run_print(
 
         match line_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Ok(line)) => {
+                last_stdout = Instant::now();
                 let line = line.trim();
                 if let Ok(ev) = serde_json::from_str::<Value>(line) {
+                    if let Some(usage) = parse_cursor_usage(&ev) {
+                        native_usage = Some(usage);
+                    }
                     let ty = ev.get("type").and_then(|t| t.as_str()).unwrap_or("");
                     match ty {
                         "system" => {
@@ -984,11 +1040,16 @@ fn run_print(
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
         }
 
-        if let Some(exit) = child
-            .try_wait()
-            .map_err(|e| NurError::Other(format!("cursor-agent wait: {e}")))?
-        {
-            status = Some(exit);
+        if status.is_none() {
+            status = child
+                .try_wait()
+                .map_err(|e| NurError::Other(format!("cursor-agent wait: {e}")))?;
+        }
+        // Cursor's detached worker may inherit stdout/stderr and keep those
+        // pipes open after the foreground CLI exits. Joining the reader threads
+        // therefore hangs forever. Let the foreground exit establish completion,
+        // then allow a short quiet window to drain its final JSON records.
+        if status.is_some() && last_stdout.elapsed() >= Duration::from_millis(350) {
             break;
         }
         // Affected Cursor builds persist a complete JSONL turn but never write
@@ -1005,8 +1066,12 @@ fn run_print(
         }
     }
 
-    let _ = stdout_handle.join();
-    let err_text = stderr_handle.join().unwrap_or_default();
+    for line in err_rx.try_iter().flatten() {
+        if !err_text.is_empty() {
+            err_text.push('\n');
+        }
+        err_text.push_str(&line);
+    }
     if let Some(error) = cli_error {
         return Err(NurError::Other(error));
     }
@@ -1040,7 +1105,48 @@ fn run_print(
         ));
     }
     let model_name = model.unwrap_or_else(|| "auto".into());
-    Ok((text, model_name))
+    Ok((text, model_name, native_usage))
+}
+
+/// Cursor CLI's event schema has changed across releases. Accept the common
+/// usage envelopes without turning absent telemetry into a synthetic zero.
+pub fn parse_cursor_usage(event: &Value) -> Option<ApiUsage> {
+    let usage = event
+        .get("usage")
+        .or_else(|| event.get("usage_metadata"))
+        .or_else(|| event.get("token_usage"))
+        .or_else(|| event.pointer("/result/usage"))?;
+    let number = |keys: &[&str]| {
+        keys.iter()
+            .find_map(|key| usage.get(*key).and_then(Value::as_u64))
+            .unwrap_or(0)
+    };
+    let input = number(&["input_tokens", "prompt_tokens", "input"]);
+    let output = number(&["output_tokens", "completion_tokens", "output"]);
+    let total = number(&["total_tokens", "total"]);
+    let cached = usage
+        .pointer("/input_tokens_details/cached_tokens")
+        .or_else(|| usage.pointer("/prompt_tokens_details/cached_tokens"))
+        .or_else(|| usage.get("cached_tokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let cache_write = usage
+        .get("cache_write_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if input == 0 && output == 0 && total == 0 {
+        return None;
+    }
+    Some(ApiUsage {
+        input_tokens: input,
+        output_tokens: output,
+        total_tokens: total.max(input.saturating_add(output)),
+        output_tokens_details: None,
+        input_tokens_details: (cached > 0).then_some(crate::api::types::InputTokensDetails {
+            cached_tokens: cached,
+        }),
+        cache_write_tokens: cache_write,
+    })
 }
 
 fn assistant_text(ev: &Value) -> String {
@@ -1112,6 +1218,7 @@ mod tests {
             stream: None,
             parallel_tool_calls: None,
             prompt_cache_key: None,
+            max_output_tokens: None,
         };
         let p = flatten_prompt(&req);
         assert!(p.contains("System:"));
@@ -1132,7 +1239,7 @@ mod tests {
     #[test]
     fn response_parses_tool_calls() {
         let text = "```nur-tools\n[{\"name\":\"agent\",\"arguments\":{\"prompt\":\"review\",\"provider\":\"anthropic\"}}]\n```";
-        let resp = response_from_cli_text("auto", text, true);
+        let resp = response_from_cli_text("auto", text, true, None);
         assert!(matches!(
             resp.output.first(),
             Some(OutputItem::FunctionCall { name: Some(n), .. }) if n == "agent"
@@ -1166,10 +1273,32 @@ mod tests {
     }
 
     #[test]
+    fn cursor_native_usage_is_preserved_when_available() {
+        let usage = parse_cursor_usage(&serde_json::json!({
+            "type": "result",
+            "usage": {"prompt_tokens": 120, "completion_tokens": 8, "total_tokens": 128}
+        }))
+        .expect("usage");
+        assert_eq!(usage.input_tokens, 120);
+        assert_eq!(usage.output_tokens, 8);
+        assert_eq!(usage.total_tokens, 128);
+    }
+
+    #[test]
+    fn cursor_credit_only_event_is_not_fake_zero_token_usage() {
+        assert!(parse_cursor_usage(&serde_json::json!({
+            "usage": {"credits_used": 1}
+        }))
+        .is_none());
+    }
+
+    #[test]
     #[ignore = "requires an installed, authenticated Cursor Agent"]
     fn live_cursor_completion_recovers_silent_windows_stdout() {
         let req = ResponseRequest {
-            model: "composer-2.5-fast".into(),
+            // `auto` is the catalog default and avoids pinning this transport
+            // regression to a model that Cursor may temporarily withdraw.
+            model: "auto".into(),
             input: json!([{
                 "type":"message",
                 "role":"user",
@@ -1184,6 +1313,7 @@ mod tests {
             stream: Some(true),
             parallel_tool_calls: None,
             prompt_cache_key: None,
+            max_output_tokens: None,
         };
         let cancel = tokio_util::sync::CancellationToken::new();
         let response = complete(&req, &cancel).expect("live Cursor completion");
@@ -1212,6 +1342,7 @@ mod tests {
             stream: Some(true),
             parallel_tool_calls: None,
             prompt_cache_key: None,
+            max_output_tokens: None,
         };
         let cancel = tokio_util::sync::CancellationToken::new();
         let error = complete(&req, &cancel).expect_err("the 1s live test should time out");

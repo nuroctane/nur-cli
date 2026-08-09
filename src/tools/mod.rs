@@ -117,6 +117,41 @@ pub const SUBAGENT_TOOL_NAMES: &[&str] = &[
     "mem",
 ];
 
+/// A safe root profile for ordinary repository work. Specialist integrations
+/// are selected from the user's task on the first round and all schemas are
+/// restored after the first tool round. This avoids re-billing unrelated
+/// ecosystem schemas on the common inspect/edit/test loop without making an
+/// enabled tool permanently unreachable.
+const ROOT_CORE_TOOL_NAMES: &[&str] = &[
+    "read_file",
+    "list_dir",
+    "write_file",
+    "edit_file",
+    "multi_edit",
+    "apply_patch",
+    "bash",
+    "grep",
+    "glob",
+    "web_fetch",
+    "web_search",
+    "browser",
+    "terminal_browser",
+    "look",
+    "extract_frames",
+    "git_status",
+    "git_diff",
+    "context",
+    "anydoc",
+    "goal",
+    "proposal",
+    "mem",
+    "skill",
+    "memory",
+    "todo_write",
+    "submit_plan",
+    "agent",
+];
+
 pub struct ToolContext {
     pub cwd: PathBuf,
     /// Cooperative cancellation — long-running tools (shell) poll this and
@@ -249,6 +284,69 @@ impl ToolHost {
                     .collect()
             })
             .clone()
+    }
+
+    /// Return an initial task-shaped root profile. The second and later model
+    /// requests use the complete surface: a model can discover or invoke any
+    /// specialist after it has oriented with cheap core tools, and tool-call
+    /// replay remains valid because definitions are only added, never removed.
+    pub fn root_tool_defs_for_task(&self, task: &str, after_first_round: bool) -> Vec<ToolDef> {
+        let all = self.tool_defs();
+        if after_first_round {
+            return all;
+        }
+        let text = task.to_ascii_lowercase();
+        let mut enabled: std::collections::HashSet<&str> =
+            ROOT_CORE_TOOL_NAMES.iter().copied().collect();
+        let has = |needles: &[&str]| needles.iter().any(|n| text.contains(n));
+        if has(&[
+            "diagram",
+            "draw",
+            "canvas",
+            "excalidraw",
+            "tldraw",
+            "image",
+            "video",
+            "screenshot",
+        ]) {
+            enabled.extend(["excalidraw", "tldraw", "penecho", "egaki"]);
+        }
+        if has(&[
+            "memory",
+            "remember",
+            "recall",
+            "optmem",
+            "plur",
+            "ruflo",
+            "chronicle",
+        ]) {
+            enabled.extend(["connectome", "plur", "ruflo", "optmem"]);
+        }
+        if has(&[
+            "graph",
+            "architecture",
+            "impact",
+            "dependency",
+            "codebase map",
+        ]) {
+            enabled.extend(["graphify", "graphjin"]);
+        }
+        if has(&[
+            "background",
+            "overnight",
+            "fractal",
+            "swarm",
+            "omp",
+            "delegate many",
+        ]) {
+            enabled.extend(["admission", "bg", "fractal", "omp"]);
+        }
+        if has(&["external api", "openapi", "graphql", "mcp", "executor"]) {
+            enabled.insert("executor");
+        }
+        all.into_iter()
+            .filter(|tool| enabled.contains(tool.name.as_str()))
+            .collect()
     }
 
     pub fn subagent_tool_defs(&self) -> Vec<ToolDef> {
@@ -547,6 +645,21 @@ mod tests {
         assert!(!names.contains(&"agent"));
         assert!(!names.contains(&"omp"));
         assert!(defs.len() < host.tool_defs().len());
+    }
+
+    #[test]
+    fn initial_root_profile_is_task_shaped_then_expands_safely() {
+        let host = ToolHost::default();
+        let initial = host.root_tool_defs_for_task("fix the Rust tests", false);
+        assert!(initial.iter().any(|t| t.name == "read_file"));
+        assert!(!initial.iter().any(|t| t.name == "egaki"));
+        let visual = host.root_tool_defs_for_task("draw an architecture diagram", false);
+        assert!(visual.iter().any(|t| t.name == "excalidraw"));
+        assert_eq!(
+            host.root_tool_defs_for_task("fix the Rust tests", true)
+                .len(),
+            host.tool_defs().len()
+        );
     }
 
     /// The unknown-tool fallthrough must actually reject unregistered names

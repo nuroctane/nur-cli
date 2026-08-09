@@ -5,6 +5,7 @@
 use crate::agent::{AgentEvent, Session};
 use crate::api::failover::{plan_targets, resolve_target_key};
 use crate::api::fusion::{self, PanelAnswer};
+use crate::api::types::{replay_output_items, user_text_item};
 use crate::api::{ApiClient, ApiResponse};
 use crate::usage::{TokenUsage, UsageTracker};
 use tokio::sync::mpsc;
@@ -71,6 +72,32 @@ async fn run(
     // actually hold a key for (reusing the failover credential resolver — a
     // panel provider never borrows the primary's auth.json).
     let targets = plan_targets(primary_provider_id, panel_ids, resolve_target_key);
+    for requested in panel_ids {
+        let id = requested.trim();
+        if id.is_empty() || id == primary_provider_id || crate::providers::by_id(id).is_none() {
+            continue;
+        }
+        if targets.iter().any(|target| target.provider_id == id) {
+            continue;
+        }
+        let provider = crate::providers::by_id(id).expect("checked provider");
+        let _ = tx.send(AgentEvent::FusionLoginRequired {
+            provider_id: provider.id.to_string(),
+            provider_name: provider.name.to_string(),
+            question: question.to_string(),
+            panel_ids: panel_ids.to_vec(),
+        });
+        return Err(format!(
+            "fusion · waiting for {} authentication; request preserved",
+            provider.name
+        ));
+    }
+
+    // A fusion answer is real conversation history, not a disposable side
+    // query. Persist the question and final synthesis so /resume, /sessions,
+    // forks, and cross-session chat continue from exactly what the user saw.
+    session.push_user(question);
+    session.input_items.push(user_text_item(question));
     let panel_n = targets.len() + 1;
 
     let _ = tx.send(AgentEvent::Status(format!(
@@ -79,13 +106,17 @@ async fn run(
     )));
 
     // Kick every member off concurrently; each task yields (label, result).
+    let primary_effective_model = primary.resolve_local_model(primary_model).await;
     let mut futs = Vec::new();
     {
         let c = primary.clone();
-        let label = fusion::label(primary_provider_id, primary_model);
-        let req = fusion::question_request(primary_model, question);
+        let model = primary_effective_model.clone();
+        let label = fusion::label(primary_provider_id, &model);
+        let req = fusion::question_request(&model, question);
+        let provider_id = primary_provider_id.to_string();
         futs.push(tokio::spawn(async move {
-            (label, c.create_response(&req).await)
+            let response = c.create_response(&req).await;
+            (provider_id, model, label, response)
         }));
     }
     for t in &targets {
@@ -93,10 +124,13 @@ async fn run(
             Ok(c) => c.with_style(t.style),
             Err(_) => continue,
         };
-        let label = fusion::label(&t.provider_id, &t.model);
-        let req = fusion::question_request(&t.model, question);
+        let model = client.resolve_local_model(&t.model).await;
+        let label = fusion::label(&t.provider_id, &model);
+        let req = fusion::question_request(&model, question);
+        let provider_id = t.provider_id.clone();
         futs.push(tokio::spawn(async move {
-            (label, client.create_response(&req).await)
+            let response = client.create_response(&req).await;
+            (provider_id, model, label, response)
         }));
     }
 
@@ -106,15 +140,15 @@ async fn run(
             return Err("interrupted".into());
         }
         match f.await {
-            Ok((label, Ok(resp))) => {
-                meter(&resp, session, usage);
+            Ok((provider_id, model, label, Ok(resp))) => {
+                meter(&resp, session, usage, &provider_id, &model);
                 answers.push(PanelAnswer {
                     label,
                     text: resp.output_text(),
                     ok: true,
                 });
             }
-            Ok((label, Err(e))) => {
+            Ok((_, _, label, Err(e))) => {
                 answers.push(PanelAnswer {
                     label,
                     text: e.to_string(),
@@ -157,11 +191,21 @@ async fn run(
     }
 
     // Judge = the active model (best key + reasoning budget).
-    let synth = fusion::synthesis_request(primary_model, question, &ok);
+    let synth = fusion::synthesis_request(&primary_effective_model, question, &ok);
     match primary.create_response(&synth).await {
         Ok(resp) => {
-            meter(&resp, session, usage);
+            meter(
+                &resp,
+                session,
+                usage,
+                primary_provider_id,
+                &primary_effective_model,
+            );
             let fused = resp.output_text();
+            session
+                .input_items
+                .extend(replay_output_items(&resp.output));
+            session.push_assistant(&fused);
             let _ = tx.send(AgentEvent::AssistantMessage(fused.clone()));
             Ok(fused)
         }
@@ -170,10 +214,16 @@ async fn run(
 }
 
 /// Fold one response's token usage into the session total + the tracker.
-fn meter(resp: &ApiResponse, session: &mut Session, usage: &mut UsageTracker) {
+fn meter(
+    resp: &ApiResponse,
+    session: &mut Session,
+    usage: &mut UsageTracker,
+    provider: &str,
+    model: &str,
+) {
     if let Some(u) = &resp.usage {
         let tu: TokenUsage = u.into();
-        usage.record_request(tu, resp.id.clone());
+        usage.record_request_for_route(provider, model, tu, resp.id.clone());
         session.usage.add(usage.last_usage());
     }
 }

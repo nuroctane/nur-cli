@@ -57,6 +57,7 @@ fn one_shot(model: &str, instructions: &str, input: Value) -> ResponseRequest {
         stream: Some(false),
         parallel_tool_calls: None,
         prompt_cache_key: None,
+        max_output_tokens: None,
     }
 }
 

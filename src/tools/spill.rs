@@ -3,8 +3,8 @@
 
 use super::sensitive::body_looks_sensitive;
 use crate::config::{atomic_write, nur_home};
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Default max chars of tool output kept inline in the transcript / API items.
 /// Keep in sync with `config::default_tool_result_max_chars`.
@@ -16,6 +16,32 @@ const PREVIEW_CHARS: usize = 2_000;
 
 pub fn tool_results_dir() -> PathBuf {
     nur_home().join("tool-results")
+}
+
+/// Shared, content-addressed bodies.  Context-store variables and ordinary tool
+/// result spills deliberately use this one namespace: registering a result must
+/// not make a second copy of the same large payload.
+pub fn shared_blob_dir() -> PathBuf {
+    tool_results_dir().join("blobs")
+}
+
+/// Store a non-sensitive body once, keyed by its SHA-256 digest.  The returned
+/// path stays below `tool-results`, so it remains readable by the normal
+/// read-file sandbox exception.
+pub fn write_content_addressed_blob(body: &str) -> Result<PathBuf, String> {
+    let mut hasher = Sha256::new();
+    hasher.update(body.as_bytes());
+    let digest = hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    let path = shared_blob_dir().join(format!("sha256-{digest}.txt"));
+    if path.is_file() {
+        return Ok(path);
+    }
+    atomic_write(&path, body.as_bytes()).map_err(|e| format!("write blob: {e}"))?;
+    Ok(path)
 }
 
 /// True when `path` resolves under the nur tool-results spill directory.
@@ -68,7 +94,7 @@ fn path_prefix(path: &Path, root: &Path) -> bool {
 /// substitute for the model. Errors and tiny results pass through unchanged.
 ///
 /// `max_chars == 0` disables spilling (unlimited).
-pub fn maybe_spill(session_id: &str, tool: &str, body: String, max_chars: usize) -> String {
+pub fn maybe_spill(_session_id: &str, _tool: &str, body: String, max_chars: usize) -> String {
     if max_chars == 0 || body.chars().count() <= max_chars {
         return body;
     }
@@ -77,22 +103,12 @@ pub fn maybe_spill(session_id: &str, tool: &str, body: String, max_chars: usize)
         return truncate_only(&body, max_chars);
     }
 
-    let dir = tool_results_dir();
-    let _ = std::fs::create_dir_all(&dir);
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    let safe_tool: String = tool
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect();
-    let sid: String = session_id.chars().take(8).collect();
-    let uniq = uuid::Uuid::new_v4().simple().to_string();
-    let path = dir.join(format!("{sid}_{safe_tool}_{ts}_{uniq}.txt"));
-    if atomic_write(&path, body.as_bytes()).is_err() {
-        return truncate_only(&body, max_chars);
-    }
+    let path = match write_content_addressed_blob(&body) {
+        Ok(path) => path,
+        Err(_) => {
+            return truncate_only(&body, max_chars);
+        }
+    };
 
     let total = body.chars().count();
     let preview: String = body.chars().take(PREVIEW_CHARS).collect();
@@ -174,5 +190,15 @@ mod tests {
         let _ = std::fs::write(&f, "hi");
         assert!(is_under_tool_results(&f));
         let _ = std::fs::remove_file(&f);
+    }
+
+    #[test]
+    fn identical_bodies_share_one_content_addressed_blob() {
+        let body = format!("blob-{}", uuid::Uuid::new_v4());
+        let a = write_content_addressed_blob(&body).unwrap();
+        let b = write_content_addressed_blob(&body).unwrap();
+        assert_eq!(a, b);
+        assert!(is_under_tool_results(&a));
+        let _ = std::fs::remove_file(a);
     }
 }

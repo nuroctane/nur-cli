@@ -698,8 +698,12 @@ fn parse_usage(value: &Value) -> Option<TokenUsage> {
             .and_then(Value::as_u64)
             .unwrap_or(0),
         cached_tokens: cache_read,
+        cache_write_tokens: cache_write,
         cost_usd: cost,
         cost_known: true,
+        usage_state: crate::usage::UsageState::Observed,
+        cost_provenance: crate::usage::CostProvenance::ProviderReported,
+        upstream_provider: None,
     })
 }
 

@@ -13,6 +13,65 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
+fn push_fusion_provider(out: &mut Vec<String>, candidate: &str) -> bool {
+    let Some(provider) = crate::providers::resolve_provider_alias(candidate) else {
+        return false;
+    };
+    if !out.iter().any(|id| id == provider.id) {
+        out.push(provider.id.to_string());
+    }
+    true
+}
+
+/// Pull explicitly named providers out of a fusion request while preserving
+/// the actual question. A provider-list prefix is authoritative when followed
+/// by `:`; elsewhere we use the same boundary-aware aliases as delegation.
+fn parse_fusion_request(raw: &str) -> (String, Vec<String>) {
+    let raw = raw.trim();
+    let mut providers = Vec::new();
+    for id in crate::providers::named_providers_in_text(raw) {
+        push_fusion_provider(&mut providers, &id);
+    }
+    // `/fusion` itself supplies the routing intent, so it is safe to recognize
+    // the broader catalog here than in ordinary prose. Keep the few aliases
+    // that are common English function words out of this token pass.
+    for token in raw.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '.')) {
+        if token.is_empty()
+            || matches!(
+                token.to_ascii_lowercase().as_str(),
+                "or" | "x" | "pro" | "local" | "meta" | "step"
+            )
+        {
+            continue;
+        }
+        push_fusion_provider(&mut providers, token);
+    }
+
+    if let Some((prefix, question)) = raw.split_once(':') {
+        let mut prefix_providers = Vec::new();
+        for token in prefix.split(|c: char| c == ',' || c.is_whitespace()) {
+            let token = token.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-');
+            if token.is_empty()
+                || matches!(
+                    token.to_ascii_lowercase().as_str(),
+                    "with" | "using" | "via" | "on" | "and" | "plus"
+                )
+            {
+                continue;
+            }
+            push_fusion_provider(&mut prefix_providers, token);
+        }
+        if !prefix_providers.is_empty() && !question.trim().is_empty() {
+            for id in prefix_providers {
+                push_fusion_provider(&mut providers, &id);
+            }
+            return (question.trim().to_string(), providers);
+        }
+    }
+
+    (raw.to_string(), providers)
+}
+
 /// Launch `nur <args>` in a **new console window** so a long job (a multi-GB
 /// `local up` download, a `bench run`) shows its own live progress without
 /// freezing or corrupting the TUI. Non-Windows: detached background process.
@@ -207,7 +266,7 @@ impl App {
                 let st = crate::ecosystem::ensure_ecosystem(false);
                 self.push_note(Tone::Skill, st.report());
             }
-            "/login" => {
+            "/login" | "/provider" => {
                 // `/login` opens the plain picker; `/login <provider>` pre-selects
                 // that provider (accepts the same NL aliases as the agent tool,
                 // e.g. `/login grok`, `/login gemini`, `/login antigravity`).
@@ -217,6 +276,7 @@ impl App {
                     self.open_login_for(arg.trim());
                 }
             }
+            "/auth" => self.open_auth_manager(),
             "/logout" => self.cmd_logout(),
             "/goal" => self.cmd_goal(&arg),
             "/graph" => self.cmd_graph(),
@@ -1037,7 +1097,11 @@ impl App {
         if let Some(s) = &self.session {
             let _ = s.save();
         }
-        let session = Session::new(&self.cfg.model, &self.cwd.display().to_string());
+        let session = Session::new_for_provider(
+            &self.cfg.model,
+            &self.cfg.provider,
+            &self.cwd.display().to_string(),
+        );
         self.session_id = session.id.clone();
         let mut usage =
             UsageTracker::new(session.id.clone(), self.cfg.model.clone(), self.cwd.clone());
@@ -1271,9 +1335,9 @@ impl App {
                 };
                 let mut unknown = Vec::new();
                 for id in ids {
-                    if crate::providers::by_id(&id).is_some() {
-                        if !valid.iter().any(|v| v == &id) {
-                            valid.push(id);
+                    if let Some(provider) = crate::providers::resolve_provider_alias(&id) {
+                        if !valid.iter().any(|v| v == provider.id) {
+                            valid.push(provider.id.to_string());
                         }
                     } else {
                         unknown.push(id);
@@ -1318,32 +1382,70 @@ impl App {
     }
 
     /// Fan the question out to [active model + panel], then synthesize one answer.
-    fn start_fusion(&mut self, question: &str) {
+    fn start_fusion(&mut self, raw: &str) {
+        let (question, named_providers) = parse_fusion_request(raw);
         let question = question.trim();
         if question.is_empty() {
             self.fusion_status();
             return;
         }
-        if !self.authed {
-            self.push_error("signed out — run /login before /fusion".into());
-            return;
+
+        let mut panel = self.cfg.fusion_panel.clone();
+        for id in named_providers {
+            if id != self.cfg.provider && !panel.iter().any(|existing| existing == &id) {
+                panel.push(id);
+            }
         }
-        if self.cfg.fusion_panel.is_empty() {
+        if panel.is_empty() {
             self.push_error(
-                "no fusion panel set — /fusion panel openai,anthropic,groq  (then /fusion <question>)"
+                "no fusion panel set - /fusion panel openai,anthropic,groq  (then /fusion <question>)"
                     .into(),
             );
             return;
         }
+        self.start_fusion_with_panel_inner(question, panel, true);
+    }
+
+    pub(super) fn start_fusion_with_panel(&mut self, question: &str, panel: Vec<String>) {
+        self.start_fusion_with_panel_inner(question.trim(), panel, false);
+    }
+
+    fn start_fusion_with_panel_inner(
+        &mut self,
+        question: &str,
+        panel: Vec<String>,
+        show_user_cell: bool,
+    ) {
+        let active = crate::providers::by_id(&self.cfg.provider)
+            .copied()
+            .unwrap_or(*crate::providers::default_provider());
+        if !self.authed && !active.key_optional {
+            self.pending_fusion_login = Some(super::PendingFusionLogin {
+                provider_id: active.id.to_string(),
+                question: question.to_string(),
+                panel_ids: panel,
+            });
+            self.push_note(
+                Tone::Mode,
+                format!(
+                    "fusion needs {} credentials - opening auth, then the exact request will resume",
+                    active.name
+                ),
+            );
+            self.open_scoped_login_for(active.id);
+            return;
+        }
         if self.busy {
-            self.push_error("busy — wait for the current turn to finish".into());
+            self.push_error("busy - wait for the current turn to finish".into());
             return;
         }
         let (Some(session), Some(usage)) = (self.session.take(), self.usage.take()) else {
             self.push_error("internal: session busy".into());
             return;
         };
-        self.cells.push(Cell::User(format!("/fusion {question}")));
+        if show_user_cell {
+            self.cells.push(Cell::User(format!("/fusion {question}")));
+        }
         if !self.title_from_prompt {
             self.window_base = question.to_string();
             self.title_from_prompt = true;
@@ -1366,7 +1468,7 @@ impl App {
             self.client.clone(),
             self.cfg.provider.clone(),
             self.cfg.model.clone(),
-            self.cfg.fusion_panel.clone(),
+            panel,
             question.to_string(),
             session,
             usage,
@@ -2116,6 +2218,10 @@ impl App {
                 if let Some(s) = &self.session {
                     let _ = s.save();
                 }
+                let source_provider = (!loaded.provider.is_empty()
+                    && loaded.provider != self.cfg.provider)
+                    .then(|| loaded.provider.clone());
+                loaded.provider = self.cfg.provider.clone();
                 // Tools stay sandboxed to the *current* workspace, so a session
                 // resumed from elsewhere is re-homed here — say so plainly.
                 let from_elsewhere = {
@@ -2149,6 +2255,15 @@ impl App {
                         ),
                     ),
                     None => self.push_note(Tone::Session, format!("opened {short}")),
+                }
+                if let Some(origin) = source_provider {
+                    self.push_note(
+                        Tone::Session,
+                        format!(
+                            "session provider context: originated on {origin}; continuing on the explicitly selected {}",
+                            self.cfg.provider
+                        ),
+                    );
                 }
                 self.replay_session_history();
             }
@@ -2353,7 +2468,11 @@ impl App {
         if sid.trim().is_empty() {
             return None;
         }
-        let proj = self.cwd.file_name().and_then(|n| n.to_str()).unwrap_or("workspace");
+        let proj = self
+            .cwd
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("workspace");
         Some(format!("{proj}:{sid}"))
     }
 
@@ -2422,7 +2541,10 @@ impl App {
         match crate::agent::chronicle::checkpoint(&scope, &name, "") {
             Ok(cp) => self.push_note(
                 Tone::Skill,
-                format!("checkpoint `{}` at seq {}\n  /restore not wired — use connectome restore", cp.name, cp.seq),
+                format!(
+                    "checkpoint `{}` at seq {}\n  /restore not wired — use connectome restore",
+                    cp.name, cp.seq
+                ),
             ),
             Err(e) => self.push_error(format!("checkpoint failed: {e}")),
         }
@@ -2450,7 +2572,14 @@ impl App {
                 format!(
                     "lessons (rev {}):\n{}",
                     h.revision,
-                    h.supplemental.chars().rev().take(3000).collect::<String>().chars().rev().collect::<String>()
+                    h.supplemental
+                        .chars()
+                        .rev()
+                        .take(3000)
+                        .collect::<String>()
+                        .chars()
+                        .rev()
+                        .collect::<String>()
                 ),
             );
         }
@@ -2475,7 +2604,9 @@ impl App {
             return;
         }
         if arg.is_empty() {
-            self.push_info("usage: /refine <lesson> — evidence optional (second line after `#`)".into());
+            self.push_info(
+                "usage: /refine <lesson> — evidence optional (second line after `#`)".into(),
+            );
             return;
         }
         let (lesson, evidence) = match arg.split_once('\u{2666}') {
@@ -2488,7 +2619,10 @@ impl App {
         match crate::agent::harness::refine(&sid, lesson, evidence) {
             Ok(s) => self.push_note(
                 Tone::Skill,
-                format!("refined lessons → rev {} (evidence-backed, never rewrites base prompt)", s.revision),
+                format!(
+                    "refined lessons → rev {} (evidence-backed, never rewrites base prompt)",
+                    s.revision
+                ),
             ),
             Err(e) => self.push_error(format!("refine failed: {e}")),
         }
@@ -2532,7 +2666,10 @@ impl App {
             } else {
                 self.push_note(
                     Tone::Skill,
-                    format!("quality gate (continuous/autonomous DONE):\n  $ {}", cfg.quality_gate),
+                    format!(
+                        "quality gate (continuous/autonomous DONE):\n  $ {}",
+                        cfg.quality_gate
+                    ),
                 );
             }
             return;
@@ -2547,7 +2684,9 @@ impl App {
         let _ = crate::config::save_config(&cfg);
         self.push_note(
             Tone::Skill,
-            format!("quality gate set\n  $ {arg}\n  runs before continuous/autonomous DONE is accepted"),
+            format!(
+                "quality gate set\n  $ {arg}\n  runs before continuous/autonomous DONE is accepted"
+            ),
         );
     }
 
@@ -2593,28 +2732,23 @@ impl App {
         let note = note.to_string();
         let note_for_beat = note.clone();
         let label = format!("heartbeat · every {interval}");
-        let job = crate::bg_jobs::spawn(
-            label.clone(),
-            "heartbeat".to_string(),
-            move |cancel| {
-                let until = std::time::Instant::now()
-                    + std::time::Duration::from_secs(secs as u64);
-                // Loop with a short sleep so cancel interrupts promptly.
-                loop {
-                    if cancel.load(std::sync::atomic::Ordering::SeqCst) {
-                        return Err("cancelled".into());
-                    }
-                    if std::time::Instant::now() >= until {
-                        if let Ok(mut q) = steer.lock() {
-                            q.push_back(note_for_beat.clone());
-                        }
-                        // Reset the deadline for the next beat.
-                        return Ok("heartbeat fired (one-shot beat per job)".into());
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(500));
+        let job = crate::bg_jobs::spawn(label.clone(), "heartbeat".to_string(), move |cancel| {
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(secs as u64);
+            // Loop with a short sleep so cancel interrupts promptly.
+            loop {
+                if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                    return Err("cancelled".into());
                 }
-            },
-        );
+                if std::time::Instant::now() >= until {
+                    if let Ok(mut q) = steer.lock() {
+                        q.push_back(note_for_beat.clone());
+                    }
+                    // Reset the deadline for the next beat.
+                    return Ok("heartbeat fired (one-shot beat per job)".into());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        });
         self.heartbeat_job = Some(job);
         self.push_note(
             Tone::Skill,
@@ -3183,6 +3317,41 @@ fn is_unlimited_token(v: &str) -> bool {
             | "clear"
             | "reset"
     )
+}
+
+#[cfg(test)]
+mod fusion_request_tests {
+    use super::parse_fusion_request;
+
+    #[test]
+    fn provider_prefix_is_removed_and_aliases_are_canonicalized() {
+        let (question, providers) =
+            parse_fusion_request("with claude, gemini and ollama: compare these APIs");
+        assert_eq!(question, "compare these APIs");
+        assert!(
+            providers.contains(&"anthropic".to_string()),
+            "{providers:?}"
+        );
+        assert!(providers.contains(&"google".to_string()), "{providers:?}");
+        assert!(providers.contains(&"ollama".to_string()), "{providers:?}");
+    }
+
+    #[test]
+    fn provider_mentions_without_prefix_preserve_the_question() {
+        let raw = "ask DeepSeek and Groq which cache design is cheaper";
+        let (question, providers) = parse_fusion_request(raw);
+        assert_eq!(question, raw);
+        assert!(providers.contains(&"deepseek".to_string()), "{providers:?}");
+        assert!(providers.contains(&"groq".to_string()), "{providers:?}");
+    }
+
+    #[test]
+    fn prose_colon_is_not_mistaken_for_a_provider_prefix() {
+        let raw = "Explain this tradeoff: latency versus cost";
+        let (question, providers) = parse_fusion_request(raw);
+        assert_eq!(question, raw);
+        assert!(providers.is_empty(), "{providers:?}");
+    }
 }
 
 #[cfg(test)]

@@ -29,7 +29,7 @@ pub struct ModelRates {
     pub output_per_mtok_usd: f64,
     /// USD per 1M cached/read tokens. Falls back to input rate when unknown.
     pub cache_read_per_mtok_usd: f64,
-    /// USD per 1M cache-write tokens (unused until APIs report it separately).
+    /// USD per 1M cache-write tokens when the provider exposes a distinct rate.
     #[serde(default)]
     pub cache_write_per_mtok_usd: Option<f64>,
     pub context_window: Option<u64>,
@@ -52,8 +52,12 @@ impl ModelRates {
         let fresh = usage.input_tokens.saturating_sub(cached);
         let input = fresh as f64 / 1_000_000.0 * self.input_per_mtok_usd;
         let cache = cached as f64 / 1_000_000.0 * self.cache_read_per_mtok_usd;
+        let cache_write = usage.cache_write_tokens as f64 / 1_000_000.0
+            * self
+                .cache_write_per_mtok_usd
+                .unwrap_or(self.input_per_mtok_usd);
         let output = usage.output_tokens as f64 / 1_000_000.0 * self.output_per_mtok_usd;
-        input + cache + output
+        input + cache + cache_write + output
     }
 
     pub fn is_estimate(&self) -> bool {
@@ -523,8 +527,12 @@ mod tests {
             total_tokens: 2_000_000,
             reasoning_tokens: 0,
             cached_tokens: 400_000,
+            cache_write_tokens: 0,
             cost_usd: 0.0,
             cost_known: false,
+            usage_state: crate::usage::UsageState::Observed,
+            cost_provenance: crate::usage::CostProvenance::Unknown,
+            upstream_provider: None,
         };
         // fresh 0.6M * $10 + cache 0.4M * $1 + out 1M * $20 = 6 + 0.4 + 20 = 26.4
         let c = rates.cost_for(&u);

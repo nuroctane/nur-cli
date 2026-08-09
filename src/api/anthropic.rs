@@ -120,9 +120,10 @@ pub fn build_body_with_oauth(req: &ResponseRequest, stream: bool, oauth: bool) -
     }
 
     let model = normalize_model_id(&req.model);
+    let max_tokens = req.max_output_tokens.unwrap_or(16_384);
     let mut body = json!({
         "model": model,
-        "max_tokens": 16_384,
+        "max_tokens": max_tokens,
         "messages": messages,
     });
     if oauth {
@@ -875,12 +876,20 @@ mod tests {
             stream: None,
             parallel_tool_calls: None,
             prompt_cache_key: None,
+            max_output_tokens: None,
         }
     }
 
     /// Same fixture as [`req`] but with a caller-supplied Responses transcript.
     fn req_with(input: Value) -> ResponseRequest {
         ResponseRequest { input, ..req() }
+    }
+
+    #[test]
+    fn output_reserve_is_serialized_as_anthropic_max_tokens() {
+        let mut request = req();
+        request.max_output_tokens = Some(4096);
+        assert_eq!(build_body(&request, false)["max_tokens"], 4096);
     }
 
     fn messages_of(input: Value) -> Vec<Value> {

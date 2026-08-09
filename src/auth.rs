@@ -10,6 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static OAUTH_STORE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static KEY_STORE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static POLICY_STORE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 fn oauth_store_guard() -> MutexGuard<'static, ()> {
     OAUTH_STORE_LOCK
@@ -20,6 +21,13 @@ fn oauth_store_guard() -> MutexGuard<'static, ()> {
 
 fn key_store_guard() -> MutexGuard<'static, ()> {
     KEY_STORE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn policy_store_guard() -> MutexGuard<'static, ()> {
+    POLICY_STORE_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -246,22 +254,22 @@ pub fn resolve_api_key() -> Result<String> {
 /// Inputs are already trimmed; empty string is treated as absent.
 /// Pick the first non-empty credential from a priority list.
 ///
-/// Callers decide priority. [`resolve_api_key_for`] passes
-/// `(env, matching_auth, failover_oauth, failover_key, …)` so a live browser
-/// session outranks a stale API key for non-active providers.
+/// Explicit choices made in `/auth` outrank ambient environment variables.
+/// The chooser removes a provider's conflicting saved method, so OAuth versus
+/// API-key precedence is deterministic rather than dependent on stale files.
 pub(crate) fn pick_provider_credential(
-    provider_env: Option<&str>,
     matching_auth: Option<&str>,
-    failover_primary: Option<&str>,
-    failover_secondary: Option<&str>,
+    provider_oauth: Option<&str>,
+    provider_key: Option<&str>,
+    provider_env: Option<&str>,
     nur_global: Option<&str>,
     legacy_auth: Option<&str>,
 ) -> Option<String> {
     for cand in [
-        provider_env,
         matching_auth,
-        failover_primary,
-        failover_secondary,
+        provider_oauth,
+        provider_key,
+        provider_env,
         nur_global,
         legacy_auth,
     ] {
@@ -277,10 +285,10 @@ pub(crate) fn pick_provider_credential(
 /// **With `Some(provider_id)`** (client init, `/model`, etc.) — provider-scoped
 /// first so a key for one provider never gets sent to another after `/login`:
 /// 1. matching active OAuth session (refreshed), so env cannot replace it after restart
-/// 2. catalog env (`XAI_API_KEY`, `OPENAI_API_KEY`, …)
-/// 3. matching `auth.json` API key
-/// 4. per-provider OAuth store (browser login for a non-active provider)
-/// 5. per-provider API key store
+/// 2. matching `auth.json` API key
+/// 3. per-provider OAuth store (browser login for a non-active provider)
+/// 4. per-provider API key store
+/// 5. catalog env (`XAI_API_KEY`, `OPENAI_API_KEY`, …)
 /// 6. `NUR_API_KEY` only as a true global override
 ///
 /// OAuth is preferred over a stored API key for non-active providers so a stale
@@ -336,14 +344,20 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
             .map(|k| k.trim().to_string())
             .filter(|k| !k.is_empty());
         if let Some(k) = pick_provider_credential(
-            provider_env.as_deref(),
             matching_auth.as_deref(),
             failover_oauth.as_deref(),
             failover_key.as_deref(),
+            provider_env.as_deref(),
             nur_global.as_deref(),
             legacy_auth.as_deref(),
         ) {
             return Ok(k);
+        }
+        // Local and self-hosted OpenAI-compatible providers are usable without
+        // credentials. Do not probe vendor CLIs or OMP and do not mark the TUI
+        // signed out merely because no bearer exists.
+        if crate::providers::by_id(exp).is_some_and(|provider| provider.key_optional) {
+            return Ok(String::new());
         }
         // Saved nur credentials (active + per-provider + env) already failed.
         // Still try vendor CLI / OMP for the *expected* provider even when
@@ -358,84 +372,86 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
         // is reachable directly from the async main() / turn-1 startup path, so
         // an unguarded call here could stall a Tokio worker thread on the very
         // first request.
-        if let Ok(Some(tokens)) =
-            crate::oauth::run_blocking(|| crate::oauth::import_existing_session(exp))
-        {
-            let tok = tokens.access_token.trim().to_string();
-            if !tok.is_empty() && !oauth_expired(tokens.expires_at) {
-                if crate::oauth::omp_bridge::is_omp_import(&tokens) {
-                    if crate::oauth::omp_bridge::is_omp_oauth_import(&tokens) {
-                        let _ = save_provider_oauth(
-                            exp,
-                            &tok,
-                            tokens.refresh_token.clone(),
-                            tokens.expires_at,
-                            tokens.meta.clone(),
-                        );
-                    } else {
-                        let _ = save_provider_key(exp, &tok);
+        if t3_fallback_allowed(exp) {
+            if let Ok(Some(tokens)) =
+                crate::oauth::run_blocking(|| crate::oauth::import_existing_session(exp))
+            {
+                let tok = tokens.access_token.trim().to_string();
+                if !tok.is_empty() && !oauth_expired(tokens.expires_at) {
+                    if crate::oauth::omp_bridge::is_omp_import(&tokens) {
+                        if crate::oauth::omp_bridge::is_omp_oauth_import(&tokens) {
+                            let _ = save_provider_oauth(
+                                exp,
+                                &tok,
+                                tokens.refresh_token.clone(),
+                                tokens.expires_at,
+                                tokens.meta.clone(),
+                            );
+                        } else {
+                            let _ = save_provider_key(exp, &tok);
+                        }
+                    }
+                    return Ok(tok);
+                }
+                // Stale but refreshable. The vendor CLI would renew this silently on
+                // its next use, so refusing here meant "signed into the CLI" did not
+                // actually mean "signed into nur" — the token merely had to be more
+                // than five minutes old. Mint a fresh one from the same refresh
+                // token the CLI stores, and keep using it transiently.
+                let mut refreshed_ok = false;
+                if let Some(refresh) = tokens.refresh_token.as_deref().filter(|r| !r.is_empty()) {
+                    let probe = Auth {
+                        provider: exp.to_string(),
+                        ..Default::default()
+                    };
+                    if let Ok(fresh) = crate::oauth::run_blocking(|| {
+                        crate::oauth::refresh_tokens(exp, &probe, refresh)
+                    }) {
+                        let tok = fresh.access_token.trim().to_string();
+                        if !tok.is_empty() && !oauth_expired(fresh.expires_at) {
+                            // Persist the refreshed token back to the per-provider
+                            // session store. Without this, the token we return no
+                            // longer matches the stored session, so
+                            // `oauth_request_context` refuses to attach
+                            // `x-goog-user-project` and the generativelanguage host
+                            // answers 401 UNAUTHENTICATED. Re-saving keeps the
+                            // token <-> project_id link intact for google-family.
+                            let _ = save_provider_oauth(
+                                exp,
+                                &tok,
+                                fresh
+                                    .refresh_token
+                                    .clone()
+                                    .or_else(|| Some(refresh.to_string())),
+                                fresh.expires_at,
+                                fresh.meta.clone(),
+                            );
+                            return Ok(tok);
+                        }
+                        refreshed_ok = true;
                     }
                 }
-                return Ok(tok);
-            }
-            // Stale but refreshable. The vendor CLI would renew this silently on
-            // its next use, so refusing here meant "signed into the CLI" did not
-            // actually mean "signed into nur" — the token merely had to be more
-            // than five minutes old. Mint a fresh one from the same refresh
-            // token the CLI stores, and keep using it transiently.
-            let mut refreshed_ok = false;
-            if let Some(refresh) = tokens.refresh_token.as_deref().filter(|r| !r.is_empty()) {
-                let probe = Auth {
-                    provider: exp.to_string(),
-                    ..Default::default()
-                };
-                if let Ok(fresh) = crate::oauth::run_blocking(|| {
-                    crate::oauth::refresh_tokens(exp, &probe, refresh)
-                }) {
-                    let tok = fresh.access_token.trim().to_string();
-                    if !tok.is_empty() && !oauth_expired(fresh.expires_at) {
-                        // Persist the refreshed token back to the per-provider
-                        // session store. Without this, the token we return no
-                        // longer matches the stored session, so
-                        // `oauth_request_context` refuses to attach
-                        // `x-goog-user-project` and the generativelanguage host
-                        // answers 401 UNAUTHENTICATED. Re-saving keeps the
-                        // token <-> project_id link intact for google-family.
-                        let _ = save_provider_oauth(
-                            exp,
-                            &tok,
-                            fresh
-                                .refresh_token
-                                .clone()
-                                .or_else(|| Some(refresh.to_string())),
-                            fresh.expires_at,
-                            fresh.meta.clone(),
-                        );
+                // For google-family CLI imports (antigravity / gcloud), the access
+                // token is short-lived and the CLI itself refreshes it. If our
+                // refresh attempt failed due to missing NUR_GOOGLE_CLIENT_ID (browser
+                // flow not configured), returning NotAuthenticated leaves the user
+                // in a "signed in · no key (local) -> signed out" loop even though
+                // `agy` / `gcloud` has a valid session. Fall back to the original
+                // token even if expired — the API will either accept it or return
+                // 401, which then triggers a proper re-login prompt rather than a
+                // silent sign-out. This keeps `antigravity` working for CLI-only users.
+                let is_google_family = matches!(exp, "google" | "antigravity" | "google-oauth");
+                if is_google_family && !tok.is_empty() {
+                    // If we attempted refresh and it failed, or token is from CLI,
+                    // still return it as last resort instead of NotAuthenticated.
+                    return Ok(tok);
+                }
+                if !refreshed_ok {
+                    // For non-google providers, still give expired token a chance if
+                    // no refresh was attempted, to avoid silent sign-out loops.
+                    if !tok.is_empty() {
                         return Ok(tok);
                     }
-                    refreshed_ok = true;
-                }
-            }
-            // For google-family CLI imports (antigravity / gcloud), the access
-            // token is short-lived and the CLI itself refreshes it. If our
-            // refresh attempt failed due to missing NUR_GOOGLE_CLIENT_ID (browser
-            // flow not configured), returning NotAuthenticated leaves the user
-            // in a "signed in · no key (local) -> signed out" loop even though
-            // `agy` / `gcloud` has a valid session. Fall back to the original
-            // token even if expired — the API will either accept it or return
-            // 401, which then triggers a proper re-login prompt rather than a
-            // silent sign-out. This keeps `antigravity` working for CLI-only users.
-            let is_google_family = matches!(exp, "google" | "antigravity" | "google-oauth");
-            if is_google_family && !tok.is_empty() {
-                // If we attempted refresh and it failed, or token is from CLI,
-                // still return it as last resort instead of NotAuthenticated.
-                return Ok(tok);
-            }
-            if !refreshed_ok {
-                // For non-google providers, still give expired token a chance if
-                // no refresh was attempted, to avoid silent sign-out loops.
-                if !tok.is_empty() {
-                    return Ok(tok);
                 }
             }
         }
@@ -747,7 +763,88 @@ pub fn save_api_key_for(key: &str, provider: Option<&str>) -> Result<()> {
             }
         }
     }
-    save_auth(&auth)
+    save_auth(&auth)?;
+    if let Some(provider) = provider.filter(|provider| !provider.trim().is_empty()) {
+        allow_t3_fallback(provider)?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct CredentialPolicy {
+    #[serde(default)]
+    blocked_t3: std::collections::BTreeSet<String>,
+}
+
+const GOOGLE_CREDENTIAL_FAMILY: &[&str] = &["google", "antigravity", "google-oauth"];
+
+fn credential_family_ids(provider_id: &str) -> Vec<&str> {
+    if GOOGLE_CREDENTIAL_FAMILY.contains(&provider_id) {
+        GOOGLE_CREDENTIAL_FAMILY.to_vec()
+    } else {
+        vec![provider_id]
+    }
+}
+
+fn read_credential_policy() -> CredentialPolicy {
+    std::fs::read_to_string(crate::config::credential_policy_path())
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+fn write_credential_policy(policy: &CredentialPolicy) -> Result<()> {
+    ensure_dirs()?;
+    let text = serde_json::to_string_pretty(policy)?;
+    private_atomic_write(&crate::config::credential_policy_path(), text.as_bytes())
+        .map_err(|error| NurError::Other(format!("failed to save credential policy: {error}")))
+}
+
+/// Whether automatic vendor-CLI / OMP discovery is allowed for this provider.
+/// Explicitly saved credentials and environment variables are unaffected.
+pub fn t3_fallback_allowed(provider_id: &str) -> bool {
+    let id = provider_id.trim();
+    let policy = read_credential_policy();
+    !credential_family_ids(id)
+        .iter()
+        .any(|family_id| policy.blocked_t3.contains(*family_id))
+}
+
+/// Re-enable normal T3 discovery after a deliberate save or import.
+pub fn allow_t3_fallback(provider_id: &str) -> Result<()> {
+    let id = provider_id.trim();
+    if id.is_empty() {
+        return Ok(());
+    }
+    let _guard = policy_store_guard();
+    let mut policy = read_credential_policy();
+    let changed = credential_family_ids(id)
+        .into_iter()
+        .fold(false, |changed, family_id| {
+            policy.blocked_t3.remove(family_id) || changed
+        });
+    if changed {
+        write_credential_policy(&policy)?;
+    }
+    Ok(())
+}
+
+fn block_t3_fallback(provider_id: &str) -> Result<()> {
+    let id = provider_id.trim();
+    if id.is_empty() {
+        return Ok(());
+    }
+    let _guard = policy_store_guard();
+    let mut policy = read_credential_policy();
+    let changed = credential_family_ids(id)
+        .into_iter()
+        .fold(false, |changed, family_id| {
+            policy.blocked_t3.insert(family_id.to_string()) || changed
+        });
+    if changed {
+        write_credential_policy(&policy)?;
+    }
+    Ok(())
 }
 
 // ── Per-provider key store (for cross-provider failover) ─────────────────────
@@ -836,8 +933,38 @@ pub fn load_provider_key(provider_id: &str) -> Option<String> {
 /// Save a per-provider failover key (validated like a normal API key).
 pub fn save_provider_key(provider_id: &str, key: &str) -> Result<()> {
     ensure_dirs()?;
-    let _guard = key_store_guard();
-    save_key_at(&crate::config::provider_keys_path(), provider_id, key)
+    {
+        let _guard = key_store_guard();
+        save_key_at(&crate::config::provider_keys_path(), provider_id, key)?;
+    }
+    allow_t3_fallback(provider_id)
+}
+
+/// Save an API key as the user's authoritative choice for this provider. Any
+/// older saved OAuth session is removed so it cannot continue to outrank the
+/// replacement key. If this is the active provider, `auth.json` is updated too.
+pub fn choose_provider_key(provider_id: &str, key: &str) -> Result<()> {
+    save_provider_key(provider_id, key)?;
+    {
+        let _guard = oauth_store_guard();
+        let path = crate::config::provider_sessions_path();
+        let mut sessions = read_sessions_at(&path);
+        let changed = credential_family_ids(provider_id)
+            .into_iter()
+            .fold(false, |changed, family_id| {
+                sessions.remove(family_id).is_some() || changed
+            });
+        if changed {
+            write_sessions_at(&path, &sessions)?;
+        }
+    }
+    let active_matches = load_auth()?.is_some_and(|auth| {
+        !auth.provider.trim().is_empty() && !provider_mismatch(&auth, provider_id)
+    });
+    if active_matches {
+        save_api_key_for(key, Some(provider_id))?;
+    }
+    Ok(())
 }
 
 fn forget_provider_at(keys_path: &Path, sessions_path: &Path, provider_id: &str) -> bool {
@@ -907,6 +1034,30 @@ pub fn forget_provider(provider_id: &str) -> bool {
     )
 }
 
+/// Remove every Nur-managed credential for one provider and suppress automatic
+/// vendor CLI / OMP re-import until the user explicitly chooses it again in
+/// `/auth`. Environment variables remain visible and cannot be mutated by Nur.
+pub fn delete_provider_credentials(provider_id: &str) -> Result<bool> {
+    let id = provider_id.trim();
+    if id.is_empty() {
+        return Ok(false);
+    }
+    let active = load_auth()?;
+    let active_matches = active
+        .as_ref()
+        .is_some_and(|auth| !auth.provider.trim().is_empty() && !provider_mismatch(auth, id));
+    if active_matches {
+        let path = auth_path();
+        if path.exists() {
+            fs::remove_file(path)?;
+        }
+    }
+    let removed = forget_provider(id);
+    block_t3_fallback(id)?;
+    crate::oauth::omp_bridge::invalidate_omp_token_cache();
+    Ok(removed || active_matches)
+}
+
 /// Persist an OAuth session as the **active** login (`auth.json`), and also
 /// stash it in the per-provider session store so the same provider can later
 /// be used as a failover target without re-signing-in.
@@ -925,6 +1076,7 @@ pub fn save_oauth_session(
     refresh_oauth_in_place(&mut auth)?;
     save_auth(&auth)?;
     save_provider_session(&auth)?;
+    allow_t3_fallback(provider)?;
     Ok(())
 }
 
@@ -1058,7 +1210,50 @@ pub fn save_provider_oauth(
     let _guard = oauth_store_guard();
     let mut auth = oauth_auth(provider, access_token, refresh_token, expires_at, meta)?;
     refresh_oauth_in_place(&mut auth)?;
-    save_provider_session(&auth)
+    save_provider_session(&auth)?;
+    allow_t3_fallback(provider)
+}
+
+/// Save OAuth as the authoritative choice for a provider and remove an older
+/// saved API key. The active slot is updated only when it already belongs to
+/// this provider, so managing another provider never changes the current one.
+pub fn choose_provider_oauth(
+    provider: &str,
+    access_token: &str,
+    refresh_token: Option<String>,
+    expires_at: Option<u64>,
+    meta: Option<OauthMeta>,
+) -> Result<()> {
+    save_provider_oauth(
+        provider,
+        access_token,
+        refresh_token.clone(),
+        expires_at,
+        meta.clone(),
+    )?;
+    {
+        let _guard = key_store_guard();
+        let path = crate::config::provider_keys_path();
+        let mut keys = read_keys_at(&path);
+        let changed = credential_family_ids(provider)
+            .into_iter()
+            .fold(false, |changed, family_id| {
+                keys.remove(family_id).is_some() || changed
+            });
+        if changed {
+            let text = serde_json::to_string_pretty(&keys)?;
+            private_atomic_write(&path, text.as_bytes()).map_err(|error| {
+                NurError::Other(format!("failed to save provider keys: {error}"))
+            })?;
+        }
+    }
+    let active_matches = load_auth()?.is_some_and(|auth| {
+        !auth.provider.trim().is_empty() && !provider_mismatch(&auth, provider)
+    });
+    if active_matches {
+        save_oauth_session(provider, access_token, refresh_token, expires_at, meta)?;
+    }
+    Ok(())
 }
 
 /// Best-effort: patch `project_id` / `tier_id` into existing google-family OAuth
@@ -1188,6 +1383,76 @@ pub fn has_provider_oauth(provider_id: &str) -> bool {
         .get(provider_id)
         .map(|a| matches!(a.auth_method, AuthMethod::Oauth) && !a.api_key.trim().is_empty())
         .unwrap_or(false)
+}
+
+/// One non-secret status label per catalog provider for the scrollable `/auth`
+/// manager. This reads local stores once and never refreshes tokens or invokes
+/// OMP. First-party CLI probes are local-only and expose no credential data.
+pub fn provider_credential_summaries() -> BTreeMap<String, String> {
+    let keys = read_keys_at(&crate::config::provider_keys_path());
+    let sessions = read_sessions_at(&crate::config::provider_sessions_path());
+    let active = load_auth().ok().flatten();
+    let policy = read_credential_policy();
+    let mut out = BTreeMap::new();
+
+    for provider in crate::providers::PROVIDERS {
+        let mut sources: Vec<String> = Vec::new();
+        if provider.key_optional {
+            sources.push("local · no auth".into());
+        }
+        if active.as_ref().is_some_and(|auth| {
+            !auth.provider.trim().is_empty() && !provider_mismatch(auth, provider.id)
+        }) {
+            sources.push("active".into());
+        }
+        if let Some(auth) = sessions.get(provider.id) {
+            let source = if auth
+                .oauth_meta
+                .as_ref()
+                .is_some_and(|meta| meta.issuer.eq_ignore_ascii_case("omp"))
+            {
+                "OMP OAuth"
+            } else if oauth_expired(auth.expires_at)
+                && auth.refresh_token.as_deref().is_none_or(str::is_empty)
+            {
+                "OAuth expired"
+            } else {
+                "OAuth"
+            };
+            sources.push(source.into());
+        }
+        if keys
+            .get(provider.id)
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            sources.push("saved key".into());
+        }
+        if std::env::var(provider.env_key).is_ok_and(|value| !value.trim().is_empty()) {
+            sources.push(format!("env {}", provider.env_key));
+        }
+        let driver = match provider.id {
+            "openai" => Some(crate::t3code::DriverId::Codex),
+            "anthropic" => Some(crate::t3code::DriverId::Claude),
+            "xai" => Some(crate::t3code::DriverId::Grok),
+            "google" => Some(crate::t3code::DriverId::Gemini),
+            "antigravity" => Some(crate::t3code::DriverId::Antigravity),
+            "cursor" => Some(crate::t3code::DriverId::Cursor),
+            _ => None,
+        };
+        if driver.is_some_and(|driver| crate::t3code::probe_driver(driver).has_credentials) {
+            sources.push("CLI available".into());
+        }
+        if policy.blocked_t3.contains(provider.id) {
+            sources.push("T3 blocked".into());
+        } else if !provider.key_optional {
+            sources.push("CLI/OMP fallback".into());
+        }
+        if sources.is_empty() {
+            sources.push("add credential".into());
+        }
+        out.insert(provider.id.to_string(), sources.join(" · "));
+    }
+    out
 }
 
 /// Non-secret readiness lines for browser/official-CLI providers.
@@ -1555,20 +1820,19 @@ mod tests {
         );
         assert_eq!(
             pick_provider_credential(
-                Some("sk-openai-from-env"),
                 Some("xai-oauth-jwt"),
                 None,
                 None,
+                Some("sk-openai-from-env"),
                 Some("nur-global"),
                 None,
             )
             .as_deref(),
-            Some("sk-openai-from-env"),
-            "catalog env wins first for that provider"
+            Some("xai-oauth-jwt"),
+            "the credential explicitly selected in /auth beats ambient env"
         );
-        // pick_provider_credential arg3 is the higher-priority failover slot and
-        // arg4 the lower one. resolve_api_key_for passes OAuth then API key so a
-        // live browser session outranks a stale provider_keys entry.
+        // A chosen OAuth session outranks a stored API key. The UI normally
+        // removes that conflicting key, but this also makes legacy state safe.
         assert_eq!(
             pick_provider_credential(
                 None,

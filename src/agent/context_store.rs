@@ -15,8 +15,9 @@
 use crate::config::{atomic_write, nur_home};
 use crate::tools::sensitive::body_looks_sensitive;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -24,6 +25,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const INLINE_MAX_CHARS: usize = 200_000;
 /// Max vars per session (prevents unbounded growth).
 const MAX_VARS_PER_SESSION: usize = 256;
+/// Default retained payload cap for a single session. Config is deliberately
+/// env-backed for now so old config files retain their exact shape.
+const DEFAULT_SESSION_BYTES: u64 = 64 * 1024 * 1024;
+/// Default cap across persisted context-store sessions.
+const DEFAULT_GLOBAL_BYTES: u64 = 512 * 1024 * 1024;
+const DEFAULT_RETENTION_DAYS: u64 = 30;
 /// Default peek window (chars).
 pub const DEFAULT_PEEK: usize = 2_000;
 
@@ -48,6 +55,38 @@ struct SessionStore {
     vars: HashMap<String, ContextVar>,
     /// Insertion order for stable listing.
     order: Vec<String>,
+    loaded: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PersistedSession {
+    version: u8,
+    vars: HashMap<String, ContextVar>,
+    order: Vec<String>,
+}
+
+/// Retention settings are exposed for the session/bootstrap owner. Environment
+/// overrides are useful in managed installs before config schema grows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetentionPolicy {
+    pub session_bytes: u64,
+    pub global_bytes: u64,
+    pub max_age_days: u64,
+}
+
+pub fn retention_policy() -> RetentionPolicy {
+    fn env_u64(name: &str, fallback: u64) -> u64 {
+        std::env::var(name)
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(fallback)
+    }
+    RetentionPolicy {
+        session_bytes: env_u64("NUR_CONTEXT_STORE_SESSION_BYTES", DEFAULT_SESSION_BYTES),
+        global_bytes: env_u64("NUR_CONTEXT_STORE_GLOBAL_BYTES", DEFAULT_GLOBAL_BYTES),
+        max_age_days: env_u64("NUR_CONTEXT_STORE_RETENTION_DAYS", DEFAULT_RETENTION_DAYS),
+    }
 }
 
 fn global() -> &'static Mutex<HashMap<String, SessionStore>> {
@@ -64,6 +103,88 @@ fn now_unix() -> u64 {
 
 fn store_dir() -> PathBuf {
     nur_home().join("context-store")
+}
+
+fn session_dir(session_id: &str) -> PathBuf {
+    let mut h = Sha256::new();
+    h.update(session_id.as_bytes());
+    let digest = h
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    store_dir().join(&digest[..24])
+}
+
+fn session_index_path(session_id: &str) -> PathBuf {
+    session_dir(session_id).join("index.json")
+}
+
+fn session_payload_bytes(sess: &SessionStore) -> u64 {
+    sess.vars
+        .values()
+        .map(|v| {
+            v.body.as_ref().map(|b| b.len() as u64).unwrap_or_else(|| {
+                v.path
+                    .as_ref()
+                    .and_then(|p| std::fs::metadata(p).ok())
+                    .map(|m| m.len())
+                    .unwrap_or(v.char_count as u64)
+            })
+        })
+        .sum()
+}
+
+fn persist_session(session_id: &str, sess: &SessionStore) -> Result<(), String> {
+    let disk = PersistedSession {
+        version: 1,
+        vars: sess.vars.clone(),
+        order: sess.order.clone(),
+    };
+    let bytes = serde_json::to_vec_pretty(&disk).map_err(|e| format!("context index: {e}"))?;
+    atomic_write(&session_index_path(session_id), &bytes).map_err(|e| format!("context index: {e}"))
+}
+
+fn load_session(session_id: &str) -> SessionStore {
+    let index = session_index_path(session_id);
+    let Ok(text) = std::fs::read_to_string(index) else {
+        return SessionStore {
+            loaded: true,
+            ..Default::default()
+        };
+    };
+    let Ok(disk) = serde_json::from_str::<PersistedSession>(&text) else {
+        return SessionStore {
+            loaded: true,
+            ..Default::default()
+        };
+    };
+    let mut order: Vec<String> = disk
+        .order
+        .into_iter()
+        .filter(|n| disk.vars.contains_key(n))
+        .collect();
+    for n in disk.vars.keys() {
+        if !order.contains(n) {
+            order.push(n.clone());
+        }
+    }
+    SessionStore {
+        vars: disk.vars,
+        order,
+        loaded: true,
+    }
+}
+
+fn ensure_loaded<'a>(
+    g: &'a mut HashMap<String, SessionStore>,
+    session_id: &str,
+) -> &'a mut SessionStore {
+    let reload = g.get(session_id).map(|s| !s.loaded).unwrap_or(true);
+    if reload {
+        g.insert(session_id.to_string(), load_session(session_id));
+    }
+    g.get_mut(session_id).expect("context session inserted")
 }
 
 fn sanitize_name(raw: &str) -> String {
@@ -90,9 +211,36 @@ fn load_body(var: &ContextVar) -> Result<String, String> {
         return Ok(body.clone());
     }
     if let Some(path) = &var.path {
-        return std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path));
+        let path = PathBuf::from(path);
+        let owned =
+            crate::tools::spill::is_under_tool_results(&path) || path_is_under(&path, &store_dir());
+        if !owned {
+            return Err("refused context-store body outside managed storage".into());
+        }
+        return std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()));
     }
     Err("variable has no body or path".into())
+}
+
+fn path_is_under(path: &Path, root: &Path) -> bool {
+    let Ok(root) = root.canonicalize() else {
+        return false;
+    };
+    let Ok(path) = path.canonicalize() else {
+        return false;
+    };
+    path.starts_with(root)
+}
+
+fn remove_legacy_body(var: &ContextVar) {
+    // Content-addressed blobs can belong to a spill and/or another context var;
+    // only old private context-store paths are safe to unlink directly.
+    if let Some(path) = &var.path {
+        let path = PathBuf::from(path);
+        if path_is_under(&path, &store_dir()) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 /// Register (or overwrite) a named context variable for `session_id`.
@@ -135,32 +283,47 @@ pub fn register(
     if char_count <= INLINE_MAX_CHARS {
         var.body = Some(content.to_string());
     } else {
-        let dir = store_dir().join(session_id.chars().take(12).collect::<String>());
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join(format!("{id}.txt"));
-        atomic_write(&path, content.as_bytes()).map_err(|e| format!("spill failed: {e}"))?;
+        let path = crate::tools::spill::write_content_addressed_blob(content)
+            .map_err(|e| format!("spill failed: {e}"))?;
         var.path = Some(path.display().to_string());
     }
 
     let mut g = global()
         .lock()
         .map_err(|_| "context_store lock poisoned".to_string())?;
-    let sess = g.entry(session_id.to_string()).or_default();
+    let sess = ensure_loaded(&mut g, session_id);
     if !sess.vars.contains_key(&name) && sess.vars.len() >= MAX_VARS_PER_SESSION {
         // Evict oldest.
         if let Some(old) = sess.order.first().cloned() {
             sess.order.remove(0);
             if let Some(evicted) = sess.vars.remove(&old) {
-                if let Some(p) = evicted.path {
-                    let _ = std::fs::remove_file(p);
-                }
+                remove_legacy_body(&evicted);
             }
         }
     }
     if !sess.vars.contains_key(&name) {
         sess.order.push(name.clone());
     }
-    sess.vars.insert(name, var.clone());
+    sess.vars.insert(name.clone(), var.clone());
+    let policy = retention_policy();
+    while session_payload_bytes(sess) > policy.session_bytes && sess.order.len() > 1 {
+        let old = sess.order.remove(0);
+        if let Some(evicted) = sess.vars.remove(&old) {
+            remove_legacy_body(&evicted);
+        }
+    }
+    if session_payload_bytes(sess) > policy.session_bytes {
+        sess.vars.remove(&name);
+        sess.order.retain(|n| n != &name);
+        let _ = persist_session(session_id, sess);
+        return Err(format!(
+            "context variable exceeds session storage quota ({} bytes)",
+            policy.session_bytes
+        ));
+    }
+    persist_session(session_id, sess)?;
+    drop(g);
+    let _ = cleanup_retention();
     // Don't return full body in register ack when huge.
     if var.char_count > DEFAULT_PEEK {
         var.body = None;
@@ -200,12 +363,10 @@ pub fn maybe_register_tool_result(
 }
 
 pub fn list(session_id: &str) -> Vec<ContextVar> {
-    let Ok(g) = global().lock() else {
+    let Ok(mut g) = global().lock() else {
         return Vec::new();
     };
-    let Some(sess) = g.get(session_id) else {
-        return Vec::new();
-    };
+    let sess = ensure_loaded(&mut g, session_id);
     sess.order
         .iter()
         .filter_map(|n| {
@@ -218,12 +379,18 @@ pub fn list(session_id: &str) -> Vec<ContextVar> {
         .collect()
 }
 
-pub fn get(session_id: &str, name: &str) -> Option<ContextVar> {    let g = global().lock().ok()?;
-    let sess = g.get(session_id)?;
+pub fn get(session_id: &str, name: &str) -> Option<ContextVar> {
+    let mut g = global().lock().ok()?;
+    let sess = ensure_loaded(&mut g, session_id);
     sess.vars.get(name).cloned()
 }
 
-pub fn peek(session_id: &str, name: &str, offset: usize, max_chars: usize) -> Result<String, String> {
+pub fn peek(
+    session_id: &str,
+    name: &str,
+    offset: usize,
+    max_chars: usize,
+) -> Result<String, String> {
     let var = get(session_id, name).ok_or_else(|| format!("unknown context var `{name}`"))?;
     let body = load_body(&var)?;
     let max = max_chars.clamp(1, 100_000);
@@ -289,18 +456,141 @@ pub fn delete(session_id: &str, name: &str) -> Result<String, String> {
     let mut g = global()
         .lock()
         .map_err(|_| "context_store lock poisoned".to_string())?;
-    let sess = g
-        .get_mut(session_id)
-        .ok_or_else(|| "no context store for session".to_string())?;
+    let sess = ensure_loaded(&mut g, session_id);
     let name = sanitize_name(name);
     let Some(var) = sess.vars.remove(&name) else {
         return Err(format!("unknown context var `{name}`"));
     };
     sess.order.retain(|n| n != &name);
-    if let Some(p) = var.path {
-        let _ = std::fs::remove_file(p);
-    }
+    remove_legacy_body(&var);
+    persist_session(session_id, sess)?;
     Ok(format!("deleted `{name}`"))
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct CleanupReport {
+    pub removed_sessions: usize,
+    pub removed_blobs: usize,
+    pub reclaimed_bytes: u64,
+}
+
+fn dir_size(path: &Path) -> u64 {
+    walkdir::WalkDir::new(path)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter_map(|e| e.metadata().ok())
+        .filter(|m| m.is_file())
+        .map(|m| m.len())
+        .sum()
+}
+
+fn modified_unix(path: &Path) -> u64 {
+    path.metadata()
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|m| m.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn referenced_blob_paths() -> std::collections::HashSet<PathBuf> {
+    let mut paths = std::collections::HashSet::new();
+    for e in walkdir::WalkDir::new(store_dir())
+        .max_depth(2)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name() == "index.json")
+    {
+        let Ok(text) = std::fs::read_to_string(e.path()) else {
+            continue;
+        };
+        let Ok(index) = serde_json::from_str::<PersistedSession>(&text) else {
+            continue;
+        };
+        for var in index.vars.values() {
+            if let Some(path) = &var.path {
+                paths.insert(PathBuf::from(path));
+            }
+        }
+    }
+    paths
+}
+
+/// Enforce retention after writes and at session bootstrap. It is intentionally
+/// conservative: referenced blobs live as long as their session index does;
+/// unreferenced spill blobs are retained for the same age window and then
+/// reclaimed. Call this during session resume for cold-session cleanup.
+pub fn cleanup_retention() -> CleanupReport {
+    let policy = retention_policy();
+    let now = now_unix();
+    let max_age = policy.max_age_days.saturating_mul(86_400);
+    let mut report = CleanupReport::default();
+    let mut sessions: Vec<PathBuf> = std::fs::read_dir(store_dir())
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+
+    for path in &sessions {
+        if now.saturating_sub(modified_unix(path)) > max_age {
+            let bytes = dir_size(path);
+            if std::fs::remove_dir_all(path).is_ok() {
+                report.removed_sessions += 1;
+                report.reclaimed_bytes += bytes;
+            }
+        }
+    }
+    sessions.retain(|p| p.exists());
+    sessions.sort_by_key(|p| modified_unix(p));
+
+    // A global hard cap makes abandoned session indexes bounded even when they
+    // are frequently older than the age window.
+    let mut total = dir_size(&store_dir()) + dir_size(&crate::tools::spill::shared_blob_dir());
+    for path in sessions {
+        if total <= policy.global_bytes {
+            break;
+        }
+        let bytes = dir_size(&path);
+        if std::fs::remove_dir_all(&path).is_ok() {
+            total = total.saturating_sub(bytes);
+            report.removed_sessions += 1;
+            report.reclaimed_bytes += bytes;
+        }
+    }
+
+    let references = referenced_blob_paths();
+    let mut blobs: Vec<PathBuf> = std::fs::read_dir(crate::tools::spill::shared_blob_dir())
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_file())
+        .collect();
+    blobs.sort_by_key(|p| modified_unix(p));
+    for blob in blobs {
+        let old = now.saturating_sub(modified_unix(&blob)) > max_age;
+        let over = total > policy.global_bytes;
+        if (old || over) && !references.contains(&blob) {
+            let bytes = std::fs::metadata(&blob).map(|m| m.len()).unwrap_or(0);
+            if std::fs::remove_file(&blob).is_ok() {
+                total = total.saturating_sub(bytes);
+                report.removed_blobs += 1;
+                report.reclaimed_bytes += bytes;
+            }
+        }
+    }
+    report
+}
+
+/// Explicit resume hook. Listing/getting already reload lazily; callers that
+/// have the session id at startup can invoke this to perform bounded cleanup.
+pub fn reload_session(session_id: &str) -> Vec<ContextVar> {
+    let _ = cleanup_retention();
+    list(session_id)
 }
 
 /// Compact summary for system/user injection after chat compaction (Prime: kernel survives).
@@ -331,12 +621,11 @@ pub fn clear_session(session_id: &str) {
     if let Ok(mut g) = global().lock() {
         if let Some(sess) = g.remove(session_id) {
             for v in sess.vars.values() {
-                if let Some(p) = &v.path {
-                    let _ = std::fs::remove_file(p);
-                }
+                remove_legacy_body(v);
             }
         }
     }
+    let _ = std::fs::remove_dir_all(session_dir(session_id));
 }
 
 #[cfg(test)]
@@ -396,5 +685,38 @@ mod tests {
         let msg = maybe_register_tool_result(&s, "bash", &big, 100).unwrap();
         assert!(msg.contains("context_store"));
         clear_session(&s);
+    }
+
+    #[test]
+    fn persisted_index_reloads_after_process_cache_is_dropped() {
+        let s = sid();
+        register(
+            &s,
+            "durable",
+            "survives an in-process restart",
+            "test",
+            "unit",
+        )
+        .unwrap();
+        global().lock().unwrap().remove(&s);
+        let vars = reload_session(&s);
+        assert_eq!(vars.len(), 1);
+        assert_eq!(vars[0].name, "durable");
+        assert!(peek(&s, "durable", 0, 100).unwrap().contains("survives"));
+        clear_session(&s);
+    }
+
+    #[test]
+    fn large_context_and_tool_spill_share_a_blob() {
+        let s = sid();
+        let body = format!("shared-{}", "x".repeat(INLINE_MAX_CHARS + 1));
+        let context = register(&s, "large", &body, "test", "unit").unwrap();
+        let direct = crate::tools::spill::write_content_addressed_blob(&body).unwrap();
+        assert_eq!(
+            context.path.as_deref(),
+            Some(direct.to_string_lossy().as_ref())
+        );
+        clear_session(&s);
+        let _ = std::fs::remove_file(direct);
     }
 }

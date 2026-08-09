@@ -323,6 +323,14 @@ pub fn migrate(tool: &str, reference: &str, home_cwd: &str, model: &str) -> Resu
     let label = tool_label(tool);
 
     let mut session = Session::new(model, home_cwd);
+    session.provider = match tool.to_ascii_lowercase().as_str() {
+        "claude" => "anthropic",
+        "codex" => "openai",
+        "cursor" => "cursor",
+        "grok" => "xai",
+        _ => "",
+    }
+    .to_string();
     if let Some(ts) = ir
         .updated_at
         .as_deref()

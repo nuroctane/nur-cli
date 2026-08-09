@@ -17,7 +17,7 @@ The harness supersedes stale duplicate reads, spills large tool results, preserv
   <img src="docs/assets/nur-demo.gif" alt="NurCLI demo" width="600">
 </p>
 
-**Your personal coding agent.** Custom Rust harness, dense gold TUI, **native vision**, tools, knowledge stack, hardened sandbox. Multi-provider `/login`. Any model via `--model` / `/model` / config.
+**Your personal coding agent.** Custom Rust harness, dense gold TUI, **native vision**, tools, knowledge stack, hardened sandbox. Multi-provider `/provider` plus a unified `/auth` vault. Any model via `--model` / `/model` / config.
 
 ```text
 nur          # interactive gold TUI
@@ -51,13 +51,13 @@ nur                 # open the TUI
 nur doctor          # health check
 ```
 
-Or run `nur` and use **`/login`** in the TUI: pick any of **62 providers**
+Or run `nur` and use **`/provider`** in the TUI (`/login` remains an alias): pick any of **62 providers**
 (OpenAI, Anthropic, Gemini, xAI, Groq, OpenRouter, Requesty, local Ollama/LM Studio, Meta Model API, and so on).
 For **OpenAI, Anthropic, xAI, Kimi Code, Google Gemini, Azure OpenAI, GitHub Models, GitHub Copilot, and Cursor** you can **sign in with a browser or an official CLI session** (or import an existing Codex / Claude Code / Grok / Kimi / Cursor Agent session) instead of pasting an API key. OAuth sessions refresh before use, retry once after an authentication rejection, and `/model` detects the models available to the active credential. Cursor uses `cursor-agent login` and runs chat through the Agent CLI (no API key required). No credential on launch and login opens automatically.
 
 Provider requests have a shared five-minute watchdog by default, immediate Esc cancellation, and clean transport teardown. Set `NUR_PROVIDER_TURN_TIMEOUT_SECS` to adjust the ceiling. On Windows, Nur also recovers successful Cursor Agent turns from Cursor's durable transcript when affected CLI builds emit no redirected stdout.
 
-Keys are kept **per provider**, so switching with `/login` never strands the one you switched away from - it stays available for failover and for subagents running on another provider's model. Imported OMP credentials retain their real kind, so API keys use API endpoints and OAuth subscriptions use their provider-specific OAuth routes. `/login` itself clears nothing; **`/logout`** is what signs you out of an account. See [docs/authentication.md](docs/authentication.md).
+Keys are kept **per provider**, so switching with `/provider` never strands the one you switched away from - it stays available for failover, fusion, and subagents running on another provider's model. **`/auth`** opens one scrollable vault for every provider, where you can add, replace, import CLI/OMP, or delete credentials without switching the current chat. Imported OMP credentials retain their real kind, so API keys use API endpoints and OAuth subscriptions use their provider-specific OAuth routes. See [docs/authentication.md](docs/authentication.md).
 
 ### Update
 
@@ -335,7 +335,8 @@ Launching from a drive root (`C:\`) auto-picks a safe workspace (git / last sess
 | Command | Purpose |
 |---------|---------|
 | `/help` | Keys + commands |
-| `/login` `/logout` | Provider + key / clear |
+| `/provider` `/login` | Choose and activate provider (`/login` is an alias) |
+| `/auth` `/logout` | Manage all provider credentials / clear active provider |
 | `/model` | Show and switch models for the active provider |
 | `/plugins` | Browse and install marketplace plugins (provider-picker UX) |
 | `/goal` `/btw` | Session goal / one-off note |

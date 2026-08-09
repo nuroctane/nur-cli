@@ -384,13 +384,20 @@ async fn real_main() -> Result<()> {
         theme::print_info("continuing last session for this directory…");
         Session::continue_for_cwd(&cwd_str)?
     } else {
-        Session::new(&cfg.model, &cwd_str)
+        Session::new_for_provider(&cfg.model, &cfg.provider, &cwd_str)
     };
 
     // Keep model in sync if user overrode
     if session.model != cfg.model {
         session.model = cfg.model.clone();
     }
+    if !session.provider.is_empty() && session.provider != cfg.provider {
+        theme::print_info(&format!(
+            "session originated on provider '{}' - continuing on explicitly selected '{}'",
+            session.provider, cfg.provider
+        ));
+    }
+    session.provider = cfg.provider.clone();
     session.cwd = cwd_str.clone();
 
     let mut usage = UsageTracker::new(session.id.clone(), cfg.model.clone(), cwd.clone());
@@ -1002,6 +1009,15 @@ async fn run_headless(
                 // blocked (no silent parent fallback); user must re-run after login.
                 theme::print_info(&format!(
                     "not signed in to {provider_name} — spawn blocked. Run `nur` then `/login {provider_id}` (or export its API key), then re-deploy the subagent there"
+                ));
+            }
+            AgentEvent::FusionLoginRequired {
+                provider_id,
+                provider_name,
+                ..
+            } => {
+                theme::print_info(&format!(
+                    "not signed in to {provider_name} - fusion blocked. Run `nur` then `/auth` or `/provider {provider_id}`, then retry"
                 ));
             }
             AgentEvent::PlanSubmitted(text) => {

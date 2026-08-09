@@ -48,6 +48,28 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
+    /// An opt-in remote compaction request. The receipt records only endpoint
+    /// origin and bounded payload/usage facts, never the transcript itself.
+    RemoteCompaction {
+        endpoint_origin: String,
+        input_tokens_estimate: u64,
+        output_tokens: u64,
+        usage_reported: bool,
+    },
+    /// Billable or potentially billable work outside the primary chat call,
+    /// such as remote embeddings and Headroom compression.
+    AuxiliaryInference {
+        purpose: String,
+        route: String,
+        model: String,
+        processing: String,
+        input_tokens: u64,
+        output_tokens: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cost_usd: Option<f64>,
+        cost_provenance: String,
+        outcome: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -318,12 +340,51 @@ fn spans_from_chain(session_id: &str, text: &str) -> Vec<serde_json::Value> {
                     "detail": detail,
                 }),
             ),
+            Event::RemoteCompaction {
+                endpoint_origin,
+                input_tokens_estimate,
+                output_tokens,
+                usage_reported,
+            } => (
+                format!("remote compaction {endpoint_origin}"),
+                "client".to_string(),
+                serde_json::json!({
+                    "endpoint_origin": endpoint_origin,
+                    "input_tokens_estimate": input_tokens_estimate,
+                    "output_tokens": output_tokens,
+                    "usage_reported": usage_reported,
+                }),
+            ),
+            Event::AuxiliaryInference {
+                purpose,
+                route,
+                model,
+                processing,
+                input_tokens,
+                output_tokens,
+                cost_usd,
+                cost_provenance,
+                outcome,
+            } => (
+                format!("auxiliary {purpose} {route}/{model}"),
+                "client".to_string(),
+                serde_json::json!({
+                    "purpose": purpose,
+                    "route": route,
+                    "model": model,
+                    "processing": processing,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "cost_usd": cost_usd,
+                    "cost_provenance": cost_provenance,
+                    "outcome": outcome,
+                }),
+            ),
         };
         let parent = prev.map(|(seq, _)| seq).unwrap_or(0);
-        let duration_ms = e
-            .ts
-            .saturating_sub(prev.map(|(_, ts)| ts).unwrap_or(e.ts))
-            .max(1);
+        let duration_ms =
+            e.ts.saturating_sub(prev.map(|(_, ts)| ts).unwrap_or(e.ts))
+                .max(1);
         spans.push(serde_json::json!({
             "trace_id": session_id,
             "span_id": e.seq,
@@ -457,6 +518,48 @@ pub fn render(session_id: &str) -> String {
                     if *ok { "ok" } else { "error" }
                 ));
             }
+            Event::RemoteCompaction {
+                endpoint_origin,
+                input_tokens_estimate,
+                output_tokens,
+                usage_reported,
+            } => rows.push(format!(
+                "  #{:<3} remote compact  {}  ~{}+{} tok ({})",
+                e.seq,
+                endpoint_origin,
+                input_tokens_estimate,
+                output_tokens,
+                if *usage_reported {
+                    "provider usage"
+                } else {
+                    "local estimate"
+                },
+            )),
+            Event::AuxiliaryInference {
+                purpose,
+                route,
+                model,
+                processing,
+                input_tokens,
+                output_tokens,
+                cost_usd,
+                cost_provenance,
+                outcome,
+            } => rows.push(format!(
+                "  #{:<3} auxiliary  {}  {}/{}  {}+{} tok  processing={}  cost={} ({}, {})",
+                e.seq,
+                purpose,
+                route,
+                model,
+                input_tokens,
+                output_tokens,
+                processing,
+                cost_usd
+                    .map(|cost| format!("${cost:.6}"))
+                    .unwrap_or_else(|| "unknown".into()),
+                cost_provenance,
+                outcome,
+            )),
         }
     }
     // Public `verify` keeps the hash-chain API reachable; render uses it so
