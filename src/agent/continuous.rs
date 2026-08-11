@@ -129,13 +129,7 @@ mod tests {
     #[test]
     fn empty_quality_gate_always_passes() {
         assert!(run_quality_gate(Path::new("."), "").is_ok());
-        assert_eq!(
-            accept_done("DONE", Path::new("."), "").unwrap(),
-            true
-        );
-        assert_eq!(
-            accept_done("still working", Path::new("."), "").unwrap(),
-            false
-        );
+        assert!(accept_done("DONE", Path::new("."), "").unwrap());
+        assert!(!accept_done("still working", Path::new("."), "").unwrap());
     }
 }

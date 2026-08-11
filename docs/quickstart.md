@@ -118,7 +118,8 @@ Or from the shell: `nur plugins install superpowers`. Skills land under `~/.nur/
 On install / ecosystem ensure, Nur pulls:
 
 - **superpowers** · **fable** · **mattpocock** · **addyosmani** · **builderio**
-- plus design / clone-website / cybersecurity packs when the skills CLI is available
+- plus design / clone-website / cybersecurity / infinite-headcount /
+  Text-to-CAD / mobile-harness packs when the skills CLI is available
 
 They land under `~/.nur/plugins/` and mirror into `~/.nur/skills/` so `/grill-me`, `/fable-method`, `/context-engineering`, etc. work immediately.
 

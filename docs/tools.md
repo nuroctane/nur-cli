@@ -154,6 +154,16 @@ Search shared engram memory.
 
 Search vector memory.
 
+### `mem`
+
+One intent-routed entry point over native hierarchical memory, the local vector
+index, the knowledge graph, and optional HelixDB acceleration. Use `read` and
+`write` for normal recall/storage, `vector` or `graph` for direct inspection,
+and `helix_status` / `helix_sync` to diagnose or reconcile a configured Helix
+resident. Helix mirroring is local-first and never replaces the native archive.
+Explicit reads share one query embedding across these residents and deduplicate
+the merged context by memory ID automatically.
+
 ### `headroom`
 
 Doctor / optional one-shot compress for [Headroom](https://github.com/headroomlabs-ai/headroom).

@@ -273,6 +273,7 @@ pub struct UsageAttemptLine {
     pub reason: Option<String>,
 }
 
+#[allow(clippy::too_many_arguments)] // one append-only row matching the receipt schema
 pub fn record_transport_attempt(
     attempt_id: &str,
     session_id: Option<&str>,

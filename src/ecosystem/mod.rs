@@ -1,7 +1,8 @@
 //! External agent-ecosystem integrations provisioned by Meta's one-shot install.
 //!
 //! Core runtime: Graphify · PLUR · Ruflo
-//! Skill packs: Emil design · clone-website · cybersecurity · default plugins
+//! Skill packs: Emil design · clone-website · cybersecurity · Text-to-CAD ·
+//! mobile-harness · default plugins
 //! (superpowers · fable · mattpocock · addyosmani · builderio) · OpenCode catalog
 //! Gateways: Executor MCP · skills CLI · AKM
 //! Patterns: DCP-style context pruning (native + docs)
@@ -39,7 +40,8 @@ const ECOSYSTEM_MARKER: &str = "ecosystem.json";
 /// 15: terminal-browser (native/WSL + Windows host fallback via agent-browser-cli).
 /// 16: interior (ddoemonn/interior.dev) bundled skill + /plugins catalog entry.
 /// 17: Dogwood skill/tool detection + pi-peer/subagent orchestration skill updates.
-const ECOSYSTEM_SCHEMA: u32 = 17;
+/// 18: Text-to-CAD + mobile-harness packs with complete resource-tree mirroring.
+const ECOSYSTEM_SCHEMA: u32 = 18;
 /// Re-run ensure at most once per this many seconds unless forced.
 const ENSURE_TTL_SECS: u64 = 86_400;
 
@@ -230,7 +232,7 @@ impl EcosystemStatus {
         s.push_str(
             "\n  slash: /ecosystem /plur /ruflo /graphify /skills /akarso /openseo /tb\n\
              tools:  graphify plur ruflo akarso executor omp browser terminal_browser excalidraw penecho tldraw skill dogwood\n\
-             packs:  design · clone-website · cybersecurity · opencode catalog · DCP patterns\n",
+             packs:  design · clone-website · cybersecurity · Text-to-CAD · mobile-harness · opencode catalog · DCP patterns\n",
         );
         s
     }

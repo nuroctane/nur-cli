@@ -47,9 +47,7 @@ impl Tool for ProposalTool {
             "list" => Ok(proposal::format_list(&session_id)),
             "apply" => proposal::apply_all(&session_id, &ctx.cwd).map_err(NurError::Tool),
             "discard" => proposal::discard_all(&session_id).map_err(NurError::Tool),
-            other => Err(NurError::Tool(format!(
-                "unknown proposal action `{other}`"
-            ))),
+            other => Err(NurError::Tool(format!("unknown proposal action `{other}`"))),
         }
     }
 }

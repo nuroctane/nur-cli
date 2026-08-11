@@ -54,6 +54,10 @@ fn now_secs() -> u64 {
 fn global_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     roots.push(crate::config::nur_home().join("skills"));
+    // Source builds carry the canonical bundled pack in the repository. Treat
+    // it like a global root so 700+ skills are parsed once and cached rather
+    // than synchronously rescanned on every turn while developing Nur.
+    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("skills"));
     roots.extend(crate::plugins::enabled_skill_roots());
     if let Some(home) = dirs::home_dir() {
         roots.push(home.join(".agents").join("skills"));

@@ -182,7 +182,12 @@ pub fn describe_at(scope: &str, name: &str) -> Result<String, String> {
         if e.seq + 12 < cp.seq && e.kind != "checkpoint" {
             continue; // show last ~12 events before checkpoint + the marker
         }
-        lines.push(format!("  #{seq} [{kind}] {text}", seq = e.seq, kind = e.kind, text = e.text.chars().take(160).collect::<String>()));
+        lines.push(format!(
+            "  #{seq} [{kind}] {text}",
+            seq = e.seq,
+            kind = e.kind,
+            text = e.text.chars().take(160).collect::<String>()
+        ));
     }
     Ok(lines.join("\n"))
 }

@@ -98,7 +98,11 @@ pub fn finish(session_id: &str, id: u64, result: &str, ok: bool) {
             AdmissionState::Failed
         };
         a.result = result.chars().take(40_000).collect();
-        a.error = if ok { None } else { Some("child failed".into()) };
+        a.error = if ok {
+            None
+        } else {
+            Some("child failed".into())
+        };
         a.finished_unix = Some(now_unix());
         if let Ok(body) = serde_json::to_string_pretty(&a) {
             let _ = atomic_write(&p, body.as_bytes());

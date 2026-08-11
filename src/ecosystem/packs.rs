@@ -27,6 +27,10 @@ const SKILL_PACKS: &[(&str, &str)] = &[
         "MikeFishbeinAtherial/infinite-headcount",
         "infinite-headcount",
     ),
+    // STEP-first CAD/robotics/fabrication workflows and their local scripts.
+    ("earthtojake/text-to-cad", "text-to-cad"),
+    // Portable Android/iOS/cloud-phone operating harness for mobilerun-core.
+    ("droidrun/mobile-harness", "mobile-harness"),
 ];
 
 pub fn ensure_skills_cli(node_ok: bool) -> ComponentStatus {
@@ -494,24 +498,7 @@ pub fn install_skill_packs(skills_cli: &ComponentStatus) -> (Vec<String>, Vec<St
         // skills add <source> -g -a agents -y --copy
         // Design + cyber: install all skills in the repo.
         // Clone-website: full-depth search for nested SKILL.md under .claude/skills.
-        let args: Vec<&str> = if *label == "clone-website" {
-            vec![
-                "add",
-                *source,
-                "-g",
-                "-a",
-                "agents",
-                "-y",
-                "--copy",
-                "--full-depth",
-                "-s",
-                "clone-website",
-            ]
-        } else {
-            vec![
-                "add", *source, "-g", "-a", "agents", "-y", "--copy", "--all",
-            ]
-        };
+        let args = skill_pack_install_args(source, label);
         match run_capture(&bin, &args, None, 600_000) {
             Ok(out) => {
                 let _ = fs::create_dir_all(marker.parent().unwrap());
@@ -523,7 +510,8 @@ pub fn install_skill_packs(skills_cli: &ComponentStatus) -> (Vec<String>, Vec<St
                         out.chars().take(500).collect::<String>()
                     ),
                 );
-                // Mirror into ~/.nur/skills for dual discovery
+                // Mirror complete skill directories into ~/.nur/skills so scripts,
+                // platform guides, and progressive references remain usable.
                 mirror_agents_to_nur();
                 ok.push((*label).into());
             }
@@ -537,6 +525,18 @@ pub fn install_skill_packs(skills_cli: &ComponentStatus) -> (Vec<String>, Vec<St
     }
 
     (ok, notes)
+}
+
+fn skill_pack_install_args<'a>(source: &'a str, label: &'a str) -> Vec<&'a str> {
+    let mut args = vec!["add", source, "-g", "-a", "agents", "-y", "--copy"];
+    if label == "clone-website" {
+        args.extend(["--full-depth", "-s", "clone-website"]);
+    } else {
+        // Do not use `--all`: skills CLI defines it as both `--skill '*'` and
+        // `--agent '*'`, which would install into dozens of unrelated agents.
+        args.extend(["-s", "*"]);
+    }
+    args
 }
 
 fn pack_marker(label: &str) -> PathBuf {
@@ -572,28 +572,44 @@ fn mirror_agents_to_nur() {
             .and_then(|n| n.to_str())
             .unwrap_or("skill");
         let dest = nur.join(name);
-        if dest.exists() {
-            continue;
-        }
-        // Best-effort: SKILL.md + small references/ if present (skip huge trees).
-        let _ = fs::create_dir_all(&dest);
-        let _ = fs::copy(&skill_md, dest.join("SKILL.md"));
-        let refs = src_dir.join("references");
-        if refs.is_dir() {
-            // copy shallow references files only
-            if let Ok(rd) = fs::read_dir(&refs) {
-                let dest_refs = dest.join("references");
-                let _ = fs::create_dir_all(&dest_refs);
-                for e in rd.flatten() {
-                    let p = e.path();
-                    if p.is_file() {
-                        let _ = fs::copy(&p, dest_refs.join(e.file_name()));
-                    }
-                }
-            }
-        }
+        // Never overwrite a primary ~/.nur copy, but fill every missing file.
+        // Root-level harnesses such as mobile-harness depend on sibling trees
+        // (`platforms/`, `core/`, `apps/`), while CAD skills ship executable
+        // `scripts/`; copying only SKILL.md makes both integrations unusable.
+        let _ = mirror_missing_tree(src_dir, &dest);
     }
     crate::agent::skill_cache::invalidate_cache();
+}
+
+fn mirror_missing_tree(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+) -> std::io::Result<()> {
+    fs::create_dir_all(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            continue;
+        }
+        let name = entry.file_name();
+        let name_text = name.to_string_lossy();
+        if file_type.is_dir()
+            && matches!(
+                name_text.as_ref(),
+                ".git" | ".venv" | "node_modules" | "target" | "__pycache__"
+            )
+        {
+            continue;
+        }
+        let target = destination.join(&name);
+        if file_type.is_dir() {
+            mirror_missing_tree(&entry.path(), &target)?;
+        } else if file_type.is_file() && !target.exists() {
+            fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
 }
 
 /// Catalog / index skills that point the agent at large packs without loading
@@ -851,7 +867,10 @@ akm install <package>
 
 #[cfg(test)]
 mod tests {
-    use super::{bun_meets_omp_floor, omp_meets_feature_floor};
+    use super::{
+        bun_meets_omp_floor, mirror_missing_tree, omp_meets_feature_floor, skill_pack_install_args,
+        SKILL_PACKS,
+    };
 
     #[test]
     fn omp_bun_floor_is_enforced() {
@@ -867,5 +886,54 @@ mod tests {
         assert!(!omp_meets_feature_floor("omp/17.1.4"));
         assert!(omp_meets_feature_floor("omp/17.2.0"));
         assert!(omp_meets_feature_floor("omp/18.0.0"));
+    }
+
+    #[test]
+    fn default_packs_include_cad_and_mobile_harness() {
+        assert!(SKILL_PACKS.contains(&("earthtojake/text-to-cad", "text-to-cad")));
+        assert!(SKILL_PACKS.contains(&("droidrun/mobile-harness", "mobile-harness")));
+    }
+
+    #[test]
+    fn pack_install_targets_only_the_agents_root() {
+        let args = skill_pack_install_args("earthtojake/text-to-cad", "text-to-cad");
+        assert!(args.windows(2).any(|pair| pair == ["-a", "agents"]));
+        assert!(args.windows(2).any(|pair| pair == ["-s", "*"]));
+        assert!(!args.contains(&"--all"));
+    }
+
+    #[test]
+    fn mirror_preserves_complete_resource_tree_without_overwriting_primary_skill() {
+        let root = std::env::temp_dir().join(format!(
+            "nur-skill-mirror-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let source = root.join("source");
+        let destination = root.join("destination");
+        std::fs::create_dir_all(source.join("platforms").join("android")).unwrap();
+        std::fs::create_dir_all(source.join("scripts")).unwrap();
+        std::fs::create_dir_all(&destination).unwrap();
+        std::fs::write(source.join("SKILL.md"), "upstream").unwrap();
+        std::fs::write(
+            source.join("platforms").join("android").join("GUIDE.md"),
+            "android guide",
+        )
+        .unwrap();
+        std::fs::write(source.join("scripts").join("inspect.py"), "print('ok')").unwrap();
+        std::fs::write(destination.join("SKILL.md"), "primary").unwrap();
+
+        mirror_missing_tree(&source, &destination).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(destination.join("SKILL.md")).unwrap(),
+            "primary"
+        );
+        assert!(destination
+            .join("platforms")
+            .join("android")
+            .join("GUIDE.md")
+            .is_file());
+        assert!(destination.join("scripts").join("inspect.py").is_file());
+        let _ = std::fs::remove_dir_all(root);
     }
 }

@@ -76,7 +76,8 @@ impl Tool for ContextTool {
             "slice" => {
                 let name = arg_str(args, "name")?;
                 let start = arg_u64(args, "start").unwrap_or(0) as usize;
-                let end = arg_u64(args, "end").unwrap_or(start.saturating_add(2000) as u64) as usize;
+                let end =
+                    arg_u64(args, "end").unwrap_or(start.saturating_add(2000) as u64) as usize;
                 context_store::slice(&session_id, &name, start, end).map_err(NurError::Tool)
             }
             "search" => {

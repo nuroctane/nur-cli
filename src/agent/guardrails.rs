@@ -22,10 +22,8 @@ pub enum GuardDecision {
 fn secret_line_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(
-            r"(?i)(api[_-]?key|secret|password|passwd|token|authorization)\s*[:=]\s*\S{8,}",
-        )
-        .expect("secret regex")
+        Regex::new(r"(?i)(api[_-]?key|secret|password|passwd|token|authorization)\s*[:=]\s*\S{8,}")
+            .expect("secret regex")
     })
 }
 
@@ -91,9 +89,9 @@ pub fn check_tool_args(name: &str, args_json: &str) -> GuardDecision {
             || lower.contains("\"command\":\"rm -rf /\"")
             || lower.contains("rm -rf /")
         {
-            return GuardDecision::Block(
-                format!("guardrail blocked {name}: looks like filesystem-root mutation/read"),
-            );
+            return GuardDecision::Block(format!(
+                "guardrail blocked {name}: looks like filesystem-root mutation/read"
+            ));
         }
     }
     if name == "bash" {

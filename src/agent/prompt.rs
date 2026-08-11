@@ -502,7 +502,7 @@ Direct technical markdown. Fence code with languages.
             };
             // Central router: give the model the routing table so it stops
             // guessing which memory resident to use (m4).
-            s.push_str("\n");
+            s.push('\n');
             s.push_str(super::memory_router::routing_guidance());
             s.push_str("\n\n");
             // Router snapshot (empty query → recency+confidence ranked). Inject

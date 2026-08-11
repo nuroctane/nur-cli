@@ -49,15 +49,19 @@ impl Tool for HarnessTool {
             "status" => Ok(harness::status(&session_id)),
             "refine" => {
                 let lesson = arg_str(args, "lesson")?;
-                let evidence = args
-                    .get("evidence")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let evidence = args.get("evidence").and_then(|v| v.as_str()).unwrap_or("");
                 let s = harness::refine(&session_id, &lesson, evidence).map_err(NurError::Tool)?;
                 Ok(format!(
                     "refined harness to rev {}\n{}",
                     s.revision,
-                    s.supplemental.chars().rev().take(800).collect::<String>().chars().rev().collect::<String>()
+                    s.supplemental
+                        .chars()
+                        .rev()
+                        .take(800)
+                        .collect::<String>()
+                        .chars()
+                        .rev()
+                        .collect::<String>()
                 ))
             }
             "rollback" => {

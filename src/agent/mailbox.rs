@@ -36,6 +36,8 @@ static DRAIN_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 /// Root conversation identity selected by `ensure_live_watch`. Tool calls do
 /// not carry a Session, so they cannot safely recompute it from environment.
 static CURRENT_PEER_ID: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+#[cfg(test)]
+static TEST_PEERS_DIR: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 
 // ===========================================================================
 // Constants (exact values from the reference)
@@ -77,17 +79,12 @@ fn now_ms() -> u64 {
 // ===========================================================================
 
 /// Whether the session is mid-turn. Written by the owner, read by everyone.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PeerState {
+    #[default]
     Idle,
     Working,
-}
-
-impl Default for PeerState {
-    fn default() -> Self {
-        PeerState::Idle
-    }
 }
 
 /// `live` - running and beating. `stalled` - process there but stopped beating.
@@ -127,6 +124,15 @@ pub struct PeerStatus {
 }
 
 pub fn peers_dir() -> PathBuf {
+    #[cfg(test)]
+    if let Some(path) = TEST_PEERS_DIR
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .ok()
+        .and_then(|path| path.clone())
+    {
+        return path;
+    }
     nur_home().join("peers")
 }
 
@@ -219,7 +225,7 @@ pub fn read_records(dir: &Path) -> Vec<PeerRecord> {
             }
         }
     }
-    out.sort_by(|a, b| a.started_at.cmp(&b.started_at));
+    out.sort_by_key(|record| record.started_at);
     out
 }
 
@@ -1369,15 +1375,22 @@ mod tests {
     }
 
     fn set_home(h: &Path) {
-        std::env::set_var("NUR_HOME", h);
+        if let Ok(mut path) = TEST_PEERS_DIR.get_or_init(|| Mutex::new(None)).lock() {
+            *path = Some(h.join("peers"));
+        }
     }
 
     fn clear_home() {
-        std::env::remove_var("NUR_HOME");
+        if let Ok(mut path) = TEST_PEERS_DIR.get_or_init(|| Mutex::new(None)).lock() {
+            *path = None;
+        }
+        if let Ok(mut id) = CURRENT_PEER_ID.get_or_init(|| Mutex::new(None)).lock() {
+            *id = None;
+        }
     }
 
-    /// The FS-touching tests mutate the global `NUR_HOME`; serialize them or
-    /// they race on the same home dir. (Env-independent tests skip this.)
+    /// The FS-touching tests use one mailbox-only directory override; serialize
+    /// them while leaving process-wide `NUR_HOME` untouched for other tests.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn env_guard() -> std::sync::MutexGuard<'static, ()> {
@@ -1652,7 +1665,6 @@ mod tests {
         let _g = env_guard();
         let home = tmp_home();
         set_home(&home);
-        std::env::remove_var("NUR_SESSION_ID");
 
         let cwd = std::env::current_dir()
             .map(|p| p.to_string_lossy().into_owned())
@@ -1742,11 +1754,12 @@ mod tests {
         );
 
         // Recipient's turn starts. drain_inbound_for_prompt is what loop.rs
-        // calls; it must drain + surface the peer message (own_id matches since
-        // we use the real current_dir + the same sid).
-        std::env::set_var("NUR_SESSION_ID", &sid);
+        // calls; use the identity established by the live root session instead
+        // of mutating the process-wide NUR_SESSION_ID during parallel tests.
+        if let Ok(mut current) = CURRENT_PEER_ID.get_or_init(|| Mutex::new(None)).lock() {
+            *current = Some(recv_id.clone());
+        }
         let block = drain_inbound_for_prompt();
-        std::env::remove_var("NUR_SESSION_ID");
         assert!(
             !block.is_empty(),
             "peer mail must be injected into the turn"

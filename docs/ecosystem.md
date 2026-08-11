@@ -23,6 +23,8 @@ NurCLI ships with an auto-provisioned knowledge stack.
 | **egaki** | [egaki](https://github.com/remorses/egaki) image/video/speech (`/egaki` · `/image`; ChatGPT / xAI OAuth / BYOK / Egaki plan) |
 | **fractal** | [fractal](https://github.com/plasma-ai/fractal) hierarchical loops - Unix only; ecosystem ensure + loud warn on `node start` |
 | **infinite-headcount** | Factory skill pack auto-provisioned via ecosystem packs |
+| **CAD Skills** | [Text-to-CAD](https://www.texttocad.dev/) STEP-first CAD, DXF, G-code, robot-description, part sourcing, validation, and local review skills (`/cad`, `/cad-viewer`, `/dxf`, `/urdf`, `/sdf`, …) |
+| **mobile-harness** | [DroidRun Mobile Harness](https://github.com/droidrun/mobile-harness) portable Android, iOS, and cloud-phone operating guides for `mobilerun-core` (`/mobile-harness`) |
 | **Interior** | [ddoemonn/interior](https://github.com/ddoemonn/interior) / [interior.dev](https://interior.dev) - finished React micro-interactions (bundled `/interior` skill + `/plugins install interior` for the component source tree) |
 
 
@@ -64,11 +66,9 @@ On install, skill packs are **mirrored in full** (including `references/`) into 
 
 **Default auto-install** (on `nur install` / ecosystem ensure): `superpowers`, `fable`, `mattpocock`, `addyosmani`, `builderio`.
 
-Also still auto-provisioned via the skills CLI into `~/.agents/skills`: design (Emil), clone-website, cybersecurity (large), plus dual-write of the default set when the CLI is available.
-
-**Default auto-install** (on `nur install` / ecosystem ensure): `superpowers`, `fable`, `mattpocock`, `addyosmani`, `builderio`.
-
-Also still auto-provisioned via the skills CLI into `~/.agents/skills`: design (Emil), clone-website, cybersecurity (large), plus dual-write of the default set when the CLI is available.
+Also auto-provisioned via the skills CLI into `~/.agents/skills`: design (Emil),
+clone-website, cybersecurity (large), infinite-headcount, Text-to-CAD, and
+mobile-harness, plus dual-write of the default set when the CLI is available.
 
 ### `/plugins` catalog (browse by category)
 
@@ -329,6 +329,8 @@ Progressive skill packs loaded on demand.
 - `dialkit` - Live-tune interface parameters (dials/sliders/timelines) across React/Svelte/Vue/Solid; `/dialkit`
 - `clone-website` - Website reverse-engineering
 - `cybersecurity` - Security investigations and DFIR
+- `cad` / `cad-viewer` / `dxf` / `gcode` / `urdf` / `srdf` / `sdf` - STEP-first CAD, fabrication, robot descriptions, and visual review from Text-to-CAD
+- `mobile-harness` - Android, iOS, and cloud-phone control through the capability-gated `mobilerun-core` facade
 - `apple-design` - Apple-style interface design
 - And 800+ more...
 

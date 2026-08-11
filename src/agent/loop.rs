@@ -478,7 +478,7 @@ impl AgentRunner {
             if !target_caps.parallel_tools {
                 req2.parallel_tool_calls = Some(false);
             }
-            if !target_caps.output_limit {
+            if !client.supports_output_limit(&req2.model) {
                 req2.max_output_tokens = None;
             }
             match self.stream_one(&client, &req2, tx, cancel).await {
@@ -820,12 +820,13 @@ impl AgentRunner {
                 .unwrap_or(crate::providers::ApiStyle::Responses);
             let primary_caps =
                 crate::api::failover::route_capabilities(&self.config.provider, primary_style);
-            if !primary_caps.parallel_tools || !primary_caps.output_limit {
+            let primary_output_limit = self.client.supports_output_limit(&effective_model);
+            if !primary_caps.parallel_tools || !primary_output_limit {
                 let mut limits = Vec::new();
                 if !primary_caps.parallel_tools {
                     limits.push("serial tool calls");
                 }
-                if !primary_caps.output_limit {
+                if !primary_output_limit {
                     limits.push("provider output limit unavailable");
                 }
                 let _ = tx.send(AgentEvent::Status(format!(
@@ -862,7 +863,7 @@ impl AgentRunner {
                 // One cache key per session so system instructions + tools can be
                 // prefix-cached across multi-turn agent loops.
                 prompt_cache_key: Some(session.id.clone()),
-                max_output_tokens: (output_reserve > 0 && primary_caps.output_limit)
+                max_output_tokens: (output_reserve > 0 && primary_output_limit)
                     .then_some(output_reserve),
             };
 
@@ -1171,7 +1172,7 @@ impl AgentRunner {
                     // Model-assisted extraction (Mem0-class, paper M2) - opt-in.
                     if self.config.memory_model_extract {
                         let prompt = super::native_memory::model_extract_prompt(&text, 8_000);
-                        let extract_input_estimate = ((prompt.chars().count() as u64) + 2) / 3;
+                        let extract_input_estimate = (prompt.chars().count() as u64).div_ceil(3);
                         if let Some(msg) = preflight_request_budget(
                             &self.config,
                             usage,
@@ -3072,8 +3073,10 @@ mod tests {
 
     #[test]
     fn request_preflight_reserves_output_before_dispatch() {
-        let mut cfg = Config::default();
-        cfg.max_session_tokens = Some(10_000);
+        let mut cfg = Config {
+            max_session_tokens: Some(10_000),
+            ..Default::default()
+        };
         let usage = UsageTracker::new("preflight".into(), "m".into(), PathBuf::from("."));
         let err = preflight_request_budget(&cfg, &usage, "meta", "m", 3_000, 8_192)
             .expect("input plus reserved completion must be checked before dispatch");
@@ -4765,7 +4768,7 @@ async fn try_remote_compact_summary(
         })
         .map(str::trim)
         .filter(|s| !s.is_empty())?;
-    let input_tokens_estimate = ((serialized.chars().count() as u64) + 2) / 3;
+    let input_tokens_estimate = (serialized.chars().count() as u64).div_ceil(3);
     let reported_input = v
         .pointer("/usage/input_tokens")
         .and_then(Value::as_u64)
@@ -4783,7 +4786,7 @@ async fn try_remote_compact_summary(
         endpoint_origin: compact_endpoint_origin(&endpoint),
         input_tokens_estimate: reported_input.unwrap_or(input_tokens_estimate),
         output_tokens: reported_output
-            .unwrap_or_else(|| ((summary.chars().count() as u64) + 2) / 3),
+            .unwrap_or_else(|| (summary.chars().count() as u64).div_ceil(3)),
         usage_reported,
     })
 }
@@ -4851,9 +4854,9 @@ pub async fn compact_session(
              Preserve goals, decisions, file paths, and next steps; drop redundant tool noise.";
     items.push(user_text_item(user_prompt));
     let compact_input_estimate = serde_json::to_string(&items)
-        .map(|text| ((text.chars().count() as u64) + 2) / 3)
+        .map(|text| (text.chars().count() as u64).div_ceil(3))
         .unwrap_or(0)
-        .saturating_add(((system_prompt.chars().count() as u64) + 2) / 3);
+        .saturating_add((system_prompt.chars().count() as u64).div_ceil(3));
     if let Some(msg) = preflight_request_budget(
         &runner.config,
         usage,

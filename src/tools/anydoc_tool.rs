@@ -131,9 +131,7 @@ fn convert_with_crate(path: &Path) -> Result<String> {
 fn convert_with_cli(path: &Path) -> Result<String> {
     // Try common CLI entrypoints.
     for bin in ["anydoc", "firecrawl-anydoc"] {
-        let out = Command::new(bin)
-            .arg(path.as_os_str())
-            .output();
+        let out = Command::new(bin).arg(path.as_os_str()).output();
         if let Ok(o) = out {
             if o.status.success() {
                 let s = String::from_utf8_lossy(&o.stdout).to_string();

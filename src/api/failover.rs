@@ -70,19 +70,19 @@ pub fn preflight_target(
         return Err("does not support requested tool calls".into());
     }
     let estimated_input = serde_json::to_string(&req.input)
-        .map(|s| ((s.chars().count() as u64) + 2) / 3)
+        .map(|s| (s.chars().count() as u64).div_ceil(3))
         .unwrap_or(0)
         .saturating_add(
             req.instructions
                 .as_deref()
-                .map(|s| ((s.chars().count() as u64) + 2) / 3)
+                .map(|s| (s.chars().count() as u64).div_ceil(3))
                 .unwrap_or(0),
         )
         .saturating_add(
             req.tools
                 .as_ref()
                 .and_then(|tools| serde_json::to_string(tools).ok())
-                .map(|s| ((s.chars().count() as u64) + 2) / 3)
+                .map(|s| (s.chars().count() as u64).div_ceil(3))
                 .unwrap_or(0),
         );
     let reserve = req
@@ -784,8 +784,10 @@ mod tests {
             prompt_cache_key: None,
             max_output_tokens: Some(8192),
         };
-        let mut cfg = Config::default();
-        cfg.context_window = 1_000;
+        let cfg = Config {
+            context_window: 1_000,
+            ..Default::default()
+        };
         let usage = UsageTracker::new(
             "failover-preflight".into(),
             "test".into(),

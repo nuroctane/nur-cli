@@ -153,7 +153,8 @@ Everything is **local**. Secrets never go into the git repo.
 
 #### D. Ecosystem packs
 
-Graphify · PLUR · Ruflo · Executor · omp · agent-browser-cli · skill packs. Installed when Node/uv/Bun are available.
+Graphify · PLUR · Ruflo · Executor · omp · agent-browser-cli · Text-to-CAD ·
+mobile-harness · skill packs. Installed when Node/uv/Bun are available.
 
 Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](./docs/setup.md)
 
@@ -252,6 +253,9 @@ nur "steal UI design tokens from demo.mp4 and scaffold a matching component"
 | **[OptMem](https://github.com/VictorTaelin/OptMem)** | Permanent memory at `~/.optmem` (`/optmem` · `/memo`) |
 | **[egaki](https://github.com/remorses/egaki)** | Image/video gen (`/egaki` · `/image`; ChatGPT-sub login supported) |
 | **[terminal-browser](https://terminal-browser.com/)** | In-terminal Chromium (`/tb`); Windows host fallback via agent-browser-cli |
+| **[HelixDB](https://github.com/HelixDB/helix-db)** | Optional graph-vector resident behind `mem`: local-first durable outbox, background mirror, scoped vector/text recall (`mem helix_status` / `helix_sync`) |
+| **[Text-to-CAD](https://www.texttocad.dev/)** | Auto-provisioned STEP-first CAD, DXF, G-code, robot-description, sourcing, validation, and review skills (`/cad`, `/cad-viewer`, …). MIT |
+| **[DroidRun Mobile Harness](https://github.com/droidrun/mobile-harness)** | Auto-provisioned Android, iOS, and cloud-phone operating harness for `mobilerun-core` (`/mobile-harness`). MIT |
 | **[penecho](https://github.com/penecho/penecho)** | Infinite thinking canvas run as a sidecar (`/penecho`). AGPL-3.0 |
 | **[t3code](https://github.com/pingdotgg/t3code)** | Vendor-CLI auth delegation — driver probing, env isolation, pairing. MIT |
 

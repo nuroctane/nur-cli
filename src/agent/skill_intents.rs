@@ -1,5 +1,6 @@
 //! Expanded NL triggers for all 700+ skills — comprehensive JSON index.
-//! This file loads `skill_intents.json` (generated from ~/.nur/skills) which contains
+//! This file loads `skill_intents.json` (generated from ~/.nur/skills,
+//! ~/.agents/skills, and repo skills) which contains
 //! triggers for every installed skill, not just the hardcoded INTENT_RULES.
 //! The JSON is 600-700KB and is parsed once via OnceLock.
 

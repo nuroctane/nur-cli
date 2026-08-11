@@ -78,7 +78,13 @@ fn python_answers(prog: &str) -> bool {
 fn repl_data_dir(name: &str) -> PathBuf {
     let safe: String = name
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .take(64)
         .collect();
     nur_home().join("repl").join(safe)
@@ -214,16 +220,22 @@ fn spawn_repl(name: &str, cwd: &std::path::Path) -> Result<ReplSession> {
         // Runtime errors are framed through stdout (traceback.format_exc); we
         // never drain stderr, so null it to avoid a pipe-buffer deadlock.
         .stderr(Stdio::null())
-        .env("NUR_REPL_STATE", state_path(name).to_string_lossy().as_ref())
+        .env(
+            "NUR_REPL_STATE",
+            state_path(name).to_string_lossy().as_ref(),
+        )
         .env(
             "NUR_REPL_HISTORY",
             history_path(name).to_string_lossy().as_ref(),
         );
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| NurError::Tool(format!("could not start python REPL ({}): {e}", python_bin())))?;
+    let mut child = cmd.spawn().map_err(|e| {
+        NurError::Tool(format!(
+            "could not start python REPL ({}): {e}",
+            python_bin()
+        ))
+    })?;
     let stdin = child
         .stdin
         .take()
@@ -256,7 +268,11 @@ fn ensure_repl(name: &str, cwd: &std::path::Path) -> Result<Arc<Mutex<ReplSessio
         // Reap if the child died.
         let dead = {
             let mut s = s.lock().map_err(|_| NurError::Tool("repl lock".into()))?;
-            s.proc.child.try_wait().map(|st| st.is_some()).unwrap_or(false)
+            s.proc
+                .child
+                .try_wait()
+                .map(|st| st.is_some())
+                .unwrap_or(false)
         };
         if !dead {
             return Ok(s.clone());
@@ -282,20 +298,21 @@ pub fn repl_exec(
         return Err(NurError::Tool("repl cell exceeds 100k chars".into()));
     }
     let session = ensure_repl(name, cwd)?;
-    let mut sess =
-        session
-            .lock()
-            .map_err(|_| NurError::Tool("repl lock poisoned".into()))?;
+    let mut sess = session
+        .lock()
+        .map_err(|_| NurError::Tool("repl lock poisoned".into()))?;
     let payload = serde_json::json!({
         "code": code,
         "expr": expression,
         "cwd": cwd.to_string_lossy(),
     });
-    let line = serde_json::to_string(&payload)
-        .map_err(|e| NurError::Tool(format!("repl encode: {e}")))?;
-    writeln!(sess.proc.stdin, "{line}")
-        .map_err(|e| NurError::Tool(format!("repl write: {e}")))?;
-    sess.proc.stdin.flush().map_err(|e| NurError::Tool(format!("repl flush: {e}")))?;
+    let line =
+        serde_json::to_string(&payload).map_err(|e| NurError::Tool(format!("repl encode: {e}")))?;
+    writeln!(sess.proc.stdin, "{line}").map_err(|e| NurError::Tool(format!("repl write: {e}")))?;
+    sess.proc
+        .stdin
+        .flush()
+        .map_err(|e| NurError::Tool(format!("repl flush: {e}")))?;
     sess.proc.last_output = read_frame(&mut sess.proc.stdout, name)?;
     Ok(sess.proc.last_output.clone())
 }
@@ -366,7 +383,7 @@ pub fn repl_status(name: &str) -> String {
     let reg = repl_registry().lock().unwrap_or_else(|e| e.into_inner());
     match reg.get(name) {
         Some(s) => {
-            let s = s.lock().map(|g| g).map(|g| {
+            let s = s.lock().map(|g| {
                 format!(
                     "repl `{}` running · cwd={} · created_unix={} · persisted={} · history={}",
                     g.name,
@@ -394,7 +411,11 @@ pub fn repl_list() -> String {
     if reg.is_empty() {
         "no active repl sessions".into()
     } else {
-        format!("{} repl(s): {}", reg.len(), reg.keys().cloned().collect::<Vec<_>>().join(", "))
+        format!(
+            "{} repl(s): {}",
+            reg.len(),
+            reg.keys().cloned().collect::<Vec<_>>().join(", ")
+        )
     }
 }
 
@@ -403,7 +424,8 @@ mod tests {
     use super::*;
 
     fn temp_cwd() -> PathBuf {
-        let d = std::env::temp_dir().join(format!("nur-repl-test-{}", uuid::Uuid::new_v4().simple()));
+        let d =
+            std::env::temp_dir().join(format!("nur-repl-test-{}", uuid::Uuid::new_v4().simple()));
         let _ = std::fs::create_dir_all(&d);
         d
     }
@@ -414,7 +436,10 @@ mod tests {
         let name = format!("t-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
         // Define a variable in one call...
         let out = repl_exec(&name, &dir, "answer = 42", false).unwrap();
-        assert!(!out.to_lowercase().contains("error"), "define failed: {out}");
+        assert!(
+            !out.to_lowercase().contains("error"),
+            "define failed: {out}"
+        );
         // ...and read it in a later call (persistence across tool calls).
         let out2 = repl_exec(&name, &dir, "answer", true).unwrap();
         assert_eq!(out2.trim(), "42", "state did not persist: {out2}");
@@ -437,17 +462,27 @@ mod tests {
     #[test]
     fn state_persists_across_process_restart() {
         let dir = temp_cwd();
-        let name = format!("restart-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+        let name = format!(
+            "restart-{}",
+            &uuid::Uuid::new_v4().simple().to_string()[..8]
+        );
         // 1) exec defines a variable and snapshots state.
         let out = repl_exec(&name, &dir, "persisted = 99", false).unwrap();
-        assert!(!out.to_lowercase().contains("error"), "define failed: {out}");
+        assert!(
+            !out.to_lowercase().contains("error"),
+            "define failed: {out}"
+        );
         assert!(has_snapshot(&name), "snapshot should exist after exec");
         assert!(history_count(&name) >= 1, "history should record the cell");
         // 2) Kill subprocess (simulates process exit/restart).
         drop_persisted_live_repl(&name);
         // 3) Fresh ensure_repl restores from the pickle.
         let out2 = repl_exec(&name, &dir, "persisted", true).unwrap();
-        assert_eq!(out2.trim(), "99", "state did not restore after restart: {out2}");
+        assert_eq!(
+            out2.trim(),
+            "99",
+            "state did not restore after restart: {out2}"
+        );
         kill_repl(&name);
         let _ = std::fs::remove_dir_all(&dir);
     }

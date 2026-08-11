@@ -939,13 +939,11 @@ fn run_print(
     let mut err_text = String::new();
     let mut native_usage = None;
     loop {
-        for line in err_rx.try_iter() {
-            if let Ok(line) = line {
-                if !err_text.is_empty() {
-                    err_text.push('\n');
-                }
-                err_text.push_str(&line);
+        for line in err_rx.try_iter().flatten() {
+            if !err_text.is_empty() {
+                err_text.push('\n');
             }
+            err_text.push_str(&line);
         }
         if cancel.is_cancelled() {
             let _ = child.kill();

@@ -13,6 +13,7 @@ before building the real embedding/KG layer so the "before" is honest.
 | **ruflo** | `~/.nur/ruflo/` (Meta DB) | AgentDB vector store (via CLI) | embedding/pattern memory, swarm/hive |
 | **context_store** | `~/.nur/context-store/` | RLM prompt-as-variable | large tool results / docs kept outside the window; peek/slice/search |
 | **native_memory** | `~/.nur/native-memory/` | hierarchical tiers (recent/l1/l2/l3) | agent-native memoirs from M1–M4 framework |
+| **HelixDB** | configured `/v2/query` service + local `helix-outbox.jsonl` | tenant-partitioned vector/text index | optional background mirror and explicit-read accelerator for native memory |
 | **chronicle** | `~/.nur/chronicle/` | append-only event log | every event; checkpoints; time-travel |
 | **harness** (Continual) | `~/.nur/harness/` | refined supplemental lessons | `/refine` notes + rollback |
 | **goal** | `~/.nur/goals/` | persistent goal state | active objective + token budget |
@@ -110,8 +111,27 @@ demand.
   across vector + graph + hierarchical and merges. `mem` tool action=read/write/
   vector/graph/guidance. Prompt injects `routing_guidance()` so the model stops
   guessing which resident to use.
+- Every explicit read computes one query embedding and shares it across the local
+  vector index, Helix, and graph reranking. Results are deduplicated by stable
+  memory ID before rendering, including the hierarchical fallback. This is the
+  built-in path, not a feature flag. Empty prompt snapshots skip semantic lookup.
 - `native_memory::remember` now auto-embeds into the vector store and absorbs into
   the knowledge graph on every write.
+
+### HelixDB resident (m5)
+- `src/agent/helix_memory.rs` mirrors the same authoritative native-memory entry
+  and persisted 256d embedding into a `NurMemory` node. The Helix vector and text
+  indexes are partitioned by Nur memory scope.
+- Writes are local-first: the mirror operation lands in `helix-outbox.jsonl`
+  before a background flush. An offline service cannot fail or delay the native
+  memory write, and `mem helix_sync` reconciles the full live scope later.
+- Maintenance mirrors tier changes and retirements. Live reads exclude retired
+  rows, while `helix_sync` clears and rebuilds only the selected tenant scope so
+  remote state cannot retain stale memories after an offline period.
+- `mem read` fans out to Helix only for an explicit non-empty query. The empty
+  snapshot used to build prompts never embeds or touches the network.
+- Configure with `[helix_memory]`, `HELIX_URL`/`NUR_HELIX_URL`, and an optional
+  `HELIX_API_KEY`. Diagnose with `mem helix_status`.
 
 ### Optimization realized
 - The model no longer has to pick among 6+ memory systems blindly; the router

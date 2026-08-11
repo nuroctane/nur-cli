@@ -355,14 +355,14 @@ pub fn embed_local(text: &str) -> Vec<f32> {
     v
 }
 
-fn hash_into(c: &char, idx: usize, _n: usize, v: &mut Vec<f32>) {
+fn hash_into(c: &char, idx: usize, _n: usize, v: &mut [f32]) {
     let mut seed = (*c as u64).wrapping_add((idx as u64).wrapping_mul(2654435761));
     seed ^= seed >> 21;
     let bin = (seed % EMBED_DIM as u64) as usize;
     v[bin] += 1.0;
 }
 
-fn hash_pair(a: u16, b: u16, v: &mut Vec<f32>) {
+fn hash_pair(a: u16, b: u16, v: &mut [f32]) {
     let key = (a as u64) << 16 | b as u64;
     let mut h = key.wrapping_mul(0x9E3779B97F4A7C15);
     h ^= h >> 29;
@@ -397,7 +397,7 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
     for i in 0..n {
         dot += a[i] * b[i];
     }
-    dot.max(0.0).min(1.0)
+    dot.clamp(0.0, 1.0)
 }
 
 #[cfg(test)]

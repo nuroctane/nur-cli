@@ -67,6 +67,13 @@ impl VectorStore {
         self.docs.is_empty()
     }
 
+    /// Fetch the persisted vector for a memory id. Helix mirroring reuses this
+    /// exact vector so the local and remote indexes never drift dimension or
+    /// embedding source.
+    pub fn get(&self, id: &str) -> Option<VectorDoc> {
+        self.docs.get(id).cloned()
+    }
+
     /// Index (embed + persist) a memory entry's text under its id.
     pub fn index(&mut self, id: &str, text: &str) -> String {
         // Auto mode writes a local vector first, then upgrades it remotely in a
@@ -111,10 +118,16 @@ impl VectorStore {
     /// Top-k semantic neighbors of `query` via cosine. Returns (id, score).
     pub fn search(&self, query: &str, k: usize) -> Vec<(String, f32)> {
         let q = embed::embed(query);
+        self.search_with_embedding(&q, k)
+    }
+
+    /// Top-k semantic neighbors using a query embedding computed by the caller.
+    /// This lets the memory router share one embedding across every resident.
+    pub fn search_with_embedding(&self, query_embedding: &[f32], k: usize) -> Vec<(String, f32)> {
         let mut scored: Vec<(String, f32)> = self
             .docs
             .values()
-            .map(|d| (d.id.clone(), embed::cosine(&q, &d.vec)))
+            .map(|d| (d.id.clone(), embed::cosine(query_embedding, &d.vec)))
             .collect();
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(k.max(1));
@@ -161,6 +174,11 @@ fn schedule_remote_upgrade(scope: String, id: String, text: String) {
                 doc.vec = vec;
                 doc.source = "api-background".into();
                 let _ = store.save();
+                if let Some(entry) = crate::agent::native_memory::get_by_id(&scope, &id) {
+                    if !entry.retired {
+                        crate::agent::helix_memory::enqueue(&scope, &entry);
+                    }
+                }
             }
         });
 }

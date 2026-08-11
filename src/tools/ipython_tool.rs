@@ -23,7 +23,13 @@ fn session_name(_ctx: &ToolContext) -> String {
         })
         .unwrap_or_else(|_| "default".to_string())
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -75,7 +81,7 @@ impl Tool for ReplTool {
                 let code = arg_str(args, "code")?;
                 let out = repl::repl_exec(&name, &cwd, &code, false)?;
                 if out.is_empty() {
-                    Ok(format!("[repl] exec ok — no output\nstate preserved"))
+                    Ok("[repl] exec ok — no output\nstate preserved".to_string())
                 } else {
                     Ok(format!("[repl]\n{out}"))
                 }

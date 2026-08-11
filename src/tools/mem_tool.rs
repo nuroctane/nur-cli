@@ -3,7 +3,7 @@
 //! One entry point that replaces "which memory system do I use?" with an
 //! intent-routed fan-out: vector (semantic) + knowledge graph (relations/paths)
 //! + hierarchical memory + RLM context-store pointers. Writing via `mem write`
-//! stores once (dedup) across the unified hierarchy and auto-indexes vector+graph.
+//!   stores once (dedup) across the unified hierarchy and auto-indexes vector+graph.
 
 use super::{arg_str, arg_u64, Tool, ToolContext};
 use crate::agent::memory_router;
@@ -44,7 +44,8 @@ impl Tool for MemTool {
          vector (semantic), knowledge graph (relations/paths), and hierarchical \
          memory — no guessing which system. Actions: read (fan-out, intent-routed; \
          prefer for any recall) | write (store once, auto-indexes vector+graph) | \
-         vector (semantic top-k) | graph (neighbors|path) | guidance. Never store \
+         vector (semantic top-k) | graph (neighbors|path) | helix_status | \
+         helix_sync | guidance. Never store \
          secrets. Complements connectome/context/memory/optmem/plur/ruflo."
     }
 
@@ -54,7 +55,7 @@ impl Tool for MemTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["read", "write", "vector", "graph", "guidance"],
+                    "enum": ["read", "write", "vector", "graph", "helix_status", "helix_sync", "guidance"],
                     "description": "read = intent-routed fan-out (preferred); write = store once + auto-index; \
                     vector = semantic top-k only; graph neighbors|path; guidance = routing table"
                 },
@@ -81,6 +82,8 @@ impl Tool for MemTool {
 
         match action.as_str() {
             "guidance" => Ok(memory_router::routing_guidance().to_string()),
+            "helix_status" => Ok(crate::agent::helix_memory::status(&scope)),
+            "helix_sync" => crate::agent::helix_memory::sync(&scope).map_err(NurError::Tool),
             "write" => {
                 let text = arg_str(args, "text")?;
                 Ok(memory_router::write(&scope, &text, "mem_tool"))
@@ -158,7 +161,7 @@ impl Tool for MemTool {
                 }
             }
             other => Err(NurError::Tool(format!(
-                "unknown mem action `{other}`; use read|write|vector|graph|guidance"
+                "unknown mem action `{other}`; use read|write|vector|graph|helix_status|helix_sync|guidance"
             ))),
         }
     }

@@ -264,7 +264,7 @@ impl ApiResponse {
                 self.accounting
                     .as_ref()
                     .map(|a| a.estimated_usage.clone())
-                    .unwrap_or_else(|| TokenUsage::unknown())
+                    .unwrap_or_else(TokenUsage::unknown)
             });
         if let Some(accounting) = &self.accounting {
             usage.upstream_provider = accounting.upstream_provider.clone();

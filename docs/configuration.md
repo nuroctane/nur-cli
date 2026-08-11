@@ -45,6 +45,17 @@ compact_tool_body_max_chars = 800
 # enabled = true
 # into = "openai-codex/gpt-5.6-luna"
 
+# Optional HelixDB graph-vector memory resident. `auto` activates when a URL is
+# configured here or through HELIX_URL/NUR_HELIX_URL, so an untouched default
+# has no network/startup cost.
+# Local native memory remains authoritative and failed mirrors retry from a
+# durable outbox.
+# [helix_memory]
+# mode = "on"                       # auto | on | off
+# url = "http://127.0.0.1:6969"
+# api_key_env = "HELIX_API_KEY"     # env var name, never the key itself
+# timeout_ms = 1500
+
 # Cost-saver prompt: skip PLUR inject + long memory (tools + skill NL/slash stay full)
 poor_mode = false
 
@@ -77,6 +88,10 @@ auto_update = true
 | `compaction.remote_endpoint` | string | unset | OMP-compatible compact URL; setting it opts in. Supports `{systemPrompt,prompt}` endpoints and OpenAI `/chat/completions`; failures fall back locally. The bounded transcript crosses this configured remote data boundary. Nur records endpoint origin, bounded input estimate, output estimate, and provider usage when returned in the session receipt. Env: `NUR_COMPACT_REMOTE_ENDPOINT` (+ `NUR_COMPACT_REMOTE=1` if only env) |
 | `prewalk.enabled` | bool | `false` | After todos exist, first write/edit switches to `prewalk.into` / smol |
 | `prewalk.into` | string | unset | Cheap model for prewalk handoff (`/prewalk into …`, or `OMP_SMOL_MODEL` / OMP `modelRoles.smol`) |
+| `helix_memory.mode` | string | `auto` | `auto` enables only when `HELIX_URL`/`NUR_HELIX_URL` or a configured URL exists; `on` uses the configured/local endpoint; `off` disables the resident |
+| `helix_memory.url` | string | local endpoint when on | HelixDB gateway base URL. Nur uses `/healthz` and typed `/v2/query` requests |
+| `helix_memory.api_key_env` | string | `HELIX_API_KEY` | Name of the env var containing the Helix bearer token. The token is never written to config or memory |
+| `helix_memory.timeout_ms` | integer | `1500` | Per-request deadline. Writes queue locally first and retry from the outbox on later writes or `helix_sync` |
 | `poor_mode` | bool | `false` | Skip PLUR auto-inject and long memory (skill NL/slash activation still works) |
 | `ecosystem_auto_ensure` | bool | `true` | Background TTL **repair** of packs on later TUI opens (first install is foreground via one-liner / EXE / `nur install`); set `false` to skip repair |
 | `auto_update` | bool | `true` | On **every** launch (bare TUI, `nur "prompt"`, `nur run …`, gateway), check [GitHub Releases](https://github.com/nuroctane/nur-cli/releases/latest) and install a newer binary when available; it runs on a background thread so it never delays or breaks a run, and the new binary is picked up on the next launch. A 60s floor between network checks stops a script that loops `nur` from hammering the API — tune it with `NUR_AUTO_UPDATE_TTL_SECS` (`0` = check every run). Opt out with `false` or env `NUR_SKIP_AUTO_UPDATE=1`. Verify with `nur update --check`; `nur update` always runs the full update path |
@@ -235,6 +250,8 @@ The release check runs on **every** launch (see `auto_update` above).
 |----------|---------|
 | `CLAUDE_FLOW_DB_PATH` | Ruflo database path |
 | `CLAUDE_FLOW_MEMORY_PATH` | Ruflo home path |
+| `HELIX_URL` / `NUR_HELIX_URL` | Activate the HelixDB memory resident in `auto` mode and select its gateway |
+| `HELIX_API_KEY` | Optional HelixDB bearer token (or use the env-var name configured by `helix_memory.api_key_env`) |
 | `USE_BUILTIN_RIPGREP` | Set to `0` to use system ripgrep |
 
 ---

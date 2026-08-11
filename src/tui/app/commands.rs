@@ -2484,9 +2484,9 @@ impl App {
         let msg = match action {
             "get" => match agent::goal::load(&sid) {
                 Some(g) => format!("goal:\n{}", agent::goal::format_status(&g)),
-                None => format!(
+                None => String::from(
                     "no persistent goal for this session\n  /goal <objective> sets it (tracks \
-                     tokens/continuations; survives restart)"
+                     tokens/continuations; survives restart)",
                 ),
             },
             "clear" => {
@@ -2703,7 +2703,7 @@ impl App {
         {
             // Cancel the last scheduled heartbeat job we remember (bg id stored).
             if let Some(id) = self.heartbeat_job {
-                match crate::bg_jobs::cancel(id as u64) {
+                match crate::bg_jobs::cancel(id) {
                     Ok(m) => self.push_note(Tone::Skill, format!("heartbeat stopped\n{m}")),
                     Err(e) => self.push_error(format!("could not stop heartbeat: {e}")),
                 }
@@ -2733,7 +2733,7 @@ impl App {
         let note_for_beat = note.clone();
         let label = format!("heartbeat · every {interval}");
         let job = crate::bg_jobs::spawn(label.clone(), "heartbeat".to_string(), move |cancel| {
-            let until = std::time::Instant::now() + std::time::Duration::from_secs(secs as u64);
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(secs);
             // Loop with a short sleep so cancel interrupts promptly.
             loop {
                 if cancel.load(std::sync::atomic::Ordering::SeqCst) {
@@ -2757,9 +2757,6 @@ impl App {
             ),
         );
     }
-
-    /// `/heartbeat` body above; this is a method-only marker to keep the impl
-    /// block contiguous (see `parse_interval_secs` free fn at file end).
 
     /// `/bg` — list / inspect / cancel / run background jobs without blocking
     /// the agent turn. Status chip in the footer shows running work.

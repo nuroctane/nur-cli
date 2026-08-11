@@ -59,7 +59,10 @@ fn store_path(scope: &str) -> PathBuf {
         })
         .take(80)
         .collect();
-    nur_home().join("native-memory").join(safe).join("graph.json")
+    nur_home()
+        .join("native-memory")
+        .join(safe)
+        .join("graph.json")
 }
 
 const RELATIONS: &[&str] = &[
@@ -173,8 +176,16 @@ impl GraphStore {
                 let Some(idx) = lower.find(n) else { continue };
                 let subject_raw = &text[..idx];
                 let after = &text[idx + n.len()..];
-                let object_pre = after.split([',', '.', '!', '?', ';', '\n']).next().unwrap_or("");
-                let subject = clean_entity(subject_raw.split([',', ':', '-', ';', '.']).next().unwrap_or(subject_raw));
+                let object_pre = after
+                    .split([',', '.', '!', '?', ';', '\n'])
+                    .next()
+                    .unwrap_or("");
+                let subject = clean_entity(
+                    subject_raw
+                        .split([',', ':', '-', ';', '.'])
+                        .next()
+                        .unwrap_or(subject_raw),
+                );
                 let object = clean_entity(truncate_noise(object_pre));
                 if names_ok(&subject) && names_ok(&object) && subject != object {
                     let src = self.upsert_node(&subject, memory_id);
@@ -261,7 +272,7 @@ impl GraphStore {
         }
         // alias lookup
         for (nid, node) in &self.graph.nodes {
-            if node.aliases.iter().any(|a| a.to_ascii_lowercase() == entity.to_ascii_lowercase()) {
+            if node.aliases.iter().any(|a| a.eq_ignore_ascii_case(entity)) {
                 return Some(nid.clone());
             }
         }
@@ -272,18 +283,16 @@ impl GraphStore {
         self.graph
             .nodes
             .values()
-            .map(|n| {
-                n.aliases
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| n.id.clone())
-            })
+            .map(|n| n.aliases.first().cloned().unwrap_or_else(|| n.id.clone()))
             .collect()
     }
 
-    /// Semantic rerank of entities against a query (embedding boost) for routing.
-    pub fn closest_entities(&self, query: &str, k: usize) -> Vec<(String, f32)> {
-        let q = embed::embed(query);
+    /// Semantic rerank using a query embedding shared by the memory router.
+    pub fn closest_entities_with_embedding(
+        &self,
+        query_embedding: &[f32],
+        k: usize,
+    ) -> Vec<(String, f32)> {
         let mut scored: Vec<(String, f32)> = self
             .graph
             .nodes
@@ -291,12 +300,10 @@ impl GraphStore {
             .map(|n| {
                 let label = n.aliases.first().cloned().unwrap_or_default();
                 let nv = embed::embed_local(&label);
-                (label, embed::cosine(&q, &nv))
+                (label, embed::cosine(query_embedding, &nv))
             })
             .collect();
-        scored.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(k.max(1));
         scored
     }
@@ -363,7 +370,8 @@ mod tests {
         // neighbors of cargo: build agent (uses) + tokio (depends_on)
         let nbrs = g.neighbors("cargo");
         assert!(
-            nbrs.iter().any(|(_, r, t)| r == "uses" && t.contains("build_agent")),
+            nbrs.iter()
+                .any(|(_, r, t)| r == "uses" && t.contains("build_agent")),
             "cargo neighbors: {nbrs:?}"
         );
         // path build agent -> tokio should exist via cargo
@@ -371,11 +379,7 @@ mod tests {
         assert!(path.is_some(), "expected path: {path:?}");
         let hops = path.unwrap();
         assert_eq!(hops[0].2, "n:cargo", "first hop should hit cargo: {hops:?}");
-        let _ = std::fs::remove_dir_all(
-            crate::config::nur_home()
-                .join("native-memory")
-                .join(&s),
-        );
+        let _ = std::fs::remove_dir_all(crate::config::nur_home().join("native-memory").join(&s));
     }
 
     #[test]
@@ -385,8 +389,6 @@ mod tests {
         g.absorb("m1", "alpha uses beta");
         g.absorb("m2", "xenon uses yttrium");
         assert!(g.path("alpha", "yttrium").is_none());
-        let _ = std::fs::remove_dir_all(
-            crate::config::nur_home().join("native-memory").join(&s),
-        );
+        let _ = std::fs::remove_dir_all(crate::config::nur_home().join("native-memory").join(&s));
     }
 }

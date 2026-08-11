@@ -3,7 +3,7 @@
 Generate src/agent/skill_intents.json — comprehensive 700+ skill intent index.
 Must be run when adding new skills per AGENTS.md.
 
-Scans ~/.nur/skills + repo skills/ and generates triggers:
+Scans ~/.nur/skills + ~/.agents/skills + repo skills/ and generates triggers:
 - name, /name, spaced, /spaced
 - bigrams/trigrams from name
 - aliases for known shorthands
@@ -16,6 +16,7 @@ Usage:
 import pathlib, json, re
 
 skills_root = pathlib.Path.home() / ".nur" / "skills"
+agents_skills_root = pathlib.Path.home() / ".agents" / "skills"
 repo_root = pathlib.Path(__file__).parent.parent
 output = repo_root / "src" / "agent" / "skill_intents.json"
 
@@ -81,7 +82,7 @@ def gen_triggers(name, desc):
     return filtered
 
 skills = []
-for src in [skills_root, repo_root / "skills"]:
+for src in [skills_root, agents_skills_root, repo_root / "skills"]:
     if not src.exists():
         continue
     for md in src.rglob("SKILL.md"):

@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-08-08T01:01:49.249708",
-  "total_skills": 1001,
+  "generated_at": "2026-08-11T04:00:33.519702",
+  "total_skills": 1013,
   "note": "Comprehensive skill intent index - 700+ skills, expanded NL triggers. Must be updated when adding skills per AGENTS.md. Run: python scripts/generate_skill_intents.py",
   "skills": [
     {
@@ -3351,6 +3351,30 @@
       ]
     },
     {
+      "name": "bambu-labs",
+      "description": "Dry-run, upload, and cautiously initiate local Bambu Lab print jobs from validated plain `.gcode`, using Bambu LAN FTPS/MQTT handoffs.",
+      "path": "C:\\Users\\david\\.agents\\skills\\bambu-labs\\SKILL.md",
+      "triggers": [
+        "upload cautiously",
+        "/bambu labs",
+        "/bambu-labs",
+        "bambu labs",
+        "bambu-labs"
+      ],
+      "keywords": [
+        "bambu",
+        "labs",
+        "upload",
+        "cautiously",
+        "initiate",
+        "local",
+        "print",
+        "jobs",
+        "validated",
+        "plain"
+      ]
+    },
+    {
       "name": "banner-design",
       "description": "Design banners for social media, ads, website heroes, creative assets, and print. Multiple art direction options with AI-generated visuals. Actions: design, create, generate banner. Platforms: Facebook, Twitter/X, LinkedIn, YouTube, Instagram, Google Display, website hero, print. Styles: minimalist,",
       "path": "C:\\Users\\david\\.nur\\skills\\banner-design\\SKILL.md",
@@ -4805,6 +4829,50 @@
         "pages",
         "apis",
         "administrative"
+      ]
+    },
+    {
+      "name": "cad",
+      "description": "Create, modify, inspect, and validate STEP-first parametric CAD parts and assemblies. Use for natural-language CAD specs, reference images, 2D technical drawings, STEP/STP generation or direct inspection, Python CAD source, source-level joints, selector references, geometry facts, measurements, mati",
+      "path": "C:\\Users\\david\\.agents\\skills\\cad\\SKILL.md",
+      "triggers": [
+        "create modify"
+      ],
+      "keywords": [
+        "create",
+        "modify",
+        "inspect",
+        "validate",
+        "step",
+        "first",
+        "parametric",
+        "parts",
+        "assemblies",
+        "natural"
+      ]
+    },
+    {
+      "name": "cad-viewer",
+      "description": "Start or reuse CAD Viewer and return review links for explicit CAD, implicit CAD, robot-description, and G-code files. Use when visually reviewing `.step`, `.stp`, `.implicit.js`, `.implicit.mjs`, `.glb`, `.stl`, `.3mf`, `.gcode`, `.dxf`, `.urdf`, `.srdf`, or `.sdf` files, especially when handed off",
+      "path": "C:\\Users\\david\\.agents\\skills\\cad-viewer\\SKILL.md",
+      "triggers": [
+        "/cad viewer",
+        "/cad-viewer",
+        "start reuse",
+        "cad viewer",
+        "cad-viewer"
+      ],
+      "keywords": [
+        "viewer",
+        "start",
+        "reuse",
+        "return",
+        "review",
+        "links",
+        "explicit",
+        "implicit",
+        "robot",
+        "description"
       ]
     },
     {
@@ -10826,6 +10894,26 @@
       ]
     },
     {
+      "name": "dxf",
+      "description": "Generate, regenerate, and validate 2D DXF drawings from Python ezdxf sources. Use for DXF files, gen_dxf() sources, 2D profiles, outlines, templates, gaskets, panels, flat patterns, laser/plasma/waterjet cut layouts, and 2D drawing exports of CAD geometry.",
+      "path": "C:\\Users\\david\\.agents\\skills\\dxf\\SKILL.md",
+      "triggers": [
+        "generate regenerate"
+      ],
+      "keywords": [
+        "generate",
+        "regenerate",
+        "validate",
+        "drawings",
+        "python",
+        "ezdxf",
+        "sources",
+        "files",
+        "profiles",
+        "outlines"
+      ]
+    },
+    {
       "name": "edit-article",
       "description": "Edit and improve articles by restructuring sections, improving clarity, and tightening prose. Use when user wants to edit, revise, or improve an article draft.",
       "path": "C:\\Users\\david\\.nur\\skills\\edit-article\\SKILL.md",
@@ -13208,6 +13296,28 @@
         "coding",
         "claude",
         "code"
+      ]
+    },
+    {
+      "name": "gcode",
+      "description": "Generate, inspect, dry-run, and statically validate plain FDM `.gcode` from 3D mesh files by orchestrating real slicer CLIs. Use when Codex needs to slice `.stl`, `.obj`, unsliced `.3mf`, `.ply`, `.glb`, or `.gltf` into printer-profiled G-code, discover local slicer backends, inspect whether a mesh ",
+      "path": "C:\\Users\\david\\.agents\\skills\\gcode\\SKILL.md",
+      "triggers": [
+        "generate inspect",
+        "/gcode",
+        "gcode"
+      ],
+      "keywords": [
+        "gcode",
+        "generate",
+        "inspect",
+        "statically",
+        "validate",
+        "plain",
+        "mesh",
+        "files",
+        "orchestrating",
+        "real"
       ]
     },
     {
@@ -20082,6 +20192,30 @@
       ]
     },
     {
+      "name": "implicit-cad",
+      "description": "Create, edit, render, and snapshot browser-native implicit CAD `.implicit.js` and `.implicit.mjs` files using GLSL signed-distance fields, shader primitives, smooth booleans, TPMS fields, and direct CAD Viewer raymarch rendering. Experimental.",
+      "path": "C:\\Users\\david\\.agents\\skills\\implicit-cad\\SKILL.md",
+      "triggers": [
+        "/implicit cad",
+        "/implicit-cad",
+        "implicit cad",
+        "implicit-cad",
+        "create edit"
+      ],
+      "keywords": [
+        "implicit",
+        "create",
+        "edit",
+        "render",
+        "snapshot",
+        "browser",
+        "native",
+        "files",
+        "glsl",
+        "signed"
+      ]
+    },
+    {
       "name": "improve-animations",
       "description": "Survey a codebase's animation and motion code as a senior motion advisor, then produce a prioritized audit and self-contained implementation plans for other agents (or cheaper models) to execute. Read-only on source code \u2014 it plans improvements, it does not apply them. Use when the user asks to",
       "path": "C:\\Users\\david\\.nur\\skills\\improve-animations\\SKILL.md",
@@ -20903,6 +21037,28 @@
         "palette",
         "typographic",
         "contrast"
+      ]
+    },
+    {
+      "name": "mobile-harness",
+      "description": "Portable Android and iOS device-control harness for agents using mobilerun-core.",
+      "path": "C:\\Users\\david\\.agents\\skills\\mobile-harness\\SKILL.md",
+      "triggers": [
+        "portable android",
+        "/mobile harness",
+        "/mobile-harness",
+        "mobile harness",
+        "mobile-harness"
+      ],
+      "keywords": [
+        "mobile",
+        "harness",
+        "portable",
+        "android",
+        "device",
+        "control",
+        "mobilerun",
+        "core"
       ]
     },
     {
@@ -26029,6 +26185,26 @@
       ]
     },
     {
+      "name": "sdf",
+      "description": "SDFormat/SDF model and world generation, validation, and simulator handoff. Use for `.sdf` files, SDFormat XML, Python `gen_sdf()` sources, models, worlds, links, joints, poses, frames, inertials, visual/collision geometry, mesh URIs, sensors, lights, physics, plugins, includes, Gazebo, static SDF r",
+      "path": "C:\\Users\\david\\.agents\\skills\\sdf\\SKILL.md",
+      "triggers": [
+        "sdformat model"
+      ],
+      "keywords": [
+        "sdformat",
+        "model",
+        "world",
+        "generation",
+        "validation",
+        "simulator",
+        "handoff",
+        "files",
+        "python",
+        "sources"
+      ]
+    },
+    {
       "name": "security-and-hardening",
       "description": "Hardens code against vulnerabilities. Use when handling user input, authentication, data storage, or external integrations. Use when building any feature that accepts untrusted data, manages user sessions, or interacts with third-party services.",
       "path": "C:\\Users\\david\\.nur\\skills\\security-and-hardening\\SKILL.md",
@@ -26078,6 +26254,28 @@
         "vt323",
         "pixel",
         "typeface"
+      ]
+    },
+    {
+      "name": "sendcutsend",
+      "description": "Review DXF and STEP/STP uploads for SendCutSend.com orders using its ordering guide, catalog, and specs. Use only for SendCutSend.com preflight reports covering upload readiness, selected material/SKU/thickness/service availability, and service-specific checks for laser cutting, CNC routing, bending",
+      "path": "C:\\Users\\david\\.agents\\skills\\sendcutsend\\SKILL.md",
+      "triggers": [
+        "/sendcutsend",
+        "review step",
+        "sendcutsend"
+      ],
+      "keywords": [
+        "sendcutsend",
+        "review",
+        "step",
+        "uploads",
+        "orders",
+        "ordering",
+        "guide",
+        "catalog",
+        "specs",
+        "preflight"
       ]
     },
     {
@@ -26506,6 +26704,27 @@
       ]
     },
     {
+      "name": "srdf",
+      "description": "MoveIt2 SRDF generation, validation, and planning-semantics workflow. Use when creating, editing, regenerating, inspecting, or validating `.srdf` files, `gen_srdf()` sources, MoveIt planning groups, virtual joints, passive joints, end effectors, group states, disabled collisions, URDF-linked plannin",
+      "path": "C:\\Users\\david\\.agents\\skills\\srdf\\SKILL.md",
+      "triggers": [
+        "moveit2 srdf",
+        "/srdf"
+      ],
+      "keywords": [
+        "srdf",
+        "moveit2",
+        "generation",
+        "validation",
+        "planning",
+        "semantics",
+        "workflow",
+        "creating",
+        "editing",
+        "regenerating"
+      ]
+    },
+    {
       "name": "start",
       "description": "Front door. Reads the current project (framework, tokens, brief, spec, harness) and reports what ui-craft can do right now, then routes you to the right next step. Run this first if you're new or unsure where to begin. No code changes. Invoke when the user asks for start on their UI, or mentions 'st",
       "path": "C:\\Users\\david\\.nur\\skills\\start\\SKILL.md",
@@ -26556,6 +26775,30 @@
         "weekly",
         "usage",
         "checking"
+      ]
+    },
+    {
+      "name": "step-parts",
+      "description": "Find, evaluate, and download common purchasable CAD parts from step.parts, including named off-the-shelf actuators, servos, motors, electronics boards, connectors, screws, bolts, nuts, washers, bearings, standoffs, and other catalog components. Use when Codex needs to search the hosted step.parts ca",
+      "path": "C:\\Users\\david\\.agents\\skills\\step-parts\\SKILL.md",
+      "triggers": [
+        "find evaluate",
+        "/step parts",
+        "/step-parts",
+        "step parts",
+        "step-parts"
+      ],
+      "keywords": [
+        "step",
+        "parts",
+        "find",
+        "evaluate",
+        "download",
+        "common",
+        "purchasable",
+        "including",
+        "named",
+        "shelf"
       ]
     },
     {
@@ -27298,6 +27541,27 @@
         "happy",
         "states",
         "loading"
+      ]
+    },
+    {
+      "name": "urdf",
+      "description": "URDF robot description generation and default generation-time validation. Use when creating, editing, regenerating, inspecting, or debugging `.urdf` files, Python `gen_urdf()` sources, robot links, joints, limits, inertials, visual/collision geometry, mesh references, frame conventions, or generated",
+      "path": "C:\\Users\\david\\.agents\\skills\\urdf\\SKILL.md",
+      "triggers": [
+        "urdf robot",
+        "/urdf"
+      ],
+      "keywords": [
+        "urdf",
+        "robot",
+        "description",
+        "generation",
+        "default",
+        "time",
+        "validation",
+        "creating",
+        "editing",
+        "regenerating"
       ]
     },
     {

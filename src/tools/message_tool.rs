@@ -30,7 +30,7 @@ fn scope_from(args: &Value, ctx: &ToolContext) -> String {
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("workspace");
-    format!("{proj}")
+    proj.to_string()
 }
 
 impl Tool for MessageTool {

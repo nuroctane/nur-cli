@@ -26,6 +26,7 @@ secrets*
 
 # Local agent instructions only (never publish to main)
 AGENTS.md
+.claude/
 
 # Editor / OS
 .idea/

@@ -86,10 +86,9 @@ impl Tool for MultiEdit {
             .unwrap_or(false)
         {
             let sid = std::env::var("NUR_SESSION_ID").unwrap_or_else(|_| "default".into());
-            let entry = crate::agent::proposal::stage_write(
-                &sid, &ctx.cwd, &path, &content, "multi_edit",
-            )
-            .map_err(NurError::Tool)?;
+            let entry =
+                crate::agent::proposal::stage_write(&sid, &ctx.cwd, &path, &content, "multi_edit")
+                    .map_err(NurError::Tool)?;
             return Ok(format!(
                 "proposal staged `{}` ({} bytes) — workspace untouched. \
                  Use tool `proposal` action=list|apply|discard.",

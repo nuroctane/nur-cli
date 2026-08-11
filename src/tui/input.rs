@@ -1,7 +1,9 @@
 //! Multi-line input editor with cursor movement, paste chips, + persistent history.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -28,6 +30,16 @@ pub struct VisualRow {
     pub abs_start: usize,
     /// Exclusive end buffer index (may equal start for empty row after `\n`).
     pub abs_end: usize,
+}
+
+/// Two-phase layout cache inspired by Pretext: analyze once for a given draft
+/// and width, then reuse the measured row ranges for height, paint, cursor and
+/// mouse hit-testing during the frame.
+#[derive(Clone, Debug)]
+struct VisualLayoutCache {
+    key: u64,
+    width: usize,
+    rows: Vec<VisualRow>,
 }
 
 /// Active Ctrl+R reverse-history-search session.
@@ -58,6 +70,7 @@ pub struct InputState {
     stash: String,
     /// Some while a Ctrl+R reverse search is in progress.
     search: Option<ReverseSearch>,
+    visual_layout_cache: RefCell<Option<VisualLayoutCache>>,
 }
 
 /// Most-recent history entry (searching newest → oldest) at an index `< before`
@@ -143,6 +156,7 @@ impl InputState {
             hist_idx: None,
             stash: String::new(),
             search: None,
+            visual_layout_cache: RefCell::new(None),
         }
     }
 
@@ -657,16 +671,28 @@ impl InputState {
     /// This is what the input viewport scrolls through — one notch = one row.
     pub fn visual_rows(&self, width: usize) -> Vec<VisualRow> {
         let width = width.max(1);
+        let key = self.visual_layout_key();
+        if let Some(cached) = self.visual_layout_cache.borrow().as_ref() {
+            if cached.width == width && cached.key == key {
+                return cached.rows.clone();
+            }
+        }
         let mut rows = Vec::new();
         let mut row_start = 0usize;
         let mut col = 0usize;
         let n = self.buffer.len();
 
         if n == 0 {
-            return vec![VisualRow {
+            let rows = vec![VisualRow {
                 abs_start: 0,
                 abs_end: 0,
             }];
+            *self.visual_layout_cache.borrow_mut() = Some(VisualLayoutCache {
+                key,
+                width,
+                rows: rows.clone(),
+            });
+            return rows;
         }
 
         let mut i = 0usize;
@@ -711,7 +737,27 @@ impl InputState {
                 abs_end: n,
             });
         }
+        *self.visual_layout_cache.borrow_mut() = Some(VisualLayoutCache {
+            key,
+            width,
+            rows: rows.clone(),
+        });
         rows
+    }
+
+    fn visual_layout_key(&self) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.buffer.hash(&mut hasher);
+        // A paste sentinel occupies its generated label width. Appending lines
+        // may change that width while leaving the sentinel itself unchanged.
+        let mut paste_widths: Vec<(u32, usize)> = self
+            .pastes
+            .iter()
+            .map(|(id, block)| (*id, paste_chip_label(&block.content).width()))
+            .collect();
+        paste_widths.sort_unstable_by_key(|(id, _)| *id);
+        paste_widths.hash(&mut hasher);
+        hasher.finish()
     }
 
     pub fn visual_line_count(&self, width: usize) -> usize {
@@ -980,6 +1026,7 @@ impl InputState {
             hist_idx: None,
             stash: String::new(),
             search: None,
+            visual_layout_cache: RefCell::new(None),
         }
     }
 
@@ -1232,6 +1279,27 @@ mod tests {
         let max_top = rows.len().saturating_sub(8);
         assert_eq!(max_top, 2);
         assert_eq!(i.index_at_visual(3, 0, 40), rows[3].abs_start);
+    }
+
+    #[test]
+    fn visual_layout_cache_reuses_and_invalidates() {
+        let mut i = InputState::empty_for_test();
+        i.insert_str("abcdefghij");
+        let first = i.visual_rows(5);
+        let first_key = i.visual_layout_cache.borrow().as_ref().unwrap().key;
+        assert_eq!(first.len(), 2);
+
+        assert_eq!(i.visual_rows(5), first);
+        assert_eq!(
+            i.visual_layout_cache.borrow().as_ref().unwrap().key,
+            first_key
+        );
+
+        i.insert_str("k");
+        let changed = i.visual_rows(5);
+        let changed_key = i.visual_layout_cache.borrow().as_ref().unwrap().key;
+        assert_eq!(changed.len(), 3);
+        assert_ne!(changed_key, first_key);
     }
 
     #[test]

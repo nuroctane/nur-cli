@@ -450,7 +450,18 @@ pub fn rates_for(provider: &str, model: &str) -> ModelRates {
 
 /// Suggest a context window from the catalog (None when unknown).
 pub fn context_window_for(provider: &str, model: &str) -> Option<u64> {
-    rates_for(provider, model).context_window
+    let rates = rates_for(provider, model);
+    if rates.source != "builtin-fallback" {
+        return rates.context_window;
+    }
+    // Keep startup safe when the optional models.dev cache has not been
+    // populated yet. Anthropic's Messages models have a conservative 200k
+    // baseline; using Nur's generic 1M fallback postpones compaction until the
+    // provider has already rejected the request.
+    match models_dev_provider_key(provider.trim()) {
+        "anthropic" => Some(200_000),
+        _ => rates.context_window,
+    }
 }
 
 /// Apply the catalog's context window for the active provider/model.

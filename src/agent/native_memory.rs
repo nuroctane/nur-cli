@@ -252,6 +252,10 @@ pub fn remember(
         let mut g = crate::agent::memory_graph::GraphStore::open(scope);
         let _ = g.absorb(&entry.id, &entry.text);
     }
+    // HelixDB is an optional, durable acceleration resident. Queue only after
+    // the authoritative local write and indexes are complete; the background
+    // mirror can fail or be offline without losing the memory.
+    crate::agent::helix_memory::enqueue(scope, &entry);
     Ok(entry)
 }
 
@@ -459,6 +463,15 @@ pub fn consolidate_localized(scope: &str, max_l1: usize) -> Result<String, Strin
         }
         let _ = vs.index(&l2.id, &l2.text);
     }
+    // Mirror both sides of the lifecycle transition so live searches can
+    // filter retired rows immediately. Explicit sync later prunes those remote
+    // rows because the local native archive is authoritative.
+    for entry in all
+        .iter()
+        .filter(|entry| ids.contains(&entry.id) || entry.id == l2.id)
+    {
+        crate::agent::helix_memory::enqueue(scope, entry);
+    }
     Ok(format!(
         "localized maintenance: retired {} L1 → new L2 `{}` ({} chars)",
         take,
@@ -528,6 +541,11 @@ pub fn promote_aged(scope: &str) -> Result<String, String> {
     rewrite_all(scope, &all)?;
     // Coherence: index era notes so deep recollection stays searchable by meaning.
     reindex_era_notes(scope, &all);
+    // Tier changes, retirements and new era notes are all material mutations.
+    // Queue exactly the rows changed in this maintenance pass.
+    for entry in all.iter().filter(|entry| entry.updated_unix == now) {
+        crate::agent::helix_memory::enqueue(scope, entry);
+    }
 
     if report.trim().is_empty() {
         Ok("no aged memories to promote".into())
@@ -728,7 +746,7 @@ pub fn supersede_contradictions(
         let polarity_b = polarity(new_text);
         if polarity_a != polarity_b {
             // Demote the older one so recall ranks the newer more strongly.
-            e.confidence = e.confidence * 0.4;
+            e.confidence *= 0.4;
             e.updated_unix = now_unix();
             touched += 1;
         }
@@ -942,7 +960,10 @@ mod tests {
         };
         let folded = fold_into_era(vec![source.clone()], Tier::L2, &[source], 100);
         let archived = folded.iter().find(|e| e.id == "source-memory").unwrap();
-        assert!(archived.retired, "source row remains as a retired archive entry");
+        assert!(
+            archived.retired,
+            "source row remains as a retired archive entry"
+        );
         assert!(folded.iter().any(|e| e.tier == Tier::L2 && !e.retired));
     }
 

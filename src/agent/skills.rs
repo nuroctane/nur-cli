@@ -630,6 +630,41 @@ const INTENT_RULES: &[IntentRule] = &[
         why: "Toolcraft design-app scaffold (pointer — fetch live docs)",
     },
     IntentRule {
+        skill_names: &["cad"],
+        phrases: &[
+            "/cad",
+            "text to cad",
+            "create a cad model",
+            "generate a cad model",
+            "make a cad model",
+            "parametric cad",
+            "create a step file",
+            "generate a step file",
+            "design a 3d printable part",
+            "model this mechanical part",
+        ],
+        label: "cad",
+        why: "STEP-first parametric CAD workflow (text-to-cad)",
+    },
+    IntentRule {
+        skill_names: &["mobile-harness"],
+        phrases: &[
+            "/mobile-harness",
+            "mobile harness",
+            "control my android",
+            "control my iphone",
+            "control my phone",
+            "automate android",
+            "automate ios",
+            "automate my phone",
+            "mobile app automation",
+            "test this mobile app",
+            "run this on my phone",
+        ],
+        label: "mobile-harness",
+        why: "Android/iOS/cloud-phone control via mobilerun-core",
+    },
+    IntentRule {
         skill_names: &["site-cli"],
         phrases: &[
             "site cli",
@@ -1312,6 +1347,21 @@ mod intent_tests {
             detect_skill_activation("use toolcraft for this scaffold", &skills).unwrap();
         assert_eq!(sk.name, "toolcraft");
         assert_eq!(rule.label, "toolcraft");
+    }
+
+    #[test]
+    fn detects_cad_and_mobile_harness_requests() {
+        let skills = vec![fake_skill("cad"), fake_skill("mobile-harness")];
+
+        let (cad, rule) =
+            detect_skill_activation("create a STEP file for this bracket", &skills).unwrap();
+        assert_eq!(cad.name, "cad");
+        assert_eq!(rule.label, "cad");
+
+        let (mobile, rule) =
+            detect_skill_activation("automate Android and open Settings", &skills).unwrap();
+        assert_eq!(mobile.name, "mobile-harness");
+        assert_eq!(rule.label, "mobile-harness");
     }
 
     /// Resuming another agent is `/takeover`, not a skill. Talking about another

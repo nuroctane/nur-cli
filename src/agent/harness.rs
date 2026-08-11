@@ -179,7 +179,12 @@ mod tests {
     #[test]
     fn refine_and_rollback() {
         let sid = format!("harness-{}", uuid::Uuid::new_v4().simple());
-        refine(&sid, "prefer grep over bash find", "loop hang investigation").unwrap();
+        refine(
+            &sid,
+            "prefer grep over bash find",
+            "loop hang investigation",
+        )
+        .unwrap();
         let s = load(&sid);
         assert!(s.supplemental.contains("prefer grep"));
         assert_eq!(s.revision, 1);

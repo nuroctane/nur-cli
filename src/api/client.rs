@@ -128,6 +128,13 @@ fn text_only_endpoints() -> &'static std::sync::Mutex<std::collections::HashSet<
     SEEN.get_or_init(Default::default)
 }
 
+fn endpoints_without_output_limit(
+) -> &'static std::sync::Mutex<std::collections::HashSet<EndpointKey>> {
+    static SEEN: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<EndpointKey>>> =
+        std::sync::OnceLock::new();
+    SEEN.get_or_init(Default::default)
+}
+
 fn endpoint_key(provider_id: &str, base_url: &str, model: &str) -> EndpointKey {
     EndpointKey {
         provider_id: provider_id.to_string(),
@@ -154,6 +161,61 @@ fn mark_text_only(provider_id: &str, base_url: &str, model: &str) {
         model,
         "endpoint has no vision support - replaying attachments as text placeholders"
     );
+}
+
+fn mark_output_limit_unsupported(provider_id: &str, base_url: &str, model: &str) {
+    if let Ok(mut seen) = endpoints_without_output_limit().lock() {
+        seen.insert(endpoint_key(provider_id, base_url, model));
+    }
+    tracing::warn!(
+        provider = provider_id,
+        endpoint = base_url,
+        model,
+        "endpoint rejected its output-limit parameter - using its provider default"
+    );
+}
+
+fn rejects_output_limit_parameter(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    [
+        "max_output_tokens",
+        "max_completion_tokens",
+        "maxoutputtokens",
+        "max_tokens",
+    ]
+    .iter()
+    .any(|field| message.contains(field))
+        && [
+            "unsupported",
+            "not supported",
+            "unknown parameter",
+            "unknown field",
+            "unrecognized",
+            "not permitted",
+        ]
+        .iter()
+        .any(|needle| message.contains(needle))
+}
+
+fn body_has_output_limit(body: &serde_json::Value) -> bool {
+    body.get("max_output_tokens").is_some()
+        || body.get("max_completion_tokens").is_some()
+        || body.get("max_tokens").is_some()
+        || body.pointer("/generationConfig/maxOutputTokens").is_some()
+}
+
+fn remove_optional_output_limit(body: &mut serde_json::Value) {
+    if let Some(object) = body.as_object_mut() {
+        object.remove("max_output_tokens");
+        object.remove("max_completion_tokens");
+        object.remove("max_tokens");
+    }
+    if let Some(generation_config) = body
+        .get_mut("generationConfig")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        generation_config.remove("maxOutputTokens");
+    }
 }
 
 fn oauth_blocking<T: Send>(operation: impl FnOnce() -> T + Send) -> T {
@@ -186,6 +248,7 @@ pub struct ApiClient {
 /// Incremental events surfaced while a response streams in.
 #[derive(Debug)]
 #[allow(dead_code)] // Completed's payload is consumed by some callers only
+#[allow(clippy::large_enum_variant)] // events stay allocation-free on the streaming hot path
 pub enum StreamEvent {
     /// Assistant output text delta.
     TextDelta(String),
@@ -327,6 +390,7 @@ impl ApiClient {
         response
     }
 
+    #[allow(clippy::too_many_arguments)] // mirrors the durable transport-attempt schema
     fn record_attempt(
         &self,
         req: &ResponseRequest,
@@ -442,12 +506,48 @@ impl ApiClient {
             && self.style == ApiStyle::Responses
     }
 
+    /// Whether this exact credential-backed route accepts an output ceiling.
+    ///
+    /// The public OpenAI Responses API supports `max_output_tokens`, but the
+    /// ChatGPT/Codex OAuth inference surface does not. Learned compatibility
+    /// failures are also retained for the process so later turns do not repeat
+    /// a validation request against a stricter Responses-compatible endpoint.
+    pub(crate) fn supports_output_limit(&self, model: &str) -> bool {
+        if self.style == ApiStyle::GeminiCloudCode {
+            return false;
+        }
+        if self.style == ApiStyle::Responses && self.provider_id == "openai" && self.oauth.is_some()
+        {
+            return false;
+        }
+        endpoints_without_output_limit()
+            .lock()
+            .map(|seen| !seen.contains(&endpoint_key(&self.provider_id, &self.base_url, model)))
+            .unwrap_or(true)
+    }
+
+    fn request_for_route<'a>(
+        &self,
+        req: &'a ResponseRequest,
+    ) -> std::borrow::Cow<'a, ResponseRequest> {
+        if req.max_output_tokens.is_some() && !self.supports_output_limit(&req.model) {
+            let mut wire = req.clone();
+            wire.max_output_tokens = None;
+            std::borrow::Cow::Owned(wire)
+        } else {
+            std::borrow::Cow::Borrowed(req)
+        }
+    }
+
     fn response_request_for_wire(&self, req: &ResponseRequest) -> ResponseRequest {
         let mut wire = req.clone();
         if self.requires_streaming_responses() {
             // Central enforcement covers background Responses calls too
             // (compaction, memory extraction), not only AgentRunner's main loop.
             wire.stream = Some(true);
+        }
+        if !self.supports_output_limit(&wire.model) {
+            wire.max_output_tokens = None;
         }
         sanitize_media_for_provider(&mut wire.input, &self.provider_id);
         wire
@@ -702,6 +802,8 @@ impl ApiClient {
             // so the next call cannot recurse again.
             return Box::pin(routed.create_response(req)).await;
         }
+        let route_req = self.request_for_route(req);
+        let req = route_req.as_ref();
         match self.style {
             ApiStyle::ChatCompletions => return self.create_chat(req).await,
             ApiStyle::AnthropicMessages => {
@@ -721,8 +823,7 @@ impl ApiClient {
         // Normalize all Responses calls at the wire boundary. In particular,
         // ChatGPT/Codex OAuth rejects `stream:false` rather than merely ignoring
         // it, and returns SSE when streaming is enabled.
-        let req_owned = self.response_request_for_wire(req);
-        let req = &req_owned;
+        let mut req_owned = self.response_request_for_wire(req);
         let url = format!("{}/responses", self.base_url);
         let mut attempt = 0u32;
         let idempotency_key = self.idempotency_key();
@@ -732,14 +833,22 @@ impl ApiClient {
         let mut oauth_refreshed = false;
         loop {
             attempt += 1;
-            self.record_attempt(req, &attempt_id, attempt, "started", None, None, None);
+            self.record_attempt(
+                &req_owned,
+                &attempt_id,
+                attempt,
+                "started",
+                None,
+                None,
+                None,
+            );
             let res = match self
                 .auth_headers(
                     self.with_idempotency(
                         self.http
                             .post(&url)
                             .header("Content-Type", "application/json")
-                            .json(req),
+                            .json(&req_owned),
                         idempotency_key.as_deref(),
                     ),
                 )
@@ -749,7 +858,7 @@ impl ApiClient {
                 Ok(r) => r,
                 Err(e) => {
                     self.record_attempt(
-                        req,
+                        &req_owned,
                         &attempt_id,
                         attempt,
                         "ambiguous",
@@ -782,10 +891,29 @@ impl ApiClient {
                 // Retry on transient upstream failures from gateways like OpenCode (Console Go)
                 // which surface as 400 with "Upstream request failed".
                 let message = parse_error_message(&body).unwrap_or_else(|| body.clone());
+                if req_owned.max_output_tokens.is_some() && rejects_output_limit_parameter(&message)
+                {
+                    self.record_attempt(
+                        &req_owned,
+                        &attempt_id,
+                        attempt,
+                        "rejected",
+                        Some(status.as_u16()),
+                        Some(&message),
+                        None,
+                    );
+                    mark_output_limit_unsupported(
+                        &self.provider_id,
+                        &self.base_url,
+                        &req_owned.model,
+                    );
+                    req_owned.max_output_tokens = None;
+                    continue;
+                }
                 let retryable =
                     is_retryable_error(status.as_u16(), &message, self.is_opencode_route());
                 self.record_attempt(
-                    req,
+                    &req_owned,
                     &attempt_id,
                     attempt,
                     if retryable { "ambiguous" } else { "failed" },
@@ -815,9 +943,9 @@ impl ApiClient {
             }
 
             let response = parse_success_body(&body, status.as_u16())
-                .map(|response| response.with_local_usage_estimate(req))?;
+                .map(|response| response.with_local_usage_estimate(&req_owned))?;
             self.record_attempt(
-                req,
+                &req_owned,
                 &attempt_id,
                 attempt,
                 "succeeded",
@@ -850,6 +978,8 @@ impl ApiClient {
         if routed.style != self.style {
             return Box::pin(routed.create_response_stream(req, on_event, cancel)).await;
         }
+        let route_req = self.request_for_route(req);
+        let req = route_req.as_ref();
         match self.style {
             ApiStyle::ChatCompletions => {
                 return self.create_chat_stream(req, on_event, cancel).await
@@ -870,9 +1000,8 @@ impl ApiClient {
         }
         // Codex/ChatGPT OAuth always streams Responses events; force stream=true
         // so the body matches what we parse.
-        let mut stream_req = req.clone();
+        let mut stream_req = self.response_request_for_wire(req);
         stream_req.stream = Some(true);
-        sanitize_media_for_provider(&mut stream_req.input, &self.provider_id);
         let url = format!("{}/responses", self.base_url);
         let mut attempt = 0u32;
         let mut last_err: Option<NurError> = None;
@@ -947,6 +1076,24 @@ impl ApiClient {
                 // which arrives as a 400 with a transient message.
                 let body_text = res.text().await.unwrap_or_default();
                 let msg = parse_error_message(&body_text).unwrap_or(body_text);
+                if stream_req.max_output_tokens.is_some() && rejects_output_limit_parameter(&msg) {
+                    self.record_attempt(
+                        &stream_req,
+                        &attempt_id,
+                        attempt,
+                        "rejected",
+                        Some(status.as_u16()),
+                        Some(&msg),
+                        None,
+                    );
+                    mark_output_limit_unsupported(
+                        &self.provider_id,
+                        &self.base_url,
+                        &stream_req.model,
+                    );
+                    stream_req.max_output_tokens = None;
+                    continue;
+                }
                 let retryable = is_retryable_error(status.as_u16(), &msg, self.is_opencode_route());
                 self.record_attempt(
                     &stream_req,
@@ -1290,6 +1437,20 @@ impl ApiClient {
                     continue;
                 }
                 let message = parse_error_message(&text).unwrap_or(text);
+                if body_has_output_limit(&body) && rejects_output_limit_parameter(&message) {
+                    self.record_attempt(
+                        req,
+                        &attempt_id,
+                        attempt,
+                        "rejected",
+                        Some(status.as_u16()),
+                        Some(&message),
+                        None,
+                    );
+                    mark_output_limit_unsupported(&self.provider_id, &self.base_url, &req.model);
+                    remove_optional_output_limit(&mut body);
+                    continue;
+                }
                 let retryable =
                     is_retryable_error(status.as_u16(), &message, self.is_opencode_route());
                 self.record_attempt(
@@ -1352,6 +1513,7 @@ impl ApiClient {
         let has_media = super::chat::request_has_media(req);
         let mut drop_media =
             has_media && endpoint_is_text_only(&self.provider_id, &self.base_url, &req.model);
+        let mut drop_output_limit = !self.supports_output_limit(&req.model);
 
         // Connect phase, retried once without attachments if the endpoint turns
         // out to be text-only. Nothing has streamed yet at this point, so the
@@ -1364,7 +1526,10 @@ impl ApiClient {
         let (res, content_type, status) = loop {
             attempt += 1;
             self.record_attempt(req, &attempt_id, attempt, "started", None, None, None);
-            let body = super::chat::build_body_opts(req, true, &self.provider_id, drop_media);
+            let mut body = super::chat::build_body_opts(req, true, &self.provider_id, drop_media);
+            if drop_output_limit {
+                remove_optional_output_limit(&mut body);
+            }
             let res = self
                 .send_with_oauth_retry(|| {
                     self.with_idempotency(
@@ -1404,6 +1569,20 @@ impl ApiClient {
             if !status.is_success() {
                 let text = res.text().await.unwrap_or_default();
                 let message = parse_error_message(&text).unwrap_or(text);
+                if body_has_output_limit(&body) && rejects_output_limit_parameter(&message) {
+                    self.record_attempt(
+                        req,
+                        &attempt_id,
+                        attempt,
+                        "rejected",
+                        Some(status.as_u16()),
+                        Some(&message),
+                        None,
+                    );
+                    mark_output_limit_unsupported(&self.provider_id, &self.base_url, &req.model);
+                    drop_output_limit = true;
+                    continue;
+                }
                 let retryable =
                     self.is_opencode_route() && is_retryable_error(status.as_u16(), &message, true);
                 self.record_attempt(
@@ -2760,12 +2939,17 @@ mod tests {
             stream: Some(false),
             parallel_tool_calls: None,
             prompt_cache_key: None,
-            max_output_tokens: None,
+            max_output_tokens: Some(8_192),
         };
+        let oauth_wire = oauth.response_request_for_wire(&request);
         assert_eq!(
-            oauth.response_request_for_wire(&request).stream,
+            oauth_wire.stream,
             Some(true),
             "the actual OAuth Responses wire request must force stream=true"
+        );
+        assert_eq!(
+            oauth_wire.max_output_tokens, None,
+            "the ChatGPT/Codex inference route rejects max_output_tokens"
         );
 
         let mut api_key = ApiClient::new("https://api.openai.com/v1", "sk-test").unwrap();
@@ -2775,13 +2959,160 @@ mod tests {
             !api_key.requires_streaming_responses(),
             "API-key OpenAI honors the user's stream preference"
         );
+        let api_key_wire = api_key.response_request_for_wire(&request);
+        assert_eq!(api_key_wire.stream, Some(false));
         assert_eq!(
-            api_key.response_request_for_wire(&request).stream,
-            Some(false)
+            api_key_wire.max_output_tokens,
+            Some(8_192),
+            "the public OpenAI Responses API supports max_output_tokens"
         );
 
         oauth.style = ApiStyle::ChatCompletions;
         assert!(!oauth.requires_streaming_responses());
+    }
+
+    #[test]
+    fn responses_output_limit_compatibility_failure_is_narrow_and_remembered() {
+        assert!(rejects_output_limit_parameter(
+            "Unsupported parameter: 'max_output_tokens'."
+        ));
+        assert!(rejects_output_limit_parameter(
+            "max_output_tokens is not supported with this model"
+        ));
+        assert!(rejects_output_limit_parameter(
+            "Unknown parameter: max_completion_tokens"
+        ));
+        assert!(rejects_output_limit_parameter(
+            "generationConfig.maxOutputTokens is not supported"
+        ));
+        assert!(rejects_output_limit_parameter(
+            "max_tokens: extra inputs are not permitted"
+        ));
+        assert!(!rejects_output_limit_parameter(
+            "max_tokens must be positive"
+        ));
+        assert!(!rejects_output_limit_parameter(
+            "upstream provider unavailable"
+        ));
+
+        let client = ApiClient::for_provider(
+            "https://strict-responses.example.test/v1",
+            "key",
+            "strict-test",
+        )
+        .unwrap()
+        .with_style(ApiStyle::Responses);
+        assert!(client.supports_output_limit("strict-model"));
+        mark_output_limit_unsupported(
+            "strict-test",
+            "https://strict-responses.example.test/v1",
+            "strict-model",
+        );
+        assert!(!client.supports_output_limit("strict-model"));
+        let request = ResponseRequest {
+            model: "strict-model".into(),
+            input: serde_json::json!([]),
+            instructions: None,
+            tools: None,
+            tool_choice: None,
+            store: None,
+            include: None,
+            reasoning: None,
+            stream: None,
+            parallel_tool_calls: None,
+            prompt_cache_key: None,
+            max_output_tokens: Some(4_096),
+        };
+        assert_eq!(
+            client.response_request_for_wire(&request).max_output_tokens,
+            None
+        );
+        assert!(client.supports_output_limit("different-model"));
+    }
+
+    #[test]
+    fn every_catalog_provider_uses_only_its_protocol_native_output_limit() {
+        let request = ResponseRequest {
+            model: "test-model".into(),
+            input: serde_json::json!([]),
+            instructions: None,
+            tools: None,
+            tool_choice: None,
+            store: None,
+            include: None,
+            reasoning: None,
+            stream: None,
+            parallel_tool_calls: None,
+            prompt_cache_key: None,
+            max_output_tokens: Some(2_048),
+        };
+
+        for provider in crate::providers::PROVIDERS {
+            let mut client = ApiClient::new(provider.base_url, "test-key").unwrap();
+            client.provider_id = provider.id.into();
+            client.style = provider.style;
+            let route_request = client.request_for_route(&request);
+            match provider.style {
+                ApiStyle::Responses => {
+                    let body = serde_json::to_value(
+                        client.response_request_for_wire(route_request.as_ref()),
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        body.get("max_output_tokens")
+                            .and_then(|value| value.as_u64()),
+                        Some(2_048),
+                        "{} Responses request lost its native output limit",
+                        provider.id
+                    );
+                    assert!(
+                        body.get("max_tokens").is_none(),
+                        "{} leaked max_tokens",
+                        provider.id
+                    );
+                    assert!(
+                        body.get("max_completion_tokens").is_none(),
+                        "{} leaked max_completion_tokens",
+                        provider.id
+                    );
+                }
+                ApiStyle::ChatCompletions => {
+                    let body = super::super::chat::build_body_for_provider(
+                        route_request.as_ref(),
+                        false,
+                        provider.id,
+                    );
+                    let expected = if matches!(provider.id, "openai" | "openai-cc" | "xai") {
+                        "max_completion_tokens"
+                    } else {
+                        "max_tokens"
+                    };
+                    assert_eq!(
+                        body.get(expected).and_then(|value| value.as_u64()),
+                        Some(2_048),
+                        "{} chat request used the wrong output-limit field",
+                        provider.id
+                    );
+                    assert!(
+                        body.get("max_output_tokens").is_none(),
+                        "{} leaked the internal Responses field into Chat Completions",
+                        provider.id
+                    );
+                }
+                ApiStyle::AnthropicMessages => {
+                    let body = super::super::anthropic::build_body(route_request.as_ref(), false);
+                    assert_eq!(body["max_tokens"], serde_json::json!(2_048));
+                    assert!(body.get("max_output_tokens").is_none());
+                }
+                ApiStyle::GeminiCloudCode => {
+                    assert_eq!(
+                        route_request.max_output_tokens, None,
+                        "{} must rely on the managed route's provider default",
+                        provider.id
+                    );
+                }
+            }
+        }
     }
 
     #[test]

@@ -818,11 +818,10 @@ pub fn allow_t3_fallback(provider_id: &str) -> Result<()> {
     }
     let _guard = policy_store_guard();
     let mut policy = read_credential_policy();
-    let changed = credential_family_ids(id)
-        .into_iter()
-        .fold(false, |changed, family_id| {
-            policy.blocked_t3.remove(family_id) || changed
-        });
+    let mut changed = false;
+    for family_id in credential_family_ids(id) {
+        changed |= policy.blocked_t3.remove(family_id);
+    }
     if changed {
         write_credential_policy(&policy)?;
     }
@@ -836,11 +835,10 @@ fn block_t3_fallback(provider_id: &str) -> Result<()> {
     }
     let _guard = policy_store_guard();
     let mut policy = read_credential_policy();
-    let changed = credential_family_ids(id)
-        .into_iter()
-        .fold(false, |changed, family_id| {
-            policy.blocked_t3.insert(family_id.to_string()) || changed
-        });
+    let mut changed = false;
+    for family_id in credential_family_ids(id) {
+        changed |= policy.blocked_t3.insert(family_id.to_string());
+    }
     if changed {
         write_credential_policy(&policy)?;
     }
@@ -949,11 +947,10 @@ pub fn choose_provider_key(provider_id: &str, key: &str) -> Result<()> {
         let _guard = oauth_store_guard();
         let path = crate::config::provider_sessions_path();
         let mut sessions = read_sessions_at(&path);
-        let changed = credential_family_ids(provider_id)
-            .into_iter()
-            .fold(false, |changed, family_id| {
-                sessions.remove(family_id).is_some() || changed
-            });
+        let mut changed = false;
+        for family_id in credential_family_ids(provider_id) {
+            changed |= sessions.remove(family_id).is_some();
+        }
         if changed {
             write_sessions_at(&path, &sessions)?;
         }
@@ -1235,11 +1232,10 @@ pub fn choose_provider_oauth(
         let _guard = key_store_guard();
         let path = crate::config::provider_keys_path();
         let mut keys = read_keys_at(&path);
-        let changed = credential_family_ids(provider)
-            .into_iter()
-            .fold(false, |changed, family_id| {
-                keys.remove(family_id).is_some() || changed
-            });
+        let mut changed = false;
+        for family_id in credential_family_ids(provider) {
+            changed |= keys.remove(family_id).is_some();
+        }
         if changed {
             let text = serde_json::to_string_pretty(&keys)?;
             private_atomic_write(&path, text.as_bytes()).map_err(|error| {

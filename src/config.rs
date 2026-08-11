@@ -65,7 +65,7 @@ pub const PRICE_OUTPUT_PER_MTOK: f64 = 4.25;
 /// Schema >=12: reserve and cap each inference response by default. This is
 /// intentionally separate from unlimited task rounds: an unlimited task must
 /// not imply an unlimited single completion.
-pub const CONFIG_SCHEMA: u32 = 12;
+pub const CONFIG_SCHEMA: u32 = 13;
 
 const RETIRED_PROVIDER_IDS: &[&str] = &[
     "anyscale",
@@ -246,6 +246,11 @@ pub struct Config {
     /// offline n-gram hash embedding, never calls the provider).
     #[serde(default = "default_embed_mode")]
     pub memory_embed_mode: String,
+    /// Optional HelixDB graph-vector resident behind the central memory router.
+    /// Local native memory remains authoritative; Helix is a durable,
+    /// background-synced acceleration and cross-process query layer.
+    #[serde(default)]
+    pub helix_memory: HelixMemoryConfig,
     /// Inbound peer-mail policy (pi-peer `inbound`): `accept` (default) /
     /// `ask` (flag inbound mail for review, never auto-approve) / `refuse`
     /// (drop inbound mail). See `~/.nur/peers` and the `message` tool.
@@ -328,6 +333,51 @@ pub struct OptmemConfig {
     /// Default **true**. Wake inject + tool available when enabled.
     #[serde(default = "default_true")]
     pub enabled: bool,
+}
+
+/// `[helix_memory]` - optional HelixDB resident for the native memory stack.
+///
+/// `mode = "auto"` enables only when NUR_HELIX_URL or HELIX_URL is present,
+/// keeping launch and turn latency unchanged for users without Helix. `on`
+/// uses `url` (or the local default). API keys are read from an env var and are
+/// never persisted in config or memory.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HelixMemoryConfig {
+    /// auto | on | off
+    #[serde(default = "default_helix_mode")]
+    pub mode: String,
+    /// Helix gateway base URL. Empty means http://127.0.0.1:6969.
+    #[serde(default)]
+    pub url: String,
+    /// Name of the environment variable containing the bearer token.
+    #[serde(default = "default_helix_api_key_env")]
+    pub api_key_env: String,
+    /// Per-request deadline. Background mirroring retries from a durable outbox.
+    #[serde(default = "default_helix_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+fn default_helix_mode() -> String {
+    "auto".into()
+}
+
+fn default_helix_api_key_env() -> String {
+    "HELIX_API_KEY".into()
+}
+
+fn default_helix_timeout_ms() -> u64 {
+    1_500
+}
+
+impl Default for HelixMemoryConfig {
+    fn default() -> Self {
+        Self {
+            mode: default_helix_mode(),
+            url: String::new(),
+            api_key_env: default_helix_api_key_env(),
+            timeout_ms: default_helix_timeout_ms(),
+        }
+    }
 }
 
 impl Default for OptmemConfig {
@@ -480,6 +530,7 @@ impl Default for Config {
             kv_stable_compact: true,
             memory_embed_model: String::new(),
             memory_embed_mode: default_embed_mode(),
+            helix_memory: HelixMemoryConfig::default(),
             message_inbound: default_message_inbound(),
         }
     }

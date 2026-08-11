@@ -58,10 +58,7 @@ impl Tool for GoalTool {
                 Ok(format!("goal set (active)\n{}", goal::format_status(&g)))
             }
             "complete" => {
-                let note = args
-                    .get("note")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let note = args.get("note").and_then(|v| v.as_str()).unwrap_or("");
                 let g = goal::complete(&session_id, note).map_err(NurError::Tool)?;
                 Ok(format!("goal completed\n{}", goal::format_status(&g)))
             }

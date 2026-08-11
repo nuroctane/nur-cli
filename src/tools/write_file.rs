@@ -35,14 +35,9 @@ impl Tool for WriteFile {
             .unwrap_or(false)
         {
             let sid = std::env::var("NUR_SESSION_ID").unwrap_or_else(|_| "default".into());
-            let entry = crate::agent::proposal::stage_write(
-                &sid,
-                &ctx.cwd,
-                &path,
-                &contents,
-                "write_file",
-            )
-            .map_err(NurError::Tool)?;
+            let entry =
+                crate::agent::proposal::stage_write(&sid, &ctx.cwd, &path, &contents, "write_file")
+                    .map_err(NurError::Tool)?;
             return Ok(format!(
                 "proposal staged `{}` ({} bytes) at {} — not written to workspace. \
                  Use tool `proposal` action=list|apply|discard.",

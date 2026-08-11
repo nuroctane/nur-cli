@@ -147,7 +147,10 @@ pub fn discard_all(session_id: &str) -> Result<String, String> {
     let root = root(session_id);
     let n = load_manifest(session_id).len();
     let _ = std::fs::remove_dir_all(&root);
-    Ok(format!("discarded {n} proposal(s) under {}", root.display()))
+    Ok(format!(
+        "discarded {n} proposal(s) under {}",
+        root.display()
+    ))
 }
 
 pub fn format_list(session_id: &str) -> String {
@@ -163,8 +166,7 @@ pub fn format_list(session_id: &str) -> String {
         ));
     }
     lines.push(
-        "Use tool `proposal` action=apply to merge into the workspace, or action=discard."
-            .into(),
+        "Use tool `proposal` action=apply to merge into the workspace, or action=discard.".into(),
     );
     lines.join("\n")
 }

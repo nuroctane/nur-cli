@@ -65,6 +65,10 @@ Mouse/keyboard interaction tips that used to live under the art are behind
 | `Enter` | Send message |
 | `Shift+Enter` | Newline in input |
 
+The composer caches its measured soft-wrap layout for each draft and terminal
+width, then reuses that map for height, paint, cursor movement, and mouse hit
+testing. This keeps long or paste-heavy drafts responsive during redraws.
+
 ### Control
 
 | Key | Action |
