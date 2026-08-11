@@ -54,12 +54,14 @@ nav:
   - Setup: setup.md
   - Quickstart: quickstart.md
   - Authentication: authentication.md
+  - Providers: providers.md
   - Configuration: configuration.md
   - Commands: commands.md
   - TUI: tui.md
   - Tools: tools.md
   - Vision: vision.md
   - Ecosystem: ecosystem.md
+  - Memory Routing: research/memory-routing.md
   - "Evaluation: Ax & GraphJin": integrations-ax-graphjin.md
   - Security: security.md
   - Troubleshooting: troubleshooting.md

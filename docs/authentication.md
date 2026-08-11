@@ -158,7 +158,7 @@ Every key you enter is saved twice: as the **active** credential (`auth.json`)
 and under its provider in the per-provider store (`provider_keys.json`; browser
 sign-ins land in `provider_sessions.json`). Switching provider with `/login`
 therefore never strands the one you switched away from — it stays available for
-[cross-provider failover](security.md#provider-privacy--cross-provider-failover)
+[cross-provider failover](security.md#provider-privacy-cross-provider-failover)
 and for **subagents running on a different provider's model**, which need their
 own credential to authenticate.
 
@@ -307,7 +307,7 @@ the base URL. Laguna is also reachable through OpenRouter
 Privacy tier is **Standard**: Poolside publishes no ZDR or no-training
 commitment for API traffic, and nur does not award a tier that is not
 documented. If your deployment contract says otherwise, override it - see
-[Provider privacy](security.md#provider-privacy--cross-provider-failover) or
+[Provider privacy](security.md#provider-privacy-cross-provider-failover) or
 `/failover`.
 
 ---

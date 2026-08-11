@@ -1,7 +1,7 @@
 # Provider setup and conformance matrix
 
-This is the user-facing mirror of the 62-entry `PROVIDERS` catalog in
-[`src/providers.rs`](../src/providers.rs). The base URL, request style, default
+This is the user-facing mirror of the 68-entry `PROVIDERS` catalog in
+[`src/providers.rs`](https://github.com/nuroctane/nur-cli/blob/main/src/providers.rs). The base URL, request style, default
 model, and environment variable below are the exact current catalog values, not
 recommendations inferred from a vendor's marketing page.
 
