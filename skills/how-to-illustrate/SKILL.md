@@ -1,6 +1,6 @@
 ---
 name: how-to-illustrate
-description: "MANDATORY router for ANY request to draw, illustrate, diagram, chart, graph, visualize, or map something. Exhaustive diagram-type taxonomy (30+ categories, 200+ named types) + tool selection (excalidraw/tldraw/penecho/flint-chart) + source-figure extraction mandate + interactivity/animation mandate. Triggers on every drawing/illustration/graph request, not just explicit tool mentions."
+description: "MANDATORY router for ANY request to draw, illustrate, diagram, chart, graph, visualize, or map something. Exhaustive diagram-type taxonomy (30+ categories, 200+ named types) + tool selection (excalidraw/tldraw/penecho/flint-chart) + source-figure extraction mandate + visual-encoding mandate (semantic color/shape/edge grammar, per-tool feature exhaustion) + interactivity/animation mandate + pre-delivery quality gate. Triggers on every drawing/illustration/graph request, not just explicit tool mentions."
 ---
 
 # How to Illustrate
@@ -1029,7 +1029,138 @@ See `skill(action=read, name=diagram)` for canvas routing mechanics and exact
 tool-call shapes. For Flint MCP: prefer `create_chart_view`, else
 `render_chart` / `compile_chart` / `validate_chart` / `list_chart_types`.
 
-## Step 3 — Interactivity and animation mandate (non-negotiable)
+## Step 3 — Visual encoding mandate (this is what separates a real diagram from a flaccid one)
+
+A correctly-chosen diagram type drawn with default-colored, identically-shaped,
+unlabeled elements is a **failed illustration**. Every drawing tool exposes a
+rich feature set — shape vocabulary, stroke and fill styles, color palettes,
+dash patterns, layers, groups, frames, text hierarchy — and that feature set is
+your *visual vocabulary*. Using only the default rectangle in the default
+black is the single most common failure mode. Before drawing, and again before
+delivering, you must deliberately work through this section.
+
+### 3a — Declare the visual grammar BEFORE the first shape
+
+Write a short design brief (mentally or as a scratch note) with these four
+lines, then draw *to* it. Random, per-element styling decisions made mid-draw
+are how outputs end up "randomly colored" — the fix is deciding the encoding
+up front so every color, shape, and line *means something*.
+
+1. **Palette** — pick 3–6 semantic colors + neutral gray. Each color means
+   exactly one thing for the whole canvas, and that meaning goes in a legend.
+   Prefer domain conventions when they exist:
+   - green = success / goal / healthy / value-add
+   - red = failure / threat / blocker / risk
+   - amber/orange = warning / contention / bottleneck
+   - blue = neutral process / data / primary flow
+   - purple = external / third-party / out-of-scope
+   - gray = background, annotation, de-emphasized context
+   Consistency beats cleverness: same concept → same color everywhere,
+   including arrow and label colors. If you cannot say what a color *means*,
+   it should be gray.
+2. **Shape grammar** — each shape encodes a node *type*, applied uniformly:
+   rectangle = process/action · rounded-rect = start/end/state · diamond =
+   decision · ellipse = terminator/event/use-case · cylinder = data store ·
+   container/frame = boundary, tier, trust zone, or group · freedraw/ink =
+   annotation, emphasis, or literally hand-drawn things. If two different
+   node kinds share a shape, or one kind uses two shapes, the grammar is
+   broken.
+3. **Edge grammar** — arrowhead = direction of flow/causality (never leave it
+   ambiguous) · solid = primary/actual/synchronous · dashed = hypothetical,
+   planned, optional, or asynchronous · dotted = secondary/weak relation ·
+   thickness = volume, strength, or criticality · color = semantic category
+   from the palette. Label the edges where the relation isn't obvious
+   ("causes", "calls", "blocks", "5 req/s").
+4. **Layout plan** — reading direction (LTR or top-down), lanes/tiers/grouping,
+   what sits inside what, where the legend and title go. Alignment and
+   consistent spacing are encodings too: proximity = relatedness; identical
+   size = peer status; larger = more important/higher magnitude.
+
+### 3b — Exhaust the tool's feature set (per-tool checklist)
+
+Walk the checklist for your chosen tool **before finishing** and make a
+conscious use-or-reject decision on each item. "I didn't know the tool could
+do that" is not acceptable — the tool's own skill file (Step 5) documents
+every capability below.
+
+**Excalidraw** — you must have consciously decided on each:
+- Shape variety: rectangle / diamond / ellipse / arrow / line / freedraw —
+  mapped to your shape grammar, not used decoratively.
+- Per-element styles: `strokeColor`, `backgroundColor`, `fillStyle`
+  (solid / hachure / cross-hatch — hachure reads as "lighter" than solid,
+  use that), `strokeWidth` (thin/normal/bold — weight = emphasis),
+  `strokeStyle` (solid/dashed/dotted per your edge grammar), `edges`
+  (sharp/round), `opacity` (dim context layers to ~50% instead of deleting
+  them), `sloppiness`.
+- Text hierarchy: `fontSize` (S/M/L) and `fontFamily` (hand/normal/code) —
+  titles large, labels normal, code/values in monospace. Bind text to shapes
+  (`containerId`) and labels to arrows (`boundElements`) so nothing floats.
+- Arrows: bind start/end (`startBinding`/`endBinding`) so relationships
+  survive re-layout. Use arrowhead styles (triangle/dot/bar/none) as
+  semantics: triangle = flow, dot = "produces/data", none = association.
+- Structure: group related elements; use `frames` to name panels/sections
+  (each source figure = one frame in multi-panel work); z-order (front/back)
+  for containment layering.
+
+**tldraw** — you must have consciously decided on each:
+- Shape variety: `geo` (dozens of variants — pick semantically), `arrow`
+  (bound to shapes, never a decorative line), `text`, `draw`, `image`
+  (assets for screenshots/photos), `frame` (grouped, named sections),
+  `group`, `note`.
+- Style props: `color` (named palette — map to your semantic palette),
+  `dash` (draw/solid/dashed/dotted = edge grammar), `fill` (semi/solid/
+  hatch/pattern = emphasis tiers), `size`, `font`, `alpha` (dim instead of
+  delete).
+- Board mechanics: frames + `fit_camera` for guided tours through panels;
+  groups for movable clusters; z-order via `moveToFront`/`moveToBack`.
+- Document scripts (`script=`/`script_path=`): anything explaining a process,
+  state machine, decision tree, or comparison should be click-reactive —
+  see Step 4.
+
+**penecho** — you must have consciously decided on each:
+- Ink layers (structure ink vs annotation ink), stroke weight/pressure for
+  emphasis, MathJax for any quantitative label, declarative animation scenes
+  for anything with motion or sequence (Step 4), and the AI-refine/draft
+  loop to iterate in place rather than redrawing.
+
+**flint-chart** — quantitative panels must map data to *visual channels*
+deliberately: position (most precise) > length > angle > area > color
+(least precise) — encode the most important variable on the most precise
+channel. Use legend/axis/tooltip/theme config; see
+`references/flint-chart/flint-chart-author.SKILL.md`.
+
+### 3c — Depth requirements for every non-trivial diagram
+
+- **Title** — every canvas gets one; readers should never wonder what
+  they're looking at.
+- **Legend** — required whenever ≥2 semantic colors or shape roles are in
+  play (i.e., almost always). Colors that mean different things with no key
+  are decoration, not encoding.
+- **Labeled edges** where the relation isn't nameable from node text alone.
+- **Grouping/containment** — tiers, zones, phases, or lanes whenever the
+  content has more than ~7 loose elements.
+- **One annotation callout** naming the key insight the diagram exists to
+  show (the bottleneck, the critical path, the equilibrium point).
+- **Deliberate white space and alignment** — a grid-aligned diagram with
+  breathing room reads as professional; a jittered pile reads as careless.
+- **Multi-panel structure** for multi-figure sources (Step 0): one frame/
+  panel per source figure, clearly titled, plus clearly-labeled synthesis
+  panels for your own additions.
+
+### 3d — Anti-patterns (any one of these = go back and fix before delivering)
+
+- Uniform monochrome boxes and default-black arrows ("shape soup").
+- Colors applied per-element with no meaning or legend ("random colors").
+- Unlabeled or ambiguously-directed arrows.
+- Everything the same size, so nothing is emphasized.
+- A wall of text inside boxes — if a box needs a paragraph, the diagram
+  level is wrong; split it, nest it, or demote it to an annotation.
+- Missing title or missing legend when semantic encoding is used.
+- Edges crossing en masse when a different layout would untangle them.
+- Plain sharp rectangles for decisions/start/end where the domain's shape
+  convention says otherwise (diamonds, rounded terminators).
+
+## Step 4 — Interactivity and animation mandate (non-negotiable)
 
 **If the chosen tool supports any element of interactivity or animation, you
 MUST use it whenever even remotely useful. Do not neglect these elements.**
