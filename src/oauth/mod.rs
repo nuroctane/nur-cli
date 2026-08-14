@@ -5,6 +5,7 @@
 
 mod browser;
 mod flows;
+mod harness;
 pub mod omp_bridge;
 
 use crate::auth::{Auth, AuthMethod};
@@ -17,6 +18,18 @@ pub use browser::open_browser;
 /// Crate-internal CSPRNG for credential-shaped strings (see [`flows::random_urlsafe`]).
 pub(crate) use flows::random_urlsafe;
 pub use flows::{import_existing_session, login_browser, BrowserLoginProgress, OAuthTokens};
+pub use harness::is_api_key_import;
+
+/// Whether a login/import result should be persisted as an OAuth session.
+///
+/// OMP and first-party CLI imports may be ordinary API keys (DeepSeek Harness,
+/// Qwen settings, a Z.AI general key). Those must not take an OAuth-only route.
+pub fn imported_as_oauth_session(tokens: &OAuthTokens) -> bool {
+    if is_api_key_import(tokens) {
+        return false;
+    }
+    !omp_bridge::is_omp_import(tokens) || omp_bridge::is_omp_oauth_import(tokens)
+}
 
 /// Kimi managed-API device headers bound to the current OAuth device identity.
 pub fn kimi_request_headers() -> Result<Vec<(&'static str, String)>> {
@@ -159,6 +172,9 @@ pub fn refresh_tokens(provider: &str, auth: &Auth, refresh: &str) -> Result<OAut
         "github-models" | "github-copilot" => flows::github::refresh(auth, refresh),
         "cursor" => flows::cursor::refresh(auth, refresh),
         "opencode" => flows::opencode::refresh(auth, refresh),
+        "meta" => harness::muse::refresh(auth, refresh),
+        "deepseek" => harness::deepseek::refresh(auth, refresh),
+        "zhipu" => harness::zhipu::refresh(auth, refresh),
         _ => Err(NurError::Other(format!(
             "no OAuth refresh path for provider '{provider}'"
         ))),
@@ -187,7 +203,10 @@ mod tests {
         assert!(supports_browser("github-copilot"));
         assert!(supports_browser("cursor"));
         assert!(supports_browser("opencode"));
-        assert!(!supports_browser("meta"));
+        assert!(supports_browser("meta"));
+        assert!(supports_browser("deepseek"));
+        assert!(supports_browser("zhipu"));
+        assert!(!supports_browser("qwen"));
     }
 
     #[test]
@@ -218,6 +237,9 @@ mod tests {
             "github-copilot",
             "cursor",
             "opencode",
+            "meta",
+            "deepseek",
+            "zhipu",
         ];
         const REFRESH: &[&str] = &[
             "openai",
@@ -234,6 +256,9 @@ mod tests {
             "github-copilot",
             "cursor",
             "opencode",
+            "meta",
+            "deepseek",
+            "zhipu",
         ];
         for id in crate::providers::oauth_browser_provider_ids() {
             assert!(
@@ -255,6 +280,35 @@ mod tests {
                 "login_browser has '{id}' but catalog browser_auth=false"
             );
         }
+    }
+
+    #[test]
+    fn api_key_imports_are_not_treated_as_oauth_sessions() {
+        let key = OAuthTokens {
+            access_token: "sk-deepseek-harness-key-123456".into(),
+            refresh_token: Some("deepseek-cli".into()),
+            expires_at: None,
+            meta: Some(crate::auth::OauthMeta {
+                issuer: "deepseek".into(),
+                client_id: "deepseek-cli".into(),
+                extra: serde_json::json!({"credential_kind": "api_key"}),
+            }),
+        };
+        assert!(is_api_key_import(&key));
+        assert!(!imported_as_oauth_session(&key));
+
+        let oauth = OAuthTokens {
+            access_token: "muse-access-token-value-12345".into(),
+            refresh_token: Some("muse-refresh".into()),
+            expires_at: None,
+            meta: Some(crate::auth::OauthMeta {
+                issuer: "muse".into(),
+                client_id: "muse-code".into(),
+                extra: serde_json::json!({"credential_kind": "oauth"}),
+            }),
+        };
+        assert!(!is_api_key_import(&oauth));
+        assert!(imported_as_oauth_session(&oauth));
     }
 
     #[test]

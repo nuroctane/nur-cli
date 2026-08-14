@@ -6852,8 +6852,7 @@ impl App {
                     }
                 }
                 crate::oauth::BrowserLoginProgress::Done(tokens) => {
-                    let imported_as_oauth = !crate::oauth::omp_bridge::is_omp_import(&tokens)
-                        || crate::oauth::omp_bridge::is_omp_oauth_import(&tokens);
+                    let imported_as_oauth = crate::oauth::imported_as_oauth_session(&tokens);
                     let (provider_id, is_fallback) = self
                         .login
                         .as_ref()
@@ -7459,28 +7458,8 @@ impl App {
             .copied()
             .unwrap_or(*crate::providers::default_provider());
 
-        self.cfg.provider = provider.id.to_string();
-        let fixed_oauth_base = via_oauth
-            .then(|| crate::providers::oauth_base_url(provider.id))
-            .flatten();
-        self.cfg.base_url = fixed_oauth_base.unwrap_or(provider.base_url).to_string();
-        self.cfg.model = if via_oauth && provider.id == "xai" {
-            crate::providers::XAI_DEFAULT_MODEL.to_string()
-        } else {
-            provider.default_model.to_string()
-        };
-        // Self-hosted overrides apply only when the access token is not bound
-        // to a first-party OAuth inference backend.
-        if fixed_oauth_base.is_none() {
-            // Per-provider override (`OPENAI_BASE_URL`, `[provider_base_urls]`) wins
-            // over the catalog default - this is how `openai` (and any provider)
-            // points at an OpenAI-compatible endpoint in API-key mode.
-            if let Some(base) = crate::config::provider_base_url_override(&self.cfg, provider.id) {
-                self.cfg.base_url = base;
-            } else {
-                crate::config::apply_base_url_env(&mut self.cfg);
-            }
-        }
+        crate::config::apply_provider_defaults(&mut self.cfg, provider.id, via_oauth);
+        let (_, style, _) = crate::providers::endpoint_for_credential(&provider, via_oauth);
         // OAuth tokens may be refreshed while the login result is persisted.
         // Always use the canonical stored token for model detection and the
         // hot-swapped client instead of the raw pre-refresh login result.
@@ -7506,7 +7485,7 @@ impl App {
         crate::pricing::maybe_apply_context_window(&mut self.cfg);
 
         match crate::api::ApiClient::for_provider(&self.cfg.base_url, &bearer, provider.id)
-            .map(|c| c.with_style(provider.style))
+            .map(|c| c.with_style(style))
         {
             Ok(client) => {
                 self.client = client;
@@ -10011,9 +9990,14 @@ mod tests {
 
         let deepseek = crate::providers::by_id("deepseek").unwrap();
         let choices = login_method_choices(deepseek, true);
-        assert!(!choices.contains(&LoginMethodChoice::Browser));
+        assert!(choices.contains(&LoginMethodChoice::Browser));
         assert!(choices.contains(&LoginMethodChoice::ApiKey));
         assert!(choices.contains(&LoginMethodChoice::Import));
+
+        let meta = crate::providers::by_id("meta").unwrap();
+        assert!(login_method_choices(meta, true).contains(&LoginMethodChoice::Browser));
+        let zhipu = crate::providers::by_id("zhipu").unwrap();
+        assert!(login_method_choices(zhipu, true).contains(&LoginMethodChoice::Browser));
     }
 
     fn key(code: KeyCode, mods: KeyModifiers) -> KeyEvent {

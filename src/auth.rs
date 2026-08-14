@@ -298,12 +298,14 @@ pub(crate) fn pick_provider_credential(
 /// **With `None`** — generic envs then `auth.json` (scripts / headless).
 pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
     if let Some(exp) = expected_provider {
-        let provider_env = crate::providers::by_id(exp).and_then(|p| {
-            std::env::var(p.env_key)
-                .ok()
-                .map(|k| k.trim().to_string())
-                .filter(|k| !k.is_empty())
-        });
+        let provider_env = crate::providers::provider_env_keys(exp)
+            .into_iter()
+            .find_map(|name| {
+                std::env::var(name)
+                    .ok()
+                    .map(|k| k.trim().to_string())
+                    .filter(|k| !k.is_empty())
+            });
         let mut matching_auth = None;
         let mut matching_oauth = None;
         let mut legacy_auth = None;
@@ -1668,35 +1670,178 @@ pub fn auth_status() -> Result<()> {
     }
 }
 
-pub fn login_interactive(key_arg: Option<String>) -> Result<()> {
-    let key = if let Some(k) = key_arg {
-        k
+pub fn login_interactive(
+    key_arg: Option<String>,
+    provider_arg: Option<String>,
+    browser: bool,
+    import: bool,
+) -> Result<()> {
+    let mut cfg = crate::config::load_config().unwrap_or_default();
+    let provider = if let Some(raw) = provider_arg.as_deref() {
+        crate::providers::resolve_provider_alias(raw)
+            .map(|p| p.id.to_string())
+            .ok_or_else(|| NurError::Other(format!("unknown provider '{raw}'")))?
+    } else if !cfg.provider.trim().is_empty() {
+        cfg.provider.clone()
     } else {
-        print!("API key: ");
-        io::stdout().flush()?;
-        match rpassword::read_password() {
-            Ok(k) if !k.trim().is_empty() => k,
-            _ => {
-                let mut line = String::new();
-                io::stdin().read_line(&mut line)?;
-                line
+        crate::providers::default_provider().id.to_string()
+    };
+    let browser_ok = crate::providers::by_id(&provider)
+        .map(|p| p.browser_auth)
+        .unwrap_or(false);
+
+    if import {
+        return persist_cli_import(&provider, &mut cfg);
+    }
+    if let Some(k) = key_arg {
+        return persist_cli_api_key(&provider, k.trim(), &mut cfg);
+    }
+    if browser {
+        if !browser_ok {
+            return Err(NurError::Other(format!(
+                "provider '{provider}' has no official browser / harness sign-in. \
+                 Pass --key, or run `nur auth login --import` if a vendor CLI session exists."
+            )));
+        }
+        return persist_cli_browser(&provider, &mut cfg);
+    }
+    if browser_ok && atty_stdin() {
+        if let Ok(Some(tokens)) =
+            crate::oauth::run_blocking(|| crate::oauth::import_existing_session(&provider))
+        {
+            return persist_imported_tokens(
+                &provider,
+                tokens,
+                &mut cfg,
+                "imported existing CLI / OMP session",
+            );
+        }
+        println!(
+            "starting official sign-in for {provider} (pass --key to paste an API key instead)"
+        );
+        match persist_cli_browser(&provider, &mut cfg) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                eprintln!("{e}");
+                eprintln!("falling back to API key prompt");
             }
         }
+    }
+    print!("API key: ");
+    io::stdout().flush()?;
+    let typed = match rpassword::read_password() {
+        Ok(k) if !k.trim().is_empty() => k,
+        _ => {
+            let mut line = String::new();
+            io::stdin().read_line(&mut line)?;
+            line
+        }
     };
-    let key = key.trim();
+    persist_cli_api_key(&provider, typed.trim(), &mut cfg)
+}
+
+fn atty_stdin() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdin().is_terminal()
+}
+
+fn persist_cli_api_key(provider: &str, key: &str, cfg: &mut crate::config::Config) -> Result<()> {
     if key.is_empty() {
         return Err(NurError::Other("empty API key".into()));
     }
-    let provider = crate::config::load_config()
-        .map(|cfg| cfg.provider)
-        .unwrap_or_else(|_| crate::providers::default_provider().id.to_string());
-    save_api_key_for(key, Some(&provider))?;
-    save_provider_key(&provider, key)?;
+    save_api_key_for(key, Some(provider))?;
+    save_provider_key(provider, key)?;
     crate::oauth::omp_bridge::invalidate_omp_token_cache();
+    crate::config::apply_provider_defaults(cfg, provider, false);
+    crate::config::save_config(cfg)?;
     println!("saved to {}", auth_path().display());
     println!("provider: {provider}");
     println!("key: {}", key_fingerprint(key));
     Ok(())
+}
+
+fn persist_imported_tokens(
+    provider: &str,
+    tokens: crate::oauth::OAuthTokens,
+    cfg: &mut crate::config::Config,
+    via: &str,
+) -> Result<()> {
+    let oauth = crate::oauth::imported_as_oauth_session(&tokens);
+    let fingerprint = key_fingerprint(&tokens.access_token);
+    if oauth {
+        save_oauth_session(
+            provider,
+            &tokens.access_token,
+            tokens.refresh_token,
+            tokens.expires_at,
+            tokens.meta,
+        )?;
+    } else {
+        save_api_key_for(&tokens.access_token, Some(provider))?;
+        save_provider_key(provider, &tokens.access_token)?;
+    }
+    crate::oauth::omp_bridge::invalidate_omp_token_cache();
+    crate::config::apply_provider_defaults(cfg, provider, oauth);
+    crate::config::save_config(cfg)?;
+    println!("{via}");
+    println!("saved to {}", auth_path().display());
+    println!("provider: {provider}");
+    println!(
+        "method: {}",
+        if oauth { "oauth / harness" } else { "api_key" }
+    );
+    println!("key: {fingerprint}");
+    Ok(())
+}
+
+fn persist_cli_import(provider: &str, cfg: &mut crate::config::Config) -> Result<()> {
+    let tokens = crate::oauth::run_blocking(|| crate::oauth::import_existing_session(provider))?
+        .ok_or_else(|| {
+            NurError::Other(format!(
+                "no importable CLI / OMP session for '{provider}'. Sign in with the vendor CLI first, \
+                 or pass --browser / --key."
+            ))
+        })?;
+    persist_imported_tokens(provider, tokens, cfg, "imported existing CLI / OMP session")
+}
+
+fn persist_cli_browser(provider: &str, cfg: &mut crate::config::Config) -> Result<()> {
+    use crate::oauth::{BrowserLoginProgress, CancelFlag};
+    use std::sync::mpsc;
+    use std::thread;
+
+    let (tx, rx) = mpsc::channel();
+    let cancel = CancelFlag::new();
+    let cancel_bg = cancel.clone();
+    let pid = provider.to_string();
+    thread::spawn(move || {
+        crate::oauth::login_browser(&pid, tx, cancel_bg);
+    });
+    let tokens = loop {
+        match rx.recv() {
+            Ok(BrowserLoginProgress::Status(s)) => {
+                println!("  {s}");
+            }
+            Ok(BrowserLoginProgress::DeviceCode {
+                verification_url,
+                user_code,
+            }) => {
+                println!("open: {verification_url}");
+                println!("code: {user_code}");
+            }
+            Ok(BrowserLoginProgress::OpenUrl(url)) => {
+                println!("open: {url}");
+            }
+            Ok(BrowserLoginProgress::Done(tokens)) => break tokens,
+            Ok(BrowserLoginProgress::Failed(err)) => {
+                return Err(NurError::Other(err));
+            }
+            Err(_) => {
+                return Err(NurError::Other("sign-in channel closed".into()));
+            }
+        }
+    };
+    persist_imported_tokens(provider, tokens, cfg, "signed in")
 }
 
 #[cfg(test)]

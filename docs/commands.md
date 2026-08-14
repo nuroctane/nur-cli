@@ -75,8 +75,9 @@ Manage the stored API key (`~/.nur/auth.json`).
 For **multi-provider** sign-in (pick OpenAI, OpenRouter, Ollama, xAI, … + endpoint
 and default model), use the TUI slash command **`/provider`** (`/login` is an
 alias). Use **`/auth`** for the scrollable all-provider credential vault. See
-[Authentication](authentication.md). CLI `nur auth login` stores a key for the
-active provider without opening the full catalog picker.
+[Authentication](authentication.md). CLI `nur auth login` can paste a key, run
+an official harness/browser sign-in, or import a vendor CLI session, and updates
+the active provider/model when `--provider` is set.
 
 ```bash
 nur auth <SUBCOMMAND>
@@ -84,15 +85,20 @@ nur auth <SUBCOMMAND>
 
 #### `nur auth login`
 
-Save API key to `~/.nur/auth.json`.
+Save an API key, official harness session, or imported CLI credential to
+`~/.nur/auth.json` (and the per-provider store). Also writes `provider` /
+`base_url` / `model` into `~/.nur/config.toml`.
 
 ```bash
-nur auth login [--key <KEY>]
+nur auth login [--provider <ID>] [--browser] [--import] [--key <KEY>]
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--key <KEY>` | API key (optional; prompts if omitted) |
+| `--provider <ID>` | Catalog id or alias (`muse`, `zcode`, `dsh`, `openai`, …) |
+| `--browser` | Official browser / harness sign-in when the provider has one |
+| `--import` | Import an existing vendor CLI or OMP session |
+| `--key <KEY>` | API key (optional; prompts if omitted and no browser flow runs) |
 
 #### `nur auth status`
 

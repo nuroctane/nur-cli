@@ -37,7 +37,7 @@ repair or upgrade ecosystem components.
 nur doctor · v0.13.2
 
 binary  C:\Users\you\.local\bin\nur.exe
-config  model=Llama-4-Maverick-17B-128E-Instruct-FP8 effort=high max_turns=∞ budget=∞$/∞tok  (C:\Users\you\.nur\config.toml)
+config  model=muse-spark-1.2 effort=high max_turns=∞ budget=∞$/∞tok  (C:\Users\you\.nur\config.toml)
 auth    key set (…abcd)
 home    C:\Users\you\.nur
 status  C:\Users\you\.nur\status.json

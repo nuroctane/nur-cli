@@ -53,7 +53,7 @@ nur doctor          # health check
 
 Or run `nur` and use **`/provider`** in the TUI (`/login` remains an alias): pick any of **62 providers**
 (OpenAI, Anthropic, Gemini, xAI, Groq, OpenRouter, Requesty, local Ollama/LM Studio, Meta Model API, and so on).
-For **OpenAI, Anthropic, xAI, Kimi Code, Google Gemini, Azure OpenAI, GitHub Models, GitHub Copilot, and Cursor** you can **sign in with a browser or an official CLI session** (or import an existing Codex / Claude Code / Grok / Kimi / Cursor Agent session) instead of pasting an API key. OAuth sessions refresh before use, retry once after an authentication rejection, and `/model` detects the models available to the active credential. Cursor uses `cursor-agent login` and runs chat through the Agent CLI (no API key required). No credential on launch and login opens automatically.
+For **OpenAI, Anthropic, xAI, Kimi Code, Google Gemini, Azure OpenAI, GitHub Models, GitHub Copilot, Cursor, Muse Code, DeepSeek Harness, and ZCode (GLM)** you can **sign in with a browser or an official CLI session** (or import an existing Codex / Claude Code / Grok / Kimi / Cursor Agent / Muse / `dsh` / ZCode session) instead of pasting an API key. `nur auth login --provider muse --browser` (and the same for `deepseek` / `zcode`) is the CLI equivalent of TUI `/login`. OAuth sessions refresh before use, retry once after an authentication rejection, and `/model` detects the models available to the active credential. Cursor uses `cursor-agent login` and runs chat through the Agent CLI (no API key required). DeepSeek's official harness is API-key only (`$DSH_HOME/.credentials.yaml`). No credential on launch and login opens automatically.
 
 Provider requests have a shared five-minute watchdog by default, immediate Esc cancellation, and clean transport teardown. Set `NUR_PROVIDER_TURN_TIMEOUT_SECS` to adjust the ceiling. On Windows, Nur also recovers successful Cursor Agent turns from Cursor's durable transcript when affected CLI builds emit no redirected stdout.
 
@@ -387,7 +387,7 @@ Full list: **[docs/commands.md → TUI slash commands](./docs/commands.md#tui-sl
 
 ```toml
 provider = "meta"              # or openai, openrouter, ollama, ...
-model = "Llama-4-Maverick-17B-128E-Instruct-FP8"
+model = "muse-spark-1.2"
 base_url = "https://api.meta.ai/v1"
 reasoning_effort = "high"
 max_turns = 0   # 0 = unlimited agent rounds per prompt

@@ -259,12 +259,46 @@ pub fn normalize_antigravity_model_id(model: &str) -> String {
 /// Current general-purpose DeepSeek id.
 pub const DEEPSEEK_DEFAULT_MODEL: &str = "deepseek-v4-flash";
 
+/// Official Meta Model API default ([models](https://dev.meta.ai/docs/models)).
+pub const META_DEFAULT_MODEL: &str = "muse-spark-1.2";
+
+/// Z.AI general (prepaid / resource package) OpenAI-compatible host.
+pub const ZHIPU_BASE_URL: &str = "https://api.z.ai/api/paas/v4";
+
+/// Z.AI GLM Coding Plan OpenAI-compatible host.
+///
+/// Official ZCode / Coding Plan docs: do **not** use `/api/paas/v4` for a
+/// Coding Plan key. See https://zcode.z.ai/en/docs/configuration
+pub const ZHIPU_CODING_BASE_URL: &str = "https://api.z.ai/api/coding/paas/v4";
+
+/// GLM-5.3 is the Coding Plan flagship. The general `paas/v4` API still
+/// documents `glm-5.2` in its HTTP examples; Coding Plan routes 5.2/5.1
+/// requests to 5.3.
+pub const ZHIPU_DEFAULT_MODEL: &str = "glm-5.2";
+pub const ZHIPU_CODING_DEFAULT_MODEL: &str = "glm-5.3";
+
 /// Rewrite the retired DeepSeek aliases.
 ///
 /// DeepSeek removes `deepseek-chat` and `deepseek-reasoner` on
 /// **2026-07-24 15:59 UTC**. They were the non-thinking and thinking modes of
 /// `deepseek-v4-flash`, so the id swap is behaviour-neutral — nur drives
 /// reasoning depth through its own effort setting, not the model id.
+/// Rewrite Meta Model API ids that the current catalog no longer serves.
+///
+/// Official lineup is Muse Spark (`muse-spark-1.1`, `muse-spark-1.2`,
+/// `muse-spark-1.2-contributor`). The former Llama 4 stock default 404s.
+pub fn normalize_meta_model_id(model: &str) -> String {
+    let m = model.trim();
+    if m.is_empty() {
+        return META_DEFAULT_MODEL.to_string();
+    }
+    let lower = m.to_ascii_lowercase();
+    if lower.starts_with("llama-4-maverick") || lower.starts_with("llama-4-scout") {
+        return META_DEFAULT_MODEL.to_string();
+    }
+    m.to_string()
+}
+
 pub fn normalize_deepseek_model_id(model: &str) -> String {
     let m = model.trim();
     if m.is_empty() {
@@ -306,6 +340,7 @@ pub fn normalize_model_for(provider_id: &str, model: &str) -> String {
         "google" => normalize_google_model_id(model),
         "deepseek" => normalize_deepseek_model_id(model),
         "inception" => normalize_inception_model_id(model),
+        "meta" => normalize_meta_model_id(model),
         _ => model.trim().to_string(),
     }
 }
@@ -454,6 +489,7 @@ pub fn oauth_base_url(provider_id: &str) -> Option<&'static str> {
         "openai" => Some(OPENAI_OAUTH_BASE_URL),
         "xai" => Some(XAI_OAUTH_BASE_URL),
         "kimi" => Some(KIMI_CODE_BASE_URL),
+        "zhipu" => Some(ZHIPU_CODING_BASE_URL),
         _ => None,
     }
 }
@@ -490,6 +526,9 @@ pub fn endpoint_for_credential(
         // The Grok Build proxy is Responses-shaped and serves the current
         // flagship id, not whatever the key-side catalog row happens to hold.
         return (base, ApiStyle::Responses, XAI_DEFAULT_MODEL);
+    }
+    if p.id == "zhipu" {
+        return (base, p.style, ZHIPU_CODING_DEFAULT_MODEL);
     }
     (base, p.style, p.default_model)
 }
@@ -532,12 +571,12 @@ pub const PROVIDERS: &[Provider] = &[
         id: "meta",
         name: "Meta Model API",
         base_url: "https://api.meta.ai/v1",
-        default_model: "Llama-4-Maverick-17B-128E-Instruct-FP8",
+        default_model: META_DEFAULT_MODEL,
         env_key: "META_API_KEY",
         style: R,
-        note: "Llama 4 Maverick · Meta vendor default",
+        note: "Muse Spark · key or Muse Code browser",
         key_optional: false,
-        browser_auth: false,
+        browser_auth: true,
     },
     // ── frontier direct APIs ─────────────────────────────────────────────
     Provider {
@@ -623,9 +662,9 @@ pub const PROVIDERS: &[Provider] = &[
         default_model: DEEPSEEK_DEFAULT_MODEL,
         env_key: "DEEPSEEK_API_KEY",
         style: CC,
-        note: "V3 · R1",
+        note: "V4 Flash/Pro · key or DeepSeek Harness",
         key_optional: false,
-        browser_auth: false,
+        browser_auth: true,
     },
     Provider {
         id: "mistral",
@@ -979,15 +1018,15 @@ pub const PROVIDERS: &[Provider] = &[
     Provider {
         id: "zhipu",
         name: "Z.AI",
-        base_url: "https://api.z.ai/api/paas/v4",
-        // `glm-4.6` still resolves but is four generations behind; Z.AI documents
-        // `glm-5.2` against this exact base.
-        default_model: "glm-5.2",
+        base_url: ZHIPU_BASE_URL,
+        // General prepaid/resource-package route. Coding Plan / ZCode OAuth
+        // uses `ZHIPU_CODING_BASE_URL` + `glm-5.3` via `endpoint_for_credential`.
+        default_model: ZHIPU_DEFAULT_MODEL,
         env_key: "ZAI_API_KEY",
         style: CC,
-        note: "GLM",
+        note: "GLM · key or ZCode / Coding Plan",
         key_optional: false,
-        browser_auth: false,
+        browser_auth: true,
     },
     Provider {
         id: "qwen",
@@ -1414,17 +1453,20 @@ fn resolve_provider_token(q: &str) -> Option<&'static Provider> {
         | "gpt4" => "openai",
         "openai-cc" | "gpt-cc" | "openai-chat" => "openai-cc",
         // DeepSeek
-        "deepseek" | "ds" | "deep-seek" | "r1" | "deepseek-r1" | "deepseek-v3" => "deepseek",
+        "deepseek" | "ds" | "deep-seek" | "r1" | "deepseek-r1" | "deepseek-v3"
+        | "deepseek-v4" | "dsh" | "deepseek-harness" => "deepseek",
         // Mistral
         "mistral" | "lechat" | "mixtral" | "codestral" => "mistral",
         // Kimi / Moonshot (distinct catalog ids)
         "kimi" | "kimi-code" | "k2" | "kimi-k2" => "kimi",
         "moonshot" | "moonshot-ai" => "moonshot",
-        // Meta (default vendor)
-        "llama" | "meta" | "meta-ai" => "meta",
+        // Meta (default vendor) / Muse Code
+        "llama" | "meta" | "meta-ai" | "muse" | "muse-code" | "muse-spark" => "meta",
         // Chinese labs
         "qwen" | "dashscope" | "alibaba" | "tongyi" => "qwen",
-        "zhipu" | "z.ai" | "zai" | "glm" | "chatglm" => "zhipu",
+        "zhipu" | "z.ai" | "zai" | "glm" | "chatglm" | "zcode" | "glm-5.3" | "glm-5.2" => {
+            "zhipu"
+        }
         "minimax" | "abab" => "minimax",
         "stepfun" | "step" => "stepfun",
         "baichuan" => "baichuan",
@@ -1772,7 +1814,23 @@ pub fn oauth_browser_provider_ids() -> &'static [&'static str] {
         "github-copilot",
         "cursor",
         "opencode",
+        "meta",
+        "deepseek",
+        "zhipu",
     ]
+}
+
+/// Environment variables that count as this provider's own key.
+///
+/// Most catalog rows have one `env_key`. Meta Model API documents both
+/// `META_API_KEY` (Muse Code) and `MODEL_API_KEY` (Model API dashboard).
+pub fn provider_env_keys(provider_id: &str) -> Vec<&'static str> {
+    match provider_id {
+        "meta" => vec!["META_API_KEY", "MODEL_API_KEY"],
+        other => by_id(other)
+            .map(|p| vec![p.env_key])
+            .unwrap_or_default(),
+    }
 }
 
 #[cfg(test)]
@@ -1878,6 +1936,14 @@ mod tests {
         assert_eq!(style, ApiStyle::Responses, "proxy is Responses-shaped");
         assert_eq!(model, XAI_DEFAULT_MODEL);
         assert_eq!(endpoint_for_credential(xai, false).1, xai.style);
+
+        let zhipu = by_id("zhipu").expect("zhipu in catalog");
+        let (base, style, model) = endpoint_for_credential(zhipu, true);
+        assert_eq!(base, ZHIPU_CODING_BASE_URL);
+        assert_eq!(style, zhipu.style);
+        assert_eq!(model, ZHIPU_CODING_DEFAULT_MODEL);
+        assert_eq!(endpoint_for_credential(zhipu, false).0, ZHIPU_BASE_URL);
+        assert_eq!(endpoint_for_credential(zhipu, false).2, ZHIPU_DEFAULT_MODEL);
 
         // Google `ya29.` tokens are 401 on generativelanguage — Cloud Code only.
         let google = by_id("google").expect("google in catalog");
@@ -2243,6 +2309,24 @@ mod tests {
     }
 
     #[test]
+    fn retired_meta_llama_stock_ids_are_rewritten() {
+        assert_eq!(
+            normalize_meta_model_id("Llama-4-Maverick-17B-128E-Instruct-FP8"),
+            META_DEFAULT_MODEL
+        );
+        assert_eq!(normalize_meta_model_id("muse-spark-1.1"), "muse-spark-1.1");
+        assert_eq!(normalize_meta_model_id("muse-spark-1.2"), META_DEFAULT_MODEL);
+        assert_eq!(
+            resolve_provider_alias("muse").map(|p| p.id),
+            Some("meta")
+        );
+        assert_eq!(
+            resolve_provider_alias("zcode").map(|p| p.id),
+            Some("zhipu")
+        );
+    }
+
+    #[test]
     fn retired_inception_ids_are_rewritten() {
         assert_eq!(
             normalize_inception_model_id("mercury-coder"),
@@ -2323,6 +2407,9 @@ mod tests {
         assert_eq!(oauth_base_url("openai"), Some(OPENAI_OAUTH_BASE_URL));
         assert_eq!(oauth_base_url("xai"), Some(XAI_OAUTH_BASE_URL));
         assert_eq!(oauth_base_url("kimi"), Some(KIMI_CODE_BASE_URL));
+        assert_eq!(oauth_base_url("zhipu"), Some(ZHIPU_CODING_BASE_URL));
+        assert_eq!(oauth_base_url("meta"), None);
+        assert_eq!(oauth_base_url("deepseek"), None);
         assert_eq!(oauth_base_url("anthropic"), None);
     }
 
@@ -2377,6 +2464,9 @@ mod tests {
                 "github-copilot",
                 "cursor",
                 "opencode",
+                "meta",
+                "deepseek",
+                "zhipu",
             ]
         );
         assert!(!by_id("huggingface").unwrap().browser_auth);

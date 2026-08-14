@@ -6,7 +6,7 @@ use std::path::PathBuf;
 pub const DEFAULT_BASE_URL: &str = "https://api.meta.ai/v1";
 /// Default model id when provider is Meta Model API (wire format). Override via
 /// `/model`, `--model`, config, or `NUR_MODEL`.
-pub const DEFAULT_MODEL: &str = "Llama-4-Maverick-17B-128E-Instruct-FP8";
+pub const DEFAULT_MODEL: &str = crate::providers::META_DEFAULT_MODEL;
 pub const DEFAULT_REASONING: &str = "high";
 
 /// Pretty-print a model id for the splash title / status only.
@@ -65,7 +65,9 @@ pub const PRICE_OUTPUT_PER_MTOK: f64 = 4.25;
 /// Schema >=12: reserve and cap each inference response by default. This is
 /// intentionally separate from unlimited task rounds: an unlimited task must
 /// not imply an unlimited single completion.
-pub const CONFIG_SCHEMA: u32 = 13;
+/// Schema >=14: Meta Model API stock default is Muse Spark 1.2 (Llama 4
+/// Maverick is no longer on this host).
+pub const CONFIG_SCHEMA: u32 = 14;
 
 const RETIRED_PROVIDER_IDS: &[&str] = &[
     "anyscale",
@@ -644,8 +646,33 @@ pub fn migrate_config(cfg: &mut Config) -> bool {
     if cfg.config_schema < 11 && cfg.provider == "meta" && is_retired_stock_meta_model(&cfg.model) {
         cfg.model = DEFAULT_MODEL.to_string();
     }
+    if cfg.config_schema < 14 && cfg.provider == "meta" {
+        cfg.model = crate::providers::normalize_meta_model_id(&cfg.model);
+    }
     cfg.config_schema = CONFIG_SCHEMA;
     true
+}
+
+/// Apply catalog (or OAuth) host + default model for a provider onto config.
+/// Used by TUI `/login` and `nur auth login --provider`.
+pub fn apply_provider_defaults(cfg: &mut Config, provider_id: &str, via_oauth: bool) {
+    let provider = crate::providers::by_id(provider_id)
+        .copied()
+        .unwrap_or(*crate::providers::default_provider());
+    cfg.provider = provider.id.to_string();
+    let (base, _, model) = crate::providers::endpoint_for_credential(&provider, via_oauth);
+    cfg.base_url = base.to_string();
+    cfg.model = model.to_string();
+    let fixed_oauth_base = via_oauth
+        .then(|| crate::providers::oauth_base_url(provider.id))
+        .flatten();
+    if fixed_oauth_base.is_none() {
+        if let Some(over) = provider_base_url_override(cfg, provider.id) {
+            cfg.base_url = over;
+        } else {
+            apply_base_url_env(cfg);
+        }
+    }
 }
 
 /// Match the retired stock model without retaining its former product name in
@@ -923,6 +950,19 @@ mod tests {
         cfg.max_turns = 12;
         assert!(!migrate_config(&mut cfg));
         assert_eq!(cfg.max_turns, 12);
+    }
+
+    #[test]
+    fn migrate_rewrites_retired_meta_llama_stock_id() {
+        let mut cfg = Config {
+            config_schema: 13,
+            provider: "meta".into(),
+            model: "Llama-4-Maverick-17B-128E-Instruct-FP8".into(),
+            ..Default::default()
+        };
+        assert!(migrate_config(&mut cfg));
+        assert_eq!(cfg.model, crate::providers::META_DEFAULT_MODEL);
+        assert_eq!(cfg.config_schema, CONFIG_SCHEMA);
     }
 
     /// A config saved when `grok-4` was the default must heal itself on load,

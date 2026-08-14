@@ -106,7 +106,12 @@ async fn real_main() -> Result<()> {
     match &cli.command {
         Some(Commands::Auth { action }) => {
             match action {
-                AuthCmd::Login { key } => login_interactive(key.clone())?,
+                AuthCmd::Login {
+                    key,
+                    provider,
+                    browser,
+                    import,
+                } => login_interactive(key.clone(), provider.clone(), *browser, *import)?,
                 AuthCmd::Status => auth_status()?,
                 AuthCmd::Logout { revoke } => {
                     logout(*revoke)?;

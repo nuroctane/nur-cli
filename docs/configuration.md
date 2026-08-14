@@ -9,7 +9,7 @@ The config file lives at `~/.nur/config.toml` and is created on first run.
 ```toml
 # Active provider id from the catalog (set by TUI /login)
 provider = "meta"
-model = "Llama-4-Maverick-17B-128E-Instruct-FP8"
+model = "muse-spark-1.2"
 base_url = "https://api.meta.ai/v1"
 reasoning_effort = "high"
 # 0 = unlimited agent rounds per prompt (default). Set a number to cap.
@@ -71,7 +71,7 @@ auto_update = true
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `provider` | string | `nur` | Catalog id (`nur`, `openai`, `openrouter`, `ollama`, …). Set by TUI **`/login`** with matching `base_url` + `model` |
-| `model` | string | `Llama-4-Maverick-17B-128E-Instruct-FP8` | Model id for the active provider |
+| `model` | string | `muse-spark-1.2` | Model id for the active provider |
 | `base_url` | string | `https://api.meta.ai/v1` | API base (no trailing path); providers use Responses or Chat Completions under this base |
 | `reasoning_effort` | string | `high` | Reasoning depth: `minimal`, `low`, `medium`, `high`, `xhigh` |
 | `max_turns` | integer | `0` | Max agent tool/model rounds per user prompt. **`0` = unlimited** (default). Set via config or `/budget turns` / `/turns` |

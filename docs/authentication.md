@@ -12,7 +12,7 @@ The active provider, endpoint, and default model are stored in
 
 | Provider | API key | Browser / SSO |
 |----------|---------|----------------|
-| **Meta Model API** | [dev.meta.ai](https://dev.meta.ai/) | - |
+| **Meta Model API** | `META_API_KEY` or `MODEL_API_KEY` | Muse Code browser (`muse login`) or import `~/.config/muse/auth.json` |
 | **OpenAI** | `OPENAI_API_KEY` | ChatGPT browser OAuth (Codex backend) or import `~/.codex` |
 | **xAI Grok** | `XAI_API_KEY` | Device code / Grok CLI session (cli-chat-proxy) |
 | **Kimi Code (kimi.com)** | `KIMI_API_KEY` | Device code / Kimi CLI session |
@@ -21,6 +21,8 @@ The active provider, endpoint, and default model are stored in
 | **GitHub Copilot** | `COPILOT_GITHUB_TOKEN` (fine-grained PAT with Copilot Requests) | `gh auth login` (subscription token) |
 | **Cursor** | `CURSOR_API_KEY` (optional) | `cursor-agent login` → nur chat via Agent CLI (no key required) |
 | **OpenCode** | `OPENCODE_API_KEY` | `opencode auth login` (imports `~/.local/share/opencode/auth.json` → `opencode` / `opencode-go`) |
+| **DeepSeek** | `DEEPSEEK_API_KEY` | DeepSeek Harness (`$DSH_HOME/.credentials.yaml`); no official OAuth |
+| **Z.AI / ZCode (GLM)** | `ZAI_API_KEY` | `zcode login` (Z.ai or BigModel) or import `~/.zcode/v2/config.json` |
 | **Hugging Face** | `HF_TOKEN` | - |
 | **Azure OpenAI** | `AZURE_OPENAI_API_KEY` | `az login` / Entra device code |
 | **Amazon Bedrock** | `AWS_BEARER_TOKEN_BEDROCK` | - (AWS SSO credentials require SigV4, which this route does not implement) |
@@ -76,6 +78,9 @@ these providers:
 | **GitHub Copilot** | GitHub login via `gh` | GitHub CLI session | `api.githubcopilot.com` |
 | **Cursor** | Cursor login via `cursor-agent` | `$CURSOR_AGENT_HOME` or `~/.cursor` / OS keychain | Chat runs through `cursor-agent -p` (nur tool harness by default); optional `CURSOR_API_KEY` |
 | **OpenCode** | `opencode auth login` | `~/.local/share/opencode/auth.json` | Zen/Go gateway key (`opencode` / `opencode-go` entries) |
+| **Meta / Muse Code** | `muse login` (or first-run `muse`) | `$MUSE_CONFIG_DIR` or `~/.config/muse/auth.json` | `api.meta.ai/v1` (same host as an API key) |
+| **DeepSeek** | DeepSeek Harness `dsh web` → Settings → Models | `$DSH_HOME/.credentials.yaml` (default `~/.dsh`) | `api.deepseek.com/v1` (API key only; no official OAuth) |
+| **Z.AI / ZCode (GLM)** | `zcode login` (Z.ai or BigModel) | `~/.zcode/v2/config.json` (`$ZCODE_HOME`) | Coding Plan: `api.z.ai/api/coding/paas/v4`; general key: `api.z.ai/api/paas/v4` |
 
 #### Cursor details (CLI, no pasted key)
 
@@ -111,6 +116,13 @@ In `/login`, pick the provider → **Sign in with browser**, or **Use existing C
 session** when a local first-party login is detected. API keys remain available as a
 fallback for every one of them.
 
+Other first-party CLIs that do **not** have a browser OAuth nur can copy:
+
+- **Qwen Code** — official Qwen OAuth was discontinued on 2026-04-15. Nur imports
+  `DASHSCOPE_API_KEY` / Coding Plan keys from `~/.qwen/settings.json`.
+- **MiniMax CLI (`mmx`)** — `mmx auth login --api-key` only. Nur imports a stored
+  key from `~/.mmx` / `~/.minimax` when present.
+
 ### Signed into the vendor CLI = signed into nur
 
 Credential resolution order for a catalog provider:
@@ -121,7 +133,8 @@ Credential resolution order for a catalog provider:
    then per-provider keys/sessions (`provider_keys.json` / `provider_sessions.json`),
    followed by the global `NUR_API_KEY` fallback.
 3. **Vendor CLI session** (Claude Code, Codex, Grok, Kimi, Cursor, OpenCode,
-   Antigravity / gcloud) when that provider has a first-party importer.
+   Antigravity / gcloud, Muse Code, DeepSeek Harness, ZCode, Qwen Code settings,
+   MiniMax CLI) when that provider has a first-party importer.
 4. **Oh My Pi (OMP)** for every catalog provider - `omp token <provider>` reads
    `~/.omp/agent/agent.db` (see [Oh My Pi](https://github.com/can1357/oh-my-pi)).
    Nur maps ids (`openai` → `openai-codex`, `google` → `google-gemini-cli`, …).
@@ -145,9 +158,10 @@ minutes old no longer sends you to `/login`.
 
 Nur respects the official CLI isolation variables when locating those sessions:
 `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `XAI_CONFIG_DIR`, `CURSOR_AGENT_HOME`,
-`ANTIGRAVITY_HOME`, and `GCLOUD_CONFIG_DIR`. This matters for work profiles and
-sandboxed CLI installs: a valid login outside the default home directory is not
-treated as signed out.
+`ANTIGRAVITY_HOME`, `GCLOUD_CONFIG_DIR`, `MUSE_CONFIG_DIR`, `DSH_HOME`,
+`ZCODE_HOME` / `ZCODE_CONFIG_DIR`, and `QWEN_CONFIG_DIR`. This matters for work
+profiles and sandboxed CLI installs: a valid login outside the default home
+directory is not treated as signed out.
 
 Kimi Code API keys work against `https://api.kimi.com/coding/v1`. The separate Moonshot
 AI catalog entry remains available for `https://api.moonshot.ai/v1` keys.
@@ -191,14 +205,26 @@ No key on launch → the login modal opens automatically.
 
 ```bash
 nur auth login
+nur auth login --provider muse --browser
+nur auth login --provider deepseek --import
+nur auth login --provider zcode --browser
 nur auth login --key YOUR_KEY   # avoid on shared machines
 ```
 
-Key is written to `~/.nur/auth.json` and never printed. CLI login stores a key for the
-active provider config; it does **not** open the full catalog picker.
+`--provider` accepts catalog ids and aliases (`muse`, `zcode`, `dsh`, `glm`).
+`--browser` runs that vendor's official harness / CLI sign-in (Muse Code, ZCode,
+DeepSeek Harness `dsh web`, plus the existing Codex / Claude / Grok / … flows).
+`--import` reads an already-signed-in vendor CLI or OMP session.
 
-For a clean multi-provider switch (catalog + endpoint + model + API style together),
-prefer **`/login`** in the TUI.
+On a TTY, `nur auth login` without `--key` starts the official sign-in when the
+active (or `--provider`) catalog row has one. Pass `--key` to paste an API key
+instead.
+
+A successful CLI login writes `~/.nur/auth.json`, the per-provider store, and
+updates `~/.nur/config.toml` (`provider`, `base_url`, `model`) the same way
+`/login` does.
+
+For a scrollable catalog picker, prefer **`/login`** in the TUI.
 
 ## Via environment variable
 

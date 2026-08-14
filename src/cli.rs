@@ -247,11 +247,20 @@ pub enum EcosystemCmd {
 
 #[derive(Subcommand, Debug)]
 pub enum AuthCmd {
-    /// Save API key to ~/.nur/auth.json
+    /// Sign in (API key, official harness/browser, or import a vendor CLI session)
     Login {
         /// API key (optional; prompts if omitted)
         #[arg(long)]
         key: Option<String>,
+        /// Catalog provider (or alias: muse, zcode, dsh, …). Default: current config.
+        #[arg(long, short = 'p')]
+        provider: Option<String>,
+        /// Official browser / harness sign-in (Muse Code, ZCode, DeepSeek Harness, …)
+        #[arg(long)]
+        browser: bool,
+        /// Import an existing vendor CLI / OMP session
+        #[arg(long)]
+        import: bool,
     },
     /// Show auth status (never prints full key)
     Status,

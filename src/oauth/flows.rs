@@ -72,6 +72,9 @@ pub fn login_browser(provider_id: &str, tx: ProgressTx, cancel: CancelFlag) {
         "github-models" | "github-copilot" => github::login(provider_id, &tx, &cancel),
         "cursor" => cursor::login(&tx, &cancel),
         "opencode" => opencode::login(&tx, &cancel),
+        "meta" => super::harness::muse::login(&tx, &cancel),
+        "deepseek" => super::harness::deepseek::login(&tx, &cancel),
+        "zhipu" => super::harness::zhipu::login(&tx, &cancel),
         other => Err(NurError::Other(format!(
             "browser login not supported for '{other}'"
         ))),
@@ -101,6 +104,11 @@ pub fn import_existing_session(provider_id: &str) -> Result<Option<OAuthTokens>>
         "huggingface" => Ok(huggingface::import_hf_token()),
         "cursor" => cursor::import_cursor_cli(),
         "opencode" => opencode::import_opencode_cli(),
+        "meta" => super::harness::muse::import_muse_cli(),
+        "deepseek" => super::harness::deepseek::import_dsh_cli(),
+        "zhipu" => super::harness::zhipu::import_zcode_cli(),
+        "qwen" => super::harness::qwen::import_qwen_cli(),
+        "minimax" => super::harness::minimax::import_mmx_cli(),
         // Google / Antigravity: try Antigravity CLI first (Windows credman + file),
         // then gcloud ADC.
         "google" | "antigravity" | "google-oauth" => {
