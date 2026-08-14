@@ -1,6 +1,6 @@
 [package]
 name = "nur-cli"
-version = "0.27.16"
+version = "0.27.17"
 edition = "2021"
 description = "NurCLI - fully loaded multi-provider coding agent (TUI, vision, tools, sandbox, Graphify/PLUR/Ruflo/Executor + 976 bundled skills)."
 license = "GPL-3.0-or-later"
@@ -51,6 +51,8 @@ colored = "2"
 arboard = "3"
 sha2 = "0.11.0"
 base64 = "0.22.1"
+# ZCode credential store decryption (enc:v1 AES-256-GCM envelopes).
+aes-gcm = "0.10"
 # Firecrawl anydoc — local office/PDF → GFM (nickscamara / firecrawl/anydoc).
 # Optional so lean builds can drop the document stack.
 anydoc = { version = "0.1.6", optional = true }

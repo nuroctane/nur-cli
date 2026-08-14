@@ -22,7 +22,7 @@ The active provider, endpoint, and default model are stored in
 | **Cursor** | `CURSOR_API_KEY` (optional) | `cursor-agent login` → nur chat via Agent CLI (no key required) |
 | **OpenCode** | `OPENCODE_API_KEY` | `opencode auth login` (imports `~/.local/share/opencode/auth.json` → `opencode` / `opencode-go`) |
 | **DeepSeek** | `DEEPSEEK_API_KEY` | DeepSeek Harness (`$DSH_HOME/.credentials.yaml`); no official OAuth |
-| **Z.AI / ZCode (GLM)** | `ZAI_API_KEY` | `zcode login` (Z.ai or BigModel) or import `~/.zcode/v2/config.json` |
+| **Z.AI / ZCode (GLM)** | `ZAI_API_KEY` | `zcode login` / in-app `/login zai-coding-plan`; nur imports `~/.zcode/v2/credentials.json` (decrypted locally) and `~/.zcode/v2/config.json` |
 | **Hugging Face** | `HF_TOKEN` | - |
 | **Azure OpenAI** | `AZURE_OPENAI_API_KEY` | `az login` / Entra device code |
 | **Amazon Bedrock** | `AWS_BEARER_TOKEN_BEDROCK` | - (AWS SSO credentials require SigV4, which this route does not implement) |
@@ -80,7 +80,7 @@ these providers:
 | **OpenCode** | `opencode auth login` | `~/.local/share/opencode/auth.json` | Zen/Go gateway key (`opencode` / `opencode-go` entries) |
 | **Meta / Muse Code** | `muse login` (or first-run `muse`) | `$MUSE_CONFIG_DIR` or `~/.config/muse/auth.json` | `api.meta.ai/v1` (same host as an API key) |
 | **DeepSeek** | DeepSeek Harness `dsh web` → Settings → Models | `$DSH_HOME/.credentials.yaml` (default `~/.dsh`) | `api.deepseek.com/v1` (API key only; no official OAuth) |
-| **Z.AI / ZCode (GLM)** | `zcode login` (Z.ai or BigModel) | `~/.zcode/v2/config.json` (`$ZCODE_HOME`) | Coding Plan: `api.z.ai/api/coding/paas/v4`; general key: `api.z.ai/api/paas/v4` |
+| **Z.AI / ZCode (GLM)** | in-app `/login zai-coding-plan` (Electron app) or `zcode login` (npm CLI) | `~/.zcode/v2/credentials.json` (AES-256-GCM `enc:v1:` envelopes nur decrypts on-device) + `~/.zcode/v2/config.json` (`$ZCODE_HOME`) | Coding Plan: `api.z.ai/api/coding/paas/v4`; general key: `api.z.ai/api/paas/v4` |
 
 #### Cursor details (CLI, no pasted key)
 

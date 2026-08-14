@@ -9,9 +9,11 @@
 //!   API key only, stored as `$DSH_HOME/.credentials.yaml` (`DEEPSEEK_API_KEY: …`).
 //!   Isolation: `DSH_HOME` (default `~/.dsh`).
 //! - **ZCode** ([connect](https://zcode.z.ai/en/docs/configuration)): Z.ai /
-//!   BigModel account OAuth (`zcode login`) or an API key. Config
-//!   `~/.zcode/v2/config.json`; `credentials.json` is device-encrypted and is
-//!   not scraped. Coding Plan traffic uses `/api/coding/paas/v4`.
+//!   BigModel account OAuth (in-app `/login zai-coding-plan`, or `zcode login`
+//!   on npm installs) or an API key. Config `~/.zcode/v2/config.json`;
+//!   `credentials.json` uses deterministic `enc:v1:` AES-256-GCM envelopes
+//!   (same-device import works — see `zhipu::decrypt_credential`). Coding
+//!   Plan traffic uses `/api/coding/paas/v4`.
 //! - **Qwen Code** ([auth](https://qwenlm.github.io/qwen-code-docs/en/users/configuration/auth/)):
 //!   Qwen OAuth is discontinued. Import `~/.qwen/settings.json` keys only.
 //! - **MiniMax CLI**: `mmx auth login --api-key` (no OAuth). Import a stored
@@ -216,7 +218,8 @@ fn walk_json_secrets(v: &serde_json::Value, keys: &[&str], out: &mut Vec<(String
     if let Some(obj) = v.as_object() {
         if let Some(secret) = json_string_field(v, keys) {
             let base = obj
-                .get("baseUrl")
+                .get("baseURL")
+                .or_else(|| obj.get("baseUrl"))
                 .or_else(|| obj.get("base_url"))
                 .or_else(|| obj.get("endpoint"))
                 .and_then(|x| x.as_str())
@@ -629,6 +632,11 @@ pub mod deepseek {
 
 pub mod zhipu {
     use super::*;
+    use aes_gcm::aead::{Aead, KeyInit};
+    use aes_gcm::{Aes256Gcm, Nonce};
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
 
     pub fn zcode_home() -> PathBuf {
         for var in ["ZCODE_HOME", "ZCODE_CONFIG_DIR"] {
@@ -653,36 +661,194 @@ pub mod zhipu {
         ]
     }
 
+    pub fn credentials_path() -> PathBuf {
+        zcode_home().join("v2").join("credentials.json")
+    }
+
     fn prefer_coding(base: Option<&str>) -> bool {
         base.is_some_and(|b| b.contains("/coding/") || b.contains("/anthropic"))
     }
 
+    // ── credential decryption ────────────────────────────────────────────
+    //
+    // ZCode stores OAuth state in `v2/credentials.json` as `enc:v1:iv.tag.ct`
+    // AES-256-GCM envelopes (base64url parts). The key is `sha256(secret)`
+    // where the secret is `ZCODE_CREDENTIAL_SECRET` or, by default, the
+    // deterministic device string `zcode-credential-fallback:{platform}:
+    // {homedir}:{username}` (zcode.cjs `createZCodeCredentialCipher`), so the
+    // same user on the same machine can always recover the session.
+
+    fn node_platform() -> &'static str {
+        match std::env::consts::OS {
+            "windows" => "win32",
+            "macos" => "darwin",
+            _ => "linux",
+        }
+    }
+
+    fn credential_secret() -> String {
+        if let Ok(secret) = std::env::var("ZCODE_CREDENTIAL_SECRET") {
+            let t = secret.trim().to_string();
+            if !t.is_empty() {
+                return t;
+            }
+        }
+        let username = std::env::var("USERNAME")
+            .or_else(|_| std::env::var("USER"))
+            .unwrap_or_else(|_| "unknown".into());
+        let home = home_dir()
+            .map(|h| h.display().to_string())
+            .unwrap_or_default();
+        format!("zcode-credential-fallback:{}:{}:{}", node_platform(), home, username)
+    }
+
+    fn decrypt_credential(envelope: &str) -> Option<String> {
+        let rest = envelope.strip_prefix("enc:v1:")?;
+        let mut parts = rest.split('.');
+        let iv = URL_SAFE_NO_PAD.decode(parts.next()?).ok()?;
+        let tag = URL_SAFE_NO_PAD.decode(parts.next()?).ok()?;
+        let ct = URL_SAFE_NO_PAD.decode(parts.next()?).ok()?;
+        if parts.next().is_some() || iv.len() != 12 || tag.len() != 16 || ct.is_empty() {
+            return None;
+        }
+        let key = Sha256::digest(credential_secret().as_bytes());
+        let cipher = Aes256Gcm::new_from_slice(&key).ok()?;
+        let mut sealed = ct;
+        sealed.extend_from_slice(&tag);
+        let plain = cipher.decrypt(Nonce::from_slice(&iv), sealed.as_ref()).ok()?;
+        String::from_utf8(plain).ok()
+    }
+
+    /// Accept a plaintext value or an `enc:v1:` envelope; envelopes that fail
+    /// to decrypt are passed through untouched so they still fail the
+    /// `looks_like_secret`/sender checks loudly rather than vanishing.
+    fn reveal_credential(value: &str) -> String {
+        let t = value.trim();
+        if t.starts_with("enc:v1:") {
+            decrypt_credential(t).unwrap_or_else(|| t.to_string())
+        } else {
+            t.to_string()
+        }
+    }
+
+    fn jwt_expiry(token: &str) -> Option<u64> {
+        let payload = token.split('.').nth(1)?;
+        let bytes = URL_SAFE_NO_PAD.decode(payload).ok()?;
+        let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+        v.get("exp")
+            .and_then(|x| x.as_u64().or_else(|| x.as_f64().map(|f| f as u64)))
+    }
+
+    /// OAuth session from `v2/credentials.json`. Keys: `oauth:zai:access_token`,
+    /// `oauth:zai:refresh_token` (when the server issued one), `zcodejwttoken`,
+    /// `oauth:zai:user_info`, `oauth:active_provider` (`zai` | `bigmodel`).
+    pub fn tokens_from_credentials_file(text: &str, path: &Path) -> Option<OAuthTokens> {
+        let v: serde_json::Value = serde_json::from_str(text).ok()?;
+        let field = |name: &str| -> Option<String> {
+            v.get(name)
+                .and_then(|x| x.as_str())
+                .map(reveal_credential)
+                .filter(|s| looks_like_secret(s))
+        };
+        let access = field("oauth:zai:access_token")?;
+        let refresh = field("oauth:zai:refresh_token");
+        let active = field("oauth:active_provider");
+        let base = match active.as_deref() {
+            Some("bigmodel") => "https://open.bigmodel.cn/api/coding/paas/v4",
+            _ => "https://api.z.ai/api/coding/paas/v4",
+        };
+        let mut extra = serde_json::json!({
+            "imported_from": "zcode-credentials",
+            "path": path.display().to_string(),
+            "credential_kind": "oauth",
+            "route": "coding",
+            "base_url": base,
+        });
+        if let Some(jwt) = field("zcodejwttoken") {
+            extra["zcode_jwt"] = serde_json::Value::String(jwt);
+        }
+        Some(credential_tokens(
+            access.clone(),
+            refresh.or_else(|| Some("zcode".into())),
+            jwt_expiry(&access),
+            "zcode",
+            "zcode-cli",
+            extra,
+        ))
+    }
+
+    fn import_zcode_credentials() -> Result<Option<OAuthTokens>> {
+        let path = credentials_path();
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            if let Some(tokens) = tokens_from_credentials_file(&text, &path) {
+                return Ok(Some(tokens));
+            }
+        }
+        Ok(None)
+    }
+
+    /// API keys / plan tokens from `v2/config.json`. Real ZCode configs key
+    /// provider entries under `provider` with `options.baseURL` (capital URL)
+    /// and an `enabled` flag — the enabled Coding-Plan entry is the live one.
     pub fn tokens_from_zcode_config(text: &str, path: &Path) -> Option<OAuthTokens> {
         let v: serde_json::Value = serde_json::from_str(text).ok()?;
-        let mut found = Vec::new();
-        walk_json_secrets(
-            &v,
-            &["api_key", "apiKey", "access_token", "accessToken", "token"],
-            &mut found,
-        );
+        // (secret, base, enabled)
+        let mut found: Vec<(String, Option<String>, bool)> = Vec::new();
+        for section in ["provider", "providers"] {
+            let Some(entries) = v.get(section).and_then(|p| p.as_object()) else {
+                continue;
+            };
+            for entry in entries.values() {
+                let options = entry.get("options").unwrap_or(entry);
+                let Some(secret) = ["apiKey", "api_key", "access_token", "token"]
+                    .iter()
+                    .find_map(|k| options.get(*k).and_then(|x| x.as_str()))
+                    .map(reveal_credential)
+                    .filter(|s| looks_like_secret(s))
+                else {
+                    continue;
+                };
+                let base = ["baseURL", "baseUrl", "base_url", "endpoint"]
+                    .iter()
+                    .find_map(|k| options.get(*k).and_then(|x| x.as_str()))
+                    .map(|s| s.to_string());
+                let enabled = entry.get("enabled").and_then(|x| x.as_bool()).unwrap_or(false);
+                found.push((secret, base, enabled));
+            }
+        }
+        if found.is_empty() {
+            let mut generic = Vec::new();
+            walk_json_secrets(
+                &v,
+                &["api_key", "apiKey", "access_token", "accessToken", "token"],
+                &mut generic,
+            );
+            for (secret, base) in generic {
+                found.push((secret, base, false));
+            }
+        }
         if found.is_empty() {
             return None;
         }
-        // Prefer a Coding Plan / official Z.ai key over a third-party custom
-        // provider that happens to sit in the same config.
-        found.sort_by_key(|(_, base)| {
+        // Prefer the enabled official Coding-Plan entry over disabled or
+        // third-party entries that happen to sit in the same config.
+        found.sort_by_key(|(_, base, enabled)| {
             let b = base.as_deref().unwrap_or("");
-            if b.contains("api.z.ai") || b.contains("bigmodel.cn") {
-                if prefer_coding(Some(b)) {
+            let official =
+                b.contains("api.z.ai") || b.contains("bigmodel.cn") || b.contains("zcode.z.ai");
+            let coding = prefer_coding(Some(b));
+            (
+                if official && coding {
                     0
-                } else {
+                } else if official || *enabled {
                     1
-                }
-            } else {
-                2
-            }
+                } else {
+                    2
+                },
+                !*enabled,
+            )
         });
-        let (secret, base) = found.into_iter().next()?;
+        let (secret, base, _) = found.into_iter().next()?;
         let coding = prefer_coding(base.as_deref());
         Some(credential_tokens(
             secret,
@@ -701,6 +867,11 @@ pub mod zhipu {
     }
 
     pub fn import_zcode_cli() -> Result<Option<OAuthTokens>> {
+        // The OAuth session in credentials.json is canonical — import it
+        // before falling back to config.json plan keys.
+        if let Ok(Some(t)) = import_zcode_credentials() {
+            return Ok(Some(t));
+        }
         for path in config_paths() {
             if let Ok(text) = std::fs::read_to_string(&path) {
                 if let Some(tokens) = tokens_from_zcode_config(&text, &path) {
@@ -711,63 +882,99 @@ pub mod zhipu {
         Ok(None)
     }
 
-    fn zcode_bin() -> Option<PathBuf> {
+    /// A real `zcode` CLI on PATH (npm-style installs). The Electron desktop
+    /// app is deliberately excluded — it does not accept CLI login args.
+    fn zcode_cli_bin() -> Option<PathBuf> {
         let mut dirs = Vec::new();
         if let Some(home) = home_dir() {
             dirs.push(home.join(".local").join("bin"));
             dirs.push(zcode_home().join("bin"));
-            #[cfg(windows)]
-            {
-                dirs.push(home.join("AppData").join("Local").join("Programs").join("zcode"));
-                dirs.push(home.join("AppData").join("Local").join("zcode"));
-            }
         }
         resolve_cli("zcode", &["zcode.exe", "zcode.cmd"], &dirs)
+    }
+
+    /// ZCode desktop (Electron) install: `%LOCALAPPDATA%\Programs\ZCode\ZCode.exe`.
+    /// Sign-in happens in-app via `/login zai-coding-plan`, which parks the
+    /// OAuth session in `v2/credentials.json` for us to import.
+    fn zcode_desktop_bin() -> Option<PathBuf> {
+        let local = std::env::var_os("LOCALAPPDATA").map(PathBuf::from)?;
+        let exe = local.join("Programs").join("ZCode").join("ZCode.exe");
+        exe.is_file().then_some(exe)
+    }
+
+    fn poll_for_new_session(
+        _tx: &ProgressTx,
+        cancel: &CancelFlag,
+        before: Option<&str>,
+        timeout: Duration,
+    ) -> Result<Option<OAuthTokens>> {
+        let started = Instant::now();
+        loop {
+            if cancel.is_cancelled() {
+                return Err(NurError::Other("login cancelled".into()));
+            }
+            if let Ok(Some(t)) = import_zcode_cli() {
+                if before.is_none() || before != Some(t.access_token.as_str()) {
+                    return Ok(Some(t));
+                }
+            }
+            if started.elapsed() > timeout {
+                return Ok(None);
+            }
+            thread::sleep(Duration::from_millis(400));
+        }
     }
 
     pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
         if let Ok(Some(t)) = import_zcode_cli() {
             send(
                 tx,
-                BrowserLoginProgress::Status("using existing ZCode config.json credential".into()),
+                BrowserLoginProgress::Status("using existing ZCode session".into()),
             );
             return Ok(t);
         }
-        let bin = zcode_bin().ok_or_else(|| {
-            NurError::Other(
-                "zcode not found on PATH. Install ZCode (https://zcode.z.ai), run `zcode login`, \
-                 or paste a Z.AI API key (Coding Plan: https://api.z.ai/api/coding/paas/v4)."
-                    .into(),
-            )
-        })?;
-        send(
-            tx,
-            BrowserLoginProgress::Status("launching `zcode login`…".into()),
-        );
-        let mut child = spawn_cli(&bin, &["login"]).map_err(|e| {
-            NurError::Other(format!(
-                "failed to launch zcode ({e}). Run `zcode login` in a terminal, or paste ZAI_API_KEY."
-            ))
-        })?;
-        if let Some(err) = child.stderr.take() {
-            pump_cli_output(tx.clone(), err);
-        }
-        if let Some(out) = child.stdout.take() {
-            pump_cli_output(tx.clone(), out);
-        }
         let before = import_zcode_cli().ok().flatten().map(|t| t.access_token);
-        let _ = wait_child_or_cancel(&mut child, cancel, Duration::from_secs(300))?;
-        if let Ok(Some(t)) = import_zcode_cli() {
-            if before.as_ref() != Some(&t.access_token) || before.is_none() {
-                return Ok(t);
+        // Official CLI login when a real `zcode` CLI exists.
+        if let Some(bin) = zcode_cli_bin() {
+            send(
+                tx,
+                BrowserLoginProgress::Status("launching `zcode login`…".into()),
+            );
+            if let Ok(mut child) = spawn_cli(&bin, &["login"]) {
+                if let Some(err) = child.stderr.take() {
+                    pump_cli_output(tx.clone(), err);
+                }
+                if let Some(out) = child.stdout.take() {
+                    pump_cli_output(tx.clone(), out);
+                }
+                let _ = wait_child_or_cancel(&mut child, cancel, Duration::from_secs(300));
+                if let Some(t) = poll_for_new_session(tx, cancel, before.as_deref(), Duration::from_secs(5))? {
+                    return Ok(t);
+                }
             }
-            return Ok(t);
+        }
+        // No CLI: the Electron desktop app is the official login surface.
+        if let Some(app) = zcode_desktop_bin() {
+            send(
+                tx,
+                BrowserLoginProgress::Status(
+                    "opening ZCode — run /login zai-coding-plan inside it to sign in…".into(),
+                ),
+            );
+            if spawn_cli(&app, &[]).is_ok() {
+                if let Some(t) = poll_for_new_session(tx, cancel, before.as_deref(), Duration::from_secs(300))? {
+                    return Ok(t);
+                }
+                return Err(NurError::Other(
+                    "no ZCode session appeared. Finish /login zai-coding-plan inside the ZCode app, \
+                     or paste a Z.AI API key (Coding Plan: https://api.z.ai/api/coding/paas/v4)."
+                        .into(),
+                ));
+            }
         }
         Err(NurError::Other(
-            "zcode login finished, but nur found no API key in ~/.zcode/v2/config.json. \
-             Official ZCode OAuth tokens are device-encrypted — after login, switch the \
-             Z.ai provider to API Key mode or paste ZAI_API_KEY. Coding Plan endpoint: \
-             https://api.z.ai/api/coding/paas/v4"
+            "zcode login unavailable: no `zcode` CLI on PATH and no ZCode desktop app found. \
+             Install ZCode (https://zcode.z.ai), sign in once, or paste ZAI_API_KEY."
                 .into(),
         ))
     }
@@ -775,7 +982,9 @@ pub mod zhipu {
     pub fn refresh(_auth: &crate::auth::Auth, _refresh: &str) -> Result<OAuthTokens> {
         import_zcode_cli()?.ok_or_else(|| {
             NurError::Other(
-                "ZCode session missing. Run `zcode login`, or set ZAI_API_KEY.".into(),
+                "ZCode session missing. Run /login zai-coding-plan in the ZCode app (or `zcode login`), \
+                 or set ZAI_API_KEY."
+                    .into(),
             )
         })
     }
@@ -938,6 +1147,76 @@ mod tests {
             t.meta.as_ref().unwrap().extra["route"].as_str(),
             Some("coding")
         );
+    }
+
+    #[test]
+    fn zcode_config_real_shape_prefers_enabled_coding_plan() {
+        // Real v2/config.json shape: entries under `provider`, secrets and
+        // `baseURL` (capital URL) under `options`, plus `enabled` flags.
+        let text = r#"{
+            "provider": {
+                "builtin:bigmodel": {
+                    "name": "Bigmodel - API Key", "kind": "anthropic",
+                    "options": { "apiKey": "", "baseURL": "https://open.bigmodel.cn/api/anthropic" },
+                    "enabled": false
+                },
+                "builtin:zai": {
+                    "options": { "apiKey": "sk-zai-general-key-1234567890", "baseURL": "https://api.z.ai/api/paas/v4" },
+                    "enabled": false
+                },
+                "builtin:zai-start-plan": {
+                    "options": { "apiKey": "eyJhbGciOiJIUzI1NiJ9.startplanjwt.should.lose-12345678901234", "baseURL": "https://zcode.z.ai/api/v1/zcode-plan/anthropic" },
+                    "enabled": false
+                },
+                "builtin:zai-coding-plan": {
+                    "options": { "apiKey": "sk-zai-coding-key-1234567890", "baseURL": "https://api.z.ai/api/anthropic" },
+                    "enabled": true
+                }
+            }
+        }"#;
+        let t = zhipu::tokens_from_zcode_config(text, Path::new("/tmp/config.json")).unwrap();
+        assert_eq!(t.access_token, "sk-zai-coding-key-1234567890");
+        assert!(!is_api_key_import(&t));
+        assert_eq!(
+            t.meta.as_ref().unwrap().extra["route"].as_str(),
+            Some("coding")
+        );
+    }
+
+    #[test]
+    fn zcode_credentials_enc_v1_round_trip() {
+        use aes_gcm::aead::{Aead, KeyInit};
+        use aes_gcm::{Aes256Gcm, Nonce};
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use base64::Engine;
+        use sha2::{Digest, Sha256};
+
+        // SAFETY: unique env var for this test; no other test touches it.
+        std::env::set_var("ZCODE_CREDENTIAL_SECRET", "nur-test-secret");
+        let key = Sha256::digest(b"nur-test-secret");
+        let cipher = Aes256Gcm::new_from_slice(&key).unwrap();
+        let iv = [7u8; 12];
+        let sealed = cipher
+            .encrypt(Nonce::from_slice(&iv), b"zai-oauth-access-token-123456".as_slice())
+            .unwrap();
+        let (ct, tag) = sealed.split_at(sealed.len() - 16);
+        let envelope = format!(
+            "enc:v1:{}..{}..{}",
+            URL_SAFE_NO_PAD.encode(iv),
+            URL_SAFE_NO_PAD.encode(tag),
+            URL_SAFE_NO_PAD.encode(ct)
+        )
+        .replace("..", ".");
+        let text = serde_json::json!({
+            "oauth:zai:access_token": envelope,
+            "oauth:active_provider": "enc:v1:should-not-block-import-without-active".to_string(),
+        })
+        .to_string();
+        let t = zhipu::tokens_from_credentials_file(&text, Path::new("/tmp/credentials.json"))
+            .expect("decrypted session imports");
+        assert_eq!(t.access_token, "zai-oauth-access-token-123456");
+        assert!(!is_api_key_import(&t));
+        std::env::remove_var("ZCODE_CREDENTIAL_SECRET");
     }
 
     #[test]

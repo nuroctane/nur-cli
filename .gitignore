@@ -47,3 +47,4 @@ site/
 # Python bytecode (session_reader.py syntax checks)
 __pycache__/
 *.pyc
+/reference/
