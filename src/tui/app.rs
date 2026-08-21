@@ -1267,19 +1267,111 @@ pub struct ModelPicker {
 /// Runtime theme chooser opened by `/theme` and once during first-run
 /// onboarding. Moving the selection previews immediately; Enter persists it,
 /// while Esc restores the palette that was active when the picker opened.
+///
+/// Scroll/select contract matches [`LoginModal`] / [`ModelPicker`]: one entry
+/// per ↑↓, wheel coalesced to one step per 45ms so a trackpad flick cannot
+/// jump from the first row to the last.
 pub struct ThemePicker {
     pub sel: usize,
+    /// First visible row - moves by 1 when selection leaves the window.
+    pub scroll: usize,
+    /// Rows that fit in the body (set by last draw).
+    pub vis_page: usize,
     pub original: String,
     pub onboarding: bool,
     pub hit: PickerHit,
+    /// Coalesce wheel floods to one step per tick (same as other pickers).
+    pub last_step_at: Instant,
 }
 
 impl ThemePicker {
+    pub fn count(&self) -> usize {
+        theme::THEMES.len()
+    }
+
     pub fn chosen(&self) -> &'static str {
         theme::THEMES
             .get(self.sel)
             .map(|(id, _)| *id)
             .unwrap_or("gold")
+    }
+
+    /// Same clamp rules as the provider / model pickers.
+    pub fn clamp_scroll(&mut self) {
+        let count = self.count();
+        if count == 0 {
+            self.sel = 0;
+            self.scroll = 0;
+            return;
+        }
+        self.sel = self.sel.min(count - 1);
+        let page = self.vis_page.max(1);
+        let max_scroll = count.saturating_sub(page);
+        if self.scroll > max_scroll {
+            self.scroll = max_scroll;
+        }
+        if self.sel < self.scroll {
+            self.scroll = self.sel;
+        }
+        let last_vis = self.scroll + page - 1;
+        if self.sel > last_vis {
+            self.scroll = self.sel + 1 - page;
+        }
+    }
+
+    /// Move selection by exactly one entry. Viewport shifts by at most 1.
+    pub fn step(&mut self, dir: i32) {
+        if dir == 0 {
+            return;
+        }
+        let count = self.count();
+        if count == 0 {
+            return;
+        }
+        let page = self.vis_page.max(1);
+        if dir < 0 {
+            if self.sel == 0 {
+                return;
+            }
+            self.sel -= 1;
+            if self.sel < self.scroll {
+                self.scroll = self.sel;
+            }
+        } else {
+            if self.sel + 1 >= count {
+                return;
+            }
+            self.sel += 1;
+            let last_vis = self.scroll + page - 1;
+            if self.sel > last_vis {
+                self.scroll += 1;
+            }
+        }
+        let max_scroll = count.saturating_sub(page);
+        if self.scroll > max_scroll {
+            self.scroll = max_scroll;
+        }
+    }
+
+    /// Wheel: one step max every 45ms (identical to other pickers).
+    pub fn wheel_step(&mut self, dir: i32) {
+        let now = Instant::now();
+        if now.duration_since(self.last_step_at) < Duration::from_millis(45) {
+            return;
+        }
+        self.last_step_at = now;
+        self.step(dir.signum());
+    }
+
+    pub fn set_idx(&mut self, i: usize) {
+        let count = self.count();
+        if count == 0 {
+            self.sel = 0;
+            self.scroll = 0;
+            return;
+        }
+        self.sel = i.min(count - 1);
+        self.clamp_scroll();
     }
 }
 
@@ -6044,32 +6136,44 @@ impl App {
             .unwrap_or(0);
         self.theme_picker = Some(ThemePicker {
             sel,
+            scroll: 0,
+            vis_page: 8,
             original,
             onboarding,
             hit: PickerHit::default(),
+            last_step_at: Instant::now()
+                .checked_sub(Duration::from_secs(1))
+                .unwrap_or_else(Instant::now),
         });
+        if let Some(picker) = &mut self.theme_picker {
+            picker.clamp_scroll();
+        }
     }
 
     fn preview_theme_at(&mut self, idx: usize) {
-        let max = theme::THEMES.len().saturating_sub(1);
-        let idx = idx.min(max);
         if let Some(picker) = &mut self.theme_picker {
-            picker.sel = idx;
+            picker.set_idx(idx);
             let _ = theme::set_theme(picker.chosen());
             self.needs_full_redraw = true;
         }
     }
 
-    fn step_theme(&mut self, delta: i32) {
-        let Some(picker) = self.theme_picker.as_ref() else {
+    fn step_theme(&mut self, dir: i32) {
+        let Some(picker) = self.theme_picker.as_mut() else {
             return;
         };
-        let len = theme::THEMES.len() as i32;
-        if len == 0 {
+        picker.step(dir.signum());
+        let idx = picker.sel;
+        self.preview_theme_at(idx);
+    }
+
+    fn wheel_theme(&mut self, dir: i32) {
+        let Some(picker) = self.theme_picker.as_mut() else {
             return;
-        }
-        let next = (picker.sel as i32 + delta).clamp(0, len - 1) as usize;
-        self.preview_theme_at(next);
+        };
+        picker.wheel_step(dir);
+        let idx = picker.sel;
+        self.preview_theme_at(idx);
     }
 
     fn cancel_theme_picker(&mut self) {
@@ -6113,6 +6217,26 @@ impl App {
             KeyCode::Enter => self.commit_theme_picker(),
             KeyCode::Up => self.step_theme(-1),
             KeyCode::Down => self.step_theme(1),
+            KeyCode::PageUp => {
+                if let Some(p) = &mut self.theme_picker {
+                    let page = p.vis_page.max(1) as i32;
+                    for _ in 0..page {
+                        p.step(-1);
+                    }
+                    let idx = p.sel;
+                    self.preview_theme_at(idx);
+                }
+            }
+            KeyCode::PageDown => {
+                if let Some(p) = &mut self.theme_picker {
+                    let page = p.vis_page.max(1) as i32;
+                    for _ in 0..page {
+                        p.step(1);
+                    }
+                    let idx = p.sel;
+                    self.preview_theme_at(idx);
+                }
+            }
             KeyCode::Home => self.preview_theme_at(0),
             KeyCode::End => {
                 self.preview_theme_at(theme::THEMES.len().saturating_sub(1));
@@ -6125,8 +6249,8 @@ impl App {
         self.mouse_col = m.column;
         self.mouse_row = m.row;
         match m.kind {
-            MouseEventKind::ScrollUp => self.step_theme(-1),
-            MouseEventKind::ScrollDown => self.step_theme(1),
+            MouseEventKind::ScrollUp => self.wheel_theme(-1),
+            MouseEventKind::ScrollDown => self.wheel_theme(1),
             MouseEventKind::Down(MouseButton::Left) => {
                 let hit = self.theme_picker.as_ref().map(|p| p.hit.clone());
                 let Some(hit) = hit else { return };
@@ -10195,6 +10319,52 @@ mod tests {
             opencode_model_selection("opencode-go/grok-4.5").1,
             crate::providers::OPENCODE_GO_BASE_URL
         );
+        // Free models stay on Zen even with a Go prefix or leftover Go host.
+        for id in [
+            "ox-alpha-free",
+            "opencode-go/ox-alpha-free",
+            "big-pickle",
+            "mimo-v2.5-free",
+        ] {
+            assert_eq!(
+                opencode_model_selection(id).1,
+                crate::providers::OPENCODE_ZEN_BASE_URL,
+                "{id} should route to Zen"
+            );
+        }
+        assert_eq!(
+            opencode_model_selection("ox-alpha-free").0,
+            "x-preview-f-free"
+        );
+    }
+
+    #[test]
+    fn theme_picker_wheel_coalesces_to_one_step() {
+        let mut picker = ThemePicker {
+            sel: 0,
+            scroll: 0,
+            vis_page: 2,
+            original: "gold".into(),
+            onboarding: false,
+            hit: PickerHit::default(),
+            last_step_at: Instant::now()
+                .checked_sub(Duration::from_secs(1))
+                .unwrap_or_else(Instant::now),
+        };
+        picker.wheel_step(1);
+        picker.wheel_step(1);
+        picker.wheel_step(1);
+        assert_eq!(
+            picker.sel, 1,
+            "one physical flick must not jump to the last theme"
+        );
+        assert!(picker.scroll <= 1);
+        picker.step(1);
+        picker.step(1);
+        assert_eq!(picker.sel, 3);
+        // Viewport moves by at most 1 per step when vis_page is 2.
+        assert!(picker.scroll <= picker.sel);
+        assert!(picker.sel - picker.scroll < picker.vis_page.max(1));
     }
 
     #[test]

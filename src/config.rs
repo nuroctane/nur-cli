@@ -773,12 +773,15 @@ pub fn load_config() -> Result<Config> {
     }
     // Always normalize a stray `opencode-go/` prefix that might have been
     // persisted by an older picker or manual edit — the canonical stored id is
-    // bare, with the base URL carrying the route.
+    // bare, with the base URL carrying the route. Free models (including Go's
+    // `ox-alpha-free` alias) snap to Zen so they never inherit a leftover Go
+    // host and 429 on the monthly Go quota.
     if cfg.provider == "opencode" {
         let trimmed = cfg.model.trim().to_string();
         if !trimmed.is_empty() {
-            let lower = trimmed.to_ascii_lowercase();
-            if lower.starts_with("opencode-go/") {
+            if crate::providers::is_opencode_free_model(&trimmed)
+                || trimmed.to_ascii_lowercase().starts_with("opencode-go/")
+            {
                 let (bare, base) = crate::providers::normalize_opencode_selection(&trimmed);
                 cfg.model = bare;
                 cfg.base_url = base.to_string();
@@ -934,6 +937,17 @@ mod tests {
         let text = toml::to_string(&selected).expect("serialize config");
         let decoded: Config = toml::from_str(&text).expect("deserialize config");
         assert_eq!(decoded.theme.as_deref(), Some("midnight"));
+    }
+
+    #[test]
+    fn opencode_free_model_snaps_off_the_go_host() {
+        let (bare, base) = crate::providers::normalize_opencode_selection("ox-alpha-free");
+        assert_eq!(bare, "x-preview-f-free");
+        assert_eq!(base, crate::providers::OPENCODE_ZEN_BASE_URL);
+        let (bare, base) =
+            crate::providers::normalize_opencode_selection("opencode-go/mimo-v2.5-free");
+        assert_eq!(bare, "mimo-v2.5-free");
+        assert_eq!(base, crate::providers::OPENCODE_ZEN_BASE_URL);
     }
 
     #[test]

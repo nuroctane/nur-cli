@@ -168,7 +168,9 @@ fn pump_cli_output(tx: ProgressTx, stream: impl std::io::Read + Send + 'static) 
                 let url = word.trim_matches(|c: char| {
                     matches!(c, ')' | '(' | '"' | '\'' | '`' | ',' | '.' | ';')
                 });
-                if url.starts_with("https://") || url.starts_with("http://127.") || url.starts_with("http://localhost")
+                if url.starts_with("https://")
+                    || url.starts_with("http://127.")
+                    || url.starts_with("http://localhost")
                 {
                     send(&tx, BrowserLoginProgress::OpenUrl(url.to_string()));
                     let _ = open_browser(url);
@@ -214,7 +216,11 @@ fn json_string_field(v: &serde_json::Value, keys: &[&str]) -> Option<String> {
     None
 }
 
-fn walk_json_secrets(v: &serde_json::Value, keys: &[&str], out: &mut Vec<(String, Option<String>)>) {
+fn walk_json_secrets(
+    v: &serde_json::Value,
+    keys: &[&str],
+    out: &mut Vec<(String, Option<String>)>,
+) {
     if let Some(obj) = v.as_object() {
         if let Some(secret) = json_string_field(v, keys) {
             let base = obj
@@ -447,7 +453,8 @@ pub mod muse {
                                 break;
                             }
                             Ok(Some(status)) => {
-                                last_err = Some(format!("muse {} failed (exit {status})", args.join(" ")));
+                                last_err =
+                                    Some(format!("muse {} failed (exit {status})", args.join(" ")));
                                 break;
                             }
                             Ok(None) => {
@@ -699,7 +706,12 @@ pub mod zhipu {
         let home = home_dir()
             .map(|h| h.display().to_string())
             .unwrap_or_default();
-        format!("zcode-credential-fallback:{}:{}:{}", node_platform(), home, username)
+        format!(
+            "zcode-credential-fallback:{}:{}:{}",
+            node_platform(),
+            home,
+            username
+        )
     }
 
     fn decrypt_credential(envelope: &str) -> Option<String> {
@@ -715,7 +727,9 @@ pub mod zhipu {
         let cipher = Aes256Gcm::new_from_slice(&key).ok()?;
         let mut sealed = ct;
         sealed.extend_from_slice(&tag);
-        let plain = cipher.decrypt(Nonce::from_slice(&iv), sealed.as_ref()).ok()?;
+        let plain = cipher
+            .decrypt(Nonce::from_slice(&iv), sealed.as_ref())
+            .ok()?;
         String::from_utf8(plain).ok()
     }
 
@@ -812,7 +826,10 @@ pub mod zhipu {
                     .iter()
                     .find_map(|k| options.get(*k).and_then(|x| x.as_str()))
                     .map(|s| s.to_string());
-                let enabled = entry.get("enabled").and_then(|x| x.as_bool()).unwrap_or(false);
+                let enabled = entry
+                    .get("enabled")
+                    .and_then(|x| x.as_bool())
+                    .unwrap_or(false);
                 found.push((secret, base, enabled));
             }
         }
@@ -948,7 +965,9 @@ pub mod zhipu {
                     pump_cli_output(tx.clone(), out);
                 }
                 let _ = wait_child_or_cancel(&mut child, cancel, Duration::from_secs(300));
-                if let Some(t) = poll_for_new_session(tx, cancel, before.as_deref(), Duration::from_secs(5))? {
+                if let Some(t) =
+                    poll_for_new_session(tx, cancel, before.as_deref(), Duration::from_secs(5))?
+                {
                     return Ok(t);
                 }
             }
@@ -962,7 +981,9 @@ pub mod zhipu {
                 ),
             );
             if spawn_cli(&app, &[]).is_ok() {
-                if let Some(t) = poll_for_new_session(tx, cancel, before.as_deref(), Duration::from_secs(300))? {
+                if let Some(t) =
+                    poll_for_new_session(tx, cancel, before.as_deref(), Duration::from_secs(300))?
+                {
                     return Ok(t);
                 }
                 return Err(NurError::Other(
@@ -1080,7 +1101,11 @@ pub mod minimax {
     pub fn tokens_from_mmx_file(text: &str, path: &Path) -> Option<OAuthTokens> {
         let v: serde_json::Value = serde_json::from_str(text).ok()?;
         let mut found = Vec::new();
-        walk_json_secrets(&v, &["api_key", "apiKey", "token", "access_token"], &mut found);
+        walk_json_secrets(
+            &v,
+            &["api_key", "apiKey", "token", "access_token"],
+            &mut found,
+        );
         let (secret, _) = found.into_iter().next()?;
         Some(api_key_tokens(
             secret,
@@ -1109,8 +1134,9 @@ mod tests {
     #[test]
     fn dsh_import_reads_official_flat_mapping() {
         let text = "DEEPSEEK_API_KEY: sk-deepseek-harness-key-123456\n";
-        let tokens = deepseek::tokens_from_credentials_yaml(text, Path::new("/tmp/.credentials.yaml"))
-            .expect("key");
+        let tokens =
+            deepseek::tokens_from_credentials_yaml(text, Path::new("/tmp/.credentials.yaml"))
+                .expect("key");
         assert!(is_api_key_import(&tokens));
         assert_eq!(tokens.access_token, "sk-deepseek-harness-key-123456");
     }
@@ -1124,7 +1150,10 @@ mod tests {
         }"#;
         let t = muse::tokens_from_auth_json(oauth, Path::new("/tmp/auth.json")).unwrap();
         assert!(!is_api_key_import(&t));
-        assert_eq!(t.refresh_token.as_deref(), Some("muse-refresh-token-value-12345"));
+        assert_eq!(
+            t.refresh_token.as_deref(),
+            Some("muse-refresh-token-value-12345")
+        );
 
         let key = r#"{"api_key":"LLM|607358788850350|nx9abcdefghijklmnopLJY"}"#;
         let t = muse::tokens_from_auth_json(key, Path::new("/tmp/auth.json")).unwrap();
@@ -1197,7 +1226,10 @@ mod tests {
         let cipher = Aes256Gcm::new_from_slice(&key).unwrap();
         let iv = [7u8; 12];
         let sealed = cipher
-            .encrypt(Nonce::from_slice(&iv), b"zai-oauth-access-token-123456".as_slice())
+            .encrypt(
+                Nonce::from_slice(&iv),
+                b"zai-oauth-access-token-123456".as_slice(),
+            )
             .unwrap();
         let (ct, tag) = sealed.split_at(sealed.len() - 16);
         let envelope = format!(

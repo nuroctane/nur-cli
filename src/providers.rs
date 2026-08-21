@@ -345,6 +345,53 @@ pub fn normalize_model_for(provider_id: &str, model: &str) -> String {
     }
 }
 
+/// Strip `opencode-go/` or `opencode/` from a picker / config model id.
+pub fn opencode_bare_model_id(id: &str) -> String {
+    let trimmed = id.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("opencode-go/") {
+        trimmed["opencode-go/".len()..].trim().to_string()
+    } else if lower.starts_with("opencode/") {
+        trimmed["opencode/".len()..].trim().to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// OpenCode Zen free models (and Go's unlimited Ox Alpha Free alias).
+///
+/// These must never hit `/zen/go/v1`. Go's monthly quota 429s them even though
+/// OpenCode desktop keeps serving them via Zen (`opencode/big-pickle`,
+/// `*-free`, `x-preview-f-free`). The Go family prefixes (`mimo`, `deepseek`,
+/// ...) would otherwise swallow `mimo-v2.5-free` / `deepseek-v4-flash-free`.
+pub fn is_opencode_free_model(id: &str) -> bool {
+    let bare = opencode_bare_model_id(id).to_ascii_lowercase();
+    if bare.is_empty() {
+        return false;
+    }
+    if bare.ends_with("-free") {
+        return true;
+    }
+    matches!(
+        bare.as_str(),
+        "big-pickle" | "ox-alpha-free" | "x-preview-f-free"
+    )
+}
+
+/// Canonical Zen id for a free model. Go lists Ox Alpha Free as `ox-alpha-free`;
+/// Zen serves the same model as `x-preview-f-free`.
+pub fn opencode_zen_free_wire_id(id: &str) -> String {
+    let bare = opencode_bare_model_id(id);
+    if bare.eq_ignore_ascii_case("ox-alpha-free") {
+        "x-preview-f-free".to_string()
+    } else {
+        bare
+    }
+}
+
 /// Whether a bare model id (or one with `opencode-go/` prefix) belongs on the
 /// OpenCode **Go** endpoint (`/zen/go/v1`) rather than Zen (`/zen/v1`).
 ///
@@ -355,19 +402,23 @@ pub fn normalize_model_for(provider_id: &str, model: &str) -> String {
 /// `grok-4.5` exist in both; they intentionally return **false** here so a
 /// bare `grok-4.5` stays on Zen (works for Zen-only keys) and only
 /// `opencode-go/grok-4.5` forces Go — the picker always offers both forms.
+///
+/// Free models (`*-free`, `big-pickle`, `ox-alpha-free`) always return false,
+/// even with an `opencode-go/` prefix.
 pub fn is_opencode_go_model(id: &str) -> bool {
     let trimmed = id.trim();
     if trimmed.is_empty() {
         return false;
     }
+    if is_opencode_free_model(trimmed) {
+        return false;
+    }
     let lower = trimmed.to_ascii_lowercase();
-    // Explicit Go route prefix always means Go.
+    // Explicit Go route prefix always means Go (except free models, above).
     if lower.starts_with("opencode-go/") {
         return true;
     }
-    // Strip prefix if present for the bare check below (caller may have already
-    // stripped, but accept either form).
-    let bare = lower.strip_prefix("opencode-go/").unwrap_or(&lower).trim();
+    let bare = opencode_bare_model_id(&lower);
     // Go-exclusive families observed in
     // https://julien.cloud/opencode-go-models/ + https://opencode.ai/docs/go/.
     // `grok-` is deliberately excluded — it exists in both Zen and Go, and a
@@ -379,10 +430,16 @@ pub fn is_opencode_go_model(id: &str) -> bool {
 /// Return the canonical bare model id and the correct OpenCode base URL for a
 /// picker entry that may be `opencode-go/<id>` or a bare Go-exclusive id like
 /// `kimi-k3` / `glm-5.2`. Always returns a valid base URL (Zen or Go).
+///
+/// Free models always resolve to Zen, including Go's `ox-alpha-free` alias
+/// (rewritten to Zen's `x-preview-f-free`).
 pub fn normalize_opencode_selection(id: &str) -> (String, &'static str) {
     let trimmed = id.trim();
     if trimmed.is_empty() {
         return (String::new(), OPENCODE_ZEN_BASE_URL);
+    }
+    if is_opencode_free_model(trimmed) {
+        return (opencode_zen_free_wire_id(trimmed), OPENCODE_ZEN_BASE_URL);
     }
     // Case-insensitive `opencode-go/` prefix — slice from the original string
     // by its byte length so `OpenCode-Go/Kimi-K3` still yields `Kimi-K3`.
@@ -404,6 +461,36 @@ pub fn normalize_opencode_selection(id: &str) -> (String, &'static str) {
         OPENCODE_ZEN_BASE_URL
     };
     (bare, base)
+}
+
+/// Per-request OpenCode host for `model`, honouring an already-selected Go
+/// base for overlapping ids (`grok-4.5`, `gpt-5.6-luna`) while forcing free
+/// models onto Zen even when config still points at `/zen/go/v1`.
+pub fn opencode_request_route(model: &str, current_base: &str) -> (String, &'static str) {
+    let (bare, normalized) = normalize_opencode_selection(model);
+    if is_opencode_free_model(model) {
+        return (bare, OPENCODE_ZEN_BASE_URL);
+    }
+    if is_opencode_go_model(model) {
+        return (bare, OPENCODE_GO_BASE_URL);
+    }
+    let on_go = current_base
+        .trim_end_matches('/')
+        .to_ascii_lowercase()
+        .contains("/zen/go/");
+    if on_go {
+        let ml = bare.to_ascii_lowercase();
+        let zen_only = ml.contains("claude")
+            || ml.contains("sonnet")
+            || ml.contains("opus")
+            || ml.contains("haiku")
+            || ml.contains("gemini");
+        if zen_only {
+            return (bare, OPENCODE_ZEN_BASE_URL);
+        }
+        return (bare, OPENCODE_GO_BASE_URL);
+    }
+    (bare, normalized)
 }
 
 /// Floor version xAI enforces on `cli-chat-proxy` (HTTP 426 if missing → "none").
@@ -1453,8 +1540,8 @@ fn resolve_provider_token(q: &str) -> Option<&'static Provider> {
         | "gpt4" => "openai",
         "openai-cc" | "gpt-cc" | "openai-chat" => "openai-cc",
         // DeepSeek
-        "deepseek" | "ds" | "deep-seek" | "r1" | "deepseek-r1" | "deepseek-v3"
-        | "deepseek-v4" | "dsh" | "deepseek-harness" => "deepseek",
+        "deepseek" | "ds" | "deep-seek" | "r1" | "deepseek-r1" | "deepseek-v3" | "deepseek-v4"
+        | "dsh" | "deepseek-harness" => "deepseek",
         // Mistral
         "mistral" | "lechat" | "mixtral" | "codestral" => "mistral",
         // Kimi / Moonshot (distinct catalog ids)
@@ -1464,9 +1551,7 @@ fn resolve_provider_token(q: &str) -> Option<&'static Provider> {
         "llama" | "meta" | "meta-ai" | "muse" | "muse-code" | "muse-spark" => "meta",
         // Chinese labs
         "qwen" | "dashscope" | "alibaba" | "tongyi" => "qwen",
-        "zhipu" | "z.ai" | "zai" | "glm" | "chatglm" | "zcode" | "glm-5.3" | "glm-5.2" => {
-            "zhipu"
-        }
+        "zhipu" | "z.ai" | "zai" | "glm" | "chatglm" | "zcode" | "glm-5.3" | "glm-5.2" => "zhipu",
         "minimax" | "abab" => "minimax",
         "stepfun" | "step" => "stepfun",
         "baichuan" => "baichuan",
@@ -1827,9 +1912,7 @@ pub fn oauth_browser_provider_ids() -> &'static [&'static str] {
 pub fn provider_env_keys(provider_id: &str) -> Vec<&'static str> {
     match provider_id {
         "meta" => vec!["META_API_KEY", "MODEL_API_KEY"],
-        other => by_id(other)
-            .map(|p| vec![p.env_key])
-            .unwrap_or_default(),
+        other => by_id(other).map(|p| vec![p.env_key]).unwrap_or_default(),
     }
 }
 
@@ -2171,6 +2254,55 @@ mod tests {
         assert_eq!(base, OPENCODE_GO_BASE_URL);
     }
 
+    #[test]
+    fn opencode_free_models_never_route_to_go() {
+        for id in [
+            "big-pickle",
+            "ox-alpha-free",
+            "opencode-go/ox-alpha-free",
+            "opencode/big-pickle",
+            "x-preview-f-free",
+            "mimo-v2.5-free",
+            "deepseek-v4-flash-free",
+            "hy3-free",
+            "nemotron-3-ultra-free",
+            "laguna-s-2.1-free",
+        ] {
+            assert!(
+                is_opencode_free_model(id),
+                "{id} should be detected as a free model"
+            );
+            assert!(
+                !is_opencode_go_model(id),
+                "{id} must not be treated as a metered Go model"
+            );
+            let (_, base) = normalize_opencode_selection(id);
+            assert_eq!(base, OPENCODE_ZEN_BASE_URL, "{id} must route to Zen");
+        }
+        let (bare, base) = normalize_opencode_selection("ox-alpha-free");
+        assert_eq!(bare, "x-preview-f-free");
+        assert_eq!(base, OPENCODE_ZEN_BASE_URL);
+        let (bare, base) = normalize_opencode_selection("opencode-go/ox-alpha-free");
+        assert_eq!(bare, "x-preview-f-free");
+        assert_eq!(base, OPENCODE_ZEN_BASE_URL);
+        // Paid cousins still go to Go.
+        assert!(is_opencode_go_model("mimo-v2.5"));
+        assert!(is_opencode_go_model("deepseek-v4-flash"));
+        assert_eq!(
+            opencode_request_route("ox-alpha-free", OPENCODE_GO_BASE_URL).1,
+            OPENCODE_ZEN_BASE_URL
+        );
+        assert_eq!(
+            opencode_request_route("kimi-k3", OPENCODE_ZEN_BASE_URL).1,
+            OPENCODE_GO_BASE_URL
+        );
+        // Overlapping grok stays on an already-selected Go base.
+        assert_eq!(
+            opencode_request_route("grok-4.5", OPENCODE_GO_BASE_URL).1,
+            OPENCODE_GO_BASE_URL
+        );
+    }
+
     /// Every id nur can put on the wire for xAI must be one `api.x.ai` still
     /// serves — the Grok 4 line is gone, and both the key path (`default_model`)
     /// and the OAuth path pinned it independently, so they must agree.
@@ -2315,15 +2447,12 @@ mod tests {
             META_DEFAULT_MODEL
         );
         assert_eq!(normalize_meta_model_id("muse-spark-1.1"), "muse-spark-1.1");
-        assert_eq!(normalize_meta_model_id("muse-spark-1.2"), META_DEFAULT_MODEL);
         assert_eq!(
-            resolve_provider_alias("muse").map(|p| p.id),
-            Some("meta")
+            normalize_meta_model_id("muse-spark-1.2"),
+            META_DEFAULT_MODEL
         );
-        assert_eq!(
-            resolve_provider_alias("zcode").map(|p| p.id),
-            Some("zhipu")
-        );
+        assert_eq!(resolve_provider_alias("muse").map(|p| p.id), Some("meta"));
+        assert_eq!(resolve_provider_alias("zcode").map(|p| p.id), Some("zhipu"));
     }
 
     #[test]

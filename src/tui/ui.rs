@@ -769,7 +769,7 @@ fn draw_model_picker(f: &mut Frame, app: &mut App, area: Rect) {
 
 // ── runtime theme chooser (`/theme`) ────────────────────────────────────────
 fn draw_theme_picker(f: &mut Frame, app: &mut App, area: Rect) {
-    let rect = fit_modal_rect(area, 72, 16, 46, 10);
+    let rect = fit_modal_rect(area, 72, 22, 46, 10);
     f.render_widget(Clear, rect);
     f.render_widget(
         Block::default().style(Style::default().bg(theme::SURFACE_2())),
@@ -811,7 +811,22 @@ fn draw_theme_picker(f: &mut Frame, app: &mut App, area: Rect) {
         rows: Vec::new(),
     };
 
-    let selected = app.theme_picker.as_ref().map(|p| p.sel).unwrap_or(0);
+    // Header line + windowed list — same one-step scroll as models / providers.
+    const HEADER_ROWS: usize = 1;
+    let list_h = (inner.height as usize).saturating_sub(HEADER_ROWS).max(1);
+    let vis_rows = list_h.max(1);
+
+    let (mut sel, mut start) = {
+        let p = app.theme_picker.as_ref().unwrap();
+        (p.sel, p.scroll)
+    };
+    if let Some(p) = &mut app.theme_picker {
+        p.vis_page = vis_rows;
+        p.clamp_scroll();
+        sel = p.sel;
+        start = p.scroll;
+    }
+
     let saved = app.cfg.theme.as_deref().unwrap_or("gold");
     let mut lines = vec![Line::from(Span::styled(
         if onboarding {
@@ -823,8 +838,8 @@ fn draw_theme_picker(f: &mut Frame, app: &mut App, area: Rect) {
     ))];
     let col = (inner.width as usize).saturating_sub(3);
 
-    for (idx, (id, label)) in theme::THEMES.iter().enumerate() {
-        let is_selected = idx == selected;
+    for (idx, (id, label)) in theme::THEMES.iter().enumerate().skip(start).take(vis_rows) {
+        let is_selected = idx == sel;
         let is_saved = *id == saved;
         let row_bg = if is_selected {
             theme::NUR_GOLD()
@@ -861,7 +876,8 @@ fn draw_theme_picker(f: &mut Frame, app: &mut App, area: Rect) {
         ));
         lines.push(Line::from(spans));
 
-        let row_y = inner.y + 1 + idx as u16;
+        let drawn = idx - start;
+        let row_y = inner.y + HEADER_ROWS as u16 + drawn as u16;
         if row_y < inner.y + inner.height {
             hit.rows.push((
                 idx,

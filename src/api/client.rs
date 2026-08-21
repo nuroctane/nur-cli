@@ -530,13 +530,20 @@ impl ApiClient {
         &self,
         req: &'a ResponseRequest,
     ) -> std::borrow::Cow<'a, ResponseRequest> {
-        if req.max_output_tokens.is_some() && !self.supports_output_limit(&req.model) {
-            let mut wire = req.clone();
-            wire.max_output_tokens = None;
-            std::borrow::Cow::Owned(wire)
-        } else {
-            std::borrow::Cow::Borrowed(req)
+        let mut model = req.model.clone();
+        if self.provider_id == "opencode" {
+            model = crate::providers::normalize_opencode_selection(&req.model).0;
         }
+        let drop_limit = req.max_output_tokens.is_some() && !self.supports_output_limit(&model);
+        if model == req.model && !drop_limit {
+            return std::borrow::Cow::Borrowed(req);
+        }
+        let mut wire = req.clone();
+        wire.model = model;
+        if drop_limit {
+            wire.max_output_tokens = None;
+        }
+        std::borrow::Cow::Owned(wire)
     }
 
     fn response_request_for_wire(&self, req: &ResponseRequest) -> ResponseRequest {
@@ -569,6 +576,8 @@ impl ApiClient {
         let mut routed = self.clone();
         if self.provider_id == "opencode" {
             routed.style = opencode_style_for_model(model);
+            let (_, base) = crate::providers::opencode_request_route(model, &self.base_url);
+            routed.base_url = base.trim_end_matches('/').to_string();
         }
         routed
     }
@@ -796,10 +805,10 @@ impl ApiClient {
             return self.create_opencode_gemini(req).await;
         }
         let routed = self.routed_for_model(&req.model);
-        if routed.style != self.style {
-            // Boxing makes the one-step protocol redispatch finite for Rust's
-            // async type system. The routed client's style is already exact,
-            // so the next call cannot recurse again.
+        if routed.style != self.style || routed.base_url != self.base_url {
+            // Boxing makes the one-step protocol/host redispatch finite for
+            // Rust's async type system. The routed client's style and base are
+            // already exact, so the next call cannot recurse again.
             return Box::pin(routed.create_response(req)).await;
         }
         let route_req = self.request_for_route(req);
@@ -975,7 +984,7 @@ impl ApiClient {
                 .await;
         }
         let routed = self.routed_for_model(&req.model);
-        if routed.style != self.style {
+        if routed.style != self.style || routed.base_url != self.base_url {
             return Box::pin(routed.create_response_stream(req, on_event, cancel)).await;
         }
         let route_req = self.request_for_route(req);
@@ -2917,6 +2926,33 @@ mod tests {
         assert_eq!(
             zen.routed_for_model("claude-sonnet-5").style,
             ApiStyle::AnthropicMessages
+        );
+    }
+
+    #[test]
+    fn opencode_free_models_leave_the_go_host() {
+        let go = ApiClient::for_provider(crate::providers::OPENCODE_GO_BASE_URL, "k", "opencode")
+            .unwrap();
+        let zen = crate::providers::OPENCODE_ZEN_BASE_URL.trim_end_matches('/');
+        for id in [
+            "ox-alpha-free",
+            "opencode-go/ox-alpha-free",
+            "big-pickle",
+            "mimo-v2.5-free",
+            "deepseek-v4-flash-free",
+        ] {
+            let routed = go.routed_for_model(id);
+            assert_eq!(routed.base_url, zen, "{id} must leave /zen/go/v1");
+        }
+        let paid = go.routed_for_model("kimi-k3");
+        assert_eq!(
+            paid.base_url,
+            crate::providers::OPENCODE_GO_BASE_URL.trim_end_matches('/')
+        );
+        let grok = go.routed_for_model("grok-4.5");
+        assert_eq!(
+            grok.base_url,
+            crate::providers::OPENCODE_GO_BASE_URL.trim_end_matches('/')
         );
     }
 

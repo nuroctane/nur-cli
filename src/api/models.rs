@@ -108,11 +108,11 @@ pub fn fetch_model_ids(
                         // Go shares the OpenCode credential with Zen, but its
                         // requests require a different endpoint. Preserve that
                         // route in the picker id so selection can switch bases.
+                        // Free models stay unprefixed (Zen) even if Go lists them.
                         if url.starts_with(crate::providers::OPENCODE_GO_BASE_URL) {
-                            opencode_ids
-                                .extend(ids.into_iter().map(|id| format!("opencode-go/{id}")));
+                            opencode_ids.extend(ids.into_iter().map(opencode_picker_id_from_go));
                         } else {
-                            opencode_ids.extend(ids);
+                            opencode_ids.extend(ids.into_iter().map(opencode_picker_id_from_zen));
                         }
                         break;
                     }
@@ -199,6 +199,25 @@ pub fn resolve_local_model_if_needed(
         }
     }
     model.to_string()
+}
+
+/// Picker id for a model listed on the Go catalog. Free models are rewritten
+/// to their Zen wire id (no `opencode-go/` prefix) so selecting them cannot
+/// pin `/zen/go/v1` and 429 against Go's monthly cap.
+fn opencode_picker_id_from_go(id: String) -> String {
+    if crate::providers::is_opencode_free_model(&id) {
+        crate::providers::opencode_zen_free_wire_id(&id)
+    } else {
+        format!("opencode-go/{id}")
+    }
+}
+
+fn opencode_picker_id_from_zen(id: String) -> String {
+    if crate::providers::is_opencode_free_model(&id) {
+        crate::providers::opencode_zen_free_wire_id(&id)
+    } else {
+        id
+    }
 }
 
 fn model_list_urls(base_url: &str, provider_id: &str, is_oauth: bool) -> Vec<String> {
@@ -627,6 +646,26 @@ mod tests {
                 "https://opencode.ai/zen/v1/models".into(),
                 format!("{}/models", crate::providers::OPENCODE_GO_BASE_URL),
             ]
+        );
+    }
+
+    #[test]
+    fn opencode_picker_does_not_prefix_free_go_ids() {
+        assert_eq!(
+            opencode_picker_id_from_go("ox-alpha-free".into()),
+            "x-preview-f-free"
+        );
+        assert_eq!(
+            opencode_picker_id_from_go("kimi-k3".into()),
+            "opencode-go/kimi-k3"
+        );
+        assert_eq!(
+            opencode_picker_id_from_zen("mimo-v2.5-free".into()),
+            "mimo-v2.5-free"
+        );
+        assert_eq!(
+            opencode_picker_id_from_zen("big-pickle".into()),
+            "big-pickle"
         );
     }
 
