@@ -135,6 +135,35 @@ fn is_extractable_video(path: &Path) -> bool {
     )
 }
 
+/// Save raw image bytes (e.g. a clipboard bitmap) under `.nur/media/paste/`
+/// and queue them for model vision. Returns the saved path so the TUI can
+/// render an inline `Cell::Image`.
+///
+/// PNG is written verbatim; any other clipboard format arboard hands back as
+/// RGBA is encoded as PNG first.
+#[cfg_attr(not(feature = "image-peek"), allow(dead_code))]
+pub fn save_clipboard_image(cwd: &Path, bytes: &[u8], ext: &str) -> Result<PathBuf> {
+    let dir = cwd.join(".nur").join("media").join("paste");
+    fs::create_dir_all(&dir)
+        .map_err(|e| NurError::Tool(format!("mkdir {}: {e}", dir.display())))?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let ext = ext.trim_start_matches('.').to_ascii_lowercase();
+    let ext = if ext.is_empty() { "png".into() } else { ext };
+    let path = dir.join(format!("paste-{stamp}.{ext}"));
+    fs::write(&path, bytes)
+        .map_err(|e| NurError::Tool(format!("write {}: {e}", path.display())))?;
+    Ok(path)
+}
+
+/// Queue an existing image file for vision on the next turn (TUI paste path).
+/// Thin wrapper over [`load_media`] with push=true.
+pub fn queue_image_for_vision(path: &Path) -> Result<MediaAttach> {
+    load_media(path, true)
+}
+
 /// Load a workspace media file into a data URL (and pending queue if push=true).
 pub fn load_media(path: &Path, push: bool) -> Result<MediaAttach> {
     if !path.is_file() {

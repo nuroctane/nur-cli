@@ -2323,10 +2323,7 @@ mod tests {
             opencode_model_alias("x-preview-f-free"),
             Some("Ox Alpha Free")
         );
-        assert_eq!(
-            opencode_model_alias("ox-alpha-free"),
-            Some("Ox Alpha Free")
-        );
+        assert_eq!(opencode_model_alias("ox-alpha-free"), Some("Ox Alpha Free"));
         assert_eq!(
             opencode_model_alias("opencode-go/ox-alpha-free"),
             Some("Ox Alpha Free")

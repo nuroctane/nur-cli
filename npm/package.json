@@ -1,6 +1,6 @@
 {
   "name": "nur-cli",
-  "version": "0.27.20",
+  "version": "0.28.0",
   "description": "NurCLI - fully loaded multi-provider coding agent (TUI, vision, tools, sandbox, skills). One command installs the native binary: npx nur-cli",
   "license": "MIT",
   "repository": {

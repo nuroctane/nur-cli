@@ -185,7 +185,10 @@ pub const THEMES: &[(&str, &str)] = &[
     ("solarized", "Solarized Dark - the classic base16"),
     ("ember", "Ember - warm crimson + amber"),
     // Lights.
-    ("heavenly", "Heavenly White - warm ivory, amethyst + rose pearl"),
+    (
+        "heavenly",
+        "Heavenly White - warm ivory, amethyst + rose pearl",
+    ),
     ("pearl", "Pearlescent - milky opal, rose + champagne sheen"),
     ("off-white", "Off White - warm paper, graphite ink"),
     // Dark monochrome / chrome.
@@ -194,7 +197,10 @@ pub const THEMES: &[(&str, &str)] = &[
     ("off-black", "Off Black - soft charcoal, easy on the eyes"),
     ("chrome", "Chrome - dark glass grey, polished silver"),
     // Creative.
-    ("synthwave", "Synthwave - neon pink + cyan over purple night"),
+    (
+        "synthwave",
+        "Synthwave - neon pink + cyan over purple night",
+    ),
     ("matrix", "Matrix - phosphor green terminal"),
     ("dracula", "Dracula - the classic purple palace"),
     ("nord", "Nord - arctic frost"),
@@ -1284,7 +1290,14 @@ pub fn set_theme(id: &str) -> bool {
         return false;
     };
     match preset(canonical) {
-        Some(p) => {
+        Some(mut p) => {
+            // Re-layer the personal accent after the base palette swap so
+            // `/theme` previews and commits keep the user's override.
+            if let Ok(g) = ACCENT_OVERRIDE.read() {
+                if let Some(over) = g.as_ref() {
+                    apply_theme_config(&mut p, over);
+                }
+            }
             if let Ok(mut w) = ACTIVE.write() {
                 *w = p;
             }
@@ -1297,9 +1310,141 @@ pub fn set_theme(id: &str) -> bool {
     }
 }
 
+/// Global `[theme]` config overrides (accent ramp). Set once at startup from
+/// the config file and re-applied after every `set_theme` so `/theme` picks
+/// stay composable with a personal accent color.
+static ACCENT_OVERRIDE: RwLock<Option<crate::config::ThemeConfig>> = RwLock::new(None);
+
+/// Record the accent overrides to layer on every theme load.
+pub fn apply_theme_config_global(cfg: &crate::config::ThemeConfig) {
+    if cfg.accent.is_none() && cfg.protocol == "auto" && cfg.inline_images {
+        return;
+    }
+    if let Ok(mut w) = ACCENT_OVERRIDE.write() {
+        *w = Some(cfg.clone());
+    }
+    // Apply immediately on top of whatever palette is live.
+    if let Some(over) = ACCENT_OVERRIDE.read().ok().and_then(|g| g.clone()) {
+        if over.accent.is_some() {
+            if let Ok(mut w) = ACTIVE.write() {
+                apply_theme_config(&mut w, &over);
+            }
+        }
+    }
+}
+
 /// Three accent stops used by the theme picker preview.
 pub fn theme_preview(id: &str) -> Option<[Color; 3]> {
     preset(id).map(|p| [p.nur_gold_sky, p.nur_gold, p.nur_gold_deep])
+}
+
+/// Render a theme's accent ramp as a small PNG gradient for the graphics-
+/// protocol preview in the theme picker (kitty / sixel / iTerm2 terminals).
+///
+/// 96×24 px: wide enough to show the sky → accent → deep sweep, short enough
+/// to encode fast on every keystroke. Cached per theme id by the caller.
+#[cfg(feature = "image-peek")]
+pub fn theme_preview_png(id: &str) -> Option<Vec<u8>> {
+    let p = preset(id)?;
+    let light = rgb_tuple(p.nur_gold_sky);
+    let mid = rgb_tuple(p.nur_gold);
+    let deep = rgb_tuple(p.nur_gold_deep);
+    let bg = rgb_tuple(p.bg);
+    let (w, h) = (96u32, 24u32);
+    let mut img = image::RgbaImage::new(w, h);
+    let lerp3 = |a: (u8, u8, u8), b: (u8, u8, u8), t: f32| -> [u8; 3] {
+        [
+            (a.0 as f32 + (b.0 as f32 - a.0 as f32) * t).round() as u8,
+            (a.1 as f32 + (b.1 as f32 - a.1 as f32) * t).round() as u8,
+            (a.2 as f32 + (b.2 as f32 - a.2 as f32) * t).round() as u8,
+        ]
+    };
+    for (x, y, px) in img.enumerate_pixels_mut() {
+        // Diagonal sweep: columns drive the ramp, rows add a subtle vertical
+        // falloff toward the canvas color so it reads as a lit surface.
+        let t = x as f32 / (w - 1) as f32;
+        let base = if t < 0.5 {
+            lerp3(light, mid, t * 2.0)
+        } else {
+            lerp3(mid, deep, (t - 0.5) * 2.0)
+        };
+        let fall = 0.25 - 0.5 * (y as f32 / (h - 1) as f32);
+        let mix_bg = |c: u8, bgu: u8, k: f32| -> u8 {
+            (c as f32 + (bgu as f32 - c as f32) * k).round() as u8
+        };
+        let k = fall.clamp(0.0, 0.35);
+        *px = image::Rgba([
+            mix_bg(base[0], bg.0, k),
+            mix_bg(base[1], bg.1, k),
+            mix_bg(base[2], bg.2, k),
+            255,
+        ]);
+    }
+    let mut out = std::io::Cursor::new(Vec::with_capacity(4096));
+    {
+        let enc = image::codecs::png::PngEncoder::new(&mut out);
+        use image::ImageEncoder as _;
+        enc.write_image(img.as_raw(), w, h, image::ExtendedColorType::Rgba8)
+            .ok()?;
+    }
+    Some(out.into_inner())
+}
+
+fn rgb_tuple(c: Color) -> (u8, u8, u8) {
+    match c {
+        Color::Rgb(r, g, b) => (r, g, b),
+        _ => (232, 185, 35),
+    }
+}
+
+/// Apply `[theme]` config overrides (accent ramp) to a palette in place.
+///
+/// The accent recolors the identity fields that carry the theme's personality:
+/// `nur_gold` (primary accent), `nur_gold_deep`, `nur_gold_sky`, and the banner
+/// gradient endpoints. Only overrides that are actually set are applied, so
+/// users can layer a personal accent on top of any `/theme` pick.
+pub fn apply_theme_config(p: &mut Palette, cfg: &crate::config::ThemeConfig) {
+    use crate::config::parse_hex_color;
+    let accent = cfg.accent.as_deref().and_then(parse_hex_color);
+    let Some(accent) = accent else { return };
+    let deep = cfg
+        .accent_deep
+        .as_deref()
+        .and_then(parse_hex_color)
+        .or_else(|| shift_toward(accent, 0.30, (0, 0, 0)))
+        .unwrap_or(accent);
+    let sky = cfg
+        .accent_sky
+        .as_deref()
+        .and_then(parse_hex_color)
+        .or_else(|| shift_toward(accent, 0.35, (255, 255, 255)))
+        .unwrap_or(accent);
+    p.nur_gold = accent;
+    p.nur_gold_deep = deep;
+    p.nur_gold_sky = sky;
+    // Banner gradient: keep the existing light→deep shape but re-tint the two
+    // ends toward the new accent so the logotype follows.
+    let [first, _, _, _, mid, last] = &mut p.gradient;
+    if let Color::Rgb(fr, fg, fb) = shift_toward(accent, 0.45, (255, 255, 255)).unwrap_or(accent) {
+        *first = (fr, fg, fb);
+    }
+    *mid = rgb_tuple(lerp(sky, accent, 0.5));
+    *last = rgb_tuple(deep);
+}
+
+/// Mix `c` toward `target` by `t` (0 = c unchanged, 1 = target).
+fn shift_toward(c: Color, t: f64, target: (u8, u8, u8)) -> Option<Color> {
+    match c {
+        Color::Rgb(r, g, b) => {
+            let mix = |v: u8, w: u8| -> u8 { (v as f64 + (w as f64 - v as f64) * t).round() as u8 };
+            Some(Color::Rgb(
+                mix(r, target.0),
+                mix(g, target.1),
+                mix(b, target.2),
+            ))
+        }
+        _ => None,
+    }
 }
 
 /// Build a 6-stop banner gradient by interpolating a light → deep accent.
@@ -2009,8 +2154,8 @@ mod tests {
     fn every_registered_theme_resolves_and_highlights_stay_legible() {
         for (id, label) in super::THEMES {
             assert!(!label.is_empty(), "{id} needs a menu label");
-            let p = super::preset(id)
-                .unwrap_or_else(|| panic!("{id} is registered but has no preset"));
+            let p =
+                super::preset(id).unwrap_or_else(|| panic!("{id} is registered but has no preset"));
             assert!(super::theme_preview(id).is_some(), "{id} has no preview");
             let ratio = contrast(p.on_accent_fg, p.nur_gold);
             assert!(

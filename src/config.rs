@@ -190,6 +190,9 @@ pub struct Config {
     /// OptMem permanent memory (upstream-pure ~/.optmem; default on).
     #[serde(default)]
     pub optmem: OptmemConfig,
+    /// Theme setup additions (accent override, inline-image protocol).
+    #[serde(default)]
+    pub theme_setup: ThemeConfig,
     /// OMP-style prewalk: strong model plans + todos, then switch to a cheap
     /// model at the first edit/write. Default **off**.
     #[serde(default)]
@@ -335,6 +338,67 @@ pub struct OptmemConfig {
     /// Default **true**. Wake inject + tool available when enabled.
     #[serde(default = "default_true")]
     pub enabled: bool,
+}
+
+/// `[theme]` — theme setup additions: per-user accent overrides and terminal
+/// graphics controls. All fields optional; empty = use the picked theme as-is.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThemeConfig {
+    /// Accent override, hex like `#e8b923`. When set, recolors the active
+    /// palette's accent ramp (accent / deep / sky) after the theme loads so
+    /// `/theme` picks stay composable with a personal accent color.
+    #[serde(default)]
+    pub accent: Option<String>,
+    /// Optional darker stop for the accent ramp (hex). Derived from `accent`
+    /// when absent.
+    #[serde(default)]
+    pub accent_deep: Option<String>,
+    /// Optional lighter stop for the accent ramp (hex). Derived from `accent`
+    /// when absent.
+    #[serde(default)]
+    pub accent_sky: Option<String>,
+    /// Terminal graphics protocol for inline images: `auto` (default), or one
+    /// of `kitty`, `sixel`, `iterm2`, `halfblocks` to force it.
+    #[serde(default = "default_theme_protocol")]
+    pub protocol: String,
+    /// Inline image rendering in the transcript/peeks. Default **true**;
+    /// disable to fall back to text-only peeks even on capable terminals.
+    #[serde(default = "default_true")]
+    pub inline_images: bool,
+}
+
+fn default_theme_protocol() -> String {
+    "auto".into()
+}
+
+impl Default for ThemeConfig {
+    fn default() -> Self {
+        Self {
+            accent: None,
+            accent_deep: None,
+            accent_sky: None,
+            protocol: default_theme_protocol(),
+            inline_images: true,
+        }
+    }
+}
+
+/// Parse `#rgb` / `#rrggbb` (leading `#` optional) into ratatui RGB.
+pub fn parse_hex_color(s: &str) -> Option<ratatui::style::Color> {
+    let t = s.trim().trim_start_matches('#');
+    let (r, g, b) = match t.len() {
+        3 => (&t[0..1], &t[1..2], &t[2..3]),
+        6 => (&t[0..2], &t[2..4], &t[4..6]),
+        _ => return None,
+    };
+    let chan = |h: &str| -> Option<u8> {
+        if h.len() == 1 {
+            u8::from_str_radix(&format!("{h}{h}"), 16).ok()
+        } else {
+            u8::from_str_radix(h, 16).ok()
+        }
+    };
+    Some(ratatui::style::Color::Rgb(chan(r)?, chan(g)?, chan(b)?))
 }
 
 /// `[helix_memory]` - optional HelixDB resident for the native memory stack.
@@ -520,6 +584,7 @@ impl Default for Config {
             theme: None,
             headroom: HeadroomConfig::default(),
             optmem: OptmemConfig::default(),
+            theme_setup: ThemeConfig::default(),
             prewalk: PrewalkConfig::default(),
             compaction: CompactionConfig::default(),
             proposal_mode: false,

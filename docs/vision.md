@@ -1,12 +1,47 @@
 # Vision
 
-Native multimodal support: send images and short video to the model.
+Native multimodal support: send images and short video to the model - and see
+them **inline in the TUI** via your terminal's graphics protocol.
 
 ## Overview
 
 NurCLI attaches workspace media on the Responses-style multimodal path (`input_image` /
 `input_video`) when the active provider supports it. The model can **see** workspace images
 and short video clips directly.
+
+Since v0.28, pasted and attached images also render **inline in the transcript**
+using the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/),
+sixel, or iTerm2 inline images (via `ratatui-image`), with a halfblocks fallback on
+text-only terminals.
+
+---
+
+## Inline image display
+
+| Input | What happens |
+|-------|--------------|
+| **Ctrl+V an image** (screenshot, copied file) | Saved under `.nur/media/paste/`, rendered inline in the transcript, queued for vision |
+| **`/image <path>`** | Renders the workspace image inline + queues it for vision |
+| **`look` tool call** | Click the tool card to peek the full-size render |
+| **LaTeX equations** | Rendered to PNG and shown inline in answer cards (existing behavior) |
+
+Protocol selection: `auto` by default. Force one via `config.toml`:
+
+```toml
+[theme]
+protocol = "kitty"   # kitty | sixel | iterm2 | halfblocks | auto
+inline_images = true # set false to disable all inline pixel rendering
+```
+
+Or per-launch env: `NUR_IMAGE_PROTOCOL=kitty nur`. The full capability probe
+(kitty/sixel query + font size) is opt-in because it can block ~1 s on some
+terminals: `NUR_IMAGE_QUERY=1 nur`.
+
+!!! note "Terminal support"
+    Real pixels need a terminal that speaks one of the protocols - kitty,
+    WezTerm, iTerm2, foot, Konsole, mintty, VS Code integrated terminal, rio.
+    Windows Terminal / conhost fall back to unicode halfblocks art; everything
+    else behaves exactly as before.
 
 ---
 

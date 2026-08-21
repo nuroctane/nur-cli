@@ -254,7 +254,10 @@ impl App {
             "/optmem" | "/memo" => self.cmd_optmem(&arg),
             "/headroom" => self.cmd_headroom(&arg),
             "/prewalk" => self.cmd_prewalk(&arg),
-            "/egaki" | "/image" => self.cmd_egaki(&arg),
+            "/egaki" => self.cmd_egaki(&arg),
+            // `/image <path>`: show an image inline + queue it for vision.
+            // (egaki generation keeps /egaki; bare `/image` is attach-only.)
+            "/image" => self.cmd_image_attach(&arg),
             "/tb" | "/terminal-browser" => self.cmd_terminal_browser(&arg),
             "/factory-overnight" => self.cmd_skill_or_unknown("/factory-overnight", &arg),
             "/ruflo" => self.cmd_ruflo(&arg),
@@ -650,6 +653,42 @@ impl App {
             serde_json::json!({"action":"action","command": arg}).to_string()
         };
         self.run_slash_tool("terminal_browser", &json);
+    }
+
+    /// `/image <path>` - show a workspace image inline (terminal graphics
+    /// protocol) and queue it for model vision on the next turn.
+    fn cmd_image_attach(&mut self, arg: &str) {
+        let raw = arg.trim().trim_matches('"').trim_matches('\'');
+        if raw.is_empty() {
+            self.push_error("usage: /image <path-to-png|jpg|webp|gif>".into());
+            return;
+        }
+        let candidate = std::path::Path::new(raw);
+        let candidate = if candidate.is_absolute() {
+            candidate.to_path_buf()
+        } else {
+            self.cwd.join(candidate)
+        };
+        match crate::tools::media::queue_image_for_vision(&candidate) {
+            Ok(meta) => {
+                self.attach_image_cell(&candidate.display().to_string(), &meta);
+            }
+            Err(e) => {
+                // Video paths: point at /egaki-style guidance instead of failing dry.
+                let ext = candidate
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if matches!(ext.as_str(), "mp4" | "webm" | "mov" | "mkv") {
+                    self.push_error(format!(
+                        "{e}\nvideos can't render inline - use look on them or extract_frames first"
+                    ));
+                } else {
+                    self.push_error(format!("could not attach image: {e}"));
+                }
+            }
+        }
     }
 
     fn cmd_egaki(&mut self, arg: &str) {

@@ -832,10 +832,58 @@ fn draw_theme_picker(f: &mut Frame, app: &mut App, area: Rect) {
         rows: Vec::new(),
     };
 
+    // Graphics-protocol gradient preview of the highlighted theme (kitty /
+    // sixel / iTerm2 / halfblocks). Rendered above the list; on text-only
+    // terminals the swatch dots below remain the whole preview.
+    #[cfg(feature = "image-peek")]
+    {
+        if app.cfg.theme_setup.inline_images && inner.height >= 8 && inner.width >= 30 {
+            let sel_id = app
+                .theme_picker
+                .as_ref()
+                .map(|p| theme::THEMES[p.sel].0)
+                .unwrap_or("gold");
+            if let Some(png) = theme::theme_preview_png(sel_id) {
+                if let Some(proto) = app.theme_preview_protocol(&png) {
+                    // Reserve the top 5 body rows for the ramp, list takes the rest.
+                    let preview = Rect {
+                        x: inner.x + 1,
+                        y: inner.y + 1,
+                        width: inner.width.saturating_sub(2),
+                        height: 5.min(inner.height - 6),
+                    };
+                    f.render_stateful_widget(
+                        ratatui_image::StatefulImage::default(),
+                        preview,
+                        proto,
+                    );
+                }
+            }
+        }
+    }
+
     // Header line + windowed list — same one-step scroll as models / providers.
     const HEADER_ROWS: usize = 1;
-    let list_h = (inner.height as usize).saturating_sub(HEADER_ROWS).max(1);
+    let list_top: u16 = {
+        #[cfg(feature = "image-peek")]
+        {
+            if app.cfg.theme_setup.inline_images && inner.height >= 8 && inner.width >= 30 {
+                6 // preview(5) + gap(1)
+            } else {
+                0
+            }
+        }
+        #[cfg(not(feature = "image-peek"))]
+        {
+            0
+        }
+    };
+    let list_h = (inner.height as usize)
+        .saturating_sub(HEADER_ROWS)
+        .saturating_sub(list_top as usize)
+        .max(1);
     let vis_rows = list_h.max(1);
+    let list_y = inner.y + list_top;
 
     let (mut sel, mut start) = {
         let p = app.theme_picker.as_ref().unwrap();
@@ -898,7 +946,7 @@ fn draw_theme_picker(f: &mut Frame, app: &mut App, area: Rect) {
         lines.push(Line::from(spans));
 
         let drawn = idx - start;
-        let row_y = inner.y + HEADER_ROWS as u16 + drawn as u16;
+        let row_y = list_y + HEADER_ROWS as u16 + drawn as u16;
         if row_y < inner.y + inner.height {
             hit.rows.push((
                 idx,
@@ -1471,7 +1519,7 @@ fn draw_session_picker(f: &mut Frame, app: &mut App, area: Rect) {
         let place = if this_cwd_only {
             String::new()
         } else {
-            format!("  ·  {}", short_path(&r.cwd))
+            format!("  ·  {}", image_cell_caption_path(&r.cwd))
         };
         let here = if r.here && !this_cwd_only {
             "  ·  here"
@@ -1925,6 +1973,8 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     let mut hit_urls: Vec<Vec<(usize, usize, String)>> = Vec::new();
     let mut hit_swarm_panes: Vec<Vec<(u64, usize, usize)>> = Vec::new();
     let mut plain_lines: Vec<String> = Vec::new();
+    // cell_idx → first wrapped row for inline image cells (overlay anchors).
+    let mut image_cells: Vec<(usize, usize)> = Vec::new();
 
     for (cell_idx, cell) in app.cells.iter().enumerate() {
         if let Cell::User(text) = cell {
@@ -2056,6 +2106,13 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
                 Vec::new()
             };
             plain_lines.push(plain);
+            if matches!(cell, Cell::Image { .. }) && i == 0 {
+                // Row 0 of an Image cell is the blank spacer; the caption row
+                // (i == 1) is where reserved canvas starts.
+            }
+            if matches!(cell, Cell::Image { .. }) && i == 1 {
+                image_cells.push((cell_idx, wrapped.len()));
+            }
             wrapped.push(line);
             owner.push(current);
             // A User cell renders spacer → top border → padding → first text
@@ -2167,6 +2224,11 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
         Paragraph::new(visible).style(theme::style_canvas()),
         body_rect,
     );
+
+    // Inline images: paint real pixels (kitty / sixel / iTerm2) over the rows
+    // each Cell::Image reserved in the wrap cache. Runs after the Paragraph so
+    // the protocol sequences land on empty canvas, never on text.
+    overlay_inline_images(f, app, &image_cells, vis_lo, body_rect);
 
     if let Some(prompt) = sticky {
         let banner = Rect {
@@ -2418,6 +2480,7 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
     match cell {
         Cell::Banner => banner_lines(app, out),
         Cell::User(text) => user_prompt_card(text, width, out),
+        Cell::Image { path, label, .. } => image_cell_lines(path, label, width, out),
         Cell::Assistant { text, streaming } => {
             out.push(Line::default());
             let md = markdown::render_markdown(text, theme::style_assistant());
@@ -5167,6 +5230,71 @@ fn draw_pane(
 /// the transcript. Every border/padding row belongs to the prompt cell, which
 /// also makes the right-click / double-click context-menu hitbox much larger
 /// than the text alone.
+/// Placeholder rows for an inline image cell. The real pixels are overlaid at
+/// draw time by `overlay_inline_images` (kitty/sixel/iTerm2 sit outside the
+/// cell buffer); these rows reserve layout space and carry a caption + hint so
+/// text-only terminals still see the image reference.
+fn image_cell_lines(path: &str, label: &str, width: usize, out: &mut Vec<Line<'static>>) {
+    let w = width.max(12);
+    let accent = Style::default().fg(theme::NUR_GOLD());
+    let faint = theme::style_faint();
+    // Reserve rows proportional to the image aspect ratio (capped) so the
+    // overlay lands on empty canvas instead of covering transcript text.
+    let rows = image_reserved_rows(path, w);
+    out.push(Line::default());
+    out.push(Line::from(vec![
+        Span::styled("◈ ".to_string(), accent),
+        Span::styled(
+            truncate(
+                &format!("{label} · {}", image_cell_caption_path(path)),
+                w.saturating_sub(4),
+            ),
+            faint,
+        ),
+    ]));
+    for _ in 0..rows {
+        out.push(Line::from(Span::raw(String::new())));
+    }
+}
+
+/// How many blank rows to reserve under an inline image: derived from the
+/// decoded aspect ratio and the terminal cell shape (assume ~9x18 px cells,
+/// the same default ratatui-image uses), clamped to a sane band.
+#[cfg(feature = "image-peek")]
+fn image_reserved_rows(path: &str, width_cells: usize) -> usize {
+    const MIN_ROWS: usize = 4;
+    const MAX_ROWS: usize = 18;
+    let Ok(meta) = std::fs::metadata(path) else {
+        return MIN_ROWS;
+    };
+    if meta.len() > 20 * 1024 * 1024 {
+        return MIN_ROWS;
+    }
+    let dims = (|| -> Option<(u32, u32)> {
+        let img = image::ImageReader::open(path)
+            .ok()?
+            .with_guessed_format()
+            .ok()?
+            .decode()
+            .ok()?;
+        Some((img.width(), img.height()))
+    })();
+    let Some((iw, ih)) = dims else {
+        return MIN_ROWS;
+    };
+    if iw == 0 || ih == 0 {
+        return MIN_ROWS;
+    }
+    // Cell aspect ≈ 0.5 (w:h). Image height in cells = width_cells * (ih/iw) * (cell_w/cell_h).
+    let h_cells = (width_cells as f64 * (ih as f64 / iw as f64) * 0.5) as usize;
+    h_cells.clamp(MIN_ROWS, MAX_ROWS)
+}
+
+#[cfg(not(feature = "image-peek"))]
+fn image_reserved_rows(_path: &str, _width_cells: usize) -> usize {
+    3
+}
+
 fn user_prompt_card(text: &str, width: usize, out: &mut Vec<Line<'static>>) {
     let w = width.max(12);
     let border = Style::default().fg(theme::META_BLUE());
@@ -5310,7 +5438,10 @@ fn draw_hover_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
             }
             _ => theme::META_BLUE(),
         };
-        let (diff, image) = if let Cell::Tool { name, args, .. } = cell {
+        let (diff, image) = if let Cell::Image { path, .. } = cell {
+            // Pasted/attached image: peek shows the full-size render.
+            (None, Some(path.clone()))
+        } else if let Cell::Tool { name, args, .. } = cell {
             let diff = if is_edit_tool(name) {
                 Some(approval_preview(name, args))
             } else {
@@ -6641,7 +6772,9 @@ fn draw_palette(f: &mut Frame, app: &App, input_area: Rect) {
                     ),
                     Span::styled(
                         body,
-                        Style::default().fg(theme::ON_ACCENT_FG()).bg(theme::META_BLUE()),
+                        Style::default()
+                            .fg(theme::ON_ACCENT_FG())
+                            .bg(theme::META_BLUE()),
                     ),
                     Span::styled(" ".repeat(pad), Style::default().bg(theme::META_BLUE())),
                 ])
@@ -7008,6 +7141,12 @@ fn cell_wrap_key(cell: &Cell, spin_i: u64) -> u64 {
             2u8.hash(&mut h);
             t.hash(&mut h);
         }
+        Cell::Image { path, label, .. } => {
+            // Distinct tag + stable content hash: image cells never shimmer.
+            14u8.hash(&mut h);
+            path.hash(&mut h);
+            label.hash(&mut h);
+        }
         Cell::Assistant { text, streaming } => {
             3u8.hash(&mut h);
             text.hash(&mut h);
@@ -7203,7 +7342,62 @@ fn summarize_args(tool: &str, args: &str) -> String {
 }
 
 /// Last two path components — enough to recognize a repo without eating the row.
-fn short_path(p: &str) -> String {
+/// Paint real pixels over the rows reserved by each visible `Cell::Image`.
+///
+/// `image_cells` is `(cell_idx, absolute_first_wrapped_row)` captured while the
+/// transcript wrap cache was built; `vis_lo` is the first visible wrapped row
+/// and `body` the on-screen paragraph rect, so an image renders only when its
+/// anchor row is actually scrolled into view.
+#[cfg(feature = "image-peek")]
+fn overlay_inline_images(
+    f: &mut ratatui::Frame,
+    app: &mut super::app::App,
+    image_cells: &[(usize, usize)],
+    vis_lo: usize,
+    body: Rect,
+) {
+    if !app.cfg.theme_setup.inline_images {
+        return;
+    }
+    for (cell_idx, abs_row) in image_cells {
+        let Some(Cell::Image { path, .. }) = app.cells.get(*cell_idx) else {
+            continue;
+        };
+        let path = path.clone();
+        // Anchor row relative to the viewport. `abs_row - 1` skips the blank
+        // spacer row so pixels start right under the caption line.
+        let rel = abs_row.saturating_sub(1).saturating_sub(vis_lo) as u16;
+        if rel >= body.height {
+            continue; // scrolled off
+        }
+        // How many reserved rows remain on screen (caption + blank canvas).
+        let available = (body.height - rel) as usize;
+        let want = image_reserved_rows(&path, body.width as usize) + 1;
+        let h = want.min(available).min(u16::MAX as usize) as u16;
+        if h < 2 {
+            continue;
+        }
+        let rect = Rect::new(body.x, body.y + rel, body.width, h);
+        // Clear the reserved canvas first so halfblocks glyphs never bleed
+        // through a kitty/sixel overlay.
+        f.render_widget(ratatui::widgets::Clear, rect);
+        if let Some(proto) = app.image_protocol(&path) {
+            f.render_stateful_widget(ratatui_image::StatefulImage::default(), rect, proto);
+        }
+    }
+}
+
+#[cfg(not(feature = "image-peek"))]
+fn overlay_inline_images(
+    _f: &mut ratatui::Frame,
+    _app: &mut super::app::App,
+    _image_cells: &[(usize, usize)],
+    _vis_lo: usize,
+    _body: Rect,
+) {
+}
+
+fn image_cell_caption_path(p: &str) -> String {
     let parts: Vec<&str> = p.split(['\\', '/']).filter(|s| !s.is_empty()).collect();
     match parts.len() {
         0 => p.to_string(),

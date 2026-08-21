@@ -1,8 +1,8 @@
 [package]
 name = "nur-cli"
-version = "0.27.20"
+version = "0.28.0"
 edition = "2021"
-description = "NurCLI - fully loaded multi-provider coding agent (TUI, vision, tools, sandbox, Graphify/PLUR/Ruflo/Executor + 976 bundled skills)."
+description = "NurCLI - fully loaded multi-provider coding agent (TUI, inline kitty/sixel vision, tools, sandbox, Graphify/PLUR/Ruflo/Executor + 976 bundled skills)."
 license = "GPL-3.0-or-later"
 authors = ["NurCLI contributors"]
 repository = "https://github.com/nuroctane/nur-cli"

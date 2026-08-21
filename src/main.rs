@@ -240,6 +240,9 @@ async fn real_main() -> Result<()> {
         .filter(|id| theme::is_theme(id))
         .unwrap_or("gold");
     let _ = theme::set_theme(selected_theme);
+    // Layer `[theme]` accent overrides (config) on top of the picked theme so a
+    // personal accent color survives every `/theme` switch.
+    theme::apply_theme_config_global(&cfg.theme_setup);
     if let Some(m) = &cli.model {
         cfg.model = m.clone();
     } else if let Ok(m) = std::env::var("NUR_MODEL") {

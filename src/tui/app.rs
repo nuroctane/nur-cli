@@ -241,7 +241,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/headroom", "context compression status / doctor (inline default on)"),
     ("/prewalk", "OMP-style: strong model plans, then smol at first edit - on|off|status|into <model>|reset"),
     ("/egaki", "image/video gen via egaki (login --provider chatgpt supported)"),
-    ("/image", "alias: egaki image generation"),
+    ("/image", "/image <path> - show an image inline + attach it for vision"),
     ("/tb", "terminal-browser: open|ls|action|setup (Windows host fallback ok)"),
     ("/terminal-browser", "alias of /tb"),
     ("/factory-overnight", "fractal-first overnight factory from HANDOFF.md"),
@@ -307,6 +307,16 @@ pub const COMMANDS: &[(&str, &str)] = &[
 pub enum Cell {
     Banner,
     User(String),
+    /// An image the user pasted (Ctrl+V) or referenced with /image - shown
+    /// inline via the terminal's graphics protocol (kitty/sixel/iTerm2) and
+    /// queued for model vision on the next turn. `queued` tracks whether the
+    /// pixels are already in the media pending queue.
+    Image {
+        path: String,
+        label: String,
+        #[allow(dead_code)]
+        queued: bool,
+    },
     Assistant {
         text: String,
         streaming: bool,
@@ -682,7 +692,8 @@ impl Cell {
         matches!(self, Cell::Thinking { .. } | Cell::Tool { .. })
     }
 
-    /// Hover peek / expand target - thoughts, tools/bash, and turn timing strips.
+    /// Hover peek / expand target - thoughts, tools/bash, turn timing strips,
+    /// and pasted/attached images (click = full-size peek render).
     pub fn is_peekable(&self) -> bool {
         matches!(
             self,
@@ -690,6 +701,7 @@ impl Cell {
                 | Cell::Tool { .. }
                 | Cell::TurnDone { .. }
                 | Cell::Assistant { .. }
+                | Cell::Image { .. }
         )
     }
 
@@ -1992,6 +2004,9 @@ pub struct App {
     /// Decoded image protocols keyed by path - encoding is expensive, cache it.
     #[cfg(feature = "image-peek")]
     pub img_cache: HashMap<String, ratatui_image::protocol::StatefulProtocol>,
+    /// Theme-picker gradient previews keyed by PNG bytes (in-memory images).
+    #[cfg(feature = "image-peek")]
+    pub theme_preview_cache: HashMap<Vec<u8>, ratatui_image::protocol::StatefulProtocol>,
     /// True while drag-selecting transcript text (not scrollbar).
     pub selecting: bool,
     /// Left button is held - some hosts emit `Moved` instead of `Drag` while held.
@@ -2412,9 +2427,15 @@ pub async fn run_tui(
     // Fast image picker: from_query_stdio blocks 1s on Windows cmd/conhost
     // and many Unix terms (bench 1000ms vs 0.008ms for from_fontsize).
     // Use instant path by default; opt-in probing via NUR_IMAGE_QUERY=1.
+    //
+    // v0.28: the instant fallback used to hardcode halfblocks (text glyphs),
+    // which meant kitty/wezterm/iterm users never got real pixels without
+    // opting into the 1s probe. Now env-based detection runs always (free),
+    // and NUR_IMAGE_QUERY additionally enables the full stdio capability probe.
+    // `[theme] protocol` in config.toml forces a specific protocol.
     #[cfg(feature = "image-peek")]
     let img_picker = Some({
-        if std::env::var("NUR_IMAGE_QUERY")
+        let mut picker = if std::env::var("NUR_IMAGE_QUERY")
             .map(|v| !v.is_empty() && v != "0")
             .unwrap_or(false)
         {
@@ -2422,7 +2443,32 @@ pub async fn run_tui(
                 .unwrap_or_else(|_| ratatui_image::picker::Picker::from_fontsize((9, 18)))
         } else {
             ratatui_image::picker::Picker::from_fontsize((9, 18))
+        };
+        let forced = std::env::var("NUR_IMAGE_PROTOCOL")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .or_else(|| {
+                crate::config::load_config()
+                    .ok()
+                    .map(|c| c.theme_setup.protocol)
+                    .filter(|p| p != "auto")
+            });
+        match forced.map(|p| p.to_ascii_lowercase()) {
+            Some(ref p) if p == "kitty" => {
+                picker.set_protocol_type(ratatui_image::picker::ProtocolType::Kitty)
+            }
+            Some(ref p) if p == "sixel" => {
+                picker.set_protocol_type(ratatui_image::picker::ProtocolType::Sixel)
+            }
+            Some(ref p) if p == "iterm2" => {
+                picker.set_protocol_type(ratatui_image::picker::ProtocolType::Iterm2)
+            }
+            Some(ref p) if p == "halfblocks" => {
+                picker.set_protocol_type(ratatui_image::picker::ProtocolType::Halfblocks)
+            }
+            _ => {}
         }
+        picker
     });
 
     let (tx, rx) = mpsc::unbounded_channel();
@@ -2504,6 +2550,8 @@ pub async fn run_tui(
         img_picker,
         #[cfg(feature = "image-peek")]
         img_cache: HashMap::new(),
+        #[cfg(feature = "image-peek")]
+        theme_preview_cache: HashMap::new(),
         selecting: false,
         mouse_left_down: false,
         select_anchor: None,
@@ -5071,6 +5119,25 @@ impl App {
                 .insert(path.to_string(), picker.new_resize_protocol(img));
         }
         self.img_cache.get_mut(path)
+    }
+
+    /// Graphics-protocol renderer for in-memory theme-preview PNG bytes.
+    /// Cached by theme id so arrowing through the picker re-encodes nothing.
+    #[cfg(feature = "image-peek")]
+    pub fn theme_preview_protocol(
+        &mut self,
+        png: &[u8],
+    ) -> Option<&mut ratatui_image::protocol::StatefulProtocol> {
+        if !self.theme_preview_cache.contains_key(png) {
+            let picker = self.img_picker.as_ref()?;
+            let img = image::load_from_memory(png).ok()?;
+            if self.theme_preview_cache.len() >= 3 {
+                self.theme_preview_cache.clear();
+            }
+            self.theme_preview_cache
+                .insert(png.to_vec(), picker.new_resize_protocol(img));
+        }
+        self.theme_preview_cache.get_mut(png)
     }
 
     fn hit_scrollbar(&self, col: u16, row: u16) -> bool {
@@ -7777,6 +7844,26 @@ impl App {
     /// Push a message into the live steer queue and echo it in the transcript.
     /// The agent loop drains it at the next round boundary.
     ///
+    /// Push an inline image card into the transcript. Pixels are already
+    /// queued for model vision by the caller (`meta.bytes` shown in the
+    /// caption); the card renders via the terminal graphics protocol.
+    fn attach_image_cell(&mut self, path: &str, meta: &crate::tools::media::MediaAttach) {
+        let label = match meta.kind {
+            crate::tools::media::MediaKind::Video => "video attached",
+            crate::tools::media::MediaKind::Image => "image pasted",
+        };
+        self.cells.push(Cell::Image {
+            path: path.to_string(),
+            label: format!("{label} · {:.0} KB", meta.bytes as f64 / 1024.0),
+            queued: true,
+        });
+        self.scroll_to_bottom();
+        self.push_note(
+            Tone::Mode,
+            "image attached · shown inline + queued for vision on your next message".into(),
+        );
+    }
+
     /// When the steer text names a cross-provider target (claude/grok/gemini/…),
     /// append a short `[STEER · cross-provider deploy]` block mandating
     /// `agent.provider` so mid-turn redirects do not silently stay on the parent.
@@ -9549,6 +9636,26 @@ impl App {
         if text.is_empty() {
             return;
         }
+        // Image clipboard wins when the OS clipboard holds a bitmap (screenshot
+        // → Ctrl+V). The pixels go inline into the transcript AND queue for
+        // model vision on the next turn.
+        #[cfg(feature = "image-peek")]
+        {
+            if let Some((bytes, ext)) = clipboard_image() {
+                match crate::tools::media::save_clipboard_image(&self.cwd, &bytes, &ext)
+                    .and_then(|p| crate::tools::media::queue_image_for_vision(&p).map(|m| (p, m)))
+                {
+                    Ok((path, meta)) => {
+                        self.attach_image_cell(&path.display().to_string(), &meta);
+                        return;
+                    }
+                    Err(e) => {
+                        self.push_error(format!("image paste failed: {e}"));
+                        return;
+                    }
+                }
+            }
+        }
         if let Some(m) = &mut self.login {
             // Provider stage types into the filter; key / method / browser use buf.
             if m.stage == LoginStage::Provider {
@@ -9772,6 +9879,31 @@ fn clipboard_get() -> Option<String> {
         .and_then(|mut cb| cb.get_text().ok())
 }
 
+/// Clipboard image bytes (png/rgba), for Ctrl+V image paste. Returns
+/// `(encoded_png, ext)` - arboard image data is normalized to PNG here so the
+/// media pipeline only ever sees a format it already supports.
+#[cfg(feature = "image-peek")]
+fn clipboard_image() -> Option<(Vec<u8>, String)> {
+    let mut cb = arboard::Clipboard::new().ok()?;
+    let img = cb.get_image().ok()?;
+    let rgba = image::RgbaImage::new(img.width as u32, img.height as u32);
+    let mut buf = rgba;
+    for (x, y, px) in buf.enumerate_pixels_mut() {
+        let i = ((y * img.width as u32 + x) * 4) as usize;
+        if i + 3 < img.bytes.len() {
+            *px = image::Rgba([
+                img.bytes[i],
+                img.bytes[i + 1],
+                img.bytes[i + 2],
+                img.bytes[i + 3],
+            ]);
+        }
+    }
+    let mut png = std::io::Cursor::new(Vec::new());
+    buf.write_to(&mut png, image::ImageFormat::Png).ok()?;
+    Some((png.into_inner(), "png".into()))
+}
+
 /// Map a display column (terminal cells) to a char index in `plain`.
 pub fn display_col_to_char_idx(plain: &str, target_col: usize) -> usize {
     let mut used = 0usize;
@@ -9829,6 +9961,16 @@ fn cells_to_ui_log(cells: &[Cell]) -> Vec<crate::agent::session::UiLogItem> {
             Cell::User(text) => out.push(UiLogItem {
                 kind: "user".into(),
                 text: text.clone(),
+                name: None,
+                args: None,
+                ok: None,
+                ms: None,
+                thought_ms: None,
+                interrupted: false,
+            }),
+            Cell::Image { label, path, .. } => out.push(UiLogItem {
+                kind: "image".into(),
+                text: format!("{label} · {path}"),
                 name: None,
                 args: None,
                 ok: None,

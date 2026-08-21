@@ -175,7 +175,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 |---------|------------|
 | **TUI** | Streaming · duration chips · thought/tool cards · peek · drag-select · scrollbar · sessions · multi-provider `/login` · **`/model` picker** · **`/plugins` marketplace** · `/goal` `/bro` `/adhd` `/scan` `/btw` `/codesearch` `/mc` `/feedback` `/tips` · **every skill as `/name`** · budgets · doctor |
 | **Agent** | Manual / plan / auto · tools · subagents · todos · auto-compact · session $ / token budgets · Esc cancel · Shift+Tab mid-turn · **NL skill auto-activation** |
-| **Vision** | `look` · `extract_frames` · prompt auto-attach of media paths |
+| **Vision** | `look` · `extract_frames` · prompt auto-attach · **inline images in the TUI** (kitty graphics protocol, sixel, iTerm2; Ctrl+V paste or `/image <path>`) |
 | **Tools** | read · edit · bash · web · **browser** · git · knowledge · agent · **excalidraw** |
 | **Ecosystem** | Graphify · PLUR · Ruflo · Executor · omp · browser · AKM · 800+ skills · **plugin marketplace** (Fable, Superpowers, Vercel, …) |
 | **Hardening** | Sandbox · denylist · SSRF blocks · atomic `~/.nur` IO · permissions/hooks · SHA-256 install · `nur doctor` |
@@ -245,6 +245,13 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 ```text
 nur "steal UI design tokens from demo.mp4 and scaffold a matching component"
 ```
+
+**Inline rendering (v0.28+):** pasted screenshots (`Ctrl+V`) and `/image <path>`
+render as real pixels inside the TUI on terminals that support the
+[kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/),
+sixel, or iTerm2 inline images - and are queued for model vision at the same
+time. Personal accent colors (`[theme] accent = "#..."` in `config.toml`)
+layer over any `/theme` pick. Details: [docs/vision.md](./docs/vision.md).
 
 ### Ecosystem
 

@@ -21,7 +21,7 @@ const { spawnSync } = require("child_process");
 
 const REPO = "nuroctane/nur-cli";
 // Falls back to this pinned version when `latest/download` is unreachable.
-const FALLBACK_VERSION = "0.27.20";
+const FALLBACK_VERSION = "0.28.0";
 
 function fail(msg) {
   process.stderr.write(`nur-cli: ${msg}\n`);
