@@ -191,7 +191,7 @@ nur usage
 
 ### `nur install`
 
-One-stop install — **same job as the release EXE and the shell one-liners** (minus compiling from source): copy binary → PATH → prereqs (best-effort) → ecosystem ensure → browser stage → Orca hook → optional auth from env. **No TUI** until this finishes (or until you open `nur` afterward).
+One-stop install — **same job as the release EXE and `npx nur-cli`** (minus downloading or compiling the binary): copy binary → PATH → prereqs (best-effort) → ecosystem ensure → browser stage → Orca hook → optional auth from env. **No TUI** until this finishes (or until you open `nur` afterward).
 
 ```bash
 nur install
@@ -199,7 +199,7 @@ nur install
 nur self-install
 ```
 
-Double-clicking `nur-windows-x86_64.exe` from [Releases](https://github.com/nuroctane/nur-cli/releases/latest) runs this path automatically, then opens NurCLI.
+Double-clicking `nur-windows-x86_64.exe` from [Releases](https://github.com/nuroctane/nur-cli/releases/latest) runs this path automatically, then opens NurCLI. `npx nur-cli` downloads the prebuilt binary first and then runs this same path.
 
 ### `nur update`
 
@@ -228,7 +228,7 @@ shell. It also prints when the launch-time check last ran and what it decided
 
 Afterward: `nur --version` · `nur doctor`.
 
-Full paths and alternatives (one-liner / EXE / `nur install`): **[Setup → Update](setup.md#update-keep-nurcli-current)**.
+Full paths and alternatives (`npx nur-cli` / one-liner / EXE / `nur install`): **[Setup → Update](setup.md#update-keep-nurcli-current)**.
 
 ---
 

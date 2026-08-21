@@ -1,0 +1,33 @@
+{
+  "name": "nur-cli",
+  "version": "0.27.20",
+  "description": "NurCLI - fully loaded multi-provider coding agent (TUI, vision, tools, sandbox, skills). One command installs the native binary: npx nur-cli",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nuroctane/nur-cli.git"
+  },
+  "homepage": "https://www.nuroctane.xyz/cli",
+  "keywords": [
+    "nur",
+    "nurcli",
+    "ai",
+    "agent",
+    "coding-agent",
+    "cli",
+    "tui"
+  ],
+  "bin": {
+    "nur-cli": "bin.js"
+  },
+  "files": [
+    "bin.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "postinstall": "node bin.js --ensure || exit 0"
+  }
+}

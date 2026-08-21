@@ -65,3 +65,13 @@ default = ["image-peek", "anydoc"]
 image-peek = ["dep:ratatui-image", "dep:image"]
 # Local document conversion (PDF/DOCX/PPTX/…) via Firecrawl anydoc.
 anydoc = ["dep:anydoc"]
+
+[profile.release]
+# Ship smaller, load faster binaries:
+# - strip symbols (29MB -> ~12-14MB typical for this tree) so release downloads
+#   and disk-mapped startup are cheaper;
+# - thin-local LTO + one codegen unit: cross-crate inlining without the very
+#   long full-LTO link; opt-level 3 stays default.
+strip = true
+lto = "thin"
+codegen-units = 1

@@ -234,7 +234,7 @@ Windows: `py -3 %USERPROFILE%\.nur\skills\resume-session\session_reader.py grok 
 
 ## Auto-provisioning
 
-**First install** (one-liner, release EXE, or `nur install`) runs `ecosystem ensure` **in the foreground** - packs land before the TUI opens.
+**First install** (`npx nur-cli`, one-liner, release EXE, or `nur install`) runs `ecosystem ensure` **in the foreground** - packs land before the TUI opens.
 
 On later TUI opens, NurCLI:
 

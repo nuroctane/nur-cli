@@ -29,7 +29,15 @@ nur          # interactive gold TUI
 
 ## Install: dead simple
 
-One shot. The **one-liner** (builds from source) or the **Windows EXE** (prebuilt) each drop `nur` on your PATH, pull in every runtime dependency they can, and wire the full agent stack **before** the TUI opens.
+One command on every OS:
+
+```bash
+npx nur-cli
+```
+
+Downloads the **prebuilt native binary** from GitHub Releases (no Rust toolchain, no clone, no build), drops it in `~/.local/bin`, and runs the full stack setup. Keep it permanently with `npm i -g nur-cli`.
+
+Prefer a one-liner without Node? The classic **one-liners** (build from source) or the **Windows EXE** (prebuilt) each drop `nur` on your PATH, pull in every runtime dependency they can, and wire the full agent stack **before** the TUI opens.
 
 ### <img alt="Windows (PowerShell) - recommended" src="https://img.shields.io/badge/Windows_(PowerShell)_-_recommended-a855f7?style=for-the-badge">
 
@@ -69,6 +77,7 @@ Pulls latest `main` when a Laboratory checkout exists (`~/laboratory/nur-cli` or
 
 | Also fine | |
 |-----------|--|
+| Re-run **`npx nur-cli`** | Fresh prebuilt binary + stack |
 | Re-run the **one-liner** | Full rebuild from GitHub |
 | Re-download + double-click **Windows EXE** | Prebuilt path |
 | `nur install` | Reinstall *this* binary + stack (no git pull) |
@@ -79,9 +88,10 @@ Verify: `nur --version` · `nur doctor`. Detail: [docs/setup.md → Update](./do
 
 <table>
 <tr>
-<td width="33%"><strong>1. One-liner (above)</strong><br/>Easiest. Builds from source + full stack.</td>
-<td width="33%"><img alt="2. Prebuilt EXE (Windows)" src="https://img.shields.io/badge/2_Prebuilt_EXE_(Windows)-a855f7?style=for-the-badge"><br/>Download → double-click → done.</td>
-<td width="33%"><strong>3. From a clone</strong><br/>You already have the repo.</td>
+<td width="25%"><strong>1. npx (above)</strong><br/>Prebuilt binary, every OS. Fastest.</td>
+<td width="25%"><strong>2. One-liner</strong><br/>Builds from source + full stack.</td>
+<td width="25%"><img alt="3. Prebuilt EXE (Windows)" src="https://img.shields.io/badge/3_Prebuilt_EXE_(Windows)-a855f7?style=for-the-badge"><br/>Download → double-click → done.</td>
+<td width="25%"><strong>4. From a clone</strong><br/>You already have the repo.</td>
 </tr>
 </table>
 
@@ -110,7 +120,6 @@ cargo build --release
 ./target/release/nur install   # Windows: .\target\release\nur.exe install
 nur auth login
 ```
-
 ---
 
 ### What install puts on your PC
@@ -121,9 +130,9 @@ Everything is **local**. Secrets never go into the git repo.
 
 | Piece | Why |
 |-------|-----|
-| **Rust / cargo** | Builds the CLI (one-liner / cargo only) |
+| **Rust / cargo** | Builds the CLI (one-liner / cargo only; `npx` path needs none) |
 | **Git** | Clone / update |
-| **Node.js 20+** | PLUR · Ruflo · Executor · skills · browser · AKM |
+| **Node.js 20+** | PLUR · Ruflo · Executor · skills · browser · AKM (the `npx` shim itself needs only Node 18+) |
 | **Bun** | **omp** backend |
 | **uv** | **Graphify** |
 | **ripgrep (`rg`)** | Fast `grep` / `glob` |
@@ -179,7 +188,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 |--|--|
 | **Real agent, not a wrapper** | Modes, tools, sandbox, streaming, cancel, subagents, auto-compact |
 | **Sees media** | Multimodal images/short video. Sparse frames, not spam. |
-| **One-shot install** | One-liner or Windows EXE · PATH · ecosystem · browser |
+| **One-shot install** | `npx nur-cli`, one-liner, or Windows EXE · PATH · ecosystem · browser |
 | **Easy updates** | `nur update` |
 | **Knowledge stack** | Graph · engrams · vector memory · MCP · skills |
 | **Plugin marketplace** | `/plugins` picker · Superpowers, Fable, Matt Pocock, Addy Osmani, Google, NVIDIA, finance/marketing packs, … → `~/.nur/plugins` |

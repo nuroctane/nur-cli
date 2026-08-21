@@ -84,7 +84,7 @@ Tiers are built in from a review of each provider's public policy, and you can o
 
 ## Binary integrity
 
-Each release includes a SHA-256 hash written next to the binary by the installer (one-liner or EXE). `nur doctor` verifies this:
+Each release includes a SHA-256 hash written next to the binary by the installer (npx shim, one-liner, or EXE). `nur doctor` verifies this:
 
 ```bash
 nur doctor

@@ -141,6 +141,9 @@ pub fn ensure_executor(node_ok: bool) -> ComponentStatus {
     }
 
     // Always refresh to @latest on ensure (schema bumps force this).
+    // Serialized under NPM_LOCK: concurrent global installs corrupt npm's
+    // store (parallel ensure threads would otherwise race here).
+    let _guard = super::npm_lock();
     let npm = find_bin("npm").unwrap_or_else(|| "npm".into());
     match run_capture(&npm, &["install", "-g", "executor@latest"], None, 300_000) {
         Ok(_) => {}
@@ -424,19 +427,34 @@ pub fn ensure_browser_cli(node_ok: bool) -> ComponentStatus {
         return c;
     }
 
+    // Fast path: already installed - skip the npm round-trip unless --force.
+    if find_bin("agent-browser-cli").is_some() && !super::ecosystem_force_pub() {
+        if let Some(bin) = find_bin("agent-browser-cli") {
+            c.available = true;
+            c.path = Some(bin.clone());
+            c.version = super::cmd_version_pub(&bin, &["--version"]);
+            c.detail = "real-Chrome bridge ready · run `nur browser setup` to finish".into();
+            return c;
+        }
+    }
+
     let npm = find_bin("npm").unwrap_or_else(|| "npm".into());
-    match run_capture(
-        &npm,
-        &["install", "-g", "@sleepinsummer/agent-browser-cli@latest"],
-        None,
-        300_000,
-    ) {
-        Ok(_) => {}
-        Err(e) => {
-            c.detail = format!(
-                "npm install failed: {}",
-                e.chars().take(200).collect::<String>()
-            );
+    {
+        // Serialized under NPM_LOCK (see ensure_executor).
+        let _guard = super::npm_lock();
+        match run_capture(
+            &npm,
+            &["install", "-g", "@sleepinsummer/agent-browser-cli@latest"],
+            None,
+            300_000,
+        ) {
+            Ok(_) => {}
+            Err(e) => {
+                c.detail = format!(
+                    "npm install failed: {}",
+                    e.chars().take(200).collect::<String>()
+                );
+            }
         }
     }
 

@@ -4,6 +4,14 @@ Your first NurCLI session in 60 seconds.
 
 ## 1. Install
 
+=== "<span class='install-hot'>Every OS - npx</span>"
+
+    ```bash
+    npx nur-cli
+    ```
+
+Prebuilt binary, no Rust toolchain, no build. Keep it on PATH with `npm i -g nur-cli`.
+
 === "<span class='install-hot'>Windows (PowerShell)</span>"
 
     ```powershell
@@ -18,7 +26,7 @@ Your first NurCLI session in 60 seconds.
 
 That’s the full stack (binary + PATH + prereqs + ecosystem).
 
-**<span class="install-hot">Windows without building:</span>** download `nur-windows-x86_64.exe` from [Releases](https://github.com/nuroctane/nur-cli/releases/latest) and double-click. It runs the **same full install**, then opens NurCLI. Other paths: **[Setup](setup.md)**.
+**<span class="install-hot">Windows without building:</span>** download `nur-windows-x86_64.exe` from [Releases](https://github.com/nuroctane/nur-cli/releases/latest) and double-click. It runs the **same full install**, then opens NurCLI. **macOS / Linux prebuilt:** use `npx nur-cli` above. Other paths: **[Setup](setup.md)**.
 
 ## 2. Authenticate
 

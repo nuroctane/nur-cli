@@ -14,6 +14,14 @@ Repo: [nuroctane/nur-cli](https://github.com/nuroctane/nur-cli)
 
 ## Install: one line
 
+=== "<span class='install-hot'>Every OS - npx</span>"
+
+    ```bash
+    npx nur-cli
+    ```
+
+Prebuilt binary, no Rust toolchain, no build. Keep it on PATH with `npm i -g nur-cli`.
+
 === "<span class='install-hot'>Windows (PowerShell)</span>"
 
     ```powershell
@@ -28,7 +36,7 @@ Repo: [nuroctane/nur-cli](https://github.com/nuroctane/nur-cli)
 
 Then: `nur auth login` or open `nur` and use **`/login`** → pick a provider.
 
-**<span class="install-hot">Windows EXE:</span>** download `nur-windows-x86_64.exe` from [Releases](https://github.com/nuroctane/nur-cli/releases/latest) → double-click → **full install** (PATH + ecosystem + browser) then TUI. Same stack as the one-liner, no compile. Details: **[Setup](setup.md)**.
+**<span class="install-hot">Windows EXE:</span>** download `nur-windows-x86_64.exe` from [Releases](https://github.com/nuroctane/nur-cli/releases/latest) → double-click → **full install** (PATH + ecosystem + browser) then TUI. Same stack as the npx path, no compile. Details: **[Setup](setup.md)**.
 
 ### Update
 
@@ -36,7 +44,7 @@ Then: `nur auth login` or open `nur` and use **`/login`** → pick a provider.
 nur update
 ```
 
-That's the normal upgrade. Pulls / rebuilds when you have a Laboratory checkout, reinstalls `nur` + ecosystem. Or re-run the one-liner / re-download the EXE. Full detail: **[Setup → Update](setup.md#update-keep-nurcli-current)**.
+That's the normal upgrade. Pulls / rebuilds when you have a Laboratory checkout, reinstalls `nur` + ecosystem. Or re-run `npx nur-cli` / re-download the EXE. Full detail: **[Setup → Update](setup.md#update-keep-nurcli-current)**.
 
 ---
 

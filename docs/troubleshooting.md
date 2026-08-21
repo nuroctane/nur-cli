@@ -76,8 +76,8 @@ That pulls your Laboratory checkout (`~/laboratory/nur-cli` or `~/Laboratory/nur
 | If… | Then… |
 |-----|--------|
 | No source checkout | `nur update` falls back to `nur install` (repair from the running binary) |
-| You use the Windows EXE only | Re-download `nur-windows-x86_64.exe` from [Releases](https://github.com/nuroctane/nur-cli/releases/latest) and double‑click, **or** `nur update` if you later have a clone |
-| You want a full network reinstall | Re-run the [one-liner](setup.md) |
+| You use the Windows EXE only | Re-download `nur-windows-x86_64.exe` from [Releases](https://github.com/nuroctane/nur-cli/releases/latest) and double‑click, **or** `npx nur-cli`, **or** `nur update` if you later have a clone |
+| You want a full network reinstall | Re-run `npx nur-cli` or the [one-liner](setup.md) |
 | You only want stack packs refreshed | `nur ecosystem ensure --force` (does not rebuild the CLI) |
 
 Confirm:
@@ -180,7 +180,7 @@ ecosystem
     ```bash
     nur install
     # or: nur ecosystem ensure --force
-    # or re-run the one-liner / double-click a fresh release EXE
+    # or re-run npx nur-cli / the one-liner / double-click a fresh release EXE
     ```
 
 ### `ffmpeg not on PATH`
@@ -198,6 +198,9 @@ Binary may be corrupted or from a different source.
 ```bash
 # already on PATH
 nur install
+
+# every OS - prebuilt binary via npm shim
+npx nur-cli
 
 # Windows one-liner
 irm https://raw.githubusercontent.com/nuroctane/nur-cli/main/install.ps1 | iex

@@ -93,7 +93,7 @@ auto_update = true
 | `helix_memory.api_key_env` | string | `HELIX_API_KEY` | Name of the env var containing the Helix bearer token. The token is never written to config or memory |
 | `helix_memory.timeout_ms` | integer | `1500` | Per-request deadline. Writes queue locally first and retry from the outbox on later writes or `helix_sync` |
 | `poor_mode` | bool | `false` | Skip PLUR auto-inject and long memory (skill NL/slash activation still works) |
-| `ecosystem_auto_ensure` | bool | `true` | Background TTL **repair** of packs on later TUI opens (first install is foreground via one-liner / EXE / `nur install`); set `false` to skip repair |
+| `ecosystem_auto_ensure` | bool | `true` | Background TTL **repair** of packs on later TUI opens (first install is foreground via npx / one-liner / EXE / `nur install\); set `false` to skip repair |
 | `auto_update` | bool | `true` | On **every** launch (bare TUI, `nur "prompt"`, `nur run …`, gateway), check [GitHub Releases](https://github.com/nuroctane/nur-cli/releases/latest) and install a newer binary when available; it runs on a background thread so it never delays or breaks a run, and the new binary is picked up on the next launch. A 60s floor between network checks stops a script that loops `nur` from hammering the API — tune it with `NUR_AUTO_UPDATE_TTL_SECS` (`0` = check every run). Opt out with `false` or env `NUR_SKIP_AUTO_UPDATE=1`. Verify with `nur update --check`; `nur update` always runs the full update path |
 
 ### Reasoning effort levels

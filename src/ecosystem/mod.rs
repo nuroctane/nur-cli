@@ -252,9 +252,36 @@ pub fn marker_path() -> PathBuf {
 
 /// Ensure the full Meta ecosystem is installed and initialised.
 /// Safe to call on every launch - skips heavy work when the marker is fresh.
+/// True when the in-flight `ensure_ecosystem(force = true)` asked for explicit
+/// refreshes. Thread-local so parallel component ensures (see `ensure_ecosystem`)
+/// inherit it without global mutable state.
+fn ecosystem_force() -> bool {
+    ENSURE_FORCE.with(|f| f.get())
+}
+
+/// Public accessor for packs.rs fast-path guards.
+pub(crate) fn ecosystem_force_pub() -> bool {
+    ecosystem_force()
+}
+
+thread_local! {
+    static ENSURE_FORCE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Serialize npm global installs across ensure threads. Concurrent
+/// `npm install -g` runs corrupt the shared store / bin shims.
+pub(crate) fn npm_lock() -> std::sync::MutexGuard<'static, ()> {
+    static NPM_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    NPM_LOCK
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
     // Ensure the Nur home exists before creating ecosystem directories.
     let _ = crate::config::ensure_dirs();
+    ENSURE_FORCE.with(|f| f.set(force));
 
     if !force {
         if let Some(cached) = load_marker_if_fresh() {
@@ -279,25 +306,101 @@ pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
         Err(e) => status.notes.push(format!("bundled skills: {e}")),
     }
 
-    status.graphify = ensure_graphify();
-    status.plur = ensure_plur(status.node_ok);
-    status.ruflo = ensure_ruflo(status.node_ok);
-    status.skills_cli = packs::ensure_skills_cli(status.node_ok);
-    status.akm = packs::ensure_akm(status.node_ok);
-    status.executor = packs::ensure_executor(status.node_ok);
-    status.omp = packs::ensure_omp();
-    status.graphjin = packs::ensure_graphjin();
-    status.browser = packs::ensure_browser_cli(status.node_ok);
-    status.terminal_browser = ensure_terminal_browser(status.node_ok);
-    status.excalidraw = ensure_excalidraw(status.node_ok);
-    status.penecho = ensure_penecho(status.node_ok);
-    status.headroom = ensure_headroom();
-    status.optmem = ensure_optmem();
-    status.dogwood = ensure_dogwood();
-    status.egaki = ensure_egaki(status.node_ok);
-    status.fractal = ensure_fractal();
-    status.cua = ensure_cua();
-    status.akarso = ensure_akarso(status.node_ok);
+    // ── Component ensures, in parallel ────────────────────────────────────
+    // Each ensure is an independent subprocess pipeline (npm/uv/bun/cargo).
+    // Serially this was minutes of wall time; scoped threads run them
+    // concurrently. npm global installs serialize internally via `npm_lock`
+    // (concurrent `npm i -g` corrupts the shared store), so npm-bound ensures
+    // overlap their probe/verify phases and queue only their install phase.
+    //
+    // Panics are contained: a panicking ensure would poison a shared mutex or
+    // leave one component unset, so each thread catches and records a note.
+    {
+        let node_ok = status.node_ok;
+        let res = std::thread::scope(|s| {
+            let h_graphify = s.spawn(|| std::panic::catch_unwind(ensure_graphify));
+            let h_plur = s.spawn(move || std::panic::catch_unwind(|| ensure_plur(node_ok)));
+            let h_ruflo = s.spawn(move || std::panic::catch_unwind(|| ensure_ruflo(node_ok)));
+            let h_skills_cli =
+                s.spawn(move || std::panic::catch_unwind(|| packs::ensure_skills_cli(node_ok)));
+            let h_akm = s.spawn(move || std::panic::catch_unwind(|| packs::ensure_akm(node_ok)));
+            let h_executor =
+                s.spawn(move || std::panic::catch_unwind(|| packs::ensure_executor(node_ok)));
+            let h_omp = s.spawn(|| std::panic::catch_unwind(packs::ensure_omp));
+            let h_graphjin = s.spawn(|| std::panic::catch_unwind(packs::ensure_graphjin));
+            let h_browser =
+                s.spawn(move || std::panic::catch_unwind(|| packs::ensure_browser_cli(node_ok)));
+            let h_tbrowser =
+                s.spawn(move || std::panic::catch_unwind(|| ensure_terminal_browser(node_ok)));
+            let h_excalidraw =
+                s.spawn(move || std::panic::catch_unwind(|| ensure_excalidraw(node_ok)));
+            let h_penecho = s.spawn(move || std::panic::catch_unwind(|| ensure_penecho(node_ok)));
+            let h_headroom = s.spawn(|| std::panic::catch_unwind(ensure_headroom));
+            let h_optmem = s.spawn(|| std::panic::catch_unwind(ensure_optmem));
+            let h_dogwood = s.spawn(|| std::panic::catch_unwind(ensure_dogwood));
+            let h_egaki = s.spawn(move || std::panic::catch_unwind(|| ensure_egaki(node_ok)));
+            let h_fractal = s.spawn(|| std::panic::catch_unwind(ensure_fractal));
+            let h_cua = s.spawn(|| std::panic::catch_unwind(ensure_cua));
+            let h_akarso = s.spawn(move || std::panic::catch_unwind(|| ensure_akarso(node_ok)));
+
+            (
+                h_graphify.join(),
+                h_plur.join(),
+                h_ruflo.join(),
+                h_skills_cli.join(),
+                h_akm.join(),
+                h_executor.join(),
+                h_omp.join(),
+                h_graphjin.join(),
+                h_browser.join(),
+                h_tbrowser.join(),
+                h_excalidraw.join(),
+                h_penecho.join(),
+                h_headroom.join(),
+                h_optmem.join(),
+                h_dogwood.join(),
+                h_egaki.join(),
+                h_fractal.join(),
+                h_cua.join(),
+                h_akarso.join(),
+            )
+        });
+
+        // Unwrap the outer join (join errors mean the thread panicked before
+        // catch_unwind could engage - treat as unavailable), then the inner
+        // catch_unwind result.
+        macro_rules! set_component {
+            ($slot:expr, $handle:expr, $name:literal) => {
+                match $handle {
+                    Ok(Ok(status)) => $slot = status,
+                    _ => status.notes.push(format!(
+                        "{}: ensure panicked - skipped (re-run nur ecosystem ensure)",
+                        $name
+                    )),
+                }
+            };
+        }
+        let (g, p, r, sc, ak, ex, om, gj, br, tb, ed, pe, hr, op, dg, eg, fr, cu, akr) = res;
+        set_component!(status.graphify, g, "graphify");
+        set_component!(status.plur, p, "plur");
+        set_component!(status.ruflo, r, "ruflo");
+        set_component!(status.skills_cli, sc, "skills");
+        set_component!(status.akm, ak, "akm");
+        set_component!(status.executor, ex, "executor");
+        set_component!(status.omp, om, "omp");
+        set_component!(status.graphjin, gj, "graphjin");
+        set_component!(status.browser, br, "browser");
+        set_component!(status.terminal_browser, tb, "terminal-browser");
+        set_component!(status.excalidraw, ed, "excalidraw");
+        set_component!(status.penecho, pe, "penecho");
+        set_component!(status.headroom, hr, "headroom");
+        set_component!(status.optmem, op, "optmem");
+        set_component!(status.dogwood, dg, "dogwood");
+        set_component!(status.egaki, eg, "egaki");
+        set_component!(status.fractal, fr, "fractal");
+        set_component!(status.cua, cu, "cua");
+        set_component!(status.akarso, akr, "akarso");
+    }
 
     // tldraw offline desktop app (official) - best-effort auto-install so `/draw`
     // works out of the box. No-ops when already present; skips quietly offline.
@@ -403,6 +506,7 @@ fn ensure_penecho(node_ok: bool) -> ComponentStatus {
         return c;
     }
     let npm = find_bin("npm").unwrap_or_else(|| "npm".into());
+    let _npm_guard = npm_lock();
     match run_capture(&npm, &["install", "-g", "penecho@latest"], None, 300_000) {
         Ok(_) => {}
         Err(e) => {
@@ -506,6 +610,18 @@ fn ensure_headroom() -> ComponentStatus {
         ..Default::default()
     };
     let _ = crate::headroom::ensure_helper_script();
+    // Fast path: already installed - skip the uv upgrade round-trip unless --force.
+    if let Some(bin) = find_bin("headroom") {
+        if !ecosystem_force() {
+            c.available = true;
+            c.path = Some(bin.clone());
+            c.version = cmd_version(&bin, &["--version"]);
+            c.detail =
+                "CLI ready · inline tool-result compress (disable: [headroom] enabled=false)"
+                    .into();
+            return c;
+        }
+    }
     // Refresh Python package / uv tool when possible so inline compress stays current.
     if let Some(uv) = find_bin("uv") {
         let _ = run_capture(
@@ -614,11 +730,23 @@ fn ensure_egaki(node_ok: bool) -> ComponentStatus {
         name: "egaki".into(),
         ..Default::default()
     };
+    // Fast path: already installed - skip the npm round-trip unless --force.
+    if let Some(bin) = find_bin("egaki") {
+        if !ecosystem_force() {
+            c.available = true;
+            c.path = Some(bin.clone());
+            c.version = cmd_version(&bin, &["--version"]);
+            c.detail =
+                "CLI ready · egaki login --provider chatgpt | xai-oauth | egaki --key …".into();
+            return c;
+        }
+    }
     if !node_ok {
         c.detail = "needs Node.js - npm i -g egaki@latest".into();
         return c;
     }
     let npm = find_bin("npm").unwrap_or_else(|| "npm".into());
+    let _npm_guard = npm_lock();
     let _ = run_capture(&npm, &["install", "-g", "egaki@latest"], None, 300_000);
     if let Some(bin) = find_bin("egaki") {
         c.available = true;
@@ -715,6 +843,7 @@ fn ensure_akarso(node_ok: bool) -> ComponentStatus {
         c.detail = "needs Node.js 18+ - npm i -g akarso".into();
         return c;
     }
+    let _npm_guard = npm_lock();
     let _ = run_quiet("npm", &["install", "-g", "akarso"], None, 600_000);
     if let Some(bin) = find_bin("akarso") {
         c.available = true;
@@ -821,6 +950,18 @@ fn ensure_graphify() -> ComponentStatus {
         name: "graphify".into(),
         ..Default::default()
     };
+    // Fast path: already installed - skip the uv upgrade round-trip (it can
+    // take tens of seconds and re-resolves the whole toolchain). `--force`
+    // still refreshes so users can opt into an explicit upgrade.
+    if let Some(bin) = find_bin("graphify") {
+        if !ecosystem_force() {
+            c.available = true;
+            c.path = Some(bin.clone());
+            c.version = cmd_version(&bin, &["--version"]);
+            c.detail = "CLI ready".into();
+            return c;
+        }
+    }
     // Prefer upgrading via uv when available so ensure tracks latest graphifyy.
     if which("uv") || which("uv.exe") {
         let _ = run_quiet(
@@ -856,7 +997,21 @@ fn ensure_plur(node_ok: bool) -> ComponentStatus {
         c.detail = "needs Node.js 18+".into();
         return c;
     }
+    // Fast path: already installed - skip the npm round-trip unless --force.
+    if let Some(bin) = find_bin("plur") {
+        if !ecosystem_force() {
+            c.available = true;
+            c.path = Some(bin.clone());
+            c.version = cmd_version(&bin, &["--version"]);
+            let home = dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".plur");
+            c.detail = format!("store {}", home.display());
+            return c;
+        }
+    }
     // Refresh to latest on every ensure (marker TTL / schema bump gated).
+    let _npm_guard = npm_lock();
     let _ = run_quiet(
         "npm",
         &[
@@ -918,8 +1073,21 @@ fn ensure_ruflo(node_ok: bool) -> ComponentStatus {
         c.detail = "needs Node.js 20+".into();
         return c;
     }
+    // Fast path: already installed - skip the npm round-trip unless --force.
+    if let Some(bin) = find_bin("ruflo") {
+        if !ecosystem_force() {
+            c.available = true;
+            c.path = Some(bin.clone());
+            c.version = cmd_version(&bin, &["--version"]);
+            let home = ruflo_home();
+            let _ = fs::create_dir_all(&home);
+            c.detail = format!("db {}", ruflo_db_path().display());
+            return c;
+        }
+    }
     // Refresh ruflo to latest on ensure.
     let npm = find_bin("npm").unwrap_or_else(|| "npm".into());
+    let _npm_guard = npm_lock();
     let _ = run_quiet(
         &npm,
         &["install", "-g", "ruflo@latest", "--omit=optional"],

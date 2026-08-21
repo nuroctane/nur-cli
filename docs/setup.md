@@ -3,6 +3,7 @@
 System requirements, **every install path**, what lands on your PC, updates, and uninstallation.
 
 !!! tip "It's one line"
+    **<span class="install-hot">Every OS:</span>** `npx nur-cli` (prebuilt binary, no toolchain)  
     **<span class="install-hot">Windows:</span>** `irm https://raw.githubusercontent.com/nuroctane/nur-cli/main/install.ps1 | iex`  
     **<span class="install-hot">macOS / Linux:</span>** `curl -fsSL https://raw.githubusercontent.com/nuroctane/nur-cli/main/install.sh | bash`  
     Then: `nur auth login` → `nur`. Full detail below.
@@ -17,13 +18,22 @@ System requirements, **every install path**, what lands on your PC, updates, and
 | **Hardware** | 4 GB+ RAM, x64 or ARM64 processor |
 | **Network** | Internet (provider APIs + first install downloads) |
 | **Shell** | PowerShell, CMD, Bash, or Zsh |
-| **Git** | Required for the one-liner / clone paths |
+| **Git** | Required only for the one-liner / clone paths (npx needs none) |
 
 ---
 
 ## Install methods
 
-### 1. One-liner (recommended)
+### 0. npx (fastest, every OS)
+
+```bash
+npx nur-cli          # one-shot: prebuilt binary + full stack
+npm i -g nur-cli     # or keep the shim on PATH
+```
+
+Downloads the **prebuilt native binary** from GitHub Releases - no Rust toolchain, no clone, no build - installs it to `~/.local/bin`, then runs `nur install` for PATH, prereqs, ecosystem packs, and browser stage. The npm package is a zero-dependency ~4 KB downloader; all logic lives in the Rust binary. Needs only Node 18+ and internet access to `github.com`.
+
+### 1. One-liner (builds from source)
 
 Does **everything**: Rust if needed, prereqs, build, PATH, ecosystem packs, browser stage, optional Orca hook + auth.
 
@@ -39,15 +49,13 @@ Does **everything**: Rust if needed, prereqs, build, PATH, ecosystem packs, brow
     curl -fsSL https://raw.githubusercontent.com/nuroctane/nur-cli/main/install.sh | bash
     ```
 
-### 2. <span class="install-hot">Prebuilt Windows EXE</span> (no local compile)
+### 2. <span class="install-hot">Prebuilt binaries</span> (no local compile)
 
-**Same job as the one-liner:** download, run, full stack. The EXE *is* the installer.
+**Windows EXE:** download `nur-windows-x86_64.exe` from [Releases → latest](https://github.com/nuroctane/nur-cli/releases/latest) and double-click.
 
-1. Open [**Releases → latest**](https://github.com/nuroctane/nur-cli/releases/latest)
-2. Download **`nur-windows-x86_64.exe`**
-3. **Double-click it** (or `.\nur-windows-x86_64.exe`)
+**macOS / Linux:** `npx nur-cli` grabs the same prebuilt binary (`nur-macos-aarch64`, `nur-macos-x86_64`, `nur-linux-x86_64`) automatically - see method 0.
 
-What it does **before** any TUI (console progress):
+**Same job as `npx nur-cli` and the one-liner:** download, run, full stack. The EXE *is* the installer.
 
 | Step | Action |
 |------|--------|
@@ -96,7 +104,7 @@ nur auth login
 nur update
 ```
 
-That is the supported upgrade path after any install. Same spirit as the one-liner: refresh source if present, rebuild, reinstall binary + ecosystem + browser stage.
+That is the supported upgrade path after any install. Same spirit as the installers: prefer the GitHub prebuilt binary when a newer release exists, otherwise refresh local source if present, rebuild, reinstall binary + ecosystem + browser stage.
 
 | What `nur update` does | Detail |
 |-------------------------|--------|
@@ -123,6 +131,7 @@ nur doctor
 | Method | When to use |
 |--------|-------------|
 | **`nur update`** | **Preferred** — always try this first |
+| **Re-run `npx nur-cli`** | Fresh prebuilt binary + stack |
 | **Re-run the one-liner** | Same as first install; rebuilds from GitHub main |
 | **Re-download + double‑click** `nur-windows-x86_64.exe` | Windows prebuilt path (no local compile) |
 | **`nur install`** | Re-copy *this* binary + full stack (no `git pull` / rebuild) |
@@ -156,15 +165,15 @@ nur doctor
 
 ---
 
-## What the one-liner and EXE install on your PC (A → Z)
+## What the installers put on your PC (A → Z)
 
-Everything is **on your machine only**. Secrets never go into the git checkout. Same inventory for the PowerShell/bash one-liner **and** the prebuilt Windows EXE.
+Everything is **on your machine only**. Secrets never go into the git checkout. Same inventory for `npx nur-cli`, the PowerShell/bash one-liner, **and** the prebuilt Windows EXE.
 
 ### A–G · Runtimes & build tools (installed if missing)
 
 | Piece | Typical location | Used for |
 |-------|------------------|----------|
-| **Rust / cargo** (rustup) | `~/.cargo/` | Compiling NurCLI (**one-liner / cargo only** — not the release EXE) |
+| **Rust / cargo** (rustup) | `~/.cargo/` | Compiling NurCLI (**one-liner / cargo only** — not npx / release EXE) |
 | **Git** | system | Clone / update source (**one-liner / clone only**) |
 | **Node.js 20+** | system / winget / brew / apt | PLUR, Ruflo, Executor, skills, browser CLI, AKM |
 | **Bun** | `~/.bun/` | **omp** (Oh My Pi) |
