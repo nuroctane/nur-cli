@@ -1240,6 +1240,8 @@ impl LoginModal {
 pub struct ModelPicker {
     /// Provider name for the modal title (e.g. "OpenAI").
     pub provider_name: String,
+    /// Provider id (e.g. "opencode") for per-provider row decoration.
+    pub provider_id: String,
     /// Model ids fetched from the provider (empty until the fetch lands).
     pub models: Vec<String>,
     /// The currently active model id - marked in the list.
@@ -1376,12 +1378,19 @@ impl ThemePicker {
 }
 
 impl ModelPicker {
-    /// Models matching the current filter (substring, case-insensitive).
+    /// Models matching the current filter (substring, case-insensitive, on
+    /// the id or its friendly alias — typing "ox" finds `x-preview-f-free`).
     pub fn filtered(&self) -> Vec<&String> {
         let f = self.filter.trim().to_lowercase();
         self.models
             .iter()
-            .filter(|m| f.is_empty() || m.to_lowercase().contains(&f))
+            .filter(|m| {
+                f.is_empty()
+                    || m.to_lowercase().contains(&f)
+                    || crate::providers::opencode_model_alias(m)
+                        .map(|a| a.to_lowercase().contains(&f))
+                        .unwrap_or(false)
+            })
             .collect()
     }
 
@@ -6097,6 +6106,7 @@ impl App {
         // not a stale generic NUR_API_KEY or empty string.
         let key = crate::auth::resolve_api_key_for(Some(provider.id)).unwrap_or_default();
         let pid = provider.id.to_string();
+        let pid2 = pid.clone();
 
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -6105,6 +6115,7 @@ impl App {
 
         self.model_picker = Some(ModelPicker {
             provider_name: provider.name.to_string(),
+            provider_id: pid2,
             models: Vec::new(),
             current: if provider.id == "opencode"
                 && self.cfg.base_url.trim_end_matches('/') == crate::providers::OPENCODE_GO_BASE_URL

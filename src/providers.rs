@@ -392,6 +392,18 @@ pub fn opencode_zen_free_wire_id(id: &str) -> String {
     }
 }
 
+/// Friendly catalog name for cryptic OpenCode ids, shown as a suffix label in
+/// the model picker (and matched by its filter) so models stay findable by the
+/// names OpenCode uses for them. The picker lists free models under their Zen
+/// wire id only, so `x-preview-f-free` must surface its Go-catalog alias.
+pub fn opencode_model_alias(id: &str) -> Option<&'static str> {
+    let bare = opencode_bare_model_id(id);
+    match bare.to_ascii_lowercase().as_str() {
+        "x-preview-f-free" | "ox-alpha-free" => Some("Ox Alpha Free"),
+        _ => None,
+    }
+}
+
 /// Whether a bare model id (or one with `opencode-go/` prefix) belongs on the
 /// OpenCode **Go** endpoint (`/zen/go/v1`) rather than Zen (`/zen/v1`).
 ///
@@ -2301,6 +2313,26 @@ mod tests {
             opencode_request_route("grok-4.5", OPENCODE_GO_BASE_URL).1,
             OPENCODE_GO_BASE_URL
         );
+    }
+
+    #[test]
+    fn opencode_alias_labels_the_zen_wire_id_with_its_go_name() {
+        // The picker lists the free model under its Zen wire id only; both
+        // that id and the retired Go alias must surface the friendly name.
+        assert_eq!(
+            opencode_model_alias("x-preview-f-free"),
+            Some("Ox Alpha Free")
+        );
+        assert_eq!(
+            opencode_model_alias("ox-alpha-free"),
+            Some("Ox Alpha Free")
+        );
+        assert_eq!(
+            opencode_model_alias("opencode-go/ox-alpha-free"),
+            Some("Ox Alpha Free")
+        );
+        assert_eq!(opencode_model_alias("kimi-k3"), None);
+        assert_eq!(opencode_model_alias(""), None);
     }
 
     /// Every id nur can put on the wire for xAI must be one `api.x.ai` still

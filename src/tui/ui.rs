@@ -651,12 +651,13 @@ fn draw_model_picker(f: &mut Frame, app: &mut App, area: Rect) {
     let list_h = (inner.height as usize).saturating_sub(FILTER_ROWS).max(1);
     let vis_rows = list_h.max(1);
 
-    let (filter, current, error, mut sel, mut start) = {
+    let (filter, current, error, provider_id, mut sel, mut start) = {
         let m = app.model_picker.as_ref().unwrap();
         (
             m.filter.clone(),
             m.current.clone(),
             m.error.clone(),
+            m.provider_id.clone(),
             m.sel,
             m.scroll,
         )
@@ -728,6 +729,19 @@ fn draw_model_picker(f: &mut Frame, app: &mut App, area: Rect) {
         let is_current = *id == current;
         let marker = if selected { "❯ " } else { "  " };
         let badge = if is_current { "  ● active" } else { "" };
+        // Friendly alias suffix (e.g. `x-preview-f-free · Ox Alpha Free`) so
+        // models stay recognizable under their canonical wire ids. The suffix
+        // reserves its width; the id truncates first.
+        let alias = if provider_id == "opencode" {
+            crate::providers::opencode_model_alias(id)
+        } else {
+            None
+        };
+        let suffix = alias.map(|a| format!(" · {a}"));
+        let suffix_w = suffix
+            .as_ref()
+            .map(|s| UnicodeWidthStr::width(s.as_str()))
+            .unwrap_or(0);
         let text = format!("{marker}{id}{badge}");
         let style = if selected {
             Style::default()
@@ -741,7 +755,14 @@ fn draw_model_picker(f: &mut Frame, app: &mut App, area: Rect) {
         } else {
             Style::default().fg(theme::FG())
         };
-        lines.push(Line::from(Span::styled(truncate(&text, col), style)));
+        let mut spans = vec![Span::styled(
+            truncate(&text, col.saturating_sub(suffix_w)),
+            style,
+        )];
+        if let Some(s) = suffix {
+            spans.push(Span::styled(s, theme::style_faint()));
+        }
+        lines.push(Line::from(spans));
 
         let drawn = i - start;
         let row_y = inner.y + FILTER_ROWS as u16 + drawn as u16;
