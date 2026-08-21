@@ -274,7 +274,7 @@ fn draw_login_method(f: &mut Frame, app: &App, area: Rect) {
         let marker = if selected { "❯ " } else { "  " };
         let title_style = if selected {
             Style::default()
-                .fg(theme::BG())
+                .fg(theme::ON_ACCENT_FG())
                 .bg(theme::META_BLUE())
                 .add_modifier(Modifier::BOLD)
         } else {
@@ -359,7 +359,7 @@ fn draw_login_browser(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(
                 m.browser_user_code.clone(),
                 Style::default()
-                    .fg(theme::BG())
+                    .fg(theme::ON_ACCENT_FG())
                     .bg(theme::META_BLUE())
                     .add_modifier(Modifier::BOLD),
             ),
@@ -527,7 +527,7 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
         let marker = if selected { "❯ " } else { "  " };
         let name_style = if selected {
             Style::default()
-                .fg(theme::BG())
+                .fg(theme::ON_ACCENT_FG())
                 .bg(theme::META_BLUE())
                 .add_modifier(Modifier::BOLD)
         } else {
@@ -745,7 +745,7 @@ fn draw_model_picker(f: &mut Frame, app: &mut App, area: Rect) {
         let text = format!("{marker}{id}{badge}");
         let style = if selected {
             Style::default()
-                .fg(theme::BG())
+                .fg(theme::ON_ACCENT_FG())
                 .bg(theme::META_BLUE())
                 .add_modifier(Modifier::BOLD)
         } else if is_current {
@@ -869,7 +869,7 @@ fn draw_theme_picker(f: &mut Frame, app: &mut App, area: Rect) {
         };
         let text_style = if is_selected {
             Style::default()
-                .fg(theme::BG())
+                .fg(theme::ON_ACCENT_FG())
                 .bg(row_bg)
                 .add_modifier(Modifier::BOLD)
         } else if is_saved {
@@ -1034,7 +1034,7 @@ fn draw_plugin_picker(f: &mut Frame, app: &mut App, area: Rect) {
             );
             let style = if selected {
                 Style::default()
-                    .fg(theme::BG())
+                    .fg(theme::ON_ACCENT_FG())
                     .bg(theme::META_BLUE())
                     .add_modifier(Modifier::BOLD)
             } else if p.enabled {
@@ -2209,7 +2209,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
             Paragraph::new(Span::styled(
                 tag,
                 Style::default()
-                    .fg(theme::BG())
+                    .fg(theme::ON_ACCENT_FG())
                     .bg(theme::META_BLUE())
                     .add_modifier(Modifier::BOLD),
             )),
@@ -2261,7 +2261,7 @@ fn draw_sticky_banner(f: &mut Frame, prompt: &str, area: Rect) {
             Span::styled(
                 "  PROMPT  ".to_string(),
                 Style::default()
-                    .fg(theme::BG())
+                    .fg(theme::ON_ACCENT_FG())
                     .bg(theme::META_BLUE())
                     .add_modifier(Modifier::BOLD),
             ),
@@ -2456,7 +2456,7 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                         last.spans.push(Span::styled(
                             "█".to_string(),
                             Style::default()
-                                .fg(theme::BG())
+                                .fg(theme::ON_ACCENT_FG())
                                 .bg(theme::SEAFOAM())
                                 .add_modifier(Modifier::BOLD),
                         ));
@@ -2652,14 +2652,14 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                 head_spans.push(Span::styled(
                     format!(" +{add} "),
                     Style::default()
-                        .fg(theme::BG())
+                        .fg(theme::ON_ACCENT_FG())
                         .bg(theme::SUCCESS())
                         .add_modifier(Modifier::BOLD),
                 ));
                 head_spans.push(Span::styled(
                     format!(" -{del} "),
                     Style::default()
-                        .fg(theme::BG())
+                        .fg(theme::ON_ACCENT_FG())
                         .bg(theme::ERROR())
                         .add_modifier(Modifier::BOLD),
                 ));
@@ -2880,7 +2880,7 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                 Span::styled(
                     "steer".to_string(),
                     Style::default()
-                        .fg(theme::BG())
+                        .fg(theme::ON_ACCENT_FG())
                         .bg(theme::META_BLUE())
                         .add_modifier(Modifier::BOLD),
                 ),
@@ -2888,7 +2888,7 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                 Span::styled(
                     "cut in".to_string(),
                     Style::default()
-                        .fg(theme::BG())
+                        .fg(theme::ON_ACCENT_FG())
                         .bg(theme::WARN())
                         .add_modifier(Modifier::BOLD),
                 ),
@@ -5265,7 +5265,7 @@ fn apply_selection_style(line: Line<'static>, line_idx: usize, range: TextRange)
     spans.push(Span::styled(
         mid,
         Style::default()
-            .fg(theme::BG())
+            .fg(theme::ON_ACCENT_FG())
             .bg(theme::META_BLUE())
             .add_modifier(Modifier::BOLD),
     ));
@@ -6191,7 +6191,7 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
     let sel = app.input.selection_range();
     // Same wash as the transcript's drag-select - one gesture, one colour.
     let sel_style = Style::default()
-        .fg(theme::BG())
+        .fg(theme::ON_ACCENT_FG())
         .bg(theme::META_BLUE())
         .add_modifier(Modifier::BOLD);
     let normal = Style::default().fg(theme::FG());
@@ -6200,7 +6200,7 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
         .bg(theme::SURFACE())
         .add_modifier(Modifier::BOLD);
     let chip_sel_style = Style::default()
-        .fg(theme::BG())
+        .fg(theme::ON_ACCENT_FG())
         .bg(theme::META_BLUE())
         .add_modifier(Modifier::BOLD);
 
@@ -6315,7 +6315,7 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
                             chip_sel_style
                         } else {
                             Style::default()
-                                .fg(theme::BG())
+                                .fg(theme::ON_ACCENT_FG())
                                 .bg(theme::META_BLUE())
                                 .add_modifier(Modifier::BOLD)
                         }
@@ -6337,7 +6337,7 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
                         ch.to_string(),
                         if is_sel {
                             Style::default()
-                                .fg(theme::BG())
+                                .fg(theme::ON_ACCENT_FG())
                                 .bg(theme::META_BLUE())
                                 .add_modifier(Modifier::BOLD)
                         } else {
@@ -6635,13 +6635,13 @@ fn draw_palette(f: &mut Frame, app: &App, input_area: Rect) {
                     Span::styled(
                         head,
                         Style::default()
-                            .fg(theme::BG())
+                            .fg(theme::ON_ACCENT_FG())
                             .bg(theme::META_BLUE())
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         body,
-                        Style::default().fg(theme::BG()).bg(theme::META_BLUE()),
+                        Style::default().fg(theme::ON_ACCENT_FG()).bg(theme::META_BLUE()),
                     ),
                     Span::styled(" ".repeat(pad), Style::default().bg(theme::META_BLUE())),
                 ])
