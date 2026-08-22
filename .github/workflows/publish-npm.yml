@@ -32,16 +32,25 @@ jobs:
           package-manager-cache: false # never use caching in release builds
 
       # The shim lives in npm/ (package.json + bin.js + README.md).
-      - name: Sync package version with the release tag
+      - name: Resolve version (release tag, else Cargo.toml)
+        id: ver
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
+          if [[ "$GITHUB_EVENT_NAME" == "release" ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            V=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')
+            echo "version=$V" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sync package version
+        run: |
           cd npm
           node -e "
             const fs = require('fs');
             const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
             pkg.version = process.argv[1];
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
-          " "$TAG"
+          " "${{ steps.ver.outputs.version }}"
 
       - name: Publish from npm/
         run: npm publish
