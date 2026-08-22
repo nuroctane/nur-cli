@@ -6855,6 +6855,19 @@ impl App {
         login_method_choices(&provider, m.can_import).len()
     }
 
+    /// One-step move for the auth-options list (wheel + PageUp/PageDown share
+    /// this) - same contract as the theme/provider pickers' .
+    fn step_login_method(&mut self, dir: i32) {
+        let Some(m) = &mut self.login else { return };
+        let n = Self::method_option_count(m);
+        if n == 0 {
+            return;
+        }
+        let sel = m.method_sel as i32;
+        let next = (sel + dir.signum()).clamp(0, n as i32 - 1);
+        m.method_sel = next as usize;
+    }
+
     fn on_login_method_key(&mut self, key: event::KeyEvent, _ctrl: bool) {
         let Some(m) = &mut self.login else { return };
         let n = Self::method_option_count(m);
@@ -6878,6 +6891,16 @@ impl App {
                 }
             }
             KeyCode::Enter => self.login_method_confirm(),
+            KeyCode::PageUp => {
+                for _ in 0..3 {
+                    self.step_login_method(-1);
+                }
+            }
+            KeyCode::PageDown => {
+                for _ in 0..3 {
+                    self.step_login_method(1);
+                }
+            }
             KeyCode::Char('1') => {
                 m.method_sel = 0;
                 self.login_method_confirm();
@@ -7245,6 +7268,45 @@ impl App {
         self.mouse_col = m.column;
         self.mouse_row = m.row;
         let stage = self.login.as_ref().map(|l| l.stage);
+
+        // Method stage (auth options): same one-step wheel/click contract as
+        // every other picker.
+        if stage == Some(LoginStage::Method) {
+            match m.kind {
+                MouseEventKind::ScrollUp => self.step_login_method(-1),
+                MouseEventKind::ScrollDown => self.step_login_method(1),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    let Some(l) = &self.login else { return };
+                    let hit = l.hit.clone();
+                    if rect_contains(hit.close, m.column, m.row) {
+                        if let Some(l) = &mut self.login {
+                            l.stage = LoginStage::Provider;
+                            l.error = None;
+                        }
+                        return;
+                    }
+                    for (i, r) in &hit.rows {
+                        if rect_contains(*r, m.column, m.row) {
+                            let same = self
+                                .login
+                                .as_ref()
+                                .map(|l| l.method_sel == *i)
+                                .unwrap_or(false);
+                            if let Some(l) = &mut self.login {
+                                l.method_sel = *i;
+                            }
+                            if same {
+                                self.login_method_confirm();
+                            }
+                            return;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
         // Only the provider list is mouse-driven for now.
         if stage != Some(LoginStage::Provider) {
             return;

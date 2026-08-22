@@ -242,7 +242,7 @@ fn draw_login(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 /// Stage: browser vs API key (and optional import of existing CLI session).
-fn draw_login_method(f: &mut Frame, app: &App, area: Rect) {
+fn draw_login_method(f: &mut Frame, app: &mut App, area: Rect) {
     let Some(m) = &app.login else { return };
     let provider = crate::providers::by_id(&m.provider_id)
         .copied()
@@ -270,9 +270,23 @@ fn draw_login_method(f: &mut Frame, app: &App, area: Rect) {
         theme::INDIGO(),
         &title,
         None,
-        "  ↑↓  ·  ↵ choose  ·  esc back  ",
+        "  ↑↓/wheel · PgUp/PgDn · ↵ choose · esc back ",
     );
     let inner = modal_inner(rect);
+    let close = Rect {
+        x: rect.x + rect.width.saturating_sub(5),
+        y: rect.y,
+        width: 3,
+        height: 1,
+    };
+    let mut hit = super::app::PickerHit {
+        frame: rect,
+        close,
+        body: inner,
+        scope: Rect::default(),
+        foreign: Rect::default(),
+        rows: Vec::new(),
+    };
     let options: Vec<(&str, String)> = super::app::login_method_choices(&provider, m.can_import)
         .into_iter()
         .map(|choice| match choice {
@@ -318,6 +332,16 @@ fn draw_login_method(f: &mut Frame, app: &App, area: Rect) {
         } else {
             theme::style_faint()
         };
+        let option_row = lines.len() as u16;
+        hit.rows.push((
+            i,
+            Rect {
+                x: inner.x,
+                y: inner.y + option_row,
+                width: inner.width,
+                height: 1,
+            },
+        ));
         lines.push(Line::from(Span::styled(
             format!("{marker}{title}"),
             title_style,
@@ -335,6 +359,9 @@ fn draw_login_method(f: &mut Frame, app: &App, area: Rect) {
         Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
         inner,
     );
+    if let Some(login) = &mut app.login {
+        login.hit = hit;
+    }
 }
 
 /// Browser / device-code wait (Hugging Face–style URL + short code).
@@ -893,7 +920,8 @@ fn draw_theme_picker(f: &mut Frame, app: &mut App, area: Rect) {
                     height: inner.height.saturating_sub(9).max(2),
                 };
                 let actual = proto.size_for(ratatui_image::Resize::Scale(None), offer);
-                preview_rows = actual.height.min(offer.height);
+                // Cap at 3: the ramp is a garnish, the list is the point.
+                preview_rows = actual.height.min(offer.height).min(3);
             }
         }
     }
