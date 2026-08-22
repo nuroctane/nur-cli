@@ -821,7 +821,10 @@ fn draw_model_picker(f: &mut Frame, app: &mut App, area: Rect) {
 
 // ── runtime theme chooser (`/theme`) ────────────────────────────────────────
 fn draw_theme_picker(f: &mut Frame, app: &mut App, area: Rect) {
-    let rect = fit_modal_rect(area, 72, 22, 46, 10);
+    // Fill most of the window: 26+ themes need the room, and a fixed height
+    // left a dead unpainted band across the bottom half of the modal.
+    let desired_h = (area.height.saturating_mul(4) / 5).clamp(18, 34);
+    let rect = fit_modal_rect(area, 72, desired_h, 46, 14);
     f.render_widget(Clear, rect);
     f.render_widget(
         Block::default().style(Style::default().bg(theme::SURFACE_2())),
@@ -866,49 +869,64 @@ fn draw_theme_picker(f: &mut Frame, app: &mut App, area: Rect) {
     // Graphics-protocol gradient preview of the highlighted theme (kitty /
     // sixel / iTerm2 / halfblocks). Rendered above the list; on text-only
     // terminals the swatch dots below remain the whole preview.
+    //
+    // The preview's on-screen height comes from ratatui-image itself
+    // (`size_for`), NOT a hardcoded row count: a 96x24 px ramp is only ~2-3
+    // cell rows tall, so reserving 5 left a bare unpainted band across the
+    // middle of the modal — the "cuts off halfway" glitch.
+    let mut preview_rows: u16 = 0;
     #[cfg(feature = "image-peek")]
-    {
-        if app.cfg.theme_setup.inline_images && inner.height >= 8 && inner.width >= 30 {
-            let sel_id = app
-                .theme_picker
-                .as_ref()
-                .map(|p| theme::THEMES[p.sel].0)
-                .unwrap_or("gold");
-            if let Some(png) = theme::theme_preview_png(sel_id) {
-                if let Some(proto) = app.theme_preview_protocol(&png) {
-                    // Reserve the top 5 body rows for the ramp, list takes the rest.
-                    let preview = Rect {
-                        x: inner.x + 1,
-                        y: inner.y + 1,
-                        width: inner.width.saturating_sub(2),
-                        height: 5.min(inner.height - 6),
-                    };
-                    f.render_stateful_widget(
-                        ratatui_image::StatefulImage::default(),
-                        preview,
-                        proto,
-                    );
-                }
+    if app.cfg.theme_setup.inline_images && inner.height >= 10 && inner.width >= 30 {
+        let sel_id = app
+            .theme_picker
+            .as_ref()
+            .map(|p| theme::THEMES[p.sel].0)
+            .unwrap_or("gold");
+        if let Some(png) = theme::theme_preview_png(sel_id) {
+            // Borrow dance: provider lookup needs &mut app; copy the id first.
+            if let Some(proto) = app.theme_preview_protocol(&png) {
+                let offer = Rect {
+                    x: inner.x + 1,
+                    y: inner.y + 1,
+                    width: inner.width.saturating_sub(2),
+                    // Cap the offer so the list always keeps >= 8 visible rows.
+                    height: inner.height.saturating_sub(9).max(2),
+                };
+                let actual = proto.size_for(ratatui_image::Resize::Scale(None), offer);
+                preview_rows = actual.height.min(offer.height);
+            }
+        }
+    }
+    let list_top: u16 = if preview_rows > 0 {
+        preview_rows + 1 // preview + 1 blank gap row
+    } else {
+        0
+    };
+    #[cfg(feature = "image-peek")]
+    if preview_rows > 0 {
+        // Paint the gap row + preview background so no bare cells sit between
+        // the ramp and the first list row.
+        let preview = Rect {
+            x: inner.x + 1,
+            y: inner.y + 1,
+            width: inner.width.saturating_sub(2),
+            height: preview_rows,
+        };
+        f.render_widget(Clear, preview);
+        let sel_id = app
+            .theme_picker
+            .as_ref()
+            .map(|p| theme::THEMES[p.sel].0)
+            .unwrap_or("gold");
+        if let Some(png) = theme::theme_preview_png(sel_id) {
+            if let Some(proto) = app.theme_preview_protocol(&png) {
+                f.render_stateful_widget(ratatui_image::StatefulImage::default(), preview, proto);
             }
         }
     }
 
     // Header line + windowed list — same one-step scroll as models / providers.
     const HEADER_ROWS: usize = 1;
-    let list_top: u16 = {
-        #[cfg(feature = "image-peek")]
-        {
-            if app.cfg.theme_setup.inline_images && inner.height >= 8 && inner.width >= 30 {
-                6 // preview(5) + gap(1)
-            } else {
-                0
-            }
-        }
-        #[cfg(not(feature = "image-peek"))]
-        {
-            0
-        }
-    };
     let list_h = (inner.height as usize)
         .saturating_sub(HEADER_ROWS)
         .saturating_sub(list_top as usize)
@@ -991,6 +1009,13 @@ fn draw_theme_picker(f: &mut Frame, app: &mut App, area: Rect) {
         }
     }
 
+    // Pad to the full inner height so every row carries the SURFACE_2 bg —
+    // otherwise the area below the last theme renders as an unpainted band
+    // (and with transparency on, not at all).
+    let inner_rows = inner.height as usize;
+    while lines.len() < inner_rows {
+        lines.push(Line::from(Span::raw(String::new())));
+    }
     f.render_widget(
         Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
         inner,
