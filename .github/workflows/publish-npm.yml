@@ -1,0 +1,48 @@
+# Publish the nur-cli npm shim via OIDC trusted publishing (no tokens, no 2FA).
+#
+# One-time setup on npmjs.com (package → Settings → Trusted Publisher):
+#   Organization or user: nuroctane
+#   Repository:           nur-cli
+#   Workflow filename:    publish-npm.yml
+#   Allowed actions:      npm publish
+#
+# Requires npm CLI >= 11.5.1 + Node >= 22.14 on the runner (setup-node pins 24).
+
+name: publish-npm
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  id-token: write # Required for OIDC
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false # never use caching in release builds
+
+      # The shim lives in npm/ (package.json + bin.js + README.md).
+      - name: Sync package version with the release tag
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          cd npm
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = process.argv[1];
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          " "$TAG"
+
+      - name: Publish from npm/
+        run: npm publish
+        working-directory: npm
