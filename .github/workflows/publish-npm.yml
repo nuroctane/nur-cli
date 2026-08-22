@@ -31,18 +31,10 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false # never use caching in release builds
 
-      # The shim lives in npm/ (package.json + bin.js + README.md).
-      - name: Resolve version (release tag, else Cargo.toml)
-        id: ver
-        run: |
-          if [[ "$GITHUB_EVENT_NAME" == "release" ]]; then
-            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-          else
-            V=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')
-            echo "version=$V" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Sync package version
+      # Release events: force the tag version. Manual runs: trust npm/package.json
+      # as committed (the shim version can lead the binary version).
+      - name: Sync package version on release tags
+        if: github.event_name == 'release'
         run: |
           cd npm
           node -e "
@@ -50,7 +42,7 @@ jobs:
             const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
             pkg.version = process.argv[1];
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
-          " "${{ steps.ver.outputs.version }}"
+          " "${GITHUB_REF_NAME#v}"
 
       - name: Publish from npm/
         run: npm publish
