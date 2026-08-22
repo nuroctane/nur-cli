@@ -38,13 +38,96 @@ pub fn running_window_title(elapsed: std::time::Duration, prompt: &str) -> Strin
     title_with_marker(marker, prompt)
 }
 
+/// The provider label carried in the tab title. Set from the TUI whenever the
+/// active provider changes (and once at launch) so the title always names who
+/// is serving this session. Subagents deliberately do NOT touch it — the
+/// parent's provider persists for the whole session.
+static TITLE_PROVIDER: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
+
+fn product_label() -> String {
+    TITLE_PROVIDER
+        .read()
+        .map(|p| p.clone())
+        .unwrap_or_else(|_| "nur".to_string())
+}
+
 fn title_with_marker(marker: &str, prompt: &str) -> String {
     let abbr = abbreviate_for_title(prompt, 48);
-    if abbr.is_empty() || abbr == "ready" {
-        format!("{marker} nur")
+    let brand = product_label();
+    let logo = title_emoji();
+    let head = if logo.is_empty() {
+        marker.to_string()
     } else {
-        format!("{marker} nur · {abbr}")
+        format!("{logo} {marker}")
+    };
+    if abbr.is_empty() || abbr == "ready" {
+        format!("{head} {brand}")
+    } else {
+        format!("{head} {brand} · {abbr}")
     }
+}
+
+/// Provider logo EMOJI for the tab title — renders in every terminal's tab
+/// bar with zero image support. The moon-phase spinner stays as the working
+/// marker; the provider mark rides in front of the product label.
+fn provider_title_emoji(provider_chrome: &str) -> &'static str {
+    match provider_chrome {
+        "openai" => "🟢",
+        "claude" | "anthropic" => "🅰️",
+        "gemini" => "✨",
+        "grok" | "xai" => "✖️",
+        "meta" => "♾️",
+        "deepseek" => "🐋",
+        "kimi" => "🌚",
+        "ollama" => "🦙",
+        "opencode" => "🟧",
+        "openrouter" => "🛰️",
+        "nous" => "🌘",
+        "copilot" | "github-copilot" => "🪽",
+        "perplexity" => "🔎",
+        _ => "",
+    }
+}
+
+/// Rebrand with the provider's logo emoji: .
+/// Called at launch and on /provider switch; subagents never call it, so the
+/// parent provider's logo persists for the whole session.
+pub fn set_title_provider(label: &str) {
+    let emoji = provider_title_emoji(label);
+    let clean = label.trim();
+    let next = if clean.is_empty() {
+        "nur".to_string()
+    } else {
+        clean.to_string()
+    };
+    let changed = TITLE_PROVIDER
+        .read()
+        .map(|p| p.as_str() != next)
+        .unwrap_or(true);
+    if let Ok(mut w) = TITLE_PROVIDER.write() {
+        *w = next;
+    }
+    // Store the emoji alongside so title_with_marker can pick it up.
+    if let Ok(mut w) = TITLE_EMOJI.write() {
+        *w = emoji.to_string();
+    }
+    if changed {
+        reassert_after_child("ready");
+    }
+}
+
+static TITLE_EMOJI: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
+
+fn title_emoji() -> String {
+    TITLE_EMOJI.read().map(|e| e.clone()).unwrap_or_default()
+}
+
+/// Child processes (omp, egaki, graphjin serve, …) rewrite the terminal title
+/// with their own branding while they run (omp sets it to "π"). Call this
+/// after any child completes — and periodically during long ones — to put our
+/// provider-branded title back. Cheap when nothing changed.
+pub fn reassert_after_child(current_prompt: &str) {
+    set_terminal_title(&session_window_title(current_prompt));
 }
 
 /// Collapse whitespace and truncate for a compact window/tab label.

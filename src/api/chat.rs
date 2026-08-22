@@ -574,6 +574,21 @@ pub fn build_response_value_with_status(
     let status = match finish_reason {
         Some("length") => "length",
         Some("content_filter") => "content_filter",
+        // Upstream OpenCode #43813/#43892 parity: a gateway that loses its
+        // upstream mid-turn can emit `network_error` (or an unrecognized
+        // reason) as the finish_reason on a 200 stream. Mapping those to
+        // "completed" ended the run silently with a partial answer — the
+        // "ox-alpha stops mid-run" symptom. Surface them as distinct statuses
+        // so the agent loop continues instead of stopping.
+        Some("network_error") => "network_error",
+        Some(other)
+            if !matches!(
+                other,
+                "stop" | "end_turn" | "tool_calls" | "tool_use" | "function_call"
+            ) =>
+        {
+            "unknown"
+        }
         _ => "completed",
     };
     json!({
@@ -1255,6 +1270,48 @@ mod tests {
             parse_completion(&ok).get("status").and_then(|s| s.as_str()),
             Some("completed")
         );
+    }
+
+    /// Upstream OpenCode #43813/#43892 parity: `network_error` and
+    /// unrecognized finish reasons must NOT map to "completed" — that ended
+    /// runs mid-answer (the ox-alpha mid-run stop). They map to distinct
+    /// statuses the agent loop continues on.
+    #[test]
+    fn unknown_and_network_error_finish_reasons_do_not_read_completed() {
+        let mk = |fr: &str| {
+            json!({
+                "id":"r","model":"m",
+                "choices":[{"finish_reason":fr,"message":{"content":"partial"}}]
+            })
+        };
+        assert_eq!(
+            parse_completion(&mk("network_error"))
+                .get("status")
+                .and_then(|s| s.as_str()),
+            Some("network_error")
+        );
+        assert_eq!(
+            parse_completion(&mk("weird_new_reason"))
+                .get("status")
+                .and_then(|s| s.as_str()),
+            Some("unknown")
+        );
+        // Real stops still read as completed.
+        for fr in [
+            "stop",
+            "end_turn",
+            "tool_calls",
+            "tool_use",
+            "function_call",
+        ] {
+            assert_eq!(
+                parse_completion(&mk(fr))
+                    .get("status")
+                    .and_then(|s| s.as_str()),
+                Some("completed"),
+                "{fr} is a legitimate stop"
+            );
+        }
     }
 
     #[test]

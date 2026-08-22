@@ -59,7 +59,7 @@ nur                 # open the TUI
 nur doctor          # health check
 ```
 
-Or run `nur` and use **`/provider`** in the TUI (`/login` remains an alias): pick any of **62 providers**
+Or run `nur` and use **`/provider`** in the TUI (`/login` remains an alias): pick any of **63 providers**
 (OpenAI, Anthropic, Gemini, xAI, Groq, OpenRouter, Requesty, local Ollama/LM Studio, Meta Model API, and so on).
 For **OpenAI, Anthropic, xAI, Kimi Code, Google Gemini, Azure OpenAI, GitHub Models, GitHub Copilot, Cursor, Muse Code, DeepSeek Harness, and ZCode (GLM)** you can **sign in with a browser or an official CLI session** (or import an existing Codex / Claude Code / Grok / Kimi / Cursor Agent / Muse / `dsh` / ZCode session) instead of pasting an API key. `nur auth login --provider muse --browser` (and the same for `deepseek` / `zcode`) is the CLI equivalent of TUI `/login`. OAuth sessions refresh before use, retry once after an authentication rejection, and `/model` detects the models available to the active credential. Cursor uses `cursor-agent login` and runs chat through the Agent CLI (no API key required). DeepSeek's official harness is API-key only (`$DSH_HOME/.credentials.yaml`). No credential on launch and login opens automatically.
 
@@ -173,7 +173,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 
 | Surface | What ships |
 |---------|------------|
-| **TUI** | Streaming · duration chips · thought/tool cards · peek · drag-select · scrollbar · sessions · multi-provider `/login` · **`/model` picker** · **`/plugins` marketplace** · `/goal` `/bro` `/adhd` `/scan` `/btw` `/codesearch` `/mc` `/feedback` `/tips` · **every skill as `/name`** · budgets · doctor |
+| **TUI** | Streaming · duration chips · thought/tool cards · peek · drag-select · scrollbar · sessions · multi-provider `/login` · **`/model` picker** · **`/plugins` marketplace** · `/goal` `/bro` `/adhd` `/scan` `/btw` `/codesearch` `/mc` `/feedback` `/tips` · **every skill as `/name`** · **26 themes incl superred / banana / nous + transparency mode** · **provider logo in the busy line + tab title** · budgets · doctor |
 | **Agent** | Manual / plan / auto · tools · subagents · todos · auto-compact · session $ / token budgets · Esc cancel · Shift+Tab mid-turn · **NL skill auto-activation** |
 | **Vision** | `look` · `extract_frames` · prompt auto-attach · **inline images in the TUI** (kitty graphics protocol, sixel, iTerm2; Ctrl+V paste or `/image <path>`) |
 | **Tools** | read · edit · bash · web · **browser** · git · knowledge · agent · **excalidraw** |
@@ -201,7 +201,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 ## Feature map
 
 ### Agent harness
-- **Multi-provider** via `/login` (62); Responses or Chat Completions adapter
+- **Multi-provider** via `/login` (63); Responses or Chat Completions adapter
 - Manual / plan / auto · Shift+Tab mid-turn
 - Tool loop, approvals, Esc cancel, subagents, todos, plan mode
 - Session budgets (`/budget`), tool-result spill, smarter auto-compact

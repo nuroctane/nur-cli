@@ -2,7 +2,7 @@
 
 **Fully loaded multi-provider terminal coding agent.** Not a thin wrapper.
 
-Custom Rust harness, dense gold TUI, **native vision**, tools, knowledge stack, hardened sandbox. Pick any of **62 providers** with `/login`. Any model via `--model` / `/model`. Install marketplace plugins with `/plugins` (same picker UX as providers).
+Custom Rust harness, dense gold TUI, **native vision**, tools, knowledge stack, hardened sandbox. Pick any of **63 providers** with `/login`. Any model via `--model` / `/model`. Install marketplace plugins with `/plugins` (same picker UX as providers).
 
 ```text
 nur           # gold interactive TUI
@@ -52,7 +52,7 @@ That's the normal upgrade. Pulls / rebuilds when you have a Laboratory checkout,
 
 | Surface | Details |
 |---------|---------|
-| **TUI** | Streaming · duration chips · expandable thought/tool cards · click-to-peek (full write/edit content) · **queued follow-ups with send now** · **green/red transcript diffs** · **prompt menu (fork · edit · revert · copy)** · drag-select · always-on scrollbar · ↓ End · sticky prompt · sessions browser · approval mini-diff · lean banner · **`/login` (62 providers)** · **`/model` (live model list)** · **`/plugins` marketplace** · **`/goal` `/bro` `/adhd` `/scan` `/btw` `/codesearch` `/mc` `/feedback` `/tips` · **`/<skill>`**** · **`/budget` `/poor` `/permissions` `/hooks` `/cd` `/doctor`** |
+| **TUI** | Streaming · duration chips · expandable thought/tool cards · click-to-peek (full write/edit content) · **queued follow-ups with send now** · **green/red transcript diffs** · **prompt menu (fork · edit · revert · copy)** · drag-select · always-on scrollbar · ↓ End · sticky prompt · sessions browser · approval mini-diff · lean banner · **`/login` (63 providers)** · **`/model` (live model list)** · **`/plugins` marketplace** · **`/goal` `/bro` `/adhd` `/scan` `/btw` `/codesearch` `/mc` `/feedback` `/tips` · **`/<skill>`**** · **`/budget` `/poor` `/permissions` `/hooks` `/cd` `/doctor`** |
 | **Agent** | Manual / plan / auto · tool loop · subagents · todos · **smarter auto-compact** · **session $ / token budgets** · **tool-result spill** · Esc cancel · Shift+Tab mid-turn · prompt-cache keys · **Chat Completions adapter** for non-Responses providers |
 | **Vision** | `look` (images / short video) · `extract_frames` (ffmpeg keyframes) · prompt auto-attach of media paths |
 | **Tools** | read · edit · bash · web · **browser** · **terminal-browser** (`/tb`) · git · knowledge stack · agent (all first-class) |

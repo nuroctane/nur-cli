@@ -361,6 +361,10 @@ pub struct ThemeConfig {
     /// of `kitty`, `sixel`, `iterm2`, `halfblocks` to force it.
     #[serde(default = "default_theme_protocol")]
     pub protocol: String,
+    /// Transparent TUI: skip painting panel/code backgrounds so a translucent
+    /// terminal background shows through. Toggle with /theme transparent.
+    #[serde(default)]
+    pub transparent: bool,
     /// Inline image rendering in the transcript/peeks. Default **true**;
     /// disable to fall back to text-only peeks even on capable terminals.
     #[serde(default = "default_true")]
@@ -378,6 +382,7 @@ impl Default for ThemeConfig {
             accent_deep: None,
             accent_sky: None,
             protocol: default_theme_protocol(),
+            transparent: false,
             inline_images: true,
         }
     }

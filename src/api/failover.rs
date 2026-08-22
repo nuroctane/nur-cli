@@ -295,6 +295,12 @@ fn is_transient_upstream_message(message: &str) -> bool {
         "upstream unavailable",
         "upstream connect",
         "temporarily unavailable",
+        // xAI capacity / temporary unavailability (OpenCode v1.18.20 parity:
+        // retry these stream errors instead of surfacing a dead turn).
+        "capacity",
+        "overloaded",
+        "rate region",
+        "try again later",
     ];
     NEEDLES.iter().any(|n| m.contains(n))
 }

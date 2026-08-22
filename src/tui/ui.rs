@@ -128,7 +128,36 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_transcript(f, app, chunks[0]);
     }
     if app.busy {
-        draw_busy_line(f, app, chunks[1]);
+        // Provider logo sits left of the spinner: split the busy row into a
+        // logo gutter + the text line when graphics are available.
+        #[cfg(feature = "image-peek")]
+        let (logo_area, busy_area) = {
+            if app.cfg.theme_setup.inline_images && chunks[1].width > 24 && chunks[1].height >= 1 {
+                if crate::provider_logos::for_provider(&app.cfg.provider).is_some() {
+                    let parts = ratatui::layout::Layout::default()
+                        .direction(ratatui::layout::Direction::Horizontal)
+                        .constraints([Constraint::Length(3), Constraint::Min(10)])
+                        .split(chunks[1]);
+                    (Some(parts[0]), parts[1])
+                } else {
+                    (None, chunks[1])
+                }
+            } else {
+                (None, chunks[1])
+            }
+        };
+        #[cfg(not(feature = "image-peek"))]
+        let busy_area = chunks[1];
+        draw_busy_line(f, app, busy_area);
+        #[cfg(feature = "image-peek")]
+        if let Some(gutter) = logo_area {
+            // Clear first — kitty/sixel pixels sit outside the cell buffer.
+            f.render_widget(Clear, gutter);
+            let pid = app.cfg.provider.clone();
+            if let Some(proto) = app.provider_logo_protocol(&pid) {
+                f.render_stateful_widget(ratatui_image::StatefulImage::default(), gutter, proto);
+            }
+        }
     }
     draw_input(f, app, chunks[2]); // publishes input_inner for click-to-caret
     draw_statusline(f, app, chunks[3]);
@@ -734,6 +763,8 @@ fn draw_model_picker(f: &mut Frame, app: &mut App, area: Rect) {
         // reserves its width; the id truncates first.
         let alias = if provider_id == "opencode" {
             crate::providers::opencode_model_alias(id)
+        } else if provider_id == "nous" {
+            crate::providers::nous_model_alias(id)
         } else {
             None
         };

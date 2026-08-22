@@ -211,12 +211,47 @@ pub fn run_tb_cancelled(
     timeout_ms: u64,
     cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<String, String> {
-    match resolve_runtime() {
+    let primary = match resolve_runtime() {
         Some(Runtime::Native(bin)) => run_capture_cancelled(&bin, args, cwd, timeout_ms, cancel),
         Some(Runtime::Wsl) => run_wsl(args, cwd, timeout_ms, Some(cancel)),
-        Some(Runtime::Host(_)) => run_host(args, cwd, timeout_ms, Some(cancel)),
-        None => Err(missing_msg()),
+        Some(Runtime::Host(_)) => return run_host(args, cwd, timeout_ms, Some(cancel)),
+        None => return Err(missing_msg()),
+    };
+    // The in-terminal runtimes render pages as images over the kitty graphics
+    // protocol. On a terminal without image support (Windows Terminal, conhost,
+    // plain cmd) upstream aborts with "This terminal cannot show images…" —
+    // retry once through the Windows-host bridge so open/snapshot/click still
+    // work instead of failing the tool call.
+    if let Err(e) = &primary {
+        if is_graphics_unsupported(&e.to_lowercase()) && find_bin("agent-browser-cli").is_some() {
+            #[cfg(windows)]
+            {
+                if matches!(resolve_runtime(), Some(Runtime::Wsl)) {
+                    // WSL output arrives via `wsl.exe` — strip CRLF noise before
+                    // matching.
+                    let flat = e.replace('\r', "");
+                    if is_graphics_unsupported(&flat.to_lowercase()) {
+                        let mut out = run_host(args, cwd, timeout_ms, Some(cancel))?;
+                        out.push_str(
+                            "\n[nur] WSL terminal-browser needs a kitty-graphics terminal \
+                             (Ghostty/WezTerm/kitty); served this via the Windows host bridge.",
+                        );
+                        return Ok(out);
+                    }
+                }
+            }
+            let _ = e;
+        }
     }
+    primary
+}
+
+/// Match upstream's "terminal can't show images" family of errors (its exact
+/// copy varies by version; match on the stable fragments).
+fn is_graphics_unsupported(msg_lower: &str) -> bool {
+    msg_lower.contains("cannot show images")
+        || msg_lower.contains("kitty graphics protocol is supported")
+        || (msg_lower.contains("ghostty") && msg_lower.contains("recommend"))
 }
 
 fn missing_msg() -> String {

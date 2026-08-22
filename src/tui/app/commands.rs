@@ -2085,6 +2085,29 @@ impl App {
             self.open_theme_picker(false);
             return;
         }
+        // `/theme transparent` toggles see-through panels (no painted
+        // backgrounds; a translucent terminal shows through).
+        if requested.eq_ignore_ascii_case("transparent")
+            || requested.eq_ignore_ascii_case("transparency")
+        {
+            let next = !crate::theme::transparent();
+            crate::theme::set_transparent(next);
+            self.cfg.theme_setup.transparent = next;
+            self.needs_full_redraw = true;
+            match crate::config::save_config(&self.cfg) {
+                Ok(()) => self.push_note(
+                    Tone::Mode,
+                    if next {
+                        "transparency on · panels no longer paint backgrounds (best with a translucent terminal profile)"
+                            .into()
+                    } else {
+                        "transparency off · backgrounds restored".into()
+                    },
+                ),
+                Err(e) => self.push_error(format!("could not save transparency: {e}")),
+            }
+            return;
+        }
         let Some(id) = crate::theme::canonical_theme_id(requested) else {
             self.push_error(format!(
                 "unknown theme `{requested}` · choose one of: {}",

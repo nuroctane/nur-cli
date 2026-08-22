@@ -266,7 +266,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/hooks", "show local tool hook status (hooks.toml)"),
     ("/model", "show and switch models  (/models)"),
     ("/models", "show and switch models  (alias of /model)"),
-    ("/theme", "choose a live color theme  (/theme <name>)"),
+    ("/theme", "live theme picker · /theme <name> · /theme transparent toggles see-through"),
     ("/plugins", "browse · install · enable marketplace plugins"),
     ("/plugin", "browse · install · enable marketplace plugins  (alias of /plugins)"),
     // Rendered through `App::command_hint` - the rungs shown are the active
@@ -2489,6 +2489,9 @@ pub async fn run_tui(
                 .map(|m| m.content.clone())
         });
     let title_from_prompt = seed_prompt.is_some();
+    // Provider-branded title: set the provider label FIRST so the very first
+    // title write already carries it (moon + provider + prompt).
+    crate::ade::set_title_provider(&crate::config::active_provider_chrome(&cfg));
     crate::ade::set_terminal_title(&crate::ade::session_window_title(
         seed_prompt.as_deref().unwrap_or("ready"),
     ));
@@ -5121,6 +5124,23 @@ impl App {
         self.img_cache.get_mut(path)
     }
 
+    /// Provider logo protocol (busy-line brand mark). Cached by provider id;
+    /// re-encoded only when /provider switches.
+    #[cfg(feature = "image-peek")]
+    pub fn provider_logo_protocol(
+        &mut self,
+        provider_id: &str,
+    ) -> Option<&mut ratatui_image::protocol::StatefulProtocol> {
+        let logo = crate::provider_logos::for_provider(provider_id)?;
+        if !self.theme_preview_cache.contains_key(logo.png) {
+            let picker = self.img_picker.as_ref()?;
+            let img = image::load_from_memory(logo.png).ok()?;
+            self.theme_preview_cache
+                .insert(logo.png.to_vec(), picker.new_resize_protocol(img));
+        }
+        self.theme_preview_cache.get_mut(logo.png)
+    }
+
     /// Graphics-protocol renderer for in-memory theme-preview PNG bytes.
     /// Cached by theme id so arrowing through the picker re-encodes nothing.
     #[cfg(feature = "image-peek")]
@@ -7685,6 +7705,9 @@ impl App {
         }
         // Soft-update context window from models.dev when still on the default.
         crate::pricing::maybe_apply_context_window(&mut self.cfg);
+        // Rebrand the terminal title for the new provider (updates on switch;
+        // subagents never touch it so the parent provider persists).
+        crate::ade::set_title_provider(&crate::config::active_provider_chrome(&self.cfg));
 
         match crate::api::ApiClient::for_provider(&self.cfg.base_url, &bearer, provider.id)
             .map(|c| c.with_style(style))

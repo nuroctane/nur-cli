@@ -41,7 +41,9 @@ const ECOSYSTEM_MARKER: &str = "ecosystem.json";
 /// 16: interior (ddoemonn/interior.dev) bundled skill + /plugins catalog entry.
 /// 17: Dogwood skill/tool detection + pi-peer/subagent orchestration skill updates.
 /// 18: Text-to-CAD + mobile-harness packs with complete resource-tree mirroring.
-const ECOSYSTEM_SCHEMA: u32 = 18;
+/// 19: dogwood auto-install + default policy pack; graphjin auto-install +
+///     SQLite demo config (both now out-of-the-box).
+const ECOSYSTEM_SCHEMA: u32 = 19;
 /// Re-run ensure at most once per this many seconds unless forced.
 const ENSURE_TTL_SECS: u64 = 86_400;
 
@@ -710,15 +712,50 @@ fn ensure_dogwood() -> ComponentStatus {
         name: "dogwood".into(),
         ..Default::default()
     };
+    // Out-of-the-box: install the CLI when cargo exists and dogwood is
+    // missing. The reference build is a plain `cargo install --git` (no
+    // extra features), so it works anywhere a Rust toolchain is present.
+    // Best-effort and bounded — a missing/slow toolchain must not hang
+    // ensure; the tool degrades to the install hint either way.
+    if find_bin("dogwood").is_none() {
+        let cargo_ready = which("cargo") || which("cargo.exe");
+        if cargo_ready && !crate::dogwood::dogwood_install_attempted() {
+            crate::dogwood::mark_dogwood_install_attempted();
+            let _ = run_quiet(
+                "cargo",
+                &[
+                    "install",
+                    "--git",
+                    "https://github.com/dogwood-policy/dogwood",
+                    "amzn-dogwood-cli",
+                ],
+                None,
+                600_000,
+            );
+        }
+    }
     if let Some(bin) = find_bin("dogwood") {
         c.available = true;
         c.path = Some(bin.clone());
         c.version = cmd_version(&bin, &["--version"]);
-        c.detail =
-            "CLI ready · on-demand guardrail/evaluation layer (not a runtime trust anchor)".into();
+        // Seed the default policy pack once (idempotent) so validate/replay
+        // examples work immediately after install.
+        match crate::dogwood::ensure_default_config() {
+            Ok(msg) => {
+                c.detail = format!(
+                    "CLI ready · default policies at {} · {}",
+                    crate::dogwood::config_dir().display(),
+                    msg
+                );
+            }
+            Err(e) => {
+                c.detail = format!("CLI ready · default policies skipped: {e}");
+            }
+        }
     } else {
         c.detail =
-            "not installed - cargo install --git https://github.com/dogwood-policy/dogwood amzn-dogwood-cli".into();
+            "not installed - cargo install --git https://github.com/dogwood-policy/dogwood amzn-dogwood-cli (auto-install runs when cargo is on PATH)"
+                .into();
     }
     c
 }

@@ -208,6 +208,10 @@ pub const THEMES: &[(&str, &str)] = &[
     ("sakura", "Sakura - dusk plum + cherry blossom"),
     ("abyss", "Abyss - deep-ocean teal, bioluminescent"),
     ("moss", "Moss - forest-floor greens"),
+    // New-school.
+    ("superred", "Superred - ember black to blazing scarlet"),
+    ("banana", "Banana - ripe yellow on warm peel"),
+    ("nous", "Nous - Hermes cream, indigo dusk, portal gold"),
 ];
 
 /// Every registered theme id.
@@ -1279,6 +1283,196 @@ fn preset(id: &str) -> Option<Palette> {
             aurora: ring12(Color::Rgb(198, 230, 160), Color::Rgb(58, 90, 42)),
             ..GOLD
         },
+        // ── new-school ───────────────────────────────────────────────────
+        // Superred: a full red journey — near-black ember backgrounds, deep
+        // oxblood surfaces, blood-red accent ramp climbing to blazing scarlet
+        // highlights. Every channel keeps R dominant so nothing reads pink.
+        "superred" => Palette {
+            on_accent_fg: Color::Rgb(26, 8, 8),
+            nur_gold: Color::Rgb(232, 62, 48),
+            nur_gold_deep: Color::Rgb(158, 27, 24),
+            nur_gold_sky: Color::Rgb(255, 122, 89),
+            bg: Color::Rgb(18, 7, 7),
+            surface: Color::Rgb(28, 10, 10),
+            surface_2: Color::Rgb(42, 13, 12),
+            surface_3: Color::Rgb(60, 18, 16),
+            border: Color::Rgb(88, 22, 20),
+            code_bg: Color::Rgb(22, 8, 8),
+            fg: Color::Rgb(248, 234, 230),
+            muted: Color::Rgb(196, 148, 140),
+            faint: Color::Rgb(160, 112, 105),
+            md_code: Color::Rgb(255, 148, 120),
+            md_h1: Color::Rgb(255, 96, 64),
+            md_h2: Color::Rgb(240, 78, 70),
+            md_h3: Color::Rgb(255, 140, 110),
+            md_link: Color::Rgb(255, 110, 92),
+            md_quote: Color::Rgb(178, 130, 124),
+            md_list: Color::Rgb(235, 120, 100),
+            assistant_fg: Color::Rgb(250, 238, 234),
+            assistant_dim: Color::Rgb(205, 156, 148),
+            success: Color::Rgb(120, 200, 130),
+            warn: Color::Rgb(255, 176, 80),
+            error: Color::Rgb(255, 72, 56),
+            diff_add_fg: Color::Rgb(140, 220, 150),
+            diff_add_bg: Color::Rgb(24, 44, 26),
+            diff_del_fg: Color::Rgb(255, 128, 116),
+            diff_del_bg: Color::Rgb(70, 16, 14),
+            user: Color::Rgb(255, 214, 196),
+            blue_050: Color::Rgb(255, 236, 230),
+            blue_100: Color::Rgb(255, 206, 190),
+            blue_150: Color::Rgb(255, 168, 140),
+            blue_200: Color::Rgb(250, 132, 104),
+            blue_250: Color::Rgb(240, 92, 72),
+            blue_300: Color::Rgb(232, 62, 48),
+            blue_400: Color::Rgb(210, 46, 38),
+            blue_500: Color::Rgb(158, 27, 24),
+            blue_600: Color::Rgb(112, 16, 16),
+            indigo: Color::Rgb(216, 84, 110),
+            periwinkle: Color::Rgb(228, 120, 130),
+            violet: Color::Rgb(222, 96, 118),
+            lavender: Color::Rgb(240, 160, 160),
+            magenta: Color::Rgb(238, 72, 120),
+            pink: Color::Rgb(255, 120, 150),
+            rose: Color::Rgb(255, 96, 108),
+            coral: Color::Rgb(255, 128, 96),
+            amber: Color::Rgb(255, 170, 70),
+            gold: Color::Rgb(255, 190, 90),
+            orange: Color::Rgb(255, 130, 50),
+            lime: Color::Rgb(200, 230, 120),
+            mint: Color::Rgb(140, 220, 170),
+            seafoam: Color::Rgb(120, 210, 180),
+            teal: Color::Rgb(100, 195, 175),
+            cyan: Color::Rgb(255, 150, 130),
+            gradient: ramp6(Color::Rgb(255, 140, 100), Color::Rgb(96, 12, 12)),
+            aurora: ring12(Color::Rgb(255, 150, 110), Color::Rgb(104, 14, 14)),
+            ..GOLD
+        },
+        // Banana: ripe-yellow accent on warm peel-brown darkness. Yellow is
+        // the whole show — greens stay olive, oranges lean golden, and the
+        // darkest surfaces carry a brown cast instead of blue-black.
+        "banana" => Palette {
+            on_accent_fg: Color::Rgb(34, 26, 4),
+            nur_gold: Color::Rgb(255, 214, 66),
+            nur_gold_deep: Color::Rgb(206, 158, 30),
+            nur_gold_sky: Color::Rgb(255, 236, 140),
+            bg: Color::Rgb(24, 20, 8),
+            surface: Color::Rgb(33, 28, 11),
+            surface_2: Color::Rgb(46, 39, 15),
+            surface_3: Color::Rgb(63, 53, 21),
+            border: Color::Rgb(86, 73, 30),
+            code_bg: Color::Rgb(29, 25, 10),
+            fg: Color::Rgb(250, 244, 222),
+            muted: Color::Rgb(198, 184, 138),
+            faint: Color::Rgb(162, 150, 112),
+            md_code: Color::Rgb(255, 226, 120),
+            md_h1: Color::Rgb(255, 208, 60),
+            md_h2: Color::Rgb(244, 190, 70),
+            md_h3: Color::Rgb(255, 224, 130),
+            md_link: Color::Rgb(255, 216, 96),
+            md_quote: Color::Rgb(176, 164, 126),
+            md_list: Color::Rgb(230, 200, 110),
+            assistant_fg: Color::Rgb(252, 246, 228),
+            assistant_dim: Color::Rgb(204, 192, 152),
+            success: Color::Rgb(170, 210, 90),
+            warn: Color::Rgb(255, 186, 60),
+            error: Color::Rgb(240, 110, 80),
+            diff_add_fg: Color::Rgb(180, 220, 130),
+            diff_add_bg: Color::Rgb(40, 48, 18),
+            diff_del_fg: Color::Rgb(245, 140, 110),
+            diff_del_bg: Color::Rgb(66, 26, 16),
+            user: Color::Rgb(255, 240, 180),
+            blue_050: Color::Rgb(255, 248, 224),
+            blue_100: Color::Rgb(255, 238, 178),
+            blue_150: Color::Rgb(255, 228, 136),
+            blue_200: Color::Rgb(255, 218, 96),
+            blue_250: Color::Rgb(255, 216, 78),
+            blue_300: Color::Rgb(255, 214, 66),
+            blue_400: Color::Rgb(232, 190, 52),
+            blue_500: Color::Rgb(206, 158, 30),
+            blue_600: Color::Rgb(152, 114, 20),
+            indigo: Color::Rgb(214, 182, 110),
+            periwinkle: Color::Rgb(226, 200, 130),
+            violet: Color::Rgb(210, 176, 106),
+            lavender: Color::Rgb(238, 218, 160),
+            magenta: Color::Rgb(235, 180, 120),
+            pink: Color::Rgb(248, 200, 140),
+            rose: Color::Rgb(242, 186, 120),
+            coral: Color::Rgb(255, 190, 110),
+            amber: Color::Rgb(255, 202, 70),
+            gold: Color::Rgb(255, 214, 66),
+            orange: Color::Rgb(255, 176, 52),
+            lime: Color::Rgb(222, 232, 100),
+            mint: Color::Rgb(190, 226, 140),
+            seafoam: Color::Rgb(170, 216, 150),
+            teal: Color::Rgb(150, 200, 140),
+            cyan: Color::Rgb(250, 226, 130),
+            gradient: ramp6(Color::Rgb(255, 238, 150), Color::Rgb(150, 108, 18)),
+            aurora: ring12(Color::Rgb(255, 240, 160), Color::Rgb(156, 112, 20)),
+            ..GOLD
+        },
+        // Nous: the Hermes Agent site's palette — warm cream text on deep
+        // indigo dusk, with the Portal's warm gold as the accent spine. The
+        // one place a blue-leaning background is intentional.
+        "nous" => Palette {
+            nur_gold: Color::Rgb(232, 185, 92),
+            nur_gold_deep: Color::Rgb(188, 142, 58),
+            nur_gold_sky: Color::Rgb(255, 216, 150),
+            bg: Color::Rgb(16, 17, 34),
+            surface: Color::Rgb(23, 25, 47),
+            surface_2: Color::Rgb(32, 35, 64),
+            surface_3: Color::Rgb(45, 49, 86),
+            border: Color::Rgb(58, 63, 106),
+            code_bg: Color::Rgb(19, 21, 40),
+            fg: Color::Rgb(240, 236, 224),
+            muted: Color::Rgb(166, 168, 196),
+            faint: Color::Rgb(134, 138, 168),
+            md_code: Color::Rgb(150, 224, 200),
+            md_h1: Color::Rgb(255, 208, 140),
+            md_h2: Color::Rgb(146, 176, 255),
+            md_h3: Color::Rgb(196, 154, 255),
+            md_link: Color::Rgb(140, 190, 255),
+            md_quote: Color::Rgb(148, 150, 178),
+            md_list: Color::Rgb(150, 220, 190),
+            assistant_fg: Color::Rgb(244, 240, 228),
+            assistant_dim: Color::Rgb(172, 174, 200),
+            success: Color::Rgb(120, 214, 160),
+            warn: Color::Rgb(255, 196, 90),
+            error: Color::Rgb(255, 108, 96),
+            diff_add_fg: Color::Rgb(140, 220, 170),
+            diff_add_bg: Color::Rgb(20, 48, 36),
+            diff_del_fg: Color::Rgb(255, 130, 120),
+            diff_del_bg: Color::Rgb(64, 20, 24),
+            diff_meta: Color::Rgb(170, 178, 220),
+            user: Color::Rgb(255, 226, 170),
+            blue_050: Color::Rgb(238, 240, 255),
+            blue_100: Color::Rgb(206, 212, 250),
+            blue_150: Color::Rgb(172, 182, 244),
+            blue_200: Color::Rgb(140, 152, 235),
+            blue_250: Color::Rgb(116, 130, 226),
+            blue_300: Color::Rgb(98, 112, 214),
+            blue_400: Color::Rgb(84, 96, 196),
+            blue_500: Color::Rgb(64, 74, 158),
+            blue_600: Color::Rgb(46, 54, 118),
+            indigo: Color::Rgb(122, 108, 255),
+            periwinkle: Color::Rgb(150, 144, 255),
+            violet: Color::Rgb(168, 132, 255),
+            lavender: Color::Rgb(196, 174, 255),
+            magenta: Color::Rgb(226, 120, 220),
+            pink: Color::Rgb(244, 150, 200),
+            rose: Color::Rgb(240, 130, 150),
+            coral: Color::Rgb(255, 150, 120),
+            amber: Color::Rgb(255, 202, 100),
+            gold: Color::Rgb(232, 185, 92),
+            orange: Color::Rgb(255, 160, 80),
+            lime: Color::Rgb(190, 230, 130),
+            mint: Color::Rgb(130, 220, 180),
+            seafoam: Color::Rgb(110, 205, 195),
+            teal: Color::Rgb(95, 190, 205),
+            cyan: Color::Rgb(120, 210, 240),
+            gradient: ramp6(Color::Rgb(255, 216, 150), Color::Rgb(58, 52, 140)),
+            aurora: ring12(Color::Rgb(255, 220, 160), Color::Rgb(64, 58, 150)),
+            ..GOLD
+        },
         _ => return None,
     })
 }
@@ -1482,6 +1676,69 @@ macro_rules! palette_accessors {
     };
 }
 
+/// Transparent mode: when on, background-carrying palette fields resolve to
+/// [`Color::Reset`] so ratatui skips painting them and the terminal's own
+/// (translucent) background shows through. Enable with `/theme transparent`
+/// or `[theme] transparent = true` in config.toml. Foregrounds are untouched.
+pub fn set_transparent(on: bool) {
+    if let Ok(mut w) = TRANSPARENT.write() {
+        *w = on;
+    }
+}
+
+pub fn transparent() -> bool {
+    *TRANSPARENT.read().unwrap_or_else(|e| e.into_inner())
+}
+
+static TRANSPARENT: std::sync::RwLock<bool> = std::sync::RwLock::new(false);
+
+/// Resolve a background field through the transparency switch.
+fn bg_field(field: Color) -> Color {
+    if transparent() {
+        Color::Reset
+    } else {
+        field
+    }
+}
+
+// Background-carrying fields route through `bg_field` so transparent mode
+// swaps them for Color::Reset (terminal shows through). Foregrounds stay.
+#[inline]
+#[allow(non_snake_case)]
+pub fn BG() -> Color {
+    bg_field(current().bg)
+}
+#[inline]
+#[allow(non_snake_case)]
+pub fn SURFACE() -> Color {
+    bg_field(current().surface)
+}
+#[inline]
+#[allow(non_snake_case)]
+pub fn SURFACE_2() -> Color {
+    bg_field(current().surface_2)
+}
+#[inline]
+#[allow(non_snake_case)]
+pub fn SURFACE_3() -> Color {
+    bg_field(current().surface_3)
+}
+#[inline]
+#[allow(non_snake_case)]
+pub fn CODE_BG() -> Color {
+    bg_field(current().code_bg)
+}
+#[inline]
+#[allow(non_snake_case)]
+pub fn DIFF_ADD_BG() -> Color {
+    bg_field(current().diff_add_bg)
+}
+#[inline]
+#[allow(non_snake_case)]
+pub fn DIFF_DEL_BG() -> Color {
+    bg_field(current().diff_del_bg)
+}
+
 palette_accessors! {
     NUR_GOLD => nur_gold,
     NUR_GOLD_DEEP => nur_gold_deep,
@@ -1491,15 +1748,10 @@ palette_accessors! {
     META_BLUE => nur_gold,
     META_BLUE_DEEP => nur_gold_deep,
     META_BLUE_SKY => nur_gold_sky,
-    BG => bg,
-    SURFACE => surface,
-    SURFACE_2 => surface_2,
-    SURFACE_3 => surface_3,
     FG => fg,
     MUTED => muted,
     FAINT => faint,
     BORDER => border,
-    CODE_BG => code_bg,
     MD_CODE => md_code,
     MD_H1 => md_h1,
     MD_H2 => md_h2,
@@ -1513,9 +1765,7 @@ palette_accessors! {
     WARN => warn,
     ERROR => error,
     DIFF_ADD_FG => diff_add_fg,
-    DIFF_ADD_BG => diff_add_bg,
     DIFF_DEL_FG => diff_del_fg,
-    DIFF_DEL_BG => diff_del_bg,
     DIFF_META => diff_meta,
     USER => user,
     BLUE_050 => blue_050,

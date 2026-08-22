@@ -7,6 +7,7 @@ mod bg_jobs;
 mod bootstrap;
 mod cli;
 mod config;
+mod dogwood;
 mod ecosystem;
 mod egaki;
 mod error;
@@ -21,6 +22,7 @@ mod optmem;
 mod penecho;
 mod plugins;
 mod pricing;
+mod provider_logos;
 mod providers;
 mod t3code;
 mod terminal_browser;
@@ -243,6 +245,7 @@ async fn real_main() -> Result<()> {
     // Layer `[theme]` accent overrides (config) on top of the picked theme so a
     // personal accent color survives every `/theme` switch.
     theme::apply_theme_config_global(&cfg.theme_setup);
+    theme::set_transparent(cfg.theme_setup.transparent);
     if let Some(m) = &cli.model {
         cfg.model = m.clone();
     } else if let Ok(m) = std::env::var("NUR_MODEL") {

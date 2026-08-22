@@ -1077,6 +1077,53 @@ impl AgentRunner {
                         .into(),
                 ));
             }
+            // ── unknown / network_error finish reasons: continue, don't stop ──
+            // Upstream OpenCode #43892 ("loop continues when finish is
+            // unknown") + #43813 ("retry raw network finish errors"). A
+            // gateway hiccup (OpenCode Zen free routes especially) can end a
+            // 200 stream with finish_reason `network_error` or an unrecognized
+            // value right after visible text. Treating that as a completed
+            // turn is exactly the "ox-alpha stops mid-run" symptom. When the
+            // round produced text but no tool calls, nudge the model to pick
+            // up where it stopped — bounded by the same guard as truncation.
+            if matches!(
+                resp.status.as_deref(),
+                Some("network_error") | Some("unknown")
+            ) && calls.is_empty()
+            {
+                let reason = resp.status.clone().unwrap_or_default();
+                if truncation_giving_up || truncation_continuations >= MAX_TRUNCATION_CONTINUATIONS
+                {
+                    if !truncation_giving_up {
+                        truncation_giving_up = true;
+                        let _ = tx.send(AgentEvent::Status(format!(
+                            "stream ended early (finish_reason: {reason}) {truncation_continuations}× — giving up and surfacing partial output"
+                        )));
+                    }
+                    // Fall through to the normal completion path with whatever
+                    // text arrived; never loop forever on a flapping route.
+                } else {
+                    truncation_continuations += 1;
+                    let _ = tx.send(AgentEvent::Status(format!(
+                        "stream ended early (finish_reason: {reason}) — asking the model to continue… ({}/{MAX_TRUNCATION_CONTINUATIONS})",
+                        truncation_continuations
+                    )));
+                    let nudge = if text.trim().is_empty() {
+                        "[harness] The stream ended before you produced anything usable \
+                         (transport error, not a real stop). Retry your last step now."
+                    } else {
+                        "[harness] The stream was cut off by a transport error right after the \
+                         partial answer above (finish_reason marked it unreliable — this was NOT \
+                         a natural stop). Continue exactly where you left off. Do not repeat or \
+                         re-preamble; finish the response."
+                    };
+                    session
+                        .input_items
+                        .push(crate::api::types::user_text_item(nudge));
+                    self.persist_session(session);
+                    continue;
+                }
+            }
             if !truncated_this_round {
                 truncation_continuations = 0;
                 truncation_giving_up = false;
@@ -1274,21 +1321,30 @@ impl AgentRunner {
             // a panicking tool task, a subagent error. `execute_calls` owns the
             // happy path; this guard backstops *every* way out of it, so no
             // early return can strand a call in the persisted history.
-            if let Err(e) = self
+            let exec_result = self
                 .execute_calls(&calls, &mut tool_seq, session, usage, tx, cancel)
-                .await
-            {
-                let filled = pair_unanswered(&mut session.input_items, &calls, &abort_output(&e));
-                if filled > 0 && !matches!(e, NurError::Interrupted) {
-                    let _ = tx.send(AgentEvent::Status(format!(
-                        "history · {filled} tool call(s) closed out after: {e}"
-                    )));
+                .await;
+            // Tool runs shell out to child processes (omp, egaki, graphjin
+            // serve, …) that rewrite the terminal title with their own branding
+            // (omp sets it to its π mark). Put our provider-branded title back
+            // after every batch so the tab always reflects who is serving.
+            crate::ade::reassert_after_child(&session_window_prompt(session));
+            match exec_result {
+                Ok(()) => {
+                    self.persist_session(session);
                 }
-                self.persist_session(session);
-                return Err(e);
+                Err(e) => {
+                    let filled =
+                        pair_unanswered(&mut session.input_items, &calls, &abort_output(&e));
+                    if filled > 0 && !matches!(e, NurError::Interrupted) {
+                        let _ = tx.send(AgentEvent::Status(format!(
+                            "history · {filled} tool call(s) closed out after: {e}"
+                        )));
+                    }
+                    self.persist_session(session);
+                    return Err(e);
+                }
             }
-
-            self.persist_session(session);
         }
     }
 
@@ -3170,6 +3226,18 @@ pub(crate) fn pair_unanswered(
 }
 
 /// Synthetic result recorded for calls that never ran because the turn aborted.
+/// The prompt fragment the TUI uses in its window title — the last user
+/// message, so title re-asserts keep showing what this session is about.
+fn session_window_prompt(session: &Session) -> String {
+    session
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .map(|m| m.content.clone())
+        .unwrap_or_else(|| "ready".to_string())
+}
+
 fn abort_output(err: &NurError) -> String {
     match err {
         NurError::Interrupted => INTERRUPT_OUTPUT.to_string(),

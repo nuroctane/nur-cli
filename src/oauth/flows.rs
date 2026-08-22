@@ -72,6 +72,7 @@ pub fn login_browser(provider_id: &str, tx: ProgressTx, cancel: CancelFlag) {
         "github-models" | "github-copilot" => github::login(provider_id, &tx, &cancel),
         "cursor" => cursor::login(&tx, &cancel),
         "opencode" => opencode::login(&tx, &cancel),
+        "nous" => nous::login(&tx, &cancel),
         "meta" => super::harness::muse::login(&tx, &cancel),
         "deepseek" => super::harness::deepseek::login(&tx, &cancel),
         "zhipu" => super::harness::zhipu::login(&tx, &cancel),
@@ -104,6 +105,7 @@ pub fn import_existing_session(provider_id: &str) -> Result<Option<OAuthTokens>>
         "huggingface" => Ok(huggingface::import_hf_token()),
         "cursor" => cursor::import_cursor_cli(),
         "opencode" => opencode::import_opencode_cli(),
+        "nous" => nous::import_hermes_cli(),
         "meta" => super::harness::muse::import_muse_cli(),
         "deepseek" => super::harness::deepseek::import_dsh_cli(),
         "zhipu" => super::harness::zhipu::import_zcode_cli(),
@@ -1497,6 +1499,294 @@ pub mod xai {
             }
         }
         Ok(None)
+    }
+}
+
+// ── Nous Portal (RFC 8628 device flow, same first-party client as Hermes) ──
+
+/// Nous Portal — Nous Research's unified inference gateway (300+ models incl.
+/// free tiers). Device-code OAuth identical to Hermes Agent's `hermes auth add
+/// nous`: same portal host, same `hermes-cli` client id, `inference:invoke`
+/// scope. The resulting access token is a short-lived invoke JWT used as a
+/// plain Bearer on the OpenAI-compatible inference API; the refresh token
+/// rotates on every refresh (OAuth 2.1 rotation — always persist the newest).
+///
+/// Cross-CLI interop: when Hermes Agent is installed, its `~/.hermes/auth.json`
+/// `providers.nous` state is imported first (shared token store semantics —
+/// one Portal login covers both agents), so `nur auth login --provider nous`
+/// is instant for existing Hermes users.
+pub mod nous {
+    use super::*;
+
+    pub const PORTAL: &str = crate::providers::NOUS_PORTAL_URL;
+    pub const INFERENCE: &str = crate::providers::NOUS_PORTAL_BASE_URL;
+    pub const CLIENT_ID: &str = crate::providers::NOUS_OAUTH_CLIENT_ID;
+    pub const SCOPE: &str = "inference:invoke";
+
+    #[derive(Deserialize)]
+    struct DeviceCodeResp {
+        device_code: String,
+        user_code: String,
+        verification_uri: Option<String>,
+        verification_uri_complete: Option<String>,
+        #[serde(default)]
+        expires_in: u64,
+        #[serde(default = "default_interval")]
+        interval: u64,
+    }
+    fn default_interval() -> u64 {
+        1
+    }
+
+    #[derive(Deserialize)]
+    struct TokenResp {
+        access_token: Option<String>,
+        refresh_token: Option<String>,
+        expires_in: Option<u64>,
+        scope: Option<String>,
+        error: Option<String>,
+        #[serde(default)]
+        error_description: Option<String>,
+    }
+
+    fn token_from(payload: TokenResp, client_id: &str) -> Result<OAuthTokens> {
+        let access = payload
+            .access_token
+            .filter(|t| !t.trim().is_empty())
+            .ok_or_else(|| NurError::Other("Nous token response missing access_token".into()))?;
+        Ok(OAuthTokens {
+            access_token: access,
+            refresh_token: payload.refresh_token,
+            expires_at: expires_in_to_at(payload.expires_in),
+            meta: Some(OauthMeta {
+                issuer: PORTAL.into(),
+                client_id: client_id.into(),
+                extra: serde_json::json!({
+                    "inference_base_url": INFERENCE,
+                    "scope": payload.scope.unwrap_or_else(|| SCOPE.into()),
+                }),
+            }),
+        })
+    }
+
+    /// Import an existing Hermes Agent Portal session (`~/.hermes/auth.json`
+    /// → `providers.nous`). Hermes stores `access_token` (invoke JWT) +
+    /// rotating `refresh_token` under that key; both CLIs share the same
+    /// Portal client, so the credential is directly usable here.
+    pub fn import_hermes_cli() -> Result<Option<OAuthTokens>> {
+        let Some(home) = dirs::home_dir() else {
+            return Ok(None);
+        };
+        let path = home.join(".hermes").join("auth.json");
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return Ok(None);
+        };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+            return Ok(None);
+        };
+        let state = v.pointer("/providers/nous").cloned().unwrap_or_default();
+        let refresh = state
+            .get("refresh_token")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let access = state
+            .get("access_token")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if refresh.is_empty() && access.is_empty() {
+            return Ok(None);
+        }
+        // Quarantined / expired states carry an `error` marker — still try:
+        // the refresh path below will surface a clean relogin message.
+        let expires_at = state
+            .get("expires_at")
+            .and_then(|x| x.as_str())
+            .and_then(parse_iso_to_unix);
+        Ok(Some(OAuthTokens {
+            access_token: access,
+            refresh_token: if refresh.is_empty() {
+                None
+            } else {
+                Some(refresh)
+            },
+            expires_at,
+            meta: Some(OauthMeta {
+                issuer: PORTAL.into(),
+                client_id: CLIENT_ID.into(),
+                extra: serde_json::json!({ "inference_base_url": INFERENCE, "source": "hermes-cli" }),
+            }),
+        }))
+    }
+
+    fn parse_iso_to_unix(s: &str) -> Option<u64> {
+        // `2026-08-21T17:00:00Z` (or with offset) → unix secs. chrono is already
+        // a dependency; parse leniently and fail soft.
+        chrono::DateTime::parse_from_rfc3339(s)
+            .ok()
+            .map(|dt| dt.timestamp().max(0) as u64)
+    }
+
+    pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
+        // Hermes installed with a live Portal session? One import, no browser.
+        match import_hermes_cli() {
+            Ok(Some(t)) if !t.access_token.is_empty() || t.refresh_token.is_some() => {
+                send(
+                    tx,
+                    BrowserLoginProgress::Status(
+                        "imported Nous Portal session from Hermes Agent (~/.hermes/auth.json)"
+                            .into(),
+                    ),
+                );
+                return Ok(t);
+            }
+            _ => {}
+        }
+
+        send(
+            tx,
+            BrowserLoginProgress::Status("requesting Nous Portal device code…".into()),
+        );
+        let client = http()?;
+        let res = client
+            .post(format!("{PORTAL}/api/oauth/device/code"))
+            .form(&[("client_id", CLIENT_ID), ("scope", SCOPE)])
+            .send()
+            .map_err(|e| NurError::Other(format!("nous device code: {e}")))?;
+        let status = res.status();
+        let body = res.text().unwrap_or_default();
+        if !status.is_success() {
+            return Err(NurError::Other(format!(
+                "Nous device code failed ({status}: {}). Portal login page: {PORTAL}/login",
+                oauth_error_summary(&body)
+            )));
+        }
+        let device: DeviceCodeResp = serde_json::from_str(&body)
+            .map_err(|e| NurError::Other(format!("nous device code parse: {e} — body withheld")))?;
+
+        let verify = device
+            .verification_uri_complete
+            .clone()
+            .filter(|u| !u.trim().is_empty())
+            .unwrap_or_else(|| {
+                device
+                    .verification_uri
+                    .clone()
+                    .unwrap_or_else(|| format!("{PORTAL}/login"))
+            });
+
+        send(
+            tx,
+            BrowserLoginProgress::DeviceCode {
+                verification_url: verify.clone(),
+                user_code: device.user_code.clone(),
+            },
+        );
+        let _ = open_browser(&verify);
+
+        let deadline = std::time::Instant::now()
+            + Duration::from_secs(if device.expires_in > 0 {
+                device.expires_in
+            } else {
+                900
+            });
+        // Portal caps polling at 1s (matches Hermes DEVICE_AUTH_POLL_INTERVAL_CAP).
+        let base_interval = device.interval.clamp(1, 5);
+        let mut slow = false;
+        let mut attempt = 0u32;
+        while std::time::Instant::now() < deadline {
+            if cancel.is_cancelled() {
+                return Err(NurError::Other("login cancelled".into()));
+            }
+            thread::sleep(crate::oauth::device_poll_sleep(
+                base_interval,
+                slow,
+                attempt,
+            ));
+            attempt = attempt.saturating_add(1);
+            slow = false;
+            let res = client
+                .post(format!("{PORTAL}/api/oauth/token"))
+                .form(&[
+                    ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+                    ("client_id", CLIENT_ID),
+                    ("device_code", device.device_code.as_str()),
+                ])
+                .send();
+            let Ok(res) = res else { continue };
+            let parsed: TokenResp = serde_json::from_str(&res.text().unwrap_or_default())
+                .unwrap_or(TokenResp {
+                    access_token: None,
+                    refresh_token: None,
+                    expires_in: None,
+                    scope: None,
+                    error: Some("parse".into()),
+                    error_description: None,
+                });
+            match parsed.error.as_deref() {
+                None | Some("") | Some("parse") => {}
+                Some("authorization_pending") => {
+                    send(
+                        tx,
+                        BrowserLoginProgress::Status("waiting for Portal approval…".into()),
+                    );
+                    continue;
+                }
+                Some("slow_down") => {
+                    slow = true;
+                    continue;
+                }
+                Some(err) => {
+                    return Err(NurError::Other(format!(
+                        "Nous token error: {err} {} — finish signing in at {PORTAL}/login then retry",
+                        parsed.error_description.clone().unwrap_or_default()
+                    )));
+                }
+            }
+            if parsed.access_token.is_some() {
+                return token_from(parsed, CLIENT_ID);
+            }
+        }
+        Err(NurError::Other(
+            "Nous device login timed out. Sign in at portal.nousresearch.com/login in a normal \
+             browser tab (CAPTCHA loops are the usual cause), then retry /login."
+                .into(),
+        ))
+    }
+
+    /// Refresh: POST {portal}/api/oauth/token with the `x-nous-refresh-token`
+    /// header (Hermes's wire shape). The refresh token ROTATES — callers must
+    /// persist the returned one.
+    pub fn refresh(_auth: &Auth, refresh_token: &str) -> Result<OAuthTokens> {
+        let client = http()?;
+        let res = client
+            .post(format!("{PORTAL}/api/oauth/token"))
+            .header("x-nous-refresh-token", refresh_token)
+            .form(&[("grant_type", "refresh_token"), ("client_id", CLIENT_ID)])
+            .send()
+            .map_err(|e| NurError::Other(format!("nous refresh: {e}")))?;
+        let status = res.status();
+        let body = res.text().unwrap_or_default();
+        if status.as_u16() == 401 || status.as_u16() == 400 {
+            // invalid_grant / refresh_token_reused → relogin required.
+            return Err(NurError::Other(format!(
+                "Nous Portal session expired (refresh rejected, {status}). Run \
+                 /login → Nous Portal again (or `hermes auth add nous`); the old token \
+                 was rotated or revoked."
+            )));
+        }
+        if !status.is_success() {
+            return Err(NurError::Other(format!(
+                "Nous refresh failed ({status}: {})",
+                oauth_error_summary(&body)
+            )));
+        }
+        let parsed: TokenResp = serde_json::from_str(&body)
+            .map_err(|e| NurError::Other(format!("nous refresh parse: {e}")))?;
+        token_from(parsed, CLIENT_ID)
     }
 }
 

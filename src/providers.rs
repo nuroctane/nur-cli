@@ -108,6 +108,12 @@ pub const KIMI_CODE_BASE_URL: &str = "https://api.kimi.com/coding/v1";
 pub const OPENCODE_ZEN_BASE_URL: &str = "https://opencode.ai/zen/v1";
 /// OpenCode Go shares OpenCode credentials but has its own inference endpoint.
 pub const OPENCODE_GO_BASE_URL: &str = "https://opencode.ai/zen/go/v1";
+/// Nous Portal inference API — OpenAI-compatible, OAuth device-code sessions
+/// shared with Hermes Agent (`hermes auth add nous` / `nur auth login --provider nous`).
+pub const NOUS_PORTAL_BASE_URL: &str = "https://inference-api.nousresearch.com/v1";
+/// Nous Portal OAuth endpoints + client id (same first-party client as Hermes).
+pub const NOUS_PORTAL_URL: &str = "https://portal.nousresearch.com";
+pub const NOUS_OAUTH_CLIENT_ID: &str = "hermes-cli";
 /// Poolside Platform inference. Self-hosted deployments use `https://<domain>/openai/v1`.
 pub const POOLSIDE_BASE_URL: &str = "https://inference.poolside.ai/v1";
 /// Cursor Agent CLI default endpoint (`CURSOR_API_ENDPOINT`). ConnectRPC/agent
@@ -396,6 +402,20 @@ pub fn opencode_zen_free_wire_id(id: &str) -> String {
 /// the model picker (and matched by its filter) so models stay findable by the
 /// names OpenCode uses for them. The picker lists free models under their Zen
 /// wire id only, so `x-preview-f-free` must surface its Go-catalog alias.
+/// Friendly suffix for Nous Portal model ids in the picker. The Portal serves
+/// OpenRouter-style slugs (`vendor/model`, `:free` tier markers) — surface a
+/// FREE badge for zero-cost tiers so they're easy to spot.
+pub fn nous_model_alias(id: &str) -> Option<&'static str> {
+    let bare = id.rsplit('/').next().unwrap_or(id);
+    if id.eq_ignore_ascii_case("stealth/ox-alpha") {
+        Some("Ox Alpha · Nous flagship")
+    } else if bare.ends_with(":free") || id.ends_with(":free") {
+        Some("free")
+    } else {
+        None
+    }
+}
+
 pub fn opencode_model_alias(id: &str) -> Option<&'static str> {
     let bare = opencode_bare_model_id(id);
     match bare.to_ascii_lowercase().as_str() {
@@ -523,6 +543,9 @@ pub const XAI_GROK_CLI_DEFAULT_VERSION: &str = "0.2.101";
 /// The rung names nur itself understands, weakest → strongest. New vendor names
 /// outside this list are still accepted and forwarded verbatim.
 pub const EFFORT_LADDER: &[&str] = &["minimal", "low", "medium", "high", "xhigh"];
+/// Nous Portal's own effort ladder (Portal catalog `supported_efforts`):
+/// `stealth/ox-alpha` and most reasoning routes take `max`/`high`/`low`.
+pub const EFFORT_NOUS: &[&str] = &["low", "high", "max"];
 
 /// The ladder xAI's API accepts — it takes only the two ends.
 const EFFORT_LOW_HIGH: &[&str] = &["low", "high"];
@@ -537,6 +560,7 @@ pub fn effort_levels(provider_id: &str) -> &'static [&'static str] {
         // Thinking-budget providers: no `effort` string on the wire.
         "anthropic" | "google" | "antigravity" | "google-oauth" => &[],
         "xai" => EFFORT_LOW_HIGH,
+        "nous" => EFFORT_NOUS,
         _ => EFFORT_LADDER,
     }
 }
@@ -1306,6 +1330,21 @@ pub const PROVIDERS: &[Provider] = &[
         browser_auth: true,
     },
     Provider {
+        id: "nous",
+        name: "Nous Portal",
+        base_url: NOUS_PORTAL_BASE_URL,
+        // Ox Alpha is Nous's own flagship reasoning model (free tier, 1M ctx,
+        // tool calling). Agentic per the Portal's own guidance; the paid
+        // frontier picks (claude/gpt/gemini slugs) are one `/model` away and
+        // the live picker lists all 370+.
+        default_model: "stealth/ox-alpha",
+        env_key: "NOUS_API_KEY",
+        style: CC,
+        note: "300+ models incl free · hermes signin or NOUS_API_KEY",
+        key_optional: false,
+        browser_auth: true,
+    },
+    Provider {
         id: "github-models",
         name: "GitHub Models",
         base_url: "https://models.github.ai/inference",
@@ -1914,6 +1953,7 @@ pub fn oauth_browser_provider_ids() -> &'static [&'static str] {
         "meta",
         "deepseek",
         "zhipu",
+        "nous",
     ]
 }
 
@@ -2125,7 +2165,7 @@ mod tests {
         // `PROVIDER_COUNT_DOC_SITES` below too.
         assert_eq!(
             PROVIDERS.len(),
-            62,
+            63,
             "provider count changed — update the docs that quote it: {}",
             PROVIDER_COUNT_DOC_SITES.join(", ")
         );
@@ -2625,6 +2665,7 @@ mod tests {
                 "meta",
                 "deepseek",
                 "zhipu",
+                "nous",
             ]
         );
         assert!(!by_id("huggingface").unwrap().browser_auth);

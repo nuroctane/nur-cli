@@ -182,21 +182,105 @@ pub fn ensure_graphjin() -> ComponentStatus {
         name: "graphjin".into(),
         ..Default::default()
     };
+    // Out-of-the-box: install via npm when Node exists and graphjin is
+    // missing (serialized under the shared npm lock like every other pack).
+    let node_ok = super::which("node") || super::which("node.exe");
+    if find_bin("graphjin").is_none() && node_ok {
+        let _guard = super::npm_lock();
+        let npm = find_bin("npm").unwrap_or_else(|| "npm".into());
+        let _ = super::run_quiet(&npm, &["install", "-g", "graphjin@latest"], None, 600_000);
+    }
     match find_bin("graphjin") {
         Some(bin) => {
             c.available = true;
             c.version = super::cmd_version_pub(&bin, &["version"]);
             c.path = Some(bin);
-            c.detail =
-                "governed data surface ready — point GRAPHJIN_CONFIG_PATH at a config".into();
+            // Seed the local demo config (SQLite, no containers) so the tool
+            // works immediately: `graphjin serve --demo --path <nur home>`.
+            match ensure_graphjin_demo_config() {
+                Ok(Some(dir)) => {
+                    c.detail = format!(
+                        "governed data surface ready · demo config at {} (graphjin serve --demo --path \"{}\")",
+                        dir.display(),
+                        dir.display()
+                    );
+                }
+                Ok(None) => {
+                    c.detail =
+                        "governed data surface ready — point GRAPHJIN_CONFIG_PATH at a config"
+                            .into();
+                }
+                Err(e) => {
+                    c.detail = format!("ready · demo config skipped: {e}");
+                }
+            }
         }
         None => {
-            c.detail =
-                "optional — npm i -g graphjin (needed only for the `graphjin` data tool)".into();
+            c.detail = if node_ok {
+                "not found after npm install — npm i -g graphjin".into()
+            } else {
+                "needs Node.js — npm i -g graphjin".into()
+            };
         }
     }
     c
 }
+
+/// Seed a GraphJin demo config under `~/.nur/graphjin/` so the tool works
+/// out of the box (`graphjin serve --demo --path <dir>` — SQLite, no
+/// containers). Idempotent: an existing config dir is never overwritten.
+/// Returns Ok(None) when a config already exists elsewhere
+/// (GRAPHJIN_CONFIG_PATH / ~/.config/graphjin/client.json), meaning the user
+/// already has a setup we should not shadow.
+fn ensure_graphjin_demo_config() -> Result<Option<std::path::PathBuf>, String> {
+    // Respect an existing user setup.
+    if std::env::var("GRAPHJIN_CONFIG_PATH")
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false)
+    {
+        return Ok(None);
+    }
+    if let Some(home) = dirs::home_dir() {
+        if home
+            .join(".config")
+            .join("graphjin")
+            .join("client.json")
+            .is_file()
+        {
+            return Ok(None);
+        }
+    }
+    let dir = crate::config::nur_home().join("graphjin");
+    let marker = dir.join("config.yml");
+    if marker.is_file() {
+        return Ok(Some(dir));
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+    std::fs::write(&marker, DEMO_CONFIG_YML)
+        .map_err(|e| format!("write {}: {e}", marker.display()))?;
+    Ok(Some(dir))
+}
+
+const DEMO_CONFIG_YML: &str = r#"# NurCLI GraphJin demo config (seeded by `nur ecosystem ensure`).
+# Start the governed data surface with:
+#   graphjin serve --demo --path "<this directory>"
+# or use the MCP surface directly:
+#   graphjin mcp --demo --path "<this directory>"
+#
+# The --demo flag uses a built-in SQLite database (no containers needed).
+# Delete this file to re-seed; edit freely — ensure never overwrites it.
+
+app_name: "NurCLI Demo"
+app_protocol: "http"
+host_port: 3199
+
+# Demo databases are created and seeded automatically by --demo.
+database:
+  type: sqlite
+  path: demo/nur-demo.db
+
+log_level: info
+"#;
 
 /// Oh My Pi (omp.sh) - the coding-agent backend the `omp` tool delegates to.
 /// (headless `omp -p` runs; we deliberately skip its IDE/ACP surface).

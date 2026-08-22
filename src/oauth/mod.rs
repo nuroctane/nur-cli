@@ -172,6 +172,7 @@ pub fn refresh_tokens(provider: &str, auth: &Auth, refresh: &str) -> Result<OAut
         "github-models" | "github-copilot" => flows::github::refresh(auth, refresh),
         "cursor" => flows::cursor::refresh(auth, refresh),
         "opencode" => flows::opencode::refresh(auth, refresh),
+        "nous" => flows::nous::refresh(auth, refresh),
         "meta" => harness::muse::refresh(auth, refresh),
         "deepseek" => harness::deepseek::refresh(auth, refresh),
         "zhipu" => harness::zhipu::refresh(auth, refresh),
@@ -240,6 +241,7 @@ mod tests {
             "meta",
             "deepseek",
             "zhipu",
+            "nous",
         ];
         const REFRESH: &[&str] = &[
             "openai",
@@ -259,6 +261,7 @@ mod tests {
             "meta",
             "deepseek",
             "zhipu",
+            "nous",
         ];
         for id in crate::providers::oauth_browser_provider_ids() {
             assert!(

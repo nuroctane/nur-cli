@@ -30,7 +30,7 @@ That’s the full stack (binary + PATH + prereqs + ecosystem).
 
 ## 2. Authenticate
 
-**Recommended:** open the TUI and run **`/login`**. Pick any of **62 providers**
+**Recommended:** open the TUI and run **`/login`**. Pick any of **63 providers**
 (OpenAI, Anthropic, Gemini, xAI, Groq, OpenRouter, local Ollama/LM Studio, Meta Model API, and more), then paste a key or use browser sign-in where available. That path also sets endpoint + default model.
 
 CLI path (stores a key in `~/.nur/auth.json`; never printed):

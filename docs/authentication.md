@@ -45,7 +45,7 @@ What happens:
 1. **Nothing is cleared.** Opening the picker — and backing out of it with `Esc`
    — leaves your current credential exactly as it was. Credentials are replaced
    only at the moment a new one is committed.
-2. A **scrollable, type-to-filter** picker lists **62 providers** (frontier APIs,
+2. A **scrollable, type-to-filter** picker lists **63 providers** (frontier APIs,
    inference clouds, Chinese labs, OpenAI-compatible routers, local servers).
    Providers with browser sign-in show a 🌐 hint.
 3. If the provider supports browser auth, choose:

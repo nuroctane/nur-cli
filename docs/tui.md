@@ -215,6 +215,7 @@ changes. Nur forces a full `terminal.clear()` (not only a ratatui `Clear`) when:
 - `/sidegraph` opens or closes (horizontal split)
 - a click-to-peek closes (image pixels sit outside the cell buffer)
 - `/theme` preview / commit / cancel
+- `/theme transparent` toggles see-through mode (panels stop painting backgrounds; pairs with a translucent terminal profile; persisted as `[theme] transparent`)
 - a foreground child (`/fractal open`, attach) returns
 
 Steady frames only `Clear` when the layout signature changes (size, busy line,
@@ -293,7 +294,7 @@ The note is appended to your persistent memory file and recalled automatically i
 /login
 ```
 
-Scrollable, **type-to-filter** catalog of 62 providers → browser / official
+Scrollable, **type-to-filter** catalog of 63 providers → browser / official
 harness sign-in when available (including Muse Code, DeepSeek Harness, ZCode)
 or a masked key → writes `provider` / `base_url` / `model` to config and
 hot-swaps the HTTP client.
