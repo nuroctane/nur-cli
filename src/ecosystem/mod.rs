@@ -1,8 +1,8 @@
 //! External agent-ecosystem integrations provisioned by Meta's one-shot install.
 //!
 //! Core runtime: Graphify · PLUR · Ruflo
-//! Skill packs: Emil design · clone-website · cybersecurity · Text-to-CAD ·
-//! mobile-harness · default plugins
+//! Skill packs: Emil design · clone-website · cybersecurity · sc-research ·
+//! Text-to-CAD · mobile-harness · DarkNavy web3-skills · default plugins
 //! (superpowers · fable · mattpocock · addyosmani · builderio) · OpenCode catalog
 //! Gateways: Executor MCP · skills CLI · AKM
 //! Patterns: DCP-style context pruning (native + docs)
@@ -43,7 +43,9 @@ const ECOSYSTEM_MARKER: &str = "ecosystem.json";
 /// 18: Text-to-CAD + mobile-harness packs with complete resource-tree mirroring.
 /// 19: dogwood auto-install + default policy pack; graphjin auto-install +
 ///     SQLite demo config (both now out-of-the-box).
-const ECOSYSTEM_SCHEMA: u32 = 19;
+/// 20: sc-research whitehat pack + DarkNavy web3-skills ecosystem pack.
+/// 21: expanded sc-research playbooks + Cyfrin solskill pack.
+const ECOSYSTEM_SCHEMA: u32 = 21;
 /// Re-run ensure at most once per this many seconds unless forced.
 const ENSURE_TTL_SECS: u64 = 86_400;
 

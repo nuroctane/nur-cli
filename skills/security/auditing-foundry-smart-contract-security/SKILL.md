@@ -1,14 +1,6 @@
 ---
 name: auditing-foundry-smart-contract-security
-description: >-
-  Pre-deployment security audit of Solidity smart contracts in a Foundry project.
-  Combines static analysis (Slither, Aderyn), symbolic execution (Mythril), and
-  property-based testing (forge fuzz + invariant tests with handlers) to catch
-  reentrancy, access-control, oracle/price manipulation, and arithmetic bugs
-  BEFORE deploying to an EVM chain. Also enforces key hygiene (no plaintext
-  private keys, encrypted cast keystore) and a secure deploy workflow. Use when
-  writing, reviewing, testing, or deploying Solidity/Foundry contracts, building
-  a dApp, or working with forge/cast/anvil, MetaMask, or Web3/DeFi code.
+description: "Pre-deployment security audit of Solidity Foundry projects (Slither, Aderyn, Mythril, forge fuzz/invariants, key hygiene). Use when writing, reviewing, testing, or deploying Solidity/Foundry contracts or DeFi/Web3 code."
 domain: cybersecurity
 subdomain: blockchain-security
 tags:

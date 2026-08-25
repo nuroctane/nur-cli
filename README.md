@@ -163,7 +163,8 @@ Everything is **local**. Secrets never go into the git repo.
 #### D. Ecosystem packs
 
 Graphify · PLUR · Ruflo · Executor · omp · agent-browser-cli · Text-to-CAD ·
-mobile-harness · skill packs. Installed when Node/uv/Bun are available.
+mobile-harness · `/sc-research` whitehat DeFi pack · skill packs. Installed when
+Node/uv/Bun are available.
 
 Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](./docs/setup.md)
 
@@ -177,7 +178,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 | **Agent** | Manual / plan / auto · tools · subagents · todos · auto-compact · session $ / token budgets · Esc cancel · Shift+Tab mid-turn · **NL skill auto-activation** |
 | **Vision** | `look` · `extract_frames` · prompt auto-attach · **inline images in the TUI** (kitty graphics protocol, sixel, iTerm2; Ctrl+V paste or `/image <path>`) |
 | **Tools** | read · edit · bash · web · **browser** · git · knowledge · agent · **excalidraw** |
-| **Ecosystem** | Graphify · PLUR · Ruflo · Executor · omp · browser · AKM · 800+ skills · **plugin marketplace** (Fable, Superpowers, Vercel, …) |
+| **Ecosystem** | Graphify · PLUR · Ruflo · Executor · omp · browser · AKM · 800+ skills · **`/sc-research` whitehat DeFi** · **plugin marketplace** (Fable, Superpowers, Vercel, …) |
 | **Hardening** | Sandbox · denylist · SSRF blocks · atomic `~/.nur` IO · permissions/hooks · SHA-256 install · `nur doctor` |
 
 ---

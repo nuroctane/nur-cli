@@ -127,7 +127,9 @@ On install / ecosystem ensure, Nur pulls:
 
 - **superpowers** · **fable** · **mattpocock** · **addyosmani** · **builderio**
 - plus design / clone-website / cybersecurity / infinite-headcount /
-  Text-to-CAD / mobile-harness packs when the skills CLI is available
+  Text-to-CAD / mobile-harness / DarkNavy web3-skills / Cyfrin solskill packs
+  when the skills CLI is available, and the bundled `/sc-research` whitehat DeFi
+  pack (protocol + tool playbooks)
 
 They land under `~/.nur/plugins/` and mirror into `~/.nur/skills/` so `/grill-me`, `/fable-method`, `/context-engineering`, etc. work immediately.
 

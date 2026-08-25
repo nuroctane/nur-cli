@@ -22,6 +22,39 @@ output = repo_root / "src" / "agent" / "skill_intents.json"
 
 STOP = set(["a","an","the","and","or","to","of","for","in","on","at","by","with","from","this","that","these","those","is","are","was","were","be","been","being","have","has","had","do","does","did","will","would","can","could","should","may","might","must","use","using","used","when","where","what","which","who","how","why","into","over","under","about","after","before","your","you","their","them","its","it","as","if","then","than","also","just","only","not","no","yes","any","all","each","other","more","most","some","such","via","per","between","through","during","without","within","skill","skills","agent","agents","help","please","like","make","need","needs","want","wants","get","set","run","work","works","working"])
 
+def parse_frontmatter_scalar(fm, key):
+    """Plain, quoted, or YAML folded (`>-` / `|`) scalars. Bare `>-` is missing."""
+    lines = fm.splitlines()
+    prefix = f"{key}:"
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if not line.startswith(prefix):
+            i += 1
+            continue
+        rest = line[len(prefix):].strip()
+        if rest in (">", ">-", ">+", "|", "|-", "|+"):
+            i += 1
+            parts = []
+            while i < len(lines):
+                l = lines[i]
+                if l.startswith(" ") or l.startswith("\t"):
+                    t = l.strip()
+                    if t:
+                        parts.append(t)
+                    i += 1
+                elif not l.strip():
+                    i += 1
+                else:
+                    break
+            joined = " ".join(parts)
+            return joined or ""
+        s = rest.strip().strip('"').strip("'").strip()
+        if s in (">-", "|", ">", "|-"):
+            return ""
+        return s
+    return ""
+
 def gen_triggers(name, desc):
     triggers = set()
     triggers.add(name)
@@ -55,10 +88,99 @@ def gen_triggers(name, desc):
             "half second",
             "half-second",
         ],
+        "sc-research": [
+            "whitehat crypto",
+            "smart contract researcher",
+            "web3 security research",
+            "defi whitehat",
+            "sc research",
+        ],
+        "contest-and-bounty-reporting": [
+            "immunefi report",
+            "code4rena finding",
+            "cantina finding",
+            "sherlock contest",
+        ],
+        "onchain-read-recon": [
+            "cast storage",
+            "sourcify recon",
+            "onchain recon",
+        ],
+        "reviewing-oracles-and-pricing": [
+            "oracle manipulation",
+            "flash loan price",
+            "chainlink staleness",
+        ],
+        "writing-foundry-invariant-handlers": [
+            "invariant handler",
+            "ghost variables",
+            "foundry invariant",
+        ],
+        "reviewing-erc4626-and-vaults": [
+            "erc4626",
+            "vault inflation",
+            "first depositor",
+        ],
+        "reviewing-amm-and-cl-pools": [
+            "uniswap callback",
+            "concentrated liquidity",
+            "amm invariant",
+        ],
+        "reviewing-lending-and-liquidations": [
+            "liquidation bonus",
+            "lending market",
+            "bad debt",
+        ],
+        "reviewing-bridges-and-messaging": [
+            "bridge replay",
+            "layerzero",
+            "cross chain message",
+        ],
+        "reviewing-governance-and-timelocks": [
+            "governor timelock",
+            "flashloan vote",
+        ],
+        "reviewing-token-standard-pitfalls": [
+            "fee on transfer",
+            "weird erc20",
+        ],
+        "reviewing-signatures-permit-and-eip712": [
+            "eip-712",
+            "permit replay",
+            "ecrecover",
+        ],
+        "reviewing-reentrancy-and-callbacks": [
+            "read-only reentrancy",
+            "erc777 hook",
+        ],
+        "formal-verification-halmos-certora-kontrol": [
+            "halmos",
+            "certora cvl",
+            "kontrol",
+        ],
+        "researcher-gym-and-curriculum": [
+            "ethernaut",
+            "damn vulnerable defi",
+            "cyfrin updraft",
+        ],
+        "reconstructing-public-postmortems": [
+            "defihacklabs",
+            "rekt writeup",
+        ],
+        "battlechain-safe-harbor-whitehat": [
+            "battlechain",
+            "safe harbor",
+        ],
+        "auditing-blockchain-clients": [
+            "client auditor",
+            "firedancer",
+        ],
     }
+    alias_kept = []
     if name in ALIASES:
         for a in ALIASES[name]:
             triggers.add(a)
+            alias_kept.append(a)
     tokens = [w.lower() for w in re.findall(r"[A-Za-z0-9]+", desc.lower()) if len(w)>=4 and w not in STOP]
     if len(tokens) >= 2:
         bigram = f"{tokens[0]} {tokens[1]}"
@@ -79,6 +201,9 @@ def gen_triggers(name, desc):
             continue
         filtered.append(t)
     filtered = sorted(set(filtered), key=lambda x: (-len(x), x))[:12]
+    for a in alias_kept:
+        if a not in filtered:
+            filtered.append(a)
     return filtered
 
 skills = []
@@ -99,12 +224,10 @@ for src in [skills_root, agents_skills_root, repo_root / "skills"]:
             end = text.find("---", 3)
             if end != -1:
                 fm = text[3:end]
-                m = re.search(r'^name:\s*"?([^"\n]+)"?', fm, re.MULTILINE)
-                if m:
-                    name = m.group(1).strip().strip('"').strip("'")
-                m2 = re.search(r'^description:\s*"?([^"\n]+)"?', fm, re.MULTILINE)
-                if m2:
-                    desc = m2.group(1).strip().strip('"')
+                n = parse_frontmatter_scalar(fm, "name")
+                if n:
+                    name = n
+                desc = parse_frontmatter_scalar(fm, "description")
                 if not desc:
                     body = text[end+3:].strip()
                     for line in body.splitlines():

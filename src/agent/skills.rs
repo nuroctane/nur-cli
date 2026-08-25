@@ -592,6 +592,24 @@ const INTENT_RULES: &[IntentRule] = &[
         why: "code knowledge graph (graphify) workflow",
     },
     IntentRule {
+        skill_names: &["sc-research"],
+        phrases: &[
+            "/sc-research",
+            "sc-research",
+            "sc research",
+            "smart contract researcher",
+            "smart-contract researcher",
+            "whitehat crypto",
+            "whitehat for the crypto",
+            "web3 security research",
+            "defi whitehat",
+            "defi security research",
+            "become a smart contract researcher",
+        ],
+        label: "sc-research",
+        why: "whitehat smart-contract research router (load one playbook, never all)",
+    },
+    IntentRule {
         skill_names: &["cybersecurity"],
         phrases: &[
             "cybersecurity skill",
@@ -1207,6 +1225,60 @@ pub fn load_skills(cwd: &Path) -> Vec<Skill> {
     crate::agent::skill_cache::load_skills_cached(cwd)
 }
 
+/// Read a YAML mapping scalar for `key` from a frontmatter block (no leading ---).
+/// Supports `"quoted"`, `'quoted'`, plain one-line, and `>-` / `|` folded blocks.
+/// A bare `>-` with no following indented lines is treated as missing (the old
+/// generator bug that indexed Foundry's description as `">-"`).
+pub(crate) fn parse_frontmatter_scalar(fm: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key}:");
+    let lines: Vec<&str> = fm.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let rest = match lines[i].strip_prefix(&prefix) {
+            Some(r) => r.trim(),
+            None => {
+                i += 1;
+                continue;
+            }
+        };
+        if matches!(rest, ">" | ">-" | ">+" | "|" | "|-" | "|+") {
+            i += 1;
+            let mut parts: Vec<&str> = Vec::new();
+            while i < lines.len() {
+                let l = lines[i];
+                if l.starts_with(' ') || l.starts_with('\t') {
+                    let t = l.trim();
+                    if !t.is_empty() {
+                        parts.push(t);
+                    }
+                    i += 1;
+                } else if l.trim().is_empty() {
+                    i += 1;
+                } else {
+                    break;
+                }
+            }
+            let joined = parts.join(" ");
+            return if joined.is_empty() {
+                None
+            } else {
+                Some(joined)
+            };
+        }
+        if rest.is_empty() {
+            return None;
+        }
+        let s = rest.trim_matches('"').trim();
+        let s = s.strip_prefix('\'').unwrap_or(s);
+        let s = s.strip_suffix('\'').unwrap_or(s).trim();
+        if s.is_empty() {
+            return None;
+        }
+        return Some(s.to_string());
+    }
+    None
+}
+
 pub(crate) fn parse_skill(path: &Path) -> Option<Skill> {
     let text = std::fs::read_to_string(path).ok()?;
     let folder_name = path
@@ -1221,23 +1293,9 @@ pub(crate) fn parse_skill(path: &Path) -> Option<Skill> {
         if let Some(end) = content.find("---") {
             let fm = &content[..end];
             let body = content[end + 3..].trim().to_string();
-            let fm_name = fm.lines().find_map(|l| {
-                let rest = l.strip_prefix("name:")?;
-                let s = rest.trim().trim_matches('"').trim();
-                let s = s.strip_prefix("'").unwrap_or(s);
-                let s = s.strip_suffix("'").unwrap_or(s).trim();
-                if s.is_empty() {
-                    None
-                } else {
-                    Some(s.to_string())
-                }
-            });
-            let desc = fm
-                .lines()
-                .find_map(|l| {
-                    l.strip_prefix("description:")
-                        .map(|s| s.trim().trim_matches('"').to_string())
-                })
+            let fm_name = parse_frontmatter_scalar(fm, "name").filter(|s| !s.is_empty());
+            let desc = parse_frontmatter_scalar(fm, "description")
+                .filter(|s| s != ">-" && s != "|" && s != ">" && !s.is_empty())
                 .unwrap_or_else(|| first_line(&body));
             (fm_name.unwrap_or(folder_name), desc, body)
         } else {
@@ -1347,6 +1405,42 @@ mod intent_tests {
             detect_skill_activation("use toolcraft for this scaffold", &skills).unwrap();
         assert_eq!(sk.name, "toolcraft");
         assert_eq!(rule.label, "toolcraft");
+    }
+
+    #[test]
+    fn detects_sc_research_whitehat() {
+        let skills = vec![
+            fake_skill("sc-research"),
+            fake_skill("cybersecurity"),
+            fake_skill("auditing-foundry-smart-contract-security"),
+        ];
+        let (sk, rule) = detect_skill_activation(
+            "i want to whitehat for the crypto industry and bake those skills",
+            &skills,
+        )
+        .unwrap();
+        assert_eq!(sk.name, "sc-research");
+        assert_eq!(rule.label, "sc-research");
+
+        let (sk, _) = detect_skill_activation("use sc-research on this vault", &skills).unwrap();
+        assert_eq!(sk.name, "sc-research");
+
+        let (sk, _) =
+            detect_skill_activation("help me become a smart contract researcher", &skills).unwrap();
+        assert_eq!(sk.name, "sc-research");
+    }
+
+    #[test]
+    fn parse_frontmatter_folded_description() {
+        let fm = "name: auditing-foundry-smart-contract-security\ndescription: >-\n  Pre-deployment security audit of Solidity.\n  Combines Slither and Aderyn.\nversion: \"1.0\"\n";
+        assert_eq!(
+            parse_frontmatter_scalar(fm, "name").as_deref(),
+            Some("auditing-foundry-smart-contract-security")
+        );
+        let desc = parse_frontmatter_scalar(fm, "description").unwrap();
+        assert!(desc.contains("Pre-deployment security audit"));
+        assert!(desc.contains("Slither and Aderyn"));
+        assert_ne!(desc, ">-");
     }
 
     #[test]

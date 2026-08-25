@@ -47,7 +47,11 @@ pub fn install_bundled_skills() -> Result<Vec<String>> {
         let dir = root.join(name);
         fs::create_dir_all(&dir)?;
         for (filename, body) in *files {
-            fs::write(dir.join(filename), body)?;
+            let dest = dir.join(filename);
+            if let Some(parent) = dest.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&dest, body)?;
         }
         if !installed.iter().any(|n| n == name) {
             installed.push((*name).to_string());
@@ -68,7 +72,11 @@ pub fn install_bundled_skills() -> Result<Vec<String>> {
             let dir = agents.join(name);
             let _ = fs::create_dir_all(&dir);
             for (filename, body) in *files {
-                let _ = fs::write(dir.join(filename), body);
+                let dest = dir.join(filename);
+                if let Some(parent) = dest.parent() {
+                    let _ = fs::create_dir_all(parent);
+                }
+                let _ = fs::write(&dest, body);
             }
         }
     }
@@ -204,6 +212,245 @@ const MULTI_FILE_PACKS: &[(&str, &[(&str, &str)])] = &[
     (
         "interior",
         &[("SKILL.md", include_str!("../../skills/interior/SKILL.md"))],
+    ),
+    // Whitehat smart-contract research pack (router + fat references + playbooks).
+    (
+        "sc-research",
+        &[
+            (
+                "SKILL.md",
+                include_str!("../../skills/sc-research/SKILL.md"),
+            ),
+            (
+                "references/sources.md",
+                include_str!("../../skills/sc-research/references/sources.md"),
+            ),
+            (
+                "references/disclosure.md",
+                include_str!("../../skills/sc-research/references/disclosure.md"),
+            ),
+            (
+                "references/swc-map.md",
+                include_str!("../../skills/sc-research/references/swc-map.md"),
+            ),
+            (
+                "references/bug-classes.md",
+                include_str!("../../skills/sc-research/references/bug-classes.md"),
+            ),
+            (
+                "references/tools-matrix.md",
+                include_str!("../../skills/sc-research/references/tools-matrix.md"),
+            ),
+            (
+                "references/platforms.md",
+                include_str!("../../skills/sc-research/references/platforms.md"),
+            ),
+            (
+                "references/gym.md",
+                include_str!("../../skills/sc-research/references/gym.md"),
+            ),
+            (
+                "references/tob-bsc.md",
+                include_str!("../../skills/sc-research/references/tob-bsc.md"),
+            ),
+            (
+                "references/grep-patterns.md",
+                include_str!("../../skills/sc-research/references/grep-patterns.md"),
+            ),
+            (
+                "references/protocol-invariants.md",
+                include_str!("../../skills/sc-research/references/protocol-invariants.md"),
+            ),
+        ],
+    ),
+    (
+        "reviewing-with-solodit-and-swc",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/reviewing-with-solodit-and-swc/SKILL.md"),
+        )],
+    ),
+    (
+        "writing-foundry-invariant-handlers",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/writing-foundry-invariant-handlers/SKILL.md"),
+        )],
+    ),
+    (
+        "reviewing-oracles-and-pricing",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/reviewing-oracles-and-pricing/SKILL.md"),
+        )],
+    ),
+    (
+        "reviewing-upgradeable-proxies",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/reviewing-upgradeable-proxies/SKILL.md"),
+        )],
+    ),
+    (
+        "contest-and-bounty-reporting",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/contest-and-bounty-reporting/SKILL.md"),
+        )],
+    ),
+    (
+        "onchain-read-recon",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/onchain-read-recon/SKILL.md"),
+        )],
+    ),
+    (
+        "fuzzing-with-echidna-and-medusa",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/fuzzing-with-echidna-and-medusa/SKILL.md"),
+        )],
+    ),
+    (
+        "reviewing-erc4626-and-vaults",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/reviewing-erc4626-and-vaults/SKILL.md"),
+        )],
+    ),
+    (
+        "reviewing-amm-and-cl-pools",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/reviewing-amm-and-cl-pools/SKILL.md"),
+        )],
+    ),
+    (
+        "reviewing-lending-and-liquidations",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/reviewing-lending-and-liquidations/SKILL.md"),
+        )],
+    ),
+    (
+        "reviewing-bridges-and-messaging",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/reviewing-bridges-and-messaging/SKILL.md"),
+        )],
+    ),
+    (
+        "reviewing-governance-and-timelocks",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/reviewing-governance-and-timelocks/SKILL.md"),
+        )],
+    ),
+    (
+        "reviewing-token-standard-pitfalls",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/reviewing-token-standard-pitfalls/SKILL.md"),
+        )],
+    ),
+    (
+        "reviewing-signatures-permit-and-eip712",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/reviewing-signatures-permit-and-eip712/SKILL.md"),
+        )],
+    ),
+    (
+        "reviewing-reentrancy-and-callbacks",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/reviewing-reentrancy-and-callbacks/SKILL.md"),
+        )],
+    ),
+    (
+        "reviewing-access-control-and-auth",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/reviewing-access-control-and-auth/SKILL.md"),
+        )],
+    ),
+    (
+        "reviewing-mev-ordering-and-slippage",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/reviewing-mev-ordering-and-slippage/SKILL.md"),
+        )],
+    ),
+    (
+        "reviewing-l2-sequencer-and-finality",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/reviewing-l2-sequencer-and-finality/SKILL.md"),
+        )],
+    ),
+    (
+        "reviewing-nft-and-marketplace",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/reviewing-nft-and-marketplace/SKILL.md"),
+        )],
+    ),
+    (
+        "reviewing-cross-function-and-composer",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/reviewing-cross-function-and-composer/SKILL.md"),
+        )],
+    ),
+    (
+        "static-analysis-slither-aderyn-semgrep-wake",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/static-analysis-slither-aderyn-semgrep-wake/SKILL.md"),
+        )],
+    ),
+    (
+        "formal-verification-halmos-certora-kontrol",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/formal-verification-halmos-certora-kontrol/SKILL.md"),
+        )],
+    ),
+    (
+        "reconstructing-public-postmortems",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/reconstructing-public-postmortems/SKILL.md"),
+        )],
+    ),
+    (
+        "researcher-gym-and-curriculum",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/researcher-gym-and-curriculum/SKILL.md"),
+        )],
+    ),
+    (
+        "auditing-blockchain-clients",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/auditing-blockchain-clients/SKILL.md"),
+        )],
+    ),
+    (
+        "battlechain-safe-harbor-whitehat",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/battlechain-safe-harbor-whitehat/SKILL.md"),
+        )],
+    ),
+    (
+        "triaging-and-deduping-findings",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/triaging-and-deduping-findings/SKILL.md"),
+        )],
     ),
 ];
 

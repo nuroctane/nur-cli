@@ -31,6 +31,11 @@ const SKILL_PACKS: &[(&str, &str)] = &[
     ("earthtojake/text-to-cad", "text-to-cad"),
     // Portable Android/iOS/cloud-phone operating harness for mobilerun-core.
     ("droidrun/mobile-harness", "mobile-harness"),
+    // Whitehat web3 research kit posted on X (DarkNavy). Investigator is
+    // public-tx / authorized IR only - not a live-exploit cookbook.
+    ("DarkNavySecurity/web3-skills", "web3-skills"),
+    // Cyfrin Solidity standards + BattleChain whitehat / Safe Harbor.
+    ("Cyfrin/solskill", "solskill"),
 ];
 
 pub fn ensure_skills_cli(node_ok: bool) -> ComponentStatus {
@@ -876,6 +881,7 @@ Cloud · Threat Hunting · Threat Intel · Network · Web App · DFIR · Malware
 | S3 public buckets | auditing-aws-s3-bucket-permissions |
 | prompt injection | detecting-ai-model-prompt-injection-attacks |
 | kerberoasting | detecting-kerberoasting-attacks |
+| Solidity / DeFi / Immunefi | sc-research (then one playbook; this pack's Crypto domain is cryptography, not DeFi) |
 
 Index: https://raw.githubusercontent.com/mukul975/Anthropic-Cybersecurity-Skills/main/index.json
 "#;
@@ -994,6 +1000,8 @@ mod tests {
     fn default_packs_include_cad_and_mobile_harness() {
         assert!(SKILL_PACKS.contains(&("earthtojake/text-to-cad", "text-to-cad")));
         assert!(SKILL_PACKS.contains(&("droidrun/mobile-harness", "mobile-harness")));
+        assert!(SKILL_PACKS.contains(&("DarkNavySecurity/web3-skills", "web3-skills")));
+        assert!(SKILL_PACKS.contains(&("Cyfrin/solskill", "solskill")));
     }
 
     #[test]

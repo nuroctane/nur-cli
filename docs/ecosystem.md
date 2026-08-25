@@ -14,7 +14,7 @@ NurCLI ships with an auto-provisioned knowledge stack.
 | **browser** | [agent-browser-cli](https://github.com/sleepinginsummer/agent-browser-cli) real **default browser** bridge (Arc / Chrome / Edge / Brave / …) - perception + control via the `browser` tool; `nur browser setup` stages the extension once |
 | **terminal-browser** | [terminal-browser.com](https://terminal-browser.com/) in-terminal Chromium (`terminal_browser` tool · `/tb`). Native/WSL when the upstream binary is present; on Windows Nur falls back to agent-browser-cli so open/snapshot/click still work |
 | **Cua** | [trycua/cua](https://github.com/trycua/cua) computer-use driver (`cua-driver`) - full-desktop automation via MCP + CLI. Auto-installed on single-shot install **without** the elevated autostart daemon (`-NoAutoStart`). Toggle the always-on background daemon in-app with **`/cua on`** / **`/cua off`** (`/cua status` to check); or use it on demand with `cua-driver serve` / wire its MCP with `cua-driver mcp-config` |
-| **Skills** | Progressive packs (design-eng, clone-website, cybersecurity, …) via `skill` |
+| **Skills** | Progressive packs (design-eng, clone-website, cybersecurity, sc-research, …) via `skill` |
 | **Plugins** | In-product marketplace (`/plugins` · `nur plugins`) - install Superpowers, Vercel, Firecrawl, Chrome DevTools, Figma, Sentry, Fable, … into `~/.nur/plugins` |
 | **Takeover** | `/takeover` (alias `/hijack`) imports **Claude Code · Codex · Cursor · Nur · Grok Build** sessions, powered by the bundled `resume-session` reader |
 | **AKM** | Agent knowledge package manager (requires Node.js) |
@@ -23,6 +23,7 @@ NurCLI ships with an auto-provisioned knowledge stack.
 | **egaki** | [egaki](https://github.com/remorses/egaki) image/video/speech (`/egaki` · `/image`; ChatGPT / xAI OAuth / BYOK / Egaki plan) |
 | **fractal** | [fractal](https://github.com/plasma-ai/fractal) hierarchical loops - Unix only; ecosystem ensure + loud warn on `node start` |
 | **infinite-headcount** | Factory skill pack auto-provisioned via ecosystem packs |
+| **sc-research** | First-party whitehat DeFi researcher pack (`/sc-research` + protocol/tool playbooks). DarkNavy `web3-skills` and Cyfrin `solskill` auto-provisioned. Lawful/in-scope only |
 | **CAD Skills** | [Text-to-CAD](https://www.texttocad.dev/) STEP-first CAD, DXF, G-code, robot-description, part sourcing, validation, and local review skills (`/cad`, `/cad-viewer`, `/dxf`, `/urdf`, `/sdf`, …) |
 | **mobile-harness** | [DroidRun Mobile Harness](https://github.com/droidrun/mobile-harness) portable Android, iOS, and cloud-phone operating guides for `mobilerun-core` (`/mobile-harness`) |
 | **Interior** | [ddoemonn/interior](https://github.com/ddoemonn/interior) / [interior.dev](https://interior.dev) - finished React micro-interactions (bundled `/interior` skill + `/plugins install interior` for the component source tree) |
@@ -67,8 +68,10 @@ On install, skill packs are **mirrored in full** (including `references/`) into 
 **Default auto-install** (on `nur install` / ecosystem ensure): `superpowers`, `fable`, `mattpocock`, `addyosmani`, `builderio`.
 
 Also auto-provisioned via the skills CLI into `~/.agents/skills`: design (Emil),
-clone-website, cybersecurity (large), infinite-headcount, Text-to-CAD, and
-mobile-harness, plus dual-write of the default set when the CLI is available.
+clone-website, cybersecurity (large), infinite-headcount, Text-to-CAD,
+mobile-harness, DarkNavy web3-skills, and Cyfrin solskill, plus dual-write of the
+default set when the CLI is available. First-party `/sc-research` (whitehat DeFi
+playbooks) ships bundled.
 
 ### `/plugins` catalog (browse by category)
 
@@ -329,6 +332,7 @@ Progressive skill packs loaded on demand.
 - `dialkit` - Live-tune interface parameters (dials/sliders/timelines) across React/Svelte/Vue/Solid; `/dialkit`
 - `clone-website` - Website reverse-engineering
 - `cybersecurity` - Security investigations and DFIR
+- `sc-research` - Whitehat smart-contract / DeFi research router plus protocol/tool playbooks (vaults, AMMs, lending, bridges, gov, oracles, proxies, invariants, Halmos, BattleChain; lawful/in-scope only)
 - `cad` / `cad-viewer` / `dxf` / `gcode` / `urdf` / `srdf` / `sdf` - STEP-first CAD, fabrication, robot descriptions, and visual review from Text-to-CAD
 - `mobile-harness` - Android, iOS, and cloud-phone control through the capability-gated `mobilerun-core` facade
 - `apple-design` - Apple-style interface design

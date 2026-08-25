@@ -148,6 +148,48 @@ mod tests {
     }
 
     #[test]
+    fn expanded_triggers_cover_sc_research() {
+        // Don't go through load_skills: repo skills/ is a cached global root, so
+        // a stale ~/.nur/cache/skills-index.json would hide a brand-new pack.
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("skills")
+            .join("sc-research")
+            .join("SKILL.md");
+        let parsed = crate::agent::skills::parse_skill(&path)
+            .expect("skills/sc-research/SKILL.md must parse");
+        assert_eq!(parsed.name, "sc-research");
+        assert!(
+            parsed.description.to_lowercase().contains("whitehat"),
+            "description should mention whitehat, got {:?}",
+            parsed.description
+        );
+
+        let skills = vec![parsed];
+        let user = normalize_intent_text("please use sc-research on this vault");
+        let found = find_by_expanded_triggers(&user, &skills);
+        assert!(
+            found.is_some(),
+            "should find sc-research via expanded triggers"
+        );
+        assert_eq!(found.unwrap().name, "sc-research");
+
+        for extra in [
+            "reviewing-erc4626-and-vaults",
+            "reviewing-bridges-and-messaging",
+            "formal-verification-halmos-certora-kontrol",
+            "researcher-gym-and-curriculum",
+        ] {
+            let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("skills")
+                .join(extra)
+                .join("SKILL.md");
+            let sk = crate::agent::skills::parse_skill(&p)
+                .unwrap_or_else(|| panic!("{extra} must parse"));
+            assert_eq!(sk.name, extra);
+        }
+    }
+
+    #[test]
     fn expanded_index_comprehensive() {
         let (total, triggers) = stats();
         assert!(total >= 700, "should have 700+ skills, got {}", total);
