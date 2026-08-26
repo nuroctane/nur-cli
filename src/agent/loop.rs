@@ -1328,7 +1328,12 @@ impl AgentRunner {
             // serve, …) that rewrite the terminal title with their own branding
             // (omp sets it to its π mark). Put our provider-branded title back
             // after every batch so the tab always reflects who is serving.
-            crate::ade::reassert_after_child(&session_window_prompt(session));
+            // Rendered from ade's shared title state so a running turn keeps
+            // the animated marker (no busy/idle flip-flop); subagents never
+            // touch the parent session's tab.
+            if !self.is_subagent {
+                crate::ade::reassert_after_child();
+            }
             match exec_result {
                 Ok(()) => {
                     self.persist_session(session);
@@ -3226,18 +3231,6 @@ pub(crate) fn pair_unanswered(
 }
 
 /// Synthetic result recorded for calls that never ran because the turn aborted.
-/// The prompt fragment the TUI uses in its window title — the last user
-/// message, so title re-asserts keep showing what this session is about.
-fn session_window_prompt(session: &Session) -> String {
-    session
-        .messages
-        .iter()
-        .rev()
-        .find(|m| m.role == "user")
-        .map(|m| m.content.clone())
-        .unwrap_or_else(|| "ready".to_string())
-}
-
 fn abort_output(err: &NurError) -> String {
     match err {
         NurError::Interrupted => INTERRUPT_OUTPUT.to_string(),

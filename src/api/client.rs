@@ -243,6 +243,13 @@ pub struct ApiClient {
     refresh_oauth: bool,
     /// Wire format for this client (Responses / Chat Completions / Anthropic Messages).
     style: ApiStyle,
+    /// Cursor CLI chat chain (`--resume` session id + items already sent).
+    ///
+    /// The client persists across rounds and turns for one runner - the TUI's
+    /// main conversation; each subagent gets its own client - so the chat id
+    /// scopes correctly. `/model` or `/provider` rebuilds the client, which
+    /// resets the chain, and the next round full-flattens fresh.
+    cursor_chat: std::sync::Arc<std::sync::Mutex<super::cursor_cli::CursorChatState>>,
 }
 
 /// Incremental events surfaced while a response streams in.
@@ -277,6 +284,7 @@ impl ApiClient {
             oauth: None,
             refresh_oauth: false,
             style: ApiStyle::Responses,
+            cursor_chat: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
         })
     }
 
@@ -494,6 +502,34 @@ impl ApiClient {
         self.provider_id == "cursor"
             && (super::cursor_cli::is_cli_session_token(&self.api_key)
                 || crate::providers::cursor_endpoint_is_agent_rpc(&self.base_url))
+    }
+
+    /// Whether this request should persist/resume the Cursor CLI chat chain.
+    ///
+    /// The same `ApiClient` also serves auxiliary one-shots (compaction, native
+    /// memory extract, fusion, gepa). Those must not overwrite the conversation
+    /// `--resume` session id. Conversation traffic always streams (or sets
+    /// `stream: true`, as the live resume test does). Aux callers set
+    /// `stream: false` and use `create_response`.
+    fn cursor_chat_chain(
+        chat: &std::sync::Arc<std::sync::Mutex<super::cursor_cli::CursorChatState>>,
+        req: &ResponseRequest,
+        streaming: bool,
+    ) -> Option<std::sync::Arc<std::sync::Mutex<super::cursor_cli::CursorChatState>>> {
+        if streaming || req.stream == Some(true) {
+            Some(std::sync::Arc::clone(chat))
+        } else {
+            None
+        }
+    }
+
+    /// Test-only view of the Cursor chat chain (resume session id + items
+    /// already sent) for the live resume round-trip test.
+    #[cfg(test)]
+    pub(crate) fn cursor_chat_for_test(
+        &self,
+    ) -> &std::sync::Arc<std::sync::Mutex<super::cursor_cli::CursorChatState>> {
+        &self.cursor_chat
     }
 
     /// ChatGPT/Codex OAuth's Responses endpoint requires `stream: true` and
@@ -755,10 +791,12 @@ impl ApiClient {
         let estimate_req = req.clone();
         let req = req.clone();
         let cancel = tokio_util::sync::CancellationToken::new();
-        let response =
-            tokio::task::spawn_blocking(move || super::cursor_cli::complete(&req, &cancel))
-                .await
-                .map_err(|e| NurError::Other(format!("cursor-agent task failed: {e}")))?;
+        let chat = Self::cursor_chat_chain(&self.cursor_chat, &req, false);
+        let response = tokio::task::spawn_blocking(move || {
+            super::cursor_cli::complete(&req, &cancel, chat.as_ref())
+        })
+        .await
+        .map_err(|e| NurError::Other(format!("cursor-agent task failed: {e}")))?;
         Ok(response?.with_local_usage_estimate(&estimate_req))
     }
 
@@ -771,6 +809,7 @@ impl ApiClient {
         let estimate_req = req.clone();
         let req = req.clone();
         let cancel = cancel.clone();
+        let chat = Self::cursor_chat_chain(&self.cursor_chat, &req, true);
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<StreamEvent>();
         let handle = tokio::task::spawn_blocking(move || {
             super::cursor_cli::complete_stream(
@@ -779,6 +818,7 @@ impl ApiClient {
                     let _ = tx.send(ev);
                 },
                 &cancel,
+                chat.as_ref(),
             )
         });
         let mut final_resp: Option<ApiResponse> = None;
@@ -2897,6 +2937,39 @@ mod tests {
     }
 
     #[test]
+    fn cursor_aux_requests_do_not_chain_the_resume_session() {
+        let chat = std::sync::Arc::new(std::sync::Mutex::new(Default::default()));
+        let mut req = ResponseRequest {
+            model: "auto".into(),
+            input: serde_json::json!([]),
+            instructions: None,
+            tools: None,
+            tool_choice: None,
+            store: None,
+            include: None,
+            reasoning: None,
+            stream: Some(false),
+            parallel_tool_calls: None,
+            prompt_cache_key: None,
+            max_output_tokens: None,
+        };
+        assert!(
+            ApiClient::cursor_chat_chain(&chat, &req, false).is_none(),
+            "aux create_response must not touch the conversation chain"
+        );
+        req.stream = Some(true);
+        assert!(
+            ApiClient::cursor_chat_chain(&chat, &req, false).is_some(),
+            "stream:true non-stream entry (live resume test) still chains"
+        );
+        req.stream = Some(false);
+        assert!(
+            ApiClient::cursor_chat_chain(&chat, &req, true).is_some(),
+            "streaming conversation always chains"
+        );
+    }
+
+    #[test]
     fn opencode_selects_the_documented_protocol_per_model() {
         assert_eq!(
             opencode_style_for_model("claude-sonnet-5"),
@@ -3393,6 +3466,7 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
             }),
             refresh_oauth: false,
             style: ApiStyle::Responses,
+            cursor_chat: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
         };
         let request = client
             .auth_headers(client.http.get("https://example.test"))
@@ -3439,6 +3513,7 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
             }),
             refresh_oauth: false,
             style: ApiStyle::ChatCompletions,
+            cursor_chat: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
         };
         let request = client
             .auth_headers(client.http.get("https://example.test"))
@@ -3468,6 +3543,7 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
             }),
             refresh_oauth: false,
             style: ApiStyle::GeminiCloudCode,
+            cursor_chat: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
         };
         let request = client
             .auth_headers(
@@ -3555,6 +3631,7 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
             }),
             refresh_oauth: false,
             style: ApiStyle::GeminiCloudCode,
+            cursor_chat: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
         };
         let request = client
             .auth_headers(

@@ -2490,11 +2490,11 @@ pub async fn run_tui(
         });
     let title_from_prompt = seed_prompt.is_some();
     // Provider-branded title: set the provider label FIRST so the very first
-    // title write already carries it (moon + provider + prompt).
+    // title write already carries it (moon + provider + prompt). The prompt is
+    // recorded in ade's shared title state, which every writer (TUI animation,
+    // agent-loop re-asserts) renders from.
     crate::ade::set_title_provider(&crate::config::active_provider_chrome(&cfg));
-    crate::ade::set_terminal_title(&crate::ade::session_window_title(
-        seed_prompt.as_deref().unwrap_or("ready"),
-    ));
+    crate::ade::set_title_prompt(seed_prompt.as_deref().unwrap_or("ready"));
 
     let permissions = SharedPermissions::load(&cwd);
     let mut app = App {
@@ -2732,7 +2732,10 @@ pub async fn run_tui(
     let mut dirty = true;
     let mut last_draw = Instant::now();
     let mut last_title = Instant::now();
-    let mut title_animating = false;
+    // Mirror of app.busy pushed into ade's shared title state: the single
+    // place turn-state transitions (start, cancel, done) are recorded so every
+    // title writer renders the same busy/idle composition.
+    let mut title_busy_mirror = false;
     // Re-assert mouse modes occasionally - OSC title spam / hosts can drop them.
     let mut last_mouse_rearm = Instant::now();
     loop {
@@ -3063,18 +3066,15 @@ pub async fn run_tui(
                 dirty = true;
             }
         }
-        if app.busy {
-            if last_title.elapsed().as_millis() >= 110 {
-                last_title = Instant::now();
-                crate::ade::set_terminal_title(&crate::ade::running_window_title(
-                    app.spinner_epoch.elapsed(),
-                    &app.window_base,
-                ));
-            }
-            title_animating = true;
-        } else if title_animating {
-            title_animating = false;
-            crate::ade::set_terminal_title(&crate::ade::session_window_title(&app.window_base));
+        if app.busy != title_busy_mirror {
+            title_busy_mirror = app.busy;
+            // Renders the right title itself: running marker on busy-entry,
+            // idle moon on turn end / cancel.
+            crate::ade::set_title_busy(app.busy);
+        }
+        if app.busy && last_title.elapsed().as_millis() >= 110 {
+            last_title = Instant::now();
+            crate::ade::tick_running_title(app.spinner_epoch.elapsed());
         }
         // Mouse capture can be clobbered by title OSC / host quirks mid-session.
         if last_mouse_rearm.elapsed().as_secs() >= 2 {
@@ -8855,10 +8855,12 @@ impl App {
         };
         self.cells.push(Cell::User(display.to_string()));
         // First user prompt of the session owns the window/tab title text; the
-        // loop animates its marker orb while the turn runs.
+        // loop animates its marker orb while the turn runs. Record it in ade's
+        // shared title state so every writer composes the same string.
         if !self.title_from_prompt {
             self.window_base = display.to_string();
             self.title_from_prompt = true;
+            crate::ade::set_title_prompt(display);
         }
         // Sending always snaps you back to the live end of the conversation.
         self.scroll_to_bottom();

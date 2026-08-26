@@ -6,10 +6,21 @@ use serde_json::json;
 use std::fs;
 use std::io::Write;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 /// Set terminal title (OSC 0/2). Keep the word `nur` in the title so Orca/ADEs
 /// can still recognize the agent process.
+///
+/// Mutex-guarded: the TUI thread (110ms animation) and the agent thread
+/// (post-tool re-asserts) both write here concurrently, and two interleaved OSC
+/// sequences can corrupt the title mid-frame.
 pub fn set_terminal_title(title: &str) {
+    static WRITE_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    let _guard = WRITE_LOCK
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     print!("\x1b]0;{title}\x07");
     let _ = std::io::stdout().flush();
 }
@@ -112,7 +123,7 @@ pub fn set_title_provider(label: &str) {
         *w = emoji.to_string();
     }
     if changed {
-        reassert_after_child("ready");
+        render_title();
     }
 }
 
@@ -122,12 +133,85 @@ fn title_emoji() -> String {
     TITLE_EMOJI.read().map(|e| e.clone()).unwrap_or_default()
 }
 
+/// Single source of truth for the terminal-tab title, so every writer (TUI
+/// animation loop, agent-loop re-asserts after tool children, CLI paths)
+/// renders the same composed string instead of fighting over whose prompt and
+/// whose marker (idle moon vs running phases) is on screen.
+///
+/// `TITLE_PROMPT` is the session's title text (first prompt of the session;
+/// empty means "ready"). Kept as the canonical copy so a re-assert from any
+/// thread reproduces exactly what the TUI would draw.
+static TITLE_PROMPT: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
+static TITLE_BUSY: AtomicBool = AtomicBool::new(false);
+static TITLE_BUSY_SINCE: std::sync::RwLock<Option<std::time::Instant>> =
+    std::sync::RwLock::new(None);
+
+fn title_prompt() -> String {
+    TITLE_PROMPT
+        .read()
+        .map(|p| {
+            if p.is_empty() {
+                "ready".to_string()
+            } else {
+                p.clone()
+            }
+        })
+        .unwrap_or_else(|_| "ready".to_string())
+}
+
+/// Record the session's title text and repaint the tab from shared state.
+pub fn set_title_prompt(prompt: &str) {
+    if let Ok(mut w) = TITLE_PROMPT.write() {
+        *w = prompt.to_string();
+    }
+    render_title();
+}
+
+/// Mirror the turn state (busy = inference running) and repaint. `true` also
+/// stamps when the busy period began so any re-assert mid-turn renders the
+/// animated running title rather than flipping the tab back to the idle moon.
+pub fn set_title_busy(busy: bool) {
+    TITLE_BUSY.store(busy, Ordering::Relaxed);
+    if busy {
+        if let Ok(mut w) = TITLE_BUSY_SINCE.write() {
+            *w = Some(std::time::Instant::now());
+        }
+    }
+    render_title();
+}
+
+/// Repaint the tab title from shared state: running (animated marker + prompt)
+/// while busy, idle (moon + prompt) otherwise.
+pub fn render_title() {
+    let prompt = title_prompt();
+    if TITLE_BUSY.load(Ordering::Relaxed) {
+        let busy_since = TITLE_BUSY_SINCE
+            .read()
+            .ok()
+            .and_then(|g| *g)
+            .unwrap_or_else(std::time::Instant::now);
+        set_terminal_title(&running_window_title(busy_since.elapsed(), &prompt));
+    } else {
+        set_terminal_title(&session_window_title(&prompt));
+    }
+}
+
+/// Animation tick for the TUI's 110ms loop: renders the running title from the
+/// shared prompt plus the TUI's own elapsed clock WITHOUT mutating state, so
+/// the animation clock stays owned by the TUI.
+pub fn tick_running_title(elapsed: Duration) {
+    let prompt = title_prompt();
+    set_terminal_title(&running_window_title(elapsed, &prompt));
+}
+
 /// Child processes (omp, egaki, graphjin serve, …) rewrite the terminal title
 /// with their own branding while they run (omp sets it to "π"). Call this
 /// after any child completes — and periodically during long ones — to put our
-/// provider-branded title back. Cheap when nothing changed.
-pub fn reassert_after_child(current_prompt: &str) {
-    set_terminal_title(&session_window_title(current_prompt));
+/// provider-branded title back. Cheap when nothing changed. Renders from the
+/// shared title state, so a busy turn re-asserts the running marker instead of
+/// fighting the TUI animation with the idle one.
+pub fn reassert_after_child() {
+    render_title();
 }
 
 /// Collapse whitespace and truncate for a compact window/tab label.
@@ -374,3 +458,40 @@ if not "%NUR_HOME%"=="" set "ORCA_NUR_HOME=%NUR_HOME%"
   --data-urlencode "payload@-" >nul 2>nul
 exit /b 0
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_title_prompt_propagates_into_shared_state() {
+        set_title_prompt("fix the login hang");
+        assert_eq!(title_prompt(), "fix the login hang");
+        // The composed idle title carries brand + prompt text together.
+        set_title_provider("grok");
+        let title = session_window_title(&title_prompt());
+        assert!(title.contains("grok"), "brand missing: {title}");
+        assert!(
+            title.contains("fix the login hang"),
+            "prompt missing: {title}"
+        );
+        // Reset so parallel/serial tests are not order-dependent.
+        set_title_prompt("ready");
+    }
+
+    #[test]
+    fn busy_and_idle_titles_use_their_own_markers() {
+        let prompt = "write the drain bound test";
+        let idle = session_window_title(prompt);
+        let running = running_window_title(Duration::from_millis(0), prompt);
+        // Idle shows the idle moon; the running title at t=0 starts on the
+        // first running frame and differs from idle.
+        assert!(idle.contains(crate::theme::TITLE_IDLE));
+        assert_ne!(idle, running);
+        // The busy flag flips state and is observable.
+        set_title_busy(true);
+        assert!(TITLE_BUSY.load(Ordering::Relaxed));
+        set_title_busy(false);
+        assert!(!TITLE_BUSY.load(Ordering::Relaxed));
+    }
+}

@@ -1151,7 +1151,8 @@ impl App {
         self.u_last = TokenUsage::default();
         self.cells.retain(|c| matches!(c, Cell::Banner));
         self.title_from_prompt = false;
-        crate::ade::set_terminal_title(&crate::ade::session_window_title("ready"));
+        // /new resets the shared title state to a clean idle "ready" tab.
+        crate::ade::set_title_prompt("ready");
         self.push_info(format!(
             "new session {}",
             &self.session_id[..8.min(self.session_id.len())]
@@ -1488,6 +1489,7 @@ impl App {
         if !self.title_from_prompt {
             self.window_base = question.to_string();
             self.title_from_prompt = true;
+            crate::ade::set_title_prompt(&question);
         }
         self.scroll_to_bottom();
         self.scrollbar_drag = false;
@@ -2299,9 +2301,7 @@ impl App {
                 self.u_session = loaded.usage.clone();
                 // Window title = first user prompt of the resumed session.
                 if let Some(first) = loaded.messages.iter().find(|m| m.role == "user") {
-                    crate::ade::set_terminal_title(&crate::ade::session_window_title(
-                        &first.content,
-                    ));
+                    crate::ade::set_title_prompt(&first.content);
                     self.title_from_prompt = true;
                 }
                 self.session = Some(Box::new(loaded));

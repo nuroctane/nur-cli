@@ -535,9 +535,7 @@ async fn real_main() -> Result<()> {
                         .find(|m| m.role == "user")
                         .map(|m| m.content.clone())
                 });
-            ade::set_terminal_title(&ade::session_window_title(
-                seed.as_deref().unwrap_or("ready"),
-            ));
+            ade::set_title_prompt(seed.as_deref().unwrap_or("ready"));
             tui::run_tui(
                 client,
                 cfg,
@@ -920,7 +918,7 @@ async fn run_headless(
     permission_mode: SharedMode,
     verbose: bool,
 ) -> Result<()> {
-    ade::set_terminal_title(&ade::session_window_title(prompt));
+    ade::set_title_prompt(prompt);
     let peer_session_id = std::env::var("NUR_SESSION_ID").unwrap_or_else(|_| session.id.clone());
     let peer_cwd = cwd.to_string_lossy().into_owned();
     let runner = Arc::new(AgentRunner {
@@ -1096,7 +1094,7 @@ async fn run_continuous(
     max_iters: u32,
 ) -> Result<()> {
     permission_mode.set(PermissionMode::Auto);
-    ade::set_terminal_title(&ade::session_window_title(goal));
+    ade::set_title_prompt(goal);
     let quality_gate = cfg.quality_gate.clone();
 
     let runner = Arc::new(AgentRunner {

@@ -16,6 +16,7 @@ use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Stored in `auth.json` when the user is signed in via `cursor-agent login`.
@@ -181,6 +182,14 @@ fn spawn_launch(launch: &CursorLaunch, args: &[&str]) -> std::io::Result<std::pr
                     c.args(args);
                     c
                 };
+                // Wrapper shells (powershell/cmd/exe) end up running the same
+                // Node CLI underneath - give them the identical compile-cache
+                // bump the direct Node launch gets so spawns stay fast.
+                if std::env::var_os("NODE_COMPILE_CACHE").is_none() {
+                    if let Some(local) = dirs::data_local_dir() {
+                        cmd.env("NODE_COMPILE_CACHE", local.join("cursor-compile-cache"));
+                    }
+                }
                 cmd.stdin(Stdio::piped())
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped());
@@ -192,9 +201,14 @@ fn spawn_launch(launch: &CursorLaunch, args: &[&str]) -> std::io::Result<std::pr
             }
             #[cfg(not(windows))]
             {
-                Command::new(bin)
-                    .args(args)
-                    .stdin(Stdio::piped())
+                let mut c = Command::new(bin);
+                c.args(args);
+                if std::env::var_os("NODE_COMPILE_CACHE").is_none() {
+                    if let Some(local) = dirs::data_local_dir() {
+                        c.env("NODE_COMPILE_CACHE", local.join("cursor-compile-cache"));
+                    }
+                }
+                c.stdin(Stdio::piped())
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
                     .spawn()
@@ -203,22 +217,79 @@ fn spawn_launch(launch: &CursorLaunch, args: &[&str]) -> std::io::Result<std::pr
     }
 }
 
+fn join_capture_bounded(
+    handle: std::thread::JoinHandle<Vec<u8>>,
+    cap: Duration,
+) -> Result<Vec<u8>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(handle.join().ok());
+    });
+    match rx.recv_timeout(cap) {
+        Ok(Some(buf)) => Ok(buf),
+        Ok(None) => Ok(Vec::new()),
+        Err(_) => Err(NurError::Other(
+            "cursor-agent status drain timed out".into(),
+        )),
+    }
+}
+
 fn run_capture(args: &[&str]) -> Result<String> {
     let mut child = spawn_agent(args)
         .map_err(|e| NurError::Other(format!("failed to launch cursor-agent: {e}")))?;
     let _ = child.stdin.take();
-    let out = child
-        .wait_with_output()
-        .map_err(|e| NurError::Other(format!("cursor-agent failed: {e}")))?;
-    if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr);
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let out_h = stdout.map(|mut pipe| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut pipe, &mut buf);
+            buf
+        })
+    });
+    let err_h = stderr.map(|mut pipe| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut pipe, &mut buf);
+            buf
+        })
+    });
+    const CAPTURE_TIMEOUT: Duration = Duration::from_secs(20);
+    let deadline = Instant::now() + CAPTURE_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(NurError::Other(
+                    "cursor-agent status timed out after 20s".into(),
+                ));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(e) => return Err(NurError::Other(format!("cursor-agent failed: {e}"))),
+        }
+    };
+    // Grandchildren can keep inherited pipes open after the wrapper exits
+    // (same wedge as bash drain). Bound the join so auth checks cannot hang.
+    const DRAIN_CAP: Duration = Duration::from_secs(2);
+    let stdout_bytes = match out_h {
+        Some(h) => join_capture_bounded(h, DRAIN_CAP)?,
+        None => Vec::new(),
+    };
+    let stderr_bytes = match err_h {
+        Some(h) => join_capture_bounded(h, DRAIN_CAP)?,
+        None => Vec::new(),
+    };
+    if !status.success() {
+        let err = String::from_utf8_lossy(&stderr_bytes);
         return Err(NurError::Other(format!(
             "cursor-agent exited {}: {}",
-            out.status,
+            status,
             err.chars().take(300).collect::<String>()
         )));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    Ok(String::from_utf8_lossy(&stdout_bytes).into_owned())
 }
 
 /// Brief cache so every chat turn does not pay for a fresh `status` spawn.
@@ -228,7 +299,7 @@ fn auth_cache() -> &'static std::sync::Mutex<(std::time::Instant, bool)> {
     CACHE.get_or_init(|| {
         std::sync::Mutex::new((
             std::time::Instant::now()
-                .checked_sub(std::time::Duration::from_secs(120))
+                .checked_sub(std::time::Duration::from_secs(600))
                 .unwrap_or_else(std::time::Instant::now),
             false,
         ))
@@ -239,16 +310,23 @@ fn auth_cache() -> &'static std::sync::Mutex<(std::time::Instant, bool)> {
 pub fn cli_is_authenticated() -> bool {
     {
         let guard = auth_cache().lock().unwrap_or_else(|e| e.into_inner());
-        if guard.0.elapsed() < std::time::Duration::from_secs(60) {
+        if guard.0.elapsed() < std::time::Duration::from_secs(600) {
             return guard.1;
         }
     }
     if resolve_launch().is_none() {
         return false;
     }
-    let ok = run_capture(&["status", "--format", "json"])
-        .map(|text| parse_status_authenticated(&text))
-        .unwrap_or(false);
+    let ok = match run_capture(&["status", "--format", "json"]) {
+        Ok(text) => parse_status_authenticated(&text),
+        Err(_) => {
+            // A hung wrapper must not flip the cache to logged-out and must not
+            // retry on every subsequent turn.
+            let mut guard = auth_cache().lock().unwrap_or_else(|e| e.into_inner());
+            guard.0 = Instant::now();
+            return guard.1;
+        }
+    };
     if let Ok(mut guard) = auth_cache().lock() {
         *guard = (std::time::Instant::now(), ok);
     }
@@ -463,6 +541,81 @@ pub fn flatten_prompt(req: &ResponseRequest) -> String {
     parts.join("\n\n")
 }
 
+/// Cursor chat chain state, owned by the [`crate::api::client::ApiClient`] and
+/// threaded into every `cursor_cli` call. The CLI's `--resume <session_id>`
+/// recalls the whole prior conversation server-side (with cache reads), so each
+/// round only ships the NEW user messages and tool results instead of
+/// re-flattening the full history into a fresh spawn. That is what grew input
+/// tokens to 157k over 48 rounds in session 26940d90.
+///
+/// Scoping: the client persists across rounds and turns for one runner (the
+/// TUI's main conversation; each subagent gets its own client), so the chat id
+/// scopes correctly. `/model` or `/provider` rebuilds the client, which resets
+/// the chain - the next round then full-flattens fresh.
+#[derive(Default)]
+pub(crate) struct CursorChatState {
+    /// Session id echoed by the CLI's `system`/`init` event; `None` until the
+    /// first successful round (or after a failure reset).
+    pub session_id: Option<String>,
+    /// How many items of the request's `input` array the resumed session has
+    /// already seen.
+    pub items_sent: usize,
+}
+
+/// Incremental prompt for a `--resume` round: only the messages and tool
+/// results since the last reply. Cursor's own session history already contains
+/// the assistant turns, tool calls, and reasoning, so re-sending them would
+/// duplicate every round.
+pub(crate) fn flatten_incremental(items: &[Value], tools: bool) -> String {
+    let mut parts: Vec<String> = vec![
+        "Continuing the same nur session - new messages and tool results since your last reply:"
+            .into(),
+    ];
+    if tools {
+        parts.push(
+            "More tools needed: end your reply with the same ```nur-tools fence (JSON array of \
+             {name,arguments}). Final answer: plain text, no fence."
+                .into(),
+        );
+    }
+    let mut pushed = 0usize;
+    for item in items {
+        let ty = item.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        match ty {
+            "message" => {
+                let role = item.get("role").and_then(|r| r.as_str()).unwrap_or("user");
+                if role != "user" {
+                    continue; // assistant history lives in Cursor's session
+                }
+                let text = message_text(item);
+                if !text.trim().is_empty() {
+                    parts.push(format!("User:\n{}", text.trim()));
+                    pushed += 1;
+                }
+            }
+            "function_call_output" | "tool_result" => {
+                let text = item
+                    .get("output")
+                    .or_else(|| item.get("content"))
+                    .map(|o| match o {
+                        Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    })
+                    .unwrap_or_default();
+                parts.push(format!("Tool result:\n{text}"));
+                pushed += 1;
+            }
+            // Assistant messages, function_call items, and reasoning are already
+            // recorded in the resumed session's own history.
+            _ => {}
+        }
+    }
+    if pushed == 0 {
+        parts.push("Respond briefly.".into());
+    }
+    parts.join("\n\n")
+}
+
 fn nur_tools_protocol_block(req: &ResponseRequest) -> String {
     let mut out = String::from(
         "You are the model behind the nur agent harness. Nur owns tools, approvals, \
@@ -494,40 +647,96 @@ fn nur_tools_protocol_block(req: &ResponseRequest) -> String {
     out
 }
 
-/// Split `text` into (commentary, tool calls) when a ````nur-tools` fence is present.
+/// Split `text` into (commentary, tool calls) when a ````nur-tools` fence is
+/// present. Tolerant by design: models add info suffixes ("```nur-tools json"),
+/// trailing prose inside the fence, or a single JSON object instead of the
+/// array - all of those still carry the call, so recover them instead of
+/// treating the turn as a final answer. Returns the first fence that yields at
+/// least one call; `None` means a plain final answer.
 pub fn split_nur_tools(text: &str) -> Option<(String, Vec<(String, String)>)> {
     const START: &str = "```nur-tools";
-    let idx = text.find(START)?;
-    let after = &text[idx + START.len()..];
-    let after = after.strip_prefix('\r').unwrap_or(after);
-    let after = after.strip_prefix('\n').unwrap_or(after);
-    let end = after.find("```")?;
-    let json_body = after[..end].trim();
-    let commentary = text[..idx].trim().to_string();
-    let parsed: Value = serde_json::from_str(json_body).ok()?;
-    let arr = parsed.as_array()?;
-    let mut calls = Vec::new();
-    for item in arr {
-        let name = item
-            .get("name")
-            .and_then(|n| n.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        if name.is_empty() {
-            continue;
-        }
-        let args = match item.get("arguments").or_else(|| item.get("input")) {
-            Some(Value::String(s)) => s.clone(),
-            Some(other) => other.to_string(),
-            None => "{}".into(),
+    let mut search_from = 0usize;
+    while let Some(rel) = text[search_from..].find(START) {
+        let start_idx = search_from + rel;
+        let marker_end = start_idx + START.len();
+        // The rest of the fence line is an info suffix ("nur-tools json") -
+        // ignore it, unless the JSON itself starts on that line (some models
+        // put the array right after the marker).
+        let line_end = text[marker_end..]
+            .find('\n')
+            .map(|i| marker_end + i)
+            .unwrap_or(text.len());
+        let body_start = match text[marker_end..line_end].find(['[', '{']) {
+            Some(i) => marker_end + i,
+            None => (line_end + 1).min(text.len()),
         };
-        calls.push((name, args));
+        let commentary = text[..start_idx].trim().to_string();
+        // Body runs to the next closing fence (or end of text).
+        let (body_end, next_from) = match text[body_start..].find("```") {
+            Some(i) => (body_start + i, (body_start + i + 3).min(text.len())),
+            None => (text.len(), text.len()),
+        };
+        let json_body = text[body_start..body_end].trim();
+        if let Some(calls) = parse_tool_calls(json_body) {
+            return Some((commentary, calls));
+        }
+        search_from = next_from.max(marker_end);
     }
-    if calls.is_empty() {
+    None
+}
+
+/// Parse a fence body into tool calls, escalating tolerance: strict JSON
+/// array, then the substring from the first `[` to the last `]` (trailing
+/// prose inside the fence), then a single `{name, arguments|input}` object.
+fn parse_tool_calls(json_body: &str) -> Option<Vec<(String, String)>> {
+    if let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(json_body) {
+        let calls = calls_from_array(&arr);
+        if !calls.is_empty() {
+            return Some(calls);
+        }
+    }
+    if let (Some(a), Some(b)) = (json_body.find('['), json_body.rfind(']')) {
+        if a < b {
+            if let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(&json_body[a..=b]) {
+                let calls = calls_from_array(&arr);
+                if !calls.is_empty() {
+                    return Some(calls);
+                }
+            }
+        }
+    }
+    if let (Some(a), Some(b)) = (json_body.find('{'), json_body.rfind('}')) {
+        if a < b {
+            if let Ok(obj) = serde_json::from_str::<Value>(&json_body[a..=b]) {
+                if let Some(call) = call_from_item(&obj) {
+                    return Some(vec![call]);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn calls_from_array(arr: &[Value]) -> Vec<(String, String)> {
+    arr.iter().filter_map(call_from_item).collect()
+}
+
+fn call_from_item(item: &Value) -> Option<(String, String)> {
+    let name = item
+        .get("name")
+        .and_then(|n| n.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if name.is_empty() {
         return None;
     }
-    Some((commentary, calls))
+    let args = match item.get("arguments").or_else(|| item.get("input")) {
+        Some(Value::String(s)) => s.clone(),
+        Some(other) => other.to_string(),
+        None => "{}".into(),
+    };
+    Some((name, args))
 }
 
 fn message_text(item: &Value) -> String {
@@ -650,9 +859,10 @@ fn uuid_simple() -> String {
 pub fn complete(
     req: &ResponseRequest,
     cancel: &tokio_util::sync::CancellationToken,
+    chat: Option<&Arc<Mutex<CursorChatState>>>,
 ) -> Result<ApiResponse> {
     let parse_tools = tools_wire(req);
-    let (text, model, usage) = run_print(req, None, cancel)?;
+    let (text, model, usage) = run_print(req, None, cancel, provider_turn_timeout(), chat)?;
     Ok(response_from_cli_text(&model, &text, parse_tools, usage))
 }
 
@@ -661,6 +871,7 @@ pub fn complete_stream(
     req: &ResponseRequest,
     mut on_event: impl FnMut(StreamEvent),
     cancel: &tokio_util::sync::CancellationToken,
+    chat: Option<&Arc<Mutex<CursorChatState>>>,
 ) -> Result<ApiResponse> {
     let parse_tools = tools_wire(req);
     // Cursor can spend tens of seconds booting configured MCP servers before
@@ -672,6 +883,10 @@ pub fn complete_stream(
     // Always stream progress. When nur owns tools, route live tokens to the
     // thinking cell so turn 1 is not a silent hang; final commentary lands as
     // TextDelta after the nur-tools fence is stripped.
+    //
+    // Total cap sits 30s above the agent-loop select (same
+    // NUR_PROVIDER_TURN_TIMEOUT_SECS, default 300) so the loop's token fires
+    // first and cancels us cleanly instead of racing this internal kill.
     let (text, model, usage) = run_print(
         req,
         Some(&mut |ev| {
@@ -685,6 +900,8 @@ pub fn complete_stream(
             }
         }),
         cancel,
+        provider_turn_timeout() + Duration::from_secs(30),
+        chat,
     )?;
     let resp = response_from_cli_text(&model, &text, parse_tools, usage);
     if parse_tools {
@@ -816,10 +1033,34 @@ fn provider_turn_timeout() -> Duration {
         .unwrap_or_else(|| Duration::from_secs(300))
 }
 
+/// Idle cutoff: no stdout line for this long → kill, try transcript recovery,
+/// error if none. Catches Cursor's Windows silent-spawn hang far earlier than
+/// the total cap, and doubles as the trigger condition for the resume retry.
+fn cursor_idle_timeout() -> Duration {
+    std::env::var("NUR_CURSOR_IDLE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| Duration::from_secs(120))
+}
+
+/// Failures that mean a `--resume` attempt produced nothing the CLI will ever
+/// surface: a bogus session id does not error, it just hangs silently until an
+/// idle/total cap, or exits with no assistant text.
+fn is_retryable_resume_failure(err: &NurError) -> bool {
+    let msg = err.to_string();
+    msg.contains("idle timeout")
+        || msg.contains("provider turn timeout")
+        || msg.contains("produced no assistant text")
+}
+
 fn run_print(
     req: &ResponseRequest,
     mut on_event: Option<&mut dyn FnMut(StreamEvent)>,
     cancel: &tokio_util::sync::CancellationToken,
+    total_timeout: Duration,
+    chat: Option<&Arc<Mutex<CursorChatState>>>,
 ) -> Result<(String, String, Option<ApiUsage>)> {
     if resolve_launch().is_none() {
         return Err(NurError::Other(
@@ -838,7 +1079,86 @@ fn run_print(
         ));
     }
 
-    let prompt = flatten_prompt(req);
+    let items_len = match &req.input {
+        Value::Array(items) => items.len(),
+        _ => 0,
+    };
+    // Resume the same CLI session when the chain holds an id and the
+    // conversation has grown since the last completed round.
+    let (resume_id, resume_from): (Option<String>, usize) = match chat.and_then(|c| c.lock().ok()) {
+        Some(state) if state.session_id.is_some() && items_len > state.items_sent => {
+            (state.session_id.clone(), state.items_sent)
+        }
+        _ => (None, 0),
+    };
+    let mut retried_resume = false;
+    loop {
+        let attempt_resume = if retried_resume {
+            None
+        } else {
+            resume_id.clone()
+        };
+        let prompt = match &attempt_resume {
+            Some(_) => {
+                let items = req.input.as_array().cloned().unwrap_or_default();
+                let from = resume_from.min(items.len());
+                flatten_incremental(&items[from..], tools_wire(req))
+            }
+            None => flatten_prompt(req),
+        };
+        let attempt = run_print_once(
+            &prompt,
+            req,
+            attempt_resume.as_deref(),
+            &mut on_event,
+            cancel,
+            total_timeout,
+        );
+        match attempt {
+            Ok((text, model, usage, captured_session)) => {
+                if let Some(chat) = chat {
+                    if let Ok(mut st) = chat.lock() {
+                        st.session_id = captured_session.or_else(|| resume_id.clone());
+                        st.items_sent = items_len;
+                    }
+                }
+                return Ok((text, model, usage));
+            }
+            Err(e) => {
+                // Any failure resets the chain so the next round full-flattens.
+                if let Some(chat) = chat {
+                    if let Ok(mut st) = chat.lock() {
+                        st.session_id = None;
+                        st.items_sent = 0;
+                    }
+                }
+                // A stale/bogus session id hangs the CLI silently; retry a
+                // resume failure once in full mode before surfacing the error.
+                let retryable = is_retryable_resume_failure(&e);
+                if attempt_resume.is_some() && !retried_resume && retryable {
+                    retried_resume = true;
+                    continue;
+                }
+                return Err(e);
+            }
+        }
+    }
+}
+
+/// One spawn of `cursor-agent -p`. `prompt` is the already-flattened text;
+/// `resume_id` (when set) adds `--resume <id>` so the CLI recalls its own
+/// session instead of nur re-sending the whole conversation. The callback
+/// Option is passed by exclusive reference so the retry loop can hand it to
+/// each attempt (a trait object behind `&mut` is invariant, so reborrows of
+/// `Option<&mut dyn FnMut>` cannot be shortened per iteration).
+fn run_print_once(
+    prompt: &str,
+    req: &ResponseRequest,
+    resume_id: Option<&str>,
+    on_event: &mut Option<&mut dyn FnMut(StreamEvent)>,
+    cancel: &tokio_util::sync::CancellationToken,
+    total_timeout: Duration,
+) -> Result<(String, String, Option<ApiUsage>, Option<String>)> {
     let model = if req.model.trim().is_empty() || req.model == "auto" {
         None
     } else {
@@ -880,13 +1200,19 @@ fn run_print(
         owned.push("--model".into());
         owned.push(m.clone());
     }
+    if let Some(id) = resume_id {
+        // Resume the CLI's own session: it recalls the prior conversation
+        // server-side (with cache reads) so nur only ships the delta.
+        owned.push("--resume".into());
+        owned.push(id.to_string());
+    }
 
     // Windows CreateProcess cmdline ~8191 chars. Prefer stdin for the prompt
     // when large; also pass a short arg so CLIs that ignore stdin still work.
     const ARG_BUDGET: usize = 4_000;
     let pass_as_arg = prompt.len() <= ARG_BUDGET;
     if pass_as_arg {
-        owned.push(prompt.clone());
+        owned.push(prompt.to_string());
     }
 
     let transcript = TranscriptSnapshot::capture();
@@ -928,16 +1254,23 @@ fn run_print(
     });
 
     let started = Instant::now();
-    let timeout = provider_turn_timeout();
-    let mut next_transcript_probe = Instant::now();
+    let timeout = total_timeout;
+    let idle_timeout = cursor_idle_timeout();
+    // Probe the durable transcripts only after the CLI had a fair chance to
+    // produce stream-json (15s), then every 2s - polling ~/.cursor/projects
+    // on Windows is not free.
+    let mut next_transcript_probe = started + Duration::from_secs(15);
     let mut final_text = String::new();
     let mut streamed = String::new();
     let mut recovered = None;
     let mut cli_error = None;
     let mut status = None;
     let mut last_stdout = Instant::now();
+    // Any stdout line counts as liveness, not just assistant chunks.
+    let mut last_activity = Instant::now();
     let mut err_text = String::new();
     let mut native_usage = None;
+    let mut captured_session: Option<String> = None;
     loop {
         for line in err_rx.try_iter().flatten() {
             if !err_text.is_empty() {
@@ -951,13 +1284,30 @@ fn run_print(
             return Err(NurError::Interrupted);
         }
         if started.elapsed() >= timeout {
-            recovered = transcript.recover(&prompt);
+            recovered = transcript.recover(prompt);
             let _ = child.kill();
             let _ = child.wait();
             if recovered.is_none() {
                 cli_error = Some(format!(
-                    "cursor-agent exceeded the provider turn timeout ({}s)",
+                    "cursor-agent exceeded the provider turn timeout ({}s, \
+                     NUR_PROVIDER_TURN_TIMEOUT_SECS adjusts it)",
                     timeout.as_secs()
+                ));
+            }
+            break;
+        }
+        // Idle: the CLI is alive but silent (Windows silent-spawn bug, or a
+        // bogus --resume id that hangs without an error). Kill, try to recover
+        // the durable transcript, error if there is nothing to show.
+        if last_activity.elapsed() >= idle_timeout && status.is_none() {
+            recovered = transcript.recover(prompt);
+            let _ = child.kill();
+            let _ = child.wait();
+            if recovered.is_none() {
+                cli_error = Some(format!(
+                    "cursor-agent produced no output for {}s (idle timeout, \
+                     NUR_CURSOR_IDLE_TIMEOUT_SECS adjusts it)",
+                    idle_timeout.as_secs()
                 ));
             }
             break;
@@ -966,6 +1316,7 @@ fn run_print(
         match line_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Ok(line)) => {
                 last_stdout = Instant::now();
+                last_activity = last_stdout;
                 let line = line.trim();
                 if let Ok(ev) = serde_json::from_str::<Value>(line) {
                     if let Some(usage) = parse_cursor_usage(&ev) {
@@ -975,6 +1326,13 @@ fn run_print(
                     match ty {
                         "system" => {
                             if ev.get("subtype").and_then(|s| s.as_str()) == Some("init") {
+                                if let Some(sid) = ev
+                                    .get("session_id")
+                                    .and_then(|s| s.as_str())
+                                    .filter(|s| !s.is_empty())
+                                {
+                                    captured_session = Some(sid.to_string());
+                                }
                                 let model_label =
                                     ev.get("model").and_then(|m| m.as_str()).unwrap_or("Cursor");
                                 if let Some(cb) = on_event.as_mut() {
@@ -1054,8 +1412,8 @@ fn run_print(
         // stream-json to the pipe. Poll that durable result while the child is
         // alive, then terminate its orphan-prone worker cleanly.
         if Instant::now() >= next_transcript_probe {
-            next_transcript_probe = Instant::now() + Duration::from_millis(500);
-            if let Some(text) = transcript.recover(&prompt) {
+            next_transcript_probe = Instant::now() + Duration::from_secs(2);
+            if let Some(text) = transcript.recover(prompt) {
                 recovered = Some(text);
                 let _ = child.kill();
                 let _ = child.wait();
@@ -1091,7 +1449,7 @@ fn run_print(
 
     let text = if !final_text.is_empty() {
         final_text
-    } else if let Some(recovered) = recovered.or_else(|| transcript.recover(&prompt)) {
+    } else if let Some(recovered) = recovered.or_else(|| transcript.recover(prompt)) {
         recovered
     } else {
         streamed
@@ -1103,7 +1461,7 @@ fn run_print(
         ));
     }
     let model_name = model.unwrap_or_else(|| "auto".into());
-    Ok((text, model_name, native_usage))
+    Ok((text, model_name, native_usage, captured_session))
 }
 
 /// Cursor CLI's event schema has changed across releases. Accept the common
@@ -1119,17 +1477,27 @@ pub fn parse_cursor_usage(event: &Value) -> Option<ApiUsage> {
             .find_map(|key| usage.get(*key).and_then(Value::as_u64))
             .unwrap_or(0)
     };
-    let input = number(&["input_tokens", "prompt_tokens", "input"]);
-    let output = number(&["output_tokens", "completion_tokens", "output"]);
-    let total = number(&["total_tokens", "total"]);
+    // camelCase keys are what current cursor-agent builds actually emit in
+    // their stream-json result envelope; keep the snake_case spellings for
+    // older builds.
+    let input = number(&["input_tokens", "prompt_tokens", "input", "inputTokens"]);
+    let output = number(&[
+        "output_tokens",
+        "completion_tokens",
+        "output",
+        "outputTokens",
+    ]);
+    let total = number(&["total_tokens", "total", "totalTokens"]);
     let cached = usage
         .pointer("/input_tokens_details/cached_tokens")
         .or_else(|| usage.pointer("/prompt_tokens_details/cached_tokens"))
         .or_else(|| usage.get("cached_tokens"))
+        .or_else(|| usage.get("cacheReadTokens"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
     let cache_write = usage
         .get("cache_write_tokens")
+        .or_else(|| usage.get("cacheWriteTokens"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
     if input == 0 && output == 0 && total == 0 {
@@ -1235,6 +1603,88 @@ mod tests {
     }
 
     #[test]
+    fn split_nur_tools_fence_with_info_suffix() {
+        let text =
+            "```nur-tools json\n[{\"name\":\"read_file\",\"arguments\":{\"path\":\"a.rs\"}}]\n```";
+        let (_, calls) = split_nur_tools(text).expect("fence");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "read_file");
+    }
+
+    #[test]
+    fn split_nur_tools_single_object_instead_of_array() {
+        let text = "```nur-tools\n{\"name\":\"grep\",\"input\":{\"pattern\":\"TODO\"}}\n```";
+        let (_, calls) = split_nur_tools(text).expect("fence");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "grep");
+        assert!(calls[0].1.contains("TODO"));
+    }
+
+    #[test]
+    fn split_nur_tools_trailing_text_inside_fence() {
+        let text = "```nur-tools\n[{\"name\":\"list_dir\",\"arguments\":{}}] hope this helps\n```";
+        let (_, calls) = split_nur_tools(text).expect("fence");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "list_dir");
+    }
+
+    #[test]
+    fn split_nur_tools_pretty_printed_array() {
+        let text = "commentary\n```nur-tools\n[\n  {\n    \"name\": \"agent\",\n    \"arguments\": {\n      \"prompt\": \"hi\"\n    }\n  }\n]\n```";
+        let (c, calls) = split_nur_tools(text).expect("fence");
+        assert!(c.contains("commentary"));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "agent");
+    }
+
+    #[test]
+    fn flatten_incremental_only_sends_new_user_and_tool_output() {
+        let items = json!([
+            {"type":"message","role":"user","content":[{"type":"text","text":"first ask"}]},
+            {"type":"reasoning","summary":[]},
+            {"type":"function_call","name":"list_dir","arguments":"{}","call_id":"c1"},
+            {"type":"function_call_output","call_id":"c1","output":"dir listing"},
+            {"type":"message","role":"user","content":[{"type":"text","text":"second ask"}]}
+        ]);
+        let arr = items.as_array().expect("input array");
+        let out = flatten_incremental(arr, true);
+        assert!(out.contains("Continuing the same nur session"));
+        assert!(out.contains("nur-tools"));
+        assert!(out.contains("User:\nfirst ask"));
+        assert!(out.contains("Tool result:\ndir listing"));
+        assert!(out.contains("User:\nsecond ask"));
+        // Assistant/tool-call/reasoning history must not be re-sent.
+        assert_eq!(out.matches("Tool call").count(), 0);
+
+        let empty = flatten_incremental(&[], false);
+        assert!(empty.contains("Respond briefly."));
+    }
+
+    #[test]
+    fn cursor_camelcase_usage_envelope() {
+        // Exact shape probed from cursor-agent 2026.08.11 stream-json result.
+        let usage = parse_cursor_usage(&serde_json::json!({
+            "type": "result",
+            "subtype": "success",
+            "usage": {
+                "inputTokens": 20204,
+                "outputTokens": 42,
+                "cacheReadTokens": 2176,
+                "cacheWriteTokens": 0
+            }
+        }))
+        .expect("usage");
+        assert_eq!(usage.input_tokens, 20204);
+        assert_eq!(usage.output_tokens, 42);
+        assert_eq!(usage.total_tokens, 20246);
+        let cached = usage
+            .input_tokens_details
+            .expect("cached bucket")
+            .cached_tokens;
+        assert_eq!(cached, 2176);
+    }
+
+    #[test]
     fn response_parses_tool_calls() {
         let text = "```nur-tools\n[{\"name\":\"agent\",\"arguments\":{\"prompt\":\"review\",\"provider\":\"anthropic\"}}]\n```";
         let resp = response_from_cli_text("auto", text, true, None);
@@ -1314,7 +1764,7 @@ mod tests {
             max_output_tokens: None,
         };
         let cancel = tokio_util::sync::CancellationToken::new();
-        let response = complete(&req, &cancel).expect("live Cursor completion");
+        let response = complete(&req, &cancel, None).expect("live Cursor completion");
         assert!(response.output_text().contains("NUR_CURSOR_E2E_OK"));
     }
 
@@ -1343,7 +1793,85 @@ mod tests {
             max_output_tokens: None,
         };
         let cancel = tokio_util::sync::CancellationToken::new();
-        let error = complete(&req, &cancel).expect_err("the 1s live test should time out");
+        let error = complete(&req, &cancel, None).expect_err("the 1s live test should time out");
         assert!(error.to_string().contains("provider turn timeout"));
+    }
+
+    /// End-to-end `--resume` chain: the second round must recall the secret
+    /// from the FIRST round's CLI session without nur re-sending it, and the
+    /// shared chat state must hold the session id with the full item count.
+    #[test]
+    #[ignore = "requires an installed, authenticated Cursor Agent"]
+    fn live_cursor_resume_round_trip() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        rt.block_on(async {
+            let client = crate::api::client::ApiClient::for_provider(
+                "https://api2.cursor.sh",
+                CURSOR_CLI_SESSION_TOKEN,
+                "cursor",
+            )
+            .expect("cursor ApiClient");
+            let first = ResponseRequest {
+                model: "auto".into(),
+                input: json!([{
+                    "type":"message",
+                    "role":"user",
+                    "content":[{"type":"text","text":"My secret phrase is ZEBRA_4711. Remember it."}]
+                }]),
+                instructions: None,
+                tools: None,
+                tool_choice: None,
+                store: None,
+                include: None,
+                reasoning: None,
+                stream: Some(true),
+                parallel_tool_calls: None,
+                prompt_cache_key: None,
+                max_output_tokens: None,
+            };
+            let r1 = client.create_response(&first).await.expect("first round");
+            assert!(!r1.output_text().trim().is_empty());
+
+            let second = ResponseRequest {
+                model: "auto".into(),
+                input: json!([
+                    {
+                        "type":"message",
+                        "role":"user",
+                        "content":[{"type":"text","text":"My secret phrase is ZEBRA_4711. Remember it."}]
+                    },
+                    {
+                        "type":"message",
+                        "role":"user",
+                        "content":[{"type":"text","text":"What was my secret phrase? Answer with just the phrase."}]
+                    }
+                ]),
+                instructions: None,
+                tools: None,
+                tool_choice: None,
+                store: None,
+                include: None,
+                reasoning: None,
+                stream: Some(true),
+                parallel_tool_calls: None,
+                prompt_cache_key: None,
+                max_output_tokens: None,
+            };
+            let r2 = client.create_response(&second).await.expect("second round");
+            assert!(
+                r2.output_text().contains("ZEBRA_4711"),
+                "resume lost the secret; answer was: {}",
+                r2.output_text()
+            );
+            let state = client
+                .cursor_chat_for_test()
+                .lock()
+                .expect("chat state lock");
+            assert!(state.session_id.is_some(), "no session id captured");
+            assert_eq!(state.items_sent, 2, "items_sent must cover both messages");
+        });
     }
 }

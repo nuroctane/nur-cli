@@ -21,6 +21,12 @@ const IDLE_TIMEOUT_MS: u64 = 90_000;
 const IDLE_GRACE_MS: u64 = 20_000;
 /// How long we wait for pipe drain threads after killing the process tree.
 const JOIN_AFTER_KILL_MS: u64 = 2_000;
+/// Bounded drain after the child exits: grandchildren (cargo, rustc, node, …)
+/// inherit the pipes and can hold them open forever, so a bare `join()` on the
+/// reader threads can wedge the tool long after the command itself finished
+/// (session 26940d90 died exactly this way).
+const DRAIN_IDLE_MS: u64 = 5_000;
+const DRAIN_CAP_MS: u64 = 30_000;
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -61,6 +67,43 @@ fn join_with_timeout(handle: thread::JoinHandle<Vec<u8>>, timeout_ms: u64) -> Ve
     });
     rx.recv_timeout(Duration::from_millis(timeout_ms))
         .unwrap_or_default()
+}
+
+/// Bounded join for the post-exit pipe drain. Returns the drained bytes when
+/// the reader finishes; gives up (returning empty) when the shared `progress`
+/// timestamp has not advanced for `idle_ms` (pipe held open but silent) or
+/// `cap_ms` elapsed overall (pipe held open by a chatty grandchild).
+fn join_drain_bounded(
+    handle: thread::JoinHandle<Vec<u8>>,
+    progress: &Arc<AtomicU64>,
+    idle_ms: u64,
+    cap_ms: u64,
+) -> Vec<u8> {
+    let progress = Arc::clone(progress);
+    let (tx, rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(handle.join().unwrap_or_default());
+    });
+    let started = Instant::now();
+    let idle = Duration::from_millis(idle_ms);
+    let cap = Duration::from_millis(cap_ms);
+    let mut last_progress = progress.load(Ordering::Relaxed);
+    loop {
+        match rx.recv_timeout(Duration::from_millis(50)) {
+            Ok(bytes) => return bytes,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Vec::new(),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+        }
+        if started.elapsed() >= cap {
+            return Vec::new();
+        }
+        let now = progress.load(Ordering::Relaxed);
+        if now != last_progress {
+            last_progress = now;
+        } else if now_ms().saturating_sub(last_progress) >= idle.as_millis() as u64 {
+            return Vec::new();
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -327,8 +370,17 @@ pub fn run_in_shell(
         }
     };
 
-    let stdout_bytes = out_h.join().unwrap_or_default();
-    let stderr_bytes = err_h.join().unwrap_or_default();
+    // Child exited normally - but a grandchild may still hold the pipes open.
+    // Drain both streams with an idle/cap bound (a chatty grandchild keeps the
+    // shared progress stamp moving, which would defeat the idle cutoff, so the
+    // cap is the real backstop). Run the two joins concurrently so the whole
+    // drain is bounded by ONE cap window, not one per stream.
+    let drain_progress = Arc::clone(&progress);
+    let out_drain = thread::spawn(move || {
+        join_drain_bounded(out_h, &drain_progress, DRAIN_IDLE_MS, DRAIN_CAP_MS)
+    });
+    let stderr_bytes = join_drain_bounded(err_h, &progress, DRAIN_IDLE_MS, DRAIN_CAP_MS);
+    let stdout_bytes = out_drain.join().unwrap_or_default();
     let stdout = String::from_utf8_lossy(&stdout_bytes);
     let stderr = String::from_utf8_lossy(&stderr_bytes);
     let code = status.code().unwrap_or(-1);
@@ -382,5 +434,35 @@ mod tests {
         assert_eq!(clamp_timeout_ms(0), 1_000);
         assert_eq!(clamp_timeout_ms(30_000), 30_000);
         assert_eq!(clamp_timeout_ms(999_999), MAX_TIMEOUT_MS);
+    }
+
+    /// Regression: after the child exits, a grandchild holding the inherited
+    /// pipes must not wedge the tool forever (session 26940d90). `start /b
+    /// ping` backgrounds a writer that keeps stdout alive ~60s; the tool must
+    /// return well inside the 45s wall-clock bound (one DRAIN_CAP_MS window).
+    #[cfg(windows)]
+    #[test]
+    fn drain_returns_despite_pipe_holding_grandchild() {
+        let backend = ShellBackend {
+            kind: ShellKind::Cmd,
+            program: PathBuf::from("cmd.exe"),
+            label: "cmd".into(),
+        };
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let started = Instant::now();
+        let result = run_in_shell(
+            &backend,
+            "start /b ping -n 60 127.0.0.1 & exit 0",
+            Path::new("."),
+            10_000,
+            &cancel,
+        );
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(45),
+            "run_in_shell took {elapsed:?} - drain wedged on pipe-holding grandchild"
+        );
+        // cmd exited 0, so this should be a normal Ok result.
+        assert!(result.is_ok(), "unexpected failure: {:?}", result.err());
     }
 }
