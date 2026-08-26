@@ -1,163 +1,130 @@
 ---
 name: skeuomorphic-ui
-description: Build dark skeuomorphic UI components (knobs, sliders, inset controls, raised shells) with top-lighting, layered shadows, tactile depth, and animation-ready interaction patterns. Trigger this skill when the user asks for skeuomorphic components, neumorphic dark controls, rotary dials, or realistic hardware-like UI.
+description: Create skeuomorphic web UI surfaces with layered gradients, stacked inner and outer shadows, reflective gradient borders, micro texture, and embossed text or icon details. Use when asked for pressed, carved, tactile, realistic, soft-plastic, soft-metal, or premium physical interface styling.
 ---
 
 # Skeuomorphic UI
 
-Use this skill to design and implement dark skeuomorphic components with consistent lighting, material depth, and tactile motion.
+## Use When
+- A card, button, switch, dial, input, toolbar, or control should feel tactile.
+- A flat surface needs physical depth without becoming glossy or cartoonish.
+- The design calls for pressed, carved, raised, soft-plastic, soft-metal, or premium hardware-like UI.
 
-## Non-Negotiable Foundations
+## Surface Recipe
+1. Start with a rounded shape and a soft vertical gradient: lighter top, darker bottom.
+2. Add a 1px gradient-border wrapper to simulate a reflective edge.
+3. Stack outer shadows for elevation and inset shadows for carved depth.
+4. Add a fine top-edge highlight and a darker lower edge.
+5. Use text shadows and icon shadows sparingly for an embossed feel.
+6. Add micro-details only when scale supports it: dots, grain, seams, or tiny specular marks.
+7. Keep transitions smooth and short: `160ms` to `240ms`.
 
-- Scene/background must stay in the `#080808` to `#1a1a1a` range.
-- Parent skeuomorphic shell should generally sit around: `bg-gradient-to-b from-[#202020] to-[#191919]`.
-- Light direction is from the top.
-- Every shadow/highlight decision must reinforce top lighting.
+## Base Tokens
+Tune these per brand and theme.
 
-## Core Material Recipes
+```css
+:root {
+  --sk-bg-top: #f8fafc;
+  --sk-bg-mid: #e9eef5;
+  --sk-bg-bottom: #cfd7e4;
+  --sk-edge-top: rgba(255, 255, 255, 0.82);
+  --sk-edge-bottom: rgba(79, 93, 122, 0.34);
+  --sk-shadow: rgba(31, 41, 55, 0.18);
+  --sk-shadow-deep: rgba(31, 41, 55, 0.28);
+  --sk-highlight: rgba(255, 255, 255, 0.72);
+}
+```
 
-### 1) Raised Shell (main component body)
+## Raised Surface
+Use for cards, panels, primary buttons, tabs, and control housings.
 
-Use for the big parent/control housing.
+```css
+.sk-surface {
+  position: relative;
+  border: 1px solid transparent;
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, var(--sk-bg-top), var(--sk-bg-mid) 48%, var(--sk-bg-bottom)) padding-box,
+    linear-gradient(180deg, var(--sk-edge-top), rgba(255, 255, 255, 0.22) 45%, var(--sk-edge-bottom)) border-box;
+  box-shadow:
+    0 18px 34px var(--sk-shadow),
+    0 5px 12px rgba(31, 41, 55, 0.12),
+    inset 0 1px 0 var(--sk-highlight),
+    inset 0 -1px 0 rgba(79, 93, 122, 0.24);
+  transition:
+    box-shadow 200ms ease,
+    transform 200ms ease,
+    background 200ms ease;
+}
 
-- Base:
-  - `bg-gradient-to-b from-[#202020] to-[#191919]`
-- Highlight + depth shadow recipe:
-  - `shadow-[0_2px_1px_#ffffff15_inset,0_1px_2px_#ffffff20_inset,{black_shadow}]`
-- `{black_shadow}` examples (2-3 layers):
-  - `0_10px_20px_-2px_#00000050,0_20px_40px_-4px_#00000030,0_0px_15px_2px_#00000020`
-- Optional **crisp** raised stack (full one-liner, same black lift as above baked in):
-  - `shadow-[0_2px_1px_#ffffff15_inset,0_1px_2px_#ffffff20_inset,0_10px_20px_-2px_#00000050,0_20px_40px_-4px_#00000030,0_0px_15px_2px_#00000020]`
-  - **When to use:** Only when you deliberately want the surface to read **extra crisp**—tighter micro-edge and a slightly harder highlight. Skip it for default chrome so every control does not fight for the same razor-sharp read.
+.sk-surface::after {
+  content: "";
+  position: absolute;
+  inset: 1px 1px auto;
+  height: 35%;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.42), transparent);
+  pointer-events: none;
+}
+```
 
-Notes:
-- White inset shadows represent reflected light on upper surfaces.
-- Black shadows create lift from the scene/background.
+## Pressed Surface
+Use for active buttons, toggled controls, selected tabs, and inset wells.
 
-### 2) Inset Surface (trenches, tracks, wells, recessed buttons)
+```css
+.sk-surface.is-pressed {
+  transform: translateY(1px);
+  background:
+    linear-gradient(180deg, #d5dce8, #eef2f7 52%, #f8fafc) padding-box,
+    linear-gradient(180deg, rgba(72, 84, 112, 0.38), rgba(255, 255, 255, 0.62)) border-box;
+  box-shadow:
+    inset 0 4px 10px rgba(31, 41, 55, 0.22),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.72),
+    0 4px 10px rgba(31, 41, 55, 0.10);
+}
+```
 
-Use for slider slots, inset icon wells, internal cavities.
+## Embossed Text And Icons
+Use for labels inside tactile controls. Keep it subtle.
 
-- Base color should be darker, within `#080808` to `#1a1a1a`.
-- Recommended inset shadow:
-  - `shadow-[0_1px_1px_#ffffff15,0_4px_16px_#00000050_inset]`
+```css
+.sk-label {
+  color: #334155;
+  text-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.78),
+    0 -1px 0 rgba(31, 41, 55, 0.12);
+}
 
-Notes:
-- Keep inset surfaces visibly carved into the parent shell.
-- White edge reflection + dark inner shadow should feel concave.
+.sk-icon {
+  filter:
+    drop-shadow(0 1px 0 rgba(255, 255, 255, 0.78))
+    drop-shadow(0 -1px 0 rgba(31, 41, 55, 0.14));
+}
+```
 
-### 3) Popping / Raised Objects (dial caps, knobs, protruding controls)
+## Micro Texture
+Use micro texture at low opacity. It should be felt, not noticed.
 
-Use same philosophy as raised shell, with stronger external black depth if needed.
+```css
+.sk-texture {
+  background-image:
+    radial-gradient(circle at 20% 30%, rgba(255, 255, 255, 0.34) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 70% 65%, rgba(31, 41, 55, 0.08) 0 1px, transparent 1.5px);
+  background-size: 18px 18px, 22px 22px;
+}
+```
 
-- Reuse raised recipe:
-  - `shadow-[0_2px_1px_#ffffff15_inset,0_1px_2px_#ffffff20_inset,0_6px_10px_rgba(0,0,0,0.5),0_2px_4px_rgba(0,0,0,0.4)]`
-- You may intensify black shadows for heavier lift.
+## Taste Rules
+- Use one physical material per component: soft plastic, enamel, ceramic, metal, or rubber.
+- Keep depth directional: light from top, shadow below.
+- Avoid pure black shadows; use tinted grays or brand-tinted darks.
+- Do not mix glassmorphism, neumorphism, and skeuomorphism in the same component.
+- Reserve heavy pressed effects for interactive states, not every surface.
+- Reduce texture on small controls so the UI stays crisp.
 
-## Component Architecture Pattern
-
-When building a complex skeuomorphic control, structure in this order:
-
-1. Scene background (very dark)
-2. Parent raised shell
-3. Inset zones (track, wells, cavities)
-4. Raised interactive objects (dial/button caps)
-5. Readout/details (numbers, ticks, icon glows)
-
-This layer order is mandatory for believable depth.
-
-## Interaction Rules
-
-- Keep tactile cues explicit:
-  - `cursor-grab` while idle
-  - `cursor-grabbing` while dragging
-  - Do NOT use active scaling for buttons (buttons should remain static on click)
-- Use spring motion for fill/rotation where possible.
-- Preserve realistic feedback timing (short, snappy transitions).
-
-## Dial Guidance
-
-- Use perimeter ticks (even angular distribution).
-- Rotation can be driven by pointer angle delta.
-- Normalize angle jumps across `-180/180` crossing.
-- Map rotation delta to value fill with clamping.
-- Optional tick audio should be rate-limited (avoid high-frequency spam).
-
-## Color and Glow Rules
-
-- Accent gradients can vary by mode (e.g., brightness vs volume), but base shell tones stay dark.
-- Icon glow must be restrained and mode-aware.
-- Glow should never overpower material lighting/shadows.
-
-## Reusable Tailwind Tokens
-
-Use these as defaults unless user asks otherwise:
-
-- Scene bg: `bg-[#0f0f0f]` (or any shade inside `#080808` to `#1a1a1a`)
-- Raised shell gradient: `bg-gradient-to-b from-[#202020] to-[#191919]`
-- Raised shell light/depth:
-  - `shadow-[0_2px_1px_#ffffff15_inset,0_1px_2px_#ffffff20_inset,0_10px_20px_-2px_#00000050,0_20px_40px_-4px_#00000030,0_0px_15px_2px_#00000020]`
-- Raised shell (**crisp** — use sparingly):
-  - `shadow-[0_2px_1px_#ffffff15_inset,0_1px_2px_#ffffff20_inset,0_10px_20px_-2px_#00000050,0_20px_40px_-4px_#00000030,0_0px_15px_2px_#00000020]`
-  - Reserve this stack for hero pieces or focal controls where an unusually sharp, “cut” top edge is desired. Prefer the default raised shell shadow for routine surfaces.
-- Inset cavity:
-  - `shadow-[0_1px_1px_#ffffff15,0_4px_16px_#00000050_inset]`
-
-## Quality Checklist (must pass)
-
-- Background is within `#080808` to `#1a1a1a`.
-- Parent shell uses near `#202020 -> #191919` gradient.
-- Light comes from top consistently.
-- Raised areas have top reflective inset whites plus black lift shadows.
-- Inset areas look carved in (concave), not flat.
-- Protruding parts read clearly above parent surface.
-- Interaction states (hover/active/drag) improve tactility.
-- Accent glow supports hierarchy, not noise.
-
-## Anti-Patterns
-
-- Flat dark blocks with no layered shadows.
-- Random light direction between elements.
-- Overbright glow that kills form.
-- Insets that look raised (wrong shadow orientation).
-- Background lighter than component shell.
-- Adding click effects like `active:scale` or `active:shadow` transformations to buttons.
-
-## If User Provides Existing Skeuomorphic Code
-
-- Preserve the existing depth hierarchy first.
-- Adjust only tokens needed for consistency.
-- Do not replace handcrafted shadow stacks with generic presets.
-
-## Typography and Density (Compact Default)
-
-- Default to compact, UI-realistic scale. Do not oversize text.
-- Unless the user asks for a hero layout, keep component height and type dense:
-  - Primary labels: ~`20px` to `28px`
-  - Secondary labels/meta: ~`14px` to `20px`
-  - Numeric emphasis: ~`24px` to `34px`
-- Keep vertical rhythm tight: prefer smaller paddings/gaps before increasing font size.
-- Scale icons with text hierarchy; avoid icons visually dominating labels.
-- For skeuomorphic control bars/cards, prioritize compact proportions over dramatic sizing.
-
-## Nested Inset + Popping Button Pattern (Learned Rule)
-
-- When a row has multiple circular action buttons, use **individual inset wells** per button rather than one shared inset group.
-- Correct structure:
-  - `Outer raised shell` -> `InsetSlot (per button)` -> `CircleBtn (raised/popping)`
-- For visual symmetry in each inset well:
-  - Button should be **flush on Y-axis** (touch top and bottom of the inset interior).
-  - Keep margin/padding mainly on X-axis.
-- Recommended implementation pattern:
-  - Inset well: `h-full ... p-1.5 ...`
-  - Button inside inset: `size-full aspect-square rounded-full ...`
-- Avoid:
-  - A single shared inset behind several buttons when the design calls for separated wells.
-  - Extra top/bottom gap around a popping button inside its inset.
-
-## Raised Material Consistency (Learned Rule)
-
-- Raised child controls (for example circular action buttons) should use the **same raised material gradient** as the raised parent shell by default.
-- Default raised material to reuse:
-  - `bg-gradient-to-b from-[#202020] to-[#191919]`
-- Do not introduce a lighter/different raised gradient for child buttons unless the user explicitly asks for contrast.
+## Quick Checks
+- Raised state has a brighter top edge and darker lower edge.
+- Pressed state reverses depth with inset shadows.
+- Rounded corners stay smooth at the actual rendered size.
+- The gradient border is 1px and does not overpower the content.
+- Text and icons remain readable after shadow effects.

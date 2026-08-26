@@ -1,13 +1,13 @@
 ---
 name: typeset
-description: "Typography pass covering font choice, modular scale, tracking, leading, weight hierarchy, and micro-typography details. Use when fonts feel generic (default Inter with no reason), the scale is ad hoc, hierarchy is flat, or the user says "fix the typography" / "the text doesn't feel right". Invoke when the user asks for typeset on their UI, or mentions 'typeset' alongside design / UI / frontend work."
+description: "Typography pass covering font choice, modular scale, tracking, leading, weight hierarchy, and micro-typography details. Use when fonts feel generic (default Inter with no reason), the scale is ad hoc, hierarchy is flat, or the user says \"fix the typography\" / \"the text doesn't feel right\". Invoke when the user asks for typeset on their UI, or mentions 'typeset' alongside design / UI / frontend work."
 ---
 
 <!-- HARNESS MIRROR — do not edit here. Canonical source: skills/ or commands/. After editing source, copy into cli/assets/<harness>/ and repo-root harness mirrors. -->
 
 **Context:** this sub-skill is one lens of the broader `ui-craft` skill. If the `ui-craft` skill is also installed, read its SKILL.md first for Discovery + Anti-Slop + Craft Test, then apply the specific lens below.
 
-Typeset the UI at the target the user described. Load the `ui-craft` skill and read `references/typography.md`.
+Typeset the UI at `$ARGUMENTS`. Load the `ui-craft` skill and read `references/typography.md`.
 
 **Note:** typeset is knob-agnostic — typography rules (no ALL CAPS on headings, tracking-tight ≥24px, one body font, etc.) are not tunable.
 
@@ -57,3 +57,5 @@ If the UI is technically correct but forgettable, use typography as the weapon. 
 **Pre-check:** if an accent is already overused or hierarchy is already loud, you don't have a tameness problem — you have a noise problem. Route to `/distill` (cut) or `/colorize` (reduce accents) instead.
 
 **Output**: edit code directly. Print the Review Format table. Call out the single highest-impact change (usually: "font choice" or "tracking-tight on hero").
+
+**Next step:** `/polish` — micro-details land best right after the type system is set (rung 1).

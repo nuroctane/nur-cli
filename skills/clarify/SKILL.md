@@ -1,13 +1,13 @@
 ---
 name: clarify
-description: "UX copy review across buttons, errors, empty states, and form hints — critiques by default, applies only on request. Use when copy feels vague, generic, or AI-sounding, or when the user says "fix the labels", "improve error messages", or "review the copy". Invoke when the user asks for clarify on their UI, or mentions 'clarify' alongside design / UI / frontend work."
+description: "UX copy review across buttons, errors, empty states, and form hints — critiques by default, applies only on request. Use when copy feels vague, generic, or AI-sounding, or when the user says \"fix the labels\", \"improve error messages\", or \"review the copy\". Invoke when the user asks for clarify on their UI, or mentions 'clarify' alongside design / UI / frontend work."
 ---
 
 <!-- HARNESS MIRROR — do not edit here. Canonical source: skills/ or commands/. After editing source, copy into cli/assets/<harness>/ and repo-root harness mirrors. -->
 
 **Context:** this sub-skill is one lens of the broader `ui-craft` skill. If the `ui-craft` skill is also installed, read its SKILL.md first for Discovery + Anti-Slop + Craft Test, then apply the specific lens below.
 
-Clarify the copy in the target the user described. Load the `ui-craft` skill.
+Clarify the copy in `$ARGUMENTS`. Load the `ui-craft` skill.
 
 **Default mode: critique, not edit.** Return the copy diff in a Review Format table. Only apply changes if the user says "apply".
 
@@ -32,3 +32,5 @@ Clarify the copy in the target the user described. Load the `ui-craft` skill.
 | --- | --- | --- |
 
 Prioritize by impact (errors and destructive actions first, then CTAs, then helper copy). End with a one-paragraph summary of the overall voice shift. If the user says "apply", edit the code and re-print the table with file paths.
+
+**Next step:** `/critique` — copy changes shift hierarchy; re-read the surface after (rung 1).

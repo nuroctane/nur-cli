@@ -1,13 +1,13 @@
 ---
 name: unhappy
-description: "State-first design pass — inventories and implements all non-happy states (loading, empty, error, partial, conflict, offline) before the happy path, and refactors impossible boolean state to proper state machines. Use when starting a new screen, reviewing an existing one for edge-case gaps, or when the user says "handle the error state" / "add loading states" / "what happens when data is missing". Invoke when the user asks for unhappy on their UI, or mentions 'unhappy' alongside design / UI / frontend work."
+description: "State-first design pass — inventories and implements all non-happy states (loading, empty, error, partial, conflict, offline) before the happy path, and refactors impossible boolean state to proper state machines. Use when starting a new screen, reviewing an existing one for edge-case gaps, or when the user says \"handle the error state\" / \"add loading states\" / \"what happens when data is missing\". Invoke when the user asks for unhappy on their UI, or mentions 'unhappy' alongside design / UI / frontend work."
 ---
 
 <!-- HARNESS MIRROR — do not edit here. Canonical source: skills/ or commands/. After editing source, copy into cli/assets/<harness>/ and repo-root harness mirrors. -->
 
 **Context:** this sub-skill is one lens of the broader `ui-craft` skill. If the `ui-craft` skill is also installed, read its SKILL.md first for Discovery + Anti-Slop + Craft Test, then apply the specific lens below.
 
-Design every non-happy state for the UI at the target the user described. Load the `ui-craft` skill and read `references/state-design.md`.
+Design every non-happy state for the UI at `$ARGUMENTS`. Load the `ui-craft` skill and read `references/state-design.md`.
 
 **Step 1 — Inventory.** List every data source and interactive surface in the target. For each, enumerate its states:
 
@@ -46,3 +46,5 @@ If `CRAFT_LEVEL` is unknown, default to 7.
 | generic "Error" toast | inline error with specific cause + retry + support ID | recoverability (heuristic 9) |
 
 One row per state added. No full diffs.
+
+**Next step:** `/harden` — implement the states you just designed (rung 1).

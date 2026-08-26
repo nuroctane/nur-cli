@@ -1,13 +1,13 @@
 ---
 name: adapt
-description: "Responsive layout pass covering breakpoints, touch targets, safe areas, and fluid type. Use when the UI has layout or touch issues on mobile/tablet, when adding a new screen that hasn't been tested across viewports, or when the user says "make it responsive" / "fix mobile layout". Invoke when the user asks for adapt on their UI, or mentions 'adapt' alongside design / UI / frontend work."
+description: "Responsive layout pass covering breakpoints, touch targets, safe areas, and fluid type. Use when the UI has layout or touch issues on mobile/tablet, when adding a new screen that hasn't been tested across viewports, or when the user says \"make it responsive\" / \"fix mobile layout\". Invoke when the user asks for adapt on their UI, or mentions 'adapt' alongside design / UI / frontend work."
 ---
 
 <!-- HARNESS MIRROR — do not edit here. Canonical source: skills/ or commands/. After editing source, copy into cli/assets/<harness>/ and repo-root harness mirrors. -->
 
 **Context:** this sub-skill is one lens of the broader `ui-craft` skill. If the `ui-craft` skill is also installed, read its SKILL.md first for Discovery + Anti-Slop + Craft Test, then apply the specific lens below.
 
-Adapt the UI at the target the user described across devices. Load the `ui-craft` skill and read `references/responsive.md`.
+Adapt the UI at `$ARGUMENTS` across devices. Load the `ui-craft` skill and read `references/responsive.md`.
 
 **Work mobile-first. Don't shrink desktop; grow from mobile.**
 
@@ -28,3 +28,5 @@ Adapt the UI at the target the user described across devices. Load the `ui-craft
 10. **Nav pattern** — desktop horizontal → mobile collapses (sheet, drawer, or bottom tabs). Never a hamburger on desktop unless the nav has > 7 top-level items.
 
 **Output**: edit code directly. Print the Review Format table of changes. Flag any responsive bugs you can't fix without more info (missing design for a breakpoint, unclear nav pattern).
+
+**Next step:** `/audit` — verify the responsive pass against a11y, performance and touch targets (rung 1).

@@ -6,9 +6,20 @@ argument-hint: "[action: build|animate|review|polish|audit] [target]"
 
 # UI Craft
 
-You are a design engineer with craft sensibility. You build interfaces where every detail compounds into something that feels right. In a world where AI-generated UIs all look the same, taste is the differentiator.
+You are a design engineer. Every decision below is one you make deliberately and can defend — never a default you inherited.
 
-> "All those unseen details combine to produce something that's just stunning, like a thousand barely audible voices all singing in tune."
+## The Ladder (use this when explaining ui-craft to the user)
+
+One progression, four rungs. Never describe ui-craft as "layers" or "modes" — use these rung names, and name the rung the user is on before suggesting a command.
+
+| Rung | User wants | They do | They get | Effort |
+|------|-----------|---------|----------|--------|
+| **0 · Ask** | better UI, zero effort | ask for UI as always | taste by default: real hierarchy, system tokens, no slop | none |
+| **1 · Direct** | control one pass | `/craft`, `/critique`, `/polish`, `/animate`, … | a focused pass on one surface | one command |
+| **2 · Persist** | consistency across sessions | `/brief`, `/tokens`, `/remember` | durable design context every future session reads | write once |
+| **3 · Enforce** | it can't regress | `/finalize`, review agents, MCP gates, score, `ui-craft-detect` | gates in review/CI + a 0-100 number | wire once |
+
+`/sddesign` is **not** a rung — it is the express lane that walks rungs 1 to 3 for one big surface. When a pass finishes, name the natural next step (`/craft` → `/finalize`, `/brief` → `/tokens`, `/audit` → `/harden`).
 
 ## Knobs (ask during Discovery, 1-10)
 
@@ -43,7 +54,9 @@ The rules that make the biggest difference between "AI-generated" and "designed 
 
 ## Routing
 
-| Intent | Mode / Reference |
+**If the ui-craft MCP server is connected, call `route_task` with the user's own words before reading anything below.** It returns the ranked references, commands and tools that cover the task plus the first move, and it resolves vocabulary this table cannot: "an analytics panel" reaches `recipe-dashboard.md`, "pricing block" reaches `recipe-landing.md`. **Why:** a table only fires when the user's words match our filenames, and they usually don't. The table below is the fallback when no MCP is available — and it stays authoritative for what each entry *is*, since `route_task` returns pointers only.
+
+| Intent | Pass / Reference |
 |--------|------------------|
 | New here / unsure where to begin | Run `/start` → reads the project, reports what's available now, routes you to the right next step |
 | Pre-build: write the project's design brief | Run `/brief` → see [brief.md](references/brief.md) |
@@ -51,17 +64,18 @@ The rules that make the biggest difference between "AI-generated" and "designed 
 | Build a surface end-to-end with the full spec-driven pipeline (brief → tokens → shape → craft → converge → ship) | Run `/sddesign` → walks all gates, writes `.ui-craft/spec.md`, orchestrates existing phase commands |
 | Build a surface in one shot (known composition, no pipeline needed) | Run `/craft <surface>` → outcome recipes: [recipe-dashboard.md](references/recipe-dashboard.md), [recipe-landing.md](references/recipe-landing.md), [recipe-auth.md](references/recipe-auth.md) |
 | Pick a ready-made theme (no token system exists) | [themes.md](references/themes.md) — 4 production token presets |
-| Building new UI | **Build** — this file + relevant references |
-| Adding/fixing animations | **Animate** — [motion.md](references/motion.md) |
-| Reviewing existing UI | **Review** — [review.md](references/review.md) — ends with a Craft Report |
-| Polishing existing UI | **Polish** — this file + [review.md](references/review.md) Polish Pass — ends with a Craft Report |
+| Building new UI | **Build pass** (rung 0/1) — this file + relevant references |
+| Adding/fixing animations | **Motion pass** — [motion.md](references/motion.md) |
+| Reviewing existing UI | **Review pass** — [review.md](references/review.md) — ends with a Craft Report |
+| Polishing existing UI | **Polish pass** — this file + [review.md](references/review.md) Polish Pass — ends with a Craft Report |
 | Multi-stage animations | [animation-storyboard.md](../../examples/animation-storyboard.md) |
 | Layout / spacing | [layout.md](references/layout.md) |
 | Typography (focused pass: `/typeset`) | [typography.md](references/typography.md) |
 | Color / theming / dark mode (focused pass: `/colorize`) | [color.md](references/color.md) |
 | Accessibility / a11y audit (technical audit: `/audit`) | [accessibility.md](references/accessibility.md) |
 | UX critique, no code changes | Run `/critique` — [review.md](references/review.md) + [inspiration.md](references/inspiration.md) |
-| Production hardening (states, i18n, edge cases) | Run `/harden` — [state-design.md](references/state-design.md) |
+| Production hardening (states, i18n, edge cases) | Run `/harden` — [state-design.md](references/state-design.md) + [coverage.md](references/coverage.md) |
+| "What's missing from this screen?" / completeness check on a table, settings, checkout, pricing, docs, invite, delete-confirm, onboarding | Call `ux_coverage` (MCP) or read [coverage.md](references/coverage.md) — the **completeness** axis, reported beside distinction, never folded into a score |
 | Cut noise / simplify an over-built surface | Run `/distill` |
 | Redesign / modernize an existing site without losing brand, IA, or SEO | Run `/redesign` — audit first, preserve list, refresh/reskin/rebuild scope |
 | Amplify personality / "make it bolder" | Run `/bolder` — [craft-intent.md](references/craft-intent.md) |
@@ -90,6 +104,17 @@ The rules that make the biggest difference between "AI-generated" and "designed 
 | Ambiguous | Ask which mode |
 
 **Overlap with other skills:** defer marketing copy to a copywriting skill; defer SEO strategy to an SEO skill — UI Craft covers the correctness of metadata already being emitted ([metadata.md](references/metadata.md)), not keyword or ranking strategy. UI Craft is the visual and interaction layer.
+
+**Out of scope.** These are surface classes the recipes do not help with. Say so, name the right tool, and still apply UI Craft to the web surfaces around them — a brief containing one of these is rarely only that.
+
+| Not this | Use instead |
+|---|---|
+| Code editor surfaces (syntax, gutters, diff views) | Monaco or CodeMirror with their own theming API |
+| Native mobile apps | Apple HIG or Material directly — UI Craft covers web |
+| Realtime collaboration UI (presence, live cursors, conflict states) | Liveblocks, or Yjs / Automerge if you own the sync layer — the recipes assume a single actor |
+| HTML email | MJML or a dedicated email framework — the CSS rules here are void in mail clients |
+
+Refusing with a pointer beats confident bad output. Silence produces the second one.
 
 ---
 
@@ -146,7 +171,15 @@ The project's own code becomes the source of truth — no external config file. 
 
 ### Craft Read (full surfaces)
 
-When building a complete surface (dashboard, landing, auth, settings shell, portfolio page) — including `/craft` — output the **Craft Read** from [craft-intent.md](references/craft-intent.md) before writing code. Pick **DESIGN_VARIANCE** and a **signature bet** in that line. The user steers in plain language ("more like X", "bolder", "quieter") — no design vocabulary required.
+When building a complete surface (dashboard, landing, auth, settings shell, portfolio page) — including `/craft` — output the **Craft Read** before writing code, in exactly this form:
+
+> **Craft Read:** *[surface kind] for [audience], [product | marketing] language, [theme/accent hint], variance [N], signature bet: [choice].*
+
+The template is here rather than only in [craft-intent.md](references/craft-intent.md) on purpose. **Why:** an instruction to emit a form, with the form in another file, produces the right *elements* in an improvised shape whenever that file is not loaded — a planning paragraph instead of the line the user can react to. A pointer to a form is not the form.
+
+Then load the recipe for the surface **before writing code**, not after: dashboard → [recipe-dashboard.md](references/recipe-dashboard.md), landing → [recipe-landing.md](references/recipe-landing.md), auth → [recipe-auth.md](references/recipe-auth.md). **Why:** every numeric limit that keeps a surface from reading as a template lives in its recipe (hero subtext ≤20 words, eyebrow budget, form column width, acceptance bar). Skipping the recipe does not soften those limits — it removes them, and the build breaches them without ever seeing them. If the MCP server is connected, `route_task` names the recipe for you.
+
+Pick **DESIGN_VARIANCE** and a **signature bet** in that line; full rationale, variance defaults and worked examples in [craft-intent.md](references/craft-intent.md). The user steers in plain language ("more like X", "bolder", "quieter") — no design vocabulary required.
 
 ---
 
@@ -229,7 +262,7 @@ Commands can iterate until their quality gate passes rather than producing a sin
 
 ### Self-Correction
 
-When the user corrects design output — "no así", "no me gusta", "always do X here", "never Z", or a reversal that reads as a standing preference — record it as a **learned constraint** in the brief (section 6; run `/remember`). Capture the **why**, not just the what, so it generalizes; confirm in one line where it landed; don't re-litigate a correction already recorded. Learned constraints rank with the principles: they override skill defaults but never the a11y/correctness floor — if a correction would breach the floor, apply the closest compliant interpretation and say so.
+When the user corrects design output — "not like that", "I don't like this", "always do X here", "never Z", or a reversal that reads as a standing preference — record it as a **learned constraint** in the brief (section 6; run `/remember`). Capture the **why**, not just the what, so it generalizes; confirm in one line where it landed; don't re-litigate a correction already recorded. Learned constraints rank with the principles: they override skill defaults but never the a11y/correctness floor — if a correction would breach the floor, apply the closest compliant interpretation and say so.
 
 This is project-scoped and lives in the brief by design — ui-craft is a UI skill, not a general memory engine. Cross-project corrections ("in all my projects") are general memory: mirror them to an external memory service if one is available, else note that cross-project recall needs one. Full behavior → [brief.md](references/brief.md) (Self-Correction).
 
@@ -290,26 +323,41 @@ Full easing curves, spring configs, stagger rules, and interaction rules → [mo
 
 Tiered by signal. Tier 1 is required reading before writing any UI; lower tiers load on context.
 
-### Tier 1 — Required before writing UI
+### Tier 1 — Always load before writing UI
+
+Two entries, because two is what a build actually loads. This list used to hold seven; build evals showed a passing dashboard opened one of them and a passing landing opened two, while both reached for the surface recipe that was filed a tier below. A required list that nobody reads is not a standard, it is a wish — so the list now names what carries the build, and everything else below states the trigger that pulls it in.
 
 | Reference | When to Read |
 |-----------|--------------|
-| [brief.md](references/brief.md) | Durable design brief at `.ui-craft/brief.md` — read first, anchors every decision. Run `/brief` if absent. |
-| [craft-intent.md](references/craft-intent.md) | Craft Read, DESIGN_VARIANCE, signature bets, product + marketing build patterns. **Load before `/craft` or any full-surface build.** |
-| [tokens.md](references/tokens.md) | 3-layer token spine (primitive → semantic → component). Both modes intentional. Run `/tokens` to audit or establish. |
-| [inspiration.md](references/inspiration.md) | Pattern archetypes from mature SaaS, signature details, "what mature interfaces never do", reference token values. **Read first** — highest signal in the skill. |
-| [accessibility.md](references/accessibility.md) | WCAG, keyboard, focus, forms, ARIA, checklist. **Required before forms or interactive components.** |
-| [color.md](references/color.md) | Strategy, palettes, dark mode, tokens, accent budget. |
-| [layout.md](references/layout.md) | Gestalt grouping, spacing rhythm, hierarchy ratios, composition strategies, optical center. |
+| [craft-intent.md](references/craft-intent.md) | Craft Read, DESIGN_VARIANCE, signature bets, product + marketing build patterns. The one reference every full-surface build needs. |
+| **The surface recipe** | [recipe-dashboard.md](references/recipe-dashboard.md) · [recipe-landing.md](references/recipe-landing.md) · [recipe-auth.md](references/recipe-auth.md) — whichever matches what you are building. Every numeric limit that keeps a surface off template grammar lives here (hero subtext ≤20 words, eyebrow budget, form column width, acceptance bar). Skipping it does not soften those limits, it removes them. |
+
+### Tier 1b — Load on trigger
+
+Same references as before, same weight when their trigger fires. Only the claim changed: these are conditional, and pretending otherwise made the whole Tier-1 label unreliable — including for the two above.
+
+| Reference | Trigger |
+|-----------|---------|
+| [brief.md](references/brief.md) | `.ui-craft/brief.md` exists — then read it first, it anchors every decision and its learned constraints override skill defaults. Absent: run `/brief` or proceed from Discovery. |
+| [tokens.md](references/tokens.md) | The project has a token system to respect or extend, or you are establishing one. With neither, [themes.md](references/themes.md) gives a production preset in one step. |
+| [accessibility.md](references/accessibility.md) | Any form, any custom interactive control, any focus or keyboard work. The a11y floor in Core Rules is the minimum; this is the detail. |
+| [color.md](references/color.md) | Choosing or changing a palette, building dark mode, or auditing accent budget. Not needed to apply a preset. |
+| [layout.md](references/layout.md) | Composing a surface from scratch, or a spacing/hierarchy pass. Not needed when a recipe already prescribes the composition. |
+| [inspiration.md](references/inspiration.md) | Highest-signal reference in the skill. Read it when the build needs an archetype or a signature detail, and whenever the result feels generic. |
+
+> **What this measured, and what it did not.** The evidence is greenfield builds — an empty
+> sandbox with no brief and no tokens, so `brief` and `tokens` could not have been read
+> whatever the label said. It shows the label was not causing loads. It does **not** show the
+> references are unnecessary: `layout` and `color` govern craft that the deterministic scorers
+> barely test, so a build can pass every check with mediocre spacing rhythm. Re-measure before
+> trimming anything further, and re-measure on a project that already has a design system.
 
 ### Tier 2 — Surface-specific (read when building this surface)
 
 | Reference | When to Read |
 |-----------|--------------|
 | [spec.md](references/spec.md) | Durable composition spec at `.ui-craft/spec.md` — the "what". Written by `/shape` Step 6, walked by `/sddesign`. Read after `brief.md` when a spec exists for the surface being built. |
-| [recipe-dashboard.md](references/recipe-dashboard.md) | Outcome recipe: 3 named compositions, shell spec, build order, acceptance bar. Load on `/craft dashboard` or any "build me a dashboard" request. |
-| [recipe-landing.md](references/recipe-landing.md) | Outcome recipe: Product-forward / Message-forward / Proof-forward compositions, section grammar, pricing block rules, acceptance bar. Load on `/craft landing` or any "build me a landing" request. |
-| [recipe-auth.md](references/recipe-auth.md) | Outcome recipe: split-panel / centered-card compositions, form contract, sign-up deltas, acceptance bar. Load on `/craft auth` or any sign-in/sign-up build. |
+| **Outcome recipes** | Promoted to Tier 1 — see *Always load*. Listed there and not here so the recipe has one home; two descriptions of the same requirement is how one of them goes stale. |
 | [themes.md](references/themes.md) | 4 named production token presets (Graphite, Porcelain, Carbon, Signal). Load when no token system exists. |
 | [dashboard.md](references/dashboard.md) | Dashboards, metric cards, charts, tables, sidebar, filters. |
 | [forms.md](references/forms.md) | Validation timing, progressive disclosure, multi-step wizards, autosave, optimistic submit. |
@@ -340,5 +388,6 @@ Tiered by signal. Tier 1 is required reading before writing any UI; lower tiers 
 | [heuristics.md](references/heuristics.md) | Nielsen's 10 + 6 design laws (Fitts, Hick, Doherty, Cleveland-McGill, Miller, Tesler) + 1-5 rubric. Load for `/heuristic`. |
 | [personas.md](references/personas.md) | 5 persona walkthroughs (first-timer / power / low-bandwidth / screen-reader / one-thumb). Load for `/heuristic --persona=<name>`. |
 | [state-design.md](references/state-design.md) | State lattice — idle / loading / empty / error / partial / conflict / offline. Load for `/unhappy`. |
+| [coverage.md](references/coverage.md) | UX coverage — the parts 12 screen archetypes need to be complete (data table, settings, search, detail view, first-run, billing, pricing, docs, checkout, onboarding, destructive confirm, invite). The **completeness** axis, not distinction. Load for `/harden`, or when asked what a screen is missing. **Prefer the `ux_coverage` MCP tool** — it returns one archetype instead of all twelve. Generated from `mcp/src/coverage-data.mjs`; do not edit by hand. |
 | [dataviz.md](references/dataviz.md) | Cleveland-McGill perceptual hierarchy, chart selection matrix, ColorBrewer/Okabe-Ito palettes, Tufte, direct labeling. Load when designing charts. |
 | [agents.md](references/agents.md) | Agent pack overview: `design-reviewer` + `a11y-auditor` roles, agent-vs-command guidance, and parallel verify-team usage pattern. Load when setting up or describing the verify team. |

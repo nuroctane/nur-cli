@@ -24,22 +24,33 @@ TOKENS_STARTER = (
 )
 
 
-def test_sync_parses_bundled_starter_template(tmp_path):
+def _run(tmp_path: Path) -> subprocess.CompletedProcess:
     node = shutil.which("node")
     if not node:
         pytest.skip("node not available")
+    return subprocess.run(
+        [node, str(SCRIPT)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        # sync-brand-to-tokens.cjs prints emoji. Without an explicit encoding,
+        # `text=True` decodes the pipe with the locale codec, and several of
+        # those emoji have UTF-8 bytes that cp1252 has no character for
+        # (0x8F in the warning, 0x9D in the error, 0x8F in the dry-run notice).
+        # Decoding then raises inside subprocess's reader thread, the stream
+        # comes back as None, and assertions against it fail with a TypeError
+        # that hides the real result.
+        encoding="utf-8",
+    )
 
+
+def test_sync_parses_bundled_starter_template(tmp_path):
     (tmp_path / "docs").mkdir()
     (tmp_path / "assets").mkdir()
     shutil.copy(BRAND_STARTER, tmp_path / "docs" / "brand-guidelines.md")
     shutil.copy(TOKENS_STARTER, tmp_path / "assets" / "design-tokens.json")
 
-    result = subprocess.run(
-        [node, str(SCRIPT)],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-    )
+    result = _run(tmp_path)
 
     # Must not crash (the bug raised an unhandled TypeError).
     assert "TypeError" not in result.stderr, result.stderr
@@ -50,3 +61,20 @@ def test_sync_parses_bundled_starter_template(tmp_path):
     assert primitive["primary"]["500"]["$value"] == "#2563EB"
     assert primitive["secondary"]["500"]["$value"] == "#8B5CF6"
     assert primitive["accent"]["500"]["$value"] == "#10B981"
+
+
+def test_reports_missing_guidelines_without_breaking_the_harness(tmp_path):
+    """The missing-guidelines path is the one that breaks a locale-decoded pipe.
+
+    It is also the default state of any project that has not run the brand skill
+    yet, so it is the path a contributor hits first. The script prints its error
+    with a leading emoji whose UTF-8 encoding contains 0x9D; cp1252 has no
+    character there, so on Windows this test fails with
+    ``TypeError: argument of type 'NoneType' is not a container`` unless the
+    subprocess pipe is pinned to UTF-8.
+    """
+    result = _run(tmp_path)
+
+    assert result.returncode == 1
+    assert result.stderr is not None
+    assert "Brand guidelines not found" in result.stderr

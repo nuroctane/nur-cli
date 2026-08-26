@@ -71,7 +71,8 @@ Also auto-provisioned via the skills CLI into `~/.agents/skills`: design (Emil),
 clone-website, cybersecurity (large), infinite-headcount, Text-to-CAD,
 mobile-harness, DarkNavy web3-skills, and Cyfrin solskill, plus dual-write of the
 default set when the CLI is available. First-party `/sc-research` (whitehat DeFi
-playbooks) ships bundled.
+playbooks) ships bundled. Schema 26+ re-pulls those packs and the default plugins
+so upstream skill edits land on the next ensure.
 
 ### `/plugins` catalog (browse by category)
 

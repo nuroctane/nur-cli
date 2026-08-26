@@ -1,13 +1,13 @@
 ---
 name: delight
-description: "Delight pass — adds one or two memorable micro-interactions (copy specificity, hover choreography, state transitions, one signature detail) without decoration or confetti. Use when the UI works but feels generic, or when the user says "make it feel special" / "add some personality". Invoke when the user asks for delight on their UI, or mentions 'delight' alongside design / UI / frontend work."
+description: "Delight pass — adds one or two memorable micro-interactions (copy specificity, hover choreography, state transitions, one signature detail) without decoration or confetti. Use when the UI works but feels generic, or when the user says \"make it feel special\" / \"add some personality\". Invoke when the user asks for delight on their UI, or mentions 'delight' alongside design / UI / frontend work."
 ---
 
 <!-- HARNESS MIRROR — do not edit here. Canonical source: skills/ or commands/. After editing source, copy into cli/assets/<harness>/ and repo-root harness mirrors. -->
 
 **Context:** this sub-skill is one lens of the broader `ui-craft` skill. If the `ui-craft` skill is also installed, read its SKILL.md first for Discovery + Anti-Slop + Craft Test, then apply the specific lens below.
 
-Add delight to the UI at the target the user described. Load the `ui-craft` skill.
+Add delight to the UI at `$ARGUMENTS`. Load the `ui-craft` skill.
 
 **Delight is specificity, not decoration.** The goal is one or two moments a user would screenshot — not confetti, not bounce, not emoji.
 
@@ -32,3 +32,5 @@ Add delight to the UI at the target the user described. Load the `ui-craft` skil
 **References to read**: `references/motion.md` (Decision Ladder + interaction rules), `references/copy.md` (microcopy voice), `../examples/animation-storyboard.md` (if multi-stage).
 
 **Output**: edit code directly. Print the Review Format table. Flag every candidate you chose not to add and why.
+
+**Next step:** `/finalize` — delight is the last additive pass; gate it before shipping (rung 3).

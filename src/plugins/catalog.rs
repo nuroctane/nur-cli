@@ -80,7 +80,7 @@ pub const CATALOG: &[PluginEntry] = &[
         name: "gstack",
         description: "Snarktank gstack - stacked agent workflows / AI engineering task graphs",
         category: "workflow",
-        source_url: "https://github.com/snarktank/gstack.git",
+        source_url: "https://github.com/garrytan/gstack.git",
         path_in_repo: None,
     },
     PluginEntry {

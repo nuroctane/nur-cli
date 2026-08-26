@@ -1,129 +1,221 @@
 ---
 name: excalidraw
-description: "Hand-drawn Excalidraw diagrams (.excalidraw). Use for architecture, flowcharts, decision trees. Prefer the excalidraw tool over bash."
+description: "Use when working with *.excalidraw or *.excalidraw.json files, user mentions diagrams/flowcharts, or requests architecture visualization - delegates all Excalidraw operations to subagents to prevent context exhaustion from verbose JSON (single files: 4k-22k tokens, can exceed read limits)"
 ---
 
-# Excalidraw — diagrams from element JSON
+# Excalidraw Subagent Delegation
 
-Nur auto-installs `excalidraw-cli` (npm) when Node is available.
-Prefer the **`excalidraw`** tool — do not shell out to bash for diagrams.
+## Overview
 
-## When to use
+**Core principle:** Main agents NEVER read Excalidraw files directly. Always delegate to subagents to isolate context consumption.
 
-- Architecture diagrams, request/data flows, decision flowcharts
-- Not for pixel-perfect UI mockups (use design skills / HTML instead)
+Excalidraw files are JSON with high token cost but low information density. Single files range from 4k-22k tokens (largest can exceed read tool limits). Reading multiple diagrams quickly exhausts context budget (7 files = 67k tokens = 33% of budget).
 
-## Fast path
+## The Problem
 
-1. Build element JSON (camera → dark bg optional → shapes → arrows with bindings)
-2. **`excalidraw(action=create, elements=[…], output="docs/foo.excalidraw")`**
-   - Writes the file, uploads to excalidraw.com, and **opens the share URL in the user's browser** (default)
-   - Do **not** stop at "here's a link" — create already opens it. Tell the user the browser should have opened.
-3. Format help: `excalidraw(action=reference)` if stuck on schema
-4. `open=false` only when the user asked not to open anything
+Excalidraw JSON structure:
+- Each shape has 20+ properties (x, y, width, height, strokeColor, seed, version, etc.)
+- Most properties are visual metadata (positioning, styling, roughness)
+- Actual content: text labels and element relationships (<10% of file)
+- **Signal-to-noise ratio is extremely low**
 
-## Open policy (critical)
+Example: 14-element diagram = 596 lines, 16K, ~4k tokens. 79-element diagram = 2,916 lines, 88K, ~22k tokens (exceeds read limit).
 
-- **Excalidraw = web share only.** `open=true` opens the browser to `https://excalidraw.com/...`.
-- **Never** OS-open a local `.excalidraw` file:
-  - forbidden: `Start-Process path\to\file.excalidraw`
-  - forbidden: `open_uri::open_path(.excalidraw)` / `xdg-open` / `open` on the file
-  - that triggers Windows **"Open with"** when no association exists
-- If export fails or no share URL is printed: leave the file on disk and report the path + error. Do **not** "console open" the local file as a fallback.
-- Prefer the `excalidraw` tool. If you must shell to CLI: `excalidraw export <file>` then open **only** the printed `https://excalidraw.com/...` URL.
-- For interactive offline boards the user can keep editing natively: use **`tldraw`** / `/draw` (desktop app) — not Excalidraw.
+## When to Use
 
-## CLI defaults (omit these in JSON)
+**Trigger on ANY of these:**
+- File path contains `.excalidraw` or `.excalidraw.json`
+- User requests: "explain/update/create diagram", "show architecture", "visualize flow"
+- User mentions: "flowchart", "architecture diagram", "Excalidraw file"
+- Architecture/design documentation tasks involving visual artifacts
 
-roughness=2 · roundness rounded · fontFamily=1 (handwritten) · strokeWidth=2
+**Use delegation even for:**
+- "Small" files (smallest is 4k tokens - still significant)
+- "Quick checks" (checking component names still loads full JSON)
+- Single file operations (isolation prevents context pollution)
+- Modifications (don't need full format understanding in main context)
 
-## Minimal shapes
+## Delegation Pattern
 
-```json
-{ "type": "rectangle", "id": "r1", "x": 100, "y": 100, "width": 200, "height": 80,
-  "backgroundColor": "#1e3a5f", "fillStyle": "solid", "strokeColor": "#4a9eed",
-  "label": { "text": "Label", "strokeColor": "#e5e5e5" } }
+### Main Agent Responsibilities
+
+**NEVER:**
+- ❌ Use Read tool on *.excalidraw files
+- ❌ Parse Excalidraw JSON in main context
+- ❌ Load multiple diagrams for comparison
+- ❌ Inspect file to "understand the format"
+
+**ALWAYS:**
+- ✅ Delegate ALL Excalidraw operations to subagents
+- ✅ Provide clear task description to subagent
+- ✅ Request text-only summaries (not raw JSON)
+- ✅ Keep diagram analysis isolated from main work
+
+### Subagent Task Templates
+
+#### Read/Understand Operation
+```
+Task: Extract and explain the components in [file.excalidraw.json]
+
+Approach:
+1. Read the Excalidraw JSON
+2. Extract only text elements (ignore positioning/styling)
+3. Identify relationships between components
+4. Summarize architecture/flow
+
+Return:
+- List of components/services with descriptions
+- Connection/dependency relationships
+- Key insights about the architecture
+- DO NOT return raw JSON or verbose element details
 ```
 
-Types: `rectangle` · `ellipse` · `diamond` · `text` · `arrow`
+#### Modify Operation
+```
+Task: Add [component] to [file.excalidraw.json], connected to [existing-component]
 
-## Labels
+Approach:
+1. Read file to identify existing elements
+2. Find [existing-component] and its position
+3. Create new element JSON for [component]
+4. Add arrow elements for connections
+5. Write updated file
 
-Use `label: { "text": "…", "fontSize": 20, "strokeColor": "#e5e5e5" }` on shapes and arrows.
-CLI expands labels into bound text elements.
-
-## Arrows + bindings
-
-```json
-{ "type": "arrow", "id": "a1", "x": 300, "y": 140, "width": 150, "height": 0,
-  "points": [[0,0],[150,0]], "endArrowhead": "arrow", "strokeColor": "#4a9eed",
-  "startBinding": { "elementId": "b1", "fixedPoint": [1, 0.5] },
-  "endBinding": { "elementId": "b2", "fixedPoint": [0, 0.5] },
-  "label": { "text": "edge", "strokeColor": "#a0a0a0" } }
+Return:
+- Confirmation of changes made
+- Position of new element
+- IDs of created elements
 ```
 
-fixedPoint: right `[1,0.5]` · left `[0,0.5]` · top `[0.5,0]` · bottom `[0.5,1]`
+#### Create Operation
+```
+Task: Create new Excalidraw diagram showing [description]
 
-Also add the arrow id to each shape's `boundElements`.
+Approach:
+1. Design layout for [number] components
+2. Create rectangle elements with text labels
+3. Add arrows showing relationships
+4. Use consistent styling (colors, fonts)
+5. Write to [file.excalidraw.json]
 
-## Camera (4:3 required)
-
-```json
-{ "type": "cameraUpdate", "width": 1200, "height": 900, "x": 0, "y": 0 }
+Return:
+- Confirmation of file created
+- Summary of components included
+- File location
 ```
 
-Sizes: 400×300 S · 600×450 M · **800×600 L** · **1200×900 XL** · 1600×1200 XXL
+#### Compare Operation
+```
+Task: Compare architecture approaches in [file1] vs [file2]
 
-## Dark mode background (first element after camera)
+Approach:
+1. Read both files
+2. Extract text labels from each
+3. Identify structural differences
+4. Compare component relationships
 
-```json
-{ "type": "rectangle", "id": "darkbg", "x": -4000, "y": -3000, "width": 10000, "height": 7500,
-  "backgroundColor": "#1e1e2e", "fillStyle": "solid", "strokeColor": "transparent", "strokeWidth": 0 }
+Return:
+- Key differences in architecture
+- Components unique to each approach
+- Relationship/flow differences
+- DO NOT return full element details from both files
 ```
 
-Dark fills: `#1e3a5f` blue · `#1a4d2e` green · `#2d1b69` purple · `#5c3d1a` amber · `#5c1a1a` red · `#1a4d4d` teal  
-Text: `#e5e5e5` primary · `#a0a0a0` muted
+## Common Rationalizations (STOP and Delegate Instead)
 
-## Drawing order
+| Excuse | Reality | What to Do |
+|--------|---------|------------|
+| "Direct reading is most efficient" | Consumes 4k-22k tokens unnecessarily | Delegate to subagent |
+| "It's token-efficient to read directly" | Baseline tests showed 9-45% budget used | Always delegate |
+| "This is optimal for one-time analysis" | "One-time" still pollutes main context | Subagent isolation |
+| "The JSON is straightforward" | Simplicity ≠ token efficiency | Delegate anyway |
+| "I need to understand the format" | Format understanding not needed in main agent | Subagent handles format |
+| "Within reasonable bounds" (18k tokens) | "Reasonable" is subjective rationalization | Hard rule: delegate |
+| "Just a quick check of components" | "Quick check" still loads full JSON | Extract text via subagent |
+| "File is small (16K)" | 4k tokens is NOT small | Size threshold doesn't matter |
 
-camera → background zones → shape → its text/label → its arrows → next shape…  
-**Bad:** all rects then all arrows. **Good:** progressive per node.
+## Red Flags - STOP and Delegate
 
-## Sizing rules
+Catch yourself about to:
+- Use Read tool on .excalidraw file
+- "Quickly check" what components exist
+- "Understand the structure" before modifying
+- Load file to "see what's there"
+- Compare multiple diagrams side-by-side
+- Parse JSON to "extract just the text"
 
-- Min labeled shape ~120×60 · gaps 20–30px · fontSize 28 title · 20 labels · 14 min
-- No emoji (Excalifont does not render them)
+**All of these mean: Use Task tool with subagent instead.**
 
-## 3-box flow template
+## Quick Reference
 
-```json
-[
-  { "type": "cameraUpdate", "width": 1200, "height": 900, "x": 0, "y": 100 },
-  { "type": "rectangle", "id": "darkbg", "x": -4000, "y": -3000, "width": 10000, "height": 7500,
-    "backgroundColor": "#1e1e2e", "fillStyle": "solid", "strokeColor": "transparent", "strokeWidth": 0 },
-  { "type": "rectangle", "id": "b1", "x": 60, "y": 350, "width": 220, "height": 90,
-    "backgroundColor": "#1e3a5f", "fillStyle": "solid", "strokeColor": "#4a9eed",
-    "label": { "text": "Request", "strokeColor": "#e5e5e5" },
-    "boundElements": [{ "id": "a1", "type": "arrow" }] },
-  { "type": "arrow", "id": "a1", "x": 280, "y": 395, "width": 200, "height": 0,
-    "points": [[0,0],[200,0]], "endArrowhead": "arrow", "strokeColor": "#4a9eed",
-    "startBinding": { "elementId": "b1", "fixedPoint": [1, 0.5] },
-    "endBinding": { "elementId": "b2", "fixedPoint": [0, 0.5] },
-    "label": { "text": "process", "strokeColor": "#a0a0a0" } },
-  { "type": "rectangle", "id": "b2", "x": 500, "y": 350, "width": 220, "height": 90,
-    "backgroundColor": "#5c3d1a", "fillStyle": "solid", "strokeColor": "#f59e0b",
-    "label": { "text": "Server", "strokeColor": "#e5e5e5" },
-    "boundElements": [{ "id": "a1", "type": "arrow" }, { "id": "a2", "type": "arrow" }] },
-  { "type": "arrow", "id": "a2", "x": 720, "y": 395, "width": 200, "height": 0,
-    "points": [[0,0],[200,0]], "endArrowhead": "arrow", "strokeColor": "#22c55e",
-    "startBinding": { "elementId": "b2", "fixedPoint": [1, 0.5] },
-    "endBinding": { "elementId": "b3", "fixedPoint": [0, 0.5] },
-    "label": { "text": "respond", "strokeColor": "#a0a0a0" } },
-  { "type": "rectangle", "id": "b3", "x": 940, "y": 350, "width": 220, "height": 90,
-    "backgroundColor": "#1a4d2e", "fillStyle": "solid", "strokeColor": "#22c55e",
-    "label": { "text": "Response", "strokeColor": "#e5e5e5" },
-    "boundElements": [{ "id": "a2", "type": "arrow" }] }
-]
+| Operation | Main Agent Action | Subagent Returns |
+|-----------|-------------------|------------------|
+| **Understand diagram** | Delegate with "Extract and explain" template | Component list + relationships |
+| **Modify diagram** | Delegate with "Add [X] connected to [Y]" template | Confirmation + changes made |
+| **Create diagram** | Delegate with "Create showing [description]" template | File location + summary |
+| **Compare diagrams** | Delegate with "Compare [A] vs [B]" template | Key differences (not raw JSON) |
+
+## Token Analysis (Why This Matters)
+
+Real data from baseline testing:
+
+| Scenario | Without Delegation | With Delegation | Savings |
+|----------|-------------------|-----------------|---------|
+| Single large file | 22k tokens (45% budget) | ~500 tokens (subagent summary) | 98% |
+| Two-file comparison | 18k tokens (9% budget) | ~800 tokens (diff summary) | 96% |
+| Modification task | 14k tokens (7% budget) | ~300 tokens (confirmation) | 98% |
+
+**Context pollution impact:**
+- Reading all 7 project diagrams: 67k tokens (33% of 200k budget)
+- With delegation: ~2k tokens (isolated in subagents)
+- **Savings: 97% context budget preserved**
+
+## Implementation Example
+
+**❌ BAD (Direct Read):**
+```
+User: "What architecture is shown in detailed-architecture.excalidraw.json?"
+Agent: Let me read that file... [reads 22k tokens into main context]
 ```
 
-Upstream: https://github.com/ahmadawais/excalidraw-cli
+**✅ GOOD (Subagent Delegation):**
+```
+User: "What architecture is shown in detailed-architecture.excalidraw.json?"
+Agent: I'll use a subagent to extract the architecture details.
+
+[Dispatches Task tool with general-purpose subagent]
+Task: Extract and explain components in .ryanquinn3/ticketing/detailed-architecture.excalidraw.json
+
+[Receives ~500 token summary with component list and relationships]
+[Responds to user with architecture explanation, main context preserved]
+```
+
+## Why "Straightforward JSON" Doesn't Matter
+
+Agents often rationalize: "The format is simple, I can just read it."
+
+**The problem isn't complexity - it's verbosity:**
+- Simple structure with 20+ properties per element
+- Repetitive metadata (seed, version, nonce, roughness)
+- Positioning data (x, y, width, height) not semantically useful
+- Visual styling (strokeColor, opacity, fillStyle) irrelevant to content
+
+**Token cost comes from volume, not complexity.**
+
+Even "straightforward" JSON consumes 4k-22k tokens because:
+- 79 elements × ~280 tokens/element = 22k tokens
+- Most tokens are metadata noise
+- Only text labels and relationships matter (~10% of content)
+
+## The Iron Law
+
+**Main agents NEVER read Excalidraw files. No exceptions.**
+
+Not for:
+- "Quick checks"
+- "Small files"
+- "Understanding format"
+- "One-time analysis"
+- "Optimal efficiency"
+
+**Always delegate. Isolation is free via subagents.**

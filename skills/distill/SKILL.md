@@ -1,13 +1,13 @@
 ---
 name: distill
-description: "Reduction pass — cuts content, structure, visuals, and dead code that doesn't answer a user question or drive an action, respecting CRAFT_LEVEL. Use when the UI feels cluttered, has too many CTAs, walls of text, or decorative noise, or when the user says "simplify this" / "it feels too busy". Invoke when the user asks for distill on their UI, or mentions 'distill' alongside design / UI / frontend work."
+description: "Reduction pass — cuts content, structure, visuals, and dead code that doesn't answer a user question or drive an action, respecting CRAFT_LEVEL. Use when the UI feels cluttered, has too many CTAs, walls of text, or decorative noise, or when the user says \"simplify this\" / \"it feels too busy\". Invoke when the user asks for distill on their UI, or mentions 'distill' alongside design / UI / frontend work."
 ---
 
 <!-- HARNESS MIRROR — do not edit here. Canonical source: skills/ or commands/. After editing source, copy into cli/assets/<harness>/ and repo-root harness mirrors. -->
 
 **Context:** this sub-skill is one lens of the broader `ui-craft` skill. If the `ui-craft` skill is also installed, read its SKILL.md first for Discovery + Anti-Slop + Craft Test, then apply the specific lens below.
 
-Distill the UI at the target the user described to its essence. Load the `ui-craft` skill.
+Distill the UI at `$ARGUMENTS` to its essence. Load the `ui-craft` skill.
 
 **The test for every section, component, prop, and word:**
 
@@ -39,3 +39,5 @@ Distill the UI at the target the user described to its essence. Load the `ui-cra
 - End with a one-line **delta**: "Before: N sections / M components / X lines. After: …".
 
 **Guardrail**: do not cut accessibility affordances (labels, focus styles, error text, reduced-motion fallbacks) — those always earn their space.
+
+**Next step:** `/polish` — what survived the cut deserves the details (rung 1).

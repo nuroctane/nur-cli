@@ -1,13 +1,13 @@
 ---
 name: extract
-description: "Refactoring pass — extracts repeated Tailwind class combos and markup into components, and lifts magic values into design tokens. Use when the codebase has obvious duplication, hardcoded hex values or pixel sizes, or when the user says "clean this up" / "extract components" / "tokenize styles". Invoke when the user asks for extract on their UI, or mentions 'extract' alongside design / UI / frontend work."
+description: "Refactoring pass — extracts repeated Tailwind class combos and markup into components, and lifts magic values into design tokens. Use when the codebase has obvious duplication, hardcoded hex values or pixel sizes, or when the user says \"clean this up\" / \"extract components\" / \"tokenize styles\". Invoke when the user asks for extract on their UI, or mentions 'extract' alongside design / UI / frontend work."
 ---
 
 <!-- HARNESS MIRROR — do not edit here. Canonical source: skills/ or commands/. After editing source, copy into cli/assets/<harness>/ and repo-root harness mirrors. -->
 
 **Context:** this sub-skill is one lens of the broader `ui-craft` skill. If the `ui-craft` skill is also installed, read its SKILL.md first for Discovery + Anti-Slop + Craft Test, then apply the specific lens below.
 
-Extract reusable pieces from the target the user described. Load the `ui-craft` skill.
+Extract reusable pieces from `$ARGUMENTS`. Load the `ui-craft` skill.
 
 **Step 1 — Scan the target for extraction candidates:**
 
@@ -40,3 +40,5 @@ Extract reusable pieces from the target the user described. Load the `ui-craft` 
 | --- | --- | --- |
 
 3. A one-line delta: "Extracted N components, M tokens. Call-sites updated: X."
+
+**Next step:** `/tokens` — lift the values you just centralized into the token spine (rung 2).

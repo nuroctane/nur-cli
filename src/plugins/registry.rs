@@ -150,18 +150,34 @@ pub fn install_entry(entry: &PluginEntry) -> Result<String, String> {
 
     let dest = home.join(entry.id);
     if dest.is_dir() {
-        // Update existing checkout.
-        let pull = Command::new("git")
-            .args(["-C", &dest.display().to_string(), "pull", "--ff-only"])
+        // Shallow clones often cannot ff-only pull; fetch + reset to origin.
+        let fetch = Command::new("git")
+            .args([
+                "-C",
+                &dest.display().to_string(),
+                "fetch",
+                "--depth",
+                "1",
+                "origin",
+            ])
             .output();
-        match pull {
-            Ok(o) if o.status.success() => {}
+        match fetch {
+            Ok(o) if o.status.success() => {
+                let _ = Command::new("git")
+                    .args([
+                        "-C",
+                        &dest.display().to_string(),
+                        "reset",
+                        "--hard",
+                        "FETCH_HEAD",
+                    ])
+                    .output();
+            }
             Ok(o) => {
                 let err = String::from_utf8_lossy(&o.stderr);
-                // Non-fatal: keep existing tree if pull fails (dirty / no remote).
-                tracing::warn!("plugin pull {}: {err}", entry.id);
+                tracing::warn!("plugin fetch {}: {err}", entry.id);
             }
-            Err(e) => tracing::warn!("plugin pull {}: {e}", entry.id),
+            Err(e) => tracing::warn!("plugin fetch {}: {e}", entry.id),
         }
     } else {
         // Shallow clone into a temp dir then rename (atomic-ish).
@@ -250,7 +266,7 @@ pub fn uninstall_plugin(id: &str) -> Result<String, String> {
 
 /// Plugins that should be present after a normal ecosystem ensure / install.
 /// Superpowers + Fable + the "real engineering" default set (mattpocock,
-/// addyosmani, builderio). Idempotent: skips when already on disk.
+/// addyosmani, builderio). Re-pulls existing clones on each ensure.
 pub const DEFAULT_PLUGINS: &[&str] = &[
     "superpowers",
     "fable",
@@ -265,17 +281,7 @@ pub fn ensure_default_plugins() -> (Vec<String>, Vec<String>) {
     let mut ok = Vec::new();
     let mut notes = Vec::new();
     for id in DEFAULT_PLUGINS {
-        let dest = plugins_home().join(id);
-        if dest.is_dir() {
-            // Already installed — still re-mirror skills in case discovery improved.
-            if let Err(e) = mirror_skills_to_nur_home(&dest) {
-                notes.push(format!("{id}: remirror {e}"));
-            }
-            // Ensure registry row is enabled.
-            let _ = set_enabled(id, true);
-            ok.push((*id).to_string());
-            continue;
-        }
+        // Always go through install_entry so an existing clone `git pull`s.
         match install_plugin(id) {
             Ok(msg) => {
                 ok.push((*id).to_string());

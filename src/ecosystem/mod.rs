@@ -49,7 +49,8 @@ const ECOSYSTEM_MARKER: &str = "ecosystem.json";
 /// 23: investigator-ops (zachxbt/tayvano) + reviewing-frontend-and-ops-surfaces.
 /// 24: hunting-x-linked-bounties paid Immunefi/X navigator.
 /// 25: SCA pack under skills/security/SCA (runtime still ~/.nur/skills/<name>).
-const ECOSYSTEM_SCHEMA: u32 = 25;
+/// 26: refresh vendored third-party skills + re-pull default plugins / skill packs.
+pub(crate) const ECOSYSTEM_SCHEMA: u32 = 26;
 /// Re-run ensure at most once per this many seconds unless forced.
 const ENSURE_TTL_SECS: u64 = 86_400;
 

@@ -1,13 +1,13 @@
 ---
 name: bolder
-description: "Amplify personality — raises layout variance and motion, strengthens typography and one signature detail, without slop. Use when the UI works but feels safe, flat, or "template-y", or when the user says "bolder", "more personality", "more creative", or "make it pop" (still professional). Invoke when the user asks for bolder on their UI, or mentions 'bolder' alongside design / UI / frontend work."
+description: "Amplify personality — raises layout variance and motion, strengthens typography and one signature detail, without slop. Use when the UI works but feels safe, flat, or \"template-y\", or when the user says \"bolder\", \"more personality\", \"more creative\", or \"make it pop\" (still professional). Invoke when the user asks for bolder on their UI, or mentions 'bolder' alongside design / UI / frontend work."
 ---
 
 <!-- HARNESS MIRROR — do not edit here. Canonical source: commands/bolder.md. After editing source, copy into cli/assets/<harness>/ and repo-root harness mirrors. -->
 
 **Context:** this sub-skill is one lens of the broader `ui-craft` skill. If the `ui-craft` skill is also installed, read its SKILL.md first for Discovery + Anti-Slop + Craft Test, then apply the specific lens below.
 
-Make the UI at `the target the user described` bolder. Load the `ui-craft` skill and read `references/craft-intent.md`.
+Make the UI at `$ARGUMENTS` bolder. Load the `ui-craft` skill and read `references/craft-intent.md`.
 
 **This is amplitude, not decoration.** Increase editorial confidence while staying anti-slop clean.
 
@@ -25,3 +25,5 @@ Make the UI at `the target the user described` bolder. Load the `ui-craft` skill
 **Knob gating:** if already at variance ≥9 or MOTION ≥9, strengthen signature and typography instead of pushing further.
 
 **Output:** edit code. Print Review Format table. End with the updated Craft Read line.
+
+**Next step:** `/critique` — confirm the added personality did not cost hierarchy or become slop (rung 1).

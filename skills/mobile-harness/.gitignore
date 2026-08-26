@@ -1,0 +1,20 @@
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
+
+# Local agent-owned state. Keep schemas/templates, ignore real content.
+memory/**
+!memory/
+!memory/README.md
+
+credentials/**
+!credentials/
+!credentials/README.md
+!credentials/TEMPLATE.md
+
+tmp/
+
+# Local QA helpers and experiments. The harness product is Markdown-only.
+scripts/
+tests/

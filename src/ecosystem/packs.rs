@@ -596,9 +596,10 @@ pub fn install_skill_packs(skills_cli: &ComponentStatus) -> (Vec<String>, Vec<St
     };
 
     for (source, label) in SKILL_PACKS {
-        // Skip re-install if a marker file says we already have this pack.
+        // Skip re-install only when this schema already recorded a success.
+        // Schema bumps re-run `skills add` so upstream playbook edits land.
         let marker = pack_marker(label);
-        if marker.is_file() {
+        if pack_marker_current(&marker) {
             ok.push((*label).into());
             continue;
         }
@@ -612,7 +613,8 @@ pub fn install_skill_packs(skills_cli: &ComponentStatus) -> (Vec<String>, Vec<St
                 let _ = fs::write(
                     &marker,
                     format!(
-                        "source={source}\ninstalled_at={}\n{}\n",
+                        "source={source}\nschema={}\ninstalled_at={}\n{}\n",
+                        super::ECOSYSTEM_SCHEMA,
                         chrono_now(),
                         out.chars().take(500).collect::<String>()
                     ),
@@ -648,6 +650,14 @@ fn skill_pack_install_args<'a>(source: &'a str, label: &'a str) -> Vec<&'a str> 
 
 fn pack_marker(label: &str) -> PathBuf {
     nur_home().join("skill-packs").join(format!("{label}.ok"))
+}
+
+fn pack_marker_current(marker: &std::path::Path) -> bool {
+    let Ok(text) = fs::read_to_string(marker) else {
+        return false;
+    };
+    text.lines()
+        .any(|line| line == format!("schema={}", super::ECOSYSTEM_SCHEMA))
 }
 
 fn chrono_now() -> String {
@@ -712,7 +722,7 @@ fn mirror_missing_tree(
         let target = destination.join(&name);
         if file_type.is_dir() {
             mirror_missing_tree(&entry.path(), &target)?;
-        } else if file_type.is_file() && !target.exists() {
+        } else if file_type.is_file() {
             fs::copy(entry.path(), target)?;
         }
     }
