@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-08-25T23:06:07.751499",
-  "total_skills": 1041,
+  "generated_at": "2026-08-26T22:55:20.042976",
+  "total_skills": 1049,
   "note": "Comprehensive skill intent index - 700+ skills, expanded NL triggers. Must be updated when adding skills per AGENTS.md. Run: python scripts/generate_skill_intents.py",
   "skills": [
     {
@@ -2980,7 +2980,7 @@
     {
       "name": "auditing-blockchain-clients",
       "description": "Audit blockchain node clients (Go, Rust, C/C++) for P2P, consensus, RPC, and memory-safety issues. Use for client contest repos (Firedancer-class) and node source. Prefer DarkNavy client-auditor when installed.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\auditing-blockchain-clients\\SKILL.md",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\auditing-blockchain-clients\\SKILL.md",
       "triggers": [
         "/auditing blockchain clients",
         "/auditing-blockchain-clients",
@@ -3515,7 +3515,7 @@
     {
       "name": "battlechain-safe-harbor-whitehat",
       "description": "Cyfrin BattleChain and Safe Harbor whitehat flow: deploy to the pre-mainnet L2, request attack mode, read on-chain bounty terms. Use with Cyfrin/solskill. Lawful attack-mode only on contracts that opted in.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\battlechain-safe-harbor-whitehat\\SKILL.md",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\battlechain-safe-harbor-whitehat\\SKILL.md",
       "triggers": [
         "/battlechain safe harbor whitehat",
         "/battlechain-safe-harbor-whitehat",
@@ -6857,7 +6857,7 @@
     {
       "name": "contest-and-bounty-reporting",
       "description": "Write in-scope smart-contract contest and Immunefi bounty reports: severity, impact, root cause, local Foundry test, fix. Use for Code4rena, Sherlock, Cantina, Hats, Immunefi. No live exploits.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\contest-and-bounty-reporting\\SKILL.md",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\contest-and-bounty-reporting\\SKILL.md",
       "triggers": [
         "/contest and bounty reporting",
         "/contest-and-bounty-reporting",
@@ -13324,7 +13324,7 @@
     {
       "name": "formal-verification-halmos-certora-kontrol",
       "description": "Formal/symbolic properties on Solidity with Halmos, solc SMTChecker, Certora CVL, and Kontrol. Use when fuzzing is not enough for a conservation law. Slow path, like Mythril.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\formal-verification-halmos-certora-kontrol\\SKILL.md",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\formal-verification-halmos-certora-kontrol\\SKILL.md",
       "triggers": [
         "/formal verification halmos certora kontrol",
         "/formal-verification-halmos-certora-kontrol",
@@ -13482,7 +13482,7 @@
     {
       "name": "fuzzing-with-echidna-and-medusa",
       "description": "Property-based fuzzing of Solidity with Echidna (Trail of Bits) and Medusa (Crytic) as a complement to Foundry invariants. Use when forge invariant handlers are not enough or the repo already has Echidna properties.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\fuzzing-with-echidna-and-medusa\\SKILL.md",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\fuzzing-with-echidna-and-medusa\\SKILL.md",
       "triggers": [
         "/fuzzing with echidna and medusa",
         "/fuzzing-with-echidna-and-medusa",
@@ -14154,6 +14154,42 @@
         "fonts",
         "spacing",
         "shadows"
+      ]
+    },
+    {
+      "name": "historical-smart-contract-vulns",
+      "description": "Historical smart-contract vulnerability library across EVM L1/L2, Solana, Move, Cosmos/IBC, Cairo, Bitcoin-adjacent, other VMs, plus zachxbt/tayvano ops vs code. Use for bounty-class mapping, public incident lookup, and in-scope review seeds. Lawful/whitehat only. Load one reference slice, never the",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\historical-smart-contract-vulns\\SKILL.md",
+      "triggers": [
+        "/historical smart contract vulns",
+        "/historical-smart-contract-vulns",
+        "historical smart contract vulns",
+        "historical-smart-contract-vulns",
+        "/historical smart contract",
+        "/historical-smart-contract",
+        "historical smart contract",
+        "historical-smart-contract",
+        "immunefi bounty library",
+        "/smart contract vulns",
+        "/smart-contract-vulns",
+        "wormhole bounty class",
+        "defi hack history",
+        "historical vulns",
+        "zachxbt",
+        "tayvano",
+        "investigator ops"
+      ],
+      "keywords": [
+        "historical",
+        "smart",
+        "contract",
+        "vulns",
+        "vulnerability",
+        "library",
+        "across",
+        "solana",
+        "move",
+        "cosmos"
       ]
     },
     {
@@ -15293,6 +15329,42 @@
         "replay",
         "lateral",
         "movement"
+      ]
+    },
+    {
+      "name": "hunting-x-linked-bounties",
+      "description": "Route Immunefi/X-linked paid writeups to the matching protocol playbook. Use for bounty intel, whitehat payouts, Immunefi bugfix reviews, and X-announced crits. Lawful/in-scope only. Load one reference slice, never the whole pack.",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\hunting-x-linked-bounties\\SKILL.md",
+      "triggers": [
+        "/hunting x linked bounties",
+        "/hunting-x-linked-bounties",
+        "hunting x linked bounties",
+        "hunting-x-linked-bounties",
+        "/hunting linked bounties",
+        "/hunting-linked-bounties",
+        "hunting linked bounties",
+        "hunting-linked-bounties",
+        "whitehat bounty writeup",
+        "/linked bounties",
+        "/linked-bounties",
+        "/hunting linked",
+        "x bounty intel",
+        "immunefi payout",
+        "paid immunefi",
+        "satya0x",
+        "pwning.eth"
+      ],
+      "keywords": [
+        "hunting",
+        "linked",
+        "bounties",
+        "route",
+        "immunefi",
+        "paid",
+        "writeups",
+        "matching",
+        "protocol",
+        "playbook"
       ]
     },
     {
@@ -21757,7 +21829,7 @@
     {
       "name": "onchain-read-recon",
       "description": "Read-only on-chain recon for verified Solidity: cast, Sourcify, storage layout, public transaction traces. Use before an in-scope audit or to reconstruct an already-mined incident. Never broadcast, never unlock wallets.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\onchain-read-recon\\SKILL.md",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\onchain-read-recon\\SKILL.md",
       "triggers": [
         "/onchain read recon",
         "/onchain-read-recon",
@@ -26071,7 +26143,7 @@
     {
       "name": "reconstructing-public-postmortems",
       "description": "Turn already-public DeFi incidents (rekt, DeFiHackLabs, BlockSec) into Foundry regression tests. Use for learning and for pinning a similar pattern on in-scope code. Never replay against live funds.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\reconstructing-public-postmortems\\SKILL.md",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reconstructing-public-postmortems\\SKILL.md",
       "triggers": [
         "/reconstructing public postmortems",
         "/reconstructing-public-postmortems",
@@ -26285,7 +26357,7 @@
     {
       "name": "researcher-gym-and-curriculum",
       "description": "Training path for a whitehat smart-contract researcher: Ethernaut, Damn Vulnerable DeFi, Cyfrin Updraft, Secureum, RareSkills, Paradigm CTF, then in-scope contests. Always as Foundry tests.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\researcher-gym-and-curriculum\\SKILL.md",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\researcher-gym-and-curriculum\\SKILL.md",
       "triggers": [
         "/researcher gym and curriculum",
         "/researcher-gym-and-curriculum",
@@ -26392,7 +26464,7 @@
     {
       "name": "reviewing-access-control-and-auth",
       "description": "Review Solidity access control: missing modifiers, tx.origin, initialize front-run, role rugging, default-public, and two-step ownership. Use on every admin, mint, upgrade, and withdraw path.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\reviewing-access-control-and-auth\\SKILL.md",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-access-control-and-auth\\SKILL.md",
       "triggers": [
         "/reviewing access control and auth",
         "/reviewing-access-control-and-auth",
@@ -26405,7 +26477,9 @@
         "/access control and",
         "/access-control-and",
         "access control and",
-        "access-control-and"
+        "access-control-and",
+        "missing onlyowner",
+        "enzyme privilege"
       ],
       "keywords": [
         "reviewing",
@@ -26423,7 +26497,7 @@
     {
       "name": "reviewing-amm-and-cl-pools",
       "description": "Review AMM and concentrated-liquidity pools: k-invariant, callbacks, fee-on-transfer, empty pool, tick math, and spoofed swap callbacks. Use for Uniswap-style, stableswap, and custom AMMs.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\reviewing-amm-and-cl-pools\\SKILL.md",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-amm-and-cl-pools\\SKILL.md",
       "triggers": [
         "/reviewing amm and cl pools",
         "/reviewing-amm-and-cl-pools",
@@ -26433,10 +26507,10 @@
         "review concentrated",
         "/reviewing amm and",
         "/reviewing-amm-and",
+        "balancer rounding",
         "reviewing amm and",
         "reviewing-amm-and",
         "uniswap callback",
-        "/reviewing amm",
         "amm invariant"
       ],
       "keywords": [
@@ -26453,9 +26527,42 @@
       ]
     },
     {
+      "name": "reviewing-bitcoin-adjacent",
+      "description": "Review Bitcoin Script, Lightning HTLCs, Stacks Clarity, BitVM/Babylon challenge games, and EVM-on-Bitcoin sidechains. Use when the VM is not Solidity. Lawful/in-scope only.",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-bitcoin-adjacent\\SKILL.md",
+      "triggers": [
+        "/reviewing bitcoin adjacent",
+        "/reviewing-bitcoin-adjacent",
+        "reviewing bitcoin adjacent",
+        "reviewing-bitcoin-adjacent",
+        "bitcoin script review",
+        "/reviewing bitcoin",
+        "/reviewing-bitcoin",
+        "/bitcoin adjacent",
+        "/bitcoin-adjacent",
+        "reviewing bitcoin",
+        "reviewing-bitcoin",
+        "stacks dos bounty",
+        "lightning htlc",
+        "stacks clarity"
+      ],
+      "keywords": [
+        "reviewing",
+        "bitcoin",
+        "adjacent",
+        "review",
+        "script",
+        "lightning",
+        "htlcs",
+        "stacks",
+        "clarity",
+        "bitvm"
+      ]
+    },
+    {
       "name": "reviewing-bridges-and-messaging",
       "description": "Review token bridges and cross-chain messages: replay, decoder, finality, aliasing, amount inflation, and unauthorized mint. Use for lock/mint, burn/mint, LayerZero, Optimism messenger, zk bridges.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\reviewing-bridges-and-messaging\\SKILL.md",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-bridges-and-messaging\\SKILL.md",
       "triggers": [
         "/reviewing bridges and messaging",
         "/reviewing-bridges-and-messaging",
@@ -26471,7 +26578,8 @@
         "reviewing-bridges-and",
         "bridge replay",
         "layerzero",
-        "cross chain message"
+        "cross chain message",
+        "scroll message spoof"
       ],
       "keywords": [
         "reviewing",
@@ -26487,9 +26595,77 @@
       ]
     },
     {
+      "name": "reviewing-cairo-and-starknet",
+      "description": "Review Cairo/Starknet contracts: u256 rounding, felt vs u256, account/session keys, L1-L2 messages. Use for Starknet DeFi (e.g. Vesu-class rounding). Lawful/in-scope only.",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-cairo-and-starknet\\SKILL.md",
+      "triggers": [
+        "/reviewing cairo and starknet",
+        "/reviewing-cairo-and-starknet",
+        "reviewing cairo and starknet",
+        "reviewing-cairo-and-starknet",
+        "/reviewing cairo and",
+        "/reviewing-cairo-and",
+        "/cairo and starknet",
+        "/cairo-and-starknet",
+        "reviewing cairo and",
+        "reviewing-cairo-and",
+        "cairo and starknet",
+        "cairo-and-starknet",
+        "cairo rounding",
+        "starknet vesu",
+        "vesu rounding"
+      ],
+      "keywords": [
+        "reviewing",
+        "cairo",
+        "starknet",
+        "review",
+        "contracts",
+        "u256",
+        "rounding",
+        "felt",
+        "account",
+        "session"
+      ]
+    },
+    {
+      "name": "reviewing-cosmos-and-ibc",
+      "description": "Review Cosmos SDK modules, IBC (ICS-20/23), ibc-hooks, CosmWasm submessages, Authz, Ante/fees. Use for appchains and IBC-connected DeFi. Lawful/in-scope only.",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-cosmos-and-ibc\\SKILL.md",
+      "triggers": [
+        "/reviewing cosmos and ibc",
+        "/reviewing-cosmos-and-ibc",
+        "reviewing cosmos and ibc",
+        "reviewing-cosmos-and-ibc",
+        "/reviewing cosmos and",
+        "/reviewing-cosmos-and",
+        "reviewing cosmos and",
+        "reviewing-cosmos-and",
+        "cosmwasm reentrancy",
+        "/reviewing cosmos",
+        "/reviewing-cosmos",
+        "reviewing cosmos",
+        "ibc ics-20",
+        "dragonberry",
+        "sei bounty"
+      ],
+      "keywords": [
+        "reviewing",
+        "cosmos",
+        "review",
+        "modules",
+        "hooks",
+        "cosmwasm",
+        "submessages",
+        "authz",
+        "ante",
+        "fees"
+      ]
+    },
+    {
       "name": "reviewing-cross-function-and-composer",
       "description": "Review compositions of otherwise-safe functions in one transaction: deposit+borrow, harvest+redeem, vote+queue. Use when unit tests pass but invariants fail on sequences. The handler skill is the test harness.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\reviewing-cross-function-and-composer\\SKILL.md",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-cross-function-and-composer\\SKILL.md",
       "triggers": [
         "/reviewing cross function and composer",
         "/reviewing-cross-function-and-composer",
@@ -26520,7 +26696,7 @@
     {
       "name": "reviewing-erc4626-and-vaults",
       "description": "Review ERC-4626 and vault share math for inflation, donation, first-depositor, rounding, and fee-on-transfer. Use for yield vaults, tokenized strategies, and convertToShares/convertToAssets paths.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\reviewing-erc4626-and-vaults\\SKILL.md",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-erc4626-and-vaults\\SKILL.md",
       "triggers": [
         "/reviewing erc4626 and vaults",
         "/reviewing-erc4626-and-vaults",
@@ -26532,8 +26708,8 @@
         "reviewing-erc4626-and",
         "/erc4626 and vaults",
         "/erc4626-and-vaults",
+        "belt finance bounty",
         "/reviewing erc4626",
-        "/reviewing-erc4626",
         "erc4626",
         "vault inflation",
         "first depositor"
@@ -26552,9 +26728,43 @@
       ]
     },
     {
+      "name": "reviewing-frontend-and-ops-surfaces",
+      "description": "Review wallets, Safe modules, Permit2, EIP-712 UIs, and signer runbooks for phishing-class bugs (Bybit Safe UI, drainers, leftover approvals). Use when the loss class is ops/frontend, not vault math. Lawful/in-scope only.",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-frontend-and-ops-surfaces\\SKILL.md",
+      "triggers": [
+        "/reviewing frontend and ops surfaces",
+        "/reviewing-frontend-and-ops-surfaces",
+        "reviewing frontend and ops surfaces",
+        "reviewing-frontend-and-ops-surfaces",
+        "/reviewing frontend and",
+        "/reviewing-frontend-and",
+        "reviewing frontend and",
+        "reviewing-frontend-and",
+        "/reviewing frontend",
+        "/reviewing-frontend",
+        "reviewing frontend",
+        "reviewing-frontend",
+        "bybit safe ui",
+        "permit2 phishing",
+        "wallet drainer"
+      ],
+      "keywords": [
+        "reviewing",
+        "frontend",
+        "surfaces",
+        "review",
+        "wallets",
+        "safe",
+        "modules",
+        "permit2",
+        "signer",
+        "runbooks"
+      ]
+    },
+    {
       "name": "reviewing-governance-and-timelocks",
       "description": "Review Governor, timelock, and upgrade-via-governance: delay bypass, proposal hijack, snapshot vs flashloan votes, queue/execute hash mismatch. Use for OZ Governor, custom DAOs, and admin multisigs.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\reviewing-governance-and-timelocks\\SKILL.md",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-governance-and-timelocks\\SKILL.md",
       "triggers": [
         "/reviewing governance and timelocks",
         "/reviewing-governance-and-timelocks",
@@ -26587,7 +26797,7 @@
     {
       "name": "reviewing-l2-sequencer-and-finality",
       "description": "Review L2 assumptions: sequencer downtime, Chainlink sequencer uptime, address aliasing, delayed inbox, custom gas tokens, and optimistic finality windows. Use for OP/Arbitrum/Base/zk and any protocol that reads L1 state from L2.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\reviewing-l2-sequencer-and-finality\\SKILL.md",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-l2-sequencer-and-finality\\SKILL.md",
       "triggers": [
         "/reviewing l2 sequencer and finality",
         "/reviewing-l2-sequencer-and-finality",
@@ -26600,7 +26810,10 @@
         "reviewing l2 sequencer",
         "reviewing-l2-sequencer",
         "sequencer and finality",
-        "sequencer-and-finality"
+        "sequencer-and-finality",
+        "l2 sequencer",
+        "optimism selfdestruct",
+        "zksync proof"
       ],
       "keywords": [
         "reviewing",
@@ -26618,7 +26831,7 @@
     {
       "name": "reviewing-lending-and-liquidations",
       "description": "Review lending markets, CDPs, and liquidations: LTV, oracle, interest index, liquidation bonus, bad debt, and self-liquidation. Use for money markets and isolated pools.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\reviewing-lending-and-liquidations\\SKILL.md",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-lending-and-liquidations\\SKILL.md",
       "triggers": [
         "/reviewing lending and liquidations",
         "/reviewing-lending-and-liquidations",
@@ -26628,10 +26841,10 @@
         "/lending-and-liquidations",
         "lending and liquidations",
         "lending-and-liquidations",
+        "notional free collateral",
         "/reviewing lending and",
         "/reviewing-lending-and",
         "reviewing lending and",
-        "reviewing-lending-and",
         "liquidation bonus",
         "lending market",
         "bad debt"
@@ -26652,7 +26865,7 @@
     {
       "name": "reviewing-mev-ordering-and-slippage",
       "description": "Review MEV, ordering, and slippage: missing minOut/deadline, approve races, auction sniping, commit-reveal skips. Use for AMMs, launches, Dutch auctions, and any tx-order-sensitive value path. Analysis only - no sandwiching.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\reviewing-mev-ordering-and-slippage\\SKILL.md",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-mev-ordering-and-slippage\\SKILL.md",
       "triggers": [
         "/reviewing mev ordering and slippage",
         "/reviewing-mev-ordering-and-slippage",
@@ -26681,9 +26894,41 @@
       ]
     },
     {
+      "name": "reviewing-move-modules",
+      "description": "Review Aptos/Sui/Movement Move modules: borrow_global address, shared-object ACL, abilities, capabilities, PTB composition, halt/DoS. Use for Move programs. Lawful/in-scope only.",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-move-modules\\SKILL.md",
+      "triggers": [
+        "/reviewing move modules",
+        "/reviewing-move-modules",
+        "reviewing move modules",
+        "reviewing-move-modules",
+        "sui network shutdown",
+        "shared object acl",
+        "/reviewing move",
+        "/reviewing-move",
+        "sui move review",
+        "reviewing move",
+        "reviewing-move",
+        "/move modules",
+        "aptos module"
+      ],
+      "keywords": [
+        "reviewing",
+        "move",
+        "modules",
+        "review",
+        "aptos",
+        "movement",
+        "borrow",
+        "global",
+        "address",
+        "shared"
+      ]
+    },
+    {
       "name": "reviewing-nft-and-marketplace",
       "description": "Review NFT and marketplace contracts: safeTransfer callbacks, royalty bypass, listing signature replay, payment token weirdness, and enumeration grief. Use for ERC-721/1155 markets and launchpads.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\reviewing-nft-and-marketplace\\SKILL.md",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-nft-and-marketplace\\SKILL.md",
       "triggers": [
         "/reviewing nft and marketplace",
         "/reviewing-nft-and-marketplace",
@@ -26714,7 +26959,7 @@
     {
       "name": "reviewing-oracles-and-pricing",
       "description": "Review DeFi price oracles and share/rate math for flash-loan, staleness, sequencer, and first-depositor manipulation. Use for vaults, lending, liquidations, and any contract that reads a spot price.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\reviewing-oracles-and-pricing\\SKILL.md",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-oracles-and-pricing\\SKILL.md",
       "triggers": [
         "/reviewing oracles and pricing",
         "/reviewing-oracles-and-pricing",
@@ -26746,7 +26991,7 @@
     {
       "name": "reviewing-reentrancy-and-callbacks",
       "description": "Review reentrancy and token/AMM callbacks: classic, cross-function, read-only, ERC-777/721/1155 hooks, Uniswap callbacks, failed-call DoS. Use on any value-moving Solidity that makes external calls.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\reviewing-reentrancy-and-callbacks\\SKILL.md",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-reentrancy-and-callbacks\\SKILL.md",
       "triggers": [
         "/reviewing reentrancy and callbacks",
         "/reviewing-reentrancy-and-callbacks",
@@ -26779,7 +27024,7 @@
     {
       "name": "reviewing-signatures-permit-and-eip712",
       "description": "Review EIP-712, permit, and custom signatures: replay, chainId, nonce, deadline, ecrecover address(0), malleability, encodePacked collisions. Use for permits, listings, votes, and bridge attestations.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\reviewing-signatures-permit-and-eip712\\SKILL.md",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-signatures-permit-and-eip712\\SKILL.md",
       "triggers": [
         "/reviewing signatures permit and eip712",
         "/reviewing-signatures-permit-and-eip712",
@@ -26811,9 +27056,43 @@
       ]
     },
     {
+      "name": "reviewing-solana-programs",
+      "description": "Review Solana/SVM programs: missing signer, account confusion, arbitrary CPI, PDA bumps, sysvar spoof, close/reinit, Token-2022 hooks. Use for Anchor/native programs and SVM L2s. Lawful/in-scope only.",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-solana-programs\\SKILL.md",
+      "triggers": [
+        "/reviewing solana programs",
+        "/reviewing-solana-programs",
+        "reviewing solana programs",
+        "reviewing-solana-programs",
+        "solana program review",
+        "/reviewing solana",
+        "/reviewing-solana",
+        "/solana programs",
+        "/solana-programs",
+        "reviewing solana",
+        "reviewing-solana",
+        "solana programs",
+        "anchor audit",
+        "missing signer",
+        "raydium tick"
+      ],
+      "keywords": [
+        "reviewing",
+        "solana",
+        "programs",
+        "review",
+        "missing",
+        "signer",
+        "account",
+        "confusion",
+        "arbitrary",
+        "bumps"
+      ]
+    },
+    {
       "name": "reviewing-token-standard-pitfalls",
       "description": "Review ERC-20/721/1155 integration footguns: fee-on-transfer, rebasing, missing return, approve race, weird decimals, ERC-777/721 hooks. Use whenever a protocol talks to arbitrary tokens.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\reviewing-token-standard-pitfalls\\SKILL.md",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-token-standard-pitfalls\\SKILL.md",
       "triggers": [
         "/reviewing token standard pitfalls",
         "/reviewing-token-standard-pitfalls",
@@ -26846,7 +27125,7 @@
     {
       "name": "reviewing-upgradeable-proxies",
       "description": "Review upgradeable Solidity proxies (UUPS, transparent, beacon) for storage-layout clashes, unprotected initialize, missing initializer lock, and implementation suicide. Use before shipping or auditing proxies.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\reviewing-upgradeable-proxies\\SKILL.md",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-upgradeable-proxies\\SKILL.md",
       "triggers": [
         "/reviewing upgradeable proxies",
         "/reviewing-upgradeable-proxies",
@@ -26854,12 +27133,13 @@
         "reviewing-upgradeable-proxies",
         "/reviewing upgradeable",
         "/reviewing-upgradeable",
+        "wormhole uninitialized",
         "reviewing upgradeable",
         "reviewing-upgradeable",
         "/upgradeable proxies",
         "/upgradeable-proxies",
-        "upgradeable proxies",
-        "upgradeable-proxies"
+        "uninitialized proxy",
+        "uups initialize"
       ],
       "keywords": [
         "reviewing",
@@ -26877,7 +27157,7 @@
     {
       "name": "reviewing-with-solodit-and-swc",
       "description": "Manual smart-contract review against Solodit historical findings and SWC weakness IDs by protocol type (vault, AMM, bridge, governance). Use after static analysis, before writing a contest report.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\reviewing-with-solodit-and-swc\\SKILL.md",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-with-solodit-and-swc\\SKILL.md",
       "triggers": [
         "/reviewing with solodit and swc",
         "/reviewing-with-solodit-and-swc",
@@ -27042,7 +27322,7 @@
     {
       "name": "sc-research",
       "description": "Router for whitehat smart-contract security research. Use for DeFi audits, Immunefi/Code4rena/Cantina/Sherlock contests, invariants, oracles, proxies, bridges, lending, AMMs, vaults, and responsible disclosure. Lawful/in-scope only. Never load the whole pack.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\sc-research\\SKILL.md",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\sc-research\\SKILL.md",
       "triggers": [
         "smart contract researcher",
         "web3 security research",
@@ -27699,7 +27979,7 @@
     {
       "name": "static-analysis-slither-aderyn-semgrep-wake",
       "description": "Run and triage Slither, Aderyn, Semgrep Solidity rules, and Wake on a Foundry/Hardhat repo. Use as the fast static layer before invariants. Complements auditing-foundry-smart-contract-security.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\static-analysis-slither-aderyn-semgrep-wake\\SKILL.md",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\static-analysis-slither-aderyn-semgrep-wake\\SKILL.md",
       "triggers": [
         "/static analysis slither aderyn semgrep wake",
         "/static-analysis-slither-aderyn-semgrep-wake",
@@ -28318,7 +28598,7 @@
     {
       "name": "triaging-and-deduping-findings",
       "description": "Dedupe and rank Slither/Aderyn/Mythril/fuzz hits: (file, line), SWC, exploitability x funds, false positives, known issues. Use before writing a contest report.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\triaging-and-deduping-findings\\SKILL.md",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\triaging-and-deduping-findings\\SKILL.md",
       "triggers": [
         "/triaging and deduping findings",
         "/triaging-and-deduping-findings",
@@ -29139,7 +29419,7 @@
     {
       "name": "writing-foundry-invariant-handlers",
       "description": "Write Foundry invariant tests with handler contracts, ghost variables, and actor rotation. Use when a vault, AMM, or any value-moving Solidity contract only has unit tests.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\writing-foundry-invariant-handlers\\SKILL.md",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\writing-foundry-invariant-handlers\\SKILL.md",
       "triggers": [
         "/writing foundry invariant handlers",
         "/writing-foundry-invariant-handlers",

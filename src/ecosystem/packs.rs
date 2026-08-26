@@ -881,7 +881,7 @@ Cloud · Threat Hunting · Threat Intel · Network · Web App · DFIR · Malware
 | S3 public buckets | auditing-aws-s3-bucket-permissions |
 | prompt injection | detecting-ai-model-prompt-injection-attacks |
 | kerberoasting | detecting-kerberoasting-attacks |
-| Solidity / DeFi / Immunefi | sc-research (then one playbook; this pack's Crypto domain is cryptography, not DeFi) |
+| Solidity / DeFi / Immunefi | sc-research (then one playbook, hunting-x-linked-bounties, or one historical-smart-contract-vulns slice including investigator-ops; this pack's Crypto domain is cryptography, not DeFi) |
 
 Index: https://raw.githubusercontent.com/mukul975/Anthropic-Cybersecurity-Skills/main/index.json
 "#;

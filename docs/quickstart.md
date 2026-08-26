@@ -129,7 +129,7 @@ On install / ecosystem ensure, Nur pulls:
 - plus design / clone-website / cybersecurity / infinite-headcount /
   Text-to-CAD / mobile-harness / DarkNavy web3-skills / Cyfrin solskill packs
   when the skills CLI is available, and the bundled `/sc-research` whitehat DeFi
-  pack (protocol + tool playbooks)
+  pack (protocol + tool playbooks, `/hunting-x-linked-bounties`, historical vuln library, investigator-ops)
 
 They land under `~/.nur/plugins/` and mirror into `~/.nur/skills/` so `/grill-me`, `/fable-method`, `/context-engineering`, etc. work immediately.
 

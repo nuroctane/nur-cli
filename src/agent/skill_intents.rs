@@ -153,10 +153,12 @@ mod tests {
         // a stale ~/.nur/cache/skills-index.json would hide a brand-new pack.
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("skills")
+            .join("security")
+            .join("SCA")
             .join("sc-research")
             .join("SKILL.md");
         let parsed = crate::agent::skills::parse_skill(&path)
-            .expect("skills/sc-research/SKILL.md must parse");
+            .expect("skills/security/SCA/sc-research/SKILL.md must parse");
         assert_eq!(parsed.name, "sc-research");
         assert!(
             parsed.description.to_lowercase().contains("whitehat"),
@@ -178,9 +180,20 @@ mod tests {
             "reviewing-bridges-and-messaging",
             "formal-verification-halmos-certora-kontrol",
             "researcher-gym-and-curriculum",
+            "historical-smart-contract-vulns",
+            "reviewing-solana-programs",
+            "reviewing-move-modules",
+            "reviewing-cosmos-and-ibc",
+            "reviewing-cairo-and-starknet",
+            "reviewing-bitcoin-adjacent",
+            "reviewing-frontend-and-ops-surfaces",
+            "hunting-x-linked-bounties",
+            "auditing-foundry-smart-contract-security",
         ] {
             let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("skills")
+                .join("security")
+                .join("SCA")
                 .join(extra)
                 .join("SKILL.md");
             let sk = crate::agent::skills::parse_skill(&p)

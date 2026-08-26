@@ -23,7 +23,7 @@ NurCLI ships with an auto-provisioned knowledge stack.
 | **egaki** | [egaki](https://github.com/remorses/egaki) image/video/speech (`/egaki` · `/image`; ChatGPT / xAI OAuth / BYOK / Egaki plan) |
 | **fractal** | [fractal](https://github.com/plasma-ai/fractal) hierarchical loops - Unix only; ecosystem ensure + loud warn on `node start` |
 | **infinite-headcount** | Factory skill pack auto-provisioned via ecosystem packs |
-| **sc-research** | First-party whitehat DeFi researcher pack (`/sc-research` + protocol/tool playbooks). DarkNavy `web3-skills` and Cyfrin `solskill` auto-provisioned. Lawful/in-scope only |
+| **sc-research** | First-party whitehat DeFi pack in-repo at `skills/security/SCA/` (`/sc-research` + protocol/tool playbooks + `hunting-x-linked-bounties` + historical vuln library + investigator-ops). DarkNavy `web3-skills` and Cyfrin `solskill` auto-provisioned. Lawful/in-scope only |
 | **CAD Skills** | [Text-to-CAD](https://www.texttocad.dev/) STEP-first CAD, DXF, G-code, robot-description, part sourcing, validation, and local review skills (`/cad`, `/cad-viewer`, `/dxf`, `/urdf`, `/sdf`, …) |
 | **mobile-harness** | [DroidRun Mobile Harness](https://github.com/droidrun/mobile-harness) portable Android, iOS, and cloud-phone operating guides for `mobilerun-core` (`/mobile-harness`) |
 | **Interior** | [ddoemonn/interior](https://github.com/ddoemonn/interior) / [interior.dev](https://interior.dev) - finished React micro-interactions (bundled `/interior` skill + `/plugins install interior` for the component source tree) |
@@ -332,7 +332,7 @@ Progressive skill packs loaded on demand.
 - `dialkit` - Live-tune interface parameters (dials/sliders/timelines) across React/Svelte/Vue/Solid; `/dialkit`
 - `clone-website` - Website reverse-engineering
 - `cybersecurity` - Security investigations and DFIR
-- `sc-research` - Whitehat smart-contract / DeFi research router plus protocol/tool playbooks (vaults, AMMs, lending, bridges, gov, oracles, proxies, invariants, Halmos, BattleChain; lawful/in-scope only)
+- `sc-research` - Whitehat smart-contract / DeFi research router (repo: `skills/security/SCA/`) plus protocol/tool playbooks (vaults, AMMs, lending, bridges, gov, oracles, proxies, invariants, Halmos, BattleChain, X-linked bounty intel, historical vuln library, frontend/ops; lawful/in-scope only)
 - `cad` / `cad-viewer` / `dxf` / `gcode` / `urdf` / `srdf` / `sdf` - STEP-first CAD, fabrication, robot descriptions, and visual review from Text-to-CAD
 - `mobile-harness` - Android, iOS, and cloud-phone control through the capability-gated `mobilerun-core` facade
 - `apple-design` - Apple-style interface design

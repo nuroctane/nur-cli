@@ -45,7 +45,11 @@ const ECOSYSTEM_MARKER: &str = "ecosystem.json";
 ///     SQLite demo config (both now out-of-the-box).
 /// 20: sc-research whitehat pack + DarkNavy web3-skills ecosystem pack.
 /// 21: expanded sc-research playbooks + Cyfrin solskill pack.
-const ECOSYSTEM_SCHEMA: u32 = 21;
+/// 22: historical smart-contract vuln library + non-EVM VM playbooks.
+/// 23: investigator-ops (zachxbt/tayvano) + reviewing-frontend-and-ops-surfaces.
+/// 24: hunting-x-linked-bounties paid Immunefi/X navigator.
+/// 25: SCA pack under skills/security/SCA (runtime still ~/.nur/skills/<name>).
+const ECOSYSTEM_SCHEMA: u32 = 25;
 /// Re-run ensure at most once per this many seconds unless forced.
 const ENSURE_TTL_SECS: u64 = 86_400;
 

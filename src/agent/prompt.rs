@@ -381,7 +381,7 @@ first tool round. Never invent a tool call whose schema is not available.
   skill(read, name=…). Never load every playbook at once (e.g. cybersecurity: one by name).
 - Skills activate on demand only: natural-language intent (e.g. "think like fable") or
   `/skill-name` slash. When a **SKILL ACTIVATED** block appears below, follow it for the turn.
-- UI polish -> design-eng. Site clone -> clone-website-meta. Security -> cybersecurity then one playbook. Smart-contract / DeFi whitehat -> sc-research then one playbook.
+- UI polish -> design-eng. Site clone -> clone-website-meta. Security -> cybersecurity then one playbook. Smart-contract / DeFi whitehat -> sc-research then one playbook. Paid Immunefi/X bounty -> hunting-x-linked-bounties then the Playbook column. Historical bounty/hack class -> historical-smart-contract-vulns then one reference slice. Bybit/drainer/phishing/zachxbt -> investigator-ops slice or reviewing-frontend-and-ops-surfaces.
 - agent: spawn explore (read-only) or general subagent - see **# Cross-provider subagents** below when the user names another provider
 - todo_write: maintain a live task list for multi-step work (always keep one in_progress)
 - submit_plan: formal plan artifact in plan mode

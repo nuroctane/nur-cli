@@ -120,21 +120,39 @@ def gen_triggers(name, desc):
             "erc4626",
             "vault inflation",
             "first depositor",
+            "belt finance bounty",
         ],
         "reviewing-amm-and-cl-pools": [
             "uniswap callback",
             "concentrated liquidity",
             "amm invariant",
+            "balancer rounding",
         ],
         "reviewing-lending-and-liquidations": [
             "liquidation bonus",
             "lending market",
             "bad debt",
+            "notional free collateral",
         ],
         "reviewing-bridges-and-messaging": [
             "bridge replay",
             "layerzero",
             "cross chain message",
+            "scroll message spoof",
+        ],
+        "reviewing-upgradeable-proxies": [
+            "uninitialized proxy",
+            "wormhole uninitialized",
+            "uups initialize",
+        ],
+        "reviewing-l2-sequencer-and-finality": [
+            "l2 sequencer",
+            "optimism selfdestruct",
+            "zksync proof",
+        ],
+        "reviewing-access-control-and-auth": [
+            "missing onlyowner",
+            "enzyme privilege",
         ],
         "reviewing-governance-and-timelocks": [
             "governor timelock",
@@ -174,6 +192,57 @@ def gen_triggers(name, desc):
         "auditing-blockchain-clients": [
             "client auditor",
             "firedancer",
+        ],
+        "historical-smart-contract-vulns": [
+            "immunefi bounty library",
+            "defi hack history",
+            "historical vulns",
+            "wormhole bounty class",
+            "zachxbt",
+            "tayvano",
+            "investigator ops",
+        ],
+        "hunting-x-linked-bounties": [
+            "x bounty intel",
+            "immunefi payout",
+            "paid immunefi",
+            "whitehat bounty writeup",
+            "satya0x",
+            "pwning.eth",
+        ],
+        "reviewing-solana-programs": [
+            "solana program review",
+            "anchor audit",
+            "missing signer",
+            "raydium tick",
+        ],
+        "reviewing-move-modules": [
+            "sui move review",
+            "aptos module",
+            "shared object acl",
+            "sui network shutdown",
+        ],
+        "reviewing-cosmos-and-ibc": [
+            "ibc ics-20",
+            "cosmwasm reentrancy",
+            "dragonberry",
+            "sei bounty",
+        ],
+        "reviewing-cairo-and-starknet": [
+            "cairo rounding",
+            "starknet vesu",
+            "vesu rounding",
+        ],
+        "reviewing-bitcoin-adjacent": [
+            "bitcoin script review",
+            "lightning htlc",
+            "stacks clarity",
+            "stacks dos bounty",
+        ],
+        "reviewing-frontend-and-ops-surfaces": [
+            "bybit safe ui",
+            "permit2 phishing",
+            "wallet drainer",
         ],
     }
     alias_kept = []

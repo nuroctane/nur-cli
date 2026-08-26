@@ -219,47 +219,47 @@ const MULTI_FILE_PACKS: &[(&str, &[(&str, &str)])] = &[
         &[
             (
                 "SKILL.md",
-                include_str!("../../skills/sc-research/SKILL.md"),
+                include_str!("../../skills/security/SCA/sc-research/SKILL.md"),
             ),
             (
                 "references/sources.md",
-                include_str!("../../skills/sc-research/references/sources.md"),
+                include_str!("../../skills/security/SCA/sc-research/references/sources.md"),
             ),
             (
                 "references/disclosure.md",
-                include_str!("../../skills/sc-research/references/disclosure.md"),
+                include_str!("../../skills/security/SCA/sc-research/references/disclosure.md"),
             ),
             (
                 "references/swc-map.md",
-                include_str!("../../skills/sc-research/references/swc-map.md"),
+                include_str!("../../skills/security/SCA/sc-research/references/swc-map.md"),
             ),
             (
                 "references/bug-classes.md",
-                include_str!("../../skills/sc-research/references/bug-classes.md"),
+                include_str!("../../skills/security/SCA/sc-research/references/bug-classes.md"),
             ),
             (
                 "references/tools-matrix.md",
-                include_str!("../../skills/sc-research/references/tools-matrix.md"),
+                include_str!("../../skills/security/SCA/sc-research/references/tools-matrix.md"),
             ),
             (
                 "references/platforms.md",
-                include_str!("../../skills/sc-research/references/platforms.md"),
+                include_str!("../../skills/security/SCA/sc-research/references/platforms.md"),
             ),
             (
                 "references/gym.md",
-                include_str!("../../skills/sc-research/references/gym.md"),
+                include_str!("../../skills/security/SCA/sc-research/references/gym.md"),
             ),
             (
                 "references/tob-bsc.md",
-                include_str!("../../skills/sc-research/references/tob-bsc.md"),
+                include_str!("../../skills/security/SCA/sc-research/references/tob-bsc.md"),
             ),
             (
                 "references/grep-patterns.md",
-                include_str!("../../skills/sc-research/references/grep-patterns.md"),
+                include_str!("../../skills/security/SCA/sc-research/references/grep-patterns.md"),
             ),
             (
                 "references/protocol-invariants.md",
-                include_str!("../../skills/sc-research/references/protocol-invariants.md"),
+                include_str!("../../skills/security/SCA/sc-research/references/protocol-invariants.md"),
             ),
         ],
     ),
@@ -267,190 +267,401 @@ const MULTI_FILE_PACKS: &[(&str, &[(&str, &str)])] = &[
         "reviewing-with-solodit-and-swc",
         &[(
             "SKILL.md",
-            include_str!("../../skills/reviewing-with-solodit-and-swc/SKILL.md"),
+            include_str!("../../skills/security/SCA/reviewing-with-solodit-and-swc/SKILL.md"),
         )],
     ),
     (
         "writing-foundry-invariant-handlers",
         &[(
             "SKILL.md",
-            include_str!("../../skills/writing-foundry-invariant-handlers/SKILL.md"),
+            include_str!("../../skills/security/SCA/writing-foundry-invariant-handlers/SKILL.md"),
         )],
     ),
     (
         "reviewing-oracles-and-pricing",
         &[(
             "SKILL.md",
-            include_str!("../../skills/reviewing-oracles-and-pricing/SKILL.md"),
+            include_str!("../../skills/security/SCA/reviewing-oracles-and-pricing/SKILL.md"),
         )],
     ),
     (
         "reviewing-upgradeable-proxies",
         &[(
             "SKILL.md",
-            include_str!("../../skills/reviewing-upgradeable-proxies/SKILL.md"),
+            include_str!("../../skills/security/SCA/reviewing-upgradeable-proxies/SKILL.md"),
         )],
     ),
     (
         "contest-and-bounty-reporting",
         &[(
             "SKILL.md",
-            include_str!("../../skills/contest-and-bounty-reporting/SKILL.md"),
+            include_str!("../../skills/security/SCA/contest-and-bounty-reporting/SKILL.md"),
         )],
     ),
     (
         "onchain-read-recon",
         &[(
             "SKILL.md",
-            include_str!("../../skills/onchain-read-recon/SKILL.md"),
+            include_str!("../../skills/security/SCA/onchain-read-recon/SKILL.md"),
         )],
     ),
     (
         "fuzzing-with-echidna-and-medusa",
         &[(
             "SKILL.md",
-            include_str!("../../skills/fuzzing-with-echidna-and-medusa/SKILL.md"),
+            include_str!("../../skills/security/SCA/fuzzing-with-echidna-and-medusa/SKILL.md"),
         )],
     ),
     (
         "reviewing-erc4626-and-vaults",
         &[(
             "SKILL.md",
-            include_str!("../../skills/reviewing-erc4626-and-vaults/SKILL.md"),
+            include_str!("../../skills/security/SCA/reviewing-erc4626-and-vaults/SKILL.md"),
         )],
     ),
     (
         "reviewing-amm-and-cl-pools",
         &[(
             "SKILL.md",
-            include_str!("../../skills/reviewing-amm-and-cl-pools/SKILL.md"),
+            include_str!("../../skills/security/SCA/reviewing-amm-and-cl-pools/SKILL.md"),
         )],
     ),
     (
         "reviewing-lending-and-liquidations",
         &[(
             "SKILL.md",
-            include_str!("../../skills/reviewing-lending-and-liquidations/SKILL.md"),
+            include_str!("../../skills/security/SCA/reviewing-lending-and-liquidations/SKILL.md"),
         )],
     ),
     (
         "reviewing-bridges-and-messaging",
         &[(
             "SKILL.md",
-            include_str!("../../skills/reviewing-bridges-and-messaging/SKILL.md"),
+            include_str!("../../skills/security/SCA/reviewing-bridges-and-messaging/SKILL.md"),
         )],
     ),
     (
         "reviewing-governance-and-timelocks",
         &[(
             "SKILL.md",
-            include_str!("../../skills/reviewing-governance-and-timelocks/SKILL.md"),
+            include_str!("../../skills/security/SCA/reviewing-governance-and-timelocks/SKILL.md"),
         )],
     ),
     (
         "reviewing-token-standard-pitfalls",
         &[(
             "SKILL.md",
-            include_str!("../../skills/reviewing-token-standard-pitfalls/SKILL.md"),
+            include_str!("../../skills/security/SCA/reviewing-token-standard-pitfalls/SKILL.md"),
         )],
     ),
     (
         "reviewing-signatures-permit-and-eip712",
         &[(
             "SKILL.md",
-            include_str!("../../skills/reviewing-signatures-permit-and-eip712/SKILL.md"),
+            include_str!("../../skills/security/SCA/reviewing-signatures-permit-and-eip712/SKILL.md"),
         )],
     ),
     (
         "reviewing-reentrancy-and-callbacks",
         &[(
             "SKILL.md",
-            include_str!("../../skills/reviewing-reentrancy-and-callbacks/SKILL.md"),
+            include_str!("../../skills/security/SCA/reviewing-reentrancy-and-callbacks/SKILL.md"),
         )],
     ),
     (
         "reviewing-access-control-and-auth",
         &[(
             "SKILL.md",
-            include_str!("../../skills/reviewing-access-control-and-auth/SKILL.md"),
+            include_str!("../../skills/security/SCA/reviewing-access-control-and-auth/SKILL.md"),
         )],
     ),
     (
         "reviewing-mev-ordering-and-slippage",
         &[(
             "SKILL.md",
-            include_str!("../../skills/reviewing-mev-ordering-and-slippage/SKILL.md"),
+            include_str!("../../skills/security/SCA/reviewing-mev-ordering-and-slippage/SKILL.md"),
         )],
     ),
     (
         "reviewing-l2-sequencer-and-finality",
         &[(
             "SKILL.md",
-            include_str!("../../skills/reviewing-l2-sequencer-and-finality/SKILL.md"),
+            include_str!("../../skills/security/SCA/reviewing-l2-sequencer-and-finality/SKILL.md"),
         )],
     ),
     (
         "reviewing-nft-and-marketplace",
         &[(
             "SKILL.md",
-            include_str!("../../skills/reviewing-nft-and-marketplace/SKILL.md"),
+            include_str!("../../skills/security/SCA/reviewing-nft-and-marketplace/SKILL.md"),
         )],
     ),
     (
         "reviewing-cross-function-and-composer",
         &[(
             "SKILL.md",
-            include_str!("../../skills/reviewing-cross-function-and-composer/SKILL.md"),
+            include_str!("../../skills/security/SCA/reviewing-cross-function-and-composer/SKILL.md"),
         )],
     ),
     (
         "static-analysis-slither-aderyn-semgrep-wake",
         &[(
             "SKILL.md",
-            include_str!("../../skills/static-analysis-slither-aderyn-semgrep-wake/SKILL.md"),
+            include_str!("../../skills/security/SCA/static-analysis-slither-aderyn-semgrep-wake/SKILL.md"),
         )],
     ),
     (
         "formal-verification-halmos-certora-kontrol",
         &[(
             "SKILL.md",
-            include_str!("../../skills/formal-verification-halmos-certora-kontrol/SKILL.md"),
+            include_str!("../../skills/security/SCA/formal-verification-halmos-certora-kontrol/SKILL.md"),
         )],
     ),
     (
         "reconstructing-public-postmortems",
         &[(
             "SKILL.md",
-            include_str!("../../skills/reconstructing-public-postmortems/SKILL.md"),
+            include_str!("../../skills/security/SCA/reconstructing-public-postmortems/SKILL.md"),
         )],
     ),
     (
         "researcher-gym-and-curriculum",
         &[(
             "SKILL.md",
-            include_str!("../../skills/researcher-gym-and-curriculum/SKILL.md"),
+            include_str!("../../skills/security/SCA/researcher-gym-and-curriculum/SKILL.md"),
         )],
     ),
     (
         "auditing-blockchain-clients",
         &[(
             "SKILL.md",
-            include_str!("../../skills/auditing-blockchain-clients/SKILL.md"),
+            include_str!("../../skills/security/SCA/auditing-blockchain-clients/SKILL.md"),
         )],
     ),
     (
         "battlechain-safe-harbor-whitehat",
         &[(
             "SKILL.md",
-            include_str!("../../skills/battlechain-safe-harbor-whitehat/SKILL.md"),
+            include_str!("../../skills/security/SCA/battlechain-safe-harbor-whitehat/SKILL.md"),
         )],
     ),
     (
         "triaging-and-deduping-findings",
         &[(
             "SKILL.md",
-            include_str!("../../skills/triaging-and-deduping-findings/SKILL.md"),
+            include_str!("../../skills/security/SCA/triaging-and-deduping-findings/SKILL.md"),
         )],
+    ),
+    (
+        "historical-smart-contract-vulns",
+        &[
+            (
+                "SKILL.md",
+                include_str!("../../skills/security/SCA/historical-smart-contract-vulns/SKILL.md"),
+            ),
+            (
+                "references/index.md",
+                include_str!("../../skills/security/SCA/historical-smart-contract-vulns/references/index.md"),
+            ),
+            (
+                "references/taxonomy.md",
+                include_str!(
+                    "../../skills/security/SCA/historical-smart-contract-vulns/references/taxonomy.md"
+                ),
+            ),
+            (
+                "references/notable-bounties.md",
+                include_str!(
+                    "../../skills/security/SCA/historical-smart-contract-vulns/references/notable-bounties.md"
+                ),
+            ),
+            (
+                "references/case-cards.md",
+                include_str!(
+                    "../../skills/security/SCA/historical-smart-contract-vulns/references/case-cards.md"
+                ),
+            ),
+            (
+                "references/incident-timeline.md",
+                include_str!(
+                    "../../skills/security/SCA/historical-smart-contract-vulns/references/incident-timeline.md"
+                ),
+            ),
+            (
+                "references/named-losses.md",
+                include_str!(
+                    "../../skills/security/SCA/historical-smart-contract-vulns/references/named-losses.md"
+                ),
+            ),
+            (
+                "references/incident-corpus.md",
+                include_str!(
+                    "../../skills/security/SCA/historical-smart-contract-vulns/references/incident-corpus.md"
+                ),
+            ),
+            (
+                "references/chain-catalog.md",
+                include_str!(
+                    "../../skills/security/SCA/historical-smart-contract-vulns/references/chain-catalog.md"
+                ),
+            ),
+            (
+                "references/evm-and-l2.md",
+                include_str!(
+                    "../../skills/security/SCA/historical-smart-contract-vulns/references/evm-and-l2.md"
+                ),
+            ),
+            (
+                "references/solana.md",
+                include_str!("../../skills/security/SCA/historical-smart-contract-vulns/references/solana.md"),
+            ),
+            (
+                "references/move-cosmos-cairo.md",
+                include_str!(
+                    "../../skills/security/SCA/historical-smart-contract-vulns/references/move-cosmos-cairo.md"
+                ),
+            ),
+            (
+                "references/bitcoin-and-other-vms.md",
+                include_str!(
+                    "../../skills/security/SCA/historical-smart-contract-vulns/references/bitcoin-and-other-vms.md"
+                ),
+            ),
+            (
+                "references/contest-winning-classes.md",
+                include_str!(
+                    "../../skills/security/SCA/historical-smart-contract-vulns/references/contest-winning-classes.md"
+                ),
+            ),
+            (
+                "references/how-to-query.md",
+                include_str!(
+                    "../../skills/security/SCA/historical-smart-contract-vulns/references/how-to-query.md"
+                ),
+            ),
+            (
+                "references/x-and-public-signal.md",
+                include_str!(
+                    "../../skills/security/SCA/historical-smart-contract-vulns/references/x-and-public-signal.md"
+                ),
+            ),
+            (
+                "references/investigator-ops.md",
+                include_str!(
+                    "../../skills/security/SCA/historical-smart-contract-vulns/references/investigator-ops.md"
+                ),
+            ),
+            (
+                "references/ingest-class-map.md",
+                include_str!(
+                    "../../skills/security/SCA/historical-smart-contract-vulns/references/ingest-class-map.md"
+                ),
+            ),
+        ],
+    ),
+    (
+        "reviewing-solana-programs",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/security/SCA/reviewing-solana-programs/SKILL.md"),
+        )],
+    ),
+    (
+        "reviewing-move-modules",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/security/SCA/reviewing-move-modules/SKILL.md"),
+        )],
+    ),
+    (
+        "reviewing-cosmos-and-ibc",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/security/SCA/reviewing-cosmos-and-ibc/SKILL.md"),
+        )],
+    ),
+    (
+        "reviewing-cairo-and-starknet",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/security/SCA/reviewing-cairo-and-starknet/SKILL.md"),
+        )],
+    ),
+    (
+        "reviewing-bitcoin-adjacent",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/security/SCA/reviewing-bitcoin-adjacent/SKILL.md"),
+        )],
+    ),
+    (
+        "reviewing-frontend-and-ops-surfaces",
+        &[(
+            "SKILL.md",
+            include_str!("../../skills/security/SCA/reviewing-frontend-and-ops-surfaces/SKILL.md"),
+        )],
+    ),
+    (
+        "hunting-x-linked-bounties",
+        &[
+            (
+                "SKILL.md",
+                include_str!("../../skills/security/SCA/hunting-x-linked-bounties/SKILL.md"),
+            ),
+            (
+                "references/paid-payouts.md",
+                include_str!(
+                    "../../skills/security/SCA/hunting-x-linked-bounties/references/paid-payouts.md"
+                ),
+            ),
+            (
+                "references/x-linked-2024-2026.md",
+                include_str!(
+                    "../../skills/security/SCA/hunting-x-linked-bounties/references/x-linked-2024-2026.md"
+                ),
+            ),
+            (
+                "references/researcher-index.md",
+                include_str!(
+                    "../../skills/security/SCA/hunting-x-linked-bounties/references/researcher-index.md"
+                ),
+            ),
+        ],
+    ),
+    (
+        "auditing-foundry-smart-contract-security",
+        &[
+            (
+                "SKILL.md",
+                include_str!(
+                    "../../skills/security/SCA/auditing-foundry-smart-contract-security/SKILL.md"
+                ),
+            ),
+            (
+                "references/api-reference.md",
+                include_str!(
+                    "../../skills/security/SCA/auditing-foundry-smart-contract-security/references/api-reference.md"
+                ),
+            ),
+            (
+                "references/vulnerability-checklist.md",
+                include_str!(
+                    "../../skills/security/SCA/auditing-foundry-smart-contract-security/references/vulnerability-checklist.md"
+                ),
+            ),
+            (
+                "references/secure-deployment-and-keys.md",
+                include_str!(
+                    "../../skills/security/SCA/auditing-foundry-smart-contract-security/references/secure-deployment-and-keys.md"
+                ),
+            ),
+            (
+                "scripts/agent.py",
+                include_str!(
+                    "../../skills/security/SCA/auditing-foundry-smart-contract-security/scripts/agent.py"
+                ),
+            ),
+        ],
     ),
 ];
 

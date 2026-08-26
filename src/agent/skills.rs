@@ -610,6 +610,159 @@ const INTENT_RULES: &[IntentRule] = &[
         why: "whitehat smart-contract research router (load one playbook, never all)",
     },
     IntentRule {
+        skill_names: &["historical-smart-contract-vulns"],
+        phrases: &[
+            "/historical-smart-contract-vulns",
+            "historical smart contract vulns",
+            "historical smart-contract vulns",
+            "immunefi bounty library",
+            "defi hack history",
+            "smart contract vuln library",
+            "wormhole bounty class",
+            "zachxbt",
+            "tayvano",
+            "investigator ops",
+        ],
+        label: "historical-smart-contract-vulns",
+        why: "historical SC vuln library (one slice, never the whole pack)",
+    },
+    IntentRule {
+        skill_names: &["hunting-x-linked-bounties"],
+        phrases: &[
+            "/hunting-x-linked-bounties",
+            "hunting x linked bounties",
+            "x bounty intel",
+            "immunefi payout",
+            "paid immunefi",
+            "whitehat bounty writeup",
+        ],
+        label: "hunting-x-linked-bounties",
+        why: "paid Immunefi/X bounty intel routed to one playbook",
+    },
+    IntentRule {
+        skill_names: &["reviewing-upgradeable-proxies"],
+        phrases: &[
+            "/reviewing-upgradeable-proxies",
+            "uninitialized proxy",
+            "wormhole uninitialized",
+        ],
+        label: "reviewing-upgradeable-proxies",
+        why: "UUPS/uninitialized-impl bounty class",
+    },
+    IntentRule {
+        skill_names: &["reviewing-bridges-and-messaging"],
+        phrases: &[
+            "/reviewing-bridges-and-messaging",
+            "scroll message spoof",
+            "review bridge messaging",
+        ],
+        label: "reviewing-bridges-and-messaging",
+        why: "bridge/message bounty class",
+    },
+    IntentRule {
+        skill_names: &["reviewing-amm-and-cl-pools"],
+        phrases: &[
+            "/reviewing-amm-and-cl-pools",
+            "balancer rounding",
+            "review amm cl pools",
+        ],
+        label: "reviewing-amm-and-cl-pools",
+        why: "AMM/CL paid rounding and tick class",
+    },
+    IntentRule {
+        skill_names: &["reviewing-lending-and-liquidations"],
+        phrases: &[
+            "/reviewing-lending-and-liquidations",
+            "notional free collateral",
+            "review lending liquidations",
+        ],
+        label: "reviewing-lending-and-liquidations",
+        why: "lending/bad-debt bounty class",
+    },
+    IntentRule {
+        skill_names: &["reviewing-erc4626-and-vaults"],
+        phrases: &[
+            "/reviewing-erc4626-and-vaults",
+            "first depositor inflation",
+            "review erc4626 vaults",
+        ],
+        label: "reviewing-erc4626-and-vaults",
+        why: "vault inflation bounty class",
+    },
+    IntentRule {
+        skill_names: &["reviewing-l2-sequencer-and-finality"],
+        phrases: &[
+            "/reviewing-l2-sequencer-and-finality",
+            "optimism selfdestruct",
+            "zksync proof bounty",
+        ],
+        label: "reviewing-l2-sequencer-and-finality",
+        why: "L2/client-adjacent bounty class",
+    },
+    IntentRule {
+        skill_names: &["reviewing-solana-programs"],
+        phrases: &[
+            "/reviewing-solana-programs",
+            "review solana program",
+            "anchor program review",
+            "solana missing signer",
+        ],
+        label: "reviewing-solana-programs",
+        why: "Solana/SVM whitehat program review",
+    },
+    IntentRule {
+        skill_names: &["reviewing-move-modules"],
+        phrases: &[
+            "/reviewing-move-modules",
+            "sui network shutdown",
+            "review move modules",
+        ],
+        label: "reviewing-move-modules",
+        why: "Move/Sui/Aptos whitehat review",
+    },
+    IntentRule {
+        skill_names: &["reviewing-cosmos-and-ibc"],
+        phrases: &[
+            "/reviewing-cosmos-and-ibc",
+            "sei bounty",
+            "review cosmos ibc",
+        ],
+        label: "reviewing-cosmos-and-ibc",
+        why: "Cosmos/IBC whitehat review",
+    },
+    IntentRule {
+        skill_names: &["reviewing-cairo-and-starknet"],
+        phrases: &[
+            "/reviewing-cairo-and-starknet",
+            "vesu rounding",
+            "review cairo starknet",
+        ],
+        label: "reviewing-cairo-and-starknet",
+        why: "Cairo/Starknet whitehat review",
+    },
+    IntentRule {
+        skill_names: &["reviewing-bitcoin-adjacent"],
+        phrases: &[
+            "/reviewing-bitcoin-adjacent",
+            "stacks dos bounty",
+            "review bitcoin adjacent",
+        ],
+        label: "reviewing-bitcoin-adjacent",
+        why: "Bitcoin-adjacent whitehat review",
+    },
+    IntentRule {
+        skill_names: &["reviewing-frontend-and-ops-surfaces"],
+        phrases: &[
+            "/reviewing-frontend-and-ops-surfaces",
+            "review frontend and ops",
+            "bybit safe ui",
+            "permit2 phishing",
+            "wallet drainer",
+        ],
+        label: "reviewing-frontend-and-ops-surfaces",
+        why: "wallet/Safe/Permit2 phishing-class review (ops, not vault math)",
+    },
+    IntentRule {
         skill_names: &["cybersecurity"],
         phrases: &[
             "cybersecurity skill",
@@ -1428,6 +1581,53 @@ mod intent_tests {
         let (sk, _) =
             detect_skill_activation("help me become a smart contract researcher", &skills).unwrap();
         assert_eq!(sk.name, "sc-research");
+    }
+
+    #[test]
+    fn detects_historical_sc_vuln_library() {
+        let skills = vec![
+            fake_skill("historical-smart-contract-vulns"),
+            fake_skill("sc-research"),
+            fake_skill("reviewing-solana-programs"),
+            fake_skill("reviewing-frontend-and-ops-surfaces"),
+            fake_skill("hunting-x-linked-bounties"),
+            fake_skill("reviewing-upgradeable-proxies"),
+        ];
+        let (sk, rule) = detect_skill_activation(
+            "open the immunefi bounty library for wormhole bounty class",
+            &skills,
+        )
+        .unwrap();
+        assert_eq!(sk.name, "historical-smart-contract-vulns");
+        assert_eq!(rule.label, "historical-smart-contract-vulns");
+
+        let (sk, _) =
+            detect_skill_activation("review solana program for missing signer", &skills).unwrap();
+        assert_eq!(sk.name, "reviewing-solana-programs");
+
+        let (sk, rule) = detect_skill_activation(
+            "classify this zachxbt thread then review bybit safe ui",
+            &skills,
+        )
+        .unwrap();
+        // First matching INTENT_RULES phrase: zachxbt on the historical library.
+        assert_eq!(sk.name, "historical-smart-contract-vulns");
+        assert_eq!(rule.label, "historical-smart-contract-vulns");
+
+        let (sk, rule) =
+            detect_skill_activation("permit2 phishing on this wallet ui", &skills).unwrap();
+        assert_eq!(sk.name, "reviewing-frontend-and-ops-surfaces");
+        assert_eq!(rule.label, "reviewing-frontend-and-ops-surfaces");
+
+        let (sk, rule) =
+            detect_skill_activation("turn this x bounty intel into a class map", &skills).unwrap();
+        assert_eq!(sk.name, "hunting-x-linked-bounties");
+        assert_eq!(rule.label, "hunting-x-linked-bounties");
+
+        let (sk, rule) =
+            detect_skill_activation("wormhole uninitialized proxy on this uups", &skills).unwrap();
+        assert_eq!(sk.name, "reviewing-upgradeable-proxies");
+        assert_eq!(rule.label, "reviewing-upgradeable-proxies");
     }
 
     #[test]
