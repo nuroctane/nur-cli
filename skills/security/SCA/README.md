@@ -13,6 +13,9 @@ Do **not** merge this pack into the 817 `cybersecurity` router. That pack's Cryp
 | Start here / unknown protocol | `sc-research` |
 | Paid Immunefi / X bounty writeup | `hunting-x-linked-bounties` (one table) |
 | Historical class / named loss / zachxbt | `historical-smart-contract-vulns` (one reference) |
+| Named-chain audit delta (Base, Robinhood Chain, Arbitrum, OP, Hyperliquid, ...) | `reviewing-major-chain-surfaces` (one chain file) |
+| Current-year trends / OWASP mapping / tooling currency | `defi-security-trends-standards` (one reference) |
+| Agentic-defense deception program / honeypots / attacker ID | `agentic-defense-game-theory` -> 3 companion skills (one slice) |
 | Pre-deploy Foundry PASS/FAIL | `auditing-foundry-smart-contract-security` |
 | Chain VM | matching `reviewing-*` playbook |
 

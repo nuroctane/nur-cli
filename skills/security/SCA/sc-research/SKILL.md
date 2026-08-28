@@ -65,6 +65,20 @@ Companion spine: `auditing-foundry-smart-contract-security` is the pre-deploy PA
 | two functions, one tx | `reviewing-cross-function-and-composer` |
 | Chainlink / TWAP / spot | `reviewing-oracles-and-pricing` |
 | UUPS / storage layout | `reviewing-upgradeable-proxies` |
+| named-chain delta (Base, Robinhood Chain, Arbitrum/Orbit, OP/Superchain, Hyperliquid, Solana ops, BNB, zkEVMs, Sonic/Berachain/Monad/Plasma, Sui/Aptos/TON/TRON/Cosmos) | `reviewing-major-chain-surfaces` (one chain file) |
+| hardfork-era deltas / EIP-7702 abuse / precompile divergence | `reviewing-major-chain-surfaces` `references/evm-fork-deltas.md` |
+| current-year classes / OWASP SC Top 10 / fresh tooling status | `defi-security-trends-standards` (one reference) |
+
+### Active defense / deception (defenders)
+
+| User ask | Skill |
+|----------|--------|
+| design deception program / game theory / attacker loop | `agentic-defense-game-theory` (one reference) |
+| honeypots / tripwires / bait / per-vector deception plays | `deploying-contract-honeypots` (one reference) |
+| poison docs / decoy repos / watermarks / recon lures | `poisoning-agent-recon-surfaces` (one reference) |
+| tripwire fired / identify attacker / evidence / handoff | `identifying-agentic-attackers` (one reference) |
+
+Deception is defender-owned-surfaces only: lawful gate in `agentic-defense-game-theory` `references/lawful-deception-bounds.md` before any play. Class ids in the play tables map back to this pack's taxonomy.
 
 ### Tools
 
