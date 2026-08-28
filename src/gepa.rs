@@ -112,6 +112,42 @@ pub fn select_parents(front: &[usize], k: usize) -> Vec<usize> {
     (0..k).map(|i| front[i % front.len()]).collect()
 }
 
+/// Cap on front members eligible as parents per generation. Mirrors upstream
+/// GEPA's `top_k_pareto` parent selection (default K=5): a very wide front is
+/// usually many near-tied tradeoffs, and reflecting from every one of them
+/// spends proposals on directions the aggregate already ranks as weaker.
+pub const PARENT_FRONT_CAP: usize = 5;
+
+/// [`select_parents`] with the upstream `top_k_pareto` cap applied: when the
+/// front exceeds [`PARENT_FRONT_CAP`], parents are drawn (still round-robin)
+/// from only its best members by the [`best_index`] ordering.
+pub fn select_parents_capped(scores: &[Score], front: &[usize], k: usize) -> Vec<usize> {
+    if front.len() <= PARENT_FRONT_CAP {
+        return select_parents(front, k);
+    }
+    let mut top: Vec<usize> = front.to_vec();
+    top.sort_by(|&a, &b| {
+        // Same ordering as best_index (pass desc, tokens asc, secs asc):
+        // Less means `a` ranks better and comes first.
+        let (x, y) = (&scores[a], &scores[b]);
+        y.pass_rate
+            .partial_cmp(&x.pass_rate)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(
+                x.tokens
+                    .partial_cmp(&y.tokens)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+            .then(
+                x.secs
+                    .partial_cmp(&y.secs)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+    });
+    top.truncate(PARENT_FRONT_CAP);
+    select_parents(&top, k)
+}
+
 /// The single best candidate to report: highest pass rate, then cheapest, then
 /// fastest. Used only to *present* a winner — never to steer the search.
 pub fn best_index(scores: &[Score]) -> Option<usize> {
@@ -369,8 +405,9 @@ pub async fn run_optimize(
             break;
         }
 
-        // Reflect: ask for one improved instruction per open slot.
-        let parents = select_parents(&front, population.saturating_sub(1));
+        // Reflect: ask for one improved instruction per open slot. Parents
+        // come from the front, capped to its strongest members (top_k_pareto).
+        let parents = select_parents_capped(&scores, &front, population.saturating_sub(1));
         for p in parents {
             let prompt = mutation_prompt(&candidates[p], &scores[p], &failures[p], &task_texts);
             let req = crate::api::fusion::question_request(&cfg.model, &prompt);
@@ -534,6 +571,46 @@ mod tests {
         assert_eq!(select_parents(&[2, 5], 5), vec![2, 5, 2, 5, 2]);
         assert!(select_parents(&[], 3).is_empty());
         assert!(select_parents(&[1], 0).is_empty());
+    }
+
+    /// Upstream GEPA's top_k_pareto: a front wider than the cap only offers
+    /// its strongest members (by the best_index ordering) as parents.
+    #[test]
+    fn wide_fronts_are_capped_to_their_strongest_parents() {
+        // Scores: (pass, secs, tokens). Each step trades a little pass rate
+        // for meaningfully less time/cost, so 0..=6 are mutually incomparable.
+        // 7 is dominated by 6 (worse pass, slower, costlier) and never eligible.
+        let scores = vec![
+            score(1.00, 60.0, 6000.0),
+            score(0.95, 40.0, 3000.0),
+            score(0.90, 25.0, 1800.0),
+            score(0.85, 15.0, 1100.0),
+            score(0.80, 9.0, 700.0),
+            score(0.75, 5.0, 450.0),
+            score(0.70, 3.0, 300.0),
+            score(0.50, 30.0, 5000.0),
+        ];
+        let front = pareto_front(&scores);
+        assert_eq!(front, vec![0, 1, 2, 3, 4, 5, 6], "7 is dominated by 6");
+        assert!(front.len() > PARENT_FRONT_CAP, "cap must bind");
+
+        // k=8 draws round-robin over the capped top-5 by (pass desc, tokens
+        // asc): indices 0-4. The 0.75 and 0.70 members must not appear.
+        let parents = select_parents_capped(&scores, &front, 8);
+        let pool: std::collections::BTreeSet<_> = parents.into_iter().collect();
+        assert_eq!(
+            pool,
+            [0usize, 1, 2, 3, 4].into_iter().collect(),
+            "only the capped top-5 may be offered as parents"
+        );
+
+        // Fronts at or under the cap pass through untouched (round-robin over
+        // the whole front).
+        let small_front = [0usize, 6];
+        assert_eq!(
+            select_parents_capped(&scores, &small_front, 4),
+            select_parents(&small_front, 4)
+        );
     }
 
     #[test]

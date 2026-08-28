@@ -1,9 +1,12 @@
 //! terminal-browser integration - <https://terminal-browser.com/>
 //!
-//! Upstream ships Apple Silicon macOS builds today (Linux WIP). On Windows we
-//! still wire a full tool surface:
+//! Upstream (zenbu-labs/terminal-browser, 0.7.x) ships native macOS **and
+//! Linux** builds; still no Windows. The agent surface is `terminal-browser
+//! action` (agent-browser-compatible CLI) plus `open <url>` / `ls` / `--split`.
+//! On Windows we still wire a full tool surface:
 //! 1. Native `terminal-browser` / `.exe` when present (future releases)
-//! 2. WSL invocation when the binary is installed inside WSL
+//! 2. WSL invocation when the binary is installed inside WSL (Linux builds make
+//!    this path the realistic one now)
 //! 3. Windows-host fallback via `agent-browser-cli` (same open/snapshot/click
 //!    workflow against the user's real Chrome) so agents stay productive
 
@@ -13,7 +16,7 @@ use std::process::Command;
 
 pub const BIN: &str = "terminal-browser";
 pub const INSTALL_HINT: &str =
-    "curl -fsSL https://terminal-browser.sh/install | bash  (Apple Silicon macOS; Linux WIP)";
+    "curl -fsSL https://terminal-browser.sh/install | bash  (macOS / Linux; Windows uses the agent-browser-cli fallback)";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Runtime {

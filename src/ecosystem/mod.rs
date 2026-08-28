@@ -50,7 +50,10 @@ const ECOSYSTEM_MARKER: &str = "ecosystem.json";
 /// 24: hunting-x-linked-bounties paid Immunefi/X navigator.
 /// 25: SCA pack under skills/security/SCA (runtime still ~/.nur/skills/<name>).
 /// 26: refresh vendored third-party skills + re-pull default plugins / skill packs.
-pub(crate) const ECOSYSTEM_SCHEMA: u32 = 26;
+/// 27: upstream sync: omp floor 17.2.0 → 18.0.9 (+ OMP_APP_NAME attribution),
+///     ruflo refresh below 3.38.19 (corrupted npm publishes), penecho 1.1.4
+///     provider model docs, terminal-browser macOS/Linux status.
+pub(crate) const ECOSYSTEM_SCHEMA: u32 = 27;
 /// Re-run ensure at most once per this many seconds unless forced.
 const ENSURE_TTL_SECS: u64 = 86_400;
 
@@ -1117,16 +1120,23 @@ fn ensure_ruflo(node_ok: bool) -> ComponentStatus {
         c.detail = "needs Node.js 20+".into();
         return c;
     }
-    // Fast path: already installed - skip the npm round-trip unless --force.
+    // npm publishes 3.38.17/3.38.18 shipped corrupted dependency graphs and were
+    // deprecated upstream; keep refreshing installs below 3.38.19.
+    const RUFLO_VERSION_FLOOR: (u64, u64, u64) = (3, 38, 19);
+    // Fast path: installed and current - skip the npm round-trip unless --force.
     if let Some(bin) = find_bin("ruflo") {
         if !ecosystem_force() {
-            c.available = true;
-            c.path = Some(bin.clone());
-            c.version = cmd_version(&bin, &["--version"]);
-            let home = ruflo_home();
-            let _ = fs::create_dir_all(&home);
-            c.detail = format!("db {}", ruflo_db_path().display());
-            return c;
+            let version = cmd_version(&bin, &["--version"]);
+            if packs::version_meets_floor(version.as_deref().unwrap_or(""), RUFLO_VERSION_FLOOR) {
+                c.available = true;
+                c.path = Some(bin.clone());
+                c.version = version;
+                let home = ruflo_home();
+                let _ = fs::create_dir_all(&home);
+                c.detail = format!("db {}", ruflo_db_path().display());
+                return c;
+            }
+            // Stale or unreadable version: fall through to the npm refresh.
         }
     }
     // Refresh ruflo to latest on ensure.
@@ -1350,7 +1360,7 @@ pub fn run_capture(
     cwd: Option<&Path>,
     timeout_ms: u64,
 ) -> std::result::Result<String, String> {
-    run_capture_inner(bin, args, cwd, timeout_ms, None)
+    run_capture_inner(bin, args, cwd, timeout_ms, None, &[])
 }
 
 /// Capture a child process while honoring the agent turn's cancellation token.
@@ -1363,7 +1373,20 @@ pub fn run_capture_cancelled(
     timeout_ms: u64,
     cancel: &tokio_util::sync::CancellationToken,
 ) -> std::result::Result<String, String> {
-    run_capture_inner(bin, args, cwd, timeout_ms, Some(cancel))
+    run_capture_inner(bin, args, cwd, timeout_ms, Some(cancel), &[])
+}
+
+/// [`run_capture_cancelled`] with extra child env vars (e.g. `OMP_APP_NAME`
+/// usage attribution on omp >= 18.0.7).
+pub fn run_capture_cancelled_with_env(
+    bin: &str,
+    args: &[&str],
+    cwd: Option<&Path>,
+    timeout_ms: u64,
+    cancel: &tokio_util::sync::CancellationToken,
+    env: &[(&str, &str)],
+) -> std::result::Result<String, String> {
+    run_capture_inner(bin, args, cwd, timeout_ms, Some(cancel), env)
 }
 
 fn run_capture_inner(
@@ -1372,6 +1395,7 @@ fn run_capture_inner(
     cwd: Option<&Path>,
     timeout_ms: u64,
     cancel: Option<&tokio_util::sync::CancellationToken>,
+    extra_env: &[(&str, &str)],
 ) -> std::result::Result<String, String> {
     // Re-resolve bare names to absolute paths (Windows .cmd safety).
     let resolved = if bin.contains('\\')
@@ -1387,6 +1411,9 @@ fn run_capture_inner(
     let mut cmd = spawn_program(&resolved, args);
     if let Some(c) = cwd {
         cmd.current_dir(c);
+    }
+    for (key, value) in extra_env {
+        cmd.env(key, value);
     }
     // Capture output manually to enforce timeout; never inherit TUI stdin.
     cmd.stdin(std::process::Stdio::null())

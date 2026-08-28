@@ -5,16 +5,19 @@
 //! declarative animations. Runtime: Node >=18, 2 deps only (@inquirer/prompts + sharp),
 //! no bundler, vanilla JS client served via http.
 //!
-//! Provider model (from api-config.js, codex-cli.js, claude-cli.js):
-//! - `AI_PROVIDER=api|codex-cli|claude-cli`
+//! Provider model (penecho 1.1.4; from api-config.js, codex-cli.js, claude-cli.js):
+//! - `AI_PROVIDER=api|codex-cli|claude-cli|kimi-cli`
 //! - API mode: `AI_API_URL`, `AI_API_KEY`, `AI_API_MODEL`, `AI_API_FORMAT=openai|anthropic`
 //!   auto-detects format from URL suffix `/chat/completions` vs `/v1/messages`
-//!   (cleaner than per-provider flags). Supports `AI_EFFORT`, `AI_TIMEOUT_SECONDS`,
+//!   (cleaner than per-provider flags). Supports `AI_EFFORT` (default medium),
+//!   `AI_TIMEOUT_SECONDS` (10-600, default 180; xhigh/max effort uses 2x),
+//!   `MAX_TOKENS` (>15000, default 20000), `TAVILY_API_KEY` (agent web search),
 //!   placeholder detection `your[_ -]|replace|changeme|sk-\...`.
-//! - Codex CLI: `CODEX_CLI_PATH` default `codex`, resolves .exe/.cmd/.bat, .js wrapper,
-//!   `codex --version`, `codex login status`, `codex debug models --bundled`.
-//! - Claude CLI: `CLAUDE_CLI_PATH` default `claude`, handles .js/.cjs/.mjs => node prefix,
-//!   .ps1 on win, system prompt + user prompt split.
+//! - CLI executors resolve their binary from PATH (`codex` / `claude` / `kimi`);
+//!   per-mode model overrides are `CODEX_CLI_MODEL` and `CLAUDE_CLI_MODEL`
+//!   (`CODEX_CLI_PATH` is no longer part of the documented surface).
+//! - Claude CLI: handles .js/.cjs/.mjs => node prefix, .ps1 on win, system prompt +
+//!   user prompt split; 1.1.4 codex agent mode speaks to `codex app-server` natively.
 //!
 //! This module mirrors penecho's ideas without copying AGPL code:
 //! - Env mapping: export nur auth to penecho's `~/.penecho/config.env` format.

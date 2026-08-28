@@ -3,6 +3,13 @@
 //! Upstream: <https://github.com/headroomlabs-ai/headroom> (`headroom-ai` on PyPI).
 //! Default mode is **inline** compress on tool outputs (config `headroom.enabled`).
 //! Uses a small Python helper that calls `from headroom import compress`.
+//!
+//! Upstream 0.3x notes (0.33-0.37): the `compress(messages, model=...)` API nur's
+//! helper uses is unchanged. `HEADROOM_PROTECT_READS` in the user's environment
+//! shields file-read bodies from lossy compression - the helper subprocess
+//! inherits env, so the knob works without nur-side config. Upstream also ships
+//! a `/v1/compress` HTTP sidecar as a Python-free path; the inline helper stays
+//! the default because it needs no running service.
 
 use crate::config::{nur_home, HeadroomConfig};
 use crate::ecosystem::{find_bin, run_capture};

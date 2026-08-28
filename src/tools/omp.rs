@@ -437,12 +437,15 @@ fn run_omp(bin: &str, args: &Value, ctx: &ToolContext) -> Result<String> {
     );
     let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
     let wrapper_timeout_ms = timeout_secs.saturating_add(15).saturating_mul(1_000);
-    let output = ecosystem::run_capture_cancelled(
+    // omp >= 18.0.7 attributes delegated spend to the host app via OMP_APP_NAME
+    // (shows up in `omp usage clients`), so nur's delegations stay distinguishable.
+    let output = ecosystem::run_capture_cancelled_with_env(
         bin,
         &refs,
         Some(&ctx.cwd),
         wrapper_timeout_ms,
         &ctx.cancel,
+        &[("OMP_APP_NAME", "nur")],
     )
     .map_err(NurError::Tool)?;
     let envelope = parse_json_run(&output, cost_mode)?;

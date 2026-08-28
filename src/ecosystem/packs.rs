@@ -335,7 +335,10 @@ pub fn ensure_omp() -> ComponentStatus {
     c
 }
 
-const OMP_FEATURE_FLOOR: (u64, u64, u64) = (17, 2, 0);
+// omp 18 (can1357/oh-my-pi): session-resume corruption fix (18.0.8), OMP_APP_NAME
+// usage attribution (18.0.7), Claude subscription OAuth fixes. The CLI surface nur
+// delegates with (`-p`, `--mode json`, `--no-session`, `--tools`) is unchanged.
+const OMP_FEATURE_FLOOR: (u64, u64, u64) = (18, 0, 9);
 const BUN_OMP_FLOOR: (u64, u64, u64) = (1, 3, 14);
 
 fn upgrade_omp(c: &mut ComponentStatus) {
@@ -476,11 +479,17 @@ pub(crate) fn best_omp() -> Option<(String, String)> {
 }
 
 fn bun_meets_omp_floor(version: &str) -> bool {
-    semver_triplet(version).is_some_and(|version| version >= BUN_OMP_FLOOR)
+    version_meets_floor(version, BUN_OMP_FLOOR)
 }
 
 fn omp_meets_feature_floor(version: &str) -> bool {
-    semver_triplet(version).is_some_and(|version| version >= OMP_FEATURE_FLOOR)
+    version_meets_floor(version, OMP_FEATURE_FLOOR)
+}
+
+/// Compare a tool's reported version against a semantic floor
+/// (unparseable versions never meet it).
+pub(crate) fn version_meets_floor(version: &str, floor: (u64, u64, u64)) -> bool {
+    semver_triplet(version).is_some_and(|version| version >= floor)
 }
 
 fn semver_triplet(version: &str) -> Option<(u64, u64, u64)> {
@@ -722,7 +731,9 @@ fn mirror_missing_tree(
         let target = destination.join(&name);
         if file_type.is_dir() {
             mirror_missing_tree(&entry.path(), &target)?;
-        } else if file_type.is_file() {
+        } else if file_type.is_file() && !target.exists() {
+            // Mirror MISSING files only: the destination's primary SKILL.md
+            // (and any locally customized file) must never be overwritten.
             fs::copy(entry.path(), target)?;
         }
     }
@@ -1001,9 +1012,10 @@ mod tests {
     #[test]
     fn omp_feature_floor_is_enforced() {
         assert!(!omp_meets_feature_floor("omp/16.3.5"));
-        assert!(!omp_meets_feature_floor("omp/17.1.4"));
-        assert!(omp_meets_feature_floor("omp/17.2.0"));
-        assert!(omp_meets_feature_floor("omp/18.0.0"));
+        assert!(!omp_meets_feature_floor("omp/17.2.0"));
+        assert!(!omp_meets_feature_floor("omp/18.0.8"));
+        assert!(omp_meets_feature_floor("omp/18.0.9"));
+        assert!(omp_meets_feature_floor("omp/19.0.0"));
     }
 
     #[test]

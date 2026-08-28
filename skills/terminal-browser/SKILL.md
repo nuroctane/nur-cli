@@ -16,7 +16,8 @@ ask the user to curl-install unless doctor says the runtime is missing.
 
 ## Runtimes Nur picks automatically
 
-1. **Native** `terminal-browser` binary (macOS Apple Silicon today; Linux WIP)
+1. **Native** `terminal-browser` binary (upstream 0.7.x ships macOS **and Linux**
+   builds; still no Windows)
 2. **WSL** - `wsl -e terminal-browser` when installed inside WSL
 3. **Windows-host** - same tool API mapped onto **agent-browser-cli** + real Chrome
    (run `nur browser setup` once for the extension)
@@ -39,5 +40,5 @@ ask the user to curl-install unless doctor says the runtime is missing.
   HTML-preview workflow the user asked for.
 - Upstream in-terminal kitty-graphics Chromium needs a supported terminal
   (Ghostty, kitty, WezTerm, …). Host mode still opens and automates Chrome.
-- Install upstream (when on Apple Silicon):  
+- Install upstream (macOS / Linux):
   `curl -fsSL https://terminal-browser.sh/install | bash`

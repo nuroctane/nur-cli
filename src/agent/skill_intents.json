@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-08-26T23:25:36.434051",
-  "total_skills": 1559,
+  "generated_at": "2026-08-28T18:26:42.193158",
+  "total_skills": 1571,
   "note": "Comprehensive skill intent index - 700+ skills, expanded NL triggers. Must be updated when adding skills per AGENTS.md. Run: python scripts/generate_skill_intents.py",
   "skills": [
     {
@@ -816,6 +816,37 @@
         "outcomes",
         "delegated",
         "task"
+      ]
+    },
+    {
+      "name": "agentic-defense-game-theory",
+      "description": "Router for deception-based active defense against AI-agent attackers of DeFi protocols: game theory of honeypots, the agentic attack loop and where to intercept it, lawful bounds of sabotage-by-misdirection, and pointers to the play libraries (contract honeypots, recon-surface poisoning, attacker id",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\agentic-defense-game-theory\\SKILL.md",
+      "triggers": [
+        "/agentic defense game theory",
+        "/agentic-defense-game-theory",
+        "agentic defense game theory",
+        "agentic-defense-game-theory",
+        "/agentic defense game",
+        "/agentic-defense-game",
+        "/defense game theory",
+        "/defense-game-theory",
+        "agentic defense game",
+        "agentic-defense-game",
+        "defense game theory",
+        "defense-game-theory"
+      ],
+      "keywords": [
+        "agentic",
+        "defense",
+        "game",
+        "theory",
+        "router",
+        "deception",
+        "based",
+        "active",
+        "against",
+        "attackers"
       ]
     },
     {
@@ -3756,6 +3787,37 @@
         "findings",
         "table",
         "invoke"
+      ]
+    },
+    {
+      "name": "audit-ai-design-slop",
+      "description": "Audit websites, apps, screenshots, mockups, and design code for harmful AI-design clich\u00e9s, generic generated defaults, and established UI defects. Use when the user wants evidence-backed design feedback, an anti-slop review, or a removal-first cleanup plan without a speculative redesign.",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\audit-ai-design-slop\\SKILL.md",
+      "triggers": [
+        "/audit ai design slop",
+        "/audit-ai-design-slop",
+        "audit ai design slop",
+        "audit-ai-design-slop",
+        "/audit ai design",
+        "/audit-ai-design",
+        "/ai design slop",
+        "/ai-design-slop",
+        "audit ai design",
+        "audit-ai-design",
+        "ai design slop",
+        "ai-design-slop"
+      ],
+      "keywords": [
+        "audit",
+        "design",
+        "slop",
+        "websites",
+        "apps",
+        "screenshots",
+        "mockups",
+        "code",
+        "harmful",
+        "clich"
       ]
     },
     {
@@ -11503,6 +11565,37 @@
       ]
     },
     {
+      "name": "defi-security-trends-standards",
+      "description": "Current-year smart-contract security briefing: what loss classes dominate right now, OWASP Smart Contract Top 10 mapping, audit tooling status, and new attack surfaces (EIP-7702 drainers, DVN/verifier bridge configs, intents, RWA rails). Use for 'what should I check in 2026', scoping a review to cur",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\defi-security-trends-standards\\SKILL.md",
+      "triggers": [
+        "/defi security trends standards",
+        "/defi-security-trends-standards",
+        "defi security trends standards",
+        "defi-security-trends-standards",
+        "/security trends standards",
+        "/security-trends-standards",
+        "security trends standards",
+        "security-trends-standards",
+        "/defi security trends",
+        "/defi-security-trends",
+        "defi security trends",
+        "defi-security-trends"
+      ],
+      "keywords": [
+        "defi",
+        "security",
+        "trends",
+        "standards",
+        "current",
+        "year",
+        "smart",
+        "contract",
+        "briefing",
+        "loss"
+      ]
+    },
+    {
       "name": "delight",
       "description": "Delight pass \u2014 adds one or two memorable micro-interactions (copy specificity, hover choreography, state transitions, one signature detail) without decoration or confetti. Use when the UI works but feels generic, or when the user says \"make it feel special\" / \"add some personality\". Invoke when the ",
       "path": "C:\\Users\\david\\.nur\\skills\\delight\\SKILL.md",
@@ -11702,6 +11795,37 @@
         "trust",
         "tunnel",
         "provide"
+      ]
+    },
+    {
+      "name": "deploying-contract-honeypots",
+      "description": "Onchain deception primitives and per-attack-vector deception plays for defending DeFi protocols against AI-agent attackers: decoy functions and tripwire storage, anti-simulation fork traps, bait funds and canaries, plus concrete play tables for every vulnerability class (T01-T40 EVM, S/M/C/K non-EVM",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\deploying-contract-honeypots\\SKILL.md",
+      "triggers": [
+        "/deploying contract honeypots",
+        "/deploying-contract-honeypots",
+        "deploying contract honeypots",
+        "deploying-contract-honeypots",
+        "/contract honeypots",
+        "/contract-honeypots",
+        "/deploying contract",
+        "/deploying-contract",
+        "contract honeypots",
+        "contract-honeypots",
+        "deploying contract",
+        "deploying-contract"
+      ],
+      "keywords": [
+        "deploying",
+        "contract",
+        "honeypots",
+        "onchain",
+        "deception",
+        "primitives",
+        "attack",
+        "vector",
+        "plays",
+        "defending"
       ]
     },
     {
@@ -18241,6 +18365,37 @@
       ]
     },
     {
+      "name": "finding-google-skills",
+      "description": "Locates and loads the right Google product skill on demand from a remote catalog index, instead of preloading every skill. Use at the START of any request touching a Google product, API, or developer platform - including Google Cloud (GKE, Cloud Run, IAM, BigQuery, Vertex AI, Spanner), Google Ads, G",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\finding-google-skills\\SKILL.md",
+      "triggers": [
+        "/finding google skills",
+        "/finding-google-skills",
+        "finding google skills",
+        "finding-google-skills",
+        "/finding google",
+        "/finding-google",
+        "/google skills",
+        "/google-skills",
+        "finding google",
+        "finding-google",
+        "google skills",
+        "google-skills"
+      ],
+      "keywords": [
+        "finding",
+        "google",
+        "locates",
+        "loads",
+        "right",
+        "product",
+        "demand",
+        "remote",
+        "catalog",
+        "index"
+      ]
+    },
+    {
       "name": "finishing-a-development-branch",
       "description": "Use when implementation is complete, all tests pass, and you need to decide how to integrate the work",
       "path": "C:\\Users\\david\\.nur\\skills\\finishing-a-development-branch\\SKILL.md",
@@ -18371,6 +18526,30 @@
         "layout",
         "thrashing",
         "compositor"
+      ]
+    },
+    {
+      "name": "flags-sdk",
+      "description": "Flags SDK and Vercel Flags expert guidance. Use when declaring feature flags with flag(), wiring provider adapters (Vercel, Statsig, LaunchDarkly, PostHog, and others), managing flags with the vercel flags CLI, implementing the precompute pattern for static A/B tests, or integrating the Flags Explor",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\flags-sdk\\SKILL.md",
+      "triggers": [
+        "flags vercel",
+        "/flags sdk",
+        "/flags-sdk",
+        "flags sdk",
+        "flags-sdk"
+      ],
+      "keywords": [
+        "flags",
+        "vercel",
+        "expert",
+        "guidance",
+        "declaring",
+        "feature",
+        "flag",
+        "wiring",
+        "provider",
+        "adapters"
       ]
     },
     {
@@ -20862,6 +21041,37 @@
       ]
     },
     {
+      "name": "google-cloud-solution-hybrid-search-alloydb",
+      "description": "Discovers requirements and generates architectural, design, and deployment guidance for dynamic hybrid search systems by combining semantic search and keyword search. Optimized for AlloyDB hybrid search use cases in Google Cloud. Use when users need vector search combined with structured SQL filteri",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\google-cloud-solution-hybrid-search-alloydb\\SKILL.md",
+      "triggers": [
+        "/google cloud solution hybrid search alloydb",
+        "/google-cloud-solution-hybrid-search-alloydb",
+        "google cloud solution hybrid search alloydb",
+        "google-cloud-solution-hybrid-search-alloydb",
+        "/solution hybrid search",
+        "/solution-hybrid-search",
+        "/cloud solution hybrid",
+        "/cloud-solution-hybrid",
+        "/google cloud solution",
+        "/google-cloud-solution",
+        "/hybrid search alloydb",
+        "/hybrid-search-alloydb"
+      ],
+      "keywords": [
+        "google",
+        "cloud",
+        "solution",
+        "hybrid",
+        "search",
+        "alloydb",
+        "discovers",
+        "requirements",
+        "generates",
+        "architectural"
+      ]
+    },
+    {
       "name": "google-cloud-solution-multi-agent-security",
       "description": "Designs, deploys, and secures Google Cloud Agent Gateway solutions. Use when the user needs to configure multi-agent security, ingress (CLIENT_TO_AGENT), or egress (AGENT_TO_ANYWHERE) patterns involving Model Armor, IAP, and Agent Registry. Don't use for general Cloud Load Balancing or basic VPC set",
       "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\google-cloud-solution-multi-agent-security\\SKILL.md",
@@ -23133,6 +23343,37 @@
         "structured",
         "divergent",
         "convergent"
+      ]
+    },
+    {
+      "name": "identifying-agentic-attackers",
+      "description": "Turn deception-program tripwires into identified attackers and lawful outcomes: tripwire event schemas and telemetry, attribution and evidence-pack standards (zachxbt-class dossier discipline, exchange/FBI/SEAL handoff), and the graduated response ladder from observe to freeze-to-handoff. Use when a",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\identifying-agentic-attackers\\SKILL.md",
+      "triggers": [
+        "/identifying agentic attackers",
+        "/identifying-agentic-attackers",
+        "identifying agentic attackers",
+        "identifying-agentic-attackers",
+        "/identifying agentic",
+        "/identifying-agentic",
+        "identifying agentic",
+        "identifying-agentic",
+        "/agentic attackers",
+        "/agentic-attackers",
+        "agentic attackers",
+        "agentic-attackers"
+      ],
+      "keywords": [
+        "identifying",
+        "agentic",
+        "attackers",
+        "turn",
+        "deception",
+        "program",
+        "tripwires",
+        "identified",
+        "lawful",
+        "outcomes"
       ]
     },
     {
@@ -30386,6 +30627,37 @@
       ]
     },
     {
+      "name": "no-ai-design-slop",
+      "description": "Prevent and remove generic AI-generated design defaults, incoherent visual choices, and established UI defects while creating, revising, or reviewing websites, apps, screenshots, mockups, and design code. Use as a passive quality gate during UI work or for an explicit anti-slop cleanup; preserve the",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\no-ai-design-slop\\SKILL.md",
+      "triggers": [
+        "/no ai design slop",
+        "/no-ai-design-slop",
+        "no ai design slop",
+        "no-ai-design-slop",
+        "/ai design slop",
+        "/ai-design-slop",
+        "ai design slop",
+        "ai-design-slop",
+        "prevent remove",
+        "/no ai design",
+        "/no-ai-design",
+        "/design slop"
+      ],
+      "keywords": [
+        "design",
+        "slop",
+        "prevent",
+        "remove",
+        "generic",
+        "generated",
+        "defaults",
+        "incoherent",
+        "visual",
+        "choices"
+      ]
+    },
+    {
       "name": "number-details",
       "description": "Add decorative 01, 02, 03 numeric detail markers.",
       "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\number-details\\SKILL.md",
@@ -36356,6 +36628,37 @@
       ]
     },
     {
+      "name": "poisoning-agent-recon-surfaces",
+      "description": "Offchain deception for AI-agent attackers of DeFi protocols: landing-surface design (decoy docs, bait search results, fake internal runbooks, robots.txt lures, decoy repos and RPCs), per-channel watermarking so exploits reveal their source, and planner-poisoning ops (misleading layouts, ABIs, addres",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\poisoning-agent-recon-surfaces\\SKILL.md",
+      "triggers": [
+        "/poisoning agent recon surfaces",
+        "/poisoning-agent-recon-surfaces",
+        "poisoning agent recon surfaces",
+        "poisoning-agent-recon-surfaces",
+        "/poisoning agent recon",
+        "/poisoning-agent-recon",
+        "/agent recon surfaces",
+        "/agent-recon-surfaces",
+        "poisoning agent recon",
+        "poisoning-agent-recon",
+        "agent recon surfaces",
+        "agent-recon-surfaces"
+      ],
+      "keywords": [
+        "poisoning",
+        "recon",
+        "surfaces",
+        "offchain",
+        "deception",
+        "attackers",
+        "defi",
+        "protocols",
+        "landing",
+        "surface"
+      ]
+    },
+    {
       "name": "polish",
       "description": "Final craft pass applying the compound details from the polish checklist \u2014 micro-typography, spacing rhythm, hover states, and a signature detail \u2014 directly to code. Use when the surface is functionally complete but feels unfinished, or when the user says \"polish this\" / \"it looks generic\" / \"add th",
       "path": "C:\\Users\\david\\.nur\\skills\\polish\\SKILL.md",
@@ -37412,6 +37715,37 @@
       ]
     },
     {
+      "name": "retrieving-developer-knowledge",
+      "description": "Searches, retrieves, and synthesizes official Google developer documentation across Google Cloud, AI/Gemini, Android, Chrome, Web, Flutter, Go, Firebase, and other Google developer platforms. Integrates with the Developer Knowledge MCP server (search_documents, get_documents, answer_query) or the De",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\retrieving-developer-knowledge\\SKILL.md",
+      "triggers": [
+        "/retrieving developer knowledge",
+        "/retrieving-developer-knowledge",
+        "retrieving developer knowledge",
+        "retrieving-developer-knowledge",
+        "/retrieving developer",
+        "/retrieving-developer",
+        "/developer knowledge",
+        "/developer-knowledge",
+        "retrieving developer",
+        "retrieving-developer",
+        "developer knowledge",
+        "developer-knowledge"
+      ],
+      "keywords": [
+        "retrieving",
+        "developer",
+        "knowledge",
+        "searches",
+        "retrieves",
+        "synthesizes",
+        "official",
+        "google",
+        "documentation",
+        "across"
+      ]
+    },
+    {
       "name": "retro",
       "description": "Throwback design with vintage-inspired typography, high-contrast retro palettes, and nostalgic visual elements.",
       "path": "C:\\Users\\david\\.nur\\skills\\retro\\SKILL.md",
@@ -38085,6 +38419,37 @@
         "interest",
         "index",
         "liquidation"
+      ]
+    },
+    {
+      "name": "reviewing-major-chain-surfaces",
+      "description": "Chain-specific audit surfaces for every major chain by current volume and TVL: Ethereum mainnet, Base, Arbitrum One + Orbit (incl. Robinhood Chain), OP Mainnet + Superchain, Hyperliquid HyperCore/HyperEVM, Solana, BNB Chain, Linea, Scroll, zkSync Era, Sonic, Berachain, Monad, Plasma, Sui, Aptos, TON",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-major-chain-surfaces\\SKILL.md",
+      "triggers": [
+        "/reviewing major chain surfaces",
+        "/reviewing-major-chain-surfaces",
+        "reviewing major chain surfaces",
+        "reviewing-major-chain-surfaces",
+        "/reviewing major chain",
+        "/reviewing-major-chain",
+        "/major chain surfaces",
+        "/major-chain-surfaces",
+        "reviewing major chain",
+        "reviewing-major-chain",
+        "major chain surfaces",
+        "major-chain-surfaces"
+      ],
+      "keywords": [
+        "reviewing",
+        "major",
+        "chain",
+        "surfaces",
+        "specific",
+        "audit",
+        "every",
+        "current",
+        "volume",
+        "ethereum"
       ]
     },
     {

@@ -126,6 +126,18 @@ def run(cmd, cwd=None, timeout=180):
     )
 
 
+def rmtree_force(path):
+    """rmtree that survives read-only .git objects on Windows."""
+    import stat
+    def onerror(func, p, _exc):
+        try:
+            os.chmod(p, stat.S_IWRITE)
+            func(p)
+        except OSError:
+            pass
+    shutil.rmtree(path, onerror=onerror)
+
+
 def parse_catalog_urls() -> list[str]:
     text = CATALOG.read_text(encoding="utf-8")
     return re.findall(r'source_url:\s*"(https://github.com/[^"]+)"', text)
@@ -160,14 +172,14 @@ def is_cyber(url: str) -> bool:
 
 def clone_one(url: str, dest: Path) -> tuple[str, bool, str]:
     if dest.exists():
-        shutil.rmtree(dest, ignore_errors=True)
+        rmtree_force(dest)
     dest.mkdir(parents=True, exist_ok=True)
     r = run(
         ["git", "clone", "--depth", "1", "--single-branch", url, str(dest)],
         timeout=300,
     )
     if r.returncode != 0:
-        shutil.rmtree(dest, ignore_errors=True)
+        rmtree_force(dest)
         err = (r.stderr or r.stdout or "clone failed").strip().splitlines()[-1:]
         return url, False, err[0] if err else "clone failed"
     sha = run(["git", "rev-parse", "--short", "HEAD"], cwd=dest).stdout.strip()
