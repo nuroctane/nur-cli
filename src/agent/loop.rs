@@ -622,6 +622,9 @@ impl AgentRunner {
         let mut compact_failures: u8 = 0;
         let mut last_compact_input: u64 = 0;
         let mut emergency_compactions: u8 = 0;
+        // Preflight context-window recoveries (compact + retry instead of
+        // dying) for this user turn.
+        let mut preflight_recoveries: u8 = 0;
         // Codex/ChatGPT free (and some hosts) sometimes emit only a reasoning
         // summary and zero tool calls / zero answer text. Retry once with a
         // hard nudge + tool_choice=required before giving up.
@@ -794,7 +797,7 @@ impl AgentRunner {
             };
             let attribution = attribute_request(&instructions, &tools, &session.input_items);
             let output_reserve = self.config.request_output_reserve_tokens;
-            if let Some(msg) = preflight_request_budget(
+            if let Some(block) = preflight_request_budget(
                 &self.config,
                 usage,
                 &self.config.provider,
@@ -802,8 +805,51 @@ impl AgentRunner {
                 attribution.estimated_input_tokens(),
                 output_reserve,
             ) {
-                let _ = tx.send(AgentEvent::Status(msg.clone()));
-                return Err(NurError::Budget(msg));
+                match block {
+                    // Over the model's context window: this is recoverable,
+                    // not a budget stop. Compact (model-assisted, falling
+                    // back to a local bounded trim) and retry the request —
+                    // never kill the session for something compaction can
+                    // fix, on any provider. Bounded so a pathological
+                    // estimate cannot spin the loop.
+                    PreflightBlock::ContextWindow(reason)
+                        if preflight_recoveries < MAX_PREFLIGHT_RECOVERIES =>
+                    {
+                        preflight_recoveries += 1;
+                        let _ = tx.send(AgentEvent::Status(format!(
+                            "request preflight: {reason} - compacting before sending"
+                        )));
+                        match compact_session(self, session, usage).await {
+                            Ok(_) => {
+                                compactions = compactions.saturating_add(1);
+                                let _ = tx.send(AgentEvent::Status(
+                                    "context compacted - retrying request".into(),
+                                ));
+                            }
+                            Err(compact_error) => {
+                                let kept = emergency_compact_session(self, session);
+                                compactions = compactions.saturating_add(1);
+                                let _ = tx.send(AgentEvent::Status(format!(
+                                    "model compaction failed ({compact_error}); recovered a \
+                                         valid {kept}-item recent context locally - retrying"
+                                )));
+                            }
+                        }
+                        continue;
+                    }
+                    other => {
+                        // Budget caps already carry the prefix; the window
+                        // reason is bare so the retry line above reads clean.
+                        let msg = match other {
+                            PreflightBlock::ContextWindow(reason) => {
+                                format!("request preflight blocked: {reason}")
+                            }
+                            PreflightBlock::Budget(msg) => msg,
+                        };
+                        let _ = tx.send(AgentEvent::Status(msg.clone()));
+                        return Err(NurError::Budget(msg));
+                    }
+                }
             }
             let _ = tx.send(AgentEvent::Status(format!(
                 "prompt ~{} tok (system {} · tools {} · dialogue {} · tool output {}) · stable-prefix {} · output reserve {}",
@@ -1220,7 +1266,7 @@ impl AgentRunner {
                     if self.config.memory_model_extract {
                         let prompt = super::native_memory::model_extract_prompt(&text, 8_000);
                         let extract_input_estimate = (prompt.chars().count() as u64).div_ceil(3);
-                        if let Some(msg) = preflight_request_budget(
+                        if let Some(block) = preflight_request_budget(
                             &self.config,
                             usage,
                             &self.config.provider,
@@ -1229,7 +1275,8 @@ impl AgentRunner {
                             self.config.request_output_reserve_tokens,
                         ) {
                             let _ = tx.send(AgentEvent::Status(format!(
-                                "memory extraction skipped - {msg}"
+                                "memory extraction skipped - {}",
+                                block.message()
                             )));
                         } else {
                             let req = crate::api::types::ResponseRequest {
@@ -3141,10 +3188,44 @@ mod tests {
         let usage = UsageTracker::new("preflight".into(), "m".into(), PathBuf::from("."));
         let err = preflight_request_budget(&cfg, &usage, "meta", "m", 3_000, 8_192)
             .expect("input plus reserved completion must be checked before dispatch");
-        assert!(err.contains("reserved output"));
+        assert!(
+            matches!(err, PreflightBlock::Budget(ref msg) if msg.contains("reserved output")),
+            "unexpected block: {err:?}"
+        );
 
         cfg.max_session_tokens = Some(20_000);
         assert!(preflight_request_budget(&cfg, &usage, "meta", "m", 3_000, 8_192).is_none());
+    }
+
+    #[test]
+    fn request_preflight_classifies_window_overflow_as_recoverable() {
+        // 3000 estimated input + 8192 output reserve does not fit a 4096
+        // window: that must surface as the RECOVERABLE ContextWindow block
+        // (compact and retry), not as a hard session-budget stop. The grok
+        // bug was exactly this shape at a 500k window.
+        let cfg = Config {
+            context_window: 4_096,
+            ..Default::default()
+        };
+        let usage = UsageTracker::new("preflight-window".into(), "m".into(), PathBuf::from("."));
+        // A local provider carries no catalog window, so the configured
+        // context_window is authoritative — deterministic, no cache reads.
+        let block = preflight_request_budget(&cfg, &usage, "llamacpp", "zz-local-model", 3_000, 8_192)
+            .expect("over-window request must be blocked");
+        match block {
+            PreflightBlock::ContextWindow(msg) => {
+                assert!(msg.contains("context window"), "message: {msg}");
+            }
+            PreflightBlock::Budget(msg) => {
+                panic!("window overflow misclassified as budget stop: {msg}")
+            }
+        }
+        // Under a wide window the same request passes.
+        let cfg = Config::default();
+        assert!(
+            preflight_request_budget(&cfg, &usage, "llamacpp", "zz-local-model", 3_000, 8_192)
+                .is_none()
+        );
     }
 
     #[test]
@@ -3323,6 +3404,26 @@ pub fn session_budget_exceeded(cfg: &Config, usage: &UsageTracker) -> Option<Str
     None
 }
 
+/// Why a request was refused before it left the machine. The two cases need
+/// opposite treatments: an over-window request is recoverable (compaction
+/// frees real context and the request can be retried), while a session
+/// budget cap is a hard stop the user asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreflightBlock {
+    /// The request would not fit the model's context window.
+    ContextWindow(String),
+    /// The session token or cost budget would be crossed.
+    Budget(String),
+}
+
+impl PreflightBlock {
+    pub fn message(&self) -> String {
+        match self {
+            PreflightBlock::ContextWindow(msg) | PreflightBlock::Budget(msg) => msg.clone(),
+        }
+    }
+}
+
 /// Guard a request before it leaves the machine. Providers often report usage
 /// only after completion (or not at all), so checking the already-spent total
 /// alone leaves one unbounded completion able to cross the user budget.
@@ -3333,23 +3434,23 @@ pub fn preflight_request_budget(
     model: &str,
     estimated_input_tokens: u64,
     reserved_output_tokens: u64,
-) -> Option<String> {
+) -> Option<PreflightBlock> {
     let requested = estimated_input_tokens.saturating_add(reserved_output_tokens);
     let context_window =
         crate::pricing::context_window_for(provider, model).unwrap_or(cfg.context_window);
     if requested > context_window {
-        return Some(format!(
-            "request preflight blocked: estimated input {estimated_input_tokens} + reserved output {reserved_output_tokens} = {requested} tokens exceeds {provider}/{model} context window {context_window}"
-        ));
+        return Some(PreflightBlock::ContextWindow(format!(
+            "estimated input {estimated_input_tokens} + reserved output {reserved_output_tokens} = {requested} tokens exceeds {provider}/{model} context window {context_window}"
+        )));
     }
     let session = usage.session_usage();
     if let Some(max) = cfg.max_session_tokens {
         let projected = session.total_tokens.saturating_add(requested);
         if projected > max {
-            return Some(format!(
+            return Some(PreflightBlock::Budget(format!(
                 "request preflight blocked: session tokens {} + estimated input {estimated_input_tokens} + reserved output {reserved_output_tokens} = {projected} would exceed budget {max}",
                 session.total_tokens
-            ));
+            )));
         }
     }
     if let Some(max) = cfg.max_session_cost_usd {
@@ -3362,10 +3463,10 @@ pub fn preflight_request_budget(
         let projected = session.estimated_cost_usd()
             + crate::pricing::rates_for(provider, model).cost_for(&reserve);
         if projected > max {
-            return Some(format!(
+            return Some(PreflightBlock::Budget(format!(
                 "request preflight blocked: estimated session cost ${projected:.4} (including this request's ${:.4} reserve) would exceed budget ${max:.4}",
                 crate::pricing::rates_for(provider, model).cost_for(&reserve)
-            ));
+            )));
         }
     }
     None
@@ -3584,6 +3685,9 @@ const MAX_AUTO_COMPACT_FAILURES: u8 = 3;
 /// This is separate from proactive compaction because usage metadata can be
 /// absent or inaccurate on gateways and OAuth-backed compatibility routes.
 const MAX_EMERGENCY_COMPACTIONS: u8 = 2;
+/// Cap on preflight context-window recoveries (compact + retry) per user
+/// turn, so a pathological estimate cannot spin the loop forever.
+const MAX_PREFLIGHT_RECOVERIES: u8 = 3;
 
 fn is_context_limit_error(error: &NurError) -> bool {
     let message = match error {
@@ -4918,7 +5022,7 @@ pub async fn compact_session(
         .map(|text| (text.chars().count() as u64).div_ceil(3))
         .unwrap_or(0)
         .saturating_add((system_prompt.chars().count() as u64).div_ceil(3));
-    if let Some(msg) = preflight_request_budget(
+    if let Some(block) = preflight_request_budget(
         &runner.config,
         usage,
         &runner.config.provider,
@@ -4926,7 +5030,26 @@ pub async fn compact_session(
         compact_input_estimate,
         runner.config.request_output_reserve_tokens,
     ) {
-        return Err(NurError::Budget(format!("compaction {msg}")));
+        match block {
+            // The summarizer request itself would not fit the model's
+            // window. Shrink to a bounded recent working set locally and
+            // summarize THAT, instead of giving up on model-assisted
+            // compaction at exactly the volume where it is needed. A budget
+            // cap stays a hard stop.
+            PreflightBlock::ContextWindow(_reason) => {
+                emergency_compact_session(runner, session);
+                items = session.input_items.clone();
+                thin_tool_bodies_for_compact(
+                    &mut items,
+                    runner.config.compact_tool_body_max_chars as usize,
+                    runner.config.compact_keep_user_turns as usize,
+                );
+                items.push(user_text_item(user_prompt));
+            }
+            PreflightBlock::Budget(msg) => {
+                return Err(NurError::Budget(format!("compaction {msg}")));
+            }
+        }
     }
 
     // OMP-compatible remote summarization (compaction.remoteEndpoint). Opt-in;
