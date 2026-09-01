@@ -544,7 +544,19 @@ pub fn cleanup_retention() -> CleanupReport {
         }
     }
     sessions.retain(|p| p.exists());
-    sessions.sort_by_key(|p| modified_unix(p));
+    // Snapshot mtimes BEFORE sorting: a live re-read per comparison makes
+    // the key move under the sort when parallel tests touch the same
+    // store, and Rust's sort panics on comparators that are not a total
+    // order.
+    let mut keyed: Vec<(u64, PathBuf)> = sessions
+        .into_iter()
+        .map(|p| {
+            let m = modified_unix(&p);
+            (m, p)
+        })
+        .collect();
+    keyed.sort_by_key(|(m, _)| *m);
+    let sessions: Vec<PathBuf> = keyed.into_iter().map(|(_, p)| p).collect();
 
     // A global hard cap makes abandoned session indexes bounded even when they
     // are frequently older than the age window.
@@ -562,7 +574,7 @@ pub fn cleanup_retention() -> CleanupReport {
     }
 
     let references = referenced_blob_paths();
-    let mut blobs: Vec<PathBuf> = std::fs::read_dir(crate::tools::spill::shared_blob_dir())
+    let blobs: Vec<PathBuf> = std::fs::read_dir(crate::tools::spill::shared_blob_dir())
         .ok()
         .into_iter()
         .flatten()
@@ -570,7 +582,16 @@ pub fn cleanup_retention() -> CleanupReport {
         .map(|e| e.path())
         .filter(|p| p.is_file())
         .collect();
-    blobs.sort_by_key(|p| modified_unix(p));
+    // Same snapshot rule as above: never sort by a live mtime read.
+    let mut keyed_blobs: Vec<(u64, PathBuf)> = blobs
+        .into_iter()
+        .map(|p| {
+            let m = modified_unix(&p);
+            (m, p)
+        })
+        .collect();
+    keyed_blobs.sort_by_key(|(m, _)| *m);
+    let blobs: Vec<PathBuf> = keyed_blobs.into_iter().map(|(_, p)| p).collect();
     for blob in blobs {
         let old = now.saturating_sub(modified_unix(&blob)) > max_age;
         let over = total > policy.global_bytes;
