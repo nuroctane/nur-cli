@@ -543,8 +543,26 @@ impl AgentRunner {
         // ran, then the turn was cancelled before the attach) so a stale image
         // can't bleed onto this unrelated prompt.
         let _ = media::take_pending_media();
+        // Oversized input never stops a turn: auto-register the bulk with
+        // context_store (RLM prompt-as-variable, done for the user) and run
+        // with a pointer + preview instead of blocking. Runs before the
+        // guardrails so the size check never fires.
+        let user_text: String = match super::context_store::maybe_spill_oversized_prompt(
+            &session.id,
+            user_text,
+        ) {
+            Some((name, replacement)) => {
+                let _ = tx.send(AgentEvent::Status(format!(
+                    "input · over the inline limit - auto-registered as context var `{name}`, \
+                         turn continues with a pointer + preview"
+                )));
+                replacement
+            }
+            None => user_text.to_string(),
+        };
         // Portable input guardrails (OpenAI Agents SDK pattern) - all providers.
-        match super::guardrails::check_input(user_text) {
+        // Size is handled above; what remains here are safety refusals.
+        match super::guardrails::check_input(&user_text) {
             super::guardrails::GuardDecision::Block(msg) => {
                 let _ = tx.send(AgentEvent::Status(format!(
                     "guardrail blocked input · {msg}"
@@ -557,11 +575,11 @@ impl AgentRunner {
             super::guardrails::GuardDecision::Allow => {}
         }
         // Track tokens toward a persistent goal when present.
-        session.push_user(user_text);
+        session.push_user(&user_text);
         // Peer mail from other sessions (real receipt + authority boundary) is
         // prepended so it arrives mid-turn; see the registration block above.
         let prompt_text = if peer_mail.is_empty() {
-            user_text.to_string()
+            user_text.clone()
         } else {
             format!("{user_text}{peer_mail}")
         };
@@ -601,7 +619,7 @@ impl AgentRunner {
             &self.config.model,
             &provider_label,
             self.config.poor_mode || limited_ctx,
-            Some(user_text),
+            Some(user_text.as_str()),
         );
         if prompt_ctx.has_skill_activation() {
             let label = prompt_ctx.skill_activation_label().unwrap_or("skill");
@@ -622,6 +640,11 @@ impl AgentRunner {
         let mut compact_failures: u8 = 0;
         let mut last_compact_input: u64 = 0;
         let mut emergency_compactions: u8 = 0;
+        // Staged context-limit recovery markers (promotion → model
+        // compaction → local minimal trim) so a size rejection never ends
+        // the turn before every stage has run.
+        let mut emergency_compact_attempted = false;
+        let mut emergency_local_trim_done = false;
         // Preflight context-window recoveries (compact + retry instead of
         // dying) for this user turn.
         let mut preflight_recoveries: u8 = 0;
@@ -793,7 +816,7 @@ impl AgentRunner {
             let tools = if self.is_subagent {
                 self.tools.subagent_tool_defs()
             } else {
-                self.tools.root_tool_defs_for_task(user_text, turns > 1)
+                self.tools.root_tool_defs_for_task(&user_text, turns > 1)
             };
             let attribution = attribute_request(&instructions, &tools, &session.input_items);
             let output_reserve = self.config.request_output_reserve_tokens;
@@ -808,8 +831,8 @@ impl AgentRunner {
                 match block {
                     // Over the model's context window: this is recoverable,
                     // not a budget stop. Compact (model-assisted, falling
-                    // back to a local bounded trim) and retry the request —
-                    // never kill the session for something compaction can
+                    // back to a local bounded trim) and retry the request
+                    // - never kill the session for something compaction can
                     // fix, on any provider. Bounded so a pathological
                     // estimate cannot spin the loop.
                     PreflightBlock::ContextWindow(reason)
@@ -837,15 +860,22 @@ impl AgentRunner {
                         }
                         continue;
                     }
-                    other => {
-                        // Budget caps already carry the prefix; the window
-                        // reason is bare so the retry line above reads clean.
-                        let msg = match other {
-                            PreflightBlock::ContextWindow(reason) => {
-                                format!("request preflight blocked: {reason}")
-                            }
-                            PreflightBlock::Budget(msg) => msg,
-                        };
+                    // Model-assisted recoveries exhausted (tiny window or a
+                    // stubborn estimate). Hard-trim to a minimal recent
+                    // working set and send anyway: a size estimate is never
+                    // a turn-stopper. If the provider still rejects, the
+                    // context-limit recovery path below takes over.
+                    PreflightBlock::ContextWindow(reason) => {
+                        let kept = emergency_compact_session(self, session);
+                        compactions = compactions.saturating_add(1);
+                        let _ = tx.send(AgentEvent::Status(format!(
+                            "request preflight: {reason} - recovered a minimal {kept}-item \
+                                 recent context locally and sending anyway"
+                        )));
+                    }
+                    PreflightBlock::Budget(msg) => {
+                        // The only preflight that ends a turn: an explicit
+                        // user-set budget cap.
                         let _ = tx.send(AgentEvent::Status(msg.clone()));
                         return Err(NurError::Budget(msg));
                     }
@@ -937,34 +967,61 @@ impl AgentRunner {
                             }
                         }
                     }
-                    if emergency_compactions >= MAX_EMERGENCY_COMPACTIONS {
+                    // Provider rejected the request as over-window.
+                    // Recovery is staged and a size rejection never ends
+                    // the turn on its own:
+                    //   1. OMP contextPromotion to a larger sibling (once,
+                    //      handled above)
+                    //   2. model-assisted compaction (once)
+                    //   3. local trim to a minimal recent working set
+                    // Only when the provider rejects even that minimal
+                    // context is the error surfaced - at that point the
+                    // route itself is broken, not the context size.
+                    if emergency_local_trim_done {
+                        let _ = tx.send(AgentEvent::Status(
+                            "provider rejected even the minimal recovered context - \
+                                 the route appears broken"
+                                .into(),
+                        ));
                         return Err(error);
                     }
-                    emergency_compactions += 1;
-                    let _ = tx.send(AgentEvent::Status(format!(
-                        "provider rejected the context window - recovering and retrying \
-                             ({emergency_compactions}/{MAX_EMERGENCY_COMPACTIONS})"
-                    )));
-
-                    match compact_session(self, session, usage).await {
-                        Ok(_) => {
-                            compactions = compactions.saturating_add(1);
-                            let _ = tx.send(AgentEvent::Status(
-                                "emergency context compaction succeeded - continuing".into(),
-                            ));
+                    emergency_compactions = emergency_compactions.saturating_add(1);
+                    if !emergency_compact_attempted {
+                        emergency_compact_attempted = true;
+                        let _ = tx.send(AgentEvent::Status(
+                            "provider rejected the context window - compacting and retrying"
+                                .into(),
+                        ));
+                        match compact_session(self, session, usage).await {
+                            Ok(_) => {
+                                compactions = compactions.saturating_add(1);
+                                let _ = tx.send(AgentEvent::Status(
+                                    "emergency context compaction succeeded - continuing".into(),
+                                ));
+                            }
+                            Err(compact_error) => {
+                                // A model-assisted summary can itself exceed
+                                // the provider window. Keep a valid recent
+                                // working set locally so the turn continues
+                                // instead of dying at exactly the point
+                                // compaction is needed.
+                                let kept = emergency_compact_session(self, session);
+                                emergency_local_trim_done = true;
+                                compactions = compactions.saturating_add(1);
+                                let _ = tx.send(AgentEvent::Status(format!(
+                                    "model compaction failed ({compact_error}); recovered a \
+                                         valid {kept}-item recent context locally - continuing"
+                                )));
+                            }
                         }
-                        Err(compact_error) => {
-                            // A model-assisted summary can itself exceed the
-                            // provider window. Keep a valid recent working
-                            // set locally so the turn continues instead of
-                            // dying at exactly the point compaction is needed.
-                            let kept = emergency_compact_session(self, session);
-                            compactions = compactions.saturating_add(1);
-                            let _ = tx.send(AgentEvent::Status(format!(
-                                "model compaction failed ({compact_error}); recovered a \
-                                     valid {kept}-item recent context locally - continuing"
-                            )));
-                        }
+                    } else {
+                        let kept = emergency_compact_session(self, session);
+                        emergency_local_trim_done = true;
+                        compactions = compactions.saturating_add(1);
+                        let _ = tx.send(AgentEvent::Status(format!(
+                            "context still over the window after compaction - recovered a \
+                                 minimal {kept}-item recent context locally - continuing"
+                        )));
                     }
                     continue;
                 }
@@ -3198,6 +3255,26 @@ mod tests {
     }
 
     #[test]
+    fn default_config_has_no_budgets_and_preflight_never_hard_stops() {
+        let cfg = Config::default();
+        // No budget of any kind is on by default.
+        assert!(cfg.max_session_tokens.is_none());
+        assert!(cfg.max_session_cost_usd.is_none());
+        assert_eq!(cfg.max_turns, 0);
+        // Without explicit budgets the preflight can never classify a block
+        // as a hard Budget stop - window overflow is recoverable and is
+        // handled by compact-and-retry in the loop.
+        let usage = UsageTracker::new("t".into(), "m".into(), PathBuf::from("."));
+        let block =
+            preflight_request_budget(&cfg, &usage, "test-no-provider", "zz-no-model", 2_000_000, 8_192);
+        assert!(matches!(
+            block,
+            Some(PreflightBlock::ContextWindow(_)) | None
+        ));
+        assert!(!matches!(block, Some(PreflightBlock::Budget(_))));
+    }
+
+    #[test]
     fn request_preflight_classifies_window_overflow_as_recoverable() {
         // 3000 estimated input + 8192 output reserve does not fit a 4096
         // window: that must surface as the RECOVERABLE ContextWindow block
@@ -3678,15 +3755,15 @@ const MAX_TRUNCATION_CONTINUATIONS: u8 = 5;
 
 /// Ceiling on automatic compactions inside one user turn. High enough that a
 /// long agent run never runs out of relief, low enough to bound the cost.
+/// Exhausting it does NOT end the turn: the provider-rejection recovery
+/// stages below still apply.
 const MAX_AUTO_COMPACTIONS: u8 = 8;
-/// Consecutive-ish compaction failures tolerated before giving up on the turn.
+/// Consecutive-ish compaction failures tolerated before proactive compaction
+/// stops retrying. Exhausting it does NOT end the turn either.
 const MAX_AUTO_COMPACT_FAILURES: u8 = 3;
-/// Reactive recoveries after a provider rejects the request as too large.
-/// This is separate from proactive compaction because usage metadata can be
-/// absent or inaccurate on gateways and OAuth-backed compatibility routes.
-const MAX_EMERGENCY_COMPACTIONS: u8 = 2;
 /// Cap on preflight context-window recoveries (compact + retry) per user
-/// turn, so a pathological estimate cannot spin the loop forever.
+/// turn, so a pathological estimate cannot spin the loop forever. After the
+/// cap the request is sent anyway from a minimal locally-trimmed context.
 const MAX_PREFLIGHT_RECOVERIES: u8 = 3;
 
 fn is_context_limit_error(error: &NurError) -> bool {

@@ -362,6 +362,50 @@ pub fn maybe_register_tool_result(
     }
 }
 
+/// Inline input limit for prompts, shared with the old input guardrail.
+pub const PROMPT_INLINE_CHAR_LIMIT: usize = 500_000;
+
+/// Oversized user prompts never stop a turn: the full text is registered as
+/// a session context variable (RLM prompt-as-variable, done for the user)
+/// and the caller runs with a pointer + preview instead. Returns
+/// `Some((var name, replacement prompt))` only when the prompt exceeds the
+/// inline limit. When registration refuses the body (sensitive-looking
+/// content, quota), the replacement carries a head+tail excerpt so the turn
+/// still proceeds - a size cap must never kill a session.
+pub fn maybe_spill_oversized_prompt(session_id: &str, text: &str) -> Option<(String, String)> {
+    let chars = text.chars().count();
+    if chars <= PROMPT_INLINE_CHAR_LIMIT {
+        return None;
+    }
+    const PREVIEW: usize = 4_000;
+    let head: String = text.chars().take(PREVIEW).collect();
+    let name = "user_paste";
+    let registered = register(session_id, name, text, "user_prompt", "auto-spill");
+    let pointer = match &registered {
+        Ok(v) => format!(
+            "The FULL text is preserved in context_store as `{name}` (id={id}, {chars} chars) - \
+             use the `context` tool with action peek|slice|search name={name} to read any part.",
+            id = v.id,
+        ),
+        Err(_) => format!(
+            "The full text could not be auto-registered ({chars} chars); the middle was \
+             elided below. Ask the user to re-share specific parts when needed."
+        ),
+    };
+    let tail: String = if chars > PREVIEW * 2 {
+        text.chars().skip(chars - PREVIEW).collect()
+    } else {
+        String::new()
+    };
+    let replacement = format!(
+        "[Your message was too large to carry inline. {pointer}]\n\n\
+         First {PREVIEW} characters:\n\n{head}\n\n\
+         {marker}{tail}",
+        marker = if tail.is_empty() { "" } else { "\n\n...[middle elided]...\n\n" },
+    );
+    Some((name.to_string(), replacement))
+}
+
 pub fn list(session_id: &str) -> Vec<ContextVar> {
     let Ok(mut g) = global().lock() else {
         return Vec::new();
@@ -705,6 +749,40 @@ mod tests {
         let big = "y".repeat(150);
         let msg = maybe_register_tool_result(&s, "bash", &big, 100).unwrap();
         assert!(msg.contains("context_store"));
+        clear_session(&s);
+    }
+
+    #[test]
+    fn oversized_prompt_spills_instead_of_blocking() {
+        let s = sid();
+        assert!(maybe_spill_oversized_prompt(&s, "just a normal prompt").is_none());
+
+        let huge = format!("alpha {}\ntail marker zebra", "x".repeat(600_000));
+        let (name, replacement) =
+            maybe_spill_oversized_prompt(&s, &huge).expect("over-limit prompt must spill");
+        assert_eq!(name, "user_paste");
+        assert!(replacement.contains("user_paste"));
+        assert!(replacement.contains("context"));
+        assert!(replacement.contains("alpha"));
+        // The replacement is far smaller than the original: the turn can
+        // actually proceed within the window.
+        assert!(replacement.chars().count() < huge.chars().count() / 10);
+        // The full body is readable from the store.
+        let hits = search(&s, "user_paste", "zebra", 5).unwrap();
+        assert!(hits.contains("zebra"));
+        delete(&s, "user_paste").unwrap();
+        clear_session(&s);
+    }
+
+    #[test]
+    fn oversized_sensitive_prompt_still_yields_a_replacement() {
+        let s = sid();
+        let huge = format!("api_key=sk-{}\n{}", "a".repeat(60), "x".repeat(600_000));
+        let (name, replacement) = maybe_spill_oversized_prompt(&s, &huge)
+            .expect("registration refusal must still return a usable replacement");
+        assert_eq!(name, "user_paste");
+        assert!(replacement.contains("elided"));
+        assert!(get(&s, "user_paste").is_none());
         clear_session(&s);
     }
 

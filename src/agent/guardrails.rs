@@ -34,21 +34,18 @@ fn sk_re() -> &'static Regex {
 
 /// Scan user input before it hits the model.
 pub fn check_input(text: &str) -> GuardDecision {
-    let chars = text.chars().count();
-    if chars > 500_000 {
-        return GuardDecision::Block(
-            "input exceeds 500k characters - register large corpora with tool `context` \
-             (RLM prompt-as-variable) instead of pasting wholesale"
-                .into(),
-        );
-    }
+    // Oversized input is NOT blocked here anymore: the turn loop
+    // auto-registers it with context_store and runs with a pointer +
+    // preview (a size cap must never stop a turn). What remains are
+    // safety refusals.
+    //
     // Pasting private keys into chat is a common accident.
     if text.contains("-----BEGIN") && text.contains("PRIVATE KEY-----") {
         return GuardDecision::Block(
             "input appears to contain a PEM private key - refuse to send to any provider".into(),
         );
     }
-    if sk_re().is_match(text) && chars < 20_000 {
+    if sk_re().is_match(text) && text.chars().count() < 20_000 {
         return GuardDecision::Warn(
             "input may contain an API token (sk-/ghp-/xox). Prefer env vars and /login; \
              rotate if this was a real secret"
@@ -121,6 +118,14 @@ mod tests {
     fn blocks_pem() {
         let t = "please use -----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----";
         assert!(matches!(check_input(t), GuardDecision::Block(_)));
+    }
+
+    #[test]
+    fn oversized_input_is_never_blocked() {
+        // A size cap must never stop a turn: oversized input is handled by
+        // the auto-spill in the turn loop, not by a guardrail block.
+        let t = "x".repeat(600_001);
+        assert!(!matches!(check_input(&t), GuardDecision::Block(_)));
     }
 
     #[test]
