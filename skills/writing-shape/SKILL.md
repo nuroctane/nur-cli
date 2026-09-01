@@ -66,6 +66,22 @@ When choosing how to render a block, weigh these tradeoffs out loud with the use
 - **Quote vs. paraphrase.** Quote when the original wording is the point. Paraphrase when only the idea matters.
 - **Code block vs. inline code.** Multi-line, runnable, or illustrative → block. Single token or identifier → inline.
 
+## Voice while shaping
+
+The pile is facts. The article is a voice. Mining a research pile into "X is Y. That's the tell. Full stop." is the **briefing tic**, and it is how shaped articles keep reading as memos even when every fact is true. If this author has a voice skill (`metaphysical-voice`, the vault `writing-skills` pack), load it before the opening and run its failure-modes checklist on every block before appending.
+
+**Banned in every block you append:**
+- Identity punches and caption sentences: "X is the house." "That's the tell." "That's the gist." "That's the whole thing." "Full stop."
+- A run of equational captions: "A is B. B is C. That's it."
+- Openers that announce what the document is, how to read it, or what the coming section will cover.
+- The "not X, it's Y" antithesis (see the voice skill, failure-mode #12).
+- The em dash.
+- Journalist throat-clears and delayed kickers (failure-mode #14).
+
+**The fix:** let the claim arrive through a scene, a number, or a named thing doing something. Aphorism is allowed when the short sentence is a complete thought that would be insulted by "that's the gist." A caption is a label glued onto a thought the paragraph already had, or a substitute for the scene that would have made the label unnecessary. If you can delete the sentence and the surrounding lines still hold the same information, it was a caption: cut it. If the sentence is the only place the claim lives, rebuild it as something happening, not as an identity.
+
+Do not open a published piece with a tour of the document. Start inside the claim.
+
 ## Writing rhythm
 
 Append to the article file as each block is agreed. Re-read the file from disk before every write: the user may have edited between turns. Never overwrite blindly. If the user wants a paragraph rewritten, edit that specific paragraph in place; leave the rest alone.

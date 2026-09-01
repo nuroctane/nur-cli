@@ -57,6 +57,10 @@ Pull material from the raw pile to populate each beat. You can paraphrase, split
 
 The article ends when the journey is complete, not when the pile is empty. Most piles will have leftover fragments that don't make it in. That is fine; that is the point of having more raw material than you need.
 
+## Voice while shaping
+
+Beats still have to be prose, not captions. Do not write identity punches ("X is the house"), "that's the tell/gist/whole thing," "full stop," or an opener that announces what the piece or beat is. Let the claim arrive through a scene, a number, or a named thing doing something. If this author has a voice skill (`metaphysical-voice`, the vault `writing-skills` pack), load it and run failure-mode #15 (the briefing tic) plus #12–#14 before appending a beat. Same rule as [writing-shape](../writing-shape/SKILL.md): the pile is facts; the article is a voice.
+
 ## Writing rhythm
 
 - Append one beat at a time. Never write ahead.
