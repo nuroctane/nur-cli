@@ -148,6 +148,13 @@ session cost $X ≥ budget $Y
 
 Or edit `max_session_cost_usd` / `max_session_tokens` in `~/.nur/config.toml`.
 
+Only an explicit budget can stop a turn. Lines like
+`request preflight: ... - compacting before sending` or
+`provider rejected the context window - compacting and retrying` are recovery
+statuses, not failures: Nur shrinks context (larger sibling model, model
+compaction, local minimal trim) and keeps the turn alive. If a turn truly dies,
+check `~/.nur/nur.log` for the underlying API error.
+
 ### Garbled text in the TUI on launch
 
 Logs go to `~/.nur/nur.log` (not stderr). If you still see noise, check that you're on **v0.13.2+** and no wrapper is redirecting `RUST_LOG` to the console at `warn` for syntect.

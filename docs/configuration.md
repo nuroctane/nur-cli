@@ -139,6 +139,13 @@ In the TUI you can set ceilings without editing the file:
 
 When a ceiling is hit, the agent **refuses new API turns** with a clear status message.
 
+Budgets are the only thing that stops a turn. With no ceilings set, nothing ends
+a turn on its own: context-window overflow (a preflight estimate or a provider
+rejection) recovers through staged compaction - promote to a larger sibling
+model, model-assisted compact, then a local minimal trim - and oversized pasted
+input is auto-registered with the `context` tool (pointer + preview) instead of
+being refused. Every other turn stop is an explicit budget you set.
+
 `max_turns = 0` means unlimited task completion rounds - it does **not** mean
 that spending is safe or capped. On the first unrestricted turn Nur warns about
 this distinction. Provider usage can be absent or subscription-only, so token

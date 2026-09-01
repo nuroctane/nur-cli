@@ -1,6 +1,6 @@
 [package]
 name = "nur-cli"
-version = "0.32.0"
+version = "0.33.0"
 edition = "2021"
 description = "NurCLI - fully loaded multi-provider coding agent (TUI, inline kitty/sixel vision, tools, sandbox, Graphify/PLUR/Ruflo/Executor + sc-research whitehat pack + historical SC vuln library)."
 license = "GPL-3.0-or-later"
