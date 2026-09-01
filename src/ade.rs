@@ -80,24 +80,11 @@ fn title_with_marker(marker: &str, prompt: &str) -> String {
 
 /// Provider logo EMOJI for the tab title — renders in every terminal's tab
 /// bar with zero image support. The moon-phase spinner stays as the working
-/// marker; the provider mark rides in front of the product label.
+/// marker; the provider mark rides in front of the product label. The
+/// mapping itself lives in `provider_logos::title_emoji` (one source of
+/// truth for ids AND chrome labels, shared with the graphics fallback).
 fn provider_title_emoji(provider_chrome: &str) -> &'static str {
-    match provider_chrome {
-        "openai" => "🟢",
-        "claude" | "anthropic" => "🅰️",
-        "gemini" => "✨",
-        "grok" | "xai" => "✖️",
-        "meta" => "♾️",
-        "deepseek" => "🐋",
-        "kimi" => "🌚",
-        "ollama" => "🦙",
-        "opencode" => "🟧",
-        "openrouter" => "🛰️",
-        "nous" => "🌘",
-        "copilot" | "github-copilot" => "🪽",
-        "perplexity" => "🔎",
-        _ => "",
-    }
+    crate::provider_logos::title_emoji(provider_chrome)
 }
 
 /// Rebrand with the provider's logo emoji: .
