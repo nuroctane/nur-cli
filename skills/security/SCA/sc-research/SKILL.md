@@ -28,7 +28,11 @@ Companion spine: `auditing-foundry-smart-contract-security` is the pre-deploy PA
 | User ask | Skill |
 |----------|--------|
 | pre-deploy Foundry audit / Slither / Aderyn / forge test | `auditing-foundry-smart-contract-security` |
-| triage detector spam | `triaging-and-deduping-findings` |
+| full multi-pass review / audit lenses / judging gates | `auditing-multi-pass-review-lenses` |
+| repo history forensics / invariant synthesis / spec vs code | `auditing-git-history-and-specs` |
+| fuzz property discovery / what to assert | `discovering-protocol-properties` |
+| reference model / differential testing / forced PoC gate | `auditing-against-reference-models` |
+| triage detector spam / severity calibration vs real corpora | `triaging-and-deduping-findings` (+ `references/corpus-calibration.md`) |
 | Immunefi / C4 / Sherlock / Cantina writeup | `contest-and-bounty-reporting` |
 | Immunefi/X paid bounty / "what class paid" / satya0x / saurik payout | `hunting-x-linked-bounties` (one reference file) |
 | learn / Ethernaut / DVD / Updraft | `researcher-gym-and-curriculum` |
@@ -100,6 +104,7 @@ Deception is defender-owned-surfaces only: lawful gate in `agentic-defense-game-
 | `references/swc-map.md` | SWC-100..136 + living replacements |
 | `references/bug-classes.md` | 20 EVM DeFi classes + pointer to 50+ taxonomy |
 | `references/tools-matrix.md` | Static / symbolic / fuzz / recon |
+| `references/ai-audit-tooling.md` | AI-audit tooling landscape (pashov hub, Plamen, aviggiano checklists) |
 | `references/platforms.md` | Immunefi, C4, Sherlock, Cantina, Hats, BattleChain |
 | `references/gym.md` | Curriculum |
 | `references/tob-bsc.md` | Trail of Bits building-secure-contracts map |

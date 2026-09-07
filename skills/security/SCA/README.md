@@ -17,6 +17,7 @@ Do **not** merge this pack into the 817 `cybersecurity` router. That pack's Cryp
 | Current-year trends / OWASP mapping / tooling currency | `defi-security-trends-standards` (one reference) |
 | Agentic-defense deception program / honeypots / attacker ID | `agentic-defense-game-theory` -> 3 companion skills (one slice) |
 | Pre-deploy Foundry PASS/FAIL | `auditing-foundry-smart-contract-security` |
+| Multi-pass audit lenses / judging / git forensics / properties / reference models | `auditing-multi-pass-review-lenses` + 3 companions (pashov/Plamen/aviggiano distillations) |
 | Chain VM | matching `reviewing-*` playbook |
 
 Raw ingest under `sc-research/library/_ingest/` is **not** a skill. Do not `skill(read)` it.

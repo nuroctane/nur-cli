@@ -44435,6 +44435,150 @@
         "task",
         "user"
       ]
+    },
+    {
+      "name": "auditing-multi-pass-review-lenses",
+      "description": "Multi-pass Solidity audit methodology: nine review lenses plus three gap-hunter seam lenses, Feynman/Socratic/Inversion mental tools, the finding-vs-lead standard with five required fields, four-gate severity judging (attack execution, reachability, trigger with admin-amplifier rule, impact), confidence scoring, group_key dedup with completeness gates, and safe-pattern/do-not-report lists. Single-session sequential by design - never spawns subagent swarms. Use for a structured full-scope audit.",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\auditing-multi-pass-review-lenses\\SKILL.md",
+      "triggers": [
+        "/auditing multi pass review lenses",
+        "/auditing-multi-pass-review-lenses",
+        "auditing multi pass review lenses",
+        "auditing-multi-pass-review-lenses",
+        "/audit lenses",
+        "multi pass audit",
+        "pashov audit methodology",
+        "audit review lenses",
+        "senior auditor sop",
+        "four gate severity judging",
+        "finding vs lead audit",
+        "gap hunter lenses",
+        "feynman socratic inversion audit",
+        "audit dedup completeness"
+      ],
+      "keywords": [
+        "auditing",
+        "multi",
+        "pass",
+        "review",
+        "lenses",
+        "judging",
+        "severity",
+        "finding",
+        "lead",
+        "dedup",
+        "completeness",
+        "senior",
+        "sop",
+        "gates",
+        "seam"
+      ]
+    },
+    {
+      "name": "auditing-git-history-and-specs",
+      "description": "Audit surfaces beyond source: git history forensics (security-fix-shaped commits, late-change churn, dangerous-area hotspots, forked dependency lineage, dev-pattern risk), invariant synthesis taxonomy (conservation, guard-lifting with write-site verification, ratio ordering, state machines, temporal ordering, cross-contract assumptions, economic invariants) with a G/I/X/E catalog format, and spec-vs-code auditing of whitepapers and design docs. Use for pre-audit recon, upgrade risk, or invariant catalog building.",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\auditing-git-history-and-specs\\SKILL.md",
+      "triggers": [
+        "/auditing git history and specs",
+        "/auditing-git-history-and-specs",
+        "auditing git history and specs",
+        "auditing-git-history-and-specs",
+        "/git forensics audit",
+        "x-ray git audit",
+        "git history security review",
+        "invariant synthesis",
+        "spec vs code audit",
+        "whitepaper claims audit",
+        "forked dependency lineage",
+        "audit commit history"
+      ],
+      "keywords": [
+        "auditing",
+        "git",
+        "history",
+        "specs",
+        "forensics",
+        "invariant",
+        "synthesis",
+        "catalog",
+        "spec",
+        "docs",
+        "churn",
+        "forked",
+        "lineage",
+        "commit",
+        "threats"
+      ]
+    },
+    {
+      "name": "discovering-protocol-properties",
+      "description": "How to discover fuzz/invariant properties for a protocol: three property classes (global, function-specific, delta-based), source-driven discovery (accumulative operations, counters, extreme values, exposed-state enumeration), protocol-type adaptation via harness or ghost variables, quality bars (no speculative ghosts, snapshot discipline, revert safety, success-gating, diagnosable assertions), and rotation perspectives (conservation auditor, adversarial profit maximizer, rounding analyst, state-transition mapper, protocol-type specialist). Complements handler/fuzzer mechanics skills.",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\discovering-protocol-properties\\SKILL.md",
+      "triggers": [
+        "/discovering protocol properties",
+        "/discovering-protocol-properties",
+        "discovering protocol properties",
+        "discovering-protocol-properties",
+        "/fuzz properties",
+        "what to assert fuzzing",
+        "invariant discovery",
+        "property generation solidity",
+        "fizz property discovery",
+        "ghost variables fuzzing",
+        "delta properties snapshots",
+        "protocol type invariants"
+      ],
+      "keywords": [
+        "discovering",
+        "protocol",
+        "properties",
+        "invariants",
+        "fuzz",
+        "ghosts",
+        "snapshots",
+        "delta",
+        "conservation",
+        "roundtrip",
+        "perspectives",
+        "suite",
+        "assertions",
+        "campaign"
+      ]
+    },
+    {
+      "name": "auditing-against-reference-models",
+      "description": "Model-based audit technique: build an independent spec-faithful reference model of the protocol's value-critical core and diff the real code against it via differential testing, property mirroring, fork mirrors for forked codebases, spec property extraction, and deployment-realistic fixtures; plus the forced PoC gate (material findings need executable local proofs unless a stated blocker applies), failure triage taxonomy, and report-facing test-campaign discipline. Single-session, no worker pools.",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\auditing-against-reference-models\\SKILL.md",
+      "triggers": [
+        "/auditing against reference models",
+        "/auditing-against-reference-models",
+        "auditing against reference models",
+        "auditing-against-reference-models",
+        "/reference model audit",
+        "differential testing audit",
+        "foundry differential tests",
+        "spec properties extraction",
+        "fork mirror testing",
+        "forced poc gate",
+        "poc or it didnt happen",
+        "failure triage fuzzing"
+      ],
+      "keywords": [
+        "auditing",
+        "reference",
+        "models",
+        "differential",
+        "mirror",
+        "spec",
+        "poc",
+        "gate",
+        "triage",
+        "fixtures",
+        "campaign",
+        "divergence",
+        "model",
+        "diff"
+      ]
     }
   ]
 }
