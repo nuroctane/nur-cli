@@ -73,6 +73,7 @@ pub fn login_browser(provider_id: &str, tx: ProgressTx, cancel: CancelFlag) {
         "cursor" => cursor::login(&tx, &cancel),
         "opencode" => opencode::login(&tx, &cancel),
         "nous" => nous::login(&tx, &cancel),
+        "commandcode" => commandcode::login(&tx, &cancel),
         "meta" => super::harness::muse::login(&tx, &cancel),
         "deepseek" => super::harness::deepseek::login(&tx, &cancel),
         "zhipu" => super::harness::zhipu::login(&tx, &cancel),
@@ -106,6 +107,7 @@ pub fn import_existing_session(provider_id: &str) -> Result<Option<OAuthTokens>>
         "cursor" => cursor::import_cursor_cli(),
         "opencode" => opencode::import_opencode_cli(),
         "nous" => nous::import_hermes_cli(),
+        "commandcode" => commandcode::import_commandcode_cli(),
         "meta" => super::harness::muse::import_muse_cli(),
         "deepseek" => super::harness::deepseek::import_dsh_cli(),
         "zhipu" => super::harness::zhipu::import_zcode_cli(),
@@ -113,15 +115,14 @@ pub fn import_existing_session(provider_id: &str) -> Result<Option<OAuthTokens>>
         "minimax" => super::harness::minimax::import_mmx_cli(),
         // Google / Antigravity: try Antigravity CLI first (Windows credman + file),
         // then gcloud ADC.
+        // antigravity::import_existing already ends with a google ADC probe,
+        // so one call covers the whole family - the old second
+        // google::import_existing here spawned `gcloud` twice per resolution.
         "google" | "antigravity" | "google-oauth" => {
-            if let Ok(Some(t)) = antigravity::import_existing() {
-                Ok(Some(t))
-            } else {
-                match google::import_existing() {
-                    Ok(Some(t)) => Ok(Some(t)),
-                    Ok(None) => Ok(None),
-                    Err(_) => Ok(None),
-                }
+            match antigravity::import_existing() {
+                Ok(Some(t)) => Ok(Some(t)),
+                Ok(None) => Ok(None),
+                Err(_) => Ok(None),
             }
         }
         _ => Ok(None),
@@ -240,8 +241,13 @@ pub mod cursor {
         None
     }
 
-    fn tokens_from_key(access: String, via: &str, path: Option<&str>) -> OAuthTokens {
-        OAuthTokens {
+    fn tokens_from_key(access: String, via: &str, path: Option<&str>) -> Option<OAuthTokens> {
+        // A stored JWT already past `exp` is a signed-out session, not a
+        // credential — returning it made login "succeed" with a dead key.
+        if expired_jwt(&access) {
+            return None;
+        }
+        Some(OAuthTokens {
             access_token: access,
             // Marker so refresh re-imports from the CLI / env.
             refresh_token: Some("cursor-agent".into()),
@@ -252,12 +258,15 @@ pub mod cursor {
                 extra: serde_json::json!({
                     "imported_from": via,
                     "path": path.unwrap_or(""),
+                    // Cursor's credential is a plain API key in every shape
+                    // this module imports; it must not take OAuth-only routes.
+                    "credential_kind": "api_key",
                 }),
             }),
-        }
+        })
     }
 
-    /// Stream stdout/stderr line-by-line and open the first https URL promptly.
+        /// Stream stdout/stderr line-by-line and open the first https URL promptly.
     fn watch_login_output(reader: impl Read + Send + 'static, tx: ProgressTx) {
         thread::spawn(move || {
             let mut lines = std::io::BufReader::new(reader).lines();
@@ -288,17 +297,20 @@ pub mod cursor {
         if let Ok(key) = std::env::var("CURSOR_API_KEY") {
             let key = key.trim().to_string();
             if !key.is_empty() {
-                return Ok(Some(tokens_from_key(key, "CURSOR_API_KEY", None)));
+                return Ok(tokens_from_key(key, "CURSOR_API_KEY", None));
             }
         }
 
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let mut dirs = Vec::new();
         if let Ok(dir) = std::env::var("CURSOR_AGENT_HOME") {
             dirs.push(PathBuf::from(dir));
         }
-        dirs.push(home.join(".cursor"));
-        dirs.push(home.join(".config").join("cursor"));
+        // No CWD-relative fallback: without a home dir, a repo-planted
+        // .cursor/auth.json must not be trusted as a credential store.
+        if let Some(home) = dirs::home_dir() {
+            dirs.push(home.join(".cursor"));
+            dirs.push(home.join(".config").join("cursor"));
+        }
         // Cursor Agent `getAuthFilePath`: Windows → `%APPDATA%\<TitleCase>\auth.json`
         // (e.g. Cursor / Cursor-agent). macOS → `~/.cursor/auth.json` (already above).
         if let Some(appdata) = std::env::var_os("APPDATA").map(PathBuf::from) {
@@ -325,11 +337,11 @@ pub mod cursor {
                     continue;
                 };
                 if let Some(key) = token_from_json(&v) {
-                    return Ok(Some(tokens_from_key(
+                    return Ok(tokens_from_key(
                         key,
                         "cursor-cli",
                         Some(&p.display().to_string()),
-                    )));
+                    ));
                 }
             }
         }
@@ -378,10 +390,21 @@ pub mod cursor {
             watch_login_output(out, tx.clone());
         }
 
+        const CURSOR_LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
+        let started = std::time::Instant::now();
         loop {
             if cancel.is_cancelled() {
                 let _ = child.kill();
                 return Err(NurError::Other("login cancelled".into()));
+            }
+            if started.elapsed() > CURSOR_LOGIN_TIMEOUT {
+                let _ = child.kill();
+                return Err(NurError::Other(
+                    "cursor-agent login did not finish within 10 minutes. Run \
+                     `cursor-agent login` in a terminal, then retry /login (nur imports the \
+                     session) — or paste CURSOR_API_KEY."
+                        .into(),
+                ));
             }
             match child.try_wait() {
                 Ok(Some(status)) if status.success() => break,
@@ -418,6 +441,52 @@ pub mod cursor {
             )
         })
     }
+#[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn tokens_from_key_marks_api_key_and_skips_expired_jwt() {
+            let t = tokens_from_key("cursor-plain-key-123".into(), "CURSOR_API_KEY", None)
+                .expect("plain key imports");
+            let extra = t.meta.expect("meta").extra;
+            assert_eq!(extra["credential_kind"], "api_key");
+            assert_eq!(extra["imported_from"], "CURSOR_API_KEY");
+            assert_eq!(t.refresh_token.as_deref(), Some("cursor-agent"));
+
+            // A JWT whose exp is already past is a signed-out session, not a
+            // credential - the import used to hand it back as success.
+            let dead = format!(
+                "x.{}.y",
+                URL_SAFE_NO_PAD.encode(br#"{"exp":1}"#)
+            );
+            assert!(tokens_from_key(dead, "cursor-cli", None).is_none());
+        }
+
+        #[test]
+        fn secret_shape_gate() {
+            // crsr_/key_ prefixes, or a long opaque bearer-shaped string.
+            assert!(looks_like_cursor_secret("crsr_abc123def456ghi789"));
+            assert!(looks_like_cursor_secret("key_abc123def456ghi789"));
+            assert!(looks_like_cursor_secret(
+                "a-long-opaque-access-token-value-without-spaces-1234567890"
+            ));
+            assert!(!looks_like_cursor_secret("crsr_short"));
+            assert!(!looks_like_cursor_secret("no"));
+            assert!(!looks_like_cursor_secret(""));
+        }
+
+        #[test]
+        fn token_from_json_prefers_key_fields() {
+            let v = serde_json::json!({"access_token": "crsr_access_token_value_1"});
+            assert_eq!(token_from_json(&v).as_deref(), Some("crsr_access_token_value_1"));
+            let nested = serde_json::json!({"auth": {"api_key": "crsr_nested_key_value_1"}});
+            assert_eq!(token_from_json(&nested).as_deref(), Some("crsr_nested_key_value_1"));
+            // Bare `token` is deliberately ignored (often an unrelated id).
+            let bare = serde_json::json!({"token": "crsr_bare_token_value_1"});
+            assert_eq!(token_from_json(&bare), None);
+        }
+    }
 }
 
 pub mod opencode {
@@ -430,7 +499,6 @@ pub mod opencode {
     /// `providerId -> { type: api|oauth|wellknown, key|access|… }`.
     /// Prefer `opencode` / `opencode-go` for nur's OpenCode gateway provider.
     fn auth_json_paths() -> Vec<PathBuf> {
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let mut out = Vec::new();
         if let Ok(dir) = std::env::var("OPENCODE_HOME") {
             out.push(PathBuf::from(dir).join("auth.json"));
@@ -438,15 +506,19 @@ pub mod opencode {
         if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
             out.push(PathBuf::from(xdg).join("opencode").join("auth.json"));
         }
-        out.push(
-            home.join(".local")
-                .join("share")
-                .join("opencode")
-                .join("auth.json"),
-        );
-        // Legacy / config-dir guesses (older installs).
-        out.push(home.join(".config").join("opencode").join("auth.json"));
-        out.push(home.join(".opencode").join("auth.json"));
+        // No CWD-relative fallback: without a home dir, a repo-planted
+        // auth.json must not be trusted as a credential store.
+        if let Some(home) = dirs::home_dir() {
+            out.push(
+                home.join(".local")
+                    .join("share")
+                    .join("opencode")
+                    .join("auth.json"),
+            );
+            // Legacy / config-dir guesses (older installs).
+            out.push(home.join(".config").join("opencode").join("auth.json"));
+            out.push(home.join(".opencode").join("auth.json"));
+        }
         out
     }
 
@@ -487,7 +559,8 @@ pub mod opencode {
     pub fn import_opencode_cli() -> Result<Option<OAuthTokens>> {
         if let Ok(key) = std::env::var("OPENCODE_API_KEY") {
             let key = key.trim().to_string();
-            if !key.is_empty() {
+            // An expired JWT is a signed-out session, not a credential.
+            if !key.is_empty() && !expired_jwt(&key) {
                 return Ok(Some(OAuthTokens {
                     access_token: key,
                     refresh_token: Some("opencode".into()),
@@ -495,7 +568,10 @@ pub mod opencode {
                     meta: Some(OauthMeta {
                         issuer: "opencode".into(),
                         client_id: "opencode-cli".into(),
-                        extra: serde_json::json!({"imported_from": "OPENCODE_API_KEY"}),
+                        extra: serde_json::json!({
+                            "imported_from": "OPENCODE_API_KEY",
+                            "credential_kind": "api_key",
+                        }),
                     }),
                 }));
             }
@@ -516,6 +592,26 @@ pub mod opencode {
                 for id in ["opencode", "opencode-go"] {
                     if let Some(entry) = map.get(id) {
                         if let Some((access, refresh)) = token_from_entry(entry) {
+                            // Expired stored tokens are dead: `refresh` has no
+                            // upstream grant to exercise, so skip to the next
+                            // path instead of importing a guaranteed 401.
+                            if expired_jwt(&access) {
+                                continue;
+                            }
+                            let entry_type =
+                                entry.get("type").and_then(|x| x.as_str()).unwrap_or("api");
+                            let extra = serde_json::json!({
+                                "imported_from": "opencode-cli",
+                                "path": p.display().to_string(),
+                                "provider_entry": id,
+                                // `api` / `wellknown` entries hold plain keys;
+                                // only `oauth` entries may take OAuth routes.
+                                "credential_kind": if entry_type == "oauth" {
+                                    "oauth"
+                                } else {
+                                    "api_key"
+                                },
+                            });
                             return Ok(Some(OAuthTokens {
                                 access_token: access,
                                 refresh_token: refresh.or_else(|| Some("opencode".into())),
@@ -523,11 +619,7 @@ pub mod opencode {
                                 meta: Some(OauthMeta {
                                     issuer: "opencode".into(),
                                     client_id: "opencode-cli".into(),
-                                    extra: serde_json::json!({
-                                        "imported_from": "opencode-cli",
-                                        "path": p.display().to_string(),
-                                        "provider_entry": id,
-                                    }),
+                                    extra,
                                 }),
                             }));
                         }
@@ -540,9 +632,10 @@ pub mod opencode {
                 .or_else(|| v.get("apiKey"))
                 .and_then(|x| x.as_str())
             {
-                if !key.trim().is_empty() {
+                let key = key.trim();
+                if !key.is_empty() && !expired_jwt(key) {
                     return Ok(Some(OAuthTokens {
-                        access_token: key.trim().to_string(),
+                        access_token: key.to_string(),
                         refresh_token: Some("opencode".into()),
                         expires_at: None,
                         meta: Some(OauthMeta {
@@ -551,6 +644,7 @@ pub mod opencode {
                             extra: serde_json::json!({
                                 "imported_from": "opencode-cli-legacy",
                                 "path": p.display().to_string(),
+                                "credential_kind": "api_key",
                             }),
                         }),
                     }));
@@ -560,7 +654,7 @@ pub mod opencode {
         Ok(None)
     }
 
-    fn opencode_bin() -> Option<PathBuf> {
+        fn opencode_bin() -> Option<PathBuf> {
         which_cli("opencode").or_else(|| {
             #[cfg(windows)]
             {
@@ -638,16 +732,36 @@ pub mod opencode {
                 }
             });
         }
+        let started = std::time::Instant::now();
+        // `opencode auth login`'s provider picker is interactive-only (its own
+        // issue tracker asks for a non-interactive flag; there is none yet), so
+        // with stdin at EOF the child usually exits without authenticating.
+        // We still spawn: some versions print the auth URL before the picker,
+        // and the watcher above opens it. The deadline + message below are the
+        // real path for everyone else.
+        const OPENCODE_LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
         loop {
             if cancel.is_cancelled() {
                 let _ = child.kill();
                 return Err(NurError::Other("login cancelled".into()));
             }
+            if started.elapsed() > OPENCODE_LOGIN_TIMEOUT {
+                let _ = child.kill();
+                return Err(NurError::Other(
+                    "opencode auth login did not finish. Its provider picker is interactive \
+                     and cannot run inside nur's login screen: run `opencode auth login` in a \
+                     separate terminal and select OpenCode, then retry /login (nur imports the \
+                     session) — or paste OPENCODE_API_KEY."
+                        .into(),
+                ));
+            }
             match child.try_wait() {
                 Ok(Some(status)) if status.success() => break,
                 Ok(Some(status)) => {
                     return Err(NurError::Other(format!(
-                        "opencode auth login failed (exit {status}). Paste OPENCODE_API_KEY as fallback."
+                        "opencode auth login failed (exit {status}). Its provider picker is \
+                         interactive: run `opencode auth login` in a separate terminal and \
+                         select OpenCode, then retry /login — or paste OPENCODE_API_KEY."
                     )));
                 }
                 Ok(None) => thread::sleep(Duration::from_millis(200)),
@@ -657,8 +771,9 @@ pub mod opencode {
         import_opencode_cli()?.ok_or_else(|| {
             NurError::Other(
                 "opencode auth login finished, but nur found no `opencode` / `opencode-go` key in \
-                 ~/.local/share/opencode/auth.json. Run `opencode auth login` and select the \
-                 OpenCode (Zen/Go) provider, or set OPENCODE_API_KEY."
+                 ~/.local/share/opencode/auth.json. Run `opencode auth login` in a terminal and \
+                 select the OpenCode (Zen/Go) provider, then retry /login — or set \
+                 OPENCODE_API_KEY."
                     .into(),
             )
         })
@@ -671,6 +786,68 @@ pub mod opencode {
                     .into(),
             )
         })
+    }
+#[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn token_from_entry_parses_all_shapes() {
+            let api = serde_json::json!({"type": "api", "key": "sk-opencode-1234567890"});
+            let (access, refresh) = token_from_entry(&api).expect("api entry");
+            assert_eq!(access, "sk-opencode-1234567890");
+            assert!(refresh.is_none());
+
+            let wellknown = serde_json::json!({"type": "wellknown", "key": "sk-oc-wk-123456"});
+            assert!(token_from_entry(&wellknown).is_some());
+
+            let oauth = serde_json::json!({
+                "type": "oauth",
+                "access": "access-token-value-1",
+                "refresh": "refresh-token-value-1",
+            });
+            let (access, refresh) = token_from_entry(&oauth).expect("oauth entry");
+            assert_eq!(access, "access-token-value-1");
+            assert_eq!(refresh.as_deref(), Some("refresh-token-value-1"));
+
+            // Aliases for the access field.
+            let legacy = serde_json::json!({"type": "oauth", "access_token": "atv-2", "refresh_token": "rtv-2"});
+            let (access, refresh) = token_from_entry(&legacy).expect("legacy oauth entry");
+            assert_eq!(access, "atv-2");
+            assert_eq!(refresh.as_deref(), Some("rtv-2"));
+
+            // Unknown type / empty key => nothing.
+            assert!(token_from_entry(&serde_json::json!({"type": "wat"})).is_none());
+            assert!(token_from_entry(&serde_json::json!({"type": "api", "key": ""})).is_none());
+        }
+
+        /// Env-pasted and file `api` entries must be marked credential_kind
+        /// api_key (they must not take OAuth-only routes), while `oauth`
+        /// entries keep OAuth semantics.
+        #[test]
+        fn import_marks_credential_kinds() {
+            // Direct env-path check via the same marker the importer writes.
+            let dir = std::env::temp_dir().join(format!("nur-oc-test-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("auth.json");
+            std::fs::write(
+                &path,
+                serde_json::json!({
+                    "opencode": {"type": "api", "key": "sk-oc-file-1234567890"},
+                })
+                .to_string(),
+            )
+            .unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let entry = &v["opencode"];
+            let (access, refresh) = token_from_entry(entry).unwrap();
+            assert_eq!(access, "sk-oc-file-1234567890");
+            assert!(refresh.is_none());
+            let entry_type = entry.get("type").and_then(|x| x.as_str()).unwrap_or("api");
+            assert_ne!(entry_type, "oauth", "api entries are keys, not sessions");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }
 
@@ -687,6 +864,22 @@ pub(crate) fn random_urlsafe(nbytes: usize) -> String {
     }
     raw.truncate(nbytes);
     URL_SAFE_NO_PAD.encode(&raw)
+}
+
+/// `exp` claim of a JWT-shaped credential, when parseable (unix seconds).
+pub(crate) fn jwt_expiry(token: &str) -> Option<u64> {
+    let payload = token.split('.').nth(1)?;
+    let bytes = URL_SAFE_NO_PAD.decode(payload).ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    v.get("exp")
+        .and_then(|x| x.as_u64().or_else(|| x.as_f64().map(|f| f as u64)))
+}
+
+/// True when a JWT-shaped credential is already past its `exp` (5-minute
+/// skew, same floor as `crate::auth::oauth_expired`). Non-JWT values are
+/// never considered expired — most vendor keys are opaque and long-lived.
+fn expired_jwt(token: &str) -> bool {
+    jwt_expiry(token).is_some_and(|exp| exp <= crate::oauth::now_unix() + 300)
 }
 
 fn pkce_challenge(verifier: &str) -> String {
@@ -883,15 +1076,32 @@ fn wait_localhost_code_on(
         }
         match listener.accept() {
             Ok((mut stream, _)) => {
-                let mut buf = [0u8; 4096];
-                let n = stream.read(&mut buf).unwrap_or(0);
-                let req = String::from_utf8_lossy(&buf[..n]);
-                let line = req.lines().next().unwrap_or("");
+                // Read to end of headers - a single 4096-byte read could
+                // truncate a request whose request line exceeds one buffer.
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+                let mut buf: Vec<u8> = Vec::with_capacity(4096);
+                let mut chunk = [0u8; 4096];
+                let head = loop {
+                    match stream.read(&mut chunk) {
+                        Ok(0) => break String::from_utf8_lossy(&buf).into_owned(),
+                        Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                        Err(_) => break String::from_utf8_lossy(&buf).into_owned(),
+                    }
+                    if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break String::from_utf8_lossy(&buf[..pos]).into_owned();
+                    }
+                    if buf.len() > 64 * 1024 {
+                        break String::from_utf8_lossy(&buf).into_owned();
+                    }
+                };
+                let line = head.lines().next().unwrap_or("");
                 // GET /callback?code=...&state=... HTTP/1.1
                 let path = line.split_whitespace().nth(1).unwrap_or("");
                 let q = path.split('?').nth(1).unwrap_or("");
                 let mut code = None;
                 let mut state = None;
+                let mut error = None;
+                let mut error_description = None;
                 for pair in q.split('&') {
                     let mut it = pair.splitn(2, '=');
                     let k = it.next().unwrap_or("");
@@ -899,6 +1109,8 @@ fn wait_localhost_code_on(
                     match k {
                         "code" => code = Some(urlencoding_decode(v)),
                         "state" => state = Some(urlencoding_decode(v)),
+                        "error" => error = Some(urlencoding_decode(v)),
+                        "error_description" => error_description = Some(urlencoding_decode(v)),
                         _ => {}
                     }
                 }
@@ -916,9 +1128,24 @@ fn wait_localhost_code_on(
                     body
                 );
                 let _ = stream.write_all(resp.as_bytes());
-                if let Some(c) = code {
-                    validate_callback_state(expected_state, state.as_deref())?;
-                    return Ok(c);
+                // An OAuth error redirect (user denied consent, IdP failure)
+                // must fail fast - waiting out the full timeout with no
+                // feedback made denials look like hangs.
+                if state_valid {
+                    if let Some(err) = error {
+                        return Err(NurError::Other(format!(
+                            "sign-in was denied by the provider: {}",
+                            error_description.unwrap_or(err)
+                        )));
+                    }
+                }
+                match code {
+                    // A code WITH a matching state completes the login.
+                    Some(c) if state_valid => return Ok(c),
+                    // A code with a WRONG state is not ours: stray tab,
+                    // prefetcher, replay. Keep listening - aborting here let
+                    // any single probe kill a legitimate in-progress login.
+                    _ => {}
                 }
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -929,33 +1156,70 @@ fn wait_localhost_code_on(
     }
 }
 
+
+/// Wait for a spawned vendor-CLI login to finish: success, failure, cancel,
+/// or a hard deadline (these loops used to run unbounded on cancel alone, so
+/// a wedged child hung the login thread forever).
+fn wait_child_with_deadline(
+    child: &mut std::process::Child,
+    cancel: &CancelFlag,
+    timeout: Duration,
+) -> Result<()> {
+    let started = std::time::Instant::now();
+    loop {
+        if cancel.is_cancelled() {
+            let _ = child.kill();
+            return Err(NurError::Other("login cancelled".into()));
+        }
+        if started.elapsed() > timeout {
+            let _ = child.kill();
+            return Err(NurError::Other(
+                "vendor login did not finish in time - run the vendor's login command in a                  terminal, then retry /login (nur imports that session)"
+                    .into(),
+            ));
+        }
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) => {
+                return Err(NurError::Other(format!("login process failed (exit {status})")))
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(200)),
+            Err(e) => return Err(NurError::Other(e.to_string())),
+        }
+    }
+}
+
+const VENDOR_CLI_LOGIN_TIMEOUT: Duration = Duration::from_secs(900);
+
 fn urlencoding_decode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+    // Decode into bytes first: pushing each %XX byte as a `char` mangled
+    // multibyte UTF-8 (é became Ã©).
     let b = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
         match b[i] {
             b'+' => {
-                out.push(' ');
+                out.push(b' ');
                 i += 1;
             }
             b'%' if i + 2 < b.len() => {
                 let hex = &s[i + 1..i + 3];
                 if let Ok(v) = u8::from_str_radix(hex, 16) {
-                    out.push(v as char);
+                    out.push(v);
                     i += 3;
                 } else {
-                    out.push('%');
+                    out.push(b'%');
                     i += 1;
                 }
             }
             c => {
-                out.push(c as char);
+                out.push(c);
                 i += 1;
             }
         }
     }
-    out
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn jwt_claims(token: &str) -> Option<serde_json::Value> {
@@ -1091,6 +1355,9 @@ pub mod openai {
     }
 
     pub fn refresh(auth: &Auth, refresh_token: &str) -> Result<OAuthTokens> {
+        // Deliberately a JSON body while the login exchange uses form encoding
+        // - this mirrors codex-rs exactly; do not "symmetrize" without testing
+        // against auth.openai.com.
         let body = serde_json::json!({
             "client_id": CLIENT_ID,
             "grant_type": "refresh_token",
@@ -1307,10 +1574,10 @@ pub mod xai {
             .verification_uri_complete
             .clone()
             .or_else(|| {
-                device
-                    .verification_uri
-                    .clone()
-                    .map(|u| format!("{u}?user_code={}", device.user_code))
+                device.verification_uri.clone().map(|u| {
+                    let sep = if u.contains('?') { '&' } else { '?' };
+                    format!("{u}{sep}user_code={}", device.user_code)
+                })
             })
             .unwrap_or_else(|| {
                 format!(
@@ -1342,6 +1609,7 @@ pub mod xai {
         let base_interval = device.interval.max(3);
         let mut attempt = 0u32;
         let mut slow = false;
+        let mut terminal_errors: Vec<String> = Vec::new();
 
         while std::time::Instant::now() < deadline {
             if cancel.is_cancelled() {
@@ -1371,21 +1639,21 @@ pub mod xai {
                     error: Some("parse".into()),
                     error_description: Some(body.clone()),
                 });
-                if let Some(err) = parsed.error.as_deref() {
-                    if err == "authorization_pending" {
-                        continue;
-                    }
-                    if err == "slow_down" {
+                match classify_device_poll_error(&parsed) {
+                    DevicePollOutcome::NoError => {}
+                    DevicePollOutcome::Pending => continue,
+                    DevicePollOutcome::SlowDown => {
                         slow = true;
                         continue;
                     }
-                    if err == "parse" {
+                    DevicePollOutcome::Unparseable => continue,
+                    DevicePollOutcome::Terminal(reason) => {
+                        // Terminal for THIS endpoint only. Another candidate
+                        // host may still be the right one - remember it and
+                        // fail only after every candidate has refused.
+                        terminal_errors.push(reason);
                         continue;
                     }
-                    return Err(NurError::Other(format!(
-                        "xAI token error: {err} {}",
-                        parsed.error_description.unwrap_or_default()
-                    )));
                 }
                 if let Some(access) = parsed.access_token {
                     return Ok(OAuthTokens {
@@ -1400,6 +1668,12 @@ pub mod xai {
                     });
                 }
             }
+            // Every candidate refused with a definitive error and nothing is
+            // pending anywhere - fail now with the collected reasons.
+            if let Some(msg) = terminal_failure(&terminal_errors, token_urls.len()) {
+                return Err(NurError::Other(msg));
+            }
+            terminal_errors.clear();
             send(
                 tx,
                 BrowserLoginProgress::Status("waiting for browser approval…".into()),
@@ -1444,11 +1718,14 @@ pub mod xai {
     }
 
     pub fn import_grok_cli() -> Result<Option<OAuthTokens>> {
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        let candidates = [
-            crate::t3code::driver_config_dir(crate::t3code::DriverId::Grok).join("auth.json"),
-            home.join(".grok").join("auth.json"),
-        ];
+        let mut candidates: Vec<PathBuf> = vec![crate::t3code::driver_config_dir(
+            crate::t3code::DriverId::Grok,
+        )
+        .join("auth.json")];
+        // No CWD-relative fallback when home is unavailable.
+        if let Some(home) = dirs::home_dir() {
+            candidates.push(home.join(".grok").join("auth.json"));
+        }
         for path in candidates {
             if !path.exists() {
                 continue;
@@ -1457,48 +1734,249 @@ pub mod xai {
             let v: serde_json::Value = serde_json::from_str(&text)?;
             // Map of "issuer::client_id" -> session object.
             if let Some(map) = v.as_object() {
-                for (_k, sess) in map {
-                    let access = sess
-                        .get("key")
-                        .or_else(|| sess.get("access_token"))
-                        .and_then(|x| x.as_str())
-                        .unwrap_or("");
-                    if access.is_empty() {
-                        continue;
-                    }
-                    let refresh = sess
-                        .get("refresh_token")
-                        .and_then(|x| x.as_str())
-                        .map(|s| s.to_string());
-                    let expires_at = sess
-                        .get("expires_at")
-                        .and_then(|x| x.as_str())
-                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                        .map(|dt| dt.timestamp() as u64);
-                    let client_id = sess
-                        .get("oidc_client_id")
-                        .and_then(|x| x.as_str())
-                        .unwrap_or(CLIENT_ID)
-                        .to_string();
-                    let issuer = sess
-                        .get("oidc_issuer")
-                        .and_then(|x| x.as_str())
-                        .unwrap_or(ISSUER)
-                        .to_string();
-                    return Ok(Some(OAuthTokens {
-                        access_token: access.to_string(),
-                        refresh_token: refresh,
-                        expires_at,
-                        meta: Some(OauthMeta {
-                            issuer,
-                            client_id,
-                            extra: serde_json::json!({"imported_from": "grok-cli"}),
-                        }),
-                    }));
+                if let Some(tokens) = pick_grok_session(map) {
+                    return Ok(Some(tokens));
                 }
             }
         }
         Ok(None)
+    }
+
+    /// Pick a session from a `~/.grok/auth.json` map: a LIVE session wins over
+    /// map ordering (the old first-non-empty pick kept importing a stale entry
+    /// even when a valid one sat right next to it). Only-stale maps fall back
+    /// to the stale session - the refresh path surfaces a clean relogin.
+    fn pick_grok_session(map: &serde_json::Map<String, serde_json::Value>) -> Option<OAuthTokens> {
+        let mut fallback: Option<OAuthTokens> = None;
+        for (_k, sess) in map {
+            let access = sess
+                .get("key")
+                .or_else(|| sess.get("access_token"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("");
+            if access.is_empty() {
+                continue;
+            }
+            let expires_at = sess
+                .get("expires_at")
+                .and_then(|x| x.as_str())
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.timestamp() as u64);
+            let is_expired = expires_at
+                .is_some_and(|exp| exp <= crate::oauth::now_unix() + 300);
+            let refresh = sess
+                .get("refresh_token")
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string());
+            let client_id = sess
+                .get("oidc_client_id")
+                .and_then(|x| x.as_str())
+                .unwrap_or(CLIENT_ID)
+                .to_string();
+            let issuer = sess
+                .get("oidc_issuer")
+                .and_then(|x| x.as_str())
+                .unwrap_or(ISSUER)
+                .to_string();
+            let tokens = OAuthTokens {
+                access_token: access.to_string(),
+                refresh_token: refresh,
+                expires_at,
+                meta: Some(OauthMeta {
+                    issuer,
+                    client_id,
+                    extra: serde_json::json!({"imported_from": "grok-cli"}),
+                }),
+            };
+            if is_expired {
+                fallback.get_or_insert(tokens);
+            } else {
+                return Some(tokens);
+            }
+        }
+        fallback
+    }
+
+    /// Device-poll error classification, shared by the poll loop and tests.
+    #[derive(Debug, PartialEq, Eq)]
+    enum DevicePollOutcome {
+        /// No `error` field - the caller checks for an access token.
+        NoError,
+        Pending,
+        SlowDown,
+        /// Body was not the expected JSON shape (mapped to `error: "parse"`).
+        Unparseable,
+        /// Definitive refusal from this endpoint, with the formatted reason.
+        Terminal(String),
+    }
+
+    fn classify_device_poll_error(parsed: &TokenResp) -> DevicePollOutcome {
+        let Some(err) = parsed.error.as_deref().filter(|e| !e.is_empty()) else {
+            return DevicePollOutcome::NoError;
+        };
+        match err {
+            "authorization_pending" => DevicePollOutcome::Pending,
+            "slow_down" => DevicePollOutcome::SlowDown,
+            "parse" => DevicePollOutcome::Unparseable,
+            other => DevicePollOutcome::Terminal(format!(
+                "{other} {}",
+                parsed.error_description.clone().unwrap_or_default()
+            )),
+        }
+    }
+
+    /// All candidate endpoints refused with definitive errors and nothing is
+    /// pending anywhere - surface the collected reasons as one failure.
+    fn terminal_failure(errors: &[String], endpoint_count: usize) -> Option<String> {
+        (errors.len() >= endpoint_count)
+            .then(|| format!("xAI token error: {}", errors.join("; ")))
+    }
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn device_code_resp_parses_with_defaults() {
+            let d: DeviceCodeResp = serde_json::from_str(
+                r#"{"device_code":"dc_1","user_code":"ABCD-EFGH",
+                    "verification_uri":"https://accounts.x.ai/connect"}"#,
+            )
+            .expect("minimal payload");
+            assert_eq!(d.device_code, "dc_1");
+            assert_eq!(d.user_code, "ABCD-EFGH");
+            assert!(d.verification_uri_complete.is_none());
+            assert_eq!(d.expires_in, 0, "expires_in defaults to 0 -> 900s fallback");
+            assert_eq!(d.interval, 5, "interval default");
+
+            let full: DeviceCodeResp = serde_json::from_str(
+                r#"{"device_code":"dc","user_code":"U","interval":2,"expires_in":600,
+                    "verification_uri":"u","verification_uri_complete":"uc"}"#,
+            )
+            .expect("full payload");
+            assert_eq!(full.interval, 2);
+            assert_eq!(full.expires_in, 600);
+            // Garbage must not parse into a half-valid response.
+            assert!(serde_json::from_str::<DeviceCodeResp>("{}").is_err());
+        }
+
+        #[test]
+        fn token_resp_parses_success_and_error_shapes() {
+            let ok: TokenResp = serde_json::from_str(
+                r#"{"access_token":"at","refresh_token":"rt","expires_in":3600}"#,
+            )
+            .unwrap();
+            assert_eq!(ok.access_token.as_deref(), Some("at"));
+            assert_eq!(ok.error, None);
+
+            let err: TokenResp = serde_json::from_str(
+                r#"{"error":"access_denied","error_description":"nope"}"#,
+            )
+            .unwrap();
+            assert_eq!(err.access_token, None);
+            assert_eq!(err.error.as_deref(), Some("access_denied"));
+
+            // Non-JSON poll bodies become a synthetic "parse" error upstream;
+            // classification treats that as retryable-unparseable, not fatal.
+            let parse_shape = TokenResp {
+                access_token: None,
+                refresh_token: None,
+                expires_in: None,
+                error: Some("parse".into()),
+                error_description: None,
+            };
+            assert_eq!(
+                classify_device_poll_error(&parse_shape),
+                DevicePollOutcome::Unparseable
+            );
+        }
+
+        #[test]
+        fn poll_error_classification_matches_the_loop_semantics() {
+            let mk = |error: Option<&str>, desc: Option<&str>| TokenResp {
+                access_token: None,
+                refresh_token: None,
+                expires_in: None,
+                error: error.map(str::to_string),
+                error_description: desc.map(str::to_string),
+            };
+            assert_eq!(classify_device_poll_error(&mk(None, None)), DevicePollOutcome::NoError);
+            assert_eq!(
+                classify_device_poll_error(&mk(Some(""), None)),
+                DevicePollOutcome::NoError
+            );
+            assert_eq!(
+                classify_device_poll_error(&mk(Some("authorization_pending"), None)),
+                DevicePollOutcome::Pending
+            );
+            assert_eq!(
+                classify_device_poll_error(&mk(Some("slow_down"), None)),
+                DevicePollOutcome::SlowDown
+            );
+            assert_eq!(
+                classify_device_poll_error(&mk(Some("expired_token"), Some("gone"))),
+                DevicePollOutcome::Terminal("expired_token gone".into())
+            );
+        }
+
+        /// A terminal error from ONE candidate endpoint must not fail the
+        /// login while other candidates remain; only a full round of refusals
+        /// surfaces the collected reasons.
+        #[test]
+        fn terminal_errors_accumulate_before_failing() {
+            let mut errors: Vec<String> = Vec::new();
+            // First endpoint refuses.
+            errors.push("expired_token gone".to_string());
+            assert!(terminal_failure(&errors, 3).is_none(), "2 endpoints still pending");
+            // Nothing pending anywhere -> next cycle would collect all three.
+            errors.push("access_denied no".to_string());
+            errors.push("server_error boom".to_string());
+            let msg = terminal_failure(&errors, 3).expect("all endpoints refused");
+            assert!(msg.contains("expired_token gone"));
+            assert!(msg.contains("access_denied no"));
+            assert!(msg.contains("server_error boom"));
+        }
+
+        #[test]
+        fn grok_session_pick_prefers_live_over_stale() {
+            let far_future = "2099-01-01T00:00:00Z";
+            let near_past = "2020-01-01T00:00:00Z";
+            let mut map = serde_json::Map::new();
+            // Stale session FIRST - map ordering must not decide.
+            map.insert(
+                "stale::c".into(),
+                serde_json::json!({
+                    "key": "stale-key-value",
+                    "refresh_token": "rt-stale",
+                    "expires_at": near_past,
+                }),
+            );
+            map.insert(
+                "live::c".into(),
+                serde_json::json!({
+                    "key": "live-key-value",
+                    "refresh_token": "rt-live",
+                    "expires_at": far_future,
+                }),
+            );
+            let picked = pick_grok_session(&map).expect("live session wins");
+            assert_eq!(picked.access_token, "live-key-value");
+            assert_eq!(picked.refresh_token.as_deref(), Some("rt-live"));
+
+            // Only stale sessions -> fallback (refresh surfaces the relogin).
+            let mut stale_only = serde_json::Map::new();
+            stale_only.insert(
+                "stale::c".into(),
+                serde_json::json!({"key": "stale-key-value", "expires_at": near_past}),
+            );
+            let picked = pick_grok_session(&stale_only).expect("stale fallback");
+            assert_eq!(picked.access_token, "stale-key-value");
+            assert!(crate::auth::oauth_expired(picked.expires_at));
+
+            // Empty keys are skipped entirely.
+            let mut empty = serde_json::Map::new();
+            empty.insert("e::c".into(), serde_json::json!({"key": ""}));
+            assert!(pick_grok_session(&empty).is_none());
+        }
     }
 }
 
@@ -1600,8 +2078,13 @@ pub mod nous {
         if refresh.is_empty() && access.is_empty() {
             return Ok(None);
         }
-        // Quarantined / expired states carry an `error` marker — still try:
-        // the refresh path below will surface a clean relogin message.
+        // Quarantined / expired states carry an `error` marker. Keep reading
+        // the tokens (a live refresh token can still recover), but surface the
+        // marker so `login` does not short-circuit on a provably dead session.
+        let error_marker = state
+            .get("error")
+            .map(|e| !e.is_null() && e.as_str() != Some(""))
+            .unwrap_or(false);
         let expires_at = state
             .get("expires_at")
             .and_then(|x| x.as_str())
@@ -1617,7 +2100,11 @@ pub mod nous {
             meta: Some(OauthMeta {
                 issuer: PORTAL.into(),
                 client_id: CLIENT_ID.into(),
-                extra: serde_json::json!({ "inference_base_url": INFERENCE, "source": "hermes-cli" }),
+                extra: serde_json::json!({
+                    "inference_base_url": INFERENCE,
+                    "source": "hermes-cli",
+                    "hermes_error": error_marker,
+                }),
             }),
         }))
     }
@@ -1632,16 +2119,33 @@ pub mod nous {
 
     pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
         // Hermes installed with a live Portal session? One import, no browser.
+        // A provably DEAD session (expired, or quarantined with an `error`
+        // marker) must fall through to the device flow — importing it anyway
+        // pinned /login into a loop: 401 on use, refresh says "run /login",
+        // and /login re-imported the same dead file forever.
         match import_hermes_cli() {
             Ok(Some(t)) if !t.access_token.is_empty() || t.refresh_token.is_some() => {
+                let dead = t.meta.as_ref().is_some_and(|m| {
+                    m.extra.get("hermes_error").and_then(|v| v.as_bool()).unwrap_or(false)
+                }) || expired_jwt(&t.access_token)
+                    || crate::auth::oauth_expired(t.expires_at);
+                if !dead {
+                    send(
+                        tx,
+                        BrowserLoginProgress::Status(
+                            "imported Nous Portal session from Hermes Agent (~/.hermes/auth.json)"
+                                .into(),
+                        ),
+                    );
+                    return Ok(t);
+                }
                 send(
                     tx,
                     BrowserLoginProgress::Status(
-                        "imported Nous Portal session from Hermes Agent (~/.hermes/auth.json)"
+                        "Hermes Nous session is expired or quarantined — starting the Portal                          device login instead…"
                             .into(),
                     ),
                 );
-                return Ok(t);
             }
             _ => {}
         }
@@ -1693,7 +2197,8 @@ pub mod nous {
             } else {
                 900
             });
-        // Portal caps polling at 1s (matches Hermes DEVICE_AUTH_POLL_INTERVAL_CAP).
+        // Server asks for >=1s; device_poll_sleep floors at 3s, so polling is
+        // always slower than the Portal cap (RFC 8628-compliant and safe).
         let base_interval = device.interval.clamp(1, 5);
         let mut slow = false;
         let mut attempt = 0u32;
@@ -1790,6 +2295,767 @@ pub mod nous {
     }
 }
 
+// ── Command Code (studio browser sign-in / `cmd` CLI auth.json import) ──────
+
+/// Command Code's login is the same first-party flow its own CLI drives, so
+/// nur runs it directly — no `cmd` binary needed. Sequence (mirrors
+/// `command-code`'s `createAuthServer` / `runBrowserAuth`, verified against the
+/// shipped bundle):
+///   1. local server on `127.0.0.1` (ephemeral port), random base64url state;
+///   2. open `{studio}/studio/auth/cli?callback=<loopback>&state=<state>&mode=redirect`;
+///   3. after "Authorize", the studio page POSTs form-urlencoded (or legacy
+///      JSON) `{apiKey, state, userId, userName, keyName}` to the callback —
+///      or `{error, error_description, state}` on denial;
+///   4. the credential is a long-lived API key: same bearer the Provider API
+///      documents. The `cmd` CLI stores it at `~/.commandcode/auth.json`.
+pub mod commandcode {
+    use super::*;
+
+    pub const STUDIO: &str = "https://commandcode.ai";
+    pub const CALLBACK_PATH: &str = "/callback";
+    /// Browser login window. The vendor CLI caps at 2 minutes; nur allows a
+    /// slower hand-off (copying the URL into another browser) to still finish.
+    const LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
+    /// Origins the studio page may POST from (mirrors the CLI's allowlist).
+    const ALLOWED_ORIGINS: &[&str] = &[
+        "https://commandcode.ai",
+        "https://staging.commandcode.ai",
+        "http://localhost:3000",
+    ];
+
+    /// Credentials the studio page delivers on success.
+    #[derive(Debug, Clone)]
+    struct CommandCreds {
+        api_key: String,
+        user_id: String,
+        user_name: String,
+        key_name: String,
+    }
+
+    fn auth_json_paths() -> Vec<PathBuf> {
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let mut out = Vec::new();
+        if let Ok(dir) = std::env::var("COMMANDCODE_HOME") {
+            out.push(PathBuf::from(dir).join("auth.json"));
+        }
+        out.push(home.join(".commandcode").join("auth.json"));
+        out
+    }
+
+    fn tokens_from_key(api_key: &str, extra: serde_json::Value) -> OAuthTokens {
+        OAuthTokens {
+            access_token: api_key.trim().to_string(),
+            // Marker consumed by `refresh` below: a Command Code credential is
+            // a long-lived Studio API key with nothing to rotate, so a
+            // mid-session 401 just re-reads the on-disk CLI session.
+            refresh_token: Some("commandcode".into()),
+            expires_at: None,
+            meta: Some(OauthMeta {
+                issuer: STUDIO.into(),
+                client_id: "cmd-cli".into(),
+                extra,
+            }),
+        }
+    }
+
+    /// Import an existing `cmd login` session (`~/.commandcode/auth.json`).
+    pub fn import_commandcode_cli() -> Result<Option<OAuthTokens>> {
+        for var in ["COMMAND_CODE_API_KEY", "CMD_API_KEY"] {
+            if let Ok(key) = std::env::var(var) {
+                let key = key.trim();
+                if !key.is_empty() {
+                    return Ok(Some(tokens_from_key(
+                        key,
+                        serde_json::json!({ "imported_from": var }),
+                    )));
+                }
+            }
+        }
+        for p in auth_json_paths() {
+            if !p.is_file() {
+                continue;
+            }
+            if let Some(tokens) = import_commandcode_auth_file(&p) {
+                return Ok(Some(tokens));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Parse one `auth.json` (`{apiKey, userId, userName, keyName, …}`).
+    /// Exposed for tests; returns `None` for missing/empty keys.
+    fn import_commandcode_auth_file(p: &std::path::Path) -> Option<OAuthTokens> {
+        let text = std::fs::read_to_string(p).ok()?;
+        let v = serde_json::from_str::<serde_json::Value>(&text).ok()?;
+        let key = v
+            .get("apiKey")
+            .or_else(|| v.get("api_key"))
+            .and_then(|x| x.as_str())?;
+        if key.trim().is_empty() {
+            return None;
+        }
+        Some(tokens_from_key(
+            key,
+            serde_json::json!({
+                "imported_from": "cmd-cli",
+                "path": p.display().to_string(),
+                "user_id": v.get("userId").and_then(|x| x.as_str()).unwrap_or(""),
+                "user_name": v.get("userName").and_then(|x| x.as_str()).unwrap_or(""),
+                "key_name": v.get("keyName").and_then(|x| x.as_str()).unwrap_or(""),
+            }),
+        ))
+    }
+
+    pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
+        // A `cmd login` on this machine already issued a usable key.
+        if let Ok(Some(t)) = import_commandcode_cli() {
+            send(
+                tx,
+                BrowserLoginProgress::Status(
+                    "using existing Command Code CLI session (~/.commandcode/auth.json)".into(),
+                ),
+            );
+            return Ok(t);
+        }
+
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .map_err(|e| NurError::Other(format!("failed to bind loopback: {e}")))?;
+        let port = listener
+            .local_addr()
+            .map(|a| a.port())
+            .map_err(|e| NurError::Other(format!("loopback port: {e}")))?;
+        let state = random_urlsafe(32);
+        let callback = format!("http://127.0.0.1:{port}{CALLBACK_PATH}");
+        let auth_url = format!(
+            "{STUDIO}/studio/auth/cli?callback={}&state={}&mode=redirect",
+            urlencoding_encode(&callback),
+            urlencoding_encode(&state),
+        );
+
+        send(tx, BrowserLoginProgress::OpenUrl(auth_url.clone()));
+        send(
+            tx,
+            BrowserLoginProgress::Status("complete Command Code sign-in in the browser…".into()),
+        );
+        let _ = open_browser(&auth_url);
+
+        let creds = wait_commandcode_credentials_on(listener, &state, cancel, LOGIN_TIMEOUT)?;
+        send(
+            tx,
+            BrowserLoginProgress::Status(format!(
+                "signed in as {} (key: {})",
+                if creds.user_name.is_empty() {
+                    "Command Code user"
+                } else {
+                    &creds.user_name
+                },
+                if creds.key_name.is_empty() {
+                    "unnamed"
+                } else {
+                    &creds.key_name
+                }
+            )),
+        );
+        Ok(tokens_from_key(
+            &creds.api_key,
+            serde_json::json!({
+                "imported_from": "nur-browser",
+                "user_id": creds.user_id,
+                "user_name": creds.user_name,
+                "key_name": creds.key_name,
+            }),
+        ))
+    }
+
+    /// The credential is a long-lived Studio API key — nothing to rotate. A
+    /// refresh attempt just re-reads the latest CLI session / env key.
+    pub fn refresh(_auth: &Auth, _refresh: &str) -> Result<OAuthTokens> {
+        import_commandcode_cli()?.ok_or_else(|| {
+            NurError::Other(
+                "Command Code session missing. Run /login → Command Code again, or `cmd login`, \
+                 or paste COMMAND_CODE_API_KEY."
+                    .into(),
+            )
+        })
+    }
+
+    // ── loopback callback server ─────────────────────────────────────────────
+
+    fn html_escape(s: &str) -> String {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+    }
+
+    fn html_page(heading: &str, detail: &str) -> String {
+        format!(
+            "<!DOCTYPE html><html><head><title>{heading} - Command Code</title></head>\
+             <body style=\"font-family:system-ui;padding:40px;text-align:center;\">\
+             <h1>{heading}</h1><p>{detail}</p></body></html>"
+        )
+    }
+
+    /// Minimal form/percent decoding: `+` → space, `%XX` → byte (UTF-8 pass-through).
+    fn form_urldecode(s: &str) -> String {
+        let bytes = s.replace('+', " ").into_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'%' && i + 2 < bytes.len() {
+                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or("");
+                if let Ok(b) = u8::from_str_radix(hex, 16) {
+                    out.push(b);
+                    i += 3;
+                    continue;
+                }
+            }
+            out.push(bytes[i]);
+            i += 1;
+        }
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    fn parse_form_pairs(body: &str) -> Vec<(String, String)> {
+        body.split('&')
+            .filter(|p| !p.is_empty())
+            .map(|pair| {
+                let mut it = pair.splitn(2, '=');
+                (
+                    form_urldecode(it.next().unwrap_or("")),
+                    form_urldecode(it.next().unwrap_or("")),
+                )
+            })
+            .collect()
+    }
+
+    fn field<'a>(pairs: &'a [(String, String)], name: &str) -> Option<&'a str> {
+        pairs
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
+            .filter(|v| !v.is_empty())
+    }
+
+    fn creds_from_pairs(pairs: &[(String, String)]) -> Option<CommandCreds> {
+        Some(CommandCreds {
+            api_key: field(pairs, "apiKey")?.to_string(),
+            user_id: field(pairs, "userId").unwrap_or("").to_string(),
+            user_name: field(pairs, "userName").unwrap_or("").to_string(),
+            key_name: field(pairs, "keyName").unwrap_or("").to_string(),
+        })
+    }
+
+    fn write_response(
+        stream: &mut std::net::TcpStream,
+        status: &str,
+        content_type: &str,
+        body: &str,
+        origin: Option<&str>,
+        private_network: bool,
+    ) {
+        let mut res = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nCache-Control: no-store\r\n\
+             Connection: close\r\nContent-Length: {}\r\n",
+            body.len()
+        );
+        if let Some(origin) = origin {
+            res.push_str(&format!("Access-Control-Allow-Origin: {origin}\r\n"));
+            res.push_str("Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n");
+            res.push_str("Access-Control-Allow-Headers: Content-Type\r\n");
+            if private_network {
+                // Chrome Local Network Access: the studio page POSTs to a
+                // loopback server and must pass the preflight for it.
+                res.push_str("Access-Control-Allow-Private-Network: true\r\n");
+            }
+        }
+        res.push_str("\r\n");
+        res.push_str(body);
+        let _ = stream.write_all(res.as_bytes());
+        let _ = stream.flush();
+    }
+
+    fn allowed_origin(origin: Option<&str>) -> Option<&'static str> {
+        origin.and_then(|o| {
+            ALLOWED_ORIGINS
+                .iter()
+                .find(|allowed| allowed.eq_ignore_ascii_case(o))
+                .copied()
+        })
+    }
+
+    /// One accepted connection → optional credentials or a denial error.
+    /// Everything else (404s, probes, state mismatches) returns None and the
+    /// loop keeps waiting.
+    #[derive(Debug)]
+    enum CallbackHit {
+        None,
+        Creds(CommandCreds),
+        Denied(String),
+    }
+
+    fn handle_connection(
+        stream: &mut std::net::TcpStream,
+        expected_state: &str,
+    ) -> CallbackHit {
+        // Read to end of headers, then content-length body bytes.
+        let mut buf: Vec<u8> = Vec::with_capacity(4096);
+        let mut chunk = [0u8; 4096];
+        let head_end = loop {
+            match stream.read(&mut chunk) {
+                Ok(0) => return CallbackHit::None,
+                Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                Err(_) => return CallbackHit::None,
+            }
+            if let Some(pos) = buf
+                .windows(4)
+                .position(|w| w == b"\r\n\r\n")
+            {
+                break pos + 4;
+            }
+            if buf.len() > 64 * 1024 {
+                return CallbackHit::None;
+            }
+        };
+        let head = String::from_utf8_lossy(&buf[..head_end]).into_owned();
+        let mut lines = head.lines();
+        let request_line = lines.next().unwrap_or("");
+        let mut parts = request_line.split_whitespace();
+        let method = parts.next().unwrap_or("").to_ascii_uppercase();
+        let target = parts.next().unwrap_or("/").to_string();
+        let origin = head
+            .lines()
+            .find_map(|l| {
+                let (k, v) = l.split_once(':')?;
+                k.eq_ignore_ascii_case("origin")
+                    .then(|| v.trim().to_string())
+            })
+            .filter(|v| !v.is_empty());
+        let wants_private_network = head.to_ascii_lowercase().contains(
+            "access-control-request-private-network: true",
+        );
+        let cors = allowed_origin(origin.as_deref());
+
+        if method == "OPTIONS" {
+            write_response(stream, "204 No Content", "text/plain", "", cors, wants_private_network);
+            return CallbackHit::None;
+        }
+
+        let (path, query) = match target.split_once('?') {
+            Some((p, q)) => (p.to_string(), Some(q.to_string())),
+            None => (target.clone(), None),
+        };
+        if path != CALLBACK_PATH {
+            write_response(stream, "404 Not Found", "text/html", "Not Found", cors, false);
+            return CallbackHit::None;
+        }
+
+        // Assemble the field set: POST body (form or legacy JSON), with a
+        // lenient GET-query fallback.
+        let content_length = head
+            .lines()
+            .find_map(|l| {
+                let (k, v) = l.split_once(':')?;
+                k.eq_ignore_ascii_case("content-length")
+                    .then(|| v.trim().parse::<usize>().ok())?
+            })
+            .unwrap_or(0)
+            .min(64 * 1024);
+        while buf.len() < head_end + content_length {
+            match stream.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                Err(_) => break,
+            }
+        }
+        let body_bytes = buf[head_end.min(buf.len())..].to_vec();
+        let content_type = head
+            .to_ascii_lowercase()
+            .contains("application/json")
+            .then_some("json");
+        // Field sources, first match wins:
+        //   1. POST body — form-urlencoded, or the legacy JSON shape (its
+        //      `state`/`error`/`error_description` fields carry the state
+        //      check and denial reason, exactly like the form shape);
+        //   2. the callback query string (lenient GET fallback).
+        let body_pairs: Vec<(String, String)> = if content_type == Some("json") {
+            serde_json::from_slice::<serde_json::Value>(&body_bytes)
+                .ok()
+                .and_then(|v| {
+                    v.as_object().map(|o| {
+                        o.iter()
+                            .filter_map(|(k, v)| {
+                                v.as_str().map(|s| (k.clone(), s.to_string()))
+                            })
+                            .collect()
+                    })
+                })
+                .unwrap_or_default()
+        } else {
+            parse_form_pairs(&String::from_utf8_lossy(&body_bytes))
+        };
+        let query_pairs: Vec<(String, String)> = query
+            .as_deref()
+            .map(parse_form_pairs)
+            .unwrap_or_default();
+        let lookup = |name: &str| -> Option<String> {
+            field(&body_pairs, name)
+                .or_else(|| field(&query_pairs, name))
+                .map(str::to_string)
+        };
+        let delivered = creds_from_pairs(&body_pairs).or_else(|| creds_from_pairs(&query_pairs));
+        let error_field = lookup("error");
+        let error_description = lookup("error_description");
+        let delivered_state = lookup("state");
+
+        let Some(delivered_state) = delivered_state else {
+            write_response(
+                stream,
+                "400 Bad Request",
+                "text/html; charset=utf-8",
+                &html_page("Invalid Request", "No credential payload received."),
+                cors,
+                false,
+            );
+            return CallbackHit::None;
+        };
+        if delivered_state != expected_state {
+            write_response(
+                stream,
+                "403 Forbidden",
+                "text/html; charset=utf-8",
+                &html_page(
+                    "Authentication Failed",
+                    "Invalid state parameter. Please try again.",
+                ),
+                cors,
+                false,
+            );
+            return CallbackHit::None;
+        }
+        if let Some(err) = error_field {
+            let detail = error_description.unwrap_or(err.clone());
+            let heading = if err == "access_denied" {
+                "Authorization Denied"
+            } else {
+                "Authentication Failed"
+            };
+            write_response(
+                stream,
+                "200 OK",
+                "text/html; charset=utf-8",
+                &html_page(heading, &html_escape(&detail)),
+                cors,
+                false,
+            );
+            return CallbackHit::Denied(detail);
+        }
+        let Some(creds) = delivered else {
+            write_response(
+                stream,
+                "400 Bad Request",
+                "text/html; charset=utf-8",
+                &html_page(
+                    "Invalid Request",
+                    "No authorization payload received. Please try again.",
+                ),
+                cors,
+                false,
+            );
+            return CallbackHit::None;
+        };
+        let user = html_escape(if creds.user_name.is_empty() {
+            "Command Code user"
+        } else {
+            &creds.user_name
+        });
+        write_response(
+            stream,
+            "200 OK",
+            "text/html; charset=utf-8",
+            &html_page(
+                "Sign in successful",
+                &format!(
+                    "Signed in as <strong>{user}</strong>.<br />Close this tab and return to nur."
+                ),
+            ),
+            cors,
+            false,
+        );
+        CallbackHit::Creds(creds)
+    }
+
+    fn wait_commandcode_credentials_on(
+        listener: TcpListener,
+        expected_state: &str,
+        cancel: &CancelFlag,
+        timeout: Duration,
+    ) -> Result<CommandCreds> {
+        listener
+            .set_nonblocking(true)
+            .map_err(|e| NurError::Other(e.to_string()))?;
+        // Each connection is handled on its own thread: a client that drips
+        // bytes to dodge the per-read timeout used to be able to stall the
+        // single accept loop past cancel and the login deadline.
+        let (hit_tx, hit_rx) = mpsc::channel::<CallbackHit>();
+        let start = std::time::Instant::now();
+        loop {
+            if cancel.is_cancelled() {
+                return Err(NurError::Other("login cancelled".into()));
+            }
+            if start.elapsed() > timeout {
+                return Err(NurError::Other(
+                    "Command Code browser login timed out — reopen /login and finish the \
+                     sign-in within 10 minutes."
+                        .into(),
+                ));
+            }
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    let tx = hit_tx.clone();
+                    let state = expected_state.to_string();
+                    thread::spawn(move || {
+                        let mut stream = stream;
+                        let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+                        let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
+                        let _ = tx.send(handle_connection(&mut stream, &state));
+                    });
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(_) => {}
+            }
+            match hit_rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(CallbackHit::Creds(creds)) => return Ok(creds),
+                Ok(CallbackHit::Denied(detail)) => {
+                    return Err(NurError::Other(format!(
+                        "Command Code sign-in was denied: {detail}"
+                    )))
+                }
+                Ok(CallbackHit::None) => {}
+                Err(_) => {}
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn pairs(list: &[(&str, &str)]) -> Vec<(String, String)> {
+            list.iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect()
+        }
+
+        #[test]
+        fn form_decode_handles_percent_and_plus() {
+            assert_eq!(form_urldecode("a+b"), "a b");
+            assert_eq!(form_urldecode("kimi%20k3"), "kimi k3");
+            assert_eq!(form_urldecode("100%25"), "100%");
+            assert_eq!(form_urldecode("plain"), "plain");
+        }
+
+        #[test]
+        fn creds_require_the_api_key_field() {
+            let full = pairs(&[
+                ("apiKey", "cc_sk_123"),
+                ("state", "s1"),
+                ("userId", "u1"),
+                ("userName", "david"),
+                ("keyName", "nur"),
+            ]);
+            let creds = creds_from_pairs(&full).expect("full payload parses");
+            assert_eq!(creds.api_key, "cc_sk_123");
+            assert_eq!(creds.user_name, "david");
+            let missing = pairs(&[("state", "s1"), ("userName", "david")]);
+            assert!(creds_from_pairs(&missing).is_none());
+        }
+
+        /// The legacy JSON shape must parse through the same pair pipeline the
+        /// form path uses (state included) - it used to be dropped entirely.
+        #[test]
+        fn legacy_json_payload_parses() {
+            let body = br#"{"apiKey":"cc_sk_9","state":"s","userId":"u","userName":"n","keyName":"k"}"#;
+            let v: serde_json::Value = serde_json::from_slice(body).unwrap();
+            let pairs: Vec<(String, String)> = v
+                .as_object()
+                .map(|o| {
+                    o.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let creds = creds_from_pairs(&pairs).expect("json payload");
+            assert_eq!(creds.api_key, "cc_sk_9");
+            assert_eq!(creds.key_name, "k");
+            assert_eq!(field(&pairs, "state"), Some("s"));
+        }
+
+        /// Socket-level: a legacy-JSON POST carrying `state` in the BODY must
+        /// be accepted - body-borne state used to be invisible, hanging the
+        /// login until timeout.
+        #[test]
+        fn json_post_with_body_state_delivers_credentials() {
+            let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let server = thread::spawn(move || {
+                listener.set_nonblocking(false).unwrap();
+                let (mut stream, _) = listener.accept().unwrap();
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                handle_connection(&mut stream, "json-state")
+            });
+            let mut client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+            let body = br#"{"apiKey":"cc_sk_js","state":"json-state","userId":"u","userName":"n","keyName":"k"}"#;
+            let req = format!(
+                "POST /callback HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            );
+            client.write_all(req.as_bytes()).unwrap();
+            client.write_all(body.as_slice()).unwrap();
+            let mut resp = String::new();
+            let _ = client.read_to_string(&mut resp);
+            assert!(resp.starts_with("HTTP/1.1 200"), "{resp}");
+            match server.join().unwrap() {
+                CallbackHit::Creds(creds) => assert_eq!(creds.api_key, "cc_sk_js"),
+                other => panic!("expected credentials, got {other:?}"),
+            }
+        }
+
+        /// Socket-level: a JSON denial (error + state in body) must surface as
+        /// Denied instead of spinning to the timeout.
+        #[test]
+        fn json_denial_fails_fast() {
+            let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let server = thread::spawn(move || {
+                listener.set_nonblocking(false).unwrap();
+                let (mut stream, _) = listener.accept().unwrap();
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                handle_connection(&mut stream, "s2")
+            });
+            let mut client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+            let body = br#"{"error":"access_denied","error_description":"user clicked deny","state":"s2"}"#;
+            let req = format!(
+                "POST /callback HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            );
+            client.write_all(req.as_bytes()).unwrap();
+            client.write_all(body.as_slice()).unwrap();
+            let mut resp = String::new();
+            let _ = client.read_to_string(&mut resp);
+            assert!(resp.contains("200 OK"), "{resp}");
+            match server.join().unwrap() {
+                CallbackHit::Denied(detail) => assert!(detail.contains("deny"), "{detail}"),
+                other => panic!("expected denial, got {other:?}"),
+            }
+        }
+
+        /// A state mismatch must be rejected before any credential is accepted.
+        #[test]
+        fn state_mismatch_yields_no_credentials() {
+            let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let server = thread::spawn(move || {
+                listener.set_nonblocking(false).unwrap();
+                let (mut stream, _) = listener.accept().unwrap();
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                matches!(
+                    handle_connection(&mut stream, "expected"),
+                    CallbackHit::None
+                )
+            });
+            let mut client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+            let body = "apiKey=cc_sk_evil&state=wrong&userId=u&userName=n&keyName=k";
+            let req = format!(
+                "POST /callback HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: \
+                 application/x-www-form-urlencoded\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            client.write_all(req.as_bytes()).unwrap();
+            let mut resp = String::new();
+            let _ = client.read_to_string(&mut resp);
+            assert!(resp.starts_with("HTTP/1.1 403"), "{resp}");
+            assert!(server.join().unwrap(), "mismatched state must not yield creds");
+        }
+
+        #[test]
+        fn options_preflight_gets_cors_and_private_network_headers() {
+            let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let server = thread::spawn(move || {
+                listener.set_nonblocking(false).unwrap();
+                let (mut stream, _) = listener.accept().unwrap();
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                handle_connection(&mut stream, "s")
+            });
+            let mut client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+            let req = "OPTIONS /callback HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: \
+                       https://commandcode.ai\r\nAccess-Control-Request-Private-Network: true\r\n\r\n";
+            client.write_all(req.as_bytes()).unwrap();
+            let mut resp = String::new();
+            let _ = client.read_to_string(&mut resp);
+            assert!(resp.starts_with("HTTP/1.1 204"), "{resp}");
+            assert!(resp.contains("Access-Control-Allow-Origin: https://commandcode.ai"));
+            assert!(resp.contains("Access-Control-Allow-Private-Network: true"));
+            assert!(matches!(server.join().unwrap(), CallbackHit::None));
+        }
+
+        /// The full happy path: a studio-style POST delivers credentials.
+        #[test]
+        fn form_post_delivers_credentials() {
+            let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let server = thread::spawn(move || {
+                listener.set_nonblocking(false).unwrap();
+                let (mut stream, _) = listener.accept().unwrap();
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                handle_connection(&mut stream, "good-state")
+            });
+            let mut client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+            let body = "apiKey=cc_sk_ok&state=good-state&userId=u1&userName=David&keyName=nur";
+            let req = format!(
+                "POST /callback HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: \
+                 https://commandcode.ai\r\nContent-Type: \
+                 application/x-www-form-urlencoded\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            client.write_all(req.as_bytes()).unwrap();
+            let mut resp = Vec::new();
+            let _ = client.read_to_end(&mut resp);
+            let resp = String::from_utf8_lossy(&resp).into_owned();
+            assert!(resp.starts_with("HTTP/1.1 200"), "{resp}");
+            assert!(resp.contains("Sign in successful"), "{resp}");
+            match server.join().unwrap() {
+                CallbackHit::Creds(creds) => {
+                    assert_eq!(creds.api_key, "cc_sk_ok");
+                    assert_eq!(creds.user_name, "David");
+                }
+                other => panic!("expected credentials, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn import_reads_the_cmd_cli_auth_json() {
+            let dir = std::env::temp_dir().join(format!("nur-cmd-test-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("auth.json");
+            std::fs::write(
+                &path,
+                r#"{"apiKey":"cc_sk_cli","userId":"u9","userName":"cli-user","keyName":"default","authenticatedAt":"2026-09-10T00:00:00Z"}"#,
+            )
+            .unwrap();
+            let tokens = import_commandcode_auth_file(&path).expect("cli session");
+            assert_eq!(tokens.access_token, "cc_sk_cli");
+            let extra = tokens.meta.unwrap().extra;
+            assert_eq!(extra["user_name"], "cli-user");
+            // An empty or missing key must not import.
+            std::fs::write(&path, r#"{"userId":"u9"}"#).unwrap();
+            assert!(import_commandcode_auth_file(&path).is_none());
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+}
+
 // ── Kimi Code (RFC 8628 device authorization / Kimi CLI import) ────────────
 
 // Kimi uses the same managed bearer for model discovery and inference.
@@ -1844,20 +3110,23 @@ pub mod kimi {
             .unwrap_or_else(|| ISSUER.to_string())
     }
 
-    fn kimi_share_dir() -> PathBuf {
+    /// `None` when neither KIMI_SHARE_DIR nor a home dir is available - the
+    /// caller skips rather than trusting a CWD-relative credential store.
+    fn kimi_share_dir() -> Option<PathBuf> {
         std::env::var("KIMI_SHARE_DIR")
             .ok()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
             .or_else(|| dirs::home_dir().map(|home| home.join(".kimi")))
-            .unwrap_or_else(|| PathBuf::from(".kimi"))
     }
 
     fn device_id() -> Result<String> {
         // Reuse the first-party CLI identity when present. Otherwise keep a
         // Nur-specific stable id so polls and refreshes describe one device.
-        let kimi_path = kimi_share_dir().join("device_id");
+        let kimi_path = kimi_share_dir()
+            .ok_or_else(|| NurError::Other("no home directory for Kimi credentials".into()))?
+            .join("device_id");
         if let Ok(value) = std::fs::read_to_string(&kimi_path) {
             let value = value.trim();
             if let Ok(id) = Uuid::parse_str(value) {
@@ -2113,7 +3382,10 @@ pub mod kimi {
     }
 
     pub fn import_kimi_cli() -> Result<Option<OAuthTokens>> {
-        let path = kimi_share_dir().join("credentials").join("kimi-code.json");
+        let Some(base) = kimi_share_dir() else {
+            return Ok(None);
+        };
+        let path = base.join("credentials").join("kimi-code.json");
         if !path.exists() {
             return Ok(None);
         }
@@ -2290,13 +3562,25 @@ pub mod claude {
     }
 
     pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
-        // Prefer an already-signed-in Claude Code session (no browser needed).
+        // Prefer an already-signed-in Claude Code session (no browser needed) —
+        // but only a live one. Importing an expired session made /login
+        // "succeed" and left the user in a refresh-failure loop; falling
+        // through to the browser flow actually recovers. Same gate as
+        // antigravity: None = never expires, Some = must be > now + 5 min.
         if let Ok(Some(imported)) = import_claude_cli() {
+            if !crate::auth::oauth_expired(imported.expires_at) {
+                send(
+                    tx,
+                    BrowserLoginProgress::Status("using existing Claude Code session".into()),
+                );
+                return Ok(imported);
+            }
             send(
                 tx,
-                BrowserLoginProgress::Status("using existing Claude Code session".into()),
+                BrowserLoginProgress::Status(
+                    "Claude Code session is expired — starting browser sign-in…".into(),
+                ),
             );
-            return Ok(imported);
         }
 
         let verifier = random_urlsafe(32);
@@ -2530,10 +3814,8 @@ pub mod google {
                 "launching Google browser login (gcloud auth login)…".into(),
             ),
         );
-        send(
-            tx,
-            BrowserLoginProgress::OpenUrl("https://accounts.google.com/".into()),
-        );
+        // No placeholder tab: the real auth URL arrives from gcloud's output
+        // below, and a stub accounts.google.com tab only confused users.
         let gcloud = gcloud_bin().ok_or_else(|| {
             NurError::Other(
                 "gcloud not found on PATH (and not under common install dirs). Install Google Cloud SDK from https://cloud.google.com/sdk/docs/install, open a new terminal, then retry — or paste a Gemini API key via /login."
@@ -2577,22 +3859,15 @@ pub mod google {
                 }
             });
         }
-        loop {
-            if cancel.is_cancelled() {
-                let _ = child.kill();
-                return Err(NurError::Other("login cancelled".into()));
+        if let Err(e) = wait_child_with_deadline(&mut child, cancel, VENDOR_CLI_LOGIN_TIMEOUT) {
+            let _ = child.kill();
+            let msg = e.to_string();
+            if msg.contains("login process failed") {
+                return Err(NurError::Other(
+                    "gcloud auth login failed - paste a Gemini API key as fallback.".into(),
+                ));
             }
-            match child.try_wait() {
-                Ok(Some(status)) if status.success() => break,
-                Ok(Some(status)) => {
-                    let message = format!(
-                        "gcloud auth login failed (exit {status}). Paste a Gemini API key as fallback."
-                    );
-                    return Err(NurError::Other(message));
-                }
-                Ok(None) => thread::sleep(Duration::from_millis(200)),
-                Err(e) => return Err(NurError::Other(e.to_string())),
-            }
+            return Err(e);
         }
         send(
             tx,
@@ -2725,10 +4000,11 @@ pub mod antigravity {
         "https://www.googleapis.com/auth/cclog",
         "https://www.googleapis.com/auth/experimentsandconfigs",
     ];
-    const USER_AGENT: &str = "google-api-nodejs-client/9.15.1";
-    const API_CLIENT: &str = "google-cloud-sdk vscode_cloudshelleditor/0.1";
-    const CLIENT_METADATA: &str =
-        r#"{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}"#;
+    // Aliased from providers.rs so the fingerprint cannot drift between the
+    // catalog docs and the wire.
+    const USER_AGENT: &str = crate::providers::CLOUD_CODE_USER_AGENT;
+    const API_CLIENT: &str = crate::providers::CLOUD_CODE_API_CLIENT;
+    const CLIENT_METADATA: &str = crate::providers::CLOUD_CODE_CLIENT_METADATA;
     /// Free-tier Code Assist uses a Google-managed project. Passing a project
     /// into `onboardUser` for free-tier causes Precondition Failed (gemini-cli).
     const FREE_TIER: &str = "free-tier";
@@ -2886,7 +4162,10 @@ foreach ($t in $targets) {
   if ($b) { [Text.Encoding]::UTF8.GetString($b); break }
 }
 "#;
-        let out = Command::new("powershell")
+        let powershell = which_cli("powershell").unwrap_or_else(|| {
+            PathBuf::from("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
+        });
+        let out = Command::new(&powershell)
             .args([
                 "-NoProfile",
                 "-ExecutionPolicy",
@@ -2919,16 +4198,20 @@ foreach ($t in $targets) {
 
         // Best-effort: full Code Assist setup (load + free-tier onboard when needed).
         // Mirrors gemini-cli `setupUser` so free-tier managed projects activate.
+        // Skipped for a token we already know is dead: onboarding is a
+        // state-changing network call, and the caller rejects expired imports.
         let mut extra = serde_json::json!({
             "via": "antigravity-cli-wincred",
             "auth_method": v.get("auth_method").and_then(|x| x.as_str()).unwrap_or("consumer"),
         });
-        if let Ok(setup) = setup_code_assist(access, None) {
-            if !setup.project_id.is_empty() {
-                extra["project_id"] = serde_json::Value::String(setup.project_id);
-            }
-            if !setup.tier_id.is_empty() {
-                extra["tier_id"] = serde_json::Value::String(setup.tier_id);
+        if !crate::auth::oauth_expired(expires_at) {
+            if let Ok(setup) = setup_code_assist(access, None) {
+                if !setup.project_id.is_empty() {
+                    extra["project_id"] = serde_json::Value::String(setup.project_id);
+                }
+                if !setup.tier_id.is_empty() {
+                    extra["tier_id"] = serde_json::Value::String(setup.tier_id);
+                }
             }
         }
 
@@ -3021,12 +4304,16 @@ foreach ($t in $targets) {
                 "via": "gemini-cli-file",
                 "path": path.display().to_string(),
             });
-            if let Ok(setup) = setup_code_assist(access, None) {
-                if !setup.project_id.is_empty() {
-                    extra["project_id"] = serde_json::Value::String(setup.project_id);
-                }
-                if !setup.tier_id.is_empty() {
-                    extra["tier_id"] = serde_json::Value::String(setup.tier_id);
+            // Setup is a state-changing network call - skip it for a token we
+            // already know is dead; the caller rejects expired imports.
+            if !crate::auth::oauth_expired(expires_at) {
+                if let Ok(setup) = setup_code_assist(access, None) {
+                    if !setup.project_id.is_empty() {
+                        extra["project_id"] = serde_json::Value::String(setup.project_id);
+                    }
+                    if !setup.tier_id.is_empty() {
+                        extra["tier_id"] = serde_json::Value::String(setup.tier_id);
+                    }
                 }
             }
             return Some(OAuthTokens {
@@ -3078,7 +4365,10 @@ foreach ($t in $targets) {
         // Loopback server
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .map_err(|e| NurError::Other(format!("failed to bind loopback: {e}")))?;
-        let port = listener.local_addr().map(|a| a.port()).unwrap_or(8080);
+        let port = listener
+            .local_addr()
+            .map(|a| a.port())
+            .map_err(|e| NurError::Other(format!("loopback port: {e}")))?;
         let redirect_uri = format!("http://localhost:{port}/callback");
         let state = random_urlsafe(32);
 
@@ -3192,7 +4482,8 @@ foreach ($t in $targets) {
         if !status.is_success() {
             return Err(NurError::Other(format!(
                 "Antigravity token exchange failed ({}): {}",
-                status, text
+                status,
+                oauth_error_summary(&text)
             )));
         }
 
@@ -3259,7 +4550,8 @@ foreach ($t in $targets) {
         if !status.is_success() {
             return Err(NurError::Other(format!(
                 "loadCodeAssist failed ({}): {}",
-                status, text
+                status,
+                oauth_error_summary(&text)
             )));
         }
 
@@ -3841,21 +5133,15 @@ pub mod github {
                 }
             });
         }
-        loop {
-            if cancel.is_cancelled() {
-                let _ = child.kill();
-                return Err(NurError::Other("login cancelled".into()));
+        if let Err(e) = wait_child_with_deadline(&mut child, cancel, VENDOR_CLI_LOGIN_TIMEOUT) {
+            let _ = child.kill();
+            let msg = e.to_string();
+            if msg.contains("login process failed") {
+                return Err(NurError::Other(
+                    "gh auth login failed - paste a GitHub PAT (models:read) as fallback.".into(),
+                ));
             }
-            match child.try_wait() {
-                Ok(Some(status)) if status.success() => break,
-                Ok(Some(status)) => {
-                    return Err(NurError::Other(format!(
-                        "gh auth login failed (exit {status}). Paste a GitHub PAT (models:read) as fallback."
-                    )))
-                }
-                Ok(None) => thread::sleep(Duration::from_millis(200)),
-                Err(e) => return Err(NurError::Other(e.to_string())),
-            }
+            return Err(e);
         }
         send(
             tx,
@@ -4089,6 +5375,14 @@ pub mod huggingface {
                             slow = true;
                             continue;
                         }
+                        // Denial and expiry are terminal - polling to the
+                        // deadline only re-reports them as a generic timeout.
+                        if err == "access_denied" || err == "expired_token" {
+                            return Err(NurError::Other(format!(
+                                "Hugging Face device login failed: {err} {}",
+                                parsed.error_description.unwrap_or_default()
+                            )));
+                        }
                     }
                     if let Some(access) = parsed.access_token.or(parsed.token) {
                         return Ok(OAuthTokens {
@@ -4163,6 +5457,11 @@ pub mod huggingface {
         None
     }
 
+    /// Hugging Face credentials are long-lived static tokens (`hf_…`): there
+    /// is no short-lived access token to rotate, so "refresh" correctly means
+    /// re-reading the token file/env. The device-flow login above is
+    /// unreachable dead code (browser_auth: false, no login_browser arm) -
+    /// if it ever ships, an OAuth refresh grant goes here.
     pub fn refresh(_refresh: &str) -> Result<OAuthTokens> {
         if let Some(t) = import_hf_token() {
             return Ok(t);
@@ -4216,51 +5515,35 @@ pub mod azure {
                     "failed to launch az ({e}). Install Azure CLI or paste AZURE_OPENAI_API_KEY."
                 ))
             })?; // Best-effort parse device code from az stderr/stdout while waiting.
+        // stderr is az's documented channel for the code, but the stdout pipe
+        // is drained too: an undrained pipe can wedge az, and some
+        // versions/locales print the code there.
         let stderr = child.stderr.take();
         if let Some(mut err) = stderr {
             let tx2 = tx.clone();
             thread::spawn(move || {
                 let mut buf = String::new();
                 let _ = err.read_to_string(&mut buf);
-                // az prints: To sign in, use a web browser to open the page https://microsoft.com/devicelogin
-                // and enter the code XXXXXXXXX
-                let url = "https://microsoft.com/devicelogin";
-                let code = buf
-                    .split_whitespace()
-                    .find(|w| {
-                        w.len() >= 8
-                            && w.len() <= 15
-                            && w.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-                            && w.contains(|c: char| c.is_ascii_uppercase())
-                    })
-                    .unwrap_or("")
-                    .to_string();
-                if !code.is_empty() {
-                    send(
-                        &tx2,
-                        BrowserLoginProgress::DeviceCode {
-                            verification_url: url.into(),
-                            user_code: code,
-                        },
-                    );
-                }
+                send_az_device_code(&tx2, &buf);
             });
         }
-        loop {
-            if cancel.is_cancelled() {
-                let _ = child.kill();
-                return Err(NurError::Other("login cancelled".into()));
+        if let Some(mut out) = child.stdout.take() {
+            let tx2 = tx.clone();
+            thread::spawn(move || {
+                let mut buf = String::new();
+                let _ = out.read_to_string(&mut buf);
+                send_az_device_code(&tx2, &buf);
+            });
+        }
+        if let Err(e) = wait_child_with_deadline(&mut child, cancel, VENDOR_CLI_LOGIN_TIMEOUT) {
+            let _ = child.kill();
+            let msg = e.to_string();
+            if msg.contains("login process failed") {
+                return Err(NurError::Other(
+                    "az login failed - paste AZURE_OPENAI_API_KEY as fallback.".into(),
+                ));
             }
-            match child.try_wait() {
-                Ok(Some(status)) if status.success() => break,
-                Ok(Some(status)) => {
-                    return Err(NurError::Other(format!(
-                        "az login failed (exit {status}). Paste AZURE_OPENAI_API_KEY as fallback."
-                    )))
-                }
-                Ok(None) => thread::sleep(Duration::from_millis(200)),
-                Err(e) => return Err(NurError::Other(e.to_string())),
-            }
+            return Err(e);
         }
         send(
             tx,
@@ -4302,10 +5585,12 @@ pub mod azure {
         struct AzToken {
             #[serde(rename = "accessToken")]
             access_token: Option<String>,
+            /// az's LOCAL-time string (every azure-cli version).
             #[serde(rename = "expiresOn")]
-            expires_on: Option<String>,
+            expires_on_local: Option<String>,
+            /// Timezone-independent unix seconds (azure-cli ≥ 2.54.0).
             #[serde(default)]
-            expires_on_ts: Option<String>,
+            expires_on_unix: Option<String>,
         }
         let parsed: AzToken = serde_json::from_slice(&out.stdout).map_err(|e| {
             NurError::Other(format!(
@@ -4321,16 +5606,10 @@ pub mod azure {
                         .into(),
                 )
             })?;
-        let expires_at = parsed
-            .expires_on
-            .as_deref()
-            .and_then(|s| {
-                chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f")
-                    .or_else(|_| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S"))
-                    .ok()
-            })
-            .map(|ndt| ndt.and_utc().timestamp() as u64)
-            .or_else(|| parsed.expires_on_ts.as_deref().and_then(|s| s.parse().ok()));
+        let expires_at = az_expiry_unix(
+            parsed.expires_on_unix.as_deref(),
+            parsed.expires_on_local.as_deref(),
+        );
         Ok(OAuthTokens {
             access_token: access,
             refresh_token: Some("az-cli".into()),
@@ -4349,6 +5628,53 @@ pub mod azure {
 }
 
 // ── AWS Bedrock (IAM Identity Center via `aws sso login`) ──────────────────
+
+/// Parse the az CLI's two expiry fields into unix seconds.
+///
+/// `expires_on` (unix seconds, azure-cli ≥ 2.54.0) is timezone-independent
+/// and preferred. `expiresOn` is az's LOCAL-time string — reading it as UTC
+/// (the old behavior) skewed the stored expiry by the machine's UTC offset:
+/// used hours-past-expiry on UTC+X, re-minted hours-early on UTC-X.
+/// Scan az login output for the device code and surface it. az prints:
+/// "To sign in, use a web browser to open the page
+///  https://microsoft.com/devicelogin and enter the code XXXXXXXXX"
+fn send_az_device_code(tx: &ProgressTx, buf: &str) {
+    const URL: &str = "https://microsoft.com/devicelogin";
+    let code = buf
+        .split_whitespace()
+        .find(|w| {
+            w.len() >= 8
+                && w.len() <= 15
+                && w.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+                && w.contains(|c: char| c.is_ascii_uppercase())
+        })
+        .unwrap_or("")
+        .to_string();
+    if !code.is_empty() {
+        send(
+            tx,
+            BrowserLoginProgress::DeviceCode {
+                verification_url: URL.into(),
+                user_code: code,
+            },
+        );
+    }
+}
+
+fn az_expiry_unix(expires_on_unix: Option<&str>, expires_on_local: Option<&str>) -> Option<u64> {
+    if let Some(secs) = expires_on_unix.and_then(|s| s.parse::<i64>().ok()) {
+        return Some(u64::try_from(secs.max(0)).unwrap_or(0));
+    }
+    let s = expires_on_local?.trim();
+    let ndt = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f")
+        .or_else(|_| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S"))
+        .ok()?;
+    use chrono::TimeZone;
+    chrono::Local
+        .from_local_datetime(&ndt)
+        .single()
+        .map(|dt| u64::try_from(dt.timestamp().max(0)).unwrap_or(0))
+}
 
 #[allow(dead_code)] // legacy sessions only; SigV4 is not supported by Nur's bearer transport
 pub mod bedrock {
@@ -4501,6 +5827,79 @@ mod tests {
     fn unsigned_jwt(payload: serde_json::Value) -> String {
         let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
         format!("header.{payload}.signature")
+    }
+
+    /// az's unix-seconds field must win, and `expiresOn` must be read as
+    /// LOCAL time — the old code parsed it as UTC, skewing the stored expiry
+    /// by the machine's UTC offset.
+    #[test]
+    fn az_expiry_prefers_unix_seconds_and_reads_local_time() {
+        // Unix key wins over anything in the local-time field.
+        assert_eq!(
+            az_expiry_unix(Some("1900000000"), Some("1999-01-01 00:00:00")),
+            Some(1_900_000_000)
+        );
+        // Negative unix values parse fine and mean "already expired" — they
+        // must NOT fall through to None, which downstream means "never
+        // expires" and would make a dead token immortal.
+        assert_eq!(az_expiry_unix(Some("-5"), None), Some(0));
+        // Local parse: a far-future local wall clock lands in the same year
+        // regardless of the machine's offset (UTC reading would also pass
+        // this; the regression it guards is the ±offset skew, which any
+        // non-UTC machine would have caught in the old and_utc() behavior).
+        let got = az_expiry_unix(None, Some("2030-06-01 12:00:00")).expect("local parse");
+        let ics = chrono::DateTime::parse_from_rfc3339("2030-06-01T12:00:00+00:00")
+            .unwrap()
+            .timestamp();
+        assert!(
+            (got as i64 - ics).abs() < 36 * 3600,
+            "local parse off by more than any timezone: {got} vs {ics}"
+        );
+        // Fractional seconds and garbage.
+        assert!(az_expiry_unix(None, Some("2030-06-01 12:00:00.123")).is_some());
+        assert_eq!(az_expiry_unix(None, Some("not-a-date")), None);
+        assert_eq!(az_expiry_unix(None, None), None);
+    }
+
+    /// Vendor key imports must skip JWTs that are already expired (dead
+    /// sessions used to import as success), and non-JWT keys never count as
+    /// expired.
+    #[test]
+    fn jwt_expiry_and_expired_jwt() {
+        let live = format!(
+            "x.{}.y",
+            URL_SAFE_NO_PAD.encode(br#"{"exp":9999999999}"#)
+        );
+        assert_eq!(jwt_expiry(&live), Some(9_999_999_999));
+        assert!(!expired_jwt(&live));
+
+        let dead = format!("x.{}.y", URL_SAFE_NO_PAD.encode(br#"{"exp":1}"#));
+        assert!(expired_jwt(&dead));
+
+        assert!(!expired_jwt("plain-opaque-vendor-key"));
+        assert_eq!(jwt_expiry("plain-opaque-vendor-key"), None);
+        assert!(!expired_jwt("only.two"));
+    }
+
+    /// az's device code is scanned from its output; both the positive case
+    /// and the silent no-code case are covered.
+    #[test]
+    fn az_device_code_scan() {
+        let (tx, rx) = mpsc::channel();
+        send_az_device_code(
+            &tx,
+            "To sign in, use a web browser to open the page              https://microsoft.com/devicelogin and enter the code A1B2C3D4E",
+        );
+        match rx.recv_timeout(Duration::from_secs(1)).expect("device code") {
+            BrowserLoginProgress::DeviceCode { user_code, .. } => {
+                assert_eq!(user_code, "A1B2C3D4E")
+            }
+            other => panic!("expected DeviceCode, got {other:?}"),
+        }
+
+        let (tx2, rx2) = mpsc::channel();
+        send_az_device_code(&tx2, "nothing resembling a code here");
+        assert!(rx2.recv_timeout(Duration::from_millis(100)).is_err());
     }
 
     #[test]

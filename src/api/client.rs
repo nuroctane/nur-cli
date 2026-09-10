@@ -96,6 +96,22 @@ fn is_opencode_gemini_model(provider_id: &str, model: &str) -> bool {
             .starts_with("gemini-")
 }
 
+/// Command Code serves open/frontier models as Chat Completions at
+/// `/provider/v1/chat/completions` and Claude as the Anthropic Messages shape
+/// at `/provider/v1/messages` — it 400s any Claude model sent to
+/// /chat/completions ("Send a Claude model to /chat/completions and you get a
+/// 400 pointing you to /messages"). Keep the split at the wire boundary so
+/// picking a Claude id from the live /models list cannot send the wrong
+/// schema. `contains` (not prefix) so both the bare (`claude-sonnet-4-6`) and
+/// vendor-namespaced (`anthropic/claude-…`) spellings route correctly.
+fn commandcode_style_for_model(model: &str) -> ApiStyle {
+    if model.to_ascii_lowercase().contains("claude") {
+        ApiStyle::AnthropicMessages
+    } else {
+        ApiStyle::ChatCompletions
+    }
+}
+
 /// Rough JWT shape check (`eyJ…`.`…`.`…`) used only to decide whether a Grok
 /// bearer should carry the CLI-proxy fingerprint headers.
 fn looks_like_jwt_bearer(token: &str) -> bool {
@@ -326,6 +342,20 @@ impl ApiClient {
                 .to_string();
             return self;
         }
+        // A zhipu OAuth session carries the route its credential was minted
+        // for (z.ai Coding Plan vs China bigmodel). The catalog default is the
+        // z.ai host; a bigmodel-active session must override it or every
+        // request 401s against a host that never saw the token.
+        if self.provider_id == "zhipu" {
+            if let Some(base) = self
+                .oauth
+                .as_ref()
+                .and_then(|o| o.base_url.as_deref())
+                .filter(|b| b.starts_with("https://"))
+            {
+                self.base_url = base.trim_end_matches('/').to_string();
+            }
+        }
         self.style = style;
         self
     }
@@ -353,6 +383,18 @@ impl ApiClient {
             ApiStyle::Responses
         };
         self
+    }
+
+    /// Should the Anthropic Messages body present first-party Claude Code
+    /// identity (system block + OAuth betas)? True only for Anthropic's own
+    /// OAuth sessions. Command Code's `/messages` is a *gateway* route — its
+    /// bearer key identifies a Studio account, and injecting Claude Code
+    /// identity into the system prompt there would corrupt the prompt.
+    fn anthropic_body_is_claude_oauth(&self) -> bool {
+        if self.provider_id == "commandcode" {
+            return false;
+        }
+        self.oauth.is_some() || super::anthropic::is_oauth_token(&self.api_key)
     }
 
     fn is_retryable_status(status: u16) -> bool {
@@ -615,6 +657,10 @@ impl ApiClient {
             let (_, base) = crate::providers::opencode_request_route(model, &self.base_url);
             routed.base_url = base.trim_end_matches('/').to_string();
         }
+        if self.provider_id == "commandcode" {
+            // Same host for every model — only the request shape flips.
+            routed.style = commandcode_style_for_model(model);
+        }
         routed
     }
 
@@ -671,6 +717,16 @@ impl ApiClient {
                 if self.provider_id == "opencode" {
                     // OpenCode's model-specific Claude endpoint remains a
                     // gateway route and authenticates with its bearer key.
+                    req = req.bearer_auth(&api_key);
+                } else if self.provider_id == "commandcode" {
+                    // Command Code's primary auth is Bearer on *every* route;
+                    // x-api-key on /messages is only the Anthropic-SDK
+                    // alternative.
+                    req = req.bearer_auth(&api_key);
+                } else if self.provider_id == "minimax" {
+                    // MiniMax's Anthropic-compatible gateway documents the
+                    // bearer token (their Claude Code config maps
+                    // ANTHROPIC_AUTH_TOKEN), not x-api-key.
                     req = req.bearer_auth(&api_key);
                 } else if is_claude_oauth {
                     // Claude Code sends oauth + claude-code betas and a cli User-Agent.
@@ -1801,7 +1857,7 @@ impl ApiClient {
     // ── Anthropic Messages API ────────────────────────────────────────────
     async fn create_anthropic(&self, req: &ResponseRequest) -> Result<ApiResponse> {
         let url = format!("{}/messages", self.base_url);
-        let oauth = self.oauth.is_some() || super::anthropic::is_oauth_token(&self.api_key);
+        let oauth = self.anthropic_body_is_claude_oauth();
         let body = super::anthropic::build_body_with_oauth(req, false, oauth);
         let mut attempt = 0u32;
         let mut oauth_refreshed = false;
@@ -1892,7 +1948,7 @@ impl ApiClient {
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<ApiResponse> {
         let url = format!("{}/messages", self.base_url);
-        let oauth = self.oauth.is_some() || super::anthropic::is_oauth_token(&self.api_key);
+        let oauth = self.anthropic_body_is_claude_oauth();
         let body = super::anthropic::build_body_with_oauth(req, true, oauth);
 
         // This path had no retry whatsoever while every sibling path has 3-4
@@ -2969,6 +3025,44 @@ mod tests {
         );
     }
 
+    /// Command Code: Claude ids must take the Anthropic Messages shape
+    /// (bare and namespaced spellings both), everything else Chat Completions.
+    #[test]
+    fn commandcode_splits_claude_from_chat_completions() {
+        assert_eq!(
+            commandcode_style_for_model("claude-sonnet-4-6"),
+            ApiStyle::AnthropicMessages
+        );
+        assert_eq!(
+            commandcode_style_for_model("anthropic/claude-opus-4-8"),
+            ApiStyle::AnthropicMessages
+        );
+        assert_eq!(
+            commandcode_style_for_model("Claude-Sonnet-4-6"),
+            ApiStyle::AnthropicMessages
+        );
+        assert_eq!(
+            commandcode_style_for_model("deepseek/deepseek-v4-flash"),
+            ApiStyle::ChatCompletions
+        );
+        assert_eq!(
+            commandcode_style_for_model("minimax-m3"),
+            ApiStyle::ChatCompletions
+        );
+        assert_eq!(
+            commandcode_style_for_model("kimi-k3"),
+            ApiStyle::ChatCompletions
+        );
+        assert_eq!(
+            commandcode_style_for_model("gpt-5.5"),
+            ApiStyle::ChatCompletions
+        );
+        assert_eq!(
+            commandcode_style_for_model("gemini-3-flash"),
+            ApiStyle::ChatCompletions
+        );
+    }
+
     #[test]
     fn opencode_selects_the_documented_protocol_per_model() {
         assert_eq!(
@@ -3027,6 +3121,104 @@ mod tests {
             grok.base_url,
             crate::providers::OPENCODE_GO_BASE_URL.trim_end_matches('/')
         );
+    }
+
+    /// End to end through the real client: Command Code keeps one host for all
+    /// models and only flips the wire shape, Claude to `/messages`, the rest to
+    /// `/chat/completions`.
+    #[test]
+    fn commandcode_routing_keeps_one_host_and_flips_only_the_style() {
+        // Callers set the catalog style via `with_style` after for_provider
+        // (the bare client defaults to Responses).
+        let cc = ApiClient::for_provider(
+            crate::providers::COMMANDCODE_BASE_URL,
+            "k",
+            "commandcode",
+        )
+        .unwrap()
+        .with_style(ApiStyle::ChatCompletions);
+        assert_eq!(cc.style, ApiStyle::ChatCompletions, "catalog style is CC");
+        let claude = cc.routed_for_model("claude-sonnet-4-6");
+        assert_eq!(claude.style, ApiStyle::AnthropicMessages);
+        assert_eq!(
+            claude.base_url,
+            crate::providers::COMMANDCODE_BASE_URL.trim_end_matches('/'),
+            "Claude stays on the same host — /messages is derived from it"
+        );
+        let open = cc.routed_for_model("deepseek/deepseek-v4-flash");
+        assert_eq!(open.style, ApiStyle::ChatCompletions);
+        assert_eq!(open.base_url, cc.base_url);
+    }
+
+    /// A zhipu OAuth session minted for the China bigmodel route must override
+    /// the catalog's z.ai host - the bigmodel token is rejected by z.ai.
+    #[test]
+    fn zhipu_bigmodel_session_overrides_the_host() {
+        let client = ApiClient::for_provider(
+            crate::providers::ZHIPU_CODING_BASE_URL,
+            "zcode-token",
+            "zhipu",
+        )
+        .unwrap();
+        assert_eq!(client.base_url, crate::providers::ZHIPU_CODING_BASE_URL);
+        let client = ApiClient {
+            oauth: Some(crate::auth::OAuthRequestContext {
+                account_id: None,
+                is_fedramp: false,
+                project_id: None,
+                base_url: Some("https://open.bigmodel.cn/api/coding/paas/v4".into()),
+            }),
+            ..client
+        };
+        let routed = client.with_style(ApiStyle::ChatCompletions);
+        assert_eq!(routed.base_url, "https://open.bigmodel.cn/api/coding/paas/v4");
+
+        // A zai-routed (or context-less) session keeps the catalog host.
+        let plain = ApiClient::for_provider(
+            crate::providers::ZHIPU_CODING_BASE_URL,
+            "zcode-token",
+            "zhipu",
+        )
+        .unwrap()
+        .with_style(ApiStyle::ChatCompletions);
+        assert_eq!(plain.base_url, crate::providers::ZHIPU_CODING_BASE_URL);
+    }
+
+    /// A Command Code OAuth-shaped session (browser sign-in) must never dress
+    /// the Anthropic route up as a first-party Claude Code session — no Claude
+    /// Code identity block in the system prompt, no OAuth betas, Bearer auth.
+    #[test]
+    fn commandcode_never_presents_claude_code_identity() {
+        let cc = ApiClient::for_provider(
+            crate::providers::COMMANDCODE_BASE_URL,
+            "cc_studio_key",
+            "commandcode",
+        )
+        .unwrap();
+        assert!(!cc.anthropic_body_is_claude_oauth());
+        let cc_oauth_session = ApiClient::for_provider(
+            crate::providers::COMMANDCODE_BASE_URL,
+            "cc_studio_key",
+            "commandcode",
+        )
+        .unwrap();
+        let cc_oauth_session = ApiClient {
+            oauth: Some(crate::auth::OAuthRequestContext::default()),
+            ..cc_oauth_session
+        };
+        assert!(
+            !cc_oauth_session.anthropic_body_is_claude_oauth(),
+            "even an OAuth-shaped stored session stays a gateway client"
+        );
+
+        // First-party Anthropic OAuth keeps the identity path.
+        let anthropic = ApiClient::for_provider(
+            "https://api.anthropic.com/v1",
+            "sk-ant-oat01-example",
+            "anthropic",
+        )
+        .unwrap();
+        assert!(anthropic.anthropic_body_is_claude_oauth());
     }
 
     #[test]
@@ -3463,6 +3655,7 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
                 account_id: Some("acct_test".to_string()),
                 is_fedramp: true,
                 project_id: None,
+                base_url: None,
             }),
             refresh_oauth: false,
             style: ApiStyle::Responses,
@@ -3510,6 +3703,7 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
                 account_id: None,
                 is_fedramp: false,
                 project_id: Some("project-test".to_string()),
+                base_url: None,
             }),
             refresh_oauth: false,
             style: ApiStyle::ChatCompletions,
@@ -3540,6 +3734,7 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
                 account_id: None,
                 is_fedramp: false,
                 project_id: Some("vivid-question-5fs6l".to_string()),
+                base_url: None,
             }),
             refresh_oauth: false,
             style: ApiStyle::GeminiCloudCode,
@@ -3628,6 +3823,7 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
                 account_id: None,
                 is_fedramp: false,
                 project_id: Some("vivid-question-5fs6l".to_string()),
+                base_url: None,
             }),
             refresh_oauth: false,
             style: ApiStyle::GeminiCloudCode,

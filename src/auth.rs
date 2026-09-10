@@ -8,6 +8,13 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+// Store locks serialize read-modify-write cycles on the credential stores.
+// Accepted tradeoff (reviewed): the guard is held across a blocking token
+// refresh (`refresh_oauth_with_token` -> run_blocking network call), which
+// serializes concurrent resolvers for the refresh duration. Correctness beats
+// throughput here - every concurrent subagent/failover resolve must observe a
+// consistent store, and lock-free CAS-style stores would be a much larger
+// redesign.
 static OAUTH_STORE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static KEY_STORE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static POLICY_STORE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -33,6 +40,11 @@ fn policy_store_guard() -> MutexGuard<'static, ()> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+// Atomic credential write. Windows note (accepted): std's rename cannot
+// replace an existing file, so this is remove-then-rename - a crash in that
+// window reads as signed-out rather than corrupting anything. Hardening to
+// MoveFileEx(REPLACE_EXISTING) would need a Windows-specific crate; the
+// profile-directory ACLs apply to the written file.
 fn private_atomic_write(path: &Path, content: &[u8]) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -128,6 +140,10 @@ pub struct OAuthRequestContext {
     pub is_fedramp: bool,
     /// Google Cloud quota project required by Gemini OAuth requests.
     pub project_id: Option<String>,
+    /// Session-scoped inference host override. Only honored for providers
+    /// whose OAuth session legitimately spans more than one route (zhipu:
+    /// `zai` vs `bigmodel` Coding Plan endpoints, stored by the import).
+    pub base_url: Option<String>,
 }
 
 impl Default for Auth {
@@ -315,7 +331,11 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
                 mismatched = true;
             } else {
                 if matches!(auth.auth_method, AuthMethod::Oauth) {
-                    matching_oauth = resolve_oauth_access_token(exp)?;
+                    // Refresh failure (expired + unrefreshable) must NOT hard-
+                    // error here: the env / per-provider key below may still
+                    // hold a working credential. The refresh error only wins
+                    // when nothing else resolves.
+                    matching_oauth = resolve_oauth_access_token(exp).ok().flatten();
                 } else {
                     let k = auth.api_key.trim().to_string();
                     if !k.is_empty() && auth.provider.is_empty() {
@@ -494,7 +514,17 @@ pub fn load_auth() -> Result<Option<Auth>> {
         return Ok(None);
     }
     let text = fs::read_to_string(&path)?;
-    let mut auth: Auth = serde_json::from_str(&text)?;
+    let Ok(mut auth) = serde_json::from_str::<Auth>(&text) else {
+        // A malformed store must not hard-fail every provider resolution
+        // (it used to defeat even env keys with a bare serde error). The
+        // write side refuses to overwrite a malformed store, so nothing is
+        // lost by reading it as signed out.
+        tracing::warn!(
+            "auth store at {} is malformed — treating as signed out (fix or delete the file)",
+            path.display()
+        );
+        return Ok(None);
+    };
     normalize_legacy_omp_credential(&mut auth);
     if auth.provider == "antigravity" {
         auth.provider = "google".into();
@@ -563,10 +593,23 @@ pub fn oauth_request_context(provider_id: &str, access_token: &str) -> Option<OA
         .and_then(|meta| meta.extra.get("project_id"))
         .and_then(|value| value.as_str())
         .map(str::to_string);
+    // The route override is only trusted for zhipu — it is the one provider
+    // whose OAuth session legitimately spans two hosts (zai / bigmodel).
+    let base_url = if provider_id == "zhipu" {
+        auth.oauth_meta
+            .as_ref()
+            .and_then(|meta| meta.extra.get("base_url"))
+            .and_then(|value| value.as_str())
+            .filter(|value| value.starts_with("https://"))
+            .map(str::to_string)
+    } else {
+        None
+    };
     Some(OAuthRequestContext {
         account_id,
         is_fedramp,
         project_id,
+        base_url,
     })
 }
 
@@ -1148,11 +1191,9 @@ fn read_sessions_at(path: &Path) -> BTreeMap<String, Auth> {
             a.provider = "antigravity".into();
             a
         });
-        map.entry("google-oauth".into()).or_insert_with(|| {
-            let mut a = g.clone();
-            a.provider = "google-oauth".into();
-            a
-        });
+        // NOTE: no `google-oauth` insert here — it is not a catalog id, so the
+        // oauth-session retain below would immediately filter it out. Family
+        // resolution handles google-oauth via the `google` entry itself.
     }
     map.retain(|id, auth| {
         !matches!(auth.auth_method, AuthMethod::Oauth) || oauth_session_supported(id)
@@ -1580,7 +1621,11 @@ pub fn key_fingerprint(key: &str) -> String {
     if k.len() <= 8 {
         return "****".to_string();
     }
-    format!("{}…{}", &k[..4], &k[k.len() - 4..])
+    // Char-boundary-safe: byte slicing panicked on keys with multibyte
+    // characters astride the cut points.
+    let head: String = k.chars().take(4).collect();
+    let tail: String = k.chars().rev().take(4).collect::<Vec<_>>().iter().rev().collect();
+    format!("{head}…{tail}")
 }
 
 pub fn auth_status() -> Result<()> {

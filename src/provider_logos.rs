@@ -79,6 +79,7 @@ pub fn title_emoji(label: &str) -> &'static str {
         "ollama" => "\u{1F999}",                           // 🦙
         "opencode" => "\u{1F7E7}",                         // 🟧
         "openrouter" => "\u{1F6F0}\u{FE0F}",               // 🛰️
+        "commandcode" => "\u{1F5A5}\u{FE0F}",              // 🖥️
         "perplexity" => "\u{1F50E}",                       // 🔎
         "github-copilot" | "copilot" => "\u{1F97D}",       // 🥽
         "nous" => "\u{1F318}",                             // 🌘

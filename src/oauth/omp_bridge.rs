@@ -227,7 +227,10 @@ fn oauth_only_omp_provider(provider: &str) -> bool {
 fn token_looks_oauth(token: &str) -> bool {
     token.starts_with("sk-ant-oat")
         || token.starts_with("ya29.")
-        || (token.matches('.').count() == 2 && token.len() >= 32)
+        // Three segments + long used to be enough, which misclassified legacy
+        // dotted API keys (a.b.c) as OAuth. Require a JWT-ish header (base64
+        // of `{"`, always `eyJ…`).
+        || (token.starts_with("eyJ") && token.matches('.').count() == 2 && token.len() >= 32)
 }
 
 fn parse_token_output(raw: &str, omp_provider: &str) -> Option<(String, bool)> {

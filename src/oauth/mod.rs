@@ -134,6 +134,10 @@ pub fn revoke_session(auth: &Auth) -> Result<String> {
             "no remote revoke endpoint wired for '{}' — local tokens deleted; revoke in the vendor account UI if needed",
             auth.provider
         )),
+        "commandcode" => Ok(
+            "local credential deleted — revoke the key in Command Code Studio (commandcode.ai/studio → API keys) if needed"
+                .into(),
+        ),
         "" => Ok(String::new()),
         other => Ok(format!(
             "no remote revoke for provider '{other}' — local file removed"
@@ -173,6 +177,7 @@ pub fn refresh_tokens(provider: &str, auth: &Auth, refresh: &str) -> Result<OAut
         "cursor" => flows::cursor::refresh(auth, refresh),
         "opencode" => flows::opencode::refresh(auth, refresh),
         "nous" => flows::nous::refresh(auth, refresh),
+        "commandcode" => flows::commandcode::refresh(auth, refresh),
         "meta" => harness::muse::refresh(auth, refresh),
         "deepseek" => harness::deepseek::refresh(auth, refresh),
         "zhipu" => harness::zhipu::refresh(auth, refresh),
@@ -238,10 +243,11 @@ mod tests {
             "github-copilot",
             "cursor",
             "opencode",
+            "nous",
+            "commandcode",
             "meta",
             "deepseek",
             "zhipu",
-            "nous",
         ];
         const REFRESH: &[&str] = &[
             "openai",
@@ -258,10 +264,11 @@ mod tests {
             "github-copilot",
             "cursor",
             "opencode",
+            "nous",
+            "commandcode",
             "meta",
             "deepseek",
             "zhipu",
-            "nous",
         ];
         for id in crate::providers::oauth_browser_provider_ids() {
             assert!(

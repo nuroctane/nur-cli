@@ -733,15 +733,25 @@ pub mod zhipu {
         String::from_utf8(plain).ok()
     }
 
-    /// Accept a plaintext value or an `enc:v1:` envelope; envelopes that fail
-    /// to decrypt are passed through untouched so they still fail the
-    /// `looks_like_secret`/sender checks loudly rather than vanishing.
-    fn reveal_credential(value: &str) -> String {
+    /// Accept a plaintext value or an `enc:v1:` envelope. Returns `None` when
+    /// an envelope cannot be decrypted — the value must be treated as *absent*,
+    /// never passed through: an undecryptable `enc:v1:…` string is exactly the
+    /// right shape to slip past `looks_like_secret` and then be stored as the
+    /// user's credential (permanent 401s with no diagnostic).
+    fn reveal_credential(value: &str) -> Option<String> {
         let t = value.trim();
         if t.starts_with("enc:v1:") {
-            decrypt_credential(t).unwrap_or_else(|| t.to_string())
+            let plain = decrypt_credential(t);
+            if plain.is_none() {
+                tracing::warn!(
+                    "zcode credential envelope failed to decrypt — check \
+                     ZCODE_CREDENTIAL_SECRET or re-run `zcode login` (upstream format may \
+                     have changed)"
+                );
+            }
+            plain
         } else {
-            t.to_string()
+            Some(t.to_string())
         }
     }
 
@@ -761,12 +771,17 @@ pub mod zhipu {
         let field = |name: &str| -> Option<String> {
             v.get(name)
                 .and_then(|x| x.as_str())
-                .map(reveal_credential)
+                .and_then(reveal_credential)
                 .filter(|s| looks_like_secret(s))
         };
         let access = field("oauth:zai:access_token")?;
         let refresh = field("oauth:zai:refresh_token");
-        let active = field("oauth:active_provider");
+        // Route selector, NOT a secret: read it without the length heuristic
+        // (the value is `zai` or `bigmodel`, both under the 12-char floor).
+        let active = v
+            .get("oauth:active_provider")
+            .and_then(|x| x.as_str())
+            .and_then(reveal_credential);
         let base = match active.as_deref() {
             Some("bigmodel") => "https://open.bigmodel.cn/api/coding/paas/v4",
             _ => "https://api.z.ai/api/coding/paas/v4",
@@ -817,7 +832,7 @@ pub mod zhipu {
                 let Some(secret) = ["apiKey", "api_key", "access_token", "token"]
                     .iter()
                     .find_map(|k| options.get(*k).and_then(|x| x.as_str()))
-                    .map(reveal_credential)
+                    .and_then(reveal_credential)
                     .filter(|s| looks_like_secret(s))
                 else {
                     continue;
@@ -1249,6 +1264,40 @@ mod tests {
         assert_eq!(t.access_token, "zai-oauth-access-token-123456");
         assert!(!is_api_key_import(&t));
         std::env::remove_var("ZCODE_CREDENTIAL_SECRET");
+    }
+
+    /// An envelope that cannot be decrypted must be treated as *absent* —
+    /// passing the `enc:v1:…` string through used to store the envelope itself
+    /// as the access token (permanent 401s with no diagnostic).
+    #[test]
+    fn zcode_undecryptable_envelope_is_treated_as_absent() {
+        let text = serde_json::json!({
+            "oauth:zai:access_token": "enc:v1:not-a-real-envelope",
+        })
+        .to_string();
+        assert!(
+            zhipu::tokens_from_credentials_file(&text, Path::new("/tmp/credentials.json"))
+                .is_none(),
+            "undecryptable envelope must not import"
+        );
+    }
+
+    /// The route selector is not a secret: `bigmodel` is under the 12-char
+    /// `looks_like_secret` floor, so the old field() read could never see it
+    /// and every bigmodel-active session was pinned to the z.ai host.
+    #[test]
+    fn zcode_bigmodel_route_is_selected() {
+        let text = serde_json::json!({
+            "oauth:zai:access_token": "zai-oauth-access-token-123456",
+            "oauth:active_provider": "bigmodel",
+        })
+        .to_string();
+        let t = zhipu::tokens_from_credentials_file(&text, Path::new("/tmp/credentials.json"))
+            .expect("bigmodel session imports");
+        assert_eq!(
+            t.meta.expect("meta").extra["base_url"],
+            "https://open.bigmodel.cn/api/coding/paas/v4"
+        );
     }
 
     #[test]

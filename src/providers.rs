@@ -108,6 +108,13 @@ pub const KIMI_CODE_BASE_URL: &str = "https://api.kimi.com/coding/v1";
 pub const OPENCODE_ZEN_BASE_URL: &str = "https://opencode.ai/zen/v1";
 /// OpenCode Go shares OpenCode credentials but has its own inference endpoint.
 pub const OPENCODE_GO_BASE_URL: &str = "https://opencode.ai/zen/go/v1";
+/// Command Code Provider API — one gateway, 70+ models (Kimi, DeepSeek, GLM,
+/// Qwen, MiniMax, Claude, GPT, Gemini, Grok). OpenAI Chat Completions at
+/// `/chat/completions` for open/frontier models, Anthropic Messages at
+/// `/messages` for Claude; [`crate::api::client`] routes per model. Keys are
+/// created in Studio and exported as `COMMAND_CODE_API_KEY` (their own CLI)
+/// or `CMD_API_KEY` (community convention). Docs: https://commandcode.ai/docs/provider
+pub const COMMANDCODE_BASE_URL: &str = "https://api.commandcode.ai/provider/v1";
 /// Nous Portal inference API — OpenAI-compatible, OAuth device-code sessions
 /// shared with Hermes Agent (`hermes auth add nous` / `nur auth login --provider nous`).
 pub const NOUS_PORTAL_BASE_URL: &str = "https://inference-api.nousresearch.com/v1";
@@ -1212,6 +1219,24 @@ pub const PROVIDERS: &[Provider] = &[
         browser_auth: false,
     },
     Provider {
+        id: "commandcode",
+        name: "Command Code",
+        base_url: COMMANDCODE_BASE_URL,
+        // Verbatim from the Provider API's own curl example. Deliberately NOT
+        // a Claude id: the gateway 400s any Claude model sent to
+        // /chat/completions (Claude belongs on /messages, which the client
+        // routes per model).
+        default_model: "deepseek/deepseek-v4-flash",
+        env_key: "COMMAND_CODE_API_KEY",
+        style: CC,
+        note: "70+ models · browser sign-in · Claude auto-routes to /messages",
+        key_optional: false,
+        // First-party browser sign-in: the same studio OAuth flow the `cmd`
+        // CLI drives (loopback POST callback), no vendor binary required. A
+        // `~/.commandcode/auth.json` from `cmd login` is imported too.
+        browser_auth: true,
+    },
+    Provider {
         id: "requesty",
         name: "Requesty",
         base_url: "https://router.requesty.ai/v1",
@@ -1608,6 +1633,7 @@ fn resolve_provider_token(q: &str) -> Option<&'static Provider> {
         "baichuan" => "baichuan",
         // Aggregators / routers
         "openrouter" | "or" => "openrouter",
+        "commandcode" | "command-code" | "commandcode.ai" => "commandcode",
         "opencode" | "zen" => "opencode",
         "cursor" | "cursor-agent" | "cursoragent" => "cursor",
         "groq" => "groq",
@@ -1648,6 +1674,7 @@ const TEXT_SCAN_ALIASES: &[&str] = &[
     "chatgpt",
     "deepseek",
     "openrouter",
+    "commandcode",
     "moonshot",
     "anthropic",
     "openai",
@@ -1910,9 +1937,14 @@ pub fn builtin_privacy(id: &str) -> Privacy {
         //   nebius — inference clouds with ZDR / no-store defaults
         //   azure · bedrock — enterprise no-train + ZDR data handling
         //   openrouter · vercel — ZDR routing / gateway policy
+        //   commandcode — documented no-train / no-sell, plus first-party ZDR
+        //     routing (`x-cmd-zdr: 1`; Anthropic-route models ZDR at account
+        //     level). Free/promo models may inherit upstream terms — the user
+        //     can downgrade the tier in the picker if that matters.
         "openai" | "openai-cc" | "anthropic" | "google" | "xai" | "mistral" | "cohere"
         | "perplexity" | "groq" | "cerebras" | "together" | "fireworks" | "deepinfra"
-        | "hyperbolic" | "nebius" | "azure" | "bedrock" | "openrouter" | "vercel" => Privacy::Zdr,
+        | "hyperbolic" | "nebius" | "azure" | "bedrock" | "openrouter" | "vercel"
+        | "commandcode" => Privacy::Zdr,
 
         // Everything else stays Standard: trains by default (DeepSeek and the
         // Chinese labs, Meta's API), logs by default (observability gateways
@@ -1954,6 +1986,7 @@ pub fn oauth_browser_provider_ids() -> &'static [&'static str] {
         "deepseek",
         "zhipu",
         "nous",
+        "commandcode",
     ]
 }
 
@@ -1964,6 +1997,9 @@ pub fn oauth_browser_provider_ids() -> &'static [&'static str] {
 pub fn provider_env_keys(provider_id: &str) -> Vec<&'static str> {
     match provider_id {
         "meta" => vec!["META_API_KEY", "MODEL_API_KEY"],
+        // Command Code's own CLI exports `COMMAND_CODE_API_KEY`; third-party
+        // tooling standardized on `CMD_API_KEY`. Accept both.
+        "commandcode" => vec!["COMMAND_CODE_API_KEY", "CMD_API_KEY"],
         other => by_id(other).map(|p| vec![p.env_key]).unwrap_or_default(),
     }
 }
@@ -2165,10 +2201,62 @@ mod tests {
         // `PROVIDER_COUNT_DOC_SITES` below too.
         assert_eq!(
             PROVIDERS.len(),
-            63,
+            64,
             "provider count changed — update the docs that quote it: {}",
             PROVIDER_COUNT_DOC_SITES.join(", ")
         );
+    }
+
+    /// Command Code: OpenAI Chat Completions gateway with an Anthropic-shaped
+    /// side door for Claude. The catalog row pins the CC base; per-model
+    /// routing to `/messages` lives in `api::client::routed_for_model`.
+    #[test]
+    fn commandcode_speaks_chat_completions_with_a_studio_key() {
+        let p = by_id("commandcode").expect("commandcode is in the catalog");
+        assert_eq!(p.name, "Command Code");
+        assert_eq!(p.base_url, COMMANDCODE_BASE_URL);
+        assert_eq!(p.base_url, "https://api.commandcode.ai/provider/v1");
+        assert_eq!(p.env_key, "COMMAND_CODE_API_KEY");
+        assert_eq!(p.default_model, "deepseek/deepseek-v4-flash");
+        assert_eq!(p.style, ApiStyle::ChatCompletions);
+        assert!(!p.key_optional);
+        // First-party studio browser sign-in (same flow the `cmd` CLI drives).
+        assert!(p.browser_auth);
+        assert!(
+            oauth_browser_provider_ids().contains(&"commandcode"),
+            "commandcode must advertise its browser sign-in flow"
+        );
+        // Both documented env spellings are scanned at startup.
+        assert_eq!(
+            provider_env_keys("commandcode"),
+            vec!["COMMAND_CODE_API_KEY", "CMD_API_KEY"]
+        );
+    }
+
+    #[test]
+    fn commandcode_is_resolvable_by_alias_and_display_name() {
+        assert_eq!(resolve_provider_alias("commandcode").map(|p| p.id), Some("commandcode"));
+        assert_eq!(
+            resolve_provider_alias("command-code").map(|p| p.id),
+            Some("commandcode")
+        );
+        assert_eq!(
+            resolve_provider_alias("Command Code").map(|p| p.id),
+            Some("commandcode")
+        );
+        // The free-text scanner must find it so cross-provider steers work.
+        assert!(
+            named_providers_in_text("spawn a commandcode subagent to audit the router")
+                .iter()
+                .any(|h| h.contains("commandcode")),
+        );
+    }
+
+    /// Their data policy documents no-train / no-sell plus first-party ZDR
+    /// routing, so the built-in tier is Zdr (user overrides still win).
+    #[test]
+    fn commandcode_defaults_to_the_zdr_privacy_tier() {
+        assert_eq!(builtin_privacy("commandcode"), Privacy::Zdr);
     }
 
     #[test]
@@ -2666,6 +2754,7 @@ mod tests {
                 "deepseek",
                 "zhipu",
                 "nous",
+                "commandcode",
             ]
         );
         assert!(!by_id("huggingface").unwrap().browser_auth);

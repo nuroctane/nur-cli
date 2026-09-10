@@ -4725,13 +4725,20 @@ fn resolve_subagent_target(
         // import_existing_session can shell out - isolate via run_blocking.
         match crate::oauth::run_blocking(|| crate::oauth::import_existing_session(prov.id)) {
             Ok(Some(tokens)) if !tokens.access_token.trim().is_empty() => {
-                let _ = crate::auth::save_provider_oauth(
-                    prov.id,
-                    &tokens.access_token,
-                    tokens.refresh_token.clone(),
-                    tokens.expires_at,
-                    tokens.meta.clone(),
-                );
+                // Persist with the same credential-kind gating as failover:
+                // plain API-key imports (cursor/opencode env keys, harness
+                // keys) must not be stored as OAuth sessions.
+                if crate::oauth::imported_as_oauth_session(&tokens) {
+                    let _ = crate::auth::save_provider_oauth(
+                        prov.id,
+                        &tokens.access_token,
+                        tokens.refresh_token.clone(),
+                        tokens.expires_at,
+                        tokens.meta.clone(),
+                    );
+                } else {
+                    let _ = crate::auth::save_provider_key(prov.id, tokens.access_token.trim());
+                }
                 let reresolved = match crate::auth::resolve_api_key_for(Some(prov.id)) {
                     Ok(k) if !k.trim().is_empty() => k,
                     _ => crate::auth::load_provider_key(prov.id)

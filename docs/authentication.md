@@ -45,7 +45,7 @@ What happens:
 1. **Nothing is cleared.** Opening the picker — and backing out of it with `Esc`
    — leaves your current credential exactly as it was. Credentials are replaced
    only at the moment a new one is committed.
-2. A **scrollable, type-to-filter** picker lists **63 providers** (frontier APIs,
+2. A **scrollable, type-to-filter** picker lists **64 providers** (frontier APIs,
    inference clouds, Chinese labs, OpenAI-compatible routers, local servers).
    Providers with browser sign-in show a 🌐 hint.
 3. If the provider supports browser auth, choose:
@@ -78,6 +78,7 @@ these providers:
 | **GitHub Copilot** | GitHub login via `gh` | GitHub CLI session | `api.githubcopilot.com` |
 | **Cursor** | Cursor login via `cursor-agent` | `$CURSOR_AGENT_HOME` or `~/.cursor` / OS keychain | Chat runs through `cursor-agent -p` (nur tool harness by default); optional `CURSOR_API_KEY` |
 | **OpenCode** | `opencode auth login` | `~/.local/share/opencode/auth.json` | Zen/Go gateway key (`opencode` / `opencode-go` entries) |
+| **Command Code** | First-party studio sign-in (same flow as `cmd login`: browser + loopback callback; no vendor binary needed) | `~/.commandcode/auth.json` (`$COMMANDCODE_HOME`) + `COMMAND_CODE_API_KEY` / `CMD_API_KEY` | `api.commandcode.ai/provider/v1` (same host as an API key; Claude models auto-route to `/messages`) |
 | **Meta / Muse Code** | `muse login` (or first-run `muse`) | `$MUSE_CONFIG_DIR` or `~/.config/muse/auth.json` | `api.meta.ai/v1` (same host as an API key) |
 | **DeepSeek** | DeepSeek Harness `dsh web` → Settings → Models | `$DSH_HOME/.credentials.yaml` (default `~/.dsh`) | `api.deepseek.com/v1` (API key only; no official OAuth) |
 | **Z.AI / ZCode (GLM)** | in-app `/login zai-coding-plan` (Electron app) or `zcode login` (npm CLI) | `~/.zcode/v2/credentials.json` (AES-256-GCM `enc:v1:` envelopes nur decrypts on-device) + `~/.zcode/v2/config.json` (`$ZCODE_HOME`) | Coding Plan: `api.z.ai/api/coding/paas/v4`; general key: `api.z.ai/api/paas/v4` |
