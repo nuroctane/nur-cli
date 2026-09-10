@@ -85,6 +85,39 @@ pub fn build_body_opts(
                 // same response), fold the tool_calls into it instead of emitting
                 // two consecutive assistant messages — the strict upstream that Go
                 // proxies rejects the split form.
+                // DeepSeek/Command Code: histories stored as a reasoning-only
+                // assistant message immediately followed by the text assistant
+                // message (older parse behavior split them) must be merged
+                // BEFORE folding, or the tool_calls land on the text message
+                // while the reasoning stays stranded on the empty carrier —
+                // and two consecutive assistant messages trip strict upstreams
+                // anyway.
+                if matches!(provider_id, "deepseek" | "commandcode") && messages.len() >= 2 {
+                    let prev = messages[messages.len() - 2].clone();
+                    let prev_is_reasoning_carrier = prev.get("role").and_then(|r| r.as_str())
+                        == Some("assistant")
+                        && prev.get("tool_calls").is_none()
+                        && prev
+                            .get("reasoning_content")
+                            .and_then(|v| v.as_str())
+                            .is_some_and(|r| !r.is_empty())
+                        && match prev.get("content") {
+                            Some(Value::String(s)) => s.is_empty(),
+                            Some(Value::Array(a)) => a.is_empty(),
+                            Some(Value::Null) | None => true,
+                            _ => false,
+                        };
+                    if prev_is_reasoning_carrier {
+                        let reasoning = prev["reasoning_content"].clone();
+                        let at = messages.len() - 2;
+                        messages.remove(at);
+                        if let Some(last) = messages.last_mut() {
+                            if last.get("reasoning_content").is_none() {
+                                last["reasoning_content"] = reasoning;
+                            }
+                        }
+                    }
+                }
                 if let Some(last) = messages.last_mut() {
                     let is_assistant =
                         last.get("role").and_then(|r| r.as_str()) == Some("assistant");
@@ -524,13 +557,34 @@ fn attach_reasoning_content(shaped: &mut Value, reasoning: Option<&str>) {
     let Some(reasoning) = reasoning.filter(|text| !text.is_empty()) else {
         return;
     };
-    let message = json!({
-        "type": "message",
-        "role": "assistant",
-        "content": [],
-        "reasoning_content": reasoning,
-    });
     if let Some(output) = shaped.get_mut("output").and_then(Value::as_array_mut) {
+        // A turn can carry reasoning AND text AND tool calls. Merge into the
+        // existing leading assistant message rather than inserting a second
+        // empty one: as two items, the replay maps them to two consecutive
+        // assistant messages and the tool_calls fold onto the TEXT message
+        // while the reasoning is stranded on the empty one — DeepSeek
+        // thinking mode then 400s ("reasoning_content must be passed back").
+        if let Some(first) = output.first_mut() {
+            let is_assistant_message = first.get("type").and_then(|t| t.as_str()) == Some("message")
+                && first.get("role").and_then(|r| r.as_str()) == Some("assistant");
+            if is_assistant_message {
+                let empty_or_absent = first
+                    .get("reasoning_content")
+                    .and_then(|v| v.as_str())
+                    .map(str::is_empty)
+                    .unwrap_or(true);
+                if empty_or_absent {
+                    first["reasoning_content"] = Value::String(reasoning.to_string());
+                }
+                return;
+            }
+        }
+        let message = json!({
+            "type": "message",
+            "role": "assistant",
+            "content": [],
+            "reasoning_content": reasoning,
+        });
         output.insert(0, message);
     }
 }
@@ -1627,6 +1681,125 @@ mod tool_choice_tests {
                 "{provider}: tool-call turn must carry reasoning_content"
             );
             assert_eq!(assistant["tool_calls"][0]["id"], "call_1");
+        }
+    }
+
+    /// Streaming variant of the same repro: the TUI runs the stream
+    /// accumulator, so the replay must carry reasoning_content there too -
+    /// a gap here is invisible to the non-streaming tests above.
+    #[test]
+    fn deepseek_streaming_reasoning_content_replays_with_its_tool_call() {
+        use crate::api::chat::StreamAccumulator;
+        let mut acc = StreamAccumulator::default();
+        for frame in [
+            r#"{"choices":[{"delta":{"reasoning_content":"Need a search."}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"search","arguments":"{}"}}]}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+        ] {
+            let v: Value = serde_json::from_str(frame).unwrap();
+            let _ = acc.push(&v);
+        }
+        let shaped = acc.finish();
+        let response = to_api_response(shaped).expect("stream response maps");
+        let replay = crate::api::types::replay_output_items(&response.output);
+        let mut request = req_with_choice(None);
+        request.input = Value::Array(replay);
+        for provider in ["commandcode", "deepseek"] {
+            let body = build_body_for_provider(&request, false, provider);
+            let assistant = body["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|m| m["role"] == "assistant")
+                .unwrap_or_else(|| panic!("{provider}: assistant replay missing"));
+            assert_eq!(
+                assistant["reasoning_content"], "Need a search.",
+                "{provider}: streaming tool-call turn must carry reasoning_content"
+            );
+            assert_eq!(assistant["tool_calls"][0]["id"], "call_1");
+        }
+    }
+
+    /// THE ACTUAL LIVE FAILURE (session 5b30168a, dsv4.1-flash via Command
+    /// Code): a turn with reasoning AND text AND tool calls used to parse into
+    /// TWO message items - reasoning on an empty one, text on the next - so
+    /// the tool_calls folded onto the text message while the reasoning was
+    /// stranded upstream of it. The parse must keep them on ONE message.
+    #[test]
+    fn parse_merges_reasoning_into_the_text_message_of_a_tool_call_turn() {
+        let raw = json!({
+            "choices": [{"message": {
+                "content": "Let me check that.",
+                "reasoning_content": "Need a search.",
+                "tool_calls": [{"id": "call_1", "function": {"name": "search", "arguments": "{}"}}]
+            }}]
+        });
+        let response = to_api_response(parse_completion(&raw)).expect("map response");
+        let messages: Vec<Value> = response
+            .output
+            .iter()
+            .filter_map(|i| serde_json::to_value(i).ok())
+            .filter(|i| i.get("role").and_then(|r| r.as_str()) == Some("assistant"))
+            .collect();
+        assert_eq!(
+            messages.len(),
+            1,
+            "one assistant message, not a reasoning-only carrier + text pair"
+        );
+        assert_eq!(messages[0]["reasoning_content"], "Need a search.");
+        // Streaming must merge identically.
+        use crate::api::chat::StreamAccumulator;
+        let mut acc = StreamAccumulator::default();
+        for frame in [
+            r#"{"choices":[{"delta":{"reasoning_content":"Need a search."}}]}"#,
+            r#"{"choices":[{"delta":{"content":"Let me check that."}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"search","arguments":"{}"}}]}}]}"#,
+        ] {
+            let v: Value = serde_json::from_str(frame).unwrap();
+            let _ = acc.push(&v);
+        }
+        let response = to_api_response(acc.finish()).expect("stream maps");
+        let messages: Vec<Value> = response
+            .output
+            .iter()
+            .filter_map(|i| serde_json::to_value(i).ok())
+            .filter(|i| i.get("role").and_then(|r| r.as_str()) == Some("assistant"))
+            .collect();
+        assert_eq!(messages.len(), 1, "streaming: single merged message");
+        assert_eq!(messages[0]["reasoning_content"], "Need a search.");
+        assert_eq!(messages[0]["content"][0]["text"], "Let me check that.");
+    }
+
+    /// Sessions stored BEFORE the parse fix carry the split shape (empty
+    /// reasoning-message + text-message). The deepseek/commandcode mapping
+    /// must splice them so the tool-call turn goes out as ONE assistant
+    /// message carrying text + reasoning_content + tool_calls.
+    #[test]
+    fn deepseek_splices_stored_split_reasoning_history() {
+        let mut request = req_with_choice(None);
+        request.input = json!([
+            {"role": "user", "content": [{"type": "input_text", "text": "go"}]},
+            {"role": "assistant", "content": [], "reasoning_content": "Need a search."},
+            {"role": "assistant", "content": [
+                {"type": "output_text", "text": "Let me check that."}],
+             "reasoning_content": null},
+            {"type": "function_call", "call_id": "call_1", "name": "search", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_1", "output": "results"},
+        ]);
+        for provider in ["deepseek", "commandcode"] {
+            let body = build_body_for_provider(&request, false, provider);
+            let messages = body["messages"].as_array().unwrap();
+            let assistants: Vec<&Value> = messages
+                .iter()
+                .filter(|m| m["role"] == "assistant")
+                .collect();
+            assert_eq!(assistants.len(), 1, "{provider}: split messages spliced");
+            assert_eq!(assistants[0]["content"], "Let me check that.", "{provider}");
+            assert_eq!(
+                assistants[0]["reasoning_content"], "Need a search.",
+                "{provider}: reasoning must ride the tool-call message"
+            );
+            assert_eq!(assistants[0]["tool_calls"][0]["id"], "call_1", "{provider}");
         }
     }
 
