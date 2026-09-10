@@ -109,6 +109,24 @@ pub fn build_body_opts(
         }
     }
 
+    // DeepSeek thinking mode accepts `reasoning_content` in exactly one place:
+    // on the assistant message that carries `tool_calls` (where it is REQUIRED
+    // for the next request). On text-only assistant turns it must not appear,
+    // so strip it there after mapping. Kimi/moonshot keep it on every
+    // replayed assistant message - both are documented to tolerate that.
+    if matches!(provider_id, "deepseek" | "commandcode") {
+        for message in &mut messages {
+            let is_assistant =
+                message.get("role").and_then(|r| r.as_str()) == Some("assistant");
+            let has_tool_calls = message.get("tool_calls").is_some();
+            if is_assistant && !has_tool_calls {
+                if let Some(obj) = message.as_object_mut() {
+                    obj.remove("reasoning_content");
+                }
+            }
+        }
+    }
+
     let mut body = json!({
         "model": req.model,
         "messages": messages,
@@ -337,7 +355,16 @@ fn push_item_messages_opts(
         out.push(json!({ "role": role, "content": text }));
     } else if images.is_empty() {
         let mut message = json!({ "role": role, "content": text });
-        if role == "assistant" && matches!(provider_id, "kimi" | "moonshot") {
+        if role == "assistant"
+            && matches!(provider_id, "kimi" | "moonshot" | "deepseek" | "commandcode")
+        {
+            // DeepSeek thinking mode REQUIRES the assistant tool-call turn's
+            // reasoning_content to be passed back on the next request (400
+            // "The `reasoning_content` in the thinking mode must be passed
+            // back to the API."); Command Code routes deepseek models and
+            // needs the same shape. to_chat_body strips it again from
+            // assistant messages that do not carry tool_calls, where
+            // reasoning_content is not legal.
             if let Some(reasoning) = item.get("reasoning_content").and_then(Value::as_str) {
                 message["reasoning_content"] = Value::String(reasoning.to_string());
             }
@@ -1567,6 +1594,79 @@ mod tool_choice_tests {
             .expect("assistant replay");
         assert_eq!(assistant["reasoning_content"], "Need a search.");
         assert_eq!(assistant["tool_calls"][0]["id"], "call_1");
+    }
+
+    /// DeepSeek thinking mode 400s with "The `reasoning_content` in the
+    /// thinking mode must be passed back to the API." unless the assistant
+    /// tool-call turn replays WITH its reasoning_content (observed live on
+    /// Command Code routing deepseek/deepseek-v4.1-flash). Command Code and
+    /// direct deepseek both need the kimi-style replay.
+    #[test]
+    fn deepseek_thinking_reasoning_content_replays_with_its_tool_call() {
+        let raw = json!({
+            "choices": [{"message": {
+                "content": null,
+                "reasoning_content": "Need a search.",
+                "tool_calls": [{"id": "call_1", "function": {"name": "search", "arguments": "{}"}}]
+            }}]
+        });
+        for provider in ["deepseek", "commandcode"] {
+            let response = to_api_response(parse_completion(&raw)).expect("map response");
+            let replay = crate::api::types::replay_output_items(&response.output);
+            let mut request = req_with_choice(None);
+            request.input = Value::Array(replay);
+            let body = build_body_for_provider(&request, false, provider);
+            let assistant = body["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|message| message["role"] == "assistant")
+                .unwrap_or_else(|| panic!("{provider}: assistant replay missing"));
+            assert_eq!(
+                assistant["reasoning_content"], "Need a search.",
+                "{provider}: tool-call turn must carry reasoning_content"
+            );
+            assert_eq!(assistant["tool_calls"][0]["id"], "call_1");
+        }
+    }
+
+    /// `reasoning_content` is only legal on the assistant message that carries
+    /// tool_calls - text-only assistant turns must have it stripped for
+    /// deepseek/commandcode (kimi/moonshot keep it, they tolerate the field).
+    #[test]
+    fn deepseek_strips_reasoning_content_from_text_only_assistant_turns() {
+        let mut request = req_with_choice(None);
+        request.input = json!([
+            {"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+            {"role": "assistant", "content": [
+                {"type": "output_text", "text": "the answer"}],
+             "reasoning_content": "thought about it"},
+            {"role": "user", "content": [{"type": "input_text", "text": "more"}]},
+        ]);
+        for provider in ["deepseek", "commandcode"] {
+            let body = build_body_for_provider(&request, false, provider);
+            let assistants: Vec<&Value> = body["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|m| m["role"] == "assistant")
+                .collect();
+            assert_eq!(assistants.len(), 1, "{provider}");
+            assert!(
+                assistants[0].get("reasoning_content").is_none(),
+                "{provider}: text-only assistant turn must not carry reasoning_content"
+            );
+            assert_eq!(assistants[0]["content"], "the answer");
+        }
+        // kimi keeps it (documented to tolerate the field everywhere).
+        let body = build_body_for_provider(&request, false, "kimi");
+        let assistant = body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["role"] == "assistant")
+            .unwrap();
+        assert_eq!(assistant["reasoning_content"], "thought about it");
     }
 
     #[test]
