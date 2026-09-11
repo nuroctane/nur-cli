@@ -1848,7 +1848,7 @@ mod tool_choice_tests {
     /// forced form (the recovery depends on it elsewhere).
     #[test]
     fn deepseek_thinking_clamps_required_tool_choice_to_auto() {
-        let mut request = req_with_choice(Some("required"));
+        let request = req_with_choice(Some("required"));
         let body = build_body_for_provider(&request, false, "deepseek");
         assert_eq!(body["tool_choice"], "auto", "deepseek thinking rejects required");
         let body = build_body_for_provider(&request, false, "commandcode");

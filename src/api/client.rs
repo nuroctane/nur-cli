@@ -266,6 +266,13 @@ pub struct ApiClient {
     /// scopes correctly. `/model` or `/provider` rebuilds the client, which
     /// resets the chain, and the next round full-flattens fresh.
     cursor_chat: std::sync::Arc<std::sync::Mutex<super::cursor_cli::CursorChatState>>,
+    /// Stable per-conversation id sent as `x-opencode-session` on OpenCode
+    /// traffic. OpenCode Go 400s without it ("Request is missing
+    /// x-opencode-session and cannot be routed efficiently") and uses it for
+    /// routing + prompt-cache affinity. Arc so `routed_for_model` clones keep
+    /// the same id within one conversation; each subagent client gets its own
+    /// (they are separate conversations).
+    opencode_session: std::sync::Arc<String>,
 }
 
 /// Incremental events surfaced while a response streams in.
@@ -301,6 +308,7 @@ impl ApiClient {
             refresh_oauth: false,
             style: ApiStyle::Responses,
             cursor_chat: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
+            opencode_session: std::sync::Arc::new(crate::oauth::random_urlsafe(16)),
         })
     }
 
@@ -748,6 +756,12 @@ impl ApiClient {
                 req.bearer_auth(&api_key)
             }
         };
+        if self.provider_id == "opencode" {
+            // OpenCode Go 400s without a stable session id
+            // (https://opencode.ai/docs/go/#where-can-i-use-it); it keys
+            // routing and prompt-cache affinity on it.
+            req = req.header("x-opencode-session", self.opencode_session.as_str());
+        }
         if self.provider_id == "openai" {
             if let Some(oauth) = &oauth {
                 // Codex backend requires a known originator (`codex_cli_rs`) +
@@ -3659,6 +3673,7 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
             }),
             refresh_oauth: false,
             style: ApiStyle::Responses,
+            opencode_session: std::sync::Arc::new("test-session".into()),
             cursor_chat: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
         };
         let request = client
@@ -3707,6 +3722,7 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
             }),
             refresh_oauth: false,
             style: ApiStyle::ChatCompletions,
+            opencode_session: std::sync::Arc::new("test-session".into()),
             cursor_chat: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
         };
         let request = client
@@ -3738,6 +3754,7 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
             }),
             refresh_oauth: false,
             style: ApiStyle::GeminiCloudCode,
+            opencode_session: std::sync::Arc::new("test-session".into()),
             cursor_chat: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
         };
         let request = client
@@ -3827,6 +3844,7 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
             }),
             refresh_oauth: false,
             style: ApiStyle::GeminiCloudCode,
+            opencode_session: std::sync::Arc::new("test-session".into()),
             cursor_chat: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
         };
         let request = client
@@ -3932,6 +3950,64 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
         assert_eq!(routed.base_url, "https://cloudcode-pa.googleapis.com");
     }
 
+    /// OpenCode Go 400s without `x-opencode-session`. The header must be
+    /// present, stable across per-model reroutes within one conversation
+    /// (routed_for_model clones), absent for other providers, and distinct
+    /// across separately-built clients (separate conversations).
+    #[test]
+    fn opencode_sends_stable_session_header() {
+        let client = ApiClient::for_provider(
+            crate::providers::OPENCODE_ZEN_BASE_URL,
+            "oc-key",
+            "opencode",
+        )
+        .unwrap()
+        .with_style(ApiStyle::ChatCompletions);
+        let request = client
+            .auth_headers(client.http.post("https://example.test/v1/chat/completions"))
+            .build()
+            .unwrap();
+        let session = request
+            .headers()
+            .get("x-opencode-session")
+            .and_then(|v| v.to_str().ok())
+            .expect("x-opencode-session header required by OpenCode Go");
+        assert!(!session.is_empty());
+
+        // Same conversation, different model route: id must not change.
+        let routed = client.routed_for_model("kimi-k3");
+        let request = routed
+            .auth_headers(routed.http.post("https://example.test/v1/chat/completions"))
+            .build()
+            .unwrap();
+        assert_eq!(
+            request
+                .headers()
+                .get("x-opencode-session")
+                .and_then(|v| v.to_str().ok()),
+            Some(session),
+            "per-model reroute must keep the conversation id"
+        );
+
+        // A separately-built client is a separate conversation.
+        let other = ApiClient::for_provider(
+            crate::providers::OPENCODE_ZEN_BASE_URL,
+            "oc-key",
+            "opencode",
+        )
+        .unwrap();
+        assert_ne!(other.opencode_session.as_str(), session);
+
+        // Other providers must not carry the header.
+        let plain = ApiClient::for_provider("https://api.example.test/v1", "k", "openai-cc")
+            .unwrap()
+            .with_style(ApiStyle::ChatCompletions);
+        let request = plain
+            .auth_headers(plain.http.post("https://example.test/v1/chat/completions"))
+            .build()
+            .unwrap();
+        assert!(request.headers().get("x-opencode-session").is_none());
+    }
     #[test]
     fn xai_oauth_requests_send_cli_version_fingerprint() {
         // cli-chat-proxy returns 426 with version "(none)" without these headers.
