@@ -212,6 +212,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 - Session resume: `-c`, `-r`, `/sessions` (alias `/resume`)
 - **Takeover** cross-agent migration (`/takeover` · `/hijack`): import a session from **Claude Code · Codex · Cursor · Grok Build** into a native nur session and resume it. Two windows in one modal — press **`c`** to switch between `/sessions` and `/takeover`
 - `/model` opens a live model list for the active provider (or `/model <id>` to set one directly)
+- Modal pickers fit their contents and terminal height, with visible scroll position and consistent keyboard/mouse selection. `/theme` previews align with their click targets; Enter saves and Esc restores the previous palette.
 - `/plugins` marketplace picker (same UX as `/login`): install Superpowers, Vercel, Firecrawl, Chrome DevTools, **Fable**, and more into `~/.nur/plugins`
 - **Natural-language + slash skill activation**: plain phrases *or* `/skill-name` / `/skill-name <prompt>` inject the skill body (Fable, TDD, site-cli, adhd, design-eng, resume-*, Excalidraw, …). Palette lists matching skills as you type. [Docs](https://www.nuroctane.xyz/cli)
 - **`/fusion`** — multi-model debate → one synthesized answer (panel of providers, active model judges)

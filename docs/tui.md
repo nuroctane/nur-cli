@@ -214,7 +214,12 @@ changes. Nur forces a full `terminal.clear()` (not only a ratatui `Clear`) when:
 - the window resizes or focus returns
 - `/sidegraph` opens or closes (horizontal split)
 - a click-to-peek closes (image pixels sit outside the cell buffer)
-- `/theme` preview / commit / cancel
+- `/theme` supports type-to-filter search, paste, and Ctrl+U to clear. It previews live as you move. Enter saves; Esc or the close button restores the previous palette. The preview and list use separate regions so visible rows and mouse targets stay aligned.
+- Theme, provider, model, plugin, and session pickers fit their content and available terminal height. A proportional rail shows when more choices are off screen. Use arrows or the wheel for one choice, Page Up/Down for a page, and Home/End for the first/last choice. Click a row to select; click the selected row again to activate it.
+- Theme, provider, model, and plugin searches accept typing or paste; Ctrl+U clears the filter. Plugin descriptions and operation status have reserved space below the choices. Pasting into a dialog stays in that dialog.
+- Sign-in forms support wheel and Page Up/Down scrolling on short terminals; their close buttons follow the same back/cancel path as Escape.
+- The command palette supports mouse row selection, Page Up/Down, Home/End, and a visible close button. Tool and subagent peeks support keyboard scrolling and keep typing/Enter from changing or submitting a hidden draft.
+- Dialog drawing, keys, and mouse share one focus order, so background update notices cannot cover a dialog that is receiving input.
 - `/theme transparent` toggles see-through mode (panels stop painting backgrounds; pairs with a translucent terminal profile; persisted as `[theme] transparent`)
 - a foreground child (`/fractal open`, attach) returns
 

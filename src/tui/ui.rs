@@ -13,6 +13,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
+    app.palette_hit = Default::default();
 
     // Too-small terminal: show a terse message instead of crashing.
     if area.width < 20 || area.height < 5 {
@@ -25,30 +26,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         f.render_widget(p, area);
         // Overlays must remain visible even when the base prompt is too small
         // to lay out. Their geometry is fitted independently below.
-        if app.approval.is_some() {
-            draw_approval(f, app, area);
-        }
-        if app.picker.is_some() {
-            draw_session_picker(f, app, area);
-        }
-        if app.login.is_some() {
-            draw_login(f, app, area);
-        }
-        if app.model_picker.is_some() {
-            draw_model_picker(f, app, area);
-        }
-        if app.theme_picker.is_some() {
-            draw_theme_picker(f, app, area);
-        }
-        if app.plugin_picker.is_some() {
-            draw_plugin_picker(f, app, area);
-        }
-        if app.update_modal.is_some() {
-            draw_update_modal(f, app, area);
-        }
-        if app.ctx_menu.is_some() {
-            draw_ctx_menu(f, app);
-        }
+        draw_focused_modal(f, app, area);
         return;
     }
 
@@ -162,35 +140,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_input(f, app, chunks[2]); // publishes input_inner for click-to-caret
     draw_statusline(f, app, chunks[3]);
 
-    if !app.palette_matches().is_empty()
-        && app.approval.is_none()
-        && app.picker.is_none()
-        && app.login.is_none()
-        && app.theme_picker.is_none()
-    {
+    if !app.palette_matches().is_empty() && app.modal_focus().is_none() && !app.peek_is_open() {
         draw_palette(f, app, chunks[2]);
     }
-    if app.approval.is_some() {
-        draw_approval(f, app, area);
-    }
-    if app.picker.is_some() {
-        draw_session_picker(f, app, area);
-    }
-    if app.login.is_some() {
-        draw_login(f, app, area);
-    }
-    if app.model_picker.is_some() {
-        draw_model_picker(f, app, area);
-    }
-    if app.theme_picker.is_some() {
-        draw_theme_picker(f, app, area);
-    }
-    if app.plugin_picker.is_some() {
-        draw_plugin_picker(f, app, area);
-    }
-    if app.update_modal.is_some() {
-        draw_update_modal(f, app, area);
-    }
+    draw_focused_modal(f, app, area);
     // Grok-style hover dialogue over thoughts / tools / turns (above everything
     // except approval/picker, which already short-circuit interaction).
     if app.approval.is_none()
@@ -222,9 +175,24 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         app.peek_box = Rect::default();
         app.peek_close = Rect::default();
     }
-    // Context menu overlay — drawn last so it sits on top.
-    if app.ctx_menu.is_some() {
-        draw_ctx_menu(f, app);
+}
+
+fn draw_focused_modal(f: &mut Frame, app: &mut App, area: Rect) {
+    use super::app::ModalFocus;
+    // No dialog content fits below this size; keep the resize message visible.
+    if area.width < 8 || area.height < 6 {
+        return;
+    }
+    match app.modal_focus() {
+        Some(ModalFocus::Theme) => draw_theme_picker(f, app, area),
+        Some(ModalFocus::Login) => draw_login(f, app, area),
+        Some(ModalFocus::Model) => draw_model_picker(f, app, area),
+        Some(ModalFocus::Plugin) => draw_plugin_picker(f, app, area),
+        Some(ModalFocus::Approval) => draw_approval(f, app, area),
+        Some(ModalFocus::Sessions) => draw_session_picker(f, app, area),
+        Some(ModalFocus::Context) => draw_ctx_menu(f, app),
+        Some(ModalFocus::Update) => draw_update_modal(f, app, area),
+        None => {}
     }
 }
 
@@ -247,7 +215,8 @@ fn draw_login_method(f: &mut Frame, app: &mut App, area: Rect) {
     let provider = crate::providers::by_id(&m.provider_id)
         .copied()
         .unwrap_or(*crate::providers::default_provider());
-    let want: u16 = if m.error.is_some() { 14 } else { 13 };
+    let count = super::app::login_method_choices(&provider, m.can_import).len();
+    let want = (count * 3 + 6 + usize::from(m.error.is_some())) as u16;
     let rect = fit_modal_rect(area, 64, want, 44, 8);
     f.render_widget(Clear, rect);
     f.render_widget(
@@ -270,7 +239,7 @@ fn draw_login_method(f: &mut Frame, app: &mut App, area: Rect) {
         theme::INDIGO(),
         &title,
         None,
-        "  ↑↓/wheel · PgUp/PgDn · ↵ choose · esc back ",
+        " ↑↓/wheel · PgUp/PgDn · ↵ choose · esc/✕ back ",
     );
     let inner = modal_inner(rect);
     let close = Rect {
@@ -312,7 +281,11 @@ fn draw_login_method(f: &mut Frame, app: &mut App, area: Rect) {
         )),
         Line::default(),
     ];
-    for (i, (title, sub)) in options.iter().enumerate() {
+    let detailed = inner.height as usize >= options.len() * 3 + 2;
+    let stride = if detailed { 3 } else { 1 };
+    let page = (inner.height.saturating_sub(2) as usize / stride).max(1);
+    let start = selection_window_start(options.len(), m.method_sel, page);
+    for (i, (title, sub)) in options.iter().enumerate().skip(start).take(page) {
         let selected = m.method_sel == i;
         let marker = if selected { "❯ " } else { "  " };
         let title_style = if selected {
@@ -333,21 +306,25 @@ fn draw_login_method(f: &mut Frame, app: &mut App, area: Rect) {
             theme::style_faint()
         };
         let option_row = lines.len() as u16;
-        hit.rows.push((
-            i,
-            Rect {
-                x: inner.x,
-                y: inner.y + option_row,
-                width: inner.width,
-                height: 1,
-            },
-        ));
+        if option_row < inner.height {
+            hit.rows.push((
+                i,
+                Rect {
+                    x: inner.x,
+                    y: inner.y + option_row,
+                    width: inner.width,
+                    height: if detailed { 2 } else { 1 },
+                },
+            ));
+        }
         lines.push(Line::from(Span::styled(
             format!("{marker}{title}"),
             title_style,
         )));
-        lines.push(Line::from(Span::styled(format!("    {sub}"), sub_style)));
-        lines.push(Line::default());
+        if detailed {
+            lines.push(Line::from(Span::styled(format!("    {sub}"), sub_style)));
+            lines.push(Line::default());
+        }
     }
     if let Some(e) = &m.error {
         lines.push(Line::from(Span::styled(
@@ -365,7 +342,7 @@ fn draw_login_method(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 /// Browser / device-code wait (Hugging Face–style URL + short code).
-fn draw_login_browser(f: &mut Frame, app: &App, area: Rect) {
+fn draw_login_browser(f: &mut Frame, app: &mut App, area: Rect) {
     let Some(m) = &app.login else { return };
     let provider = crate::providers::by_id(&m.provider_id)
         .copied()
@@ -398,7 +375,7 @@ fn draw_login_browser(f: &mut Frame, app: &App, area: Rect) {
         theme::INDIGO(),
         &title,
         None,
-        "  esc cancel  ·  paste code + ↵ if prompted  ",
+        "  esc/✕ cancel  ·  paste code + ↵ if prompted  ",
     );
     let inner = modal_inner(rect);
     let col = (inner.width as usize).saturating_sub(4);
@@ -427,7 +404,7 @@ fn draw_login_browser(f: &mut Frame, app: &App, area: Rect) {
         let shown = if m.buf.is_empty() {
             "…".to_string()
         } else {
-            truncate(&m.buf, col.saturating_sub(10))
+            field_tail(&m.buf, col.saturating_sub(10))
         };
         lines.push(Line::from(vec![
             Span::styled("  paste  ".to_string(), theme::style_faint()),
@@ -464,17 +441,47 @@ fn draw_login_browser(f: &mut Frame, app: &App, area: Rect) {
             theme::style_error(),
         )));
     }
+    draw_login_form(f, app, rect, lines);
+}
+
+/// Form content keeps wheel/page navigation and close behavior aligned with Escape.
+fn draw_login_form(f: &mut Frame, app: &mut App, rect: Rect, lines: Vec<Line<'static>>) {
+    let inner = modal_inner(rect);
+    let Some(login) = &mut app.login else { return };
+    login.form_rows = lines.len();
+    login.form_scroll = login
+        .form_scroll
+        .min(lines.len().saturating_sub(inner.height as usize));
+    login.hit = super::app::PickerHit {
+        frame: rect,
+        body: inner,
+        close: Rect::new(rect.right().saturating_sub(5), rect.y, 3, 1),
+        ..Default::default()
+    };
     f.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
+        Paragraph::new(lines)
+            .scroll((login.form_scroll.min(u16::MAX as usize) as u16, 0))
+            .style(Style::default().bg(theme::SURFACE_2())),
         inner,
     );
+    if inner.height > 0 {
+        login.hit.rows = vec![(0, inner)];
+        draw_picker_scrollbar(
+            f,
+            &login.hit,
+            login.form_rows,
+            login.form_scroll,
+            inner.height as usize,
+        );
+    }
 }
 
 /// Stage 1 — scrollable, filterable provider list.
 /// Scroll/select contract matches `draw_session_picker`: one entry per ↑↓/wheel
 /// notch (`step` / `wheel_step`), click row to select, second click confirms.
 fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
-    let rect = fit_modal_rect(area, 74, 28, 48, 12);
+    let count = app.login.as_ref().map(|m| m.count()).unwrap_or(0);
+    let rect = picker_rect(area, 74, count, 1, 2);
     f.render_widget(Clear, rect);
     f.render_widget(
         Block::default().style(Style::default().bg(theme::SURFACE_2())),
@@ -500,11 +507,11 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
         format!(" 🔑 choose a provider  ·  {total} ")
     };
     let hint = if manage_auth {
-        " ↑↓/wheel · enter add/replace · del remove · type filter · esc done "
+        " ↑↓ · ↵ add/replace · del remove · type filter · esc/✕ "
     } else if manage {
-        " ↑↓ move  ·  space add failover  ·  alt+p privacy tier  ·  type to filter  ·  esc done  "
+        " ↑↓ · space toggle · alt+p privacy · type filter · esc/✕ "
     } else {
-        " ↑↓ move  ·  enter pick  ·  space add failover  ·  alt+p privacy tier  ·  esc  "
+        " ↑↓/wheel · ↵ choose · type filter · esc/✕ "
     };
     draw_modal_frame(f, rect, phase, theme::INDIGO(), &title, None, hint);
     let inner = modal_inner(rect);
@@ -550,7 +557,7 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
         Line::from(vec![
             Span::styled("  search  ".to_string(), theme::style_faint()),
             Span::styled(
-                caret,
+                field_tail(&caret, inner.width.saturating_sub(10) as usize),
                 Style::default()
                     .fg(theme::BLUE_100())
                     .add_modifier(Modifier::BOLD),
@@ -626,7 +633,7 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
             format!("{marker}{name_col:<25} {}{priv_badge}{fb}", p.note)
         };
         let style = if selected { name_style } else { note_style };
-        lines.push(Line::from(Span::styled(truncate(&text, col), style)));
+        lines.push(Line::from(Span::styled(truncate(&text, col), style)).style(style));
 
         // Hit row: absolute index i, screen y under filter header.
         let drawn = i - start;
@@ -648,6 +655,7 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
         Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
         inner,
     );
+    draw_picker_scrollbar(f, &hit, total, start, vis_rows);
     if let Some(m) = &mut app.login {
         m.hit = hit;
     }
@@ -658,7 +666,8 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
 /// picker. Shows the active provider's `/models` list; type to filter (or to
 /// enter a custom id), ↵ to switch.
 fn draw_model_picker(f: &mut Frame, app: &mut App, area: Rect) {
-    let rect = fit_modal_rect(area, 74, 28, 48, 12);
+    let count = app.model_picker.as_ref().map(|m| m.count()).unwrap_or(0);
+    let rect = picker_rect(area, 74, count, 1, 2);
     f.render_widget(Clear, rect);
     f.render_widget(
         Block::default().style(Style::default().bg(theme::SURFACE_2())),
@@ -734,7 +743,7 @@ fn draw_model_picker(f: &mut Frame, app: &mut App, area: Rect) {
         Line::from(vec![
             Span::styled("  filter  ".to_string(), theme::style_faint()),
             Span::styled(
-                caret,
+                field_tail(&caret, inner.width.saturating_sub(10) as usize),
                 Style::default()
                     .fg(theme::BLUE_100())
                     .add_modifier(Modifier::BOLD),
@@ -841,6 +850,7 @@ fn draw_model_picker(f: &mut Frame, app: &mut App, area: Rect) {
         Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
         inner,
     );
+    draw_picker_scrollbar(f, &hit, total, start, vis_rows);
     if let Some(m) = &mut app.model_picker {
         m.hit = hit;
     }
@@ -848,10 +858,8 @@ fn draw_model_picker(f: &mut Frame, app: &mut App, area: Rect) {
 
 // ── runtime theme chooser (`/theme`) ────────────────────────────────────────
 fn draw_theme_picker(f: &mut Frame, app: &mut App, area: Rect) {
-    // Fill most of the window: 26+ themes need the room, and a fixed height
-    // left a dead unpainted band across the bottom half of the modal.
-    let desired_h = (area.height.saturating_mul(4) / 5).clamp(18, 34);
-    let rect = fit_modal_rect(area, 72, desired_h, 46, 14);
+    let count = app.theme_picker.as_ref().map(|p| p.count()).unwrap_or(0);
+    let rect = picker_rect(area, 72, count, 1, 2);
     f.render_widget(Clear, rect);
     f.render_widget(
         Block::default().style(Style::default().bg(theme::SURFACE_2())),
@@ -875,7 +883,7 @@ fn draw_theme_picker(f: &mut Frame, app: &mut App, area: Rect) {
         theme::NUR_GOLD(),
         title,
         None,
-        " ↑↓/wheel preview  ·  ↵ save  ·  esc/✕ keep previous ",
+        " ↑↓ preview · PgUp/Dn · type filter · ↵ save · esc/✕ ",
     );
     let inner = modal_inner(rect);
     let close = Rect {
@@ -884,7 +892,7 @@ fn draw_theme_picker(f: &mut Frame, app: &mut App, area: Rect) {
         width: 3,
         height: 1,
     };
-    let mut hit = super::app::PickerHit {
+    let hit = super::app::PickerHit {
         frame: rect,
         close,
         body: inner,
@@ -901,20 +909,23 @@ fn draw_theme_picker(f: &mut Frame, app: &mut App, area: Rect) {
     // (`size_for`), NOT a hardcoded row count: a 96x24 px ramp is only ~2-3
     // cell rows tall, so reserving 5 left a bare unpainted band across the
     // middle of the modal — the "cuts off halfway" glitch.
+    #[cfg(not(feature = "image-peek"))]
+    let preview_rows: u16 = 0;
+    #[cfg(feature = "image-peek")]
     let mut preview_rows: u16 = 0;
     #[cfg(feature = "image-peek")]
     if app.cfg.theme_setup.inline_images && inner.height >= 10 && inner.width >= 30 {
         let sel_id = app
             .theme_picker
             .as_ref()
-            .map(|p| theme::THEMES[p.sel].0)
+            .map(|p| p.chosen())
             .unwrap_or("gold");
         if let Some(png) = theme::theme_preview_png(sel_id) {
             // Borrow dance: provider lookup needs &mut app; copy the id first.
             if let Some(proto) = app.theme_preview_protocol(&png) {
                 let offer = Rect {
                     x: inner.x + 1,
-                    y: inner.y + 1,
+                    y: inner.y,
                     width: inner.width.saturating_sub(2),
                     // Cap the offer so the list always keeps >= 8 visible rows.
                     height: inner.height.saturating_sub(9).max(2),
@@ -925,18 +936,13 @@ fn draw_theme_picker(f: &mut Frame, app: &mut App, area: Rect) {
             }
         }
     }
-    let list_top: u16 = if preview_rows > 0 {
-        preview_rows + 1 // preview + 1 blank gap row
-    } else {
-        0
-    };
     #[cfg(feature = "image-peek")]
     if preview_rows > 0 {
         // Paint the gap row + preview background so no bare cells sit between
         // the ramp and the first list row.
         let preview = Rect {
             x: inner.x + 1,
-            y: inner.y + 1,
+            y: inner.y,
             width: inner.width.saturating_sub(2),
             height: preview_rows,
         };
@@ -944,7 +950,7 @@ fn draw_theme_picker(f: &mut Frame, app: &mut App, area: Rect) {
         let sel_id = app
             .theme_picker
             .as_ref()
-            .map(|p| theme::THEMES[p.sel].0)
+            .map(|p| p.chosen())
             .unwrap_or("gold");
         if let Some(png) = theme::theme_preview_png(sel_id) {
             if let Some(proto) = app.theme_preview_protocol(&png) {
@@ -953,38 +959,71 @@ fn draw_theme_picker(f: &mut Frame, app: &mut App, area: Rect) {
         }
     }
 
-    // Header line + windowed list — same one-step scroll as models / providers.
-    const HEADER_ROWS: usize = 1;
-    let list_h = (inner.height as usize)
-        .saturating_sub(HEADER_ROWS)
-        .saturating_sub(list_top as usize)
-        .max(1);
-    let vis_rows = list_h.max(1);
-    let list_y = inner.y + list_top;
+    let list = theme_list_rect(inner, preview_rows);
+    draw_theme_choices(
+        f,
+        app.theme_picker.as_mut().unwrap(),
+        list,
+        hit,
+        app.cfg.theme.as_deref().unwrap_or("gold"),
+        onboarding,
+    );
+}
 
-    let (mut sel, mut start) = {
-        let p = app.theme_picker.as_ref().unwrap();
-        (p.sel, p.scroll)
+fn theme_list_rect(inner: Rect, preview_rows: u16) -> Rect {
+    let top = if preview_rows > 0 {
+        preview_rows.saturating_add(1)
+    } else {
+        0
     };
-    if let Some(p) = &mut app.theme_picker {
-        p.vis_page = vis_rows;
-        p.clamp_scroll();
-        sel = p.sel;
-        start = p.scroll;
-    }
+    let top = top.min(inner.height);
+    Rect::new(inner.x, inner.y + top, inner.width, inner.height - top)
+}
 
-    let saved = app.cfg.theme.as_deref().unwrap_or("gold");
-    let mut lines = vec![Line::from(Span::styled(
-        if onboarding {
-            "  Pick a palette before signing in. Change it anytime with /theme."
-        } else {
-            "  Selection previews live across the whole interface."
-        },
-        theme::style_faint(),
-    ))];
+fn draw_theme_choices(
+    f: &mut Frame,
+    picker: &mut super::app::ThemePicker,
+    inner: Rect,
+    mut hit: super::app::PickerHit,
+    saved: &str,
+    onboarding: bool,
+) {
+    const HEADER_ROWS: usize = 2;
+    let vis_rows = inner.height.saturating_sub(HEADER_ROWS as u16) as usize;
+    picker.vis_page = vis_rows.max(1);
+    picker.clamp_scroll();
+    let (sel, start) = (picker.sel, picker.scroll);
+    let list_y = inner.y;
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!(
+                "  search  {}",
+                field_tail(
+                    &format!("{}▉", picker.filter),
+                    inner.width.saturating_sub(10) as usize
+                )
+            ),
+            theme::style_tool(),
+        )),
+        Line::from(Span::styled(
+            if onboarding {
+                "  Choose a palette before signing in."
+            } else {
+                "  Live preview; Enter saves, Esc restores."
+            },
+            theme::style_faint(),
+        )),
+    ];
+    let choices = picker.filtered();
+    if choices.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  No themes match. Ctrl+U clears search.",
+            theme::style_faint(),
+        )));
+    }
     let col = (inner.width as usize).saturating_sub(3);
 
-    for (idx, (id, label)) in theme::THEMES.iter().enumerate().skip(start).take(vis_rows) {
+    for (idx, (id, label)) in choices.iter().enumerate().skip(start).take(vis_rows) {
         let is_selected = idx == sel;
         let is_saved = *id == saved;
         let row_bg = if is_selected {
@@ -1020,7 +1059,7 @@ fn draw_theme_picker(f: &mut Frame, app: &mut App, area: Rect) {
             truncate(&format!("  {label}{badge}"), col.saturating_sub(6)),
             text_style,
         ));
-        lines.push(Line::from(spans));
+        lines.push(Line::from(spans).style(text_style));
 
         let drawn = idx - start;
         let row_y = list_y + HEADER_ROWS as u16 + drawn as u16;
@@ -1048,15 +1087,15 @@ fn draw_theme_picker(f: &mut Frame, app: &mut App, area: Rect) {
         Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
         inner,
     );
-    if let Some(picker) = &mut app.theme_picker {
-        picker.hit = hit;
-    }
+    draw_picker_scrollbar(f, &hit, picker.count(), start, vis_rows);
+    picker.hit = hit;
 }
 
 // ── plugin marketplace (`/plugins`) ──────────────────────────────────────────
 /// Same scroll/select/filter contract as the provider picker.
 fn draw_plugin_picker(f: &mut Frame, app: &mut App, area: Rect) {
-    let rect = fit_modal_rect(area, 78, 28, 52, 12);
+    let count = app.plugin_picker.as_ref().map(|m| m.count()).unwrap_or(0);
+    let rect = picker_rect(area, 78, count, 1, 5);
     f.render_widget(Clear, rect);
     f.render_widget(
         Block::default().style(Style::default().bg(theme::SURFACE_2())),
@@ -1087,7 +1126,7 @@ fn draw_plugin_picker(f: &mut Frame, app: &mut App, area: Rect) {
         theme::INDIGO(),
         &title,
         None,
-        " ↑↓/wheel  ·  ↵ install/toggle  ·  filter: design|finance|workflow|…  ·  esc/✕  ",
+        " ↑↓/wheel · PgUp/Dn · ↵ install/toggle · type filter · esc/✕ ",
     );
     let inner = modal_inner(rect);
 
@@ -1108,7 +1147,7 @@ fn draw_plugin_picker(f: &mut Frame, app: &mut App, area: Rect) {
 
     const FILTER_ROWS: usize = 2;
     let list_h = (inner.height as usize)
-        .saturating_sub(FILTER_ROWS + 1)
+        .saturating_sub(FILTER_ROWS + 3)
         .max(1);
     let vis_rows = list_h.max(1);
 
@@ -1132,7 +1171,7 @@ fn draw_plugin_picker(f: &mut Frame, app: &mut App, area: Rect) {
         Line::from(vec![
             Span::styled("  search  ".to_string(), theme::style_faint()),
             Span::styled(
-                caret,
+                field_tail(&caret, inner.width.saturating_sub(10) as usize),
                 Style::default()
                     .fg(theme::BLUE_100())
                     .add_modifier(Modifier::BOLD),
@@ -1176,7 +1215,7 @@ fn draw_plugin_picker(f: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 Style::default().fg(theme::FG())
             };
-            lines.push(Line::from(Span::styled(truncate(&text, col), style)));
+            lines.push(Line::from(Span::styled(truncate(&text, col), style)).style(style));
 
             let drawn = i - start;
             let row_y = inner.y + FILTER_ROWS as u16 + drawn as u16;
@@ -1201,7 +1240,9 @@ fn draw_plugin_picker(f: &mut Frame, app: &mut App, area: Rect) {
             p.action_hint(),
             truncate(&p.description, col.saturating_sub(16))
         );
-        // Pad to bottom-ish by letting Paragraph clip — push after a blank.
+        while lines.len() < FILTER_ROWS + vis_rows {
+            lines.push(Line::default());
+        }
         lines.push(Line::default());
         lines.push(Line::from(Span::styled(
             truncate(&hint, col),
@@ -1223,13 +1264,14 @@ fn draw_plugin_picker(f: &mut Frame, app: &mut App, area: Rect) {
         Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
         inner,
     );
+    draw_picker_scrollbar(f, &hit, total, start, vis_rows);
     if let Some(m) = &mut app.plugin_picker {
         m.hit = hit;
     }
 }
 
 /// Stage 2 — masked key entry for the chosen provider.
-fn draw_login_key(f: &mut Frame, app: &App, area: Rect) {
+fn draw_login_key(f: &mut Frame, app: &mut App, area: Rect) {
     let Some(m) = &app.login else { return };
     let provider = crate::providers::by_id(&m.provider_id)
         .copied()
@@ -1254,7 +1296,7 @@ fn draw_login_key(f: &mut Frame, app: &App, area: Rect) {
         theme::INDIGO(),
         &title,
         None,
-        "  ↵ save  ·  ctrl+v paste  ·  ctrl+u clear  ·  esc back  ",
+        " ↵ save · Ctrl+V paste · PgUp/Dn scroll · esc/✕ back ",
     );
     let inner = modal_inner(rect);
 
@@ -1313,15 +1355,12 @@ fn draw_login_key(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(truncate(e, field_w), theme::style_error()),
         ]));
     }
-    f.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
-        inner,
-    );
+    draw_login_form(f, app, rect, lines);
 }
 
 /// Stage 3 (OpenAI-compatible only) — optional base-URL override. Prefilled
 /// with the default host; ↵ accepts, edit to point at a custom endpoint.
-fn draw_login_baseurl(f: &mut Frame, app: &App, area: Rect) {
+fn draw_login_baseurl(f: &mut Frame, app: &mut App, area: Rect) {
     let Some(m) = &app.login else { return };
     let provider = crate::providers::by_id(&m.provider_id)
         .copied()
@@ -1341,7 +1380,7 @@ fn draw_login_baseurl(f: &mut Frame, app: &App, area: Rect) {
         theme::INDIGO(),
         &format!(" 🌐 {} · endpoint ", provider.name),
         None,
-        "  ↵ accept  ·  ctrl+v paste  ·  ctrl+u clear  ·  esc back  ",
+        " ↵ accept · Ctrl+V paste · PgUp/Dn scroll · esc/✕ back ",
     );
     let inner = modal_inner(rect);
     let field_w = (inner.width as usize).saturating_sub(4).max(8);
@@ -1350,15 +1389,7 @@ fn draw_login_baseurl(f: &mut Frame, app: &App, area: Rect) {
     if theme::blink_on(app.spinner_epoch.elapsed()) {
         field.push('▉');
     }
-    // Show the tail when the URL overflows the field width.
-    let shown: String = {
-        let chars: Vec<char> = field.chars().collect();
-        if chars.len() > field_w {
-            chars[chars.len() - field_w..].iter().collect()
-        } else {
-            field.clone()
-        }
-    };
+    let shown = field_tail(&field, field_w);
     let mut lines: Vec<Line> = vec![
         Line::from(Span::styled(
             format!(
@@ -1401,10 +1432,7 @@ fn draw_login_baseurl(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(truncate(e, field_w), theme::style_error()),
         ]));
     }
-    f.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
-        inner,
-    );
+    draw_login_form(f, app, rect, lines);
 }
 
 // ── sessions picker (`/sessions` · `/resume`) ────────────────────
@@ -1423,7 +1451,7 @@ fn draw_session_picker(f: &mut Frame, app: &mut App, area: Rect) {
         (total, p.this_cwd_only, p.foreign_only, p.idx, p.scroll)
     };
 
-    let rect = fit_modal_rect(area, 82, 40, 54, 8);
+    let rect = picker_rect(area, 82, total, 3, 0);
     f.render_widget(Clear, rect);
     f.render_widget(
         Block::default().style(Style::default().bg(theme::SURFACE_2())),
@@ -1641,6 +1669,7 @@ fn draw_session_picker(f: &mut Frame, app: &mut App, area: Rect) {
         inner,
     );
 
+    draw_picker_scrollbar(f, &hit, total, start, vis_rows);
     if let Some(p) = &mut app.picker {
         p.hit = hit;
     }
@@ -1656,7 +1685,7 @@ fn draw_update_modal(f: &mut Frame, app: &mut App, area: Rect) {
     let remote = modal.remote.clone();
 
     // Modal size: similar to login picker, with parity chrome
-    let rect = fit_modal_rect(area, 64, 14, 48, 10);
+    let rect = fit_modal_rect(area, 64, 12, 48, 8);
     f.render_widget(Clear, rect);
     f.render_widget(
         Block::default().style(Style::default().bg(theme::SURFACE_2())),
@@ -1686,8 +1715,8 @@ fn draw_update_modal(f: &mut Frame, app: &mut App, area: Rect) {
     let update_btn = Rect {
         x: inner.x,
         y: inner.y + inner.height.saturating_sub(2),
-        width: 18,
-        height: 1,
+        width: inner.width.min(18),
+        height: inner.height.min(1),
     };
 
     // Save hit-test geometry
@@ -1729,41 +1758,24 @@ fn draw_update_modal(f: &mut Frame, app: &mut App, area: Rect) {
         theme::style_faint(),
     )));
     lines.push(Line::default());
-    lines.push(Line::from(vec![
-        Span::styled("  ".to_string(), theme::style_faint()),
-        Span::styled(
-            "▶ Update now".to_string(),
-            Style::default()
-                .fg(theme::NUR_GOLD())
-                .bg(theme::SURFACE_2())
-                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-        ),
-        Span::styled("  ".to_string(), theme::style_faint()),
-        Span::styled("(runs in new window)".to_string(), theme::style_faint()),
-    ]));
-    lines.push(Line::default());
-    lines.push(Line::from(Span::styled(
-        "  Tip: /doctor shows update status · NUR_SKIP_AUTO_UPDATE=1 to disable".to_string(),
-        theme::style_faint(),
-    )));
-
+    let button = Line::from(vec![Span::styled(
+        "  ▶ Update now  ",
+        Style::default()
+            .fg(theme::NUR_GOLD())
+            .bg(theme::SURFACE_2())
+            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+    )]);
     // Render inner
     f.render_widget(
         Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
-        inner,
+        Rect::new(
+            inner.x,
+            inner.y,
+            inner.width,
+            inner.height.saturating_sub(2),
+        ),
     );
-
-    // Clickable ✕ (parity with hover peek / session picker)
-    {
-        let cx = rect.x + rect.width.saturating_sub(3);
-        let buf = f.buffer_mut();
-        buf[(cx, rect.y)].set_char('✕').set_style(
-            Style::default()
-                .fg(theme::ERROR())
-                .bg(theme::SURFACE_2())
-                .add_modifier(Modifier::BOLD),
-        );
-    }
+    f.render_widget(Paragraph::new(button), update_btn);
 }
 
 /// Thick double-line frame with a traveling border accent (phase).
@@ -1771,7 +1783,7 @@ fn draw_update_modal(f: &mut Frame, app: &mut App, area: Rect) {
 /// title + footer). Every dialog in the TUI is drawn through this so the picker,
 /// command palette, and approval modal share one look. `hue` tints the border
 /// (per-tool colour for approvals, Meta blue elsewhere); `right_label` draws the
-/// `[label] ✕` cluster used by the sessions picker (None omits it).
+/// `[label]` cluster used by sessions. Dialogs advertising ✕ get a visible close button.
 fn draw_modal_frame(
     f: &mut Frame,
     rect: Rect,
@@ -1865,48 +1877,47 @@ fn draw_modal_frame(
         }
     }
 
-    // Title into top edge — reserve room on the right only when a label is shown.
-    let reserve = if right_label.is_some() { 14 } else { 2 };
-    let title_chars: Vec<char> = title.chars().collect();
-    let max_t = top_len.saturating_sub(reserve).max(8);
-    for (i, ch) in title_chars.iter().take(max_t).enumerate() {
-        let x = x0 + 2 + i as u16;
-        if x < x1 {
-            buf[(x, y0)].set_char(*ch).set_style(title_s);
-        }
+    // Use terminal-cell widths for emoji / wide glyphs; labels cannot overwrite close.
+    let show_close = footer.contains('✕') || right_label.is_some();
+    let close_x = rect.right().saturating_sub(if show_close { 5 } else { 2 });
+    let right = right_label
+        .map(|label| format!(" [{label}] "))
+        .unwrap_or_default();
+    let right_width = UnicodeWidthStr::width(right.as_str()) as u16;
+    let right_x = close_x.saturating_sub(right_width).max(x0 + 2);
+    buf.set_stringn(
+        x0 + 2,
+        y0,
+        title,
+        right_x.saturating_sub(x0 + 2) as usize,
+        title_s,
+    );
+    buf.set_stringn(
+        right_x,
+        y0,
+        &right,
+        close_x.saturating_sub(right_x) as usize,
+        mute,
+    );
+    if show_close {
+        buf.set_stringn(
+            close_x,
+            y0,
+            " ✕ ",
+            3,
+            Style::default()
+                .fg(theme::ERROR())
+                .bg(theme::SURFACE_2())
+                .add_modifier(Modifier::BOLD),
+        );
     }
-    // Scope + close on the right of top edge (picker only)
-    if let Some(scope_label) = right_label {
-        let right = format!(" [{scope_label}]  ✕ ");
-        let rc: Vec<char> = right.chars().collect();
-        let start_x = x1.saturating_sub(rc.len() as u16 + 1);
-        for (i, ch) in rc.iter().enumerate() {
-            let x = start_x + i as u16;
-            if x > x0 && x < x1 {
-                let st = if *ch == '✕' {
-                    Style::default()
-                        .fg(theme::ERROR())
-                        .bg(theme::SURFACE_2())
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    mute
-                };
-                buf[(x, y0)].set_char(*ch).set_style(st);
-            }
-        }
-    }
-
-    // Footer into bottom edge
-    let fc: Vec<char> = footer.chars().collect();
-    let max_f = top_len.saturating_sub(2);
-    for (i, ch) in fc.iter().take(max_f).enumerate() {
-        let x = x0 + 2 + i as u16;
-        if x < x1 {
-            buf[(x, y1)]
-                .set_char(*ch)
-                .set_style(Style::default().fg(theme::FAINT()).bg(theme::SURFACE_2()));
-        }
-    }
+    buf.set_stringn(
+        x0 + 2,
+        y1,
+        footer,
+        rect.width.saturating_sub(4) as usize,
+        Style::default().fg(theme::FAINT()).bg(theme::SURFACE_2()),
+    );
 }
 
 /// The content rect inside a `draw_modal_frame` (2-cell padding, matching the picker).
@@ -1939,12 +1950,69 @@ fn modal_inner(rect: Rect) -> Rect {
     }
 }
 
+fn selection_window_start(count: usize, selected: usize, page: usize) -> usize {
+    selected
+        .saturating_add(1)
+        .saturating_sub(page.max(1))
+        .min(count.saturating_sub(page.max(1)))
+}
+
+/// Content-sized list dialogs use available height without leaving empty fixed panels.
+fn picker_rect(area: Rect, width: u16, count: usize, stride: usize, extra: usize) -> Rect {
+    let content = count
+        .max(1)
+        .saturating_mul(stride)
+        .saturating_add(extra + 4);
+    let height = content.min(u16::MAX as usize) as u16;
+    fit_modal_rect(area, width, height, 36, 8)
+}
+
+/// A proportional position cue in the inner frame, outside row click targets.
+fn draw_picker_scrollbar(
+    f: &mut Frame,
+    hit: &super::app::PickerHit,
+    total: usize,
+    start: usize,
+    page: usize,
+) {
+    if total <= page || hit.rows.is_empty() || hit.frame.width < 6 {
+        return;
+    }
+    let first = hit.rows.first().unwrap().1.y;
+    let last = hit
+        .rows
+        .last()
+        .unwrap()
+        .1
+        .bottom()
+        .min(hit.frame.bottom().saturating_sub(2));
+    let height = last.saturating_sub(first);
+    let metrics = ScrollMetrics::new(total, page, start, height);
+    for row in 0..height {
+        let filled = !matches!(
+            metrics.cell_fill(row as usize),
+            super::scrollbar::CellFill::Empty
+        );
+        f.buffer_mut()[(hit.frame.right() - 2, first + row)]
+            .set_char(if filled { '┃' } else { '│' })
+            .set_style(
+                Style::default()
+                    .fg(if filled {
+                        theme::NUR_GOLD()
+                    } else {
+                        theme::BORDER()
+                    })
+                    .bg(theme::SURFACE_2()),
+            );
+    }
+}
+
 /// Fit a modal inside the current terminal, relaxing its preferred minimums
 /// when the window is smaller than the design target. Every overlay must stay
 /// inside the frame so a resize immediately produces a visible, usable modal.
 fn fit_modal_rect(area: Rect, desired_w: u16, desired_h: u16, min_w: u16, min_h: u16) -> Rect {
-    let max_w = area.width.saturating_sub(2).max(1);
-    let max_h = area.height.saturating_sub(2).max(1);
+    let max_w = area.width.saturating_sub(2).max(1).min(area.width);
+    let max_h = area.height.saturating_sub(2).max(1).min(area.height);
     let width = desired_w.min(max_w).max(min_w.min(max_w));
     let height = desired_h.min(max_h).max(min_h.min(max_h));
     Rect {
@@ -1956,8 +2024,8 @@ fn fit_modal_rect(area: Rect, desired_w: u16, desired_h: u16, min_w: u16, min_h:
 }
 
 fn constrain_rect(area: Rect, rect: Rect) -> Rect {
-    let max_w = area.width.saturating_sub(2).max(1);
-    let max_h = area.height.saturating_sub(2).max(1);
+    let max_w = area.width.saturating_sub(2).max(1).min(area.width);
+    let max_h = area.height.saturating_sub(2).max(1).min(area.height);
     let width = rect.width.min(max_w);
     let height = rect.height.min(max_h);
     Rect {
@@ -6787,7 +6855,7 @@ fn effort_label(effort: &str) -> String {
 }
 
 // ── palette ────────────────────────────────────────────────────────────────
-fn draw_palette(f: &mut Frame, app: &App, input_area: Rect) {
+fn draw_palette(f: &mut Frame, app: &mut App, input_area: Rect) {
     let matches = app.palette_matches();
     if matches.is_empty() {
         return;
@@ -6820,17 +6888,33 @@ fn draw_palette(f: &mut Frame, app: &App, input_area: Rect) {
         theme::META_BLUE(),
         " ⌘  commands ",
         None,
-        " ↑↓ move  ·  ↵ run  ·  esc close ",
+        " ↑↓/wheel · PgUp/Dn · ↵ fill/run · esc/✕ ",
     );
     let inner = modal_inner(rect);
 
     let sel = app.palette_idx.min(matches.len() - 1);
     let vis = inner.height as usize;
     // Clamp palette_scroll so the keyboard selection is always visible.
-    let mut start = app.palette_scroll;
+    let mut start = app.palette_scroll.min(sel);
     start = start.max(sel.saturating_sub(vis.saturating_sub(1)));
     let max_scroll = matches.len().saturating_sub(vis);
     start = start.min(max_scroll);
+    app.palette_page = vis.max(1);
+    app.palette_scroll = start;
+    app.palette_hit = super::app::PickerHit {
+        frame: rect,
+        body: inner,
+        close: Rect::new(rect.right().saturating_sub(5), rect.y, 3, 1),
+        rows: (start..matches.len().min(start + vis))
+            .map(|i| {
+                (
+                    i,
+                    Rect::new(inner.x, inner.y + (i - start) as u16, inner.width, 1),
+                )
+            })
+            .collect(),
+        ..Default::default()
+    };
     let lines: Vec<Line> = matches
         .iter()
         .enumerate()
@@ -6877,6 +6961,7 @@ fn draw_palette(f: &mut Frame, app: &App, input_area: Rect) {
         Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
         inner,
     );
+    draw_picker_scrollbar(f, &app.palette_hit, matches.len(), start, vis);
 }
 
 // ── approval modal ─────────────────────────────────────────────────────────
@@ -7496,14 +7581,40 @@ fn pretty_args(args: &str) -> String {
         .unwrap_or_else(|_| args.to_string())
 }
 
+fn field_tail(s: &str, max: usize) -> String {
+    let mut width = 0;
+    let mut tail = Vec::new();
+    for ch in s.chars().rev() {
+        let next = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if width + next > max {
+            break;
+        }
+        tail.push(ch);
+        width += next;
+    }
+    tail.into_iter().rev().collect()
+}
+
 fn truncate(s: &str, max: usize) -> String {
     let s = s.replace('\n', " ⏎ ");
-    if s.chars().count() <= max {
-        s
-    } else {
-        let t: String = s.chars().take(max).collect();
-        format!("{t}…")
+    if UnicodeWidthStr::width(s.as_str()) <= max {
+        return s;
     }
+    if max == 0 {
+        return String::new();
+    }
+    let mut result = String::new();
+    let mut width = 0;
+    for ch in s.chars() {
+        let next = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if width + next > max - 1 {
+            break;
+        }
+        result.push(ch);
+        width += next;
+    }
+    result.push('…');
+    result
 }
 
 fn capitalize(s: &str) -> String {
@@ -7547,10 +7658,12 @@ fn draw_ctx_menu(f: &mut Frame, app: &mut App) {
     let inner = modal_inner(frame);
 
     let sel = app.ctx_menu.as_ref().map(|m| m.selected).unwrap_or(0);
+    let start = selection_window_start(CTX_ACTIONS.len(), sel, inner.height as usize);
     let mut actions = Vec::new();
     for ((i, (glyph, label)), ar) in CTX_ACTIONS
         .iter()
         .enumerate()
+        .skip(start)
         .zip(ctx_menu_row_rects(frame))
     {
         let selected = i == sel;
@@ -7624,6 +7737,117 @@ mod tests {
     }
 
     /// Representative viewport matrix with semantic and width assertions.
+    #[test]
+    fn selected_action_stays_in_short_viewport() {
+        for count in 1..20 {
+            for page in 1..10 {
+                for selected in 0..count {
+                    let start = selection_window_start(count, selected, page);
+                    assert!(selected >= start && selected < start + page);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn truncation_respects_terminal_cell_budget() {
+        for text in ["hello", "🔑 中文 theme", "e\u{301}clair", "line\nbreak"] {
+            for width in 0..24 {
+                assert!(UnicodeWidthStr::width(truncate(text, width).as_str()) <= width);
+            }
+        }
+    }
+
+    #[test]
+    fn theme_rendered_rows_match_mouse_targets_with_and_without_preview() {
+        use ratatui::{backend::TestBackend, Terminal};
+        for (width, height) in [(80, 24), (100, 50), (40, 12)] {
+            for preview in [0, 3] {
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                let frame = picker_rect(
+                    Rect::new(0, 0, width, height),
+                    72,
+                    theme::THEMES.len(),
+                    1,
+                    4,
+                );
+                if preview > 0 && modal_inner(frame).height < 10 {
+                    continue;
+                }
+                let inner = theme_list_rect(modal_inner(frame), preview);
+                let mut picker = super::super::app::ThemePicker {
+                    filter: String::new(),
+                    sel: theme::THEMES.len() - 1,
+                    scroll: 0,
+                    vis_page: 1,
+                    original: "gold".into(),
+                    onboarding: false,
+                    hit: Default::default(),
+                    last_step_at: std::time::Instant::now(),
+                };
+                terminal
+                    .draw(|f| {
+                        draw_theme_choices(
+                            f,
+                            &mut picker,
+                            inner,
+                            super::super::app::PickerHit {
+                                frame,
+                                ..Default::default()
+                            },
+                            "gold",
+                            false,
+                        )
+                    })
+                    .unwrap();
+                assert!(picker.hit.rows.iter().any(|(i, _)| *i == picker.sel));
+                for (idx, row) in &picker.hit.rows {
+                    let text: String = (row.x..row.right())
+                        .map(|x| terminal.backend().buffer()[(x, row.y)].symbol())
+                        .collect();
+                    assert!(
+                        text.contains(&theme::THEMES[*idx].1.chars().take(8).collect::<String>()),
+                        "wrong row for {idx}: {text}"
+                    );
+                    assert!(row.bottom() <= inner.bottom());
+                }
+                // The last choice reaches the bottom when the list is scrollable.
+                if theme::THEMES.len() > picker.vis_page {
+                    assert_eq!(picker.hit.rows.last().unwrap().1.bottom(), inner.bottom());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn picker_height_fits_content_and_uses_tall_terminals() {
+        let area = Rect::new(0, 0, 100, 60);
+        assert_eq!(picker_rect(area, 72, 3, 1, 2).height, 9);
+        assert_eq!(picker_rect(area, 72, 100, 1, 2).height, 58);
+        assert_eq!(picker_rect(area, 82, 3, 3, 0).height, 13);
+    }
+
+    #[test]
+    fn modal_chrome_keeps_wide_title_clear_of_close_target() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_modal_frame(
+                    f,
+                    Rect::new(1, 1, 38, 8),
+                    0,
+                    Color::Blue,
+                    " 🔑 很长的标题 a long title that must clip ",
+                    None,
+                    " esc/✕ ",
+                )
+            })
+            .unwrap();
+        assert_eq!(terminal.backend().buffer()[(35, 1)].symbol(), "✕");
+        assert_eq!(terminal.backend().buffer()[(38, 1)].symbol(), "╗");
+    }
+
     #[test]
     fn swarm_preview() {
         let _g = crate::agent::swarm::test_lock();

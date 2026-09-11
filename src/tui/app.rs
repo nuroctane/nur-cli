@@ -1102,6 +1102,9 @@ pub fn provider_takes_custom_base(p: &crate::providers::Provider) -> bool {
 }
 
 pub struct LoginModal {
+    /// Scroll state for credential / browser / endpoint forms, independent of the provider list.
+    pub form_scroll: usize,
+    pub form_rows: usize,
     pub stage: LoginStage,
     /// Provider-search filter typed in the picker stage.
     pub filter: String,
@@ -1278,6 +1281,23 @@ pub struct ModelPicker {
     pub rx: Option<std::sync::mpsc::Receiver<std::result::Result<Vec<String>, String>>>,
 }
 
+/// Bounded arrow, page and endpoint navigation for scrollable overlays.
+fn navigation_target(code: KeyCode, selected: usize, count: usize, page: usize) -> Option<usize> {
+    let last = count.saturating_sub(1);
+    Some(
+        match code {
+            KeyCode::Up => selected.saturating_sub(1),
+            KeyCode::Down => selected.saturating_add(1),
+            KeyCode::PageUp => selected.saturating_sub(page.max(1)),
+            KeyCode::PageDown => selected.saturating_add(page.max(1)),
+            KeyCode::Home => 0,
+            KeyCode::End => last,
+            _ => return None,
+        }
+        .min(last),
+    )
+}
+
 /// Runtime theme chooser opened by `/theme` and once during first-run
 /// onboarding. Moving the selection previews immediately; Enter persists it,
 /// while Esc restores the palette that was active when the picker opened.
@@ -1286,6 +1306,7 @@ pub struct ModelPicker {
 /// per ↑↓, wheel coalesced to one step per 45ms so a trackpad flick cannot
 /// jump from the first row to the last.
 pub struct ThemePicker {
+    pub filter: String,
     pub sel: usize,
     /// First visible row - moves by 1 when selection leaves the window.
     pub scroll: usize,
@@ -1299,12 +1320,22 @@ pub struct ThemePicker {
 }
 
 impl ThemePicker {
+    pub fn filtered(&self) -> Vec<&'static (&'static str, &'static str)> {
+        let filter = self.filter.trim().to_lowercase();
+        theme::THEMES
+            .iter()
+            .filter(|(id, label)| {
+                id.to_lowercase().contains(&filter) || label.to_lowercase().contains(&filter)
+            })
+            .collect()
+    }
+
     pub fn count(&self) -> usize {
-        theme::THEMES.len()
+        self.filtered().len()
     }
 
     pub fn chosen(&self) -> &'static str {
-        theme::THEMES
+        self.filtered()
             .get(self.sel)
             .map(|(id, _)| *id)
             .unwrap_or("gold")
@@ -1889,6 +1920,18 @@ fn relative_when(dt: chrono::DateTime<chrono::Utc>) -> String {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ModalFocus {
+    Theme,
+    Login,
+    Model,
+    Plugin,
+    Approval,
+    Sessions,
+    Context,
+    Update,
+}
+
 pub struct App {
     pub client: ApiClient,
     pub cfg: Config,
@@ -2184,6 +2227,8 @@ pub struct App {
     pub picker_opened_at: Option<std::time::Instant>,
     pub palette_idx: usize,
     pub palette_scroll: usize,
+    pub palette_page: usize,
+    pub palette_hit: PickerHit,
     pub palette_last_step: std::time::Instant,
     pub quit_armed: Option<Instant>,
 
@@ -2637,6 +2682,8 @@ pub async fn run_tui(
         picker: None,
         palette_idx: 0,
         palette_scroll: 0,
+        palette_page: 10,
+        palette_hit: PickerHit::default(),
         palette_last_step: std::time::Instant::now(),
         picker_opened_at: None,
         quit_armed: None,
@@ -3109,6 +3156,22 @@ pub async fn run_tui(
 }
 
 impl App {
+    /// One priority order for drawing, keys and mouse. Background notices come last.
+    pub(super) fn modal_focus(&self) -> Option<ModalFocus> {
+        [
+            (self.theme_picker.is_some(), ModalFocus::Theme),
+            (self.login.is_some(), ModalFocus::Login),
+            (self.model_picker.is_some(), ModalFocus::Model),
+            (self.plugin_picker.is_some(), ModalFocus::Plugin),
+            (self.approval.is_some(), ModalFocus::Approval),
+            (self.picker.is_some(), ModalFocus::Sessions),
+            (self.ctx_menu.is_some(), ModalFocus::Context),
+            (self.update_modal.is_some(), ModalFocus::Update),
+        ]
+        .into_iter()
+        .find_map(|(open, focus)| open.then_some(focus))
+    }
+
     /// One-line hint for a built-in command, resolved against live session
     /// state where a static string would be wrong or misleading.
     ///
@@ -3221,7 +3284,7 @@ impl App {
         if n == 0 {
             return;
         }
-        let page = 10usize;
+        let page = self.palette_page.max(1);
         if dir < 0 {
             if self.palette_idx == 0 {
                 return;
@@ -3358,6 +3421,16 @@ impl App {
             KeyCode::Esc => self.close_ctx_menu(),
             KeyCode::Up => self.ctx_move(-1),
             KeyCode::Down => self.ctx_move(1),
+            KeyCode::Home | KeyCode::PageUp => {
+                if let Some(menu) = &mut self.ctx_menu {
+                    menu.selected = 0;
+                }
+            }
+            KeyCode::End | KeyCode::PageDown => {
+                if let Some(menu) = &mut self.ctx_menu {
+                    menu.selected = CTX_ACTIONS.len().saturating_sub(1);
+                }
+            }
             KeyCode::Enter => self.ctx_confirm(),
             _ => {} // deliberately no letter shortcuts
         }
@@ -3811,51 +3884,75 @@ impl App {
 
     // ── keys ───────────────────────────────────────────────────────────
     fn on_key(&mut self, key: event::KeyEvent) {
-        // Theme picker owns the keyboard while it previews live palettes.
-        if self.theme_picker.is_some() {
-            self.on_theme_picker_key(key.code);
+        if matches!(
+            self.modal_focus(),
+            Some(ModalFocus::Theme | ModalFocus::Model | ModalFocus::Plugin)
+        ) && ((key.code == KeyCode::Char('v') && key.modifiers.contains(KeyModifiers::CONTROL))
+            || (key.code == KeyCode::Insert && key.modifiers.contains(KeyModifiers::SHIFT)))
+        {
+            if let Some(text) = clipboard_get() {
+                self.on_paste(&text);
+            }
             return;
         }
-        // Secure login modal swallows all keys (masked key entry).
-        // Ordered ABOVE the update modal on purpose: the updater opens on a
-        // background timer, and if it could win this race it would swallow the
-        // characters of an API key being typed.
-        if self.login.is_some() {
-            self.on_login_key(key);
+        if let Some(focus) = self.modal_focus() {
+            match focus {
+                ModalFocus::Theme => self.on_theme_picker_key(key),
+                ModalFocus::Login => self.on_login_key(key),
+                ModalFocus::Model => self.on_model_picker_key(key),
+                ModalFocus::Plugin => self.on_plugin_picker_key(key),
+                ModalFocus::Approval => self.on_approval_key(key),
+                ModalFocus::Sessions => self.on_picker_key(key.code),
+                ModalFocus::Context => self.on_ctx_menu_key(key.code),
+                ModalFocus::Update => self.on_update_modal_key(key.code),
+            }
             return;
         }
-        // Model picker swallows all keys while open (type-to-filter).
-        if self.model_picker.is_some() {
-            self.on_model_picker_key(key);
-            return;
-        }
-        // Plugin marketplace swallows all keys while open.
-        if self.plugin_picker.is_some() {
-            self.on_plugin_picker_key(key);
-            return;
-        }
-        // Approval modal swallows all keys.
-        if self.approval.is_some() {
-            self.on_approval_key(key);
-            return;
-        }
-        // Update-available modal (parity with other pickers). Deliberately LAST
-        // among the modals: it is the only one that opens on a background timer,
-        // so every user-initiated modal must out-rank it. Otherwise it appeared
-        // over `/login` or an approval prompt and swallowed keystrokes into a
-        // handler that understands only Esc/q/Enter.
-        if self.update_modal.is_some() {
-            self.on_update_modal_key(key.code);
-            return;
-        }
-        // Session picker swallows all keys while open.
-        if self.picker.is_some() {
-            self.on_picker_key(key.code);
-            return;
-        }
-        // Context menu swallows keys while open.
-        if self.ctx_menu.is_some() {
-            self.on_ctx_menu_key(key.code);
+
+        if self.peek_is_open() {
+            let page = self.peek_box.height.saturating_sub(6).max(1) as usize;
+            if let Some(next) = navigation_target(
+                key.code,
+                self.peek_scroll as usize,
+                self.peek_rows as usize,
+                page,
+            ) {
+                self.peek_scroll = next.min(u16::MAX as usize) as u16;
+                return;
+            }
+            // A read-only peek must not submit or edit the composer behind it.
+            let plain = !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+            let action = key.code == KeyCode::Esc
+                || (key.code == KeyCode::Char('c')
+                    && key.modifiers.contains(KeyModifiers::CONTROL))
+                || (plain && matches!(key.code, KeyCode::Char('e' | 'E')))
+                || (plain
+                    && self.peek_swarm.is_some()
+                    && matches!(key.code, KeyCode::Char('c' | 'C' | '[' | ']' | ' ')));
+            if !action {
+                return;
+            }
+        } else if self.palette_visible()
+            && matches!(
+                key.code,
+                KeyCode::PageUp | KeyCode::PageDown | KeyCode::Home | KeyCode::End
+            )
+            && key.modifiers.is_empty()
+        {
+            if let Some(next) = navigation_target(
+                key.code,
+                self.palette_idx,
+                self.palette_matches().len(),
+                self.palette_page,
+            ) {
+                self.palette_idx = next;
+                self.palette_scroll = self.palette_scroll.min(next).max(
+                    next.saturating_add(1)
+                        .saturating_sub(self.palette_page.max(1)),
+                );
+            }
             return;
         }
 
@@ -4254,57 +4351,49 @@ impl App {
     /// Works while a turn is streaming. Approval/login modals no longer kill
     /// an in-progress scrollbar drag or wheel scroll.
     fn on_mouse(&mut self, m: event::MouseEvent) {
-        if self.theme_picker.is_some() {
+        if let Some(focus) = self.modal_focus().filter(|f| *f != ModalFocus::Approval) {
             self.scrollbar_drag = false;
             self.selecting = false;
             self.select_anchor = None;
             self.mouse_left_down = false;
-            self.on_theme_picker_mouse(m);
+            match focus {
+                ModalFocus::Theme => self.on_theme_picker_mouse(m),
+                ModalFocus::Login => self.on_login_mouse(m),
+                ModalFocus::Model => self.on_model_picker_mouse(m),
+                ModalFocus::Plugin => self.on_plugin_picker_mouse(m),
+                ModalFocus::Sessions => self.on_picker_mouse(m),
+                ModalFocus::Context => self.on_ctx_menu_mouse(m),
+                ModalFocus::Update => self.on_update_modal_mouse(m),
+                ModalFocus::Approval => unreachable!(),
+            }
             return;
         }
-        if self.update_modal.is_some() {
-            self.scrollbar_drag = false;
-            self.selecting = false;
-            self.select_anchor = None;
-            self.mouse_left_down = false;
-            self.on_update_modal_mouse(m);
-            return;
-        }
-        if self.picker.is_some() {
-            // Don't clear left-down state for the main transcript - picker is modal.
-            self.scrollbar_drag = false;
-            self.selecting = false;
-            self.select_anchor = None;
-            self.mouse_left_down = false;
-            self.on_picker_mouse(m);
-            return;
-        }
-        // Login picker is modal - same wheel/click routing as the sessions picker.
-        if self.login.is_some() {
-            self.scrollbar_drag = false;
-            self.selecting = false;
-            self.select_anchor = None;
-            self.mouse_left_down = false;
-            self.on_login_mouse(m);
-            return;
-        }
-        // Model picker is modal - same wheel/click routing.
-        if self.model_picker.is_some() {
-            self.scrollbar_drag = false;
-            self.selecting = false;
-            self.select_anchor = None;
-            self.mouse_left_down = false;
-            self.on_model_picker_mouse(m);
-            return;
-        }
-        // Plugin marketplace is modal - same wheel/click routing.
-        if self.plugin_picker.is_some() {
-            self.scrollbar_drag = false;
-            self.selecting = false;
-            self.select_anchor = None;
-            self.mouse_left_down = false;
-            self.on_plugin_picker_mouse(m);
-            return;
+
+        if self.modal_focus().is_none()
+            && self.palette_visible()
+            && rect_contains(self.palette_hit.frame, m.column, m.row)
+        {
+            if m.kind == MouseEventKind::Down(MouseButton::Left) {
+                if rect_contains(self.palette_hit.close, m.column, m.row) {
+                    self.input.clear();
+                    self.clear_paste_merge_state();
+                    return;
+                }
+                let selected = self
+                    .palette_hit
+                    .rows
+                    .iter()
+                    .find(|(_, r)| rect_contains(*r, m.column, m.row))
+                    .map(|(i, _)| *i);
+                if let Some(idx) = selected {
+                    let same = idx == self.palette_idx;
+                    self.palette_idx = idx;
+                    if same {
+                        self.on_key(event::KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                    }
+                }
+                return;
+            }
         }
 
         // Mouse click/drag moves caret → break raw merge chain (same rationale
@@ -4319,16 +4408,6 @@ impl App {
         self.mouse_row = m.row;
         // Hover affordance: the thumb widens when the pointer is on the rail.
         self.scrollbar_hover = self.scrollbar_drag || self.hit_scrollbar(m.column, m.row);
-
-        // Context menu is modal - forward all mouse events.
-        if self.ctx_menu.is_some() {
-            self.scrollbar_drag = false;
-            self.selecting = false;
-            self.select_anchor = None;
-            self.mouse_left_down = false;
-            self.on_ctx_menu_mouse(m);
-            return;
-        }
 
         // Approval is a modal *overlay* but must not brick scroll/select forever.
         // Allow wheel + continue an in-progress scrollbar drag; new clicks on
@@ -4345,7 +4424,7 @@ impl App {
                         self.note_input_drag_motion(m.column, m.row);
                         self.input_drag_to(m.column, m.row);
                     }
-                } else if self.palette_visible() {
+                } else if self.palette_visible() && !self.peek_is_open() && !approval_open {
                     self.palette_wheel_step(-1);
                 } else if self.wheel_over_open_peek(m.column, m.row) {
                     // Wheel inside a pinned peek scrolls its body, not the page.
@@ -4383,7 +4462,7 @@ impl App {
                         self.note_input_drag_motion(m.column, m.row);
                         self.input_drag_to(m.column, m.row);
                     }
-                } else if self.palette_visible() {
+                } else if self.palette_visible() && !self.peek_is_open() && !approval_open {
                     self.palette_wheel_step(1);
                 } else if self.wheel_over_open_peek(m.column, m.row) {
                     self.peek_scroll = self
@@ -5920,6 +5999,8 @@ impl App {
         // open threw away the credential those runs depend on.
         self.cancel_oauth();
         self.login = Some(LoginModal {
+            form_scroll: 0,
+            form_rows: 0,
             stage: LoginStage::Provider,
             filter: String::new(),
             sel: 0,
@@ -5953,6 +6034,8 @@ impl App {
     fn open_auth_manager(&mut self) {
         self.cancel_oauth();
         self.login = Some(LoginModal {
+            form_scroll: 0,
+            form_rows: 0,
             stage: LoginStage::Provider,
             filter: String::new(),
             sel: 0,
@@ -6016,6 +6099,7 @@ impl App {
                 // supports a first-party CLI and/or browser OAuth.
                 m.can_import = true;
                 m.method_sel = 0;
+                m.form_scroll = 0;
                 m.stage = LoginStage::Method;
             }
             None => {
@@ -6031,6 +6115,8 @@ impl App {
     /// chain (`fallback_providers`) and per-provider keys.
     fn open_failover(&mut self) {
         self.login = Some(LoginModal {
+            form_scroll: 0,
+            form_rows: 0,
             stage: LoginStage::Provider,
             filter: String::new(),
             sel: 0,
@@ -6123,6 +6209,7 @@ impl App {
                 m.error = None;
                 m.can_import = true;
                 m.method_sel = 0;
+                m.form_scroll = 0;
                 m.stage = LoginStage::Method;
             }
         }
@@ -6175,6 +6262,7 @@ impl App {
             m.browser_user_code.clear();
             m.oauth_rx = None;
             m.oauth_cancel = None;
+            m.form_scroll = 0;
             m.stage = LoginStage::Provider;
         }
         self.refresh_auth_summaries();
@@ -6233,6 +6321,7 @@ impl App {
             .position(|(id, _)| *id == original)
             .unwrap_or(0);
         self.theme_picker = Some(ThemePicker {
+            filter: String::new(),
             sel,
             scroll: 0,
             vis_page: 8,
@@ -6251,6 +6340,9 @@ impl App {
     fn preview_theme_at(&mut self, idx: usize) {
         if let Some(picker) = &mut self.theme_picker {
             picker.set_idx(idx);
+            if picker.count() == 0 {
+                return;
+            }
             let _ = theme::set_theme(picker.chosen());
             self.needs_full_redraw = true;
         }
@@ -6291,6 +6383,9 @@ impl App {
     }
 
     fn commit_theme_picker(&mut self) {
+        if self.theme_picker.as_ref().is_some_and(|p| p.count() == 0) {
+            return;
+        }
         let Some(picker) = self.theme_picker.take() else {
             return;
         };
@@ -6309,9 +6404,10 @@ impl App {
         }
     }
 
-    fn on_theme_picker_key(&mut self, code: KeyCode) {
-        match code {
-            KeyCode::Esc | KeyCode::Char('q') => self.cancel_theme_picker(),
+    fn on_theme_picker_key(&mut self, key: event::KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc => self.cancel_theme_picker(),
             KeyCode::Enter => self.commit_theme_picker(),
             KeyCode::Up => self.step_theme(-1),
             KeyCode::Down => self.step_theme(1),
@@ -6337,10 +6433,34 @@ impl App {
             }
             KeyCode::Home => self.preview_theme_at(0),
             KeyCode::End => {
-                self.preview_theme_at(theme::THEMES.len().saturating_sub(1));
+                let count = self.theme_picker.as_ref().map(|p| p.count()).unwrap_or(0);
+                self.preview_theme_at(count.saturating_sub(1));
+            }
+            KeyCode::Backspace => self.filter_themes(None, false),
+            KeyCode::Char('u') if ctrl => self.filter_themes(None, true),
+            KeyCode::Char(c)
+                if !ctrl && !key.modifiers.contains(KeyModifiers::ALT) && !c.is_control() =>
+            {
+                self.filter_themes(Some(&c.to_string()), false);
             }
             _ => {}
         }
+    }
+
+    fn filter_themes(&mut self, text: Option<&str>, clear: bool) {
+        if let Some(p) = &mut self.theme_picker {
+            if clear {
+                p.filter.clear();
+            } else if let Some(text) = text {
+                p.filter.push_str(text);
+            } else {
+                p.filter.pop();
+            }
+            p.sel = 0;
+            p.scroll = 0;
+            p.clamp_scroll();
+        }
+        self.preview_theme_at(0);
     }
 
     fn on_theme_picker_mouse(&mut self, m: event::MouseEvent) {
@@ -6721,6 +6841,18 @@ impl App {
                     }
                 }
             }
+            KeyCode::Home => {
+                if let Some(m) = &mut self.plugin_picker {
+                    m.sel = 0;
+                    m.scroll = 0;
+                }
+            }
+            KeyCode::End => {
+                if let Some(m) = &mut self.plugin_picker {
+                    m.sel = m.count().saturating_sub(1);
+                    m.clamp_scroll();
+                }
+            }
             KeyCode::Backspace => {
                 if let Some(m) = &mut self.plugin_picker {
                     m.filter.pop();
@@ -6809,6 +6941,29 @@ impl App {
     }
 
     fn on_login_key(&mut self, key: event::KeyEvent) {
+        if key.code == KeyCode::Insert && key.modifiers.contains(KeyModifiers::SHIFT) {
+            if let Some(text) = clipboard_get() {
+                self.on_paste(&text);
+            }
+            return;
+        }
+        if let Some(m) = &mut self.login {
+            if !matches!(m.stage, LoginStage::Provider | LoginStage::Method) {
+                let page = m.hit.body.height.max(1) as usize;
+                let max = m.form_rows.saturating_sub(page);
+                match key.code {
+                    KeyCode::PageUp => {
+                        m.form_scroll = m.form_scroll.saturating_sub(page);
+                        return;
+                    }
+                    KeyCode::PageDown => {
+                        m.form_scroll = m.form_scroll.saturating_add(page).min(max);
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+        }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let stage = self.login.as_ref().map(|m| m.stage);
         match stage {
@@ -6837,6 +6992,7 @@ impl App {
             // active provider. `/provider` uses the same method window but
             // activates the provider after success.
             m.fallback_key = m.manage_auth;
+            m.form_scroll = 0;
             m.stage = LoginStage::Method;
         }
     }
@@ -6877,6 +7033,7 @@ impl App {
                 if m.fallback_key {
                     m.fallback_key = false;
                 }
+                m.form_scroll = 0;
                 m.stage = LoginStage::Provider;
                 m.error = None;
             }
@@ -6901,6 +7058,8 @@ impl App {
                     self.step_login_method(1);
                 }
             }
+            KeyCode::Home => m.method_sel = 0,
+            KeyCode::End => m.method_sel = n.saturating_sub(1),
             KeyCode::Char('1') => {
                 m.method_sel = 0;
                 self.login_method_confirm();
@@ -6935,6 +7094,7 @@ impl App {
             Some(LoginMethodChoice::Browser) => self.start_browser_login(&provider_id),
             Some(LoginMethodChoice::ApiKey) => {
                 if let Some(m) = &mut self.login {
+                    m.form_scroll = 0;
                     m.stage = LoginStage::Key;
                     m.buf.clear();
                     m.error = None;
@@ -6951,6 +7111,7 @@ impl App {
         let (tx, rx) = std::sync::mpsc::channel();
         let pid = provider_id.to_string();
         if let Some(m) = &mut self.login {
+            m.form_scroll = 0;
             m.stage = LoginStage::Browser;
             m.fallback_key = is_fallback;
             m.browser_status = "checking vendor CLI and OMP credentials...".into();
@@ -6978,6 +7139,7 @@ impl App {
         let cancel_bg = cancel.clone();
         let pid = provider_id.to_string();
         if let Some(m) = &mut self.login {
+            m.form_scroll = 0;
             m.stage = LoginStage::Browser;
             m.browser_status = "starting browser sign-in…".into();
             m.browser_url.clear();
@@ -6996,6 +7158,7 @@ impl App {
             KeyCode::Esc => {
                 self.cancel_oauth();
                 if let Some(m) = &mut self.login {
+                    m.form_scroll = 0;
                     m.stage = LoginStage::Method;
                     m.error = None;
                     m.browser_status.clear();
@@ -7005,6 +7168,7 @@ impl App {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.cancel_oauth();
                 if let Some(m) = &mut self.login {
+                    m.form_scroll = 0;
                     m.stage = LoginStage::Method;
                     m.buf.clear();
                 }
@@ -7030,6 +7194,11 @@ impl App {
                     m.buf.clear();
                     m.browser_status = "code submitted - exchanging…".into();
                     m.error = None;
+                }
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(m) = &mut self.login {
+                    m.buf.clear();
                 }
             }
             KeyCode::Backspace => {
@@ -7124,6 +7293,7 @@ impl App {
                         if let Err(e) = saved {
                             if let Some(m) = &mut self.login {
                                 m.error = Some(e.to_string());
+                                m.form_scroll = 0;
                                 m.stage = LoginStage::Method;
                             }
                             continue;
@@ -7165,6 +7335,7 @@ impl App {
                         if let Err(e) = saved {
                             if let Some(m) = &mut self.login {
                                 m.error = Some(e.to_string());
+                                m.form_scroll = 0;
                                 m.stage = LoginStage::Method;
                             }
                             continue;
@@ -7183,6 +7354,7 @@ impl App {
                         m.oauth_rx = None;
                         m.oauth_cancel = None;
                         // Stay on browser stage so user can read the error, or back to method.
+                        m.form_scroll = 0;
                         m.stage = LoginStage::Method;
                     }
                 }
@@ -7269,6 +7441,25 @@ impl App {
         self.mouse_row = m.row;
         let stage = self.login.as_ref().map(|l| l.stage);
 
+        if let Some(l) = &mut self.login {
+            if !matches!(l.stage, LoginStage::Provider | LoginStage::Method) {
+                let max = l.form_rows.saturating_sub(l.hit.body.height as usize);
+                match m.kind {
+                    MouseEventKind::ScrollUp => l.form_scroll = l.form_scroll.saturating_sub(1),
+                    MouseEventKind::ScrollDown => {
+                        l.form_scroll = l.form_scroll.saturating_add(1).min(max)
+                    }
+                    MouseEventKind::Down(MouseButton::Left)
+                        if rect_contains(l.hit.close, m.column, m.row) =>
+                    {
+                        self.on_login_key(event::KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+                    }
+                    _ => {}
+                }
+                return;
+            }
+        }
+
         // Method stage (auth options): same one-step wheel/click contract as
         // every other picker.
         if stage == Some(LoginStage::Method) {
@@ -7279,10 +7470,7 @@ impl App {
                     let Some(l) = &self.login else { return };
                     let hit = l.hit.clone();
                     if rect_contains(hit.close, m.column, m.row) {
-                        if let Some(l) = &mut self.login {
-                            l.stage = LoginStage::Provider;
-                            l.error = None;
-                        }
+                        self.on_login_key(event::KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
                         return;
                     }
                     for (i, r) in &hit.rows {
@@ -7328,7 +7516,7 @@ impl App {
                 let col = m.column;
                 let row = m.row;
                 if rect_contains(hit.close, col, row) {
-                    self.login = None;
+                    self.close_login_cancelled();
                     return;
                 }
                 for (i, r) in &hit.rows {
@@ -7344,7 +7532,7 @@ impl App {
                     }
                 }
                 if !rect_contains(hit.frame, col, row) {
-                    self.login = None;
+                    self.close_login_cancelled();
                 }
             }
             _ => {}
@@ -7480,11 +7668,14 @@ impl App {
                     .unwrap_or(false);
                 if browser {
                     // Keep fallback_key so Method still knows this is failover capture.
+                    m.form_scroll = 0;
                     m.stage = LoginStage::Method;
                 } else if m.fallback_key {
                     m.fallback_key = false;
+                    m.form_scroll = 0;
                     m.stage = LoginStage::Provider;
                 } else {
+                    m.form_scroll = 0;
                     m.stage = LoginStage::Provider;
                 }
                 m.buf.clear();
@@ -7574,6 +7765,7 @@ impl App {
             let prefill = crate::config::provider_base_url_override(&self.cfg, &provider_id)
                 .unwrap_or_else(|| provider.base_url.to_string());
             if let Some(m) = &mut self.login {
+                m.form_scroll = 0;
                 m.stage = LoginStage::BaseUrl;
                 m.buf = prefill;
                 m.error = None;
@@ -7589,6 +7781,7 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 // Back to key entry (the key is still buffered/saved).
+                m.form_scroll = 0;
                 m.stage = LoginStage::Key;
                 m.buf.clear();
                 m.error = None;
@@ -9723,6 +9916,50 @@ impl App {
         if text.is_empty() {
             return;
         }
+        let field_text: String = text.chars().filter(|c| !c.is_control()).collect();
+        if self.theme_picker.is_some() {
+            self.filter_themes(Some(&field_text), false);
+            return;
+        }
+        if let Some(m) = &mut self.login {
+            // Provider stage types into the filter; key / method / browser use buf.
+            if m.stage == LoginStage::Provider {
+                m.filter.push_str(&field_text);
+                m.sel = 0;
+                m.scroll = 0;
+                m.clamp_scroll();
+            } else if m.stage != LoginStage::Method {
+                m.buf.push_str(&field_text);
+            }
+            return;
+        }
+        if self.model_picker.is_some() {
+            if let Some(mp) = &mut self.model_picker {
+                mp.filter.push_str(&field_text);
+                mp.sel = 0;
+                mp.scroll = 0;
+                mp.clamp_scroll();
+            }
+            return;
+        }
+        if self.plugin_picker.is_some() {
+            if let Some(pp) = &mut self.plugin_picker {
+                pp.filter.push_str(&field_text);
+                pp.sel = 0;
+                pp.scroll = 0;
+                pp.clamp_scroll();
+            }
+            return;
+        }
+        if self.approval.is_some()
+            || self.picker.is_some()
+            || self.update_modal.is_some()
+            || self.ctx_menu.is_some()
+            || self.peek_is_open()
+        {
+            return;
+        }
+
         // Image clipboard wins when the OS clipboard holds a bitmap (screenshot
         // → Ctrl+V). The pixels go inline into the transcript AND queue for
         // model vision on the next turn.
@@ -9743,43 +9980,6 @@ impl App {
                 }
             }
         }
-        if let Some(m) = &mut self.login {
-            // Provider stage types into the filter; key / method / browser use buf.
-            if m.stage == LoginStage::Provider {
-                m.filter.push_str(&text);
-                m.sel = 0;
-                m.scroll = 0;
-                m.clamp_scroll();
-            } else {
-                m.buf.push_str(&text);
-            }
-            return;
-        }
-        if self.theme_picker.is_some() {
-            return;
-        }
-        if self.model_picker.is_some() {
-            if let Some(mp) = &mut self.model_picker {
-                mp.filter.push_str(&text);
-                mp.sel = 0;
-                mp.scroll = 0;
-                mp.clamp_scroll();
-            }
-            return;
-        }
-        if self.plugin_picker.is_some() {
-            if let Some(pp) = &mut self.plugin_picker {
-                pp.filter.push_str(&text);
-                pp.sel = 0;
-                pp.scroll = 0;
-                pp.clamp_scroll();
-            }
-            return;
-        }
-        if self.approval.is_some() || self.picker.is_some() {
-            return;
-        }
-
         // Reverse history search owns the keyboard - a paste extends the search
         // query, it must not leak into the stashed composer buffer.
         if self.input.search_is_active() {
@@ -10579,8 +10779,47 @@ mod tests {
     }
 
     #[test]
+    fn modal_navigation_pages_and_bounds() {
+        assert_eq!(navigation_target(KeyCode::PageDown, 3, 100, 20), Some(23));
+        assert_eq!(navigation_target(KeyCode::PageUp, 3, 100, 20), Some(0));
+        assert_eq!(navigation_target(KeyCode::End, 3, 100, 20), Some(99));
+        assert_eq!(navigation_target(KeyCode::Down, 0, 0, 0), Some(0));
+        assert_eq!(navigation_target(KeyCode::Enter, 3, 100, 20), None);
+    }
+
+    #[test]
+    fn theme_search_keeps_selection_inside_filtered_results() {
+        let mut picker = ThemePicker {
+            filter: "BANANA".into(),
+            sel: 20,
+            scroll: 20,
+            vis_page: 3,
+            original: "gold".into(),
+            onboarding: false,
+            hit: Default::default(),
+            last_step_at: Instant::now(),
+        };
+        picker.clamp_scroll();
+        assert_eq!(picker.count(), 1);
+        assert_eq!(picker.chosen(), "banana");
+        assert_eq!((picker.sel, picker.scroll), (0, 0));
+        picker.step(1);
+        assert_eq!(picker.chosen(), "banana");
+        picker.filter = "no-such-palette".into();
+        picker.clamp_scroll();
+        assert_eq!(picker.count(), 0);
+        picker.step(1);
+        assert_eq!((picker.sel, picker.scroll), (0, 0));
+        picker.filter.clear();
+        picker.set_idx(theme::THEMES.len() - 1);
+        assert_eq!(picker.chosen(), theme::THEMES.last().unwrap().0);
+        assert!(picker.sel >= picker.scroll && picker.sel < picker.scroll + picker.vis_page);
+    }
+
+    #[test]
     fn theme_picker_wheel_coalesces_to_one_step() {
         let mut picker = ThemePicker {
+            filter: String::new(),
             sel: 0,
             scroll: 0,
             vis_page: 2,
