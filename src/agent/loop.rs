@@ -539,10 +539,13 @@ impl AgentRunner {
                 ));
             }
         }
-        // Discard any media a prior turn queued but never flushed (e.g. `look`
-        // ran, then the turn was cancelled before the attach) so a stale image
-        // can't bleed onto this unrelated prompt.
-        let _ = media::take_pending_media();
+        // Drop stale TOOL-queued media (e.g. `look` ran but the turn was
+        // cancelled before the attach) so it can't bleed onto this unrelated
+        // prompt. USER-pasted media (Ctrl+V, /image) is kept: the paste flow
+        // promises "queued for vision on your next message", and a blanket
+        // take_pending_media() here silently ate every pasted image before it
+        // could be attached.
+        media::drop_tool_pending_media();
         // Oversized input never stops a turn: auto-register the bulk with
         // context_store (RLM prompt-as-variable, done for the user) and run
         // with a pointer + preview instead of blocking. Runs before the

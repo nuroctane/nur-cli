@@ -32,6 +32,11 @@ pub struct MediaAttach {
     pub path: String,
     pub data_url: String,
     pub bytes: u64,
+    /// True when the USER pasted/attached this deliberately (Ctrl+V, /image,
+    /// a path in their prompt). Tool-queued media (`look`, extract_frames)
+    /// is false. Turn start drops stale tool media but NEVER user media -
+    /// the paste flow promises "queued for vision on your next message".
+    pub user_pasted: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,6 +69,71 @@ pub fn take_pending_media() -> Vec<MediaAttach> {
         .lock()
         .map(|mut g| std::mem::take(&mut *g))
         .unwrap_or_default()
+}
+
+/// Discard stale TOOL-queued media (e.g. `look` ran but the turn was
+/// cancelled before the attach) while KEEPING user-pasted media, which the
+/// paste flow promises to carry on the user's next message. Runs at turn
+/// start - a blanket take_pending_media() here silently ate every pasted
+/// image before it could be attached (the paste-vision bug).
+#[cfg(test)]
+mod provenance_tests {
+    use super::*;
+
+    fn reset() {
+        let _ = take_pending_media();
+    }
+
+    /// The paste-vision bug: turn start dropped ALL pending media, so a
+    /// user-pasted image never reached the model. User media must survive
+    /// the stale-tool discard; tool media must not.
+    #[test]
+    fn drop_tool_pending_keeps_user_pastes_drops_tool_media() {
+        reset();
+        let user = MediaAttach {
+            kind: MediaKind::Image,
+            path: "paste.png".into(),
+            data_url: "data:image/png;base64,AAA".into(),
+            bytes: 10,
+            user_pasted: true,
+        };
+        let tool = MediaAttach {
+            kind: MediaKind::Image,
+            path: "look-frame.png".into(),
+            data_url: "data:image/png;base64,BBB".into(),
+            bytes: 20,
+            user_pasted: false,
+        };
+        push_pending(user.clone()).unwrap();
+        push_pending(tool).unwrap();
+        drop_tool_pending_media();
+        let left = take_pending_media();
+        assert_eq!(left.len(), 1, "only the user paste survives");
+        assert_eq!(left[0].path, "paste.png");
+        assert!(left[0].user_pasted);
+        // queue_image_for_vision marks user origin.
+        let dir = std::env::temp_dir().join(format!("nur-media-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("p.png");
+        std::fs::write(&img, "not really png").unwrap();
+        // load_media decodes nothing here; mime by extension.
+        drop(user);
+        let queued = queue_image_for_vision(&img).unwrap();
+        assert!(queued.user_pasted, "queue_image_for_vision marks user origin");
+        let left = take_pending_media();
+        assert_eq!(left.len(), 1);
+        assert!(left[0].user_pasted);
+        let _ = std::fs::remove_dir_all(&dir);
+        reset();
+    }
+}
+
+pub fn drop_tool_pending_media() {
+    let Ok(mut g) = PENDING.lock() else {
+        return;
+    };
+    let kept: Vec<MediaAttach> = g.drain(..).filter(|m| m.user_pasted).collect();
+    *g = kept;
 }
 
 fn push_pending(item: MediaAttach) -> Result<()> {
@@ -161,7 +231,12 @@ pub fn save_clipboard_image(cwd: &Path, bytes: &[u8], ext: &str) -> Result<PathB
 /// Queue an existing image file for vision on the next turn (TUI paste path).
 /// Thin wrapper over [`load_media`] with push=true.
 pub fn queue_image_for_vision(path: &Path) -> Result<MediaAttach> {
-    load_media(path, true)
+    // User-pasted (Ctrl+V / /image): must survive the turn-start stale-tool
+    // discard so it rides the user's NEXT message, as the UI promises.
+    let mut m = load_media(path, false)?;
+    m.user_pasted = true;
+    push_pending(m.clone())?;
+    Ok(m)
 }
 
 /// Load a workspace media file into a data URL (and pending queue if push=true).
@@ -193,6 +268,7 @@ pub fn load_media(path: &Path, push: bool) -> Result<MediaAttach> {
         path: path.display().to_string(),
         data_url,
         bytes: meta.len(),
+        user_pasted: false,
     };
     if push {
         push_pending(item.clone())?;

@@ -4042,13 +4042,21 @@ impl App {
                 return;
             }
             // Ctrl+V / Shift+Insert: clipboard → exactly one chip, then lock drip.
+            // An IMAGE clipboard is checked first: it carries no text, so the
+            // old text-only path silently did nothing on Ctrl+V.
             KeyCode::Char('v') if ctrl => {
+                if try_attach_clipboard_image_impl(self) {
+                    return;
+                }
                 if let Some(t) = clipboard_get() {
                     self.on_paste(&t);
                 }
                 return;
             }
             KeyCode::Insert if shift => {
+                if try_attach_clipboard_image_impl(self) {
+                    return;
+                }
                 if let Some(t) = clipboard_get() {
                     self.on_paste(&t);
                 }
@@ -9962,23 +9970,11 @@ impl App {
 
         // Image clipboard wins when the OS clipboard holds a bitmap (screenshot
         // → Ctrl+V). The pixels go inline into the transcript AND queue for
-        // model vision on the next turn.
-        #[cfg(feature = "image-peek")]
-        {
-            if let Some((bytes, ext)) = clipboard_image() {
-                match crate::tools::media::save_clipboard_image(&self.cwd, &bytes, &ext)
-                    .and_then(|p| crate::tools::media::queue_image_for_vision(&p).map(|m| (p, m)))
-                {
-                    Ok((path, meta)) => {
-                        self.attach_image_cell(&path.display().to_string(), &meta);
-                        return;
-                    }
-                    Err(e) => {
-                        self.push_error(format!("image paste failed: {e}"));
-                        return;
-                    }
-                }
-            }
+        // model vision on the next turn. Checked BEFORE the empty-text return:
+        // terminals deliver an empty bracketed paste when the clipboard holds
+        // only an image.
+        if try_attach_clipboard_image_impl(self) {
+            return;
         }
         // Reverse history search owns the keyboard - a paste extends the search
         // query, it must not leak into the stashed composer buffer.
@@ -10164,6 +10160,29 @@ fn clipboard_get() -> Option<String> {
     arboard::Clipboard::new()
         .ok()
         .and_then(|mut cb| cb.get_text().ok())
+}
+
+/// Attach the OS-clipboard bitmap (if any) as a pending vision image.
+/// Returns true when an image was attached. Composer Ctrl+V / Shift+Insert
+/// call this BEFORE the text-clipboard path: a screenshot clipboard carries no
+/// text, so the old text-only check silently did nothing on Ctrl+V.
+#[cfg(feature = "image-peek")]
+fn try_attach_clipboard_image_impl(app: &mut App) -> bool {
+    let Some((bytes, ext)) = clipboard_image() else {
+        return false;
+    };
+    match crate::tools::media::save_clipboard_image(&app.cwd, &bytes, &ext)
+        .and_then(|p| crate::tools::media::queue_image_for_vision(&p).map(|m| (p, m)))
+    {
+        Ok((path, meta)) => {
+            app.attach_image_cell(&path.display().to_string(), &meta);
+            true
+        }
+        Err(e) => {
+            app.push_error(format!("image paste failed: {e}"));
+            true // the clipboard DID hold an image - do not fall through to text
+        }
+    }
 }
 
 /// Clipboard image bytes (png/rgba), for Ctrl+V image paste. Returns
