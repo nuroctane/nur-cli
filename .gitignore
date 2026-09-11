@@ -23,10 +23,18 @@ credentials*
 **/credentials*
 secrets*
 **/secrets*
+# Templates are content, not secrets (verified placeholders only).
+!**/.env.example
 
-# Local agent instructions only (never publish to main)
-AGENTS.md
+# Local agent instructions only (never publish to main).
+# Scoped to the root: nested AGENTS.md under skills/ are skill-pack docs
+# (React Best Practices, Mobile Harness, ...) that must ship with the pack.
+/AGENTS.md
 .claude/
+!skills/**/AGENTS.md
+!skills/**/agents.md
+!skills/**/credentials/
+!skills/**/secrets/
 
 # Editor / OS
 .idea/
@@ -34,6 +42,8 @@ AGENTS.md
 *.swp
 *~
 Thumbs.db
+node_modules/
+*.7z
 
 .ref-frames/
 
