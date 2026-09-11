@@ -158,6 +158,33 @@ pub fn build_body_opts(
                 }
             }
         }
+        // Sessions whose tool-call turns predate reasoning capture store no
+        // reasoning_content at all — and DeepSeek thinking mode then 400s on
+        // the first replayed tool-call turn forever. When THIS conversation
+        // is demonstrably a thinking one (reasoning present somewhere),
+        // synthesize the field on tool-call turns that lack it so the
+        // validator passes. Non-thinking requests (no reasoning anywhere)
+        // keep the field absent.
+        let thinking_conversation = messages
+            .iter()
+            .any(|m| {
+                m.get("reasoning_content")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|s| !s.is_empty())
+            });
+        if thinking_conversation {
+            for message in &mut messages {
+                let is_assistant =
+                    message.get("role").and_then(|r| r.as_str()) == Some("assistant");
+                let has_tool_calls = message.get("tool_calls").is_some();
+                if is_assistant && has_tool_calls {
+                    if let Some(obj) = message.as_object_mut() {
+                        obj.entry("reasoning_content")
+                            .or_insert_with(|| json!(""));
+                    }
+                }
+            }
+        }
     }
 
     let mut body = json!({
@@ -195,7 +222,18 @@ pub fn build_body_opts(
             // same nothing and the run ended reporting success. Defaults to
             // "auto" when the caller expressed no preference, so every provider
             // that never sets it behaves exactly as before.
+            // DeepSeek thinking mode accepts only "auto" — anything forced
+            // ("required") is rejected 400 "Thinking mode does not support
+            // this tool_choice" (observed live via the Command Code gateway,
+            // which routes to deepseek). Clamp to "auto"; the loop's nudge
+            // text still does the recovery work. Command Code routes to
+            // deepseek and needs the same clamp.
             body["tool_choice"] = match req.tool_choice.as_deref() {
+                Some("required")
+                    if matches!(provider_id, "deepseek" | "commandcode") =>
+                {
+                    json!("auto")
+                }
                 Some(choice) if !choice.is_empty() => json!(choice),
                 _ => json!("auto"),
             };
@@ -1801,6 +1839,89 @@ mod tool_choice_tests {
             );
             assert_eq!(assistants[0]["tool_calls"][0]["id"], "call_1", "{provider}");
         }
+    }
+
+    /// Live subagent failure (session 5b30168a item 65): the empty-turn
+    /// recovery retried with `tool_choice: "required"` and DeepSeek thinking
+    /// mode rejected it - "Thinking mode does not support this tool_choice".
+    /// deepseek/commandcode must clamp to "auto"; other providers keep the
+    /// forced form (the recovery depends on it elsewhere).
+    #[test]
+    fn deepseek_thinking_clamps_required_tool_choice_to_auto() {
+        let mut request = req_with_choice(Some("required"));
+        let body = build_body_for_provider(&request, false, "deepseek");
+        assert_eq!(body["tool_choice"], "auto", "deepseek thinking rejects required");
+        let body = build_body_for_provider(&request, false, "commandcode");
+        assert_eq!(body["tool_choice"], "auto", "commandcode routes to deepseek");
+        // Other providers still get the forced form.
+        let body = build_body_for_provider(&request, false, "openai-cc");
+        assert_eq!(body["tool_choice"], "required");
+        let body = build_body_for_provider(&request, false, "kimi");
+        assert_eq!(body["tool_choice"], "required");
+    }
+
+    /// Session 5b30168a items 1-3: tool-call turns stored before reasoning
+    /// capture have NO reasoning_content anywhere. In a conversation that is
+    /// demonstrably thinking (reasoning present on a later turn), the field
+    /// must be synthesized on tool-call turns or DeepSeek 400s forever on
+    /// that session. Non-thinking conversations keep it absent.
+    #[test]
+    fn deepseek_synthesizes_reasoning_on_poisoned_tool_call_turns() {
+        let mut request = req_with_choice(None);
+        // Thinking conversation: turn 1 poisoned (no reasoning stored),
+        // turn 2 carries reasoning (proves thinking mode).
+        request.input = json!([
+            {"role": "user", "content": [{"type": "input_text", "text": "audit"}]},
+            {"role": "assistant", "content": [
+                {"type": "output_text", "text": "orienting"}],
+             "reasoning_content": null},
+            {"type": "function_call", "call_id": "c1", "name": "list_dir", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "c1", "output": "files"},
+            {"role": "assistant", "content": [], "reasoning_content": "Need a search."},
+            {"role": "assistant", "content": [
+                {"type": "output_text", "text": "reading files"}]},
+            {"type": "function_call", "call_id": "c2", "name": "grep", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "c2", "output": "hits"},
+        ]);
+        let body = build_body_for_provider(&request, false, "commandcode");
+        let assistants: Vec<&Value> = body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["role"] == "assistant")
+            .collect();
+        // Turn 1 folds to one assistant (poisoned, synthesized);
+        // turn 2's carrier+text pair splices into one assistant.
+        assert_eq!(assistants.len(), 2, "commandcode");
+        // Poisoned turn: synthesized (empty) so the validator passes.
+        assert_eq!(assistants[0]["reasoning_content"], "");
+        assert!(assistants[0]["tool_calls"].is_array());
+        assert_eq!(assistants[0]["content"], "orienting");
+        // Spliced healthy turn: real reasoning rides the tool-call message.
+        assert_eq!(assistants[1]["reasoning_content"], "Need a search.");
+        assert_eq!(assistants[1]["content"], "reading files");
+
+        // A non-thinking conversation (no reasoning anywhere) must NOT grow
+        // the field - thinking is off and the model may not accept it.
+        let mut plain = req_with_choice(None);
+        plain.input = json!([
+            {"role": "user", "content": [{"type": "input_text", "text": "go"}]},
+            {"role": "assistant", "content": [
+                {"type": "output_text", "text": "doing"}]},
+            {"type": "function_call", "call_id": "c1", "name": "ls", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "c1", "output": "x"},
+        ]);
+        let body = build_body_for_provider(&plain, false, "commandcode");
+        let assistant = body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["role"] == "assistant")
+            .unwrap();
+        assert!(
+            assistant.get("reasoning_content").is_none(),
+            "non-thinking conversation must keep reasoning_content absent"
+        );
     }
 
     /// `reasoning_content` is only legal on the assistant message that carries
