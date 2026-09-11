@@ -285,7 +285,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/dialkit", "live-tune interface parameters (dialkit skill)"),
     ("/init", "generate a NUR.md project guide"),
     ("/scan", "map this codebase → shareable foglamp scan: /scan [focus]"),
-    ("/goal", "set a standing session goal (context on every turn)"),
+    ("/goal", "set a session goal and immediately start working toward it"),
     ("/bro", "chill mode: plain words, no jargon, no preamble (toggle)"),
     ("/btw", "add a one-off note to your next message"),
     ("/codesearch", "fast ripgrep over the workspace  (/cs)"),

@@ -2482,8 +2482,13 @@ impl App {
 
     /// Standing session goal, prepended to every turn as context (invisible in
     /// the transcript). `/goal` shows it; `/goal clear` removes it.
+    ///
+    /// Submitting a NEW objective is a work order, not just context: it
+    /// immediately starts a goal-driven turn (queued after the running one if
+    /// the agent is busy). Management subcommands never start a turn.
     fn cmd_goal(&mut self, arg: &str) {
         let arg = arg.trim();
+        let objective = goal_set_objective(arg);
         // Persistent goal store (Prime /goal pattern) when a session id exists.
         if self.gen_session_scope().is_some() {
             match arg {
@@ -2498,29 +2503,58 @@ impl App {
                     self.cmd_goal_persistent_set(&text);
                 }
             }
-            return;
-        }
-        // Fallback: in-memory session goal (no session id / headless).
-        match arg {
-            "" => match &self.session_goal {
-                Some(g) => {
-                    self.push_note(Tone::Plan, format!("goal · {g}\n  /goal clear to drop it"))
+        } else {
+            // Fallback: in-memory session goal (no session id / headless).
+            match arg {
+                "" => match &self.session_goal {
+                    Some(g) => self
+                        .push_note(Tone::Plan, format!("goal · {g}\n  /goal clear to drop it")),
+                    None => self.push_info(
+                        "no session goal set  ·  /goal <what you're trying to achieve>".into(),
+                    ),
+                },
+                "clear" | "none" | "off" => {
+                    self.session_goal = None;
+                    self.push_info("session goal cleared".into());
                 }
-                None => self.push_info(
-                    "no session goal set  ·  /goal <what you're trying to achieve>".into(),
+                _ => {
+                    self.session_goal = Some(arg.to_string());
+                    self.push_note(
+                        Tone::Plan,
+                        format!("goal set · {arg}\n  every turn now carries this as context"),
+                    );
+                }
+            }
+        }
+        if let Some(objective) = objective {
+            self.start_goal_turn(objective);
+        }
+    }
+
+    /// A newly submitted goal starts working NOW: idle → a turn whose model
+    /// prompt drives toward the goal until it is demonstrably achieved; busy →
+    /// the goal turn is queued to run right after the current one (the queued
+    /// card can still be steered in immediately without cancelling).
+    fn start_goal_turn(&mut self, goal: &str) {
+        let model_prompt = goal_turn_prompt(goal);
+        if self.busy {
+            // Queued cards replay their text as the prompt (steer / cut in /
+            // after-turn), so the card carries the full instruction.
+            self.queue.push_back(model_prompt.clone());
+            self.cells
+                .push(Cell::Queued { text: model_prompt });
+            self.scroll_to_bottom();
+            self.push_note(
+                Tone::Plan,
+                format!(
+                    "goal queued · starts after the current turn ({} waiting) · \
+                     steer = work it now without cancelling · cut in = cancel + start",
+                    self.queue.len()
                 ),
-            },
-            "clear" | "none" | "off" => {
-                self.session_goal = None;
-                self.push_info("session goal cleared".into());
-            }
-            _ => {
-                self.session_goal = Some(arg.to_string());
-                self.push_note(
-                    Tone::Plan,
-                    format!("goal set · {arg}\n  every turn now carries this as context"),
-                );
-            }
+            );
+        } else {
+            let display = format!("/goal {goal}");
+            self.start_turn_labeled(&display, &model_prompt);
         }
     }
 
@@ -3492,5 +3526,54 @@ fn parse_interval_secs(s: &str) -> u64 {
         0
     } else {
         secs as u64
+    }
+}
+
+/// Classify a `/goal` argument: `Some(objective)` when the command SETS a new
+/// goal (which starts a goal-driven turn), `None` for the empty/status forms
+/// and management subcommands (which never start a turn).
+fn goal_set_objective(arg: &str) -> Option<&str> {
+    match arg.trim() {
+        "" | "clear" | "none" | "off" | "pause" | "resume" | "complete" | "get" => None,
+        objective => Some(objective),
+    }
+}
+
+/// The model prompt for a goal-driven turn: the goal verbatim plus the
+/// autonomy contract (keep going across rounds, verify before finishing).
+fn goal_turn_prompt(goal: &str) -> String {
+    format!(
+        "{goal}\n\n\
+         This is the session goal just submitted. Work toward it \
+         autonomously: plan, execute, and keep going across tool rounds \
+         until it is demonstrably achieved or you hit a blocker only the \
+         user can resolve. Do not stop between steps to ask permission. \
+         Before finishing, re-read the goal and verify every part is done; \
+         close with a completion check and list anything that remains."
+    )
+}
+
+#[cfg(test)]
+mod goal_tests {
+    use super::*;
+
+    #[test]
+    fn setting_a_goal_is_a_work_order_management_is_not() {
+        assert_eq!(goal_set_objective("audit the contracts"), Some("audit the contracts"));
+        assert_eq!(goal_set_objective("  ship v2  "), Some("ship v2"));
+        for mgmt in [
+            "", "get", "clear", "none", "off", "pause", "resume", "complete",
+        ] {
+            assert_eq!(goal_set_objective(mgmt), None, "{mgmt:?} must not start a turn");
+        }
+    }
+
+    #[test]
+    fn goal_turn_prompt_carries_the_goal_and_the_autonomy_contract() {
+        let p = goal_turn_prompt("make the tests pass");
+        assert!(p.starts_with("make the tests pass\n"));
+        assert!(p.contains("demonstrably achieved"));
+        assert!(p.contains("completion check"));
+        assert!(p.contains("Do not stop between steps"));
     }
 }
