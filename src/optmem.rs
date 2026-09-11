@@ -99,19 +99,81 @@ fn python_probe(bin: &str, launcher: bool) -> bool {
 }
 
 /// Run memo with args; returns stdout/stderr merged or an error string.
+/// True when the file is a `#!… python` script. The upstream install.sh ships
+/// `memo` with NO extension, so an `.py`-extension check alone misses it and
+/// the direct spawn dies with os error 193 (%1 is not a valid Win32
+/// application) on Windows before the Python fallback can run.
+fn is_python_script(bin: &std::path::Path) -> bool {
+    use std::io::Read;
+    if bin
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("py"))
+    {
+        return true;
+    }
+    let mut f = match std::fs::File::open(bin) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    let mut head = [0u8; 128];
+    let n = f.read(&mut head).unwrap_or(0);
+    let first_line = head[..n].split(|b| *b == b'\n').next().unwrap_or(&[]);
+    first_line.starts_with(b"#!")
+        && first_line
+            .to_ascii_lowercase()
+            .windows(6)
+            .any(|w| w == b"python")
+}
+
+/// The probed interpreter, cached: probing spawns a child per candidate and
+/// optmem calls arrive several times a session.
+fn python_runner_cached() -> Option<String> {
+    static RUNNER: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    RUNNER.get_or_init(python_runner).clone()
+}
+
+#[cfg(test)]
+mod python_script_tests {
+    use super::*;
+
+    /// The upstream install ships `memo` with NO extension; the old
+    /// extension-only check missed it and every optmem call died with
+    /// os error 193 before the Python fallback could run.
+    #[test]
+    fn shebang_detection_covers_extensionless_python_scripts() {
+        let dir = std::env::temp_dir().join(format!("nur-optmem-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let no_ext = dir.join("memo");
+        std::fs::write(&no_ext, "#!/usr/bin/env python3\nprint(1)\n").unwrap();
+        assert!(is_python_script(&no_ext));
+        let with_ext = dir.join("memo.py");
+        std::fs::write(&with_ext, "print(1)\n").unwrap();
+        assert!(is_python_script(&with_ext));
+        let binary = dir.join("memo.exe");
+        std::fs::write(&binary, b"MZ not a python script").unwrap();
+        assert!(!is_python_script(&binary));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 pub fn run_memo(args: &[&str], timeout_ms: u64) -> Result<String, String> {
     let bin = memo_bin().ok_or_else(|| {
         "OptMem memo not found at ~/.optmem/memo - run ecosystem ensure or the upstream install.sh"
             .to_string()
     })?;
 
-    let is_py = bin
+    let is_py = is_python_script(&bin)
+        || bin
         .extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("py"));
 
     if is_py {
-        let py = python_runner().ok_or_else(|| "python required to run memo.py".to_string())?;
+        let py = python_runner_cached().ok_or_else(|| {
+            "memo is a Python script but no usable interpreter was found (probed py / python /              python3). Install Python 3 - the WindowsApps python3.exe Store alias stub does not              count."
+                .to_string()
+        })?;
         let mut argv: Vec<String> = Vec::new();
         if Path::new(&py)
             .file_stem()
@@ -130,7 +192,7 @@ pub fn run_memo(args: &[&str], timeout_ms: u64) -> Result<String, String> {
     match run_capture(&bin_s, args, None, timeout_ms) {
         Ok(s) => Ok(s),
         Err(e) => {
-            if let Some(py) = python_runner() {
+            if let Some(py) = python_runner_cached() {
                 let mut argv: Vec<String> = Vec::new();
                 if Path::new(&py)
                     .file_stem()

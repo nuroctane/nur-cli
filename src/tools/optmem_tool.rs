@@ -3,6 +3,21 @@ use crate::error::{NurError, Result};
 use crate::optmem;
 use serde_json::Value;
 
+/// Collapse upstream's appended nap prompt to a one-line pointer. `memo note`
+/// prints "Saved as #N." followed by the full compression instructions every
+/// time, which drowned the actual tool result in 700+ chars of repetition.
+fn trim_nap_prompt(out: &str) -> String {
+    let marker = "Compress memories #";
+    match out.find(marker) {
+        Some(idx) => {
+            let kept = out[..idx].trim_end();
+            format!("{kept}
+[compressions pending - optmem(action=nap) to merge them]")
+        }
+        None => out.to_string(),
+    }
+}
+
 pub struct OptMem;
 
 pub fn is_read_only_action(args: &str) -> bool {
@@ -43,9 +58,9 @@ impl Tool for OptMem {
                     "enum": ["status", "doctor", "wake", "note", "nap", "recall", "zoom", "forget", "config"],
                     "default": "status"
                 },
-                "text": { "type": "string", "description": "For note: one line, max 280 chars" },
+                "text": { "type": "string", "description": "For note: one line, max 280 chars. For nap: the compressed one-line summary to apply (with range)" },
                 "query": { "type": "string", "description": "For recall: regex/search" },
-                "range": { "type": "string", "description": "For zoom/forget: a-b node id" },
+                "range": { "type": "string", "description": "For zoom/forget: a-b node id. For nap: a-b of the block to compress (with text); omit to get the pending prompt" },
                 "config_kv": { "type": "string", "description": "For config: e.g. WAKE_LINES=300" }
             }
         })
@@ -59,7 +74,8 @@ impl Tool for OptMem {
             "note" => {
                 let text = arg_str(args, "text")
                     .map_err(|_| NurError::Tool("note requires text=".into()))?;
-                optmem::note(&text).map_err(NurError::Tool)
+                let out = optmem::note(&text).map_err(NurError::Tool)?;
+                Ok(trim_nap_prompt(&out))
             }
             "nap" => {
                 // Two-step upstream protocol: bare `memo nap` prints the
