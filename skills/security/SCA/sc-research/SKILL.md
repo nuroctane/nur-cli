@@ -90,6 +90,7 @@ Deception is defender-owned-surfaces only: lawful gate in `agentic-defense-game-
 |----------|--------|
 | invariant handler + ghosts | `writing-foundry-invariant-handlers` |
 | Echidna / Medusa | `fuzzing-with-echidna-and-medusa` |
+| deep agentic fuzz campaign / threat hunt at scale | `ultrafuzz` |
 | Slither / Aderyn / Semgrep / Wake | `static-analysis-slither-aderyn-semgrep-wake` |
 | Halmos / Certora / Kontrol | `formal-verification-halmos-certora-kontrol` |
 | cast / Sourcify / public tx | `onchain-read-recon` |

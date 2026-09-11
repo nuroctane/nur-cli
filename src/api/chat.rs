@@ -48,6 +48,7 @@ pub fn build_body_opts(
             messages.push(json!({ "role": "system", "content": instr }));
         }
     }
+    let deepseek_rules = deepseek_thinking_rules(provider_id, &req.model);
     if let Value::Array(items) = &req.input {
         // A run of tool calls must reach the server as ONE assistant turn whose
         // `tool_calls` list every following `tool` message can point back at.
@@ -137,7 +138,13 @@ pub fn build_body_opts(
                 }));
                 continue;
             }
-            push_item_messages_opts(&items[index], &mut messages, drop_media, provider_id);
+            push_item_messages_opts(
+                &items[index],
+                &mut messages,
+                drop_media,
+                provider_id,
+                deepseek_rules,
+            );
             index += 1;
         }
     }
@@ -147,7 +154,7 @@ pub fn build_body_opts(
     // for the next request). On text-only assistant turns it must not appear,
     // so strip it there after mapping. Kimi/moonshot keep it on every
     // replayed assistant message - both are documented to tolerate that.
-    if matches!(provider_id, "deepseek" | "commandcode") {
+    if deepseek_rules {
         for message in &mut messages {
             let is_assistant =
                 message.get("role").and_then(|r| r.as_str()) == Some("assistant");
@@ -229,11 +236,7 @@ pub fn build_body_opts(
             // text still does the recovery work. Command Code routes to
             // deepseek and needs the same clamp.
             body["tool_choice"] = match req.tool_choice.as_deref() {
-                Some("required")
-                    if matches!(provider_id, "deepseek" | "commandcode") =>
-                {
-                    json!("auto")
-                }
+                Some("required") if deepseek_rules => json!("auto"),
                 Some(choice) if !choice.is_empty() => json!(choice),
                 _ => json!("auto"),
             };
@@ -381,6 +384,7 @@ fn push_item_messages_opts(
     out: &mut Vec<Value>,
     drop_media: bool,
     provider_id: &str,
+    deepseek_rules: bool,
 ) {
     // function_call_output → a `tool` role message.
     if item.get("type").and_then(|t| t.as_str()) == Some("function_call_output") {
@@ -426,9 +430,7 @@ fn push_item_messages_opts(
         out.push(json!({ "role": role, "content": text }));
     } else if images.is_empty() {
         let mut message = json!({ "role": role, "content": text });
-        if role == "assistant"
-            && matches!(provider_id, "kimi" | "moonshot" | "deepseek" | "commandcode")
-        {
+        if role == "assistant" && (deepseek_rules || matches!(provider_id, "kimi" | "moonshot")) {
             // DeepSeek thinking mode REQUIRES the assistant tool-call turn's
             // reasoning_content to be passed back on the next request (400
             // "The `reasoning_content` in the thinking mode must be passed
@@ -449,6 +451,20 @@ fn push_item_messages_opts(
         }
         out.push(json!({ "role": role, "content": parts }));
     }
+}
+
+/// DeepSeek thinking-mode wire rules (reasoning_content replay, tool_choice
+/// auto-only) attach to the MODEL, not the gateway: direct deepseek, Command
+/// Code, OpenCode Go, OpenRouter ... all route deepseek thinking models and
+/// need the same request shape. Keyed on the model id so a gateway adding a
+/// new deepseek route needs no new allowlist entry.
+fn deepseek_thinking_rules(provider_id: &str, model: &str) -> bool {
+    if provider_id == "deepseek" {
+        return true;
+    }
+    let m = model.trim().to_ascii_lowercase();
+    let bare = m.rsplit('/').next().unwrap_or(&m);
+    bare.contains("deepseek")
 }
 
 /// The Responses `type` discriminator of one input item, if it has one.
@@ -1706,6 +1722,7 @@ mod tool_choice_tests {
             let response = to_api_response(parse_completion(&raw)).expect("map response");
             let replay = crate::api::types::replay_output_items(&response.output);
             let mut request = req_with_choice(None);
+            request.model = "deepseek/deepseek-v4.1-flash".into();
             request.input = Value::Array(replay);
             let body = build_body_for_provider(&request, false, provider);
             let assistant = body["messages"]
@@ -1741,6 +1758,7 @@ mod tool_choice_tests {
         let response = to_api_response(shaped).expect("stream response maps");
         let replay = crate::api::types::replay_output_items(&response.output);
         let mut request = req_with_choice(None);
+        request.model = "deepseek/deepseek-v4.1-flash".into();
         request.input = Value::Array(replay);
         for provider in ["commandcode", "deepseek"] {
             let body = build_body_for_provider(&request, false, provider);
@@ -1815,6 +1833,7 @@ mod tool_choice_tests {
     #[test]
     fn deepseek_splices_stored_split_reasoning_history() {
         let mut request = req_with_choice(None);
+        request.model = "deepseek/deepseek-v4.1-flash".into();
         request.input = json!([
             {"role": "user", "content": [{"type": "input_text", "text": "go"}]},
             {"role": "assistant", "content": [], "reasoning_content": "Need a search."},
@@ -1848,15 +1867,18 @@ mod tool_choice_tests {
     /// forced form (the recovery depends on it elsewhere).
     #[test]
     fn deepseek_thinking_clamps_required_tool_choice_to_auto() {
-        let request = req_with_choice(Some("required"));
+        let mut request = req_with_choice(Some("required"));
+        request.model = "deepseek/deepseek-v4.1-flash".into();
         let body = build_body_for_provider(&request, false, "deepseek");
         assert_eq!(body["tool_choice"], "auto", "deepseek thinking rejects required");
         let body = build_body_for_provider(&request, false, "commandcode");
         assert_eq!(body["tool_choice"], "auto", "commandcode routes to deepseek");
-        // Other providers still get the forced form.
-        let body = build_body_for_provider(&request, false, "openai-cc");
+        // Other providers with a NON-deepseek model keep the forced form
+        // (the clamp is model-keyed, not provider-keyed).
+        let plain = req_with_choice(Some("required"));
+        let body = build_body_for_provider(&plain, false, "openai-cc");
         assert_eq!(body["tool_choice"], "required");
-        let body = build_body_for_provider(&request, false, "kimi");
+        let body = build_body_for_provider(&plain, false, "kimi");
         assert_eq!(body["tool_choice"], "required");
     }
 
@@ -1868,6 +1890,7 @@ mod tool_choice_tests {
     #[test]
     fn deepseek_synthesizes_reasoning_on_poisoned_tool_call_turns() {
         let mut request = req_with_choice(None);
+        request.model = "deepseek/deepseek-v4.1-flash".into();
         // Thinking conversation: turn 1 poisoned (no reasoning stored),
         // turn 2 carries reasoning (proves thinking mode).
         request.input = json!([

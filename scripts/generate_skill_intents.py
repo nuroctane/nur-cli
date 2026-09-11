@@ -94,6 +94,29 @@ def gen_triggers(name, desc):
             "web3 security research",
             "defi whitehat",
             "sc research",
+            # Audit phrasings: the scored matcher prefers these multi-word
+            # triggers over the single-word "audit" trigger of the UI-audit
+            # skill (session 5b30168a grabbed the wrong lens).
+            "smart contract audit",
+            "audit smart contracts",
+            "audit my contracts",
+            "audit the contracts",
+            "audit the protocol",
+            "contract audit",
+            "solidity audit",
+            "defi audit",
+            "sca audit",
+            "sca skills",
+            "my sca skills",
+        ],
+        "ultrafuzz": [
+            "ultra fuzz",
+            "smart contract fuzzing",
+            "agentic fuzzing",
+            "fuzz the contracts",
+            "fuzz my contracts",
+            "fuzzing campaign",
+            "monad ultrafuzz",
         ],
         "contest-and-bounty-reporting": [
             "immunefi report",
@@ -273,6 +296,12 @@ def gen_triggers(name, desc):
     for a in alias_kept:
         if a not in filtered:
             filtered.append(a)
+    # Name-derived triggers (/name, whole name) are the most precise route
+    # and must never be capped out by longer alias phrases - losing them
+    # broke /sc-research and "use sc-research" matching (2026-09-11).
+    for c in (name, f"/{name}", spaced, f"/{spaced}"):
+        if len(c) >= 5 and c not in filtered:
+            filtered.insert(0, c)
     return filtered
 
 skills = []

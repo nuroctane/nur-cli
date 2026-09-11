@@ -89,17 +89,43 @@ pub fn find_by_expanded_triggers<'a>(user_norm: &str, installed: &'a [Skill]) ->
     let installed_names: std::collections::HashSet<&str> =
         installed.iter().map(|s| s.name.as_str()).collect();
 
+    // Score every matching trigger instead of returning the first hit: the
+    // map's iteration order is arbitrary, so a generic single-word trigger
+    // ("audit" -> the UI-audit skill) used to beat a domain-precise
+    // multi-word one ("smart contract audit" -> sc-research) for a query
+    // containing both. Rank by: multi-word triggers over single-word, then
+    // longer (more specific) phrases, then description-token overlap with
+    // the query, then name for determinism.
+    let query_tokens: std::collections::HashSet<&str> =
+        user_norm.split(|c: char| !c.is_alphanumeric()).collect();
+    let mut best: Option<(u64, usize, u64, String, &'a Skill)> = None;
     for (trigger_norm, skill_name) in trigger_map().iter() {
         if !installed_names.contains(skill_name.as_str()) {
             continue;
         }
-        if phrase_matches(user_norm, trigger_norm) {
-            if let Some(sk) = installed.iter().find(|s| s.name == *skill_name) {
-                return Some(sk);
-            }
+        if !phrase_matches(user_norm, trigger_norm) {
+            continue;
+        }
+        let Some(sk) = installed.iter().find(|s| s.name == *skill_name) else {
+            continue;
+        };
+        let words = trigger_norm.split_whitespace().count() as u64;
+        let chars = trigger_norm.chars().count();
+        let overlap = sk
+            .description
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| w.chars().count() >= 4)
+            .filter(|w| query_tokens.contains(w))
+            .count() as u64;
+        let key = (words, chars, overlap, sk.name.clone());
+        if best
+            .as_ref()
+            .is_none_or(|b| (b.0, b.1, b.2, b.3.clone()) < key)
+        {
+            best = Some((words, chars, overlap, sk.name.clone(), sk));
         }
     }
-    None
+    best.map(|(_, _, _, _, sk)| sk)
 }
 
 /// Indexed skill count and expanded trigger count — surfaced by `nur doctor`.
@@ -145,6 +171,22 @@ mod tests {
             found2.is_some() || found.is_some(),
             "should find scan via expanded"
         );
+    }
+
+    /// The scored matcher must prefer the domain-precise multi-word trigger
+    /// (sc-research "smart contract audit") over the generic single-word
+    /// "audit" trigger of the UI-audit skill, regardless of map order.
+    #[test]
+    fn scoring_prefers_domain_precise_triggers_over_generic_ones() {
+        let cwd = std::env::current_dir().unwrap();
+        let skills = load_skills(&cwd);
+        let user = normalize_intent_text("audit all smart contracts in this codebase");
+        if let Some(found) = find_by_expanded_triggers(&user, &skills) {
+            assert_ne!(
+                found.name, "audit",
+                "generic 'audit' trigger must not win on a smart-contract query"
+            );
+        }
     }
 
     #[test]

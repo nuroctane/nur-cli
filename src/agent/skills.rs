@@ -605,9 +605,37 @@ const INTENT_RULES: &[IntentRule] = &[
             "defi whitehat",
             "defi security research",
             "become a smart contract researcher",
+            // Audit phrasings must outrank the UI-audit skill's bare "audit"
+            // trigger (INTENT_RULES are checked before expanded triggers).
+            "audit smart contracts",
+            "audit my contracts",
+            "audit the smart contracts",
+            "audit the protocol",
+            "smart contract audit",
+            "sca audit",
+            "sca skills",
+            "my sca skills",
+            "solidity audit",
+            "defi audit",
         ],
         label: "sc-research",
         why: "whitehat smart-contract research router (load one playbook, never all)",
+    },
+    IntentRule {
+        skill_names: &["ultrafuzz"],
+        phrases: &[
+            "/ultrafuzz",
+            "ultrafuzz",
+            "ultra fuzz",
+            "smart contract fuzzing",
+            "agentic fuzzing",
+            "fuzz the contracts",
+            "fuzz my contracts",
+            "fuzzing campaign",
+            "monad ultrafuzz",
+        ],
+        label: "ultrafuzz",
+        why: "agentic smart-contract fuzzing / threat-hunting orchestrator (Monad, MIT)",
     },
     IntentRule {
         skill_names: &["historical-smart-contract-vulns"],
@@ -1533,6 +1561,40 @@ mod intent_tests {
         assert_eq!(sk.name, "fable-judge");
 
         assert!(detect_skill_activation("fix the typo in readme", &skills).is_none());
+    }
+
+    /// Session 5b30168a regression: "audit all smart contracts ... using my
+    /// SCA skills" used to grab the UI-audit skill (single-word "audit"
+    /// trigger) instead of the SCA router. The sc-research INTENT_RULE
+    /// phrases are checked first and win.
+    #[test]
+    fn sca_audit_phrases_beat_the_ui_audit_skill() {
+        let skills = vec![
+            fake_skill("audit"),
+            fake_skill("sc-research"),
+            fake_skill("ultrafuzz"),
+        ];
+        let (sk, rule) = detect_skill_activation(
+            "audit all smart contracts in this codebase using my sca skills",
+            &skills,
+        )
+        .unwrap();
+        assert_eq!(sk.name, "sc-research", "SCA router, not the UI audit lens");
+        assert_eq!(rule.label, "sc-research");
+
+        let (sk, _) =
+            detect_skill_activation("smart contract audit for this foundry repo", &skills)
+                .unwrap();
+        assert_eq!(sk.name, "sc-research");
+
+        let (sk, _) =
+            detect_skill_activation("fuzz the contracts with an agentic campaign", &skills)
+                .unwrap();
+        assert_eq!(sk.name, "ultrafuzz");
+
+        // Plain UI-audit intents still route to the UI lens.
+        let (sk, _) = detect_skill_activation("audit this landing page design", &skills).unwrap();
+        assert_eq!(sk.name, "audit");
     }
 
     #[test]

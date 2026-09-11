@@ -115,6 +115,12 @@ pub const SUBAGENT_TOOL_NAMES: &[&str] = &[
     "connectome",
     "repl",
     "mem",
+    // Skills + OptMem: a subagent told to "load your playbook" or "check
+    // memory" silently no-oped without these (session 5b30168a: three audit
+    // subagents reported the skill tool missing and never loaded their SCA
+    // playbooks). Order matches tool_defs().
+    "optmem",
+    "skill",
 ];
 
 /// A safe root profile for ordinary repository work. Specialist integrations

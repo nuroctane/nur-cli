@@ -24,7 +24,8 @@ impl Tool for SkillTool {
             "type": "object",
             "properties": {
                 "action": {"type": "string", "enum": ["list", "read"], "default": "list"},
-                "name": {"type": "string", "description": "Skill name (for action=read)"}
+                "name": {"type": "string", "description": "Skill name (for action=read)"},
+                "query": {"type": "string", "description": "Substring filter over name/description (for action=list), e.g. \"audit\" or \"fuzz\""}
             }
         })
     }
@@ -35,10 +36,44 @@ impl Tool for SkillTool {
 
         match action.as_str() {
             "list" => {
+                // Optional filter: the full catalog is 1500+ entries and the
+                // unfiltered dump used to overflow into the context store,
+                // hiding exactly the skills the caller was hunting for
+                // (session 5b30168a: `list` truncated before sc-research).
+                if let Ok(q) = arg_str(args, "query") {
+                    let q = q.trim();
+                    if !q.is_empty() {
+                        let ql = q.to_ascii_lowercase();
+                        let matches: Vec<&crate::agent::skills::Skill> = skills
+                            .iter()
+                            .filter(|s| {
+                                s.name.to_ascii_lowercase().contains(&ql)
+                                    || s.description.to_ascii_lowercase().contains(&ql)
+                            })
+                            .collect();
+                        if matches.is_empty() {
+                            return Ok(format!(
+                                "No installed skills match '{q}'. Try a shorter substring \
+                                 (e.g. query=\"audit\", query=\"fuzz\", query=\"defi\")."
+                            ));
+                        }
+                        let mut out =
+                            format!("Installed skills matching '{q}' ({}):\n", matches.len());
+                        for sk in &matches {
+                            out.push_str(&format!("- **{}**: {}\n", sk.name, sk.description));
+                        }
+                        out.push_str(
+                            "\nUse skill(action=read, name=<name>) for full instructions.",
+                        );
+                        return Ok(out);
+                    }
+                }
                 let mut out = skills_prompt_section(&skills);
                 if !skills.is_empty() {
                     out.push_str(
                         "\nUse skill(action=read, name=<name>) for full instructions. \
+                         Tip: the catalog is large - skill(action=list, query=\"<substring>\") \
+                         filters by name/description. \
                          Users can also activate via /skill-name or natural-language intent.",
                     );
                 }

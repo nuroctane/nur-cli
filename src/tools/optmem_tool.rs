@@ -62,9 +62,38 @@ impl Tool for OptMem {
                 optmem::note(&text).map_err(NurError::Tool)
             }
             "nap" => {
-                let out = optmem::run_memo(&["nap"], 120_000).map_err(NurError::Tool)?;
+                // Two-step upstream protocol: bare `memo nap` prints the
+                // pending compression prompt; applying it is
+                // `memo nap <range> "<compressed line>"`. Forward the args
+                // when the caller supplies both, and translate upstream's
+                // raw-`memo` instruction into this tool's call shape.
+                let range = arg_str(args, "range").ok();
+                let text = arg_str(args, "text").ok();
+                let (out, applied) = match (range.as_deref(), text.as_deref()) {
+                    (Some(r), Some(line)) if !r.is_empty() && !line.is_empty() => (
+                        optmem::run_memo(&["nap", r, line], 120_000).map_err(NurError::Tool)?,
+                        true,
+                    ),
+                    _ => (
+                        optmem::run_memo(&["nap"], 120_000).map_err(NurError::Tool)?,
+                        false,
+                    ),
+                };
                 optmem::invalidate_wake_cache();
-                Ok(out)
+                if applied {
+                    Ok(out)
+                } else {
+                    let mut guided = out;
+                    if !guided.trim().is_empty() {
+                        guided.push_str("
+
+");
+                    }
+                    guided.push_str(
+                        "[nur] Perform the compression described above, then apply it with                          optmem(action=nap, range=\"<lo>-<hi>\", text=\"<your one-line summary>\")                          - do not run the raw memo binary.",
+                    );
+                    Ok(guided)
+                }
             }
             "recall" => {
                 let q = arg_str(args, "query")

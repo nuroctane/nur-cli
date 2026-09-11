@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-08-28T18:26:42.193158",
-  "total_skills": 1571,
+  "generated_at": "2026-09-11T17:56:34.851586",
+  "total_skills": 1581,
   "note": "Comprehensive skill intent index - 700+ skills, expanded NL triggers. Must be updated when adding skills per AGENTS.md. Run: python scripts/generate_skill_intents.py",
   "skills": [
     {
@@ -774,7 +774,7 @@
     },
     {
       "name": "agent-watchdog",
-      "description": "Use when asked to watch, babysit, audit, review, compare, or fix another agent's work from a Codex session ID, Claude Code session/transcript, chat/thread link, PR, branch, log, or pasted run summary. Monitor until the other agent is done or blocked, reconstruct what the user asked, inspect what the",
+      "description": "Use when asked to watch, babysit, audit, review, compare, or fix another agent's work from a Codex session ID, Claude Code session/transcript, chat/thread link, PR, branch, log, or pasted run summary. Monitor until the other agent is done or blocked, reconstruct what the user asked, independently in",
       "path": "C:\\Users\\david\\.nur\\skills\\agent-watchdog\\SKILL.md",
       "triggers": [
         "/agent watchdog",
@@ -1044,6 +1044,26 @@
         "configurable",
         "shapes",
         "density"
+      ]
+    },
+    {
+      "name": "an",
+      "description": "Open and operate Agent-Native workspace apps through Dispatch MCP, with inline app surfaces, browser-session authentication, and current screen state.",
+      "path": "C:\\Users\\david\\.nur\\skills\\an\\SKILL.md",
+      "triggers": [
+        "open operate"
+      ],
+      "keywords": [
+        "open",
+        "operate",
+        "native",
+        "workspace",
+        "apps",
+        "dispatch",
+        "inline",
+        "surfaces",
+        "browser",
+        "session"
       ]
     },
     {
@@ -3883,6 +3903,37 @@
       ]
     },
     {
+      "name": "auditing-against-reference-models",
+      "description": "Model-based audit technique: build an independent reference model of the protocol and diff the real code against it (differential testing), derive spec properties, mirror fuzz scenarios across implementations, triage failures, and run forced PoC verification for material findings. Distilled from fou",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\auditing-against-reference-models\\SKILL.md",
+      "triggers": [
+        "/auditing against reference models",
+        "/auditing-against-reference-models",
+        "auditing against reference models",
+        "auditing-against-reference-models",
+        "/auditing against reference",
+        "/auditing-against-reference",
+        "auditing against reference",
+        "auditing-against-reference",
+        "/against reference models",
+        "/against-reference-models",
+        "against reference models",
+        "against-reference-models"
+      ],
+      "keywords": [
+        "auditing",
+        "against",
+        "reference",
+        "models",
+        "model",
+        "based",
+        "audit",
+        "technique",
+        "build",
+        "independent"
+      ]
+    },
+    {
       "name": "auditing-aws-s3-bucket-permissions",
       "description": "Systematically audit AWS S3 bucket permissions to identify publicly",
       "path": "C:\\Users\\david\\.nur\\skills\\security\\auditing-aws-s3-bucket-permissions\\SKILL.md",
@@ -3941,7 +3992,7 @@
     {
       "name": "auditing-blockchain-clients",
       "description": "Audit blockchain node clients (Go, Rust, C/C++) for P2P, consensus, RPC, and memory-safety issues. Use for client contest repos (Firedancer-class) and node source. Prefer DarkNavy client-auditor when installed.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\auditing-blockchain-clients\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\auditing-blockchain-clients\\SKILL.md",
       "triggers": [
         "/auditing blockchain clients",
         "/auditing-blockchain-clients",
@@ -4033,8 +4084,8 @@
     },
     {
       "name": "auditing-foundry-smart-contract-security",
-      "description": "Pre-deployment security audit of Solidity smart contracts in a Foundry project. Combines static analysis (Slither, Aderyn), symbolic execution (Mythril), and property-based testing (forge fuzz + invariant tests with handlers) to catch reentrancy, access-control, oracle/price manipulation, and arithm",
-      "path": "C:\\Users\\david\\.nur\\skills\\security\\auditing-foundry-smart-contract-security\\SKILL.md",
+      "description": "Pre-deployment security audit of Solidity Foundry projects (Slither, Aderyn, Mythril, forge fuzz/invariants, key hygiene). Use when writing, reviewing, testing, or deploying Solidity/Foundry contracts or DeFi/Web3 code.",
+      "path": "C:\\Users\\david\\.nur\\skills\\auditing-foundry-smart-contract-security\\SKILL.md",
       "triggers": [
         "/auditing foundry smart contract security",
         "/auditing-foundry-smart-contract-security",
@@ -4058,8 +4109,8 @@
         "deployment",
         "audit",
         "solidity",
-        "contracts",
-        "project"
+        "projects",
+        "slither"
       ]
     },
     {
@@ -4089,6 +4140,37 @@
         "identify",
         "overly",
         "permissive"
+      ]
+    },
+    {
+      "name": "auditing-git-history-and-specs",
+      "description": "Audit surfaces beyond source code: git/repo history forensics (security-fix-shaped commits, late-change churn, dangerous-area hotspots, forked dependency lineage, dev-pattern risk), invariant synthesis from code structure (conservation, guard-lifting, ratio ordering, temporal ordering, cross-contrac",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\auditing-git-history-and-specs\\SKILL.md",
+      "triggers": [
+        "/auditing git history and specs",
+        "/auditing-git-history-and-specs",
+        "auditing git history and specs",
+        "auditing-git-history-and-specs",
+        "/auditing git history",
+        "/auditing-git-history",
+        "auditing git history",
+        "auditing-git-history",
+        "/history and specs",
+        "/history-and-specs",
+        "history and specs",
+        "history-and-specs"
+      ],
+      "keywords": [
+        "auditing",
+        "history",
+        "specs",
+        "audit",
+        "surfaces",
+        "beyond",
+        "source",
+        "code",
+        "repo",
+        "forensics"
       ]
     },
     {
@@ -4180,6 +4262,37 @@
         "protocol",
         "metadata",
         "ssrf"
+      ]
+    },
+    {
+      "name": "auditing-multi-pass-review-lenses",
+      "description": "Multi-pass Solidity audit methodology distilled from senior-auditor practice: nine review lenses plus three gap-hunter seam lenses, the Feynman/Socratic/Inversion mental tools, the finding-vs-lead standard, four-gate severity judging with confidence scoring, dedup and completeness gates, and safe-pa",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\auditing-multi-pass-review-lenses\\SKILL.md",
+      "triggers": [
+        "/auditing multi pass review lenses",
+        "/auditing-multi-pass-review-lenses",
+        "auditing multi pass review lenses",
+        "auditing-multi-pass-review-lenses",
+        "/auditing multi pass",
+        "/auditing-multi-pass",
+        "/pass review lenses",
+        "/pass-review-lenses",
+        "auditing multi pass",
+        "auditing-multi-pass",
+        "/multi pass review",
+        "/multi-pass-review"
+      ],
+      "keywords": [
+        "auditing",
+        "multi",
+        "pass",
+        "review",
+        "lenses",
+        "solidity",
+        "audit",
+        "methodology",
+        "distilled",
+        "senior"
       ]
     },
     {
@@ -4663,7 +4776,7 @@
     {
       "name": "battlechain-safe-harbor-whitehat",
       "description": "Cyfrin BattleChain and Safe Harbor whitehat flow: deploy to the pre-mainnet L2, request attack mode, read on-chain bounty terms. Use with Cyfrin/solskill. Lawful attack-mode only on contracts that opted in.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\battlechain-safe-harbor-whitehat\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\battlechain-safe-harbor-whitehat\\SKILL.md",
       "triggers": [
         "/battlechain safe harbor whitehat",
         "/battlechain-safe-harbor-whitehat",
@@ -8960,7 +9073,7 @@
     },
     {
       "name": "code-review",
-      "description": "Review the changes since a fixed point (commit, branch, tag, or merge-base) along two axes \u2014 Standards (does the code follow this repo's documented coding standards?) and Spec (does the code match what the originating issue/PRD asked for?). Runs both reviews in parallel sub-agents and reports them s",
+      "description": "Review the changes since a fixed point (commit, branch, tag, or merge-base) along two axes: Standards (does the code follow this repo's documented coding standards?) and Spec (does the code match what the originating issue/spec asked for?). Runs both reviews in parallel sub-agents and reports them s",
       "path": "C:\\Users\\david\\.nur\\skills\\code-review\\SKILL.md",
       "triggers": [
         "review changes",
@@ -10573,6 +10686,37 @@
       ]
     },
     {
+      "name": "constraint-driven-development",
+      "description": "Establishes a project's quality bar as a written contract and stops agents quietly lowering it. Interviews the user on which dimensions matter, supplies sane default thresholds when they have no number in mind, records everything in CONSTRAINTS.md, and watches the diff for a weakened bar \u2014 new @ts-i",
+      "path": "C:\\Users\\david\\.nur\\skills\\constraint-driven-development\\SKILL.md",
+      "triggers": [
+        "/constraint driven development",
+        "/constraint-driven-development",
+        "constraint driven development",
+        "constraint-driven-development",
+        "/driven development",
+        "/driven-development",
+        "establishes project",
+        "/constraint driven",
+        "/constraint-driven",
+        "driven development",
+        "driven-development",
+        "constraint driven"
+      ],
+      "keywords": [
+        "constraint",
+        "driven",
+        "development",
+        "establishes",
+        "project",
+        "quality",
+        "written",
+        "contract",
+        "stops",
+        "quietly"
+      ]
+    },
+    {
       "name": "container-lines",
       "description": "Add vertical container-size guide lines with mini corner squares for precise, structured web layouts. Use when asked for container lines, measured layout guides, vertical boundary lines, editorial grid markers, or small corner-square frame details.",
       "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\container-lines\\SKILL.md",
@@ -10651,7 +10795,7 @@
     {
       "name": "contest-and-bounty-reporting",
       "description": "Write in-scope smart-contract contest and Immunefi bounty reports: severity, impact, root cause, local Foundry test, fix. Use for Code4rena, Sherlock, Cantina, Hats, Immunefi. No live exploits.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\contest-and-bounty-reporting\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\contest-and-bounty-reporting\\SKILL.md",
       "triggers": [
         "/contest and bounty reporting",
         "/contest-and-bounty-reporting",
@@ -11490,7 +11634,7 @@
     },
     {
       "name": "debugging-and-error-recovery",
-      "description": "Guides systematic root-cause debugging. Use when tests fail, builds break, behavior doesn't match expectations, or you encounter any unexpected error. Use when you need a systematic approach to finding and fixing the root cause rather than guessing.",
+      "description": "Guides systematic root-cause debugging. Use when tests fail, builds break, something that worked yesterday broke, behavior doesn't match expectations, or you encounter any unexpected error. Use when you need to figure out what broke and why \u2014 a systematic approach to finding and fixing the root caus",
       "path": "C:\\Users\\david\\.nur\\skills\\debugging-and-error-recovery\\SKILL.md",
       "triggers": [
         "/debugging and error recovery",
@@ -12089,7 +12233,7 @@
     },
     {
       "name": "deprecation-and-migration",
-      "description": "Manages deprecation and migration. Use when removing old systems, APIs, or features. Use when migrating users from one implementation to another. Use when deciding whether to maintain or sunset existing code.",
+      "description": "Manages deprecation and migration. Use when removing old systems, APIs, or features. Use when migrating users from one implementation to another. Use when migrating a database schema in production, such as renaming or dropping a column without downtime (expand/contract). Use when deciding whether to",
       "path": "C:\\Users\\david\\.nur\\skills\\deprecation-and-migration\\SKILL.md",
       "triggers": [
         "/deprecation and migration",
@@ -15601,6 +15745,37 @@
       ]
     },
     {
+      "name": "discovering-protocol-properties",
+      "description": "How to discover fuzz/invariant properties for a protocol: the three property classes (global, function-specific, delta-based), source-driven discovery (accumulative ops, counters, extreme values, exposed-state enumeration), protocol-type adaptation, property quality bars (no speculative ghosts, snap",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\discovering-protocol-properties\\SKILL.md",
+      "triggers": [
+        "/discovering protocol properties",
+        "/discovering-protocol-properties",
+        "discovering protocol properties",
+        "discovering-protocol-properties",
+        "/discovering protocol",
+        "/discovering-protocol",
+        "/protocol properties",
+        "/protocol-properties",
+        "discovering protocol",
+        "discovering-protocol",
+        "protocol properties",
+        "protocol-properties"
+      ],
+      "keywords": [
+        "discovering",
+        "protocol",
+        "properties",
+        "discover",
+        "fuzz",
+        "invariant",
+        "three",
+        "property",
+        "classes",
+        "global"
+      ]
+    },
+    {
       "name": "dispatching-parallel-agents",
       "description": "Use when facing 2+ independent tasks that can be worked on without shared state or sequential dependencies",
       "path": "C:\\Users\\david\\.nur\\skills\\dispatching-parallel-agents\\SKILL.md",
@@ -15787,7 +15962,7 @@
     },
     {
       "name": "documentation-and-adrs",
-      "description": "Records decisions and documentation. Use when making architectural decisions, changing public APIs, shipping features, or when you need to record context that future engineers and agents will need to understand the codebase.",
+      "description": "Records decisions and documentation. Use when you need to document an architecture decision (ADR) or the reasoning behind a design choice, when changing public APIs, shipping features, or when you need to record context that future engineers and agents will need to understand the codebase.",
       "path": "C:\\Users\\david\\.nur\\skills\\documentation-and-adrs\\SKILL.md",
       "triggers": [
         "/documentation and adrs",
@@ -15808,12 +15983,12 @@
         "adrs",
         "records",
         "decisions",
-        "making",
-        "architectural",
-        "changing",
-        "public",
-        "apis",
-        "shipping"
+        "document",
+        "architecture",
+        "decision",
+        "reasoning",
+        "behind",
+        "design"
       ]
     },
     {
@@ -15861,7 +16036,7 @@
     },
     {
       "name": "domain-modeling",
-      "description": "Build and sharpen a project's domain model. Use when the user wants to pin down domain terminology or a ubiquitous language, record an architectural decision, or when another skill needs to maintain the domain model.",
+      "description": "Build and sharpen a project's domain model. Use when discussing codebase terminology, writing or editing a CONTEXT.md, or recording or editing an ADR.",
       "path": "C:\\Users\\david\\.nur\\skills\\domain-modeling\\SKILL.md",
       "triggers": [
         "/domain modeling",
@@ -15877,10 +16052,10 @@
         "sharpen",
         "project",
         "model",
-        "user",
-        "down",
+        "discussing",
+        "codebase",
         "terminology",
-        "ubiquitous"
+        "writing"
       ]
     },
     {
@@ -15907,7 +16082,7 @@
     },
     {
       "name": "doubt-driven-development",
-      "description": "Subjects every non-trivial decision to a fresh-context adversarial review before it stands. Use when correctness matters more than speed, when working in unfamiliar code, when stakes are high (production, security-sensitive logic, irreversible operations), or any time a confident output would be che",
+      "description": "Subjects every non-trivial decision to a fresh-context adversarial review before it stands. Use when you want every assumption cross-examined before proceeding, when stress-testing a plan for hidden failure modes, when correctness matters more than speed, when working in unfamiliar code, when stakes",
       "path": "C:\\Users\\david\\.nur\\skills\\doubt-driven-development\\SKILL.md",
       "triggers": [
         "/doubt driven development",
@@ -18605,7 +18780,7 @@
     {
       "name": "formal-verification-halmos-certora-kontrol",
       "description": "Formal/symbolic properties on Solidity with Halmos, solc SMTChecker, Certora CVL, and Kontrol. Use when fuzzing is not enough for a conservation law. Slow path, like Mythril.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\formal-verification-halmos-certora-kontrol\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\formal-verification-halmos-certora-kontrol\\SKILL.md",
       "triggers": [
         "/formal verification halmos certora kontrol",
         "/formal-verification-halmos-certora-kontrol",
@@ -18880,7 +19055,7 @@
     {
       "name": "fuzzing-with-echidna-and-medusa",
       "description": "Property-based fuzzing of Solidity with Echidna (Trail of Bits) and Medusa (Crytic) as a complement to Foundry invariants. Use when forge invariant handlers are not enough or the repo already has Echidna properties.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\fuzzing-with-echidna-and-medusa\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\fuzzing-with-echidna-and-medusa\\SKILL.md",
       "triggers": [
         "/fuzzing with echidna and medusa",
         "/fuzzing-with-echidna-and-medusa",
@@ -19275,7 +19450,7 @@
     },
     {
       "name": "git-workflow-and-versioning",
-      "description": "Structures git workflow practices. Use when making any code change. Use when committing, branching, resolving conflicts, or when you need to organize work across multiple parallel streams. Use when cutting a release, choosing a semantic version bump, tagging, or writing a changelog.",
+      "description": "Structures git workflow practices. Use when making any code change. Use when committing, branching, resolving conflicts, splitting uncommitted work in a messy working tree into clean atomic commits, opening or reviewing a pull request (PR), pushing to a remote, or when you need to organize work acro",
       "path": "C:\\Users\\david\\.nur\\skills\\git-workflow-and-versioning\\SKILL.md",
       "triggers": [
         "/git workflow and versioning",
@@ -22020,7 +22195,7 @@
     {
       "name": "historical-smart-contract-vulns",
       "description": "Historical smart-contract vulnerability library across EVM L1/L2, Solana, Move, Cosmos/IBC, Cairo, Bitcoin-adjacent, other VMs, plus zachxbt/tayvano ops vs code. Use for bounty-class mapping, public incident lookup, and in-scope review seeds. Lawful/whitehat only. Load one reference slice, never the",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\historical-smart-contract-vulns\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\historical-smart-contract-vulns\\SKILL.md",
       "triggers": [
         "/historical smart contract vulns",
         "/historical-smart-contract-vulns",
@@ -23226,7 +23401,7 @@
     {
       "name": "hunting-x-linked-bounties",
       "description": "Route Immunefi/X-linked paid writeups to the matching protocol playbook. Use for bounty intel, whitehat payouts, Immunefi bugfix reviews, and X-announced crits. Lawful/in-scope only. Load one reference slice, never the whole pack.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\hunting-x-linked-bounties\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\hunting-x-linked-bounties\\SKILL.md",
       "triggers": [
         "/hunting x linked bounties",
         "/hunting-x-linked-bounties",
@@ -23657,7 +23832,7 @@
     {
       "name": "implement-spec",
       "description": "Implement a specification in code.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\implement-spec\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\implement-spec\\SKILL.md",
       "triggers": [
         "implement specification",
         "/implement spec",
@@ -28743,7 +28918,7 @@
     },
     {
       "name": "incremental-implementation",
-      "description": "Delivers changes incrementally. Use when implementing any feature or change that touches more than one file. Use when you're about to write a large amount of code at once, or when a task feels too big to land in one step.",
+      "description": "Delivers changes incrementally in thin, verifiable slices. Use when implementing any feature or change that touches more than one file, or when picking up the next task from a plan. Use when rolling a change out behind a feature flag, when you're about to write a large amount of code at once, or whe",
       "path": "C:\\Users\\david\\.nur\\skills\\incremental-implementation\\SKILL.md",
       "triggers": [
         "/incremental implementation",
@@ -28758,11 +28933,11 @@
         "delivers",
         "changes",
         "incrementally",
+        "thin",
+        "verifiable",
+        "slices",
         "implementing",
-        "feature",
-        "change",
-        "touches",
-        "file"
+        "feature"
       ]
     },
     {
@@ -29763,6 +29938,30 @@
       ]
     },
     {
+      "name": "metaphysical-voice",
+      "description": "Write or revise metaphysical, manifesto, esoteric, occult, visionary, or eccentric/illustrious prose \u2014 invocations, cosmologies, aphoristic doctrine, hermetic fragments, declarations, prophetic or oracular registers. Use whenever the user asks for writing that is mystical, arcane, incantatory, proph",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\metaphysical-voice\\SKILL.md",
+      "triggers": [
+        "/metaphysical voice",
+        "/metaphysical-voice",
+        "metaphysical voice",
+        "metaphysical-voice",
+        "write revise"
+      ],
+      "keywords": [
+        "metaphysical",
+        "voice",
+        "write",
+        "revise",
+        "manifesto",
+        "esoteric",
+        "occult",
+        "visionary",
+        "eccentric",
+        "illustrious"
+      ]
+    },
+    {
       "name": "metrics-chart",
       "description": "Render Axiom metrics query results (application/vnd.metrics.v3+json) as line charts. Zero-dependency Unicode/ASCII by default; upgrades to inline PNG/SVG/sixel via gnuplot when present. Use when you have a metrics v3 query response and want to see the series as a chart in the terminal or transcript.",
       "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\metrics-chart\\SKILL.md",
@@ -30735,7 +30934,7 @@
     {
       "name": "onchain-read-recon",
       "description": "Read-only on-chain recon for verified Solidity: cast, Sourcify, storage layout, public transaction traces. Use before an in-scope audit or to reconstruct an already-mined incident. Never broadcast, never unlock wallets.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\onchain-read-recon\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\onchain-read-recon\\SKILL.md",
       "triggers": [
         "/onchain read recon",
         "/onchain-read-recon",
@@ -37245,7 +37444,7 @@
     {
       "name": "reconstructing-public-postmortems",
       "description": "Turn already-public DeFi incidents (rekt, DeFiHackLabs, BlockSec) into Foundry regression tests. Use for learning and for pinning a similar pattern on in-scope code. Never replay against live funds.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reconstructing-public-postmortems\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\reconstructing-public-postmortems\\SKILL.md",
       "triggers": [
         "/reconstructing public postmortems",
         "/reconstructing-public-postmortems",
@@ -37656,7 +37855,7 @@
     {
       "name": "researcher-gym-and-curriculum",
       "description": "Training path for a whitehat smart-contract researcher: Ethernaut, Damn Vulnerable DeFi, Cyfrin Updraft, Secureum, RareSkills, Paradigm CTF, then in-scope contests. Always as Foundry tests.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\researcher-gym-and-curriculum\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\researcher-gym-and-curriculum\\SKILL.md",
       "triggers": [
         "/researcher gym and curriculum",
         "/researcher-gym-and-curriculum",
@@ -37747,24 +37946,19 @@
     },
     {
       "name": "retro",
-      "description": "Throwback design with vintage-inspired typography, high-contrast retro palettes, and nostalgic visual elements.",
+      "description": "Conduct a retrospective on a coding session.",
       "path": "C:\\Users\\david\\.nur\\skills\\retro\\SKILL.md",
       "triggers": [
-        "throwback design",
+        "conduct retrospective",
         "/retro",
         "retro"
       ],
       "keywords": [
         "retro",
-        "throwback",
-        "design",
-        "vintage",
-        "inspired",
-        "typography",
-        "high",
-        "contrast",
-        "palettes",
-        "nostalgic"
+        "conduct",
+        "retrospective",
+        "coding",
+        "session"
       ]
     },
     {
@@ -38023,7 +38217,7 @@
     {
       "name": "reviewing-access-control-and-auth",
       "description": "Review Solidity access control: missing modifiers, tx.origin, initialize front-run, role rugging, default-public, and two-step ownership. Use on every admin, mint, upgrade, and withdraw path.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-access-control-and-auth\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\reviewing-access-control-and-auth\\SKILL.md",
       "triggers": [
         "/reviewing access control and auth",
         "/reviewing-access-control-and-auth",
@@ -38056,7 +38250,7 @@
     {
       "name": "reviewing-amm-and-cl-pools",
       "description": "Review AMM and concentrated-liquidity pools: k-invariant, callbacks, fee-on-transfer, empty pool, tick math, and spoofed swap callbacks. Use for Uniswap-style, stableswap, and custom AMMs.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-amm-and-cl-pools\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\reviewing-amm-and-cl-pools\\SKILL.md",
       "triggers": [
         "/reviewing amm and cl pools",
         "/reviewing-amm-and-cl-pools",
@@ -38088,7 +38282,7 @@
     {
       "name": "reviewing-bitcoin-adjacent",
       "description": "Review Bitcoin Script, Lightning HTLCs, Stacks Clarity, BitVM/Babylon challenge games, and EVM-on-Bitcoin sidechains. Use when the VM is not Solidity. Lawful/in-scope only.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-bitcoin-adjacent\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\reviewing-bitcoin-adjacent\\SKILL.md",
       "triggers": [
         "/reviewing bitcoin adjacent",
         "/reviewing-bitcoin-adjacent",
@@ -38121,7 +38315,7 @@
     {
       "name": "reviewing-bridges-and-messaging",
       "description": "Review token bridges and cross-chain messages: replay, decoder, finality, aliasing, amount inflation, and unauthorized mint. Use for lock/mint, burn/mint, LayerZero, Optimism messenger, zk bridges.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-bridges-and-messaging\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\reviewing-bridges-and-messaging\\SKILL.md",
       "triggers": [
         "/reviewing bridges and messaging",
         "/reviewing-bridges-and-messaging",
@@ -38156,7 +38350,7 @@
     {
       "name": "reviewing-cairo-and-starknet",
       "description": "Review Cairo/Starknet contracts: u256 rounding, felt vs u256, account/session keys, L1-L2 messages. Use for Starknet DeFi (e.g. Vesu-class rounding). Lawful/in-scope only.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-cairo-and-starknet\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\reviewing-cairo-and-starknet\\SKILL.md",
       "triggers": [
         "/reviewing cairo and starknet",
         "/reviewing-cairo-and-starknet",
@@ -38190,7 +38384,7 @@
     {
       "name": "reviewing-cosmos-and-ibc",
       "description": "Review Cosmos SDK modules, IBC (ICS-20/23), ibc-hooks, CosmWasm submessages, Authz, Ante/fees. Use for appchains and IBC-connected DeFi. Lawful/in-scope only.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-cosmos-and-ibc\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\reviewing-cosmos-and-ibc\\SKILL.md",
       "triggers": [
         "/reviewing cosmos and ibc",
         "/reviewing-cosmos-and-ibc",
@@ -38224,7 +38418,7 @@
     {
       "name": "reviewing-cross-function-and-composer",
       "description": "Review compositions of otherwise-safe functions in one transaction: deposit+borrow, harvest+redeem, vote+queue. Use when unit tests pass but invariants fail on sequences. The handler skill is the test harness.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-cross-function-and-composer\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\reviewing-cross-function-and-composer\\SKILL.md",
       "triggers": [
         "/reviewing cross function and composer",
         "/reviewing-cross-function-and-composer",
@@ -38255,7 +38449,7 @@
     {
       "name": "reviewing-erc4626-and-vaults",
       "description": "Review ERC-4626 and vault share math for inflation, donation, first-depositor, rounding, and fee-on-transfer. Use for yield vaults, tokenized strategies, and convertToShares/convertToAssets paths.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-erc4626-and-vaults\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\reviewing-erc4626-and-vaults\\SKILL.md",
       "triggers": [
         "/reviewing erc4626 and vaults",
         "/reviewing-erc4626-and-vaults",
@@ -38289,7 +38483,7 @@
     {
       "name": "reviewing-frontend-and-ops-surfaces",
       "description": "Review wallets, Safe modules, Permit2, EIP-712 UIs, and signer runbooks for phishing-class bugs (Bybit Safe UI, drainers, leftover approvals). Use when the loss class is ops/frontend, not vault math. Lawful/in-scope only.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-frontend-and-ops-surfaces\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\reviewing-frontend-and-ops-surfaces\\SKILL.md",
       "triggers": [
         "/reviewing frontend and ops surfaces",
         "/reviewing-frontend-and-ops-surfaces",
@@ -38323,7 +38517,7 @@
     {
       "name": "reviewing-governance-and-timelocks",
       "description": "Review Governor, timelock, and upgrade-via-governance: delay bypass, proposal hijack, snapshot vs flashloan votes, queue/execute hash mismatch. Use for OZ Governor, custom DAOs, and admin multisigs.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-governance-and-timelocks\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\reviewing-governance-and-timelocks\\SKILL.md",
       "triggers": [
         "/reviewing governance and timelocks",
         "/reviewing-governance-and-timelocks",
@@ -38356,7 +38550,7 @@
     {
       "name": "reviewing-l2-sequencer-and-finality",
       "description": "Review L2 assumptions: sequencer downtime, Chainlink sequencer uptime, address aliasing, delayed inbox, custom gas tokens, and optimistic finality windows. Use for OP/Arbitrum/Base/zk and any protocol that reads L1 state from L2.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-l2-sequencer-and-finality\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\reviewing-l2-sequencer-and-finality\\SKILL.md",
       "triggers": [
         "/reviewing l2 sequencer and finality",
         "/reviewing-l2-sequencer-and-finality",
@@ -38390,7 +38584,7 @@
     {
       "name": "reviewing-lending-and-liquidations",
       "description": "Review lending markets, CDPs, and liquidations: LTV, oracle, interest index, liquidation bonus, bad debt, and self-liquidation. Use for money markets and isolated pools.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-lending-and-liquidations\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\reviewing-lending-and-liquidations\\SKILL.md",
       "triggers": [
         "/reviewing lending and liquidations",
         "/reviewing-lending-and-liquidations",
@@ -38455,7 +38649,7 @@
     {
       "name": "reviewing-mev-ordering-and-slippage",
       "description": "Review MEV, ordering, and slippage: missing minOut/deadline, approve races, auction sniping, commit-reveal skips. Use for AMMs, launches, Dutch auctions, and any tx-order-sensitive value path. Analysis only - no sandwiching.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-mev-ordering-and-slippage\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\reviewing-mev-ordering-and-slippage\\SKILL.md",
       "triggers": [
         "/reviewing mev ordering and slippage",
         "/reviewing-mev-ordering-and-slippage",
@@ -38486,7 +38680,7 @@
     {
       "name": "reviewing-move-modules",
       "description": "Review Aptos/Sui/Movement Move modules: borrow_global address, shared-object ACL, abilities, capabilities, PTB composition, halt/DoS. Use for Move programs. Lawful/in-scope only.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-move-modules\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\reviewing-move-modules\\SKILL.md",
       "triggers": [
         "/reviewing move modules",
         "/reviewing-move-modules",
@@ -38518,7 +38712,7 @@
     {
       "name": "reviewing-nft-and-marketplace",
       "description": "Review NFT and marketplace contracts: safeTransfer callbacks, royalty bypass, listing signature replay, payment token weirdness, and enumeration grief. Use for ERC-721/1155 markets and launchpads.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-nft-and-marketplace\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\reviewing-nft-and-marketplace\\SKILL.md",
       "triggers": [
         "/reviewing nft and marketplace",
         "/reviewing-nft-and-marketplace",
@@ -38549,7 +38743,7 @@
     {
       "name": "reviewing-oracles-and-pricing",
       "description": "Review DeFi price oracles and share/rate math for flash-loan, staleness, sequencer, and first-depositor manipulation. Use for vaults, lending, liquidations, and any contract that reads a spot price.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-oracles-and-pricing\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\reviewing-oracles-and-pricing\\SKILL.md",
       "triggers": [
         "/reviewing oracles and pricing",
         "/reviewing-oracles-and-pricing",
@@ -38581,7 +38775,7 @@
     {
       "name": "reviewing-reentrancy-and-callbacks",
       "description": "Review reentrancy and token/AMM callbacks: classic, cross-function, read-only, ERC-777/721/1155 hooks, Uniswap callbacks, failed-call DoS. Use on any value-moving Solidity that makes external calls.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-reentrancy-and-callbacks\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\reviewing-reentrancy-and-callbacks\\SKILL.md",
       "triggers": [
         "/reviewing reentrancy and callbacks",
         "/reviewing-reentrancy-and-callbacks",
@@ -38614,7 +38808,7 @@
     {
       "name": "reviewing-signatures-permit-and-eip712",
       "description": "Review EIP-712, permit, and custom signatures: replay, chainId, nonce, deadline, ecrecover address(0), malleability, encodePacked collisions. Use for permits, listings, votes, and bridge attestations.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-signatures-permit-and-eip712\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\reviewing-signatures-permit-and-eip712\\SKILL.md",
       "triggers": [
         "/reviewing signatures permit and eip712",
         "/reviewing-signatures-permit-and-eip712",
@@ -38648,7 +38842,7 @@
     {
       "name": "reviewing-solana-programs",
       "description": "Review Solana/SVM programs: missing signer, account confusion, arbitrary CPI, PDA bumps, sysvar spoof, close/reinit, Token-2022 hooks. Use for Anchor/native programs and SVM L2s. Lawful/in-scope only.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-solana-programs\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\reviewing-solana-programs\\SKILL.md",
       "triggers": [
         "/reviewing solana programs",
         "/reviewing-solana-programs",
@@ -38682,7 +38876,7 @@
     {
       "name": "reviewing-token-standard-pitfalls",
       "description": "Review ERC-20/721/1155 integration footguns: fee-on-transfer, rebasing, missing return, approve race, weird decimals, ERC-777/721 hooks. Use whenever a protocol talks to arbitrary tokens.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-token-standard-pitfalls\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\reviewing-token-standard-pitfalls\\SKILL.md",
       "triggers": [
         "/reviewing token standard pitfalls",
         "/reviewing-token-standard-pitfalls",
@@ -38715,7 +38909,7 @@
     {
       "name": "reviewing-upgradeable-proxies",
       "description": "Review upgradeable Solidity proxies (UUPS, transparent, beacon) for storage-layout clashes, unprotected initialize, missing initializer lock, and implementation suicide. Use before shipping or auditing proxies.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-upgradeable-proxies\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\reviewing-upgradeable-proxies\\SKILL.md",
       "triggers": [
         "/reviewing upgradeable proxies",
         "/reviewing-upgradeable-proxies",
@@ -38747,7 +38941,7 @@
     {
       "name": "reviewing-with-solodit-and-swc",
       "description": "Manual smart-contract review against Solodit historical findings and SWC weakness IDs by protocol type (vault, AMM, bridge, governance). Use after static analysis, before writing a contest report.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\reviewing-with-solodit-and-swc\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\reviewing-with-solodit-and-swc\\SKILL.md",
       "triggers": [
         "/reviewing with solodit and swc",
         "/reviewing-with-solodit-and-swc",
@@ -38991,17 +39185,28 @@
     {
       "name": "sc-research",
       "description": "Router for whitehat smart-contract security research. Use for DeFi audits, Immunefi/Code4rena/Cantina/Sherlock contests, invariants, oracles, proxies, bridges, lending, AMMs, vaults, and responsible disclosure. Lawful/in-scope only. Never load the whole pack.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\sc-research\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\sc-research\\SKILL.md",
       "triggers": [
-        "smart contract researcher",
-        "web3 security research",
-        "router whitehat",
-        "whitehat crypto",
-        "defi whitehat",
         "/sc research",
         "/sc-research",
+        "sc-research",
+        "smart contract researcher",
+        "web3 security research",
+        "audit smart contracts",
+        "smart contract audit",
+        "audit the contracts",
+        "audit my contracts",
+        "audit the protocol",
+        "router whitehat",
+        "whitehat crypto",
+        "contract audit",
+        "solidity audit",
+        "defi whitehat",
         "sc research",
-        "sc-research"
+        "defi audit",
+        "sca audit",
+        "sca skills",
+        "my sca skills"
       ],
       "keywords": [
         "research",
@@ -39825,7 +40030,7 @@
     },
     {
       "name": "security-and-hardening",
-      "description": "Hardens code against vulnerabilities. Use when handling user input, authentication, data storage, or external integrations. Use when building any feature that accepts untrusted data, manages user sessions, or interacts with third-party services.",
+      "description": "Hardens code against vulnerabilities. Use when auditing an input handler for vulnerabilities, when handling user input, authentication, data storage, or external integrations, or when checking a login flow is safe against the OWASP Top Ten. Use when building any feature that accepts untrusted data, ",
       "path": "C:\\Users\\david\\.nur\\skills\\security-and-hardening\\SKILL.md",
       "triggers": [
         "/security and hardening",
@@ -39848,10 +40053,10 @@
         "code",
         "against",
         "vulnerabilities",
-        "handling",
-        "user",
+        "auditing",
         "input",
-        "authentication"
+        "handler",
+        "handling"
       ]
     },
     {
@@ -39899,7 +40104,7 @@
     },
     {
       "name": "setup-matt-pocock-skills",
-      "description": "Configure this repo for the engineering skills \u2014 set up its issue tracker, triage label vocabulary, and domain doc layout. Run once before first use of the other engineering skills.",
+      "description": "Configure this repo for the engineering skills: set up its issue tracker, triage label vocabulary, and domain doc layout. Run once before first use of the other engineering skills.",
       "path": "C:\\Users\\david\\.nur\\skills\\setup-matt-pocock-skills\\SKILL.md",
       "triggers": [
         "/setup matt pocock skills",
@@ -39961,7 +40166,7 @@
     },
     {
       "name": "setup-ts-deep-modules",
-      "description": "Wire dependency-cruiser into a TypeScript repo so each package is a deep module \u2014 implementation hidden in subfolders, reachable only through its entry-point files. User-invoked.",
+      "description": "Wire dependency-cruiser into a TypeScript repo so each package is a deep module, with implementation hidden in subfolders and reachable only through its entry-point files. User-invoked.",
       "path": "C:\\Users\\david\\.nur\\skills\\setup-ts-deep-modules\\SKILL.md",
       "triggers": [
         "/setup ts deep modules",
@@ -40113,7 +40318,7 @@
     },
     {
       "name": "shipping-and-launch",
-      "description": "Prepares production launches. Use when preparing to deploy to production. Use when you need a pre-launch checklist, when setting up monitoring, when planning a staged rollout, or when you need a rollback strategy.",
+      "description": "Prepares production launches. Use when preparing to deploy to production, or when asking what needs to be in place before shipping. Use when you need a pre-launch checklist, when setting up monitoring, when planning a staged rollout, or when you need a rollback strategy.",
       "path": "C:\\Users\\david\\.nur\\skills\\shipping-and-launch\\SKILL.md",
       "triggers": [
         "/shipping and launch",
@@ -40137,9 +40342,9 @@
         "launches",
         "preparing",
         "deploy",
-        "checklist",
-        "setting",
-        "monitoring"
+        "asking",
+        "place",
+        "checklist"
       ]
     },
     {
@@ -40212,26 +40417,26 @@
     },
     {
       "name": "skeuomorphic-ui",
-      "description": "Build dark skeuomorphic UI components (knobs, sliders, inset controls, raised shells) with top-lighting, layered shadows, tactile depth, and animation-ready interaction patterns. Trigger this skill when the user asks for skeuomorphic components, neumorphic dark controls, rotary dials, or realistic h",
+      "description": "Create skeuomorphic web UI surfaces with layered gradients, stacked inner and outer shadows, reflective gradient borders, micro texture, and embossed text or icon details. Use when asked for pressed, carved, tactile, realistic, soft-plastic, soft-metal, or premium physical interface styling.",
       "path": "C:\\Users\\david\\.nur\\skills\\skeuomorphic-ui\\SKILL.md",
       "triggers": [
+        "create skeuomorphic",
         "/skeuomorphic ui",
         "/skeuomorphic-ui",
         "skeuomorphic ui",
-        "skeuomorphic-ui",
-        "build dark"
+        "skeuomorphic-ui"
       ],
       "keywords": [
         "skeuomorphic",
-        "build",
-        "dark",
-        "components",
-        "knobs",
-        "sliders",
-        "inset",
-        "controls",
-        "raised",
-        "shells"
+        "create",
+        "surfaces",
+        "layered",
+        "gradients",
+        "stacked",
+        "inner",
+        "outer",
+        "shadows",
+        "reflective"
       ]
     },
     {
@@ -40398,7 +40603,7 @@
     },
     {
       "name": "source-driven-development",
-      "description": "Grounds every implementation decision in official documentation. Use when you want authoritative, source-cited code free from outdated patterns. Use when building with any framework or library where correctness matters.",
+      "description": "Grounds every implementation decision in official documentation. Use when you want to verify an approach against the official docs before implementing it, or when you want authoritative, source-cited code free from outdated patterns. Use when building with any framework or library where correctness ",
       "path": "C:\\Users\\david\\.nur\\skills\\source-driven-development\\SKILL.md",
       "triggers": [
         "/source driven development",
@@ -40424,7 +40629,7 @@
         "decision",
         "official",
         "documentation",
-        "authoritative"
+        "verify"
       ]
     },
     {
@@ -40475,7 +40680,7 @@
     },
     {
       "name": "spec-driven-development",
-      "description": "Creates specs before coding. Use when starting a new project, feature, or significant change and no specification exists yet. Use when requirements are unclear, ambiguous, or only exist as a vague idea.",
+      "description": "Creates specs before coding. Use when starting a new project, feature, or significant change and no specification exists yet. Use when drafting a PRD or requirements document with objectives and scope, or when requirements are unclear, ambiguous, or only exist as a vague idea. Use when a single requ",
       "path": "C:\\Users\\david\\.nur\\skills\\spec-driven-development\\SKILL.md",
       "triggers": [
         "/spec driven development",
@@ -40658,7 +40863,7 @@
     {
       "name": "static-analysis-slither-aderyn-semgrep-wake",
       "description": "Run and triage Slither, Aderyn, Semgrep Solidity rules, and Wake on a Foundry/Hardhat repo. Use as the fast static layer before invariants. Complements auditing-foundry-smart-contract-security.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\static-analysis-slither-aderyn-semgrep-wake\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\static-analysis-slither-aderyn-semgrep-wake\\SKILL.md",
       "triggers": [
         "/static analysis slither aderyn semgrep wake",
         "/static-analysis-slither-aderyn-semgrep-wake",
@@ -41194,7 +41399,7 @@
     },
     {
       "name": "test-driven-development",
-      "description": "Drives development with tests. Use when implementing any logic, fixing any bug, or changing any behavior. Use when you need to prove that code works, when a bug report arrives, or when you're about to modify existing functionality.",
+      "description": "Drives development with tests using the red-green-refactor loop. Use when implementing any logic, fixing any bug, or changing any behavior. Use when you need to prove that code works, when a bug report arrives, or when you're about to modify existing functionality.",
       "path": "C:\\Users\\david\\.nur\\skills\\test-driven-development\\SKILL.md",
       "triggers": [
         "/test driven development",
@@ -41218,11 +41423,11 @@
         "development",
         "drives",
         "tests",
+        "green",
+        "refactor",
+        "loop",
         "implementing",
-        "logic",
-        "fixing",
-        "changing",
-        "behavior"
+        "logic"
       ]
     },
     {
@@ -42179,7 +42384,7 @@
     },
     {
       "name": "to-spec",
-      "description": "Turn the current conversation into a spec and publish it to the project issue tracker \u2014 no interview, just synthesis of what you've already discussed.",
+      "description": "Turn the current conversation into a spec and publish it to the project issue tracker: no interview, just synthesis of what you've already discussed.",
       "path": "C:\\Users\\david\\.nur\\skills\\to-spec\\SKILL.md",
       "triggers": [
         "turn current",
@@ -42203,7 +42408,7 @@
     },
     {
       "name": "to-tickets",
-      "description": "Break a plan, spec, or the current conversation into a set of tracer-bullet tickets, each declaring its blocking edges, published to the configured tracker \u2014 edges as text in one file per ticket locally, or native blocking links on a real tracker.",
+      "description": "Break a plan, spec, or the current conversation into a set of tracer-bullet tickets, each declaring its blocking edges, published to the configured tracker (edges as text in one file per ticket locally, or native blocking links on a real tracker).",
       "path": "C:\\Users\\david\\.nur\\skills\\to-tickets\\SKILL.md",
       "triggers": [
         "/to tickets",
@@ -42301,7 +42506,7 @@
     },
     {
       "name": "triage",
-      "description": "Move issues and external PRs through a state machine of triage roles \u2014 categorise, verify, grill if needed, and write agent-ready briefs.",
+      "description": "Move issues and external PRs through a state machine of triage roles, categorise, verify, grill if needed, and write agent-ready briefs.",
       "path": "C:\\Users\\david\\.nur\\skills\\triage\\SKILL.md",
       "triggers": [
         "move issues",
@@ -42324,7 +42529,7 @@
     {
       "name": "triaging-and-deduping-findings",
       "description": "Dedupe and rank Slither/Aderyn/Mythril/fuzz hits: (file, line), SWC, exploitability x funds, false positives, known issues. Use before writing a contest report.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\triaging-and-deduping-findings\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\triaging-and-deduping-findings\\SKILL.md",
       "triggers": [
         "/triaging and deduping findings",
         "/triaging-and-deduping-findings",
@@ -42550,6 +42755,37 @@
         "debugging",
         "build",
         "issues"
+      ]
+    },
+    {
+      "name": "turn-into-app",
+      "description": "Turn visible project context, a proven thread, skill, or workflow into a runnable Agent-Native app with simple buttons, visible agent steps, preview, and deployment handoff. Use when a user invokes `/turn-into-app` or asks to make a workflow into an app, including from Claude or ChatGPT on the web, ",
+      "path": "C:\\Users\\david\\.nur\\skills\\turn-into-app\\SKILL.md",
+      "triggers": [
+        "/turn into app",
+        "/turn-into-app",
+        "turn into app",
+        "turn-into-app",
+        "turn visible",
+        "/turn into",
+        "/turn-into",
+        "/into app",
+        "/into-app",
+        "turn into",
+        "turn-into",
+        "into app"
+      ],
+      "keywords": [
+        "turn",
+        "visible",
+        "project",
+        "context",
+        "proven",
+        "thread",
+        "workflow",
+        "runnable",
+        "native",
+        "simple"
       ]
     },
     {
@@ -42791,6 +43027,35 @@
       ]
     },
     {
+      "name": "ultrafuzz",
+      "description": "Agentic smart-contract fuzzing and threat-hunting orchestrator (Monad's Ultrafuzz, MIT, github.com/monad-developers/ultrafuzz). Coordinates parallel fuzzing strategies, property-guided investigation, specialist agents, and OWASP SCVP dedupe into one campaign. Use for deep/long-running audits of Foun",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\ultrafuzz\\SKILL.md",
+      "triggers": [
+        "smart contract fuzzing",
+        "fuzz the contracts",
+        "fuzz my contracts",
+        "fuzzing campaign",
+        "agentic fuzzing",
+        "monad ultrafuzz",
+        "agentic smart",
+        "/ultrafuzz",
+        "ultra fuzz",
+        "ultrafuzz"
+      ],
+      "keywords": [
+        "ultrafuzz",
+        "agentic",
+        "smart",
+        "contract",
+        "fuzzing",
+        "threat",
+        "hunting",
+        "orchestrator",
+        "monad",
+        "github"
+      ]
+    },
+    {
       "name": "unhappy",
       "description": "State-first design pass \u2014 inventories and implements all non-happy states (loading, empty, error, partial, conflict, offline) before the happy path, and refactors impossible boolean state to proper state machines. Use when starting a new screen, reviewing an existing one for edge-case gaps, or when ",
       "path": "C:\\Users\\david\\.nur\\skills\\unhappy\\SKILL.md",
@@ -42914,7 +43179,7 @@
     },
     {
       "name": "using-agent-skills",
-      "description": "Discovers and invokes agent skills. Use when starting a session or when you need to discover which skill applies to the current task. This is the meta-skill that governs how all other skills are discovered and invoked.",
+      "description": "Discovers and invokes agent skills. Use when starting a session, or when you need to decide which skill or workflow applies to the piece of work at hand. This is the meta-skill that governs how all other skills are discovered and invoked.",
       "path": "C:\\Users\\david\\.nur\\skills\\using-agent-skills\\SKILL.md",
       "triggers": [
         "/using agent skills",
@@ -42935,12 +43200,12 @@
         "invokes",
         "starting",
         "session",
-        "discover",
+        "decide",
+        "workflow",
         "applies",
-        "current",
-        "task",
-        "meta",
-        "governs"
+        "piece",
+        "hand",
+        "meta"
       ]
     },
     {
@@ -43693,7 +43958,7 @@
     {
       "name": "wait-what",
       "description": "Stop. That last message did not land: re-pitch it.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\wait-what\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\wait-what\\SKILL.md",
       "triggers": [
         "/wait what",
         "/wait-what",
@@ -43711,7 +43976,7 @@
     },
     {
       "name": "wayfinder",
-      "description": "Plan a huge chunk of work \u2014 more than one agent session can hold \u2014 as a shared map of decision tickets on your issue tracker, and resolve them one at a time until the way to the destination is clear.",
+      "description": "Plan a huge chunk of work (more than one agent session can hold) as a shared map of decision tickets on your issue tracker, and resolve them one at a time until the way to the destination is clear.",
       "path": "C:\\Users\\david\\.nur\\skills\\wayfinder\\SKILL.md",
       "triggers": [
         "/wayfinder",
@@ -43958,8 +44223,29 @@
       ]
     },
     {
+      "name": "webmcp",
+      "description": "Open a user-provided URL in the host's built-in browser and use the page's MCP or WebMCP tools before browser UI automation for app communication or edits.",
+      "path": "C:\\Users\\david\\.nur\\skills\\webmcp\\SKILL.md",
+      "triggers": [
+        "/webmcp",
+        "webmcp"
+      ],
+      "keywords": [
+        "webmcp",
+        "open",
+        "user",
+        "provided",
+        "host",
+        "built",
+        "browser",
+        "page",
+        "tools",
+        "automation"
+      ]
+    },
+    {
       "name": "wizard",
-      "description": "Generate an interactive bash wizard that walks a human through a manual procedure \u2014 third-party setup, a one-off migration, an A\u2192B state transition \u2014 opening URLs, capturing values, confirming each step, and writing .env files and GitHub Actions secrets.",
+      "description": "Generate an interactive bash wizard that walks a human through steps only they can perform. Use when provisioning infrastructure, setting up credentials or CI secrets, walking an unfamiliar third-party dashboard, or running a one-off migration or cutover. Don't invoke this for steps the agent can pe",
       "path": "C:\\Users\\david\\.nur\\skills\\wizard\\SKILL.md",
       "triggers": [
         "generate interactive",
@@ -43973,10 +44259,10 @@
         "bash",
         "walks",
         "human",
-        "manual",
-        "procedure",
-        "third",
-        "party"
+        "steps",
+        "they",
+        "perform",
+        "provisioning"
       ]
     },
     {
@@ -44142,7 +44428,7 @@
     },
     {
       "name": "writing-beats",
-      "description": "Writing, exploit \u2014 assemble raw material into a journey of beats, grounding each term before a beat leans on it.",
+      "description": "Writing, exploit; assemble raw material into a journey of beats, grounding each term before a beat leans on it.",
       "path": "C:\\Users\\david\\.nur\\skills\\writing-beats\\SKILL.md",
       "triggers": [
         "writing exploit",
@@ -44191,7 +44477,7 @@
     {
       "name": "writing-for-agents",
       "description": "Writing documents for agents. Use when creating or editing skills, or modifying AGENTS.md or CLAUDE.md.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\writing-for-agents\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\writing-for-agents\\SKILL.md",
       "triggers": [
         "/writing for agents",
         "/writing-for-agents",
@@ -44218,7 +44504,7 @@
     {
       "name": "writing-foundry-invariant-handlers",
       "description": "Write Foundry invariant tests with handler contracts, ghost variables, and actor rotation. Use when a vault, AMM, or any value-moving Solidity contract only has unit tests.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\writing-foundry-invariant-handlers\\SKILL.md",
+      "path": "C:\\Users\\david\\.nur\\skills\\writing-foundry-invariant-handlers\\SKILL.md",
       "triggers": [
         "/writing foundry invariant handlers",
         "/writing-foundry-invariant-handlers",
@@ -44251,7 +44537,7 @@
     },
     {
       "name": "writing-fragments",
-      "description": "Writing, explore \u2014 mine raw fragments, no structure yet.",
+      "description": "Writing, explore: mine raw fragments, no structure yet.",
       "path": "C:\\Users\\david\\.nur\\skills\\writing-fragments\\SKILL.md",
       "triggers": [
         "/writing fragments",
@@ -44346,7 +44632,7 @@
     },
     {
       "name": "writing-shape",
-      "description": "Writing, exploit \u2014 shape raw material into an article, paragraph by paragraph.",
+      "description": "Writing, exploit: shape raw material into an article, paragraph by paragraph.",
       "path": "C:\\Users\\david\\.nur\\skills\\writing-shape\\SKILL.md",
       "triggers": [
         "writing exploit",
@@ -44434,150 +44720,6 @@
         "means",
         "task",
         "user"
-      ]
-    },
-    {
-      "name": "auditing-multi-pass-review-lenses",
-      "description": "Multi-pass Solidity audit methodology: nine review lenses plus three gap-hunter seam lenses, Feynman/Socratic/Inversion mental tools, the finding-vs-lead standard with five required fields, four-gate severity judging (attack execution, reachability, trigger with admin-amplifier rule, impact), confidence scoring, group_key dedup with completeness gates, and safe-pattern/do-not-report lists. Single-session sequential by design - never spawns subagent swarms. Use for a structured full-scope audit.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\auditing-multi-pass-review-lenses\\SKILL.md",
-      "triggers": [
-        "/auditing multi pass review lenses",
-        "/auditing-multi-pass-review-lenses",
-        "auditing multi pass review lenses",
-        "auditing-multi-pass-review-lenses",
-        "/audit lenses",
-        "multi pass audit",
-        "pashov audit methodology",
-        "audit review lenses",
-        "senior auditor sop",
-        "four gate severity judging",
-        "finding vs lead audit",
-        "gap hunter lenses",
-        "feynman socratic inversion audit",
-        "audit dedup completeness"
-      ],
-      "keywords": [
-        "auditing",
-        "multi",
-        "pass",
-        "review",
-        "lenses",
-        "judging",
-        "severity",
-        "finding",
-        "lead",
-        "dedup",
-        "completeness",
-        "senior",
-        "sop",
-        "gates",
-        "seam"
-      ]
-    },
-    {
-      "name": "auditing-git-history-and-specs",
-      "description": "Audit surfaces beyond source: git history forensics (security-fix-shaped commits, late-change churn, dangerous-area hotspots, forked dependency lineage, dev-pattern risk), invariant synthesis taxonomy (conservation, guard-lifting with write-site verification, ratio ordering, state machines, temporal ordering, cross-contract assumptions, economic invariants) with a G/I/X/E catalog format, and spec-vs-code auditing of whitepapers and design docs. Use for pre-audit recon, upgrade risk, or invariant catalog building.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\auditing-git-history-and-specs\\SKILL.md",
-      "triggers": [
-        "/auditing git history and specs",
-        "/auditing-git-history-and-specs",
-        "auditing git history and specs",
-        "auditing-git-history-and-specs",
-        "/git forensics audit",
-        "x-ray git audit",
-        "git history security review",
-        "invariant synthesis",
-        "spec vs code audit",
-        "whitepaper claims audit",
-        "forked dependency lineage",
-        "audit commit history"
-      ],
-      "keywords": [
-        "auditing",
-        "git",
-        "history",
-        "specs",
-        "forensics",
-        "invariant",
-        "synthesis",
-        "catalog",
-        "spec",
-        "docs",
-        "churn",
-        "forked",
-        "lineage",
-        "commit",
-        "threats"
-      ]
-    },
-    {
-      "name": "discovering-protocol-properties",
-      "description": "How to discover fuzz/invariant properties for a protocol: three property classes (global, function-specific, delta-based), source-driven discovery (accumulative operations, counters, extreme values, exposed-state enumeration), protocol-type adaptation via harness or ghost variables, quality bars (no speculative ghosts, snapshot discipline, revert safety, success-gating, diagnosable assertions), and rotation perspectives (conservation auditor, adversarial profit maximizer, rounding analyst, state-transition mapper, protocol-type specialist). Complements handler/fuzzer mechanics skills.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\discovering-protocol-properties\\SKILL.md",
-      "triggers": [
-        "/discovering protocol properties",
-        "/discovering-protocol-properties",
-        "discovering protocol properties",
-        "discovering-protocol-properties",
-        "/fuzz properties",
-        "what to assert fuzzing",
-        "invariant discovery",
-        "property generation solidity",
-        "fizz property discovery",
-        "ghost variables fuzzing",
-        "delta properties snapshots",
-        "protocol type invariants"
-      ],
-      "keywords": [
-        "discovering",
-        "protocol",
-        "properties",
-        "invariants",
-        "fuzz",
-        "ghosts",
-        "snapshots",
-        "delta",
-        "conservation",
-        "roundtrip",
-        "perspectives",
-        "suite",
-        "assertions",
-        "campaign"
-      ]
-    },
-    {
-      "name": "auditing-against-reference-models",
-      "description": "Model-based audit technique: build an independent spec-faithful reference model of the protocol's value-critical core and diff the real code against it via differential testing, property mirroring, fork mirrors for forked codebases, spec property extraction, and deployment-realistic fixtures; plus the forced PoC gate (material findings need executable local proofs unless a stated blocker applies), failure triage taxonomy, and report-facing test-campaign discipline. Single-session, no worker pools.",
-      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\security\\SCA\\auditing-against-reference-models\\SKILL.md",
-      "triggers": [
-        "/auditing against reference models",
-        "/auditing-against-reference-models",
-        "auditing against reference models",
-        "auditing-against-reference-models",
-        "/reference model audit",
-        "differential testing audit",
-        "foundry differential tests",
-        "spec properties extraction",
-        "fork mirror testing",
-        "forced poc gate",
-        "poc or it didnt happen",
-        "failure triage fuzzing"
-      ],
-      "keywords": [
-        "auditing",
-        "reference",
-        "models",
-        "differential",
-        "mirror",
-        "spec",
-        "poc",
-        "gate",
-        "triage",
-        "fixtures",
-        "campaign",
-        "divergence",
-        "model",
-        "diff"
       ]
     }
   ]
