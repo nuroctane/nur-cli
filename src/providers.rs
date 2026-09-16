@@ -115,6 +115,17 @@ pub const OPENCODE_GO_BASE_URL: &str = "https://opencode.ai/zen/go/v1";
 /// created in Studio and exported as `COMMAND_CODE_API_KEY` (their own CLI)
 /// or `CMD_API_KEY` (community convention). Docs: https://commandcode.ai/docs/provider
 pub const COMMANDCODE_BASE_URL: &str = "https://api.commandcode.ai/provider/v1";
+/// Cline API — the OpenAI-compatible gateway behind the Cline extension, CLI
+/// and SDK. One Bearer credential reaches Anthropic, OpenAI, Google, MiniMax,
+/// Grok and more through a single endpoint.
+///
+/// Model ids are OpenRouter-style `vendor/model` (e.g.
+/// `anthropic/claude-sonnet-5`) and must be passed through **verbatim**: the
+/// slash is part of the id, never a nur `provider/model` pair. Keys are minted
+/// at app.cline.bot → Settings → API Keys; a Cline account session token from
+/// `cline auth cline` authenticates the same endpoint. Docs:
+/// <https://docs.cline.bot/api/overview>.
+pub const CLINE_BASE_URL: &str = "https://api.cline.bot/api/v1";
 /// Nous Portal inference API — OpenAI-compatible, OAuth device-code sessions
 /// shared with Hermes Agent (`hermes auth add nous` / `nur auth login --provider nous`).
 pub const NOUS_PORTAL_BASE_URL: &str = "https://inference-api.nousresearch.com/v1";
@@ -145,6 +156,7 @@ const PROVIDER_COUNT_DOC_SITES: &[&str] = &[
     "docs/quickstart.md",
     "docs/authentication.md",
     "docs/tui.md",
+    "docs/providers.md",
 ];
 
 /// Current xAI flagship on `api.x.ai`.
@@ -1237,6 +1249,29 @@ pub const PROVIDERS: &[Provider] = &[
         browser_auth: true,
     },
     Provider {
+        id: "cline",
+        name: "Cline",
+        base_url: CLINE_BASE_URL,
+        // Verbatim from Cline's live catalog (`GET /api/v1/models` on
+        // 2026-09, 444 ids) and the same model nur's own `anthropic` row
+        // defaults to, so switching rows keeps the model constant. Cline
+        // namespaces every id as `vendor/model` — the docs' hyphenated
+        // `anthropic/claude-sonnet-4-6` example is stale; the live id uses a
+        // dot. `/model` lists the live catalog for your account.
+        default_model: "anthropic/claude-sonnet-5",
+        env_key: "CLINE_API_KEY",
+        style: CC,
+        // Cline serves Chat Completions for every model behind one key, so no
+        // per-model endpoint routing is needed (`api::client::routed_for_model`
+        // has no `cline` arm by design).
+        note: "Cline account sign-in or API key · 440+ models",
+        key_optional: false,
+        // Cline account sign-in (`cline auth cline`) mints an account token the
+        // same endpoint accepts; nur drives the vendor CLI, exactly like
+        // cursor / opencode, and also imports an existing `~/.cline` session.
+        browser_auth: true,
+    },
+    Provider {
         id: "requesty",
         name: "Requesty",
         base_url: "https://router.requesty.ai/v1",
@@ -1634,6 +1669,8 @@ fn resolve_provider_token(q: &str) -> Option<&'static Provider> {
         // Aggregators / routers
         "openrouter" | "or" => "openrouter",
         "commandcode" | "command-code" | "commandcode.ai" => "commandcode",
+        // Cline the coder agent's own gateway; `cline` doubles as its CLI name.
+        "cline" | "cline-bot" | "clinebot" | "cline.ai" | "cline.bot" => "cline",
         "opencode" | "zen" => "opencode",
         "cursor" | "cursor-agent" | "cursoragent" => "cursor",
         "groq" => "groq",
@@ -1675,6 +1712,9 @@ const TEXT_SCAN_ALIASES: &[&str] = &[
     "deepseek",
     "openrouter",
     "commandcode",
+    // Whole-word matched (see `contains_whole_phrase`), so ordinary English
+    // "decline" / "incline" cannot fire this.
+    "cline",
     "moonshot",
     "anthropic",
     "openai",
@@ -1987,6 +2027,7 @@ pub fn oauth_browser_provider_ids() -> &'static [&'static str] {
         "zhipu",
         "nous",
         "commandcode",
+        "cline",
     ]
 }
 
@@ -2201,7 +2242,7 @@ mod tests {
         // `PROVIDER_COUNT_DOC_SITES` below too.
         assert_eq!(
             PROVIDERS.len(),
-            64,
+            65,
             "provider count changed — update the docs that quote it: {}",
             PROVIDER_COUNT_DOC_SITES.join(", ")
         );
@@ -2312,6 +2353,98 @@ mod tests {
         let mut ov = std::collections::HashMap::new();
         ov.insert("poolside".to_string(), "zdr".to_string());
         assert_eq!(effective_privacy(&ov, "poolside"), Privacy::Zdr);
+    }
+
+    /// Cline: one Bearer credential, Chat Completions for every model, and
+    /// OpenRouter-style `vendor/model` ids that must survive verbatim.
+    #[test]
+    fn cline_speaks_chat_completions_with_one_gateway_key() {
+        let p = by_id("cline").expect("cline is in the catalog");
+        assert_eq!(p.name, "Cline");
+        assert_eq!(p.base_url, CLINE_BASE_URL);
+        assert_eq!(p.base_url, "https://api.cline.bot/api/v1");
+        assert_eq!(p.env_key, "CLINE_API_KEY");
+        assert_eq!(p.default_model, "anthropic/claude-sonnet-5");
+        assert_eq!(p.style, ApiStyle::ChatCompletions);
+        assert!(!p.key_optional);
+        // Cline accounts sign in through `cline auth cline`; that account token
+        // authenticates the same endpoint as a pasted API key.
+        assert!(p.browser_auth);
+        assert!(
+            oauth_browser_provider_ids().contains(&"cline"),
+            "cline must advertise its account sign-in flow"
+        );
+        assert_eq!(provider_env_keys("cline"), vec!["CLINE_API_KEY"]);
+    }
+
+    /// The `vendor/model` id is part of the wire format, not a nur
+    /// `provider/model` pair: any normalization that stripped or rewrote the
+    /// prefix would 404 every Cline turn with no hint why.
+    #[test]
+    fn cline_model_ids_pass_through_untouched() {
+        assert_eq!(
+            normalize_model_for("cline", "anthropic/claude-sonnet-5"),
+            "anthropic/claude-sonnet-5"
+        );
+        assert_eq!(
+            normalize_model_for("cline", "  openai/gpt-6-astra  "),
+            "openai/gpt-6-astra"
+        );
+        // Failover seeds its plan from this field, so it must stay a real id.
+        assert_eq!(
+            by_id("cline").expect("cline").default_model,
+            "anthropic/claude-sonnet-5"
+        );
+    }
+
+    #[test]
+    fn cline_is_resolvable_by_alias_display_name_and_free_text() {
+        assert_eq!(resolve_provider_alias("cline").map(|p| p.id), Some("cline"));
+        assert_eq!(
+            resolve_provider_alias("cline-bot").map(|p| p.id),
+            Some("cline")
+        );
+        assert_eq!(resolve_provider_alias("Cline").map(|p| p.id), Some("cline"));
+        // "a cline subagent" — filler words must not defeat the lookup.
+        assert_eq!(
+            resolve_provider_alias("cline subagent").map(|p| p.id),
+            Some("cline")
+        );
+        // The free-text scanner must find it so cross-provider steers work.
+        assert!(
+            named_providers_in_text("spawn a cline subagent to audit the router")
+                .iter()
+                .any(|h| h.contains("cline")),
+        );
+    }
+
+    /// "cline" is a whole word inside a larger English one ("decline",
+    /// "incline", "declined") — the scanner must stay silent there.
+    #[test]
+    fn cline_does_not_fire_inside_ordinary_english_words() {
+        for prose in [
+            "I decline to answer that.",
+            "The decline was steep and the incline steeper.",
+            "Please decline the request politely.",
+            "Reclined seating does not matter here.",
+        ] {
+            assert!(
+                named_providers_in_text(prose).is_empty(),
+                "false positive on: {prose}"
+            );
+        }
+        // Same guard applies to the routing scanner's own PHRASES list — see
+        // `agent::loop::provider_routing_ignores_decline` for the paired case.
+    }
+
+    /// Cline publishes no no-train / ZDR commitment for the gateway, so it takes
+    /// the conservative tier rather than an unearned badge.
+    #[test]
+    fn cline_defaults_to_the_conservative_privacy_tier() {
+        assert_eq!(builtin_privacy("cline"), Privacy::Standard);
+        let mut ov = std::collections::HashMap::new();
+        ov.insert("cline".to_string(), "zdr".to_string());
+        assert_eq!(effective_privacy(&ov, "cline"), Privacy::Zdr);
     }
 
     #[test]
@@ -2755,6 +2888,7 @@ mod tests {
                 "zhipu",
                 "nous",
                 "commandcode",
+                "cline",
             ]
         );
         assert!(!by_id("huggingface").unwrap().browser_auth);

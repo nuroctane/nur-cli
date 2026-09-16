@@ -138,6 +138,10 @@ pub fn revoke_session(auth: &Auth) -> Result<String> {
             "local credential deleted — revoke the key in Command Code Studio (commandcode.ai/studio → API keys) if needed"
                 .into(),
         ),
+        "cline" => Ok(
+            "local credential deleted — revoke it from the Cline account (app.cline.bot → Settings → API Keys, or `cline auth` to sign out) if needed"
+                .into(),
+        ),
         "" => Ok(String::new()),
         other => Ok(format!(
             "no remote revoke for provider '{other}' — local file removed"
@@ -178,6 +182,7 @@ pub fn refresh_tokens(provider: &str, auth: &Auth, refresh: &str) -> Result<OAut
         "opencode" => flows::opencode::refresh(auth, refresh),
         "nous" => flows::nous::refresh(auth, refresh),
         "commandcode" => flows::commandcode::refresh(auth, refresh),
+        "cline" => flows::cline::refresh(auth, refresh),
         "meta" => harness::muse::refresh(auth, refresh),
         "deepseek" => harness::deepseek::refresh(auth, refresh),
         "zhipu" => harness::zhipu::refresh(auth, refresh),
@@ -212,6 +217,7 @@ mod tests {
         assert!(supports_browser("meta"));
         assert!(supports_browser("deepseek"));
         assert!(supports_browser("zhipu"));
+        assert!(supports_browser("cline"));
         assert!(!supports_browser("qwen"));
     }
 
@@ -245,6 +251,7 @@ mod tests {
             "opencode",
             "nous",
             "commandcode",
+            "cline",
             "meta",
             "deepseek",
             "zhipu",
@@ -266,6 +273,7 @@ mod tests {
             "opencode",
             "nous",
             "commandcode",
+            "cline",
             "meta",
             "deepseek",
             "zhipu",

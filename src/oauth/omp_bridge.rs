@@ -117,6 +117,7 @@ pub fn omp_provider_aliases(nur_provider: &str) -> Vec<&'static str> {
         "upstage" => vec!["upstage"],
         "thinkingmachines" => vec!["thinkingmachines"],
         "poolside" => vec!["poolside"],
+        "cline" => vec!["cline", "cline-pass"],
         "vllm" => vec!["vllm"],
         "jan" => vec!["jan"],
         other => {

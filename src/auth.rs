@@ -1476,6 +1476,7 @@ pub fn provider_credential_summaries() -> BTreeMap<String, String> {
             "google" => Some(crate::t3code::DriverId::Gemini),
             "antigravity" => Some(crate::t3code::DriverId::Antigravity),
             "cursor" => Some(crate::t3code::DriverId::Cursor),
+            "cline" => Some(crate::t3code::DriverId::Cline),
             _ => None,
         };
         if driver.is_some_and(|driver| crate::t3code::probe_driver(driver).has_credentials) {
@@ -1552,6 +1553,7 @@ pub fn provider_health_report() -> Vec<String> {
                 "google" => Some(crate::t3code::DriverId::Gemini),
                 "antigravity" => Some(crate::t3code::DriverId::Antigravity),
                 "cursor" => Some(crate::t3code::DriverId::Cursor),
+                "cline" => Some(crate::t3code::DriverId::Cline),
                 _ => None,
             };
             if let Some(driver) = driver {

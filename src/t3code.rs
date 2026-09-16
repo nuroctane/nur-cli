@@ -29,6 +29,7 @@ pub enum DriverId {
     Grok,
     Antigravity,
     Gemini,
+    Cline,
 }
 
 impl DriverId {
@@ -41,6 +42,7 @@ impl DriverId {
             DriverId::Grok => "grok",
             DriverId::Antigravity => "antigravity",
             DriverId::Gemini => "gemini",
+            DriverId::Cline => "cline",
         }
     }
 
@@ -53,6 +55,7 @@ impl DriverId {
             DriverId::Grok => "grok login (or xai auth)",
             DriverId::Antigravity => "agy login (or agy models to verify)",
             DriverId::Gemini => "gcloud auth login",
+            DriverId::Cline => "cline auth cline",
         }
     }
 }
@@ -144,6 +147,17 @@ pub fn driver_config_dir(driver: DriverId) -> PathBuf {
             }
             home.join(".config").join("gcloud")
         }
+        DriverId::Cline => {
+            if let Ok(dir) = std::env::var("CLINE_DATA_DIR") {
+                let p = PathBuf::from(dir);
+                if p.is_absolute() {
+                    return p;
+                }
+            }
+            // Cline keeps global state (settings/, sessions/, db/) here; the CLI
+            // can relocate it with CLINE_DATA_DIR or `--data-dir`.
+            home.join(".cline").join("data")
+        }
     }
 }
 
@@ -157,6 +171,7 @@ pub fn vendor_cli_exists(driver: DriverId) -> bool {
         DriverId::Grok => "grok",
         DriverId::Antigravity => "agy",
         DriverId::Gemini => "gcloud",
+        DriverId::Cline => "cline",
     };
     which(bin).is_some()
 }
@@ -204,7 +219,7 @@ pub fn probe_driver(driver: DriverId) -> ProbeStatus {
     let mut has_credentials = if config_dir_exists
         || matches!(
             driver,
-            DriverId::Cursor | DriverId::OpenCode | DriverId::Grok
+            DriverId::Cursor | DriverId::OpenCode | DriverId::Grok | DriverId::Cline
         ) {
         probes_have_credentials(driver, &config_dir)
     } else {
@@ -330,6 +345,18 @@ fn probes_have_credentials(driver: DriverId, dir: &Path) -> bool {
                             .exists()
                 })
         }
+        DriverId::Cline => {
+            // Real store: <data>/settings/providers.json (map of providers).
+            dir.join("settings").join("providers.json").exists()
+                || dirs::home_dir().is_some_and(|home| {
+                    home.join(".cline")
+                        .join("data")
+                        .join("settings")
+                        .join("providers.json")
+                        .exists()
+                })
+                || std::env::var_os("CLINE_API_KEY").is_some_and(|v| !v.is_empty())
+        }
         DriverId::Gemini => {
             dir.join("credentials.db").exists()
                 || dir.join("legacy_credentials").exists()
@@ -349,6 +376,7 @@ pub fn probe_all() -> Vec<ProbeStatus> {
         DriverId::Grok,
         DriverId::Antigravity,
         DriverId::Gemini,
+        DriverId::Cline,
     ]
     .iter()
     .map(|d| probe_driver(*d))
@@ -528,6 +556,7 @@ pub fn env_for_driver(driver: DriverId) -> HashMap<String, String> {
         "XAI_CONFIG_DIR",
         "ANTIGRAVITY_HOME",
         "GCLOUD_CONFIG_DIR",
+        "CLINE_DATA_DIR",
     ] {
         if let Ok(v) = std::env::var(var) {
             env.insert(var.to_string(), v);
@@ -562,6 +591,10 @@ pub fn env_for_driver(driver: DriverId) -> HashMap<String, String> {
         }
         DriverId::Gemini => {
             env.entry("GCLOUD_CONFIG_DIR".to_string())
+                .or_insert_with(|| driver_config_dir(driver).display().to_string());
+        }
+        DriverId::Cline => {
+            env.entry("CLINE_DATA_DIR".to_string())
                 .or_insert_with(|| driver_config_dir(driver).display().to_string());
         }
     }
@@ -603,8 +636,29 @@ mod tests {
     }
 
     #[test]
-    fn probe_all_returns_seven() {
+    fn probe_all_covers_every_driver() {
         let all = probe_all();
-        assert_eq!(all.len(), 7);
+        // One probe per DriverId — add the row here when the enum grows.
+        assert_eq!(
+            all.len(),
+            8,
+            "Claude, Codex, Cursor, OpenCode, Grok, Antigravity, Gemini, Cline"
+        );
+        for driver in [
+            DriverId::Claude,
+            DriverId::Codex,
+            DriverId::Cursor,
+            DriverId::OpenCode,
+            DriverId::Grok,
+            DriverId::Antigravity,
+            DriverId::Gemini,
+            DriverId::Cline,
+        ] {
+            assert!(
+                all.iter().any(|probe| probe.driver == driver),
+                "probe_all is missing {}",
+                driver.as_str()
+            );
+        }
     }
 }

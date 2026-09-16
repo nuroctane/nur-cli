@@ -8,8 +8,9 @@
 //! brand marks - simple-icons (Apache-2.0) for anthropic/deepseek/gemini/
 //! googlecloud/kimi/meta/ollama/opencode/openrouter/perplexity/copilot, the
 //! official OpenAI flower (simple-icons v9, tile path stripped), the
-//! official xAI mark cropped from the Wikipedia render of their logo, and
-//! the Nous Research wordmark from their GitHub org avatar.
+//! official xAI mark cropped from the Wikipedia render of their logo, the
+//! Nous Research wordmark from their GitHub org avatar, and Cline's official
+//! app icon (glyph only - the dark tile it sits on is dropped).
 
 /// One provider logo: embedded PNG + emoji fallback.
 #[derive(Clone, Copy)]
@@ -23,6 +24,7 @@ pub struct Logo {
 }
 
 const ANTHROPIC_PNG: &[u8] = include_bytes!("../assets/provider-logos/anthropic.png");
+const CLINE_PNG: &[u8] = include_bytes!("../assets/provider-logos/cline.png");
 const COPILOT_PNG: &[u8] = include_bytes!("../assets/provider-logos/copilot.png");
 const DEEPSEEK_PNG: &[u8] = include_bytes!("../assets/provider-logos/deepseek.png");
 const GEMINI_PNG: &[u8] = include_bytes!("../assets/provider-logos/gemini.png");
@@ -56,6 +58,7 @@ pub fn for_provider(provider_id: &str) -> Option<Logo> {
         "perplexity" => PERPLEXITY_PNG,
         "github-copilot" | "copilot" => COPILOT_PNG,
         "nous" => NOUS_PNG,
+        "cline" => CLINE_PNG,
         _ => return None,
     };
     Some(Logo { png, emoji })
@@ -83,6 +86,9 @@ pub fn title_emoji(label: &str) -> &'static str {
         "perplexity" => "\u{1F50E}",                       // 🔎
         "github-copilot" | "copilot" => "\u{1F97D}",       // 🥽
         "nous" => "\u{1F318}",                             // 🌘
+        // Cline's mark is a little agent head; the robot face reads the same
+        // at tab-title size.
+        "cline" => "\u{1F916}", // 🤖
         _ => "",
     }
 }
@@ -105,6 +111,7 @@ mod tests {
     fn every_embedded_logo_png_is_64x64() {
         let logos = [
             ANTHROPIC_PNG,
+            CLINE_PNG,
             COPILOT_PNG,
             DEEPSEEK_PNG,
             GEMINI_PNG,
@@ -133,5 +140,15 @@ mod tests {
         let logo = for_provider("deepseek").expect("deepseek has a logo");
         assert_eq!(logo.emoji, title_emoji("deepseek"));
         assert!(for_provider("unknown-gateway").is_none());
+    }
+
+    /// Cline is a first-class catalog row with an inline logo, and its tab-title
+    /// emoji must resolve (an empty glyph would leave the title bare).
+    #[test]
+    fn cline_has_a_logo_and_a_title_emoji() {
+        let logo = for_provider("cline").expect("cline has a logo");
+        assert_eq!(logo.emoji, title_emoji("cline"));
+        assert_eq!(title_emoji("cline"), "\u{1F916}");
+        assert!(!logo.emoji.is_empty());
     }
 }

@@ -69,6 +69,16 @@ XAI_COLOR = CLAY
 NOUS_AVATAR_URL = "https://github.com/NousResearch.png"
 NOUS_COLOR = CLAY
 
+# Cline ships its mark as a LIGHT glyph on the brand's dark tile. simple-icons
+# carries the same outline (hex 18181B) but its path relies on nonzero winding,
+# which svglib cannot be trusted to fill, so the official app icon is the
+# source of truth and only the light glyph is kept.
+CLINE_ICON_URL = (
+    "https://raw.githubusercontent.com/cline/cline/main/"
+    "apps/cline-hub/src/webview/public/icon.png"
+)
+CLINE_COLOR = CLAY
+
 
 def fetch(url: str) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": "nur-cli-logo-fetch/1.0"})
@@ -126,7 +136,16 @@ def save(name: str, img: Image.Image, svg_bytes: bytes | None) -> None:
 
 
 def do_simple_icons(name: str, slug: str, color) -> None:
-    svg = fetch(f"https://cdn.simpleicons.org/{slug}")
+    # cdn.simpleicons.org rate-limits/blocks bulk fetches (403), so fall back to
+    # the same icon's source SVG in the simple-icons repo (Apache-2.0). Without
+    # this a single 403 aborted the whole regeneration run.
+    try:
+        svg = fetch(f"https://cdn.simpleicons.org/{slug}")
+    except Exception:
+        svg = fetch(
+            "https://raw.githubusercontent.com/simple-icons/"
+            f"simple-icons/master/icons/{slug}.svg"
+        )
     mask = glyph_from_luma(black_on_white_from_svg(svg))
     save(name, standardize(mask, color), svg)
 
@@ -267,6 +286,22 @@ def do_nous() -> None:
     save("nous", standardize(mask, NOUS_COLOR), None)
 
 
+def do_cline() -> None:
+    png = fetch(CLINE_ICON_URL)
+    img = Image.open(io.BytesIO(png)).convert("RGBA")
+    # Flatten onto black: the app icon is a light glyph inside a dark rounded
+    # tile, and any transparent margin must not read as glyph.
+    flat = Image.new("RGBA", img.size, (0, 0, 0, 255))
+    flat = Image.alpha_composite(flat, img).convert("L")
+    # Keep the light glyph only - the dark tile background drops out, and the
+    # two eye cutouts inside the glyph stay holes because they are dark too.
+    mask = flat.point(lambda v: 255 if v > 170 else 0)
+    bbox = mask.getbbox()
+    if bbox is None:
+        raise RuntimeError("cline icon yielded an empty glyph mask")
+    save("cline", standardize(mask.crop(bbox), CLINE_COLOR), None)
+
+
 def main() -> int:
     os.makedirs(OUT, exist_ok=True)
     print("fetching simple-icons…")
@@ -278,6 +313,8 @@ def main() -> int:
     do_xai()
     print("nous (github org wordmark)…")
     do_nous()
+    print("cline (official app icon, glyph only)…")
+    do_cline()
 
     # Verify every PNG is exactly 64x64 RGBA before finishing.
     for entry in sorted(os.listdir(OUT)):

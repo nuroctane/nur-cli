@@ -7,7 +7,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -74,6 +74,7 @@ pub fn login_browser(provider_id: &str, tx: ProgressTx, cancel: CancelFlag) {
         "opencode" => opencode::login(&tx, &cancel),
         "nous" => nous::login(&tx, &cancel),
         "commandcode" => commandcode::login(&tx, &cancel),
+        "cline" => cline::login(&tx, &cancel),
         "meta" => super::harness::muse::login(&tx, &cancel),
         "deepseek" => super::harness::deepseek::login(&tx, &cancel),
         "zhipu" => super::harness::zhipu::login(&tx, &cancel),
@@ -87,6 +88,31 @@ pub fn login_browser(provider_id: &str, tx: ProgressTx, cancel: CancelFlag) {
         Ok(tokens) => send(&tx, BrowserLoginProgress::Done(tokens)),
         Err(e) => send(&tx, BrowserLoginProgress::Failed(e.to_string())),
     }
+}
+
+/// Stream a child CLI's stdout/stderr line-by-line: open the first https URL
+/// promptly (so the browser round trip starts immediately) and forward other
+/// lines as progress. Shared by the vendor-CLI logins (cursor / opencode /
+/// cline).
+fn watch_login_output(reader: impl Read + Send + 'static, tx: ProgressTx) {
+    thread::spawn(move || {
+        let mut lines = std::io::BufReader::new(reader).lines();
+        while let Some(Ok(line)) = lines.next() {
+            for word in line.split_whitespace() {
+                let url =
+                    word.trim_matches(|c: char| c == ')' || c == '(' || c == '"' || c == '\'');
+                if url.starts_with("https://") {
+                    send(&tx, BrowserLoginProgress::OpenUrl(url.to_string()));
+                    let _ = open_browser(url);
+                    return;
+                }
+            }
+            let snippet: String = line.chars().take(160).collect();
+            if !snippet.trim().is_empty() {
+                send(&tx, BrowserLoginProgress::Status(snippet));
+            }
+        }
+    });
 }
 
 /// Import tokens from a first-party CLI session / OMP when present.
@@ -108,6 +134,7 @@ pub fn import_existing_session(provider_id: &str) -> Result<Option<OAuthTokens>>
         "opencode" => opencode::import_opencode_cli(),
         "nous" => nous::import_hermes_cli(),
         "commandcode" => commandcode::import_commandcode_cli(),
+        "cline" => cline::import_cline_cli(),
         "meta" => super::harness::muse::import_muse_cli(),
         "deepseek" => super::harness::deepseek::import_dsh_cli(),
         "zhipu" => super::harness::zhipu::import_zcode_cli(),
@@ -141,7 +168,6 @@ pub fn import_existing_session(provider_id: &str) -> Result<Option<OAuthTokens>>
 
 pub mod cursor {
     use super::*;
-    use std::io::BufRead;
     use std::path::PathBuf;
 
     /// Prefer `cursor-agent` only. Bare `agent` on PATH is often Grok's binary.
@@ -264,28 +290,6 @@ pub mod cursor {
                 }),
             }),
         })
-    }
-
-        /// Stream stdout/stderr line-by-line and open the first https URL promptly.
-    fn watch_login_output(reader: impl Read + Send + 'static, tx: ProgressTx) {
-        thread::spawn(move || {
-            let mut lines = std::io::BufReader::new(reader).lines();
-            while let Some(Ok(line)) = lines.next() {
-                for word in line.split_whitespace() {
-                    let url =
-                        word.trim_matches(|c: char| c == ')' || c == '(' || c == '"' || c == '\'');
-                    if url.starts_with("https://") {
-                        send(&tx, BrowserLoginProgress::OpenUrl(url.to_string()));
-                        let _ = open_browser(url);
-                        return;
-                    }
-                }
-                let snippet: String = line.chars().take(160).collect();
-                if !snippet.trim().is_empty() {
-                    send(&tx, BrowserLoginProgress::Status(snippet));
-                }
-            }
-        });
     }
 
     /// Import credentials from `CURSOR_API_KEY`, Cursor Agent session files, or
@@ -1251,6 +1255,496 @@ fn chatgpt_account_meta(id_token: &str) -> (Option<String>, bool) {
 }
 
 // ── OpenAI (ChatGPT OAuth / Codex backend) ─────────────────────────────────
+
+/// Cline (`api.cline.bot`) — one Bearer credential for Anthropic, OpenAI,
+/// Google, MiniMax, Grok and the rest of Cline's catalog.
+///
+/// Cline's own credential is the account session minted by `cline auth cline`.
+/// nur does not re-implement that browser flow: it drives the vendor CLI the
+/// same way it does for Cursor and OpenCode, then imports what the Cline SDK
+/// persists. A pasted `CLINE_API_KEY` works too, and is the documented
+/// programmatic path.
+///
+/// Store shape verified in the Cline SDK
+/// (`sdk/packages/core/src/services/storage/provider-settings-manager.ts` and
+/// `types/provider-settings.ts`): `~/.cline/data/settings/providers.json`
+/// (data dir overridable with `CLINE_DATA_DIR`) holds
+///
+/// ```json
+/// { "version": 1, "providers": { "cline": { "settings": {
+///     "apiKey": "…",
+///     "auth": { "accessToken": "…", "refreshToken": "…", "expiresAt": 0 } } } } }
+/// ```
+///
+/// The stored `accessToken` is a **bare** WorkOS token while the API expects it
+/// behind the `workos:` scheme prefix Cline's own `formatClineApiKey` adds, so
+/// the import applies it; a pasted `apiKey` passes through verbatim.
+pub mod cline {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// Schemed access-token form. Mirrors `WORKOS_TOKEN_PREFIX` in Cline's
+    /// `auth/provider-auth-registry.ts`; `formatClineApiKey` is idempotent.
+    pub const WORKOS_TOKEN_PREFIX: &str = "workos:";
+
+    /// Refresh marker for sessions born from a plain API key: there is no grant
+    /// to exchange, so `refresh` re-imports instead.
+    const API_KEY_MARKER: &str = "cline-cli";
+
+    /// The vendor CLI (`npm i -g cline`). npm shims it as `cline.cmd` on
+    /// Windows, and a standalone install may sit in the npm global prefix or
+    /// `~/.local/bin`.
+    fn cline_bin() -> Option<PathBuf> {
+        let mut extra = Vec::new();
+        if let Some(home) = dirs::home_dir() {
+            extra.push(home.join(".local").join("bin"));
+            #[cfg(windows)]
+            {
+                if let Some(appdata) = std::env::var_os("APPDATA").map(PathBuf::from) {
+                    extra.push(appdata.join("npm"));
+                }
+            }
+        }
+        resolve_cli("cline", &["cline.cmd", "cline.exe"], &extra)
+    }
+
+    /// `~/.cline/data/settings/providers.json`. `CLINE_DATA_DIR` replaces the
+    /// `~/.cline/data` root (`cline --data-dir` does the same per run).
+    fn providers_json_paths() -> Vec<PathBuf> {
+        let mut roots = Vec::new();
+        if let Ok(dir) = std::env::var("CLINE_DATA_DIR") {
+            let p = PathBuf::from(dir.trim());
+            if p.is_absolute() {
+                roots.push(p);
+            }
+        }
+        // No CWD-relative fallback: without a home dir, a repo-planted
+        // providers.json must not be trusted as a credential store.
+        if let Some(home) = dirs::home_dir() {
+            roots.push(home.join(".cline").join("data"));
+        }
+        roots
+            .into_iter()
+            .map(|root| root.join("settings").join("providers.json"))
+            .collect()
+    }
+
+    /// The API expects the account token behind the `workos:` scheme prefix.
+    fn with_workos_prefix(token: &str) -> String {
+        let t = token.trim();
+        if t.to_ascii_lowercase().starts_with(WORKOS_TOKEN_PREFIX) {
+            t.to_string()
+        } else {
+            format!("{WORKOS_TOKEN_PREFIX}{t}")
+        }
+    }
+
+    fn iso_to_unix(s: &str) -> Option<u64> {
+        chrono::DateTime::parse_from_rfc3339(s)
+            .ok()
+            .map(|dt| dt.timestamp().max(0) as u64)
+    }
+
+    /// One credential found in `providers.json`.
+    struct Stored {
+        access: String,
+        refresh: Option<String>,
+        expires_at: Option<u64>,
+        /// `oauth` for the account session, `api_key` for a pasted key.
+        kind: &'static str,
+    }
+
+    /// Pull the `cline` credential out of a `providers.json` body.
+    ///
+    /// Only the `cline` entry is read, so a neighbouring provider's key can
+    /// never be imported as ours. (`cline-pass` shares this entry: Cline's
+    /// registry maps it to the same storage id.)
+    fn stored_from_settings(text: &str) -> Option<Stored> {
+        let v: serde_json::Value = serde_json::from_str(text).ok()?;
+        let settings = v.get("providers")?.get("cline")?.get("settings")?;
+        // The account session leads: it is what `cline auth cline` writes, and
+        // it outranks a leftover pasted key.
+        if let Some(auth) = settings.get("auth") {
+            let access = auth
+                .get("accessToken")
+                .and_then(|x| x.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            if let Some(access) = access {
+                let refresh = auth
+                    .get("refreshToken")
+                    .and_then(|x| x.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string());
+                let expires_at = auth.get("expiresAt").and_then(|x| {
+                    // Cline stores ms-epoch when it converts the ISO field.
+                    x.as_u64()
+                        .map(|ms| ms / 1000)
+                        .or_else(|| x.as_str().and_then(iso_to_unix))
+                });
+                return Some(Stored {
+                    access: with_workos_prefix(access),
+                    refresh,
+                    expires_at,
+                    kind: "oauth",
+                });
+            }
+        }
+        // Cline's own resolution is `settings.apiKey || settings.auth.apiKey`
+        // (`resolveProviderApiKeyFromSettings`), so match that order.
+        let key = settings
+            .get("apiKey")
+            .or_else(|| settings.get("auth").and_then(|auth| auth.get("apiKey")))
+            .and_then(|x| x.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())?;
+        Some(Stored {
+            access: key.to_string(),
+            refresh: None,
+            expires_at: None,
+            kind: "api_key",
+        })
+    }
+
+    fn tokens_for(stored: Stored, via: &str, path: Option<&str>) -> OAuthTokens {
+        let credential_kind = stored.kind;
+        OAuthTokens {
+            access_token: stored.access,
+            refresh_token: Some(stored.refresh.unwrap_or_else(|| API_KEY_MARKER.to_string())),
+            expires_at: stored.expires_at,
+            meta: Some(OauthMeta {
+                issuer: "cline".into(),
+                client_id: "cline-cli".into(),
+                extra: serde_json::json!({
+                    "imported_from": via,
+                    "path": path.unwrap_or(""),
+                    "credential_kind": credential_kind,
+                }),
+            }),
+        }
+    }
+
+    pub fn import_cline_cli() -> Result<Option<OAuthTokens>> {
+        // 1. `CLINE_API_KEY` is the documented headless credential.
+        if let Ok(key) = std::env::var("CLINE_API_KEY") {
+            let key = key.trim().to_string();
+            if !key.is_empty() {
+                return Ok(Some(tokens_for(
+                    Stored {
+                        access: key,
+                        refresh: None,
+                        expires_at: None,
+                        kind: "api_key",
+                    },
+                    "CLINE_API_KEY",
+                    None,
+                )));
+            }
+        }
+
+        for p in providers_json_paths() {
+            if !p.is_file() {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&p) else {
+                continue;
+            };
+            let Some(stored) = stored_from_settings(&text) else {
+                continue;
+            };
+            // A stored account token already past `exp` is a signed-out
+            // session, but one carrying a refresh token can still be revived by
+            // `refresh` - so only an unrenewable dead token is skipped here.
+            if expired_jwt(&stored.access) && stored.refresh.is_none() {
+                continue;
+            }
+            return Ok(Some(tokens_for(
+                stored,
+                "cline-cli",
+                Some(&p.display().to_string()),
+            )));
+        }
+        Ok(None)
+    }
+
+    pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
+        // Already signed in through the Cline CLI? One import, no prompt.
+        if let Ok(Some(t)) = import_cline_cli() {
+            send(
+                tx,
+                BrowserLoginProgress::Status("using existing Cline session".into()),
+            );
+            return Ok(t);
+        }
+
+        let bin = cline_bin().ok_or_else(|| {
+            NurError::Other(
+                "cline not found on PATH. Install the Cline CLI (`npm i -g cline`), run \
+                 `cline auth cline` in a terminal - or paste a CLINE_API_KEY from \
+                 app.cline.bot → Settings → API Keys."
+                    .into(),
+            )
+        })?;
+
+        send(
+            tx,
+            BrowserLoginProgress::Status("launching Cline sign-in (cline auth cline)…".into()),
+        );
+        // Never hardcode Cline's login URL: wait for the CLI's own auth URL.
+        let mut child = Command::new(&bin)
+            .args(["auth", "cline"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| {
+                NurError::Other(format!(
+                    "failed to launch cline ({e}). Run `cline auth cline` in a terminal, or paste \
+                     a CLINE_API_KEY."
+                ))
+            })?;
+
+        if let Some(err) = child.stderr.take() {
+            watch_login_output(err, tx.clone());
+        }
+        if let Some(out) = child.stdout.take() {
+            watch_login_output(out, tx.clone());
+        }
+
+        // Cline's OAuth hands back to the CLI over a loopback callback on
+        // 48801-48811; the browser round trip is the slow part.
+        const CLINE_LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
+        let started = std::time::Instant::now();
+        loop {
+            if cancel.is_cancelled() {
+                let _ = child.kill();
+                return Err(NurError::Other("login cancelled".into()));
+            }
+            if started.elapsed() > CLINE_LOGIN_TIMEOUT {
+                let _ = child.kill();
+                return Err(NurError::Other(
+                    "cline auth cline did not finish within 10 minutes. Run it in a terminal, \
+                     then retry /login (nur imports the session) - or paste a CLINE_API_KEY."
+                        .into(),
+                ));
+            }
+            match child.try_wait() {
+                Ok(Some(status)) if status.success() => break,
+                Ok(Some(status)) => {
+                    return Err(NurError::Other(format!(
+                        "cline auth cline failed (exit {status}). Paste a CLINE_API_KEY from \
+                         app.cline.bot as a fallback."
+                    )));
+                }
+                Ok(None) => thread::sleep(Duration::from_millis(200)),
+                Err(e) => return Err(NurError::Other(e.to_string())),
+            }
+        }
+
+        send(
+            tx,
+            BrowserLoginProgress::Status("importing Cline session…".into()),
+        );
+        import_cline_cli()?.ok_or_else(|| {
+            NurError::Other(
+                "cline auth cline finished, but nur found no `cline` credential in \
+                 ~/.cline/data/settings/providers.json. Run `cline auth cline` in a terminal and \
+                 finish the browser sign-in, then retry /login - or paste a CLINE_API_KEY."
+                    .into(),
+            )
+        })
+    }
+
+    /// Exchange the stored refresh token for a fresh access token.
+    ///
+    /// Cline's refresh endpoint takes only the token itself (no client id), so
+    /// nur can renew the session without the vendor CLI running.
+    pub fn refresh(_auth: &Auth, refresh_token: &str) -> Result<OAuthTokens> {
+        let refresh_token = refresh_token.trim();
+        if refresh_token.is_empty() || refresh_token == API_KEY_MARKER {
+            // API-key session: the credential lives in the env or the CLI store.
+            return import_cline_cli()?.ok_or_else(|| {
+                NurError::Other(
+                    "Cline session missing. Run `cline auth cline`, or set CLINE_API_KEY.".into(),
+                )
+            });
+        }
+
+        let url = format!("{}/auth/refresh", crate::providers::CLINE_BASE_URL);
+        let body = serde_json::json!({
+            "refreshToken": refresh_token,
+            "grantType": "refresh_token",
+        });
+        let client = http()?;
+        let response = client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .map_err(|e| NurError::Other(format!("Cline refresh request failed: {e}")))?;
+        let status = response.status();
+        let text = response.text().unwrap_or_default();
+        if !status.is_success() {
+            return Err(NurError::Other(format!(
+                "Cline refresh failed (HTTP {}): {} · run `cline auth cline` to sign in again",
+                status.as_u16(),
+                oauth_error_summary(&text)
+            )));
+        }
+        let v: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| NurError::Other(format!("Cline refresh returned non-JSON: {e}")))?;
+        let data = v.get("data").unwrap_or(&v);
+        let access = data
+            .get("accessToken")
+            .and_then(|x| x.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                NurError::Other(
+                    "Cline refresh response carried no accessToken · run `cline auth cline`".into(),
+                )
+            })?;
+        let rotated = data
+            .get("refreshToken")
+            .and_then(|x| x.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        let expires_at = data.get("expiresAt").and_then(|x| {
+            x.as_u64()
+                .map(|ms| ms / 1000)
+                .or_else(|| x.as_str().and_then(iso_to_unix))
+        });
+        Ok(OAuthTokens {
+            access_token: with_workos_prefix(access),
+            refresh_token: Some(rotated.unwrap_or_else(|| refresh_token.to_string())),
+            expires_at,
+            meta: Some(OauthMeta {
+                issuer: "cline".into(),
+                client_id: "cline-cli".into(),
+                extra: serde_json::json!({"credential_kind": "oauth"}),
+            }),
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        const OAUTH_STORE: &str = r#"{
+            "version": 1,
+            "lastUsedProvider": "cline",
+            "modes": {},
+            "providers": {
+                "cline": {
+                    "settings": {
+                        "provider": "cline",
+                        "auth": {
+                            "accessToken": "eyJhbGciOiJIUzI1NiJ9.b2.zzz",
+                            "refreshToken": "refresh-abc",
+                            "expiresAt": 4102444800000
+                        }
+                    },
+                    "updatedAt": "2026-09-16T00:00:00.000Z",
+                    "tokenSource": "oauth"
+                },
+                "anthropic": { "settings": { "apiKey": "sk-ant-not-ours" } }
+            }
+        }"#;
+
+        #[test]
+        fn reads_the_account_session_and_schemes_the_token() {
+            let s = stored_from_settings(OAUTH_STORE).expect("cline entry");
+            assert_eq!(s.access, "workos:eyJhbGciOiJIUzI1NiJ9.b2.zzz");
+            assert_eq!(s.refresh.as_deref(), Some("refresh-abc"));
+            // ms epoch in the store -> seconds for nur.
+            assert_eq!(s.expires_at, Some(4_102_444_800));
+            assert_eq!(s.kind, "oauth");
+        }
+
+        #[test]
+        fn falls_back_to_a_pasted_key_and_never_borrows_a_neighbour() {
+            let pasted = r#"{"version":1,"providers":{"cline":{"settings":{"apiKey":"cline-key-1234567890"}}}}"#;
+            let s = stored_from_settings(pasted).expect("pasted key");
+            assert_eq!(s.access, "cline-key-1234567890");
+            assert_eq!(s.kind, "api_key");
+            assert!(s.refresh.is_none());
+
+            // Cline's own fallback order also accepts `auth.apiKey`.
+            let in_auth = r#"{"version":1,"providers":{"cline":{"settings":{"auth":{"apiKey":"cline-key-auth-1"}}}}}"#;
+            let s = stored_from_settings(in_auth).expect("auth.apiKey");
+            assert_eq!(s.access, "cline-key-auth-1");
+            assert_eq!(s.kind, "api_key");
+
+            // An account session outranks a leftover pasted key.
+            let both = r#"{"version":1,"providers":{"cline":{"settings":{"apiKey":"cline-key-1234567890","auth":{"accessToken":"aaaa.bbbb.cccc"}}}}}"#;
+            let s = stored_from_settings(both).expect("session wins");
+            assert_eq!(s.access, "workos:aaaa.bbbb.cccc");
+            assert_eq!(s.kind, "oauth");
+
+            // Only the `cline` entry counts: another provider's key must not
+            // satisfy the import.
+            let other =
+                r#"{"version":1,"providers":{"openai":{"settings":{"apiKey":"sk-openai-x"}}}}"#;
+            assert!(stored_from_settings(other).is_none());
+            assert!(stored_from_settings("not json").is_none());
+            assert!(stored_from_settings(r#"{"version":1,"providers":{}}"#).is_none());
+            // Blank/whitespace credentials are not credentials.
+            let blank = r#"{"version":1,"providers":{"cline":{"settings":{"apiKey":"   "}}}}"#;
+            assert!(stored_from_settings(blank).is_none());
+        }
+
+        /// `CLINE_DATA_DIR` relocates the data root, so the importer must follow
+        /// it rather than only reading `~/.cline/data` - otherwise a sandboxed
+        /// or relocated Cline install is invisible to nur.
+        #[test]
+        fn import_follows_cline_data_dir() {
+            let dir = std::env::temp_dir().join(format!("nur-cline-e2e-{}", std::process::id()));
+            let settings = dir.join("settings");
+            std::fs::create_dir_all(&settings).expect("temp settings dir");
+            std::fs::write(settings.join("providers.json"), OAUTH_STORE).expect("write store");
+
+            let previous = std::env::var("CLINE_DATA_DIR").ok();
+            std::env::set_var("CLINE_DATA_DIR", &dir);
+            let imported = import_cline_cli();
+            match previous {
+                Some(v) => std::env::set_var("CLINE_DATA_DIR", v),
+                None => std::env::remove_var("CLINE_DATA_DIR"),
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+
+            let tokens = imported
+                .expect("import runs")
+                .expect("session imported from CLINE_DATA_DIR");
+            assert_eq!(tokens.access_token, "workos:eyJhbGciOiJIUzI1NiJ9.b2.zzz");
+            assert_eq!(tokens.refresh_token.as_deref(), Some("refresh-abc"));
+            assert_eq!(tokens.expires_at, Some(4_102_444_800));
+            let extra = tokens.meta.expect("meta").extra;
+            assert_eq!(extra["credential_kind"], "oauth");
+            assert_eq!(extra["imported_from"], "cline-cli");
+            assert!(
+                extra["path"]
+                    .as_str()
+                    .is_some_and(|p| p.contains("providers.json")),
+                "path should name the store it read: {extra:?}"
+            );
+        }
+
+        #[test]
+        fn an_already_schemed_token_is_not_double_prefixed() {
+            assert_eq!(with_workos_prefix("workos:abc"), "workos:abc");
+            assert_eq!(with_workos_prefix("WORKOS:abc"), "WORKOS:abc");
+            assert_eq!(with_workos_prefix("  abc  "), "workos:abc");
+        }
+
+        #[test]
+        fn iso_expiry_parses_and_junk_fails_soft() {
+            assert_eq!(iso_to_unix("2029-01-01T00:00:00Z"), Some(1_861_920_000));
+            assert!(iso_to_unix("soon").is_none());
+        }
+    }
+}
 
 pub mod openai {
     use super::*;

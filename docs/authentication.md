@@ -21,6 +21,7 @@ The active provider, endpoint, and default model are stored in
 | **GitHub Copilot** | `COPILOT_GITHUB_TOKEN` (fine-grained PAT with Copilot Requests) | `gh auth login` (subscription token) |
 | **Cursor** | `CURSOR_API_KEY` (optional) | `cursor-agent login` → nur chat via Agent CLI (no key required) |
 | **OpenCode** | `OPENCODE_API_KEY` | `opencode auth login` (imports `~/.local/share/opencode/auth.json` → `opencode` / `opencode-go`) |
+| **Cline** | `CLINE_API_KEY` (app.cline.bot → Settings → API Keys) | `cline auth cline` (imports `~/.cline/data/settings/providers.json`; nur also refreshes the account token itself) |
 | **DeepSeek** | `DEEPSEEK_API_KEY` | DeepSeek Harness (`$DSH_HOME/.credentials.yaml`); no official OAuth |
 | **Z.AI / ZCode (GLM)** | `ZAI_API_KEY` | `zcode login` / in-app `/login zai-coding-plan`; nur imports `~/.zcode/v2/credentials.json` (decrypted locally) and `~/.zcode/v2/config.json` |
 | **Hugging Face** | `HF_TOKEN` | - |
@@ -45,7 +46,7 @@ What happens:
 1. **Nothing is cleared.** Opening the picker — and backing out of it with `Esc`
    — leaves your current credential exactly as it was. Credentials are replaced
    only at the moment a new one is committed.
-2. A **scrollable, type-to-filter** picker lists **64 providers** (frontier APIs,
+2. A **scrollable, type-to-filter** picker lists **65 providers** (frontier APIs,
    inference clouds, Chinese labs, OpenAI-compatible routers, local servers).
    Providers with browser sign-in show a 🌐 hint.
 3. If the provider supports browser auth, choose:
@@ -79,6 +80,7 @@ these providers:
 | **Cursor** | Cursor login via `cursor-agent` | `$CURSOR_AGENT_HOME` or `~/.cursor` / OS keychain | Chat runs through `cursor-agent -p` (nur tool harness by default); optional `CURSOR_API_KEY` |
 | **OpenCode** | `opencode auth login` | `~/.local/share/opencode/auth.json` | Zen/Go gateway key (`opencode` / `opencode-go` entries) |
 | **Command Code** | First-party studio sign-in (same flow as `cmd login`: browser + loopback callback; no vendor binary needed) | `~/.commandcode/auth.json` (`$COMMANDCODE_HOME`) + `COMMAND_CODE_API_KEY` / `CMD_API_KEY` | `api.commandcode.ai/provider/v1` (same host as an API key; Claude models auto-route to `/messages`) |
+| **Cline** | Cline account sign-in via the vendor CLI (`cline auth cline`, loopback callback on 48801-48811) | `~/.cline/data/settings/providers.json` (`$CLINE_DATA_DIR`) + `CLINE_API_KEY` | `api.cline.bot/api/v1` (same host for both; account tokens carry the `workos:` scheme prefix) |
 | **Meta / Muse Code** | `muse login` (or first-run `muse`) | `$MUSE_CONFIG_DIR` or `~/.config/muse/auth.json` | `api.meta.ai/v1` (same host as an API key) |
 | **DeepSeek** | DeepSeek Harness `dsh web` → Settings → Models | `$DSH_HOME/.credentials.yaml` (default `~/.dsh`) | `api.deepseek.com/v1` (API key only; no official OAuth) |
 | **Z.AI / ZCode (GLM)** | in-app `/login zai-coding-plan` (Electron app) or `zcode login` (npm CLI) | `~/.zcode/v2/credentials.json` (AES-256-GCM `enc:v1:` envelopes nur decrypts on-device) + `~/.zcode/v2/config.json` (`$ZCODE_HOME`) | Coding Plan: `api.z.ai/api/coding/paas/v4`; general key: `api.z.ai/api/paas/v4` |
@@ -296,7 +298,7 @@ The catalog lives in code (`src/providers.rs`). Categories include:
 | Frontier | OpenAI, Anthropic, Google Gemini, xAI Grok, DeepSeek, Mistral, Cohere, Meta Model API, Inception (Mercury), Writer, Upstage, Poolside (Laguna), … |
 | Inference clouds | Groq, Cerebras, Together AI, Fireworks AI, DeepInfra, Perplexity, NVIDIA NIM, Baseten, Friendli, Chutes, Venice AI, … |
 | Chinese labs | Kimi Code (kimi.com), Moonshot AI, Z.AI, Qwen (DashScope), MiniMax (minimaxi.com), StepFun (China), … |
-| Aggregators / routers | OpenRouter, Requesty, Vercel / Cloudflare AI gateways, OpenCode, GitHub Models, Helicone, AI/ML API, … |
+| Aggregators / routers | OpenRouter, Requesty, Vercel / Cloudflare AI gateways, OpenCode, Cline, GitHub Models, Helicone, AI/ML API, … |
 | Local | Ollama, LM Studio, llama.cpp, vLLM (key often optional) |
 
 Each entry declares:
@@ -336,6 +338,40 @@ commitment for API traffic, and nur does not award a tier that is not
 documented. If your deployment contract says otherwise, override it - see
 [Provider privacy](security.md#provider-privacy-cross-provider-failover) or
 `/failover`.
+
+### Cline
+
+The Cline API is the gateway behind the Cline extension, CLI and SDK: **one**
+credential reaches a 440+ id catalog (Anthropic, OpenAI, Google, MiniMax, Grok,
+DeepSeek and more) over plain OpenAI Chat Completions - streaming, tool calling,
+and Cline's own `usage.cost` field all come from the gateway.
+
+| | |
+|---|---|
+| Base URL | `https://api.cline.bot/api/v1` |
+| Model ids | OpenRouter-style `vendor/model` - `anthropic/claude-sonnet-5`, `openai/gpt-6-astra`, `deepseek/deepseek-v4.1-flash`; `/model` lists the live catalog |
+| Default model | `anthropic/claude-sonnet-5` (the same model nur's own `anthropic` row defaults to) |
+| Key | `CLINE_API_KEY`, or `/login` → **Cline** → account sign-in. Keys are minted at [app.cline.bot](https://app.cline.bot) → Settings → API Keys |
+| Auth | `Authorization: Bearer <key>` |
+
+The id is passed through **verbatim** - the `vendor/` prefix is part of Cline's
+wire format, not a nur `provider/model` pair, so nothing strips or rewrites it.
+
+Two credential kinds work, and nur imports both:
+
+- **API key** - issued by app.cline.bot and used exactly as issued.
+- **Cline account session** - `cline auth cline` signs in through the browser and
+  the CLI persists the session to `~/.cline/data/settings/providers.json`
+  (`CLINE_DATA_DIR` relocates the data root). nur reads the `cline` entry there
+  and presents the access token behind the `workos:` scheme prefix the API
+  expects. It can also **refresh the session itself** (`POST
+  /api/v1/auth/refresh` needs only the refresh token), so an expired session is
+  renewed on the next turn without re-running the CLI.
+
+Privacy tier is **Standard**: Cline's API routes to upstream providers and
+publishes no no-train or ZDR commitment for gateway traffic, so nur does not
+award a tier that is not documented. Override it in the picker or `/failover` if
+your agreement says otherwise.
 
 ---
 

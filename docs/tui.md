@@ -299,9 +299,9 @@ The note is appended to your persistent memory file and recalled automatically i
 /login
 ```
 
-Scrollable, **type-to-filter** catalog of 64 providers → browser / official
-harness sign-in when available (including Muse Code, DeepSeek Harness, ZCode)
-or a masked key → writes `provider` / `base_url` / `model` to config and
+Scrollable, **type-to-filter** catalog of 65 providers → browser / official
+harness sign-in when available (including Muse Code, DeepSeek Harness, ZCode,
+Cline) or a masked key → writes `provider` / `base_url` / `model` to config and
 hot-swaps the HTTP client.
 
 Opening `/login` clears nothing, and `Esc` out of it changes nothing — your

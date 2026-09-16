@@ -2849,6 +2849,37 @@ mod tests {
         assert_eq!(resolve_provider_alias("meta").map(|p| p.id), Some("meta"));
         // Unknown name -> None (explicit routing fails closed).
         assert!(resolve_provider_alias("nonesuch-xyz").is_none());
+        // Cline routes by its own id/name and the vendor-CLI spelling.
+        assert_eq!(resolve_provider_alias("cline").map(|p| p.id), Some("cline"));
+        assert_eq!(
+            resolve_provider_alias("cline-bot").map(|p| p.id),
+            Some("cline")
+        );
+    }
+
+    /// "cline" is a whole word inside larger English words. Routing must never
+    /// fire there — a spawn verb next to "decline" must not target Cline.
+    #[test]
+    fn provider_routing_ignores_cline_inside_english_words() {
+        assert_eq!(
+            extract_provider_routing_phrase("spawn a subagent, then decline the offer"),
+            None,
+            "decline must not route to cline"
+        );
+        assert_eq!(
+            extract_provider_routing_phrase("deploy the fix once you incline the plane"),
+            None
+        );
+        // …while a real ask still routes.
+        assert_eq!(
+            extract_provider_routing_phrase("spawn a cline subagent to audit this")
+                .map(|(id, _)| id),
+            Some("cline".to_string())
+        );
+        assert_eq!(
+            extract_provider_routing_phrase("run this through cline").map(|(id, _)| id),
+            Some("cline".to_string())
+        );
     }
 
     #[test]
@@ -4450,6 +4481,9 @@ fn extract_provider_routing_phrase(text: &str) -> Option<(String, Option<String>
         "antigravity",
         "deepseek",
         "openrouter",
+        "commandcode",
+        // Whole-word matched below, so "decline" / "incline" never fire.
+        "cline",
         "moonshot",
         "anthropic",
         "openai",
@@ -4882,6 +4916,9 @@ fn driver_for_provider(provider_id: &str) -> Option<crate::t3code::DriverId> {
         "google" => Some(DriverId::Gemini),
         "opencode" => Some(DriverId::OpenCode),
         "cursor" => Some(DriverId::Cursor),
+        // Cline ships its own CLI (`npm i -g cline`); `cline auth cline` mints
+        // the account session `oauth::cline::import_cline_cli` reads.
+        "cline" => Some(DriverId::Cline),
         _ => None,
     }
 }
