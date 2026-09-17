@@ -2622,6 +2622,30 @@ fn draw_scrollbar(f: &mut Frame, app: &App, track: Rect, top: u16, total: u16, v
     }
 }
 
+/// Compose the assistant's prose block: markdown → themed lines, every logical
+/// line carrying the 2-column transcript gutter (`● ` on the first, two spaces
+/// on the rest).
+///
+/// Kept separate from [`cell_lines`] so the prose pipeline (markdown → gutter →
+/// wrap) can be rendered and inspected on its own - see the theme-preview
+/// harness in this module's tests.
+fn assistant_prose_lines(text: &str) -> Vec<Line<'static>> {
+    let md = markdown::render_markdown(text, theme::style_assistant());
+    let bullet = theme::SEAFOAM();
+    md.into_iter()
+        .enumerate()
+        .map(|(i, mut l)| {
+            let prefix = if i == 0 {
+                Span::styled("● ".to_string(), Style::default().fg(bullet))
+            } else {
+                Span::raw("  ".to_string())
+            };
+            l.spans.insert(0, prefix);
+            l
+        })
+        .collect()
+}
+
 fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut Vec<Line<'static>>) {
     let tick = app.spinner_epoch.elapsed();
     let flash = app
@@ -2635,7 +2659,6 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
         Cell::Image { path, label, .. } => image_cell_lines(path, label, width, out),
         Cell::Assistant { text, streaming } => {
             out.push(Line::default());
-            let md = markdown::render_markdown(text, theme::style_assistant());
             let bullet = theme::SEAFOAM();
             if text.trim().is_empty() && *streaming {
                 out.push(Line::from(vec![
@@ -2646,15 +2669,7 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                     ),
                 ]));
             }
-            for (i, mut l) in md.into_iter().enumerate() {
-                let prefix = if i == 0 {
-                    Span::styled("● ".to_string(), Style::default().fg(bullet))
-                } else {
-                    Span::raw("  ".to_string())
-                };
-                l.spans.insert(0, prefix);
-                out.push(l);
-            }
+            out.extend(assistant_prose_lines(text));
             #[cfg(feature = "image-peek")]
             if crate::tui::latex::first_cached_png(text).is_some() {
                 out.push(Line::from(vec![
@@ -7699,6 +7714,121 @@ fn draw_ctx_menu(f: &mut Frame, app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Dev harness: render a representative assistant answer through the *real*
+    /// prose pipeline (`assistant_prose_lines` → `wrap::wrap_lines` → the same
+    /// Paragraph draw the transcript uses) under each theme, dumping the styled
+    /// cells as TSV so the result can be inspected as an image instead of being
+    /// reasoned about.
+    ///
+    /// ```text
+    /// NUR_TYPO_DUMP=.nur/typo cargo test --bin nur typography_preview -- --ignored --nocapture
+    /// ```
+    ///
+    /// Output: `<dir>/<theme>.tsv` with a `# theme=… width=… rows=… bg=…` header
+    /// then `row \t col \t fg \t bg \t mods \t symbol` per cell. Render the dumps
+    /// with `py scripts/render_typo_preview.py <dir> <out>` and check them against
+    /// the contrast floor with `py scripts/contrast_audit.py <dir> 3.0`.
+    #[test]
+    #[ignore]
+    fn typography_preview() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let Ok(dir) = std::env::var("NUR_TYPO_DUMP") else {
+            return;
+        };
+        std::fs::create_dir_all(&dir).expect("dump dir");
+        let sample = SAMPLE_ANSWER;
+        for theme_id in [
+            "gold",
+            "mono",
+            "solarized",
+            "heavenly",
+            "noir",
+            "synthwave",
+            "matrix",
+            "pearl",
+            "nous",
+            "gruvbox",
+        ] {
+            assert!(theme::set_theme(theme_id), "unknown theme {theme_id}");
+            for width in [100u16, 72] {
+                let mut lines = Vec::new();
+                lines.extend(assistant_prose_lines(sample));
+                let rows = wrap::wrap_lines(&lines, width);
+                let height = (rows.len() as u16 + 2).max(4);
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                terminal
+                    .draw(|f| {
+                        let area = f.area();
+                        f.render_widget(Block::default().style(theme::style_canvas()), area);
+                        f.render_widget(Paragraph::new(rows.clone()), area);
+                    })
+                    .unwrap();
+                let buf = terminal.backend().buffer().clone();
+                let hex = |c: Color| match c {
+                    Color::Rgb(r, g, b) => format!("#{r:02X}{g:02X}{b:02X}"),
+                    Color::Reset => "reset".to_string(),
+                    other => format!("{other:?}"),
+                };
+                let mut out = String::new();
+                out.push_str(&format!(
+                    "# theme={theme_id} width={width} rows={height} bg={} fg={}\n",
+                    hex(theme::BG()),
+                    hex(theme::FG())
+                ));
+                for y in 0..height {
+                    for x in 0..width {
+                        let c = &buf[(x, y)];
+                        out.push_str(&format!(
+                            "{y}\t{x}\t{}\t{}\t{}\t{}\n",
+                            hex(c.fg),
+                            hex(c.bg),
+                            c.modifier.bits(),
+                            c.symbol()
+                        ));
+                    }
+                }
+                let path = format!("{dir}/{theme_id}-{width}.tsv");
+                std::fs::write(&path, out).expect("write dump");
+            }
+        }
+        theme::set_theme("gold");
+    }
+
+    /// The shape of answer the transcript actually renders: headings, emphasis,
+    /// inline code, lists (flat + nested + ordered + task), a quote, a fenced
+    /// block, and a deliberately long paragraph (the wrap stress case).
+    const SAMPLE_ANSWER: &str = r#"## Findings
+
+I checked the **auth path** and found two problems. One is a real bug; the other is cosmetic but worth fixing while we are here.
+
+- **Token refresh races.** `refresh()` runs from the stream loop *and* the UI thread with no shared lock, so two refreshes can interleave and the loser overwrites the writer's token - which is exactly the 401 you saw after an idle minute.
+- **Duplicated logging.** Every retry logs `auth retry` twice.
+  - the inner attempt logs it, and
+  - the outer wrapper logs it again.
+
+### What I changed
+
+1. Serialized refresh behind the existing session mutex.
+2. Collapsed the duplicate log line into the retry report.
+3. Added a regression test: `auth::tests::concurrent_refresh_keeps_one_token`.
+
+> The retry budget is unchanged. This only removes the race; if a refresh genuinely fails you still get the same error surface as before.
+
+Before, the call site looked like this:
+
+```rust
+let token = refresh().await?;
+session.store(token);
+```
+
+The reason this matters is harder to see than the fix. When two callers race, the storage layer is last-writer-wins, so whichever future completes second decides the credential the next request uses, and nothing in the transcript distinguishes "refreshed successfully" from "refreshed and immediately clobbered" - which is why the failure only showed up as a mysterious 401 after an idle period rather than as an error at refresh time, and why the fix has to be a lock rather than better error handling.
+
+- [x] reproduce under a debug build
+- [ ] soak test on the `nightly` channel
+
+See the [token store notes](https://example.test/docs/token-store) for the storage layout.
+"#;
 
     // ── swarm card ───────────────────────────────────────────────────────
 

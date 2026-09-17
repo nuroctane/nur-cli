@@ -414,6 +414,31 @@ The model's reasoning is displayed in **violet thought cards** that are collapse
 
 Each tool call shows a duration chip (e.g. `1.2s`) so you can see where time is spent.
 
+### Transcript prose
+
+Assistant answers are composed for reading, not dumped as markdown source. `src/tui/markdown.rs` parses **block structure** with `pulldown-cmark` and renders **inline styling** (bold, italic, `code`, strikethrough, links, syntax-highlighted code) through `tui-markdown`. The split exists so the block layer owns how structure *looks*:
+
+| Element | How it renders |
+|---------|----------------|
+| Heading | Never shows `#`. Level marker (`▌` `▍` `▪`) in the level's own hue, text bold in `md_h1`/`md_h2`/`md_h3`, one blank line either side. Setext forms (`Title` + `====`) included. |
+| Paragraph | Body text, one blank line between blocks. |
+| List item | `•` (+ nested indent) or `1.` in `md_list`; items stack tight. |
+| Task item | `✓` (`success`) or `☐` (`md_list`) — the `[x]`/`[ ]` syntax is consumed. |
+| Blockquote | `▏` bar in `md_quote` on **every** row, text a step down from body. |
+| Code block | Fences never render. Every row sits on `code_bg` with a two-space gutter; syntax colours on dark palettes, the theme's own `md_code` on light ones (the highlighter's palette is dark-only). |
+| Rule | A short `─` rule in `border`, not literal `---`. |
+| Link | Label in `md_link`, URL appended dimmed + underlined so it stays clickable without shouting. |
+
+Wrapping repeats each line's **continuation gutter** (`src/tui/wrap.rs`): leading whitespace carries over, bars repeat, and item markers blank out — so a wrapped paragraph stays under its own text instead of collapsing to column 0.
+
+Every colour comes from a theme role, so all themes work without per-theme branching, and every text element clears the repo's 3.0 contrast floor (checked by `scripts/contrast_audit.py` against a rendered dump). To see a change instead of guessing, run the preview harness:
+
+```bash
+NUR_TYPO_DUMP=.nur/typo cargo test --bin nur typography_preview -- --ignored
+py scripts/render_typo_preview.py .nur/typo .nur/typo-png   # PNG per theme
+py scripts/contrast_audit.py .nur/typo 3.0                  # contrast floor check
+```
+
 ### Approval mini-diff
 
 When a write tool requests approval, the TUI shows a compact diff preview of what will change. The diff is line-numbered with `+`/`-` indicators so you can see exactly which lines will be added or removed before approving.

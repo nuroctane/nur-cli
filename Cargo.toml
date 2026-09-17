@@ -1,6 +1,6 @@
 [package]
 name = "nur-cli"
-version = "0.36.6"
+version = "0.36.7"
 edition = "2021"
 description = "NurCLI - fully loaded multi-provider coding agent (TUI, inline kitty/sixel vision, tools, sandbox, Graphify/PLUR/Ruflo/Executor + sc-research whitehat pack + historical SC vuln library)."
 license = "GPL-3.0-or-later"
@@ -27,6 +27,10 @@ dirs = "5"
 anyhow = "1"
 thiserror = "1"
 ratatui = "0.29"
+# Markdown block structure for the transcript composer. Same version
+# tui-markdown already pulls in, so this adds no new node to the tree -
+# tui-markdown stays the inline/code styling engine, this parses structure.
+pulldown-cmark = { version = "0.13", default-features = false }
 # Pinned to the last release on ratatui 0.29 (0.3.6+ moved to ratatui-core).
 tui-markdown = "=0.3.5"
 # Pinned to the last releases on ratatui 0.29 (newer versions moved to ratatui 0.30 / ratatui-core).

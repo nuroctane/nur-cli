@@ -1875,7 +1875,7 @@ dependencies = [
 
 [[package]]
 name = "nur-cli"
-version = "0.36.6"
+version = "0.36.7"
 dependencies = [
  "aes-gcm",
  "anydoc",
@@ -1891,6 +1891,7 @@ dependencies = [
  "helix-ast",
  "ignore",
  "image",
+ "pulldown-cmark",
  "ratatui",
  "ratatui-image",
  "regex",
