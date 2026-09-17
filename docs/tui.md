@@ -428,31 +428,22 @@ Assistant answers are composed for reading, not dumped as markdown source. `src/
 | Code block | Fences never render. Every row sits on `code_bg` with a two-space gutter; syntax colours on dark palettes, the theme's own `md_code` on light ones (the highlighter's palette is dark-only). |
 | Rule | A short `─` rule in `border`, not literal `---`. |
 | Link | Label in `md_link`, URL appended dimmed + underlined so it stays clickable without shouting. |
-| Directory | A path that exists on disk takes the theme's `dir` hue (`theme::DIR()`) — see below. |
+| Path | A path that exists on disk is a link (see below). Directories take the theme's `dir` hue. |
 
-### Directories
+### Path links
 
-Any path in the transcript that resolves to a **real directory** is painted in the theme's `dir` role and becomes clickable: the click opens it in the OS file manager (`explorer.exe` on Windows, `open` on macOS, `xdg-open` on Linux), and a note confirms what was opened. Files keep their normal colour, so a directory stands out from its neighbours:
+Any path in the transcript that exists on the machine is a link, and a click opens it exactly where the OS would:
 
-```text
-src/tui/        <- painted, opens in your file manager
-src/open_uri.rs <- not a directory, stays body/code coloured
-```
+| What you click | What happens |
+|----------------|--------------|
+| A **directory** (`src/tui/`) | Opens in your file manager - `explorer.exe` on Windows, Finder on macOS, `xdg-open` on Linux. Painted in the theme's `dir` role so it reads apart from the files beside it. |
+| A **file** (`src/open_uri.rs`) | Opens in its default application. Keeps whatever colour it already had, so a directory listing stays legible. |
+
+Precedence is deliberate: queue actions → path links → URLs → card expand. Clicking a path inside a collapsed tool card opens the path rather than toggling the card, and a note confirms what opened (or why it could not).
 
 `dir` is the palette's own `indigo`, which every preset already tunes for its identity (matrix green, gruvbox pink, heavenly purple), so folders correspond to the theme with no per-theme table to maintain. It is unused by any other transcript role (`md_link` carries URLs, `md_list` list markers, `md_code` code), and a test asserts it clears the contrast floor on both the canvas and a code band for all 23 themes.
 
-Detection is deliberately conservative (`src/open_uri.rs::find_dir_spans`): a token must contain a separator, survive prose punctuation trimming, resolve against the session working directory, and **exist** as a directory before it is coloured - so the colour is never a dead link. Existence probes are cached for 10 seconds, and lines without a separator are skipped outright. A URL's own path segments are excluded, so `https://host/src` is a link, not a folder.
-
-
-Wrapping repeats each line's **continuation gutter** (`src/tui/wrap.rs`): leading whitespace carries over, bars repeat, and item markers blank out — so a wrapped paragraph stays under its own text instead of collapsing to column 0.
-
-Every colour comes from a theme role, so all themes work without per-theme branching, and every text element clears the repo's 3.0 contrast floor (checked by `scripts/contrast_audit.py` against a rendered dump). To see a change instead of guessing, run the preview harness:
-
-```bash
-NUR_TYPO_DUMP=.nur/typo cargo test --bin nur typography_preview -- --ignored
-py scripts/render_typo_preview.py .nur/typo .nur/typo-png   # PNG per theme
-py scripts/contrast_audit.py .nur/typo 3.0                  # contrast floor check
-```
+Detection is deliberately conservative (`src/open_uri.rs::find_path_spans`): a token must contain a separator, survive prose-punctuation trimming, resolve against the session working directory, and **exist** before it becomes a link - so a clickable path is always one that opens. Existence probes are cached for 10 seconds (a directory you just created becomes clickable within that window), and lines without a separator are skipped outright. A URL's own path segments are excluded, so `https://host/src` is a link to the host, not a folder.
 
 ### Approval mini-diff
 

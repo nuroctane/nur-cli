@@ -45,43 +45,92 @@ pub fn open(target: &str) -> Result<(), String> {
     }
 }
 
+/// Open a path with the system default handler, without going through a shell
+/// where the OS allows it (a shell mangles paths containing spaces or `&`).
 pub fn open_path(path: &Path) -> Result<(), String> {
-    open(&path.to_string_lossy())
+    file_command(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Command that opens `path` with the OS default **application**.
+///
+/// Split out from [`open_path`] so the exact program and arguments can be
+/// asserted in a test without launching anything on the user's desktop.
+fn file_command(path: &Path) -> Command {
+    #[cfg(windows)]
+    {
+        // `start` needs the empty title first, or a quoted path is read as the
+        // window title. A shell is required here: the file association lives in
+        // the shell, and Explorer would only reveal the file, not open it.
+        let mut c = Command::new("cmd.exe");
+        c.args(["/C", "start", ""]).arg(path);
+        c
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut c = Command::new("open");
+        c.arg(path);
+        c
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let mut c = Command::new("xdg-open");
+        c.arg(path);
+        c
+    }
+}
+
+/// Command that reveals `path` in the OS **file manager**.
+fn dir_command(path: &Path) -> Command {
+    #[cfg(windows)]
+    {
+        // Launched directly (no shell) so the path survives verbatim; Explorer
+        // exits non-zero even on success, so callers must not check status.
+        let mut c = Command::new("explorer.exe");
+        c.arg(path);
+        c
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut c = Command::new("open");
+        c.arg(path);
+        c
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let mut c = Command::new("xdg-open");
+        c.arg(path);
+        c
+    }
 }
 
 /// Reveal a directory in the OS file manager (Explorer / Finder / xdg-open).
-///
-/// Deliberately not routed through [`open`]: `cmd /C start ""` mangles paths
-/// containing spaces, and Explorer must be launched without a shell so the path
-/// survives verbatim. Explorer also exits non-zero on success, so its status is
-/// not treated as a failure.
 pub fn open_dir(path: &Path) -> Result<(), String> {
     if !path.is_dir() {
         return Err(format!("not a directory: {}", path.display()));
     }
-    #[cfg(windows)]
-    {
-        std::process::Command::new("explorer.exe")
-            .arg(path)
-            .spawn()
-            .map(|_| ())
-            .map_err(|e| e.to_string())
-    }
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(path)
-            .spawn()
-            .map(|_| ())
-            .map_err(|e| e.to_string())
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(path)
-            .spawn()
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+    dir_command(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// What a path token turned out to be on disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathKind {
+    Dir,
+    File,
+}
+
+impl PathKind {
+    /// Open it the way a double-click in the file manager would.
+    pub fn open(self, path: &Path) -> Result<(), String> {
+        match self {
+            PathKind::Dir => open_dir(path),
+            PathKind::File => open_path(path),
+        }
     }
 }
 
@@ -94,11 +143,11 @@ const DIR_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(10);
 const DIR_CACHE_MAX: usize = 512;
 
 static DIR_CACHE: std::sync::Mutex<
-    Option<std::collections::HashMap<String, (bool, std::time::Instant)>>,
+    Option<std::collections::HashMap<String, (Option<PathKind>, std::time::Instant)>>,
 > = std::sync::Mutex::new(None);
 
-/// Cached `is_dir` for a resolved path string.
-fn is_dir_cached(key: &str, path: &Path) -> bool {
+/// Cached "what is this path" probe: `Some(Dir)` / `Some(File)` / `None`.
+fn kind_cached(key: &str, path: &Path) -> Option<PathKind> {
     let now = std::time::Instant::now();
     {
         let guard = DIR_CACHE.lock().unwrap_or_else(|e| e.into_inner());
@@ -110,7 +159,11 @@ fn is_dir_cached(key: &str, path: &Path) -> bool {
             }
         }
     }
-    let hit = path.is_dir();
+    let hit = match std::fs::metadata(path) {
+        Ok(m) if m.is_dir() => Some(PathKind::Dir),
+        Ok(_) => Some(PathKind::File),
+        Err(_) => None,
+    };
     let mut guard = DIR_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     let cache = guard.get_or_insert_with(std::collections::HashMap::new);
     if cache.len() >= DIR_CACHE_MAX {
@@ -120,17 +173,20 @@ fn is_dir_cached(key: &str, path: &Path) -> bool {
     hit
 }
 
-/// Find directory paths in a single visual line.
+/// Find file and directory paths in a single visual line.
 ///
-/// Returns `(display_col_start, display_col_end, resolved_path)` - end is
+/// Returns `(display_col_start, display_col_end, resolved_path, kind)` - end is
 /// exclusive, columns match [`find_url_spans`] so mouse hit-testing works the
-/// same way. Only tokens that actually resolve to an existing directory are
-/// returned, so the colour never advertises something you cannot open.
+/// same way. Only tokens that **exist** are returned, so a clickable path is
+/// always one that opens.
 ///
 /// `base` resolves relative paths (the session's working directory).
-pub fn find_dir_spans(plain: &str, base: &Path) -> Vec<(usize, usize, std::path::PathBuf)> {
+pub fn find_path_spans(
+    plain: &str,
+    base: &Path,
+) -> Vec<(usize, usize, std::path::PathBuf, PathKind)> {
     let mut out = Vec::new();
-    // Cheap gate: a directory candidate always carries a separator or `~`.
+    // Cheap gate: a path candidate always carries a separator or `~`.
     if !plain.contains(['/', '\\', '~']) {
         return out;
     }
@@ -196,13 +252,13 @@ pub fn find_dir_spans(plain: &str, base: &Path) -> Vec<(usize, usize, std::path:
             continue;
         }
         let resolved = resolve_path(&token, base);
-        if !is_dir_cached(&resolved.to_string_lossy(), &resolved) {
+        let Some(kind) = kind_cached(&resolved.to_string_lossy(), &resolved) else {
             continue;
-        }
+        };
         let start_col =
             UnicodeWidthStr::width(&plain[..start + (raw.len() - raw.trim_start().len())]);
         let end_col = start_col + UnicodeWidthStr::width(token.as_str());
-        out.push((start_col, end_col, resolved));
+        out.push((start_col, end_col, resolved, kind));
     }
     out
 }
@@ -367,29 +423,44 @@ mod tests {
         assert!(spans[1].2.contains("example.org"));
     }
 
-    /// Directories are only advertised when they exist, resolved against the
-    /// session base - the colour is a promise that clicking opens something.
+    /// Paths are only advertised when they exist, resolved against the session
+    /// base - so a clickable path is always one that opens.
     #[test]
-    fn finds_existing_directories_only() {
-        let base = std::env::temp_dir().join(format!("nur-dirspans-{}", std::process::id()));
+    fn finds_existing_files_and_directories() {
+        let base = std::env::temp_dir().join(format!("nur-pathspans-{}", std::process::id()));
         let nested = base.join("src").join("tui");
         std::fs::create_dir_all(&nested).expect("temp tree");
         std::fs::write(base.join("notes.md"), "x").expect("temp file");
+        std::fs::write(nested.join("markdown.rs"), "// x").expect("temp nested file");
 
-        let plain = "  results: src/tui/ and src tui/markdown.rs done";
-        let spans = find_dir_spans(plain, &base);
-        let found: Vec<String> = spans
+        let plain = "  results: src/tui/ and notes.md here";
+        let spans = find_path_spans(plain, &base);
+        let found: Vec<(String, PathKind)> = spans
             .iter()
-            .map(|(_, _, p)| p.display().to_string())
+            .map(|(_, _, p, k)| (p.display().to_string(), *k))
             .collect();
-        assert_eq!(found.len(), 1, "only the real directory: {found:?}");
-        assert!(found[0].ends_with("tui"), "{found:?}");
+        assert_eq!(
+            found.len(),
+            1,
+            "only the directory carries a separator: {found:?}"
+        );
+        assert!(
+            found[0].0.ends_with("tui") && found[0].1 == PathKind::Dir,
+            "{found:?}"
+        );
 
-        // A file of the same shape is not a directory.
-        assert!(find_dir_spans("src/tui/markdown.rs", &base).is_empty());
-        // Absolute paths work too, and the span is in display columns.
+        // A file path is clickable too, and reports itself as a file.
+        let spans = find_path_spans("see src/tui/markdown.rs", &base);
+        assert_eq!(spans.len(), 1, "{spans:?}");
+        assert_eq!(spans[0].3, PathKind::File, "files are clickable paths");
+        assert!(spans[0].2.ends_with("markdown.rs"));
+
+        // Something that does not exist is not a link.
+        assert!(find_path_spans("no/such/path", &base).is_empty());
+
+        // Absolute paths work, and the span is in display columns.
         let abs = format!("see {}", nested.display());
-        let spans = find_dir_spans(&abs, &base);
+        let spans = find_path_spans(&abs, &base);
         assert_eq!(spans.len(), 1, "{spans:?}");
         assert_eq!(spans[0].0, 4, "span starts after 'see '");
 
@@ -403,11 +474,44 @@ mod tests {
         assert_eq!(trim_path_token("src/tui/.").unwrap(), "src/tui/");
         assert_eq!(trim_path_token("src/tui/),").unwrap(), "src/tui/");
         // A drive root keeps its colon.
-        assert_eq!(trim_path_token("C:\\work\\x").unwrap(), "C:\\work\\x");
+        assert_eq!(trim_path_token(r"C:\work\x").unwrap(), r"C:\work\x");
     }
 
     #[test]
     fn lines_without_a_separator_cost_nothing() {
-        assert!(find_dir_spans("just some words here", &std::env::temp_dir()).is_empty());
+        assert!(find_path_spans("just some words here", &std::env::temp_dir()).is_empty());
+    }
+
+    /// The click has to hand the OS the real path, un-shelled where possible:
+    /// a directory goes to the file manager, a file to its associated app.
+    #[test]
+    fn open_commands_target_the_file_manager_and_the_default_app() {
+        let dir = Path::new("/tmp/example dir");
+        let file = Path::new("/tmp/example file.txt");
+        let d = dir_command(dir);
+        let f = file_command(file);
+        assert!(d.get_args().any(|a| a == dir));
+        assert!(f.get_args().any(|a| a == file));
+
+        #[cfg(windows)]
+        {
+            assert_eq!(d.get_program(), "explorer.exe");
+            #[cfg(windows)]
+            assert_eq!(f.get_program(), "cmd.exe");
+            // `start` reads a quoted path as the window title without the empty
+            // title argument first.
+            let args: Vec<String> = f
+                .get_args()
+                .map(|a| a.to_string_lossy().to_string())
+                .collect();
+            assert_eq!(args[0], "/C");
+            assert_eq!(args[1], "start");
+            assert_eq!(args[2], "");
+        }
+        #[cfg(not(windows))]
+        {
+            assert_eq!(d.get_program(), "open");
+            assert_eq!(f.get_program(), "open");
+        }
     }
 }

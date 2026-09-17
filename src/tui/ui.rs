@@ -2123,7 +2123,8 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     let mut hit_expand_phrase: Vec<Option<(usize, usize, usize)>> = Vec::new();
     let mut hit_queue_actions: Vec<Vec<(usize, usize, usize, u8)>> = Vec::new();
     let mut hit_urls: Vec<Vec<(usize, usize, String)>> = Vec::new();
-    let mut hit_dirs: Vec<Vec<(usize, usize, std::path::PathBuf)>> = Vec::new();
+    let mut hit_paths: Vec<Vec<(usize, usize, std::path::PathBuf, crate::open_uri::PathKind)>> =
+        Vec::new();
     let mut hit_swarm_panes: Vec<Vec<(u64, usize, usize)>> = Vec::new();
     let mut plain_lines: Vec<String> = Vec::new();
     // cell_idx → first wrapped row for inline image cells (overlay anchors).
@@ -2144,7 +2145,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
                 hit_expand_phrase.push(None);
                 hit_queue_actions.push(Vec::new());
                 hit_urls.push(Vec::new());
-                hit_dirs.push(Vec::new());
+                hit_paths.push(Vec::new());
                 hit_swarm_panes.push(Vec::new());
                 plain_lines.push(String::new());
             }
@@ -2250,20 +2251,25 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
             }
             // Clickable http(s) URLs on this visual line (after wrap).
             let urls = crate::open_uri::find_url_spans(&plain);
-            // Directory paths: painted in the `dir` role and clickable to open
-            // the OS file manager. Only existing directories are returned, so
-            // the colour is never a dead link.
-            let mut dirs = crate::open_uri::find_dir_spans(&plain, &app.cwd);
-            // A URL's own path segments must not double as directories.
+            // Path links: a token that exists on disk opens on click - a
+            // directory in the file manager, a file in its default app, exactly
+            // like a URL opens in the browser. Only existing paths are returned,
+            // so a clickable path is always one that opens. Directories are
+            // painted in the `dir` role so they read apart from the files
+            // beside them; a file keeps the colour it already had.
+            let mut paths = crate::open_uri::find_path_spans(&plain, &app.cwd);
+            // A URL's own path segments must not double as path links.
             if !urls.is_empty() {
-                dirs.retain(|(lo, _hi, _p)| {
+                paths.retain(|(lo, _hi, _p, _k)| {
                     !urls.iter().any(|(ulo, uhi, _)| lo >= ulo && lo < uhi)
                 });
             }
-            if !dirs.is_empty() {
+            if !paths.is_empty() {
                 let hue = theme::DIR();
-                for (lo, hi, _) in &dirs {
-                    paint_columns_fg(&mut line, *lo, *hi, hue);
+                for (lo, hi, _p, kind) in &paths {
+                    if *kind == crate::open_uri::PathKind::Dir {
+                        paint_columns_fg(&mut line, *lo, *hi, hue);
+                    }
                 }
             }
             // Swarm-card pane hits for this row (card row i → pane row i-2).
@@ -2299,7 +2305,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
             hit_expand_phrase.push(exp);
             hit_queue_actions.push(qa);
             hit_urls.push(urls);
-            hit_dirs.push(dirs);
+            hit_paths.push(paths);
             hit_swarm_panes.push(sp);
         }
     }
@@ -2310,7 +2316,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     app.hit_expand_phrase = hit_expand_phrase;
     app.hit_queue_actions = hit_queue_actions;
     app.hit_urls = hit_urls;
-    app.hit_dirs = hit_dirs;
+    app.hit_paths = hit_paths;
     app.hit_swarm_panes = hit_swarm_panes;
     app.plain_lines = plain_lines;
 
@@ -7804,9 +7810,10 @@ mod tests {
             Style::default().fg(Color::Rgb(9, 9, 9)),
         ));
 
-        let spans = crate::open_uri::find_dir_spans(&plain, &base);
+        let spans = crate::open_uri::find_path_spans(&plain, &base);
         assert_eq!(spans.len(), 1, "one directory: {spans:?}");
-        let (lo, hi, path) = spans[0].clone();
+        let (lo, hi, path, kind) = spans[0].clone();
+        assert_eq!(kind, crate::open_uri::PathKind::Dir);
         assert!(path.is_dir(), "{path:?}");
         paint_columns_fg(&mut line, lo, hi, theme::DIR());
 
@@ -7885,17 +7892,20 @@ mod tests {
                 lines.extend(assistant_prose_lines(sample));
                 let rows = wrap::wrap_lines(&lines, width);
                 // Mirror what draw_transcript does to each wrapped line, so the
-                // dump shows the transcript the user actually sees: directory
-                // paths take the `dir` role.
+                // dump shows the transcript the user actually sees: every
+                // existing path is clickable, and directories take the `dir`
+                // role.
                 let rows: Vec<Line<'static>> = rows
                     .into_iter()
                     .map(|mut line| {
                         let plain = line_to_plain(&line);
-                        for (lo, hi, _) in crate::open_uri::find_dir_spans(
+                        for (lo, hi, _p, kind) in crate::open_uri::find_path_spans(
                             &plain,
                             &std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir()),
                         ) {
-                            paint_columns_fg(&mut line, lo, hi, theme::DIR());
+                            if kind == crate::open_uri::PathKind::Dir {
+                                paint_columns_fg(&mut line, lo, hi, theme::DIR());
+                            }
                         }
                         line
                     })

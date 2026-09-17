@@ -2086,10 +2086,12 @@ pub struct App {
     pub hit_queue_actions: Vec<Vec<(usize, usize, usize, u8)>>,
     /// Absolute line → clickable `http(s)://` spans `(col_lo, col_hi, url)`.
     pub hit_urls: Vec<Vec<(usize, usize, String)>>,
-    /// Absolute line → clickable directory spans `(col_lo, col_hi, resolved)`,
-    /// painted in the `dir` theme role. Only existing directories appear here,
-    /// so the colour always means "click to open in the file manager".
-    pub hit_dirs: Vec<Vec<(usize, usize, PathBuf)>>,
+    /// Absolute line → clickable path spans `(col_lo, col_hi, resolved, kind)`.
+    /// A click opens the path where the OS would: a directory in the file
+    /// manager, a file in its default application. Only paths that exist appear
+    /// here, so a clickable path always opens. Directories are additionally
+    /// painted in the `dir` theme role.
+    pub hit_paths: Vec<Vec<(usize, usize, PathBuf, crate::open_uri::PathKind)>>,
     /// Absolute line → swarm run id for a `/swarm` transcript-card pane row, so
     /// double-clicking a pane opens the same kid peek modal as the sidegraph.
     /// `(run_id, col_lo, col_hi)`; col range is the pane's horizontal extent.
@@ -2620,7 +2622,7 @@ pub async fn run_tui(
         hit_expand_phrase: Vec::new(),
         hit_queue_actions: Vec::new(),
         hit_urls: Vec::new(),
-        hit_dirs: Vec::new(),
+        hit_paths: Vec::new(),
         hit_swarm_panes: Vec::new(),
         transcript_top: 0,
         expand_flash: None,
@@ -9624,22 +9626,22 @@ impl App {
         // A directory path opens in the OS file manager. Checked before links:
         // the two span sets never overlap, and a folder is the more specific
         // target when they somehow do.
-        if let Some(spans) = self.hit_dirs.get(line_idx) {
-            for (lo, hi, path) in spans {
+        if let Some(spans) = self.hit_paths.get(line_idx) {
+            for (lo, hi, path, kind) in spans {
                 if local_x >= *lo && local_x < *hi {
-                    match crate::open_uri::open_dir(path) {
-                        Ok(()) => {
-                            self.push_note(
-                                Tone::Neutral,
-                                format!("opened folder · {}", path.display()),
-                            );
-                        }
-                        Err(e) => {
-                            self.push_note(
-                                Tone::Session,
-                                format!("could not open folder: {e}\n  {}", path.display()),
-                            );
-                        }
+                    let what = match kind {
+                        crate::open_uri::PathKind::Dir => "folder",
+                        crate::open_uri::PathKind::File => "file",
+                    };
+                    match kind.open(path) {
+                        Ok(()) => self.push_note(
+                            Tone::Neutral,
+                            format!("opened {what} · {}", path.display()),
+                        ),
+                        Err(e) => self.push_note(
+                            Tone::Session,
+                            format!("could not open {what}: {e}\n  {}", path.display()),
+                        ),
                     }
                     return;
                 }
