@@ -49,6 +49,210 @@ pub fn open_path(path: &Path) -> Result<(), String> {
     open(&path.to_string_lossy())
 }
 
+/// Reveal a directory in the OS file manager (Explorer / Finder / xdg-open).
+///
+/// Deliberately not routed through [`open`]: `cmd /C start ""` mangles paths
+/// containing spaces, and Explorer must be launched without a shell so the path
+/// survives verbatim. Explorer also exits non-zero on success, so its status is
+/// not treated as a failure.
+pub fn open_dir(path: &Path) -> Result<(), String> {
+    if !path.is_dir() {
+        return Err(format!("not a directory: {}", path.display()));
+    }
+    #[cfg(windows)]
+    {
+        std::process::Command::new("explorer.exe")
+            .arg(path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// How long an existence probe stays warm. Long enough that a transcript full
+/// of paths costs a handful of syscalls per render, short enough that a
+/// directory created a moment ago becomes clickable without a restart.
+const DIR_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(10);
+/// Hard cap on cached probes; cleared wholesale when exceeded (transcripts
+/// reference far fewer distinct paths than this).
+const DIR_CACHE_MAX: usize = 512;
+
+static DIR_CACHE: std::sync::Mutex<
+    Option<std::collections::HashMap<String, (bool, std::time::Instant)>>,
+> = std::sync::Mutex::new(None);
+
+/// Cached `is_dir` for a resolved path string.
+fn is_dir_cached(key: &str, path: &Path) -> bool {
+    let now = std::time::Instant::now();
+    {
+        let guard = DIR_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(cache) = guard.as_ref() {
+            if let Some((hit, at)) = cache.get(key) {
+                if now.duration_since(*at) < DIR_CACHE_TTL {
+                    return *hit;
+                }
+            }
+        }
+    }
+    let hit = path.is_dir();
+    let mut guard = DIR_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let cache = guard.get_or_insert_with(std::collections::HashMap::new);
+    if cache.len() >= DIR_CACHE_MAX {
+        cache.clear();
+    }
+    cache.insert(key.to_string(), (hit, now));
+    hit
+}
+
+/// Find directory paths in a single visual line.
+///
+/// Returns `(display_col_start, display_col_end, resolved_path)` - end is
+/// exclusive, columns match [`find_url_spans`] so mouse hit-testing works the
+/// same way. Only tokens that actually resolve to an existing directory are
+/// returned, so the colour never advertises something you cannot open.
+///
+/// `base` resolves relative paths (the session's working directory).
+pub fn find_dir_spans(plain: &str, base: &Path) -> Vec<(usize, usize, std::path::PathBuf)> {
+    let mut out = Vec::new();
+    // Cheap gate: a directory candidate always carries a separator or `~`.
+    if !plain.contains(['/', '\\', '~']) {
+        return out;
+    }
+    let mut byte = 0usize;
+    while byte < plain.len() {
+        let c = plain[byte..].chars().next().unwrap_or('\0');
+        // Path characters only; everything else ends the token.
+        let is_path_char = !c.is_whitespace()
+            && !matches!(
+                c,
+                '"' | '\''
+                    | '`'
+                    | '<'
+                    | '>'
+                    | '('
+                    | ')'
+                    | '['
+                    | ']'
+                    | '{'
+                    | '}'
+                    | '|'
+                    | '*'
+                    | ','
+                    | ';'
+            );
+        if !is_path_char {
+            byte += c.len_utf8();
+            continue;
+        }
+        let start = byte;
+        let mut end = byte;
+        while end < plain.len() {
+            let ch = plain[end..].chars().next().unwrap_or('\0');
+            if ch.is_whitespace()
+                || matches!(
+                    ch,
+                    '"' | '\''
+                        | '`'
+                        | '<'
+                        | '>'
+                        | '('
+                        | ')'
+                        | '['
+                        | ']'
+                        | '{'
+                        | '}'
+                        | '|'
+                        | '*'
+                        | ','
+                        | ';'
+                )
+            {
+                break;
+            }
+            end += ch.len_utf8();
+        }
+        byte = end.max(start + 1);
+        let raw = &plain[start..end];
+        let Some(token) = trim_path_token(raw) else {
+            continue;
+        };
+        if !token.contains(['/', '\\']) {
+            continue;
+        }
+        let resolved = resolve_path(&token, base);
+        if !is_dir_cached(&resolved.to_string_lossy(), &resolved) {
+            continue;
+        }
+        let start_col =
+            UnicodeWidthStr::width(&plain[..start + (raw.len() - raw.trim_start().len())]);
+        let end_col = start_col + UnicodeWidthStr::width(token.as_str());
+        out.push((start_col, end_col, resolved));
+    }
+    out
+}
+
+/// Trim the punctuation prose wraps a path in, keeping Windows drive colons and
+/// a trailing separator (which is meaningful for directories).
+fn trim_path_token(raw: &str) -> Option<String> {
+    let t = raw.trim();
+    let t = t.trim_end_matches(['.', '!', '?', ';', ',', ')']);
+    if t.is_empty() || t.starts_with("http://") || t.starts_with("https://") {
+        return None;
+    }
+    if t.contains("://") {
+        return None;
+    }
+    Some(t.to_string())
+}
+
+/// Resolve `~`, absolute paths, and path tokens relative to the session cwd.
+fn resolve_path(token: &str, base: &Path) -> std::path::PathBuf {
+    if let Some(rest) = token
+        .strip_prefix("~/")
+        .or_else(|| token.strip_prefix("~\\"))
+    {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest);
+        }
+    }
+    let p = std::path::Path::new(token);
+    let out = if p.is_absolute() {
+        p.to_path_buf()
+    } else if base.as_os_str().is_empty() {
+        // A relative path only means something against a real base; without
+        // one, do not guess (a stray stat in the process cwd would be a lie).
+        p.to_path_buf()
+    } else {
+        base.join(p)
+    };
+    // A trailing separator is display, not identity: `src/tui/` and `src/tui`
+    // are one directory, so they share a probe (and never resolve to "" for a
+    // root like `/` or `C:\`).
+    let s = out.to_string_lossy();
+    let trimmed = s.trim_end_matches(['/', '\\']);
+    if !trimmed.is_empty() && !trimmed.ends_with(':') {
+        std::path::PathBuf::from(trimmed)
+    } else {
+        out
+    }
+}
+
 /// Find `http://` / `https://` spans in a single visual line.
 /// Returns `(display_col_start, display_col_end, url)` — end is exclusive.
 ///
@@ -161,5 +365,49 @@ mod tests {
         assert_eq!(spans.len(), 2, "{spans:?}");
         assert!(spans[0].2.contains("example.com"));
         assert!(spans[1].2.contains("example.org"));
+    }
+
+    /// Directories are only advertised when they exist, resolved against the
+    /// session base - the colour is a promise that clicking opens something.
+    #[test]
+    fn finds_existing_directories_only() {
+        let base = std::env::temp_dir().join(format!("nur-dirspans-{}", std::process::id()));
+        let nested = base.join("src").join("tui");
+        std::fs::create_dir_all(&nested).expect("temp tree");
+        std::fs::write(base.join("notes.md"), "x").expect("temp file");
+
+        let plain = "  results: src/tui/ and src tui/markdown.rs done";
+        let spans = find_dir_spans(plain, &base);
+        let found: Vec<String> = spans
+            .iter()
+            .map(|(_, _, p)| p.display().to_string())
+            .collect();
+        assert_eq!(found.len(), 1, "only the real directory: {found:?}");
+        assert!(found[0].ends_with("tui"), "{found:?}");
+
+        // A file of the same shape is not a directory.
+        assert!(find_dir_spans("src/tui/markdown.rs", &base).is_empty());
+        // Absolute paths work too, and the span is in display columns.
+        let abs = format!("see {}", nested.display());
+        let spans = find_dir_spans(&abs, &base);
+        assert_eq!(spans.len(), 1, "{spans:?}");
+        assert_eq!(spans[0].0, 4, "span starts after 'see '");
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn path_tokens_ignore_urls_and_prose_punctuation() {
+        assert!(trim_path_token("https://example.com/src").is_none());
+        assert!(trim_path_token("git://host/src").is_none());
+        assert_eq!(trim_path_token("src/tui/.").unwrap(), "src/tui/");
+        assert_eq!(trim_path_token("src/tui/),").unwrap(), "src/tui/");
+        // A drive root keeps its colon.
+        assert_eq!(trim_path_token("C:\\work\\x").unwrap(), "C:\\work\\x");
+    }
+
+    #[test]
+    fn lines_without_a_separator_cost_nothing() {
+        assert!(find_dir_spans("just some words here", &std::env::temp_dir()).is_empty());
     }
 }

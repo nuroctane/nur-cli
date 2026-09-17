@@ -1795,6 +1795,20 @@ palette_accessors! {
     CYAN => cyan,
 }
 
+/// Directory paths in transcript output, and the affordance that they open in
+/// the OS file manager on click.
+///
+/// Deliberately the palette's own `indigo` rather than a new field: every
+/// preset already tunes that role for its identity (matrix green, superred
+/// red, dracula purple, nord steel), so folders correspond to the theme with
+/// no hand-copied hex values to drift. It is not used by any other transcript
+/// role - `md_link` carries URLs, `md_list` list markers, `md_code` code.
+#[inline]
+#[allow(non_snake_case)]
+pub fn DIR() -> Color {
+    current().indigo
+}
+
 // ── Color math + animated gradients ─────────────────────────────────────────
 /// Decompose a color to RGB (non-RGB variants fall back to the canvas).
 fn rgb(c: Color) -> (f64, f64, f64) {
@@ -2412,6 +2426,16 @@ mod tests {
                 ratio >= 4.5,
                 "{id}: on-accent text is only {ratio:.2}:1 on the accent"
             );
+            // Directory paths are transcript text: the new `dir` role must clear
+            // the floor on every palette, on both the canvas and a code band.
+            for (what, bg) in [("canvas", p.bg), ("code band", p.code_bg)] {
+                let r = contrast(p.indigo, bg);
+                assert!(
+                    r >= 3.0,
+                    "{id}: dir spans are only {r:.2}:1 on the {what} - \
+                     directory paths must stay readable in every theme"
+                );
+            }
         }
     }
 

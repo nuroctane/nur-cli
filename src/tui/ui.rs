@@ -2123,6 +2123,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     let mut hit_expand_phrase: Vec<Option<(usize, usize, usize)>> = Vec::new();
     let mut hit_queue_actions: Vec<Vec<(usize, usize, usize, u8)>> = Vec::new();
     let mut hit_urls: Vec<Vec<(usize, usize, String)>> = Vec::new();
+    let mut hit_dirs: Vec<Vec<(usize, usize, std::path::PathBuf)>> = Vec::new();
     let mut hit_swarm_panes: Vec<Vec<(u64, usize, usize)>> = Vec::new();
     let mut plain_lines: Vec<String> = Vec::new();
     // cell_idx → first wrapped row for inline image cells (overlay anchors).
@@ -2143,6 +2144,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
                 hit_expand_phrase.push(None);
                 hit_queue_actions.push(Vec::new());
                 hit_urls.push(Vec::new());
+                hit_dirs.push(Vec::new());
                 hit_swarm_panes.push(Vec::new());
                 plain_lines.push(String::new());
             }
@@ -2185,7 +2187,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
                 None
             };
         let mut header_marked = false;
-        for (i, line) in w.into_iter().enumerate() {
+        for (i, mut line) in w.into_iter().enumerate() {
             // First non-empty line of a collapsible card is the click target.
             let empty = line
                 .spans
@@ -2248,6 +2250,22 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
             }
             // Clickable http(s) URLs on this visual line (after wrap).
             let urls = crate::open_uri::find_url_spans(&plain);
+            // Directory paths: painted in the `dir` role and clickable to open
+            // the OS file manager. Only existing directories are returned, so
+            // the colour is never a dead link.
+            let mut dirs = crate::open_uri::find_dir_spans(&plain, &app.cwd);
+            // A URL's own path segments must not double as directories.
+            if !urls.is_empty() {
+                dirs.retain(|(lo, _hi, _p)| {
+                    !urls.iter().any(|(ulo, uhi, _)| lo >= ulo && lo < uhi)
+                });
+            }
+            if !dirs.is_empty() {
+                let hue = theme::DIR();
+                for (lo, hi, _) in &dirs {
+                    paint_columns_fg(&mut line, *lo, *hi, hue);
+                }
+            }
             // Swarm-card pane hits for this row (card row i → pane row i-2).
             let sp: Vec<(u64, usize, usize)> = if let Some(rows) = &swarm_pane_rows {
                 i.checked_sub(2)
@@ -2281,6 +2299,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
             hit_expand_phrase.push(exp);
             hit_queue_actions.push(qa);
             hit_urls.push(urls);
+            hit_dirs.push(dirs);
             hit_swarm_panes.push(sp);
         }
     }
@@ -2291,6 +2310,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     app.hit_expand_phrase = hit_expand_phrase;
     app.hit_queue_actions = hit_queue_actions;
     app.hit_urls = hit_urls;
+    app.hit_dirs = hit_dirs;
     app.hit_swarm_panes = hit_swarm_panes;
     app.plain_lines = plain_lines;
 
@@ -2644,6 +2664,45 @@ fn assistant_prose_lines(text: &str) -> Vec<Line<'static>> {
             l
         })
         .collect()
+}
+
+/// Re-colour display columns `[lo, hi)` of an already-wrapped line, splitting
+/// spans as needed. Columns (not char indices) because the hitboxes are in
+/// display columns, so wide glyphs earlier in the line stay aligned.
+fn paint_columns_fg(line: &mut Line<'static>, lo: usize, hi: usize, fg: Color) {
+    if hi <= lo {
+        return;
+    }
+    let spans = std::mem::take(&mut line.spans);
+    let mut out: Vec<Span<'static>> = Vec::with_capacity(spans.len() + 2);
+    let mut col = 0usize;
+    let mut buf = String::new();
+    let mut buf_style: Option<Style> = None;
+    for span in spans {
+        for ch in span.content.chars() {
+            let w = UnicodeWidthChar::width(ch).unwrap_or(0);
+            let painted = col < hi && col + w > lo;
+            let style = if painted {
+                span.style.fg(fg)
+            } else {
+                span.style
+            };
+            if buf_style != Some(style) {
+                if let Some(prev) = buf_style {
+                    out.push(Span::styled(std::mem::take(&mut buf), prev));
+                }
+                buf_style = Some(style);
+            }
+            buf.push(ch);
+            col += w;
+        }
+    }
+    if let Some(style) = buf_style {
+        if !buf.is_empty() {
+            out.push(Span::styled(buf, style));
+        }
+    }
+    line.spans = out;
 }
 
 fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut Vec<Line<'static>>) {
@@ -7729,6 +7788,76 @@ mod tests {
     /// then `row \t col \t fg \t bg \t mods \t symbol` per cell. Render the dumps
     /// with `py scripts/render_typo_preview.py <dir> <out>` and check them against
     /// the contrast floor with `py scripts/contrast_audit.py <dir> 3.0`.
+    /// A directory path in transcript output is painted in the `dir` role on
+    /// exactly the columns `find_dir_spans` reports, and the rest of the line
+    /// keeps its own styling - the hitbox and the paint must agree, or clicking
+    /// the coloured text would open nothing.
+    #[test]
+    fn directory_spans_paint_the_columns_that_get_hitboxes() {
+        let base = std::env::temp_dir().join(format!("nur-dirpaint-{}", std::process::id()));
+        let target = base.join("crates").join("engine");
+        std::fs::create_dir_all(&target).expect("temp tree");
+        let rel = "crates/engine";
+        let plain = format!("  wrote {rel} ok");
+        let mut line = Line::from(Span::styled(
+            plain.clone(),
+            Style::default().fg(Color::Rgb(9, 9, 9)),
+        ));
+
+        let spans = crate::open_uri::find_dir_spans(&plain, &base);
+        assert_eq!(spans.len(), 1, "one directory: {spans:?}");
+        let (lo, hi, path) = spans[0].clone();
+        assert!(path.is_dir(), "{path:?}");
+        paint_columns_fg(&mut line, lo, hi, theme::DIR());
+
+        // Walk the line column by column: only the path columns may change.
+        let mut painted = String::new();
+        let mut col = 0usize;
+        for span in &line.spans {
+            for ch in span.content.chars() {
+                let w = UnicodeWidthChar::width(ch).unwrap_or(0);
+                if col < hi && col + w > lo {
+                    assert_eq!(
+                        span.style.fg,
+                        Some(theme::DIR()),
+                        "path columns must take the dir role: {plain:?}"
+                    );
+                    painted.push(ch);
+                } else {
+                    assert_eq!(
+                        span.style.fg,
+                        Some(Color::Rgb(9, 9, 9)),
+                        "the rest of the line keeps its style"
+                    );
+                }
+                col += w;
+            }
+        }
+        assert_eq!(painted, rel, "the painted run is the path itself");
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// Code rows carry a band; a directory inside one must not lose it.
+    #[test]
+    fn paint_columns_preserves_backgrounds() {
+        let band = Style::default().bg(theme::CODE_BG());
+        let mut line = Line::from(vec![Span::styled("ab ", band), Span::styled("cd", band)]);
+        paint_columns_fg(&mut line, 3, 5, theme::DIR());
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "ab cd");
+        let painted: Vec<&Span> = line
+            .spans
+            .iter()
+            .filter(|s| s.style.fg == Some(theme::DIR()))
+            .collect();
+        assert_eq!(painted.len(), 1, "only 'cd' is repainted");
+        assert_eq!(
+            painted[0].style.bg,
+            Some(theme::CODE_BG()),
+            "the code band survives the repaint"
+        );
+    }
+
     #[test]
     #[ignore]
     fn typography_preview() {
@@ -7755,6 +7884,22 @@ mod tests {
                 let mut lines = Vec::new();
                 lines.extend(assistant_prose_lines(sample));
                 let rows = wrap::wrap_lines(&lines, width);
+                // Mirror what draw_transcript does to each wrapped line, so the
+                // dump shows the transcript the user actually sees: directory
+                // paths take the `dir` role.
+                let rows: Vec<Line<'static>> = rows
+                    .into_iter()
+                    .map(|mut line| {
+                        let plain = line_to_plain(&line);
+                        for (lo, hi, _) in crate::open_uri::find_dir_spans(
+                            &plain,
+                            &std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir()),
+                        ) {
+                            paint_columns_fg(&mut line, lo, hi, theme::DIR());
+                        }
+                        line
+                    })
+                    .collect();
                 let height = (rows.len() as u16 + 2).max(4);
                 let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
                 terminal
@@ -7826,6 +7971,8 @@ The reason this matters is harder to see than the fix. When two callers race, th
 
 - [x] reproduce under a debug build
 - [ ] soak test on the `nightly` channel
+
+The change lives in `src/tui/` and `src/open_uri.rs`, with notes in docs and tests beside them.
 
 See the [token store notes](https://example.test/docs/token-store) for the storage layout.
 "#;

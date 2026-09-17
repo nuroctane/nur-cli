@@ -428,6 +428,21 @@ Assistant answers are composed for reading, not dumped as markdown source. `src/
 | Code block | Fences never render. Every row sits on `code_bg` with a two-space gutter; syntax colours on dark palettes, the theme's own `md_code` on light ones (the highlighter's palette is dark-only). |
 | Rule | A short `─` rule in `border`, not literal `---`. |
 | Link | Label in `md_link`, URL appended dimmed + underlined so it stays clickable without shouting. |
+| Directory | A path that exists on disk takes the theme's `dir` hue (`theme::DIR()`) — see below. |
+
+### Directories
+
+Any path in the transcript that resolves to a **real directory** is painted in the theme's `dir` role and becomes clickable: the click opens it in the OS file manager (`explorer.exe` on Windows, `open` on macOS, `xdg-open` on Linux), and a note confirms what was opened. Files keep their normal colour, so a directory stands out from its neighbours:
+
+```text
+src/tui/        <- painted, opens in your file manager
+src/open_uri.rs <- not a directory, stays body/code coloured
+```
+
+`dir` is the palette's own `indigo`, which every preset already tunes for its identity (matrix green, gruvbox pink, heavenly purple), so folders correspond to the theme with no per-theme table to maintain. It is unused by any other transcript role (`md_link` carries URLs, `md_list` list markers, `md_code` code), and a test asserts it clears the contrast floor on both the canvas and a code band for all 23 themes.
+
+Detection is deliberately conservative (`src/open_uri.rs::find_dir_spans`): a token must contain a separator, survive prose punctuation trimming, resolve against the session working directory, and **exist** as a directory before it is coloured - so the colour is never a dead link. Existence probes are cached for 10 seconds, and lines without a separator are skipped outright. A URL's own path segments are excluded, so `https://host/src` is a link, not a folder.
+
 
 Wrapping repeats each line's **continuation gutter** (`src/tui/wrap.rs`): leading whitespace carries over, bars repeat, and item markers blank out — so a wrapped paragraph stays under its own text instead of collapsing to column 0.
 
