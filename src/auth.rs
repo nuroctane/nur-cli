@@ -980,6 +980,9 @@ pub fn save_provider_key(provider_id: &str, key: &str) -> Result<()> {
         let _guard = key_store_guard();
         save_key_at(&crate::config::provider_keys_path(), provider_id, key)?;
     }
+    // A freshly saved key must be visible to the next TypeSafe probe rather
+    // than up to a few seconds later.
+    crate::typesafe::client::invalidate_key_probe();
     allow_t3_fallback(provider_id)
 }
 
@@ -1434,7 +1437,13 @@ pub fn provider_credential_summaries() -> BTreeMap<String, String> {
     let policy = read_credential_policy();
     let mut out = BTreeMap::new();
 
-    for provider in crate::providers::PROVIDERS {
+    // Sidecar entries (TypeSafe · Jev) are credential-bearing but are not chat
+    // providers, so they are not in PROVIDERS. The picker shows them pinned at
+    // the top, which means their auth column has to be filled too.
+    for provider in crate::providers::PROVIDERS
+        .iter()
+        .chain(crate::providers::SIDECAR_PROVIDERS.iter())
+    {
         let mut sources: Vec<String> = Vec::new();
         if provider.key_optional {
             sources.push("local · no auth".into());
@@ -1575,6 +1584,42 @@ pub fn provider_health_report() -> Vec<String> {
             };
             Some(format!("{:<14} {:<12} {}", id, state, source))
         })
+        .chain(sidecar_health_lines())
+        .collect()
+}
+
+/// Health lines for sidecar entries (TypeSafe · Jev): a credential that boosts
+/// every provider rather than serving chat itself.
+fn sidecar_health_lines() -> Vec<String> {
+    let keys = read_keys_at(&crate::config::provider_keys_path());
+    crate::providers::SIDECAR_PROVIDERS
+        .iter()
+        .map(|provider| {
+            let mut sources: Vec<String> = Vec::new();
+            if std::env::var(provider.env_key).is_ok_and(|v| !v.trim().is_empty()) {
+                sources.push(format!("env:{}", provider.env_key));
+            }
+            if keys
+                .get(provider.id)
+                .is_some_and(|value| !value.trim().is_empty())
+            {
+                sources.push("saved-key".into());
+            }
+            let state = if sources.is_empty() {
+                "login needed"
+            } else {
+                "ready"
+            };
+            let source = if sources.is_empty() {
+                format!(
+                    "none (boosts every provider once set; {})",
+                    provider.env_key
+                )
+            } else {
+                sources.join(",")
+            };
+            format!("{:<14} {:<12} {}", provider.id, state, source)
+        })
         .collect()
 }
 
@@ -1626,7 +1671,14 @@ pub fn key_fingerprint(key: &str) -> String {
     // Char-boundary-safe: byte slicing panicked on keys with multibyte
     // characters astride the cut points.
     let head: String = k.chars().take(4).collect();
-    let tail: String = k.chars().rev().take(4).collect::<Vec<_>>().iter().rev().collect();
+    let tail: String = k
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .iter()
+        .rev()
+        .collect();
     format!("{head}…{tail}")
 }
 
@@ -1723,7 +1775,17 @@ pub fn login_interactive(
     browser: bool,
     import: bool,
 ) -> Result<()> {
-    let mut cfg = crate::config::load_config().unwrap_or_default();
+    // Refuse to proceed on an unreadable config: the value is written back by
+    // every persist path below, so `unwrap_or_default()` here would replace a
+    // user's file (theme, fallbacks, budgets, overrides) with stock defaults
+    // because of a typo in it.
+    let mut cfg = crate::config::load_config().map_err(|e| {
+        NurError::Other(format!(
+            "cannot read {}: {e}\nFix the file (or move it aside) before logging in - nur will \
+             not overwrite a config it could not parse.",
+            crate::config::config_path().display()
+        ))
+    })?;
     let provider = if let Some(raw) = provider_arg.as_deref() {
         crate::providers::resolve_provider_alias(raw)
             .map(|p| p.id.to_string())
@@ -1736,6 +1798,31 @@ pub fn login_interactive(
     let browser_ok = crate::providers::by_id(&provider)
         .map(|p| p.browser_auth)
         .unwrap_or(false);
+
+    // A sidecar (TypeSafe · Jev) has a key but no chat endpoint: store the
+    // credential scoped to its id and leave the active provider alone. Without
+    // this it would be written as the active provider and every turn would go
+    // to a System One API that answers typed questions.
+    if crate::providers::is_sidecar_provider(&provider) {
+        if import || browser {
+            let name = crate::providers::by_id(&provider)
+                .map(|p| p.name)
+                .unwrap_or(provider.as_str());
+            return Err(NurError::Other(format!(
+                "{name} has no browser / CLI session to import - pass --key with the TypeSafe \
+                 API key (or export TYPESAFE_API_KEY)"
+            )));
+        }
+        let typed = match key_arg {
+            Some(k) if !k.trim().is_empty() => k,
+            _ => {
+                print!("TypeSafe API key: ");
+                io::stdout().flush()?;
+                rpassword::read_password().unwrap_or_default()
+            }
+        };
+        return persist_cli_scoped_key(&provider, typed.trim());
+    }
 
     if import {
         return persist_cli_import(&provider, &mut cfg);
@@ -1804,6 +1891,28 @@ fn persist_cli_api_key(provider: &str, key: &str, cfg: &mut crate::config::Confi
     println!("saved to {}", auth_path().display());
     println!("provider: {provider}");
     println!("key: {}", key_fingerprint(key));
+    Ok(())
+}
+
+/// Store a credential for a provider nur must *not* route turns to (sidecars
+/// such as TypeSafe · Jev). The active provider and base_url are untouched.
+fn persist_cli_scoped_key(provider: &str, key: &str) -> Result<()> {
+    if key.is_empty() {
+        return Err(NurError::Other(
+            "empty API key - the TypeSafe key is created in the TypeSafe dashboard".into(),
+        ));
+    }
+    save_provider_key(provider, key)?;
+    let name = crate::providers::by_id(provider)
+        .map(|p| p.name)
+        .unwrap_or(provider);
+    println!("saved to {}", auth_path().display());
+    println!("credential: {provider} ({name})");
+    println!("key: {}", key_fingerprint(key));
+    println!(
+        "note: {name} is a boost layer, not your active provider. Typed judgments are now \
+         available to every provider you use (tool `typesafe`, /typesafe)."
+    );
     Ok(())
 }
 

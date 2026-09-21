@@ -33,8 +33,16 @@ pub struct Admission {
 }
 
 fn next_id() -> u64 {
-    static N: AtomicU64 = AtomicU64::new(1);
+    static N: AtomicU64 = AtomicU64::new(0);
+    // Seeded from the wall clock, not from 1: ids name `<session>/<id>.json`, and a
+    // resumed session in a fresh process used to start at 1 and overwrite the
+    // previous run's record.
+    let seeded = N.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst);
+    if seeded.is_ok() {
+        return now_unix().saturating_mul(1_000);
+    }
     N.fetch_add(1, Ordering::SeqCst)
+        .saturating_add(now_unix().saturating_mul(1_000))
 }
 
 fn now_unix() -> u64 {

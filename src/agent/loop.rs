@@ -550,19 +550,17 @@ impl AgentRunner {
         // context_store (RLM prompt-as-variable, done for the user) and run
         // with a pointer + preview instead of blocking. Runs before the
         // guardrails so the size check never fires.
-        let user_text: String = match super::context_store::maybe_spill_oversized_prompt(
-            &session.id,
-            user_text,
-        ) {
-            Some((name, replacement)) => {
-                let _ = tx.send(AgentEvent::Status(format!(
-                    "input · over the inline limit - auto-registered as context var `{name}`, \
-                         turn continues with a pointer + preview"
-                )));
-                replacement
-            }
-            None => user_text.to_string(),
-        };
+        let user_text: String =
+            match super::context_store::maybe_spill_oversized_prompt(&session.id, user_text) {
+                Some((name, replacement)) => {
+                    let _ = tx.send(AgentEvent::Status(format!(
+                        "input · over the inline limit - auto-registered as context var `{name}`, \
+                     turn continues with a pointer + preview"
+                    )));
+                    replacement
+                }
+                None => user_text.to_string(),
+            };
         // Portable input guardrails (OpenAI Agents SDK pattern) - all providers.
         // Size is handled above; what remains here are safety refusals.
         match super::guardrails::check_input(&user_text) {
@@ -655,6 +653,9 @@ impl AgentRunner {
         // summary and zero tool calls / zero answer text. Retry once with a
         // hard nudge + tool_choice=required before giving up.
         let mut empty_tool_stalls: u8 = 0;
+        // How many times the skill layer has corrected this turn. Bounded so a
+        // triggered skill can steer the work, not nag it.
+        let mut skill_nudges: u8 = 0;
         let mut truncation_continuations: u8 = 0;
         let mut truncation_giving_up = false;
         let mut force_tool_choice = false;
@@ -816,11 +817,16 @@ impl AgentRunner {
                 configured_model.to_string()
             };
 
-            let tools = if self.is_subagent {
+            let mut tools = if self.is_subagent {
                 self.tools.subagent_tool_defs()
             } else {
                 self.tools.root_tool_defs_for_task(&user_text, turns > 1)
             };
+            // Opt-in narrowing, first round only: later rounds keep the full
+            // surface, so a tool once offered is never withdrawn mid-turn.
+            if turns <= 1 {
+                tools = self.typesafe_narrow_tools(tools, &user_text, tx).await;
+            }
             let attribution = attribute_request(&instructions, &tools, &session.input_items);
             let output_reserve = self.config.request_output_reserve_tokens;
             if let Some(block) = preflight_request_budget(
@@ -992,8 +998,7 @@ impl AgentRunner {
                     if !emergency_compact_attempted {
                         emergency_compact_attempted = true;
                         let _ = tx.send(AgentEvent::Status(
-                            "provider rejected the context window - compacting and retrying"
-                                .into(),
+                            "provider rejected the context window - compacting and retrying".into(),
                         ));
                         match compact_session(self, session, usage).await {
                             Ok(_) => {
@@ -1244,6 +1249,19 @@ impl AgentRunner {
             }
 
             if calls.is_empty() {
+                // Skill layer: a triggered skill states requirements. Before the
+                // turn is accepted as finished, the skill machinery itself
+                // checks the work against them - one Jev request over this
+                // turn's tool trace. A confident shortfall steers once or twice
+                // with the specific rule that was skipped; it never blocks the
+                // turn and never rewrites anything.
+                if skill_nudges < MAX_SKILL_NUDGES
+                    && self.typesafe_skill_nudge(&prompt_ctx, session, tx).await
+                {
+                    skill_nudges += 1;
+                    self.persist_session(session);
+                    continue;
+                }
                 // Reasoning-only / empty completion: model "planned" but never
                 // answered or called tools. Common on ChatGPT free + Codex OAuth
                 // with some gpt-5.* models. Retry once before surfacing a note.
@@ -1477,6 +1495,11 @@ impl AgentRunner {
         cancel: &CancellationToken,
     ) -> Result<()> {
         let mut idx = 0usize;
+        // Jev's tool gate runs once per response, over the whole call list: one
+        // request in, `call_id -> skip reason` out. Everything it decides is
+        // recorded here so the post-execution judge can reuse the same facts.
+        let ts_skip = self.typesafe_pre_gate(calls, session, tx).await;
+        let mut ts_results: Vec<TsToolResult> = Vec::new();
         while idx < calls.len() {
             if cancel.is_cancelled() {
                 return Err(NurError::Interrupted);
@@ -1514,6 +1537,16 @@ impl AgentRunner {
                     let call_id = call.call_id.clone();
                     let cancel_t = cancel.clone();
                     meta.push((id, call_id.clone(), name.clone()));
+                    if let Some(reason) = ts_skip.get(&call.call_id) {
+                        // Jev says this call is a confident repeat of one whose
+                        // result is still in context: answer it from that
+                        // knowledge instead of paying for the tool again.
+                        let skip = reason.clone();
+                        handles.push(tokio::task::spawn_blocking(move || {
+                            (call_id, name, Ok(skip))
+                        }));
+                        continue;
+                    }
                     handles.push(tokio::task::spawn_blocking(move || {
                         let res = host.dispatch(
                             &name,
@@ -1567,6 +1600,17 @@ impl AgentRunner {
                         },
                     );
                     emit_side_effects(tx, &name, &body);
+                    // A call the gate answered from context was never run, so
+                    // there is no result to judge: sending our own skip note to
+                    // Jev would spend tokens to grade a sentence we wrote.
+                    if !ts_skip.contains_key(&call_id) {
+                        ts_results.push(TsToolResult {
+                            tool: name.clone(),
+                            args: call_arguments(&calls, &call_id),
+                            body: body.clone(),
+                            ok,
+                        });
+                    }
                     let _ = tx.send(AgentEvent::ToolEnd {
                         id,
                         name,
@@ -1654,7 +1698,11 @@ impl AgentRunner {
 
             usage.set_state(format!("tool:{}", call.name));
 
-            let (body, ok) = if call.name == "agent" {
+            let (body, ok) = if let Some(reason) = ts_skip.get(&call.call_id) {
+                // Gated by Jev: an answer already in context, so the call is
+                // not dispatched. Reported as the tool's own output.
+                (reason.clone(), true)
+            } else if call.name == "agent" {
                 if self.is_subagent {
                     (
                         "error: nested subagents are not allowed (depth limit)".into(),
@@ -1809,6 +1857,14 @@ impl AgentRunner {
             self.hooks
                 .run_post(&call.name, &call.arguments, &self.cwd, &session.id);
             emit_side_effects(tx, &call.name, &body);
+            if !ts_skip.contains_key(&call.call_id) {
+                ts_results.push(TsToolResult {
+                    tool: call.name.clone(),
+                    args: call.arguments.clone(),
+                    body: body.clone(),
+                    ok,
+                });
+            }
             // OMP prewalk: after todos exist, first successful write/edit hands
             // off to the cheap/smol model for the rest of the session.
             // `prewalk_override` on self is enough — next turn's model pick
@@ -1837,7 +1893,418 @@ impl AgentRunner {
         // in this response is answered — slipping it between a call and its
         // output splits the pair and strict providers reject the history.
         flush_pending_media(&mut session.input_items, tx);
+        // One Jev request judges every result from this response: did it do
+        // what the call was for? Reported, never rewritten - the bodies stay
+        // verbatim.
+        self.typesafe_judge_results(&ts_results, session, tx).await;
         Ok(())
+    }
+
+    /// Drop specialist tools the task confidently does not need.
+    ///
+    /// One Noul per specialist ("does this task need tool X?"), batched into a
+    /// single request. The direction of the bet matters: a wrong *keep* costs
+    /// schema tokens, a wrong *drop* costs a round trip and can strand the turn -
+    /// so a tool is removed only when the answer is confident it is NOT needed,
+    /// and everything core, everything already offered, and every escape hatch is
+    /// kept unconditionally.
+    ///
+    /// Returns `tools` untouched when the feature is off, no judgment layer is
+    /// available, or nothing could be placed confidently.
+    async fn typesafe_narrow_tools(
+        &self,
+        tools: Vec<crate::api::types::ToolDef>,
+        task: &str,
+        tx: &mpsc::UnboundedSender<AgentEvent>,
+    ) -> Vec<crate::api::types::ToolDef> {
+        let cfg = self.config.typesafe.clone();
+        if !cfg.enabled || !cfg.tools.subset || tools.len() <= 8 {
+            return tools;
+        }
+        if crate::typesafe::harness::ready(&cfg).is_none() {
+            return tools;
+        }
+        // Candidates: the specialists beyond the always-present core. The list is
+        // built here, so the answer can only select from real, offered tools.
+        let specialists: Vec<String> = tools
+            .iter()
+            .filter(|t| !crate::tools::ROOT_CORE_TOOL_NAMES.contains(&t.name.as_str()))
+            .map(|t| t.name.clone())
+            .collect();
+        if specialists.is_empty() {
+            return tools;
+        }
+        let keep_floor = cfg.tools.keep_probability.clamp(0.5, 0.99);
+        let cfg_for_task = cfg.clone();
+        let task_owned = task.to_string();
+        let listed = specialists.clone();
+        let asked = listed.clone();
+        let judged = match tokio::task::spawn_blocking(move || {
+            let state = serde_json::json!({
+                "task": crate::typesafe::harness::judge_preview(&task_owned, 2_000),
+                "note": "Each question is about one tool below; answer yes when the task needs it",
+                "tools": listed,
+            });
+            crate::typesafe::harness::tool_need(&cfg_for_task, &state, &asked)
+        })
+        .await
+        {
+            Ok(j) => j,
+            Err(_) => return tools,
+        };
+        if judged.is_empty() {
+            return tools;
+        }
+        let mut dropped: Vec<String> = Vec::new();
+        for (name, needed) in &judged {
+            // `None` from the policy layer means "no confident answer" (escalate
+            // or confirm band) - keep the tool.
+            if let Some(p) = needed {
+                if *p < keep_floor {
+                    dropped.push(name.clone());
+                }
+            }
+        }
+        if dropped.is_empty() {
+            return tools;
+        }
+        let before = tools.len();
+        let kept: Vec<crate::api::types::ToolDef> = tools
+            .into_iter()
+            .filter(|t| !dropped.contains(&t.name))
+            .collect();
+        let _ = tx.send(AgentEvent::Status(format!(
+            "typesafe · tool surface {} → {} for this round (dropped {})",
+            before,
+            kept.len(),
+            dropped.join(", ")
+        )));
+        crate::typesafe::telemetry::record_decision(
+            Some(keep_floor),
+            true,
+            cfg.escalate_confidence,
+        );
+        kept
+    }
+
+    /// Ask Jev about this response's tool calls **before** any of them run.
+    ///
+    /// Returns `call_id -> reason` for calls the harness should not dispatch.
+    /// Everything else - risk, "a person should see this" - is surfaced in the
+    /// transcript and never enforced: the gate removes work that is provably
+    /// redundant, and nothing more.
+    async fn typesafe_pre_gate(
+        &self,
+        calls: &[FunctionCallRef],
+        session: &Session,
+        tx: &mpsc::UnboundedSender<AgentEvent>,
+    ) -> std::collections::HashMap<String, String> {
+        let cfg = self.config.typesafe.clone();
+        if !cfg.enabled || !cfg.tool_gate.enabled || calls.is_empty() {
+            return std::collections::HashMap::new();
+        }
+        if crate::typesafe::harness::ready(&cfg).is_none() {
+            return std::collections::HashMap::new();
+        }
+        let facts = typesafe_call_facts(calls, &session.input_items);
+        let preview_chars = cfg.tool_gate.preview_chars;
+        // Only the calls worth judging. `judged` maps a question index back to
+        // its position in `calls`, so a filtered list cannot misalign answers.
+        let judged_calls: Vec<(usize, &FunctionCallRef)> = calls
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| typesafe_judges_tool(&c.name))
+            .collect();
+        if judged_calls.is_empty() {
+            return std::collections::HashMap::new();
+        }
+        let items: Vec<crate::typesafe::harness::ToolCallItem> = judged_calls
+            .iter()
+            .enumerate()
+            .map(|(n, (i, c))| crate::typesafe::harness::ToolCallItem {
+                index: n,
+                tool: c.name.clone(),
+                args_preview: crate::typesafe::harness::judge_preview(&c.arguments, preview_chars),
+                intent: None,
+                result_preview: None,
+                duplicate_of: facts[*i].0,
+                prior_failures: facts[*i].1,
+            })
+            .collect();
+        let goal = typesafe_goal(session, 3);
+        let cfg_for_task = cfg.clone();
+        let judged = match tokio::task::spawn_blocking(move || {
+            let state =
+                serde_json::json!({ "goal": goal, "pending": "these calls have not run yet" });
+            crate::typesafe::harness::judge_calls(
+                &cfg_for_task,
+                &state,
+                &items,
+                crate::typesafe::harness::JudgeScope::Pre,
+            )
+        })
+        .await
+        {
+            Ok(j) => j,
+            Err(_) => return std::collections::HashMap::new(),
+        };
+        let mut skip = std::collections::HashMap::new();
+        for (n, j) in judged.iter().enumerate() {
+            let Some((_, call)) = judged_calls.get(n) else {
+                continue;
+            };
+            if cfg.tool_gate.flag_risky {
+                // Surfacing only: these use the confirm band, because a notice
+                // the user can ignore must not require near-certainty. Nothing
+                // here blocks or changes the call.
+                if let Some(band) = j.risk_notice() {
+                    let _ = tx.send(AgentEvent::Status(format!(
+                        "typesafe · {} risk {} ({})",
+                        call.name,
+                        band.as_str(),
+                        j.risk
+                            .confidence
+                            .map(|c| format!("{c:.2}"))
+                            .unwrap_or_else(|| "-".into())
+                    )));
+                }
+                if j.wants_human_notice() {
+                    let _ = tx.send(AgentEvent::Status(format!(
+                        "typesafe · {} may need you (p={}) - flagging, not blocking",
+                        call.name,
+                        j.needs_human
+                            .confidence
+                            .map(|c| format!("{c:.2}"))
+                            .unwrap_or_else(|| "-".into())
+                    )));
+                }
+            }
+            let reason = if cfg.tool_gate.skip_redundant && j.gate_skip() {
+                // Higher-stakes calls need more certainty before the harness
+                // answers them from memory: thresholds scale with the risk band.
+                let base = crate::typesafe::policy::Thresholds::from_config(&cfg);
+                let stakes = j.risk.raw().map(|b| b.stakes()).unwrap_or(0.0);
+                let scaled = base.scaled(stakes);
+                let confident = j
+                    .redundant
+                    .confidence
+                    .map(|c| c >= scaled.act)
+                    .unwrap_or(false);
+                confident.then(|| {
+                    format!(
+                        "skipped by typesafe: this call repeats an identical earlier call whose \
+                         result is still in this conversation, and the judgment was confident \
+                         (p={:.2}). Re-read that earlier result, or change the arguments if \
+                         something has changed.",
+                        j.redundant.confidence.unwrap_or(0.0)
+                    )
+                })
+            } else if cfg.tool_gate.skip_repeated_failures && j.stuck() {
+                Some(
+                    "skipped by typesafe: this is the same call that already failed here, and \
+                     the judgment says nothing relevant changed. Something else has to change \
+                     first."
+                        .to_string(),
+                )
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                let _ = tx.send(AgentEvent::Status(format!(
+                    "typesafe · skipping {} · {}",
+                    call.name,
+                    reason.lines().next().unwrap_or("")
+                )));
+                crate::typesafe::telemetry::record_gated_call();
+                skip.insert(call.call_id.clone(), reason);
+            }
+        }
+        skip
+    }
+
+    /// The skill layer's own usage check.
+    ///
+    /// A triggered skill is supposed to be followed. This asks Jev one question
+    /// per activated skill - was it carried out, judged only from this turn's
+    /// tool trace - and on a shortfall asks which of the skill's own stated
+    /// requirements was skipped, then injects that as a mid-turn steer.
+    ///
+    /// Returns `true` when a steer was injected (the caller re-runs the model).
+    /// Nothing is ever blocked or rewritten: the skill machinery corrects the
+    /// work inside the loop, which is where it belongs.
+    async fn typesafe_skill_nudge(
+        &self,
+        prompt_ctx: &super::prompt::PromptContext,
+        session: &mut Session,
+        tx: &mpsc::UnboundedSender<AgentEvent>,
+    ) -> bool {
+        let cfg = self.config.typesafe.clone();
+        if !cfg.enabled || !cfg.skills.enabled || !cfg.skills.check_usage {
+            return false;
+        }
+        let Some((skill, requirements, path)) = prompt_ctx.active_skill() else {
+            return false;
+        };
+        let path = path.to_string();
+        if requirements.is_empty() || crate::typesafe::harness::ready(&cfg).is_none() {
+            return false;
+        }
+        let skill = skill.to_string();
+        let requirements: Vec<String> = requirements.to_vec();
+        let request = typesafe_goal(session, 2);
+        let evidence = typesafe_trace_evidence(&session.input_items, 24);
+        let cfg_for_task = cfg.clone();
+        let skill_for_task = skill.clone();
+        let (verdict, missed) = tokio::task::spawn_blocking(move || {
+            let v = crate::typesafe::harness::judge_skill_use(
+                &cfg_for_task,
+                &request,
+                &skill_for_task,
+                &requirements,
+                &evidence,
+            );
+            let m = if v.usable().is_some_and(|c| c.is_shortfall()) {
+                crate::typesafe::harness::missed_requirement(
+                    &cfg_for_task,
+                    &request,
+                    &skill_for_task,
+                    &requirements,
+                    &evidence,
+                )
+                .usable()
+                .cloned()
+            } else {
+                None
+            };
+            (v, m)
+        })
+        .await
+        .unwrap_or_else(|_| {
+            (
+                crate::typesafe::policy::Judgment::unavailable("skill_use", "task failed"),
+                None,
+            )
+        });
+        let Some(compliance) = verdict.usable().copied() else {
+            return false;
+        };
+        if !compliance.is_shortfall() {
+            return false;
+        }
+        let missed_line = missed
+            .map(|m| format!("\nThe requirement that was not carried out:\n> {m}"))
+            .unwrap_or_default();
+        let steer = format!(
+            "[harness · skill check] **{skill}** is active for this request, and the work so \
+             far does not follow it ({compliance}{missed_line}).\n\
+             Do the skill's required steps now, in its stated order, before answering. \
+             If a rule genuinely does not apply to this request, say which and why.",
+            compliance = compliance.as_str(),
+        );
+        let _ = tx.send(AgentEvent::Status(format!(
+            "typesafe · skill {skill} {} ({path}) - steering once, not blocking",
+            compliance.as_str()
+        )));
+        crate::typesafe::telemetry::record_decision(
+            verdict.confidence,
+            true,
+            cfg.escalate_confidence,
+        );
+        session.input_items.push(user_text_item(&steer));
+        true
+    }
+
+    /// Ask Jev about this response's completed tool results. Verdicts are shown
+    /// and counted; nothing is rewritten and nothing is blocked.
+    async fn typesafe_judge_results(
+        &self,
+        results: &[TsToolResult],
+        session: &Session,
+        tx: &mpsc::UnboundedSender<AgentEvent>,
+    ) {
+        let cfg = self.config.typesafe.clone();
+        if !cfg.enabled
+            || !cfg.tool_gate.enabled
+            || !cfg.tool_gate.judge_results
+            || results.is_empty()
+        {
+            return;
+        }
+        if crate::typesafe::harness::ready(&cfg).is_none() {
+            return;
+        }
+        let preview_chars = cfg.tool_gate.preview_chars;
+        // Only results with something to judge: failures, and anything long
+        // enough to be worth a second opinion. Judging every tiny confirmation
+        // would spend Jev tokens for nothing.
+        let worth: Vec<usize> = results
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| typesafe_judges_tool(&r.tool))
+            .filter(|(_, r)| !r.ok || r.body.chars().count() >= 200)
+            .map(|(i, _)| i)
+            .collect();
+        if worth.is_empty() {
+            return;
+        }
+        let items: Vec<crate::typesafe::harness::ToolCallItem> = worth
+            .iter()
+            .enumerate()
+            .filter_map(|(n, i)| {
+                results
+                    .get(*i)
+                    .map(|r| crate::typesafe::harness::ToolCallItem {
+                        index: n,
+                        tool: r.tool.clone(),
+                        args_preview: crate::typesafe::harness::judge_preview(
+                            &r.args,
+                            preview_chars,
+                        ),
+                        intent: None,
+                        result_preview: Some(crate::typesafe::harness::judge_preview(
+                            &r.body,
+                            preview_chars,
+                        )),
+                        duplicate_of: None,
+                        prior_failures: 0,
+                    })
+            })
+            .collect();
+        let goal = typesafe_goal(session, 3);
+        let cfg_for_task = cfg.clone();
+        let judged = match tokio::task::spawn_blocking(move || {
+            let state = serde_json::json!({ "goal": goal });
+            crate::typesafe::harness::judge_calls(
+                &cfg_for_task,
+                &state,
+                &items,
+                crate::typesafe::harness::JudgeScope::Post,
+            )
+        })
+        .await
+        {
+            Ok(j) => j,
+            Err(_) => return,
+        };
+        for (n, j) in judged.iter().enumerate() {
+            let Some(source) = worth.get(n).and_then(|i| results.get(*i)) else {
+                continue;
+            };
+            if j.failed() {
+                let _ = tx.send(AgentEvent::Status(format!(
+                    "typesafe · {} result looks {} ({}) - verify before relying on it",
+                    source.tool,
+                    j.verification
+                        .raw()
+                        .map(|v| v.as_str())
+                        .unwrap_or("unclear"),
+                    j.verification
+                        .confidence
+                        .map(|c| format!("{c:.2}"))
+                        .unwrap_or_else(|| "-".into())
+                )));
+            }
+        }
     }
 
     /// Run a contiguous run of `agent` calls concurrently, emitting their
@@ -3299,8 +3766,14 @@ mod tests {
         // as a hard Budget stop - window overflow is recoverable and is
         // handled by compact-and-retry in the loop.
         let usage = UsageTracker::new("t".into(), "m".into(), PathBuf::from("."));
-        let block =
-            preflight_request_budget(&cfg, &usage, "test-no-provider", "zz-no-model", 2_000_000, 8_192);
+        let block = preflight_request_budget(
+            &cfg,
+            &usage,
+            "test-no-provider",
+            "zz-no-model",
+            2_000_000,
+            8_192,
+        );
         assert!(matches!(
             block,
             Some(PreflightBlock::ContextWindow(_)) | None
@@ -3321,8 +3794,9 @@ mod tests {
         let usage = UsageTracker::new("preflight-window".into(), "m".into(), PathBuf::from("."));
         // A local provider carries no catalog window, so the configured
         // context_window is authoritative — deterministic, no cache reads.
-        let block = preflight_request_budget(&cfg, &usage, "llamacpp", "zz-local-model", 3_000, 8_192)
-            .expect("over-window request must be blocked");
+        let block =
+            preflight_request_budget(&cfg, &usage, "llamacpp", "zz-local-model", 3_000, 8_192)
+                .expect("over-window request must be blocked");
         match block {
             PreflightBlock::ContextWindow(msg) => {
                 assert!(msg.contains("context window"), "message: {msg}");
@@ -4273,6 +4747,59 @@ fn record_auxiliary_telemetry(session_id: &str) {
             },
         );
     }
+    // TypeSafe/Jev judgments are billed work outside the primary chat call, and
+    // they buy back tokens the primary call does not have to carry. Recorded as a
+    // delta so the session tally the TUI chip shows stays cumulative.
+    let jev = crate::typesafe::telemetry::take_delta();
+    if !jev.is_empty() {
+        // Where it really came from: a local bridge and the hosted API must never
+        // be confused in the audit trail.
+        let ts_cfg = crate::config::load_config()
+            .map(|c| c.typesafe)
+            .unwrap_or_default();
+        let route = if jev.route.is_empty() {
+            crate::typesafe::client::effective_base_url(&ts_cfg)
+        } else {
+            jev.route.clone()
+        };
+        let model = if !jev.model.is_empty() {
+            jev.model.clone()
+        } else if ts_cfg.model.trim().is_empty() {
+            crate::typesafe::client::DEFAULT_MODEL.to_string()
+        } else {
+            ts_cfg.model.trim().to_string()
+        };
+        receipt::record(
+            session_id,
+            receipt::Event::AuxiliaryInference {
+                purpose: "typesafe system one judgments".into(),
+                route,
+                model,
+                processing: "remote".into(),
+                input_tokens: jev.input_tokens,
+                output_tokens: jev.output_tokens,
+                cost_usd: None,
+                cost_provenance: "typesafe: provider-reported usage; pricing not published by \
+                                  the endpoint"
+                    .into(),
+                outcome: format!(
+                    "requests {} · questions {} · decisions {} · escalations {} · gated {} · \
+                     pruned {} call(s)/{} result(s) · ~{} tokens kept out of context · \
+                     frontier compaction calls avoided {} · failures {}",
+                    jev.requests,
+                    jev.questions,
+                    jev.decisions,
+                    jev.escalations,
+                    jev.gated_calls,
+                    jev.pruned_calls,
+                    jev.pruned_results,
+                    jev.tokens_saved(),
+                    jev.frontier_calls_avoided,
+                    jev.failures,
+                ),
+            },
+        );
+    }
 }
 
 /// A spawned subagent run: its report text plus the tokens it spent.
@@ -4721,6 +5248,24 @@ fn resolve_subagent_target(
         let _ = tx.send(AgentEvent::Status(message.clone()));
         return SubagentTarget::Unavailable { message };
     };
+    // A sidecar (TypeSafe · Jev) has a credential like a provider but cannot
+    // serve a chat request: it answers typed questions, not turns. Point the
+    // caller at the thing that actually works instead of failing upstream.
+    if crate::providers::is_sidecar_provider(prov.id) {
+        let message = format!(
+            "`{}` is not a chat provider - it is the {} boost layer, and it has no model to run \
+             a subagent on. Use tool `typesafe` (or `/typesafe`) for typed judgments, `route` to \
+             pick a model, or name a real provider here.",
+            prov.name,
+            if prov.id == "typesafe" {
+                "TypeSafe (Jev) System One"
+            } else {
+                "sidecar"
+            }
+        );
+        let _ = tx.send(AgentEvent::Status(message.clone()));
+        return SubagentTarget::Unavailable { message };
+    }
     // Same provider as parent — or same account family (google / antigravity /
     // google-oauth all share one Google OAuth session) — means the model is
     // calling a provider the user is *already using*. Skip every bit of the
@@ -5128,8 +5673,57 @@ pub async fn compact_session(
 ) -> Result<String> {
     snapshot_before_compact(session);
 
-    // Thin old tool bodies for the summarizer so we don't re-pay huge dumps.
+    // Jev-scored compaction first. This is the cheapest release valve in the
+    // harness: Jev is shown the whole conversation with tool results replaced by
+    // short notes, and asked two questions per tool call - does the call still
+    // matter, does its result still need to be kept verbatim. Dead calls go,
+    // survivors are untouched, and text is never rewritten. If it frees enough
+    // context, the summarizing model call is skipped entirely: no frontier
+    // tokens, no lossy summary, and the working transcript stays readable.
     let mut items = session.input_items.clone();
+    let mut jev_note: Option<String> = None;
+    let ts = runner.config.typesafe.clone();
+    if ts.enabled && ts.compaction.enabled {
+        let opts = crate::typesafe::compact::CompactOptions::from_config(&ts.compaction)
+            .with_goal(typesafe_goal(session, ts.compaction.goal_prompts));
+        let for_task = items.clone();
+        let cfg = ts.clone();
+        let outcome = tokio::task::spawn_blocking(move || {
+            crate::typesafe::compact::compact_items(&cfg, &for_task, &opts)
+        })
+        .await
+        .ok()
+        .flatten();
+        if let Some(outcome) = outcome {
+            let pretty = outcome.stats.summary();
+            if ts.compaction.replace_summary
+                && outcome.stats.reduction_ratio() >= ts.compaction.min_reduction
+            {
+                let mut new_items = vec![user_text_item(&format!(
+                    "[Context pruned by Jev-scored compaction - no summary was written, and \
+                     nothing below was rewritten. {} stale tool call(s) and {} result(s) were \
+                     removed ({}); everything remaining is verbatim. The full transcript is in \
+                     the precompact backup, and any removed result can be reproduced by \
+                     re-running its tool.]\n\n{pretty}",
+                    outcome.stats.dropped_calls,
+                    outcome.stats.dropped_results,
+                    outcome.decision_counts()
+                ))];
+                new_items.extend(outcome.items);
+                let kept = new_items.len();
+                session.input_items = new_items;
+                runner.persist_session(session);
+                return Ok(format!(
+                    "[compact: jev-scored, no summary · {pretty} · {kept} items kept verbatim · \
+                     precompact bak written]"
+                ));
+            }
+            items = outcome.items;
+            jev_note = Some(pretty);
+        }
+    }
+
+    // Thin old tool bodies for the summarizer so we don't re-pay huge dumps.
     let thinned = thin_tool_bodies_for_compact(
         &mut items,
         runner.config.compact_tool_body_max_chars as usize,
@@ -5314,7 +5908,10 @@ pub async fn compact_session(
     Ok(format!(
         "{summary}\n\n[compact: thinned {thinned} tool bodies · kept {kept} recent dialogue items · \
          {tail_kept} working items · precompact bak written · context_store vars preserved · \
-         {strategy}]"
+         {strategy}{}]",
+        jev_note
+            .map(|n| format!(" · jev pre-pass: {n}"))
+            .unwrap_or_default()
     ))
 }
 
@@ -5455,6 +6052,174 @@ fn thin_tool_bodies_for_compact(
     n
 }
 
+/// One completed tool call from this response, kept for the post-execution
+/// judge. Bodies stay verbatim; this is a reference, not a rewrite.
+pub(crate) struct TsToolResult {
+    pub tool: String,
+    pub args: String,
+    pub body: String,
+    pub ok: bool,
+}
+
+/// The ongoing job as Jev should see it: the last `prompts` user turns and any
+/// assistant reply, bounded.
+fn typesafe_goal(session: &Session, prompts: usize) -> String {
+    let items = recent_dialogue_items(&session.messages, prompts);
+    let mut out = String::new();
+    for item in items {
+        let text = item
+            .get("content")
+            .and_then(Value::as_array)
+            .and_then(|a| a.first())
+            .and_then(|p| p.get("text"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if text.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&crate::typesafe::harness::judge_preview(&text, 1_500));
+    }
+    out
+}
+
+/// Code-built facts for the gate: for each pending call, the index of an
+/// identical earlier call whose result is still in context, and how many times
+/// that exact call has already failed.
+///
+/// This is deliberately code, not a question: Jev is only asked to judge the
+/// cases where a duplicate actually exists.
+fn typesafe_call_facts(calls: &[FunctionCallRef], items: &[Value]) -> Vec<(Option<usize>, u32)> {
+    let mut order: Vec<(String, String, String)> = Vec::new(); // call_id, name, args
+    let mut failure_of: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    for item in items {
+        let kind = item.get("type").and_then(Value::as_str).unwrap_or("");
+        let call_id = item.get("call_id").and_then(Value::as_str).unwrap_or("");
+        match kind {
+            "function_call" => order.push((
+                call_id.to_string(),
+                item.get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                item.get("arguments")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+            )),
+            "function_call_output" => {
+                let failed = item
+                    .get("output")
+                    .and_then(Value::as_str)
+                    .map(|o| o.trim_start().starts_with("error:"))
+                    .unwrap_or(false);
+                failure_of.insert(call_id.to_string(), failed);
+            }
+            _ => {}
+        }
+    }
+    calls
+        .iter()
+        .map(|c| {
+            let want = normalize_args(&c.arguments);
+            let mut dup: Option<usize> = None;
+            let mut failures = 0u32;
+            for (i, (id, name, args)) in order.iter().enumerate() {
+                if name != &c.name || normalize_args(args) != want {
+                    continue;
+                }
+                match failure_of.get(id) {
+                    Some(true) => failures += 1,
+                    Some(false) => {
+                        if dup.is_none() {
+                            dup = Some(i);
+                        }
+                    }
+                    None => {}
+                }
+            }
+            (dup, failures)
+        })
+        .collect()
+}
+
+/// Canonical form of a tool call's arguments, for "is this the same call?".
+///
+/// Structural when the arguments parse as JSON (`{"a": 1}` and `{"a":1}` are the
+/// same call; key order does not matter), with a whitespace collapse as the
+/// fallback for tools that take raw text. Whitespace *inside* a JSON string is
+/// significant and stays significant.
+fn normalize_args(args: &str) -> String {
+    match serde_json::from_str::<Value>(args) {
+        Ok(v) => v.to_string(),
+        Err(_) => args.split_whitespace().collect::<Vec<_>>().join(" "),
+    }
+}
+
+/// This turn's tool trace as one-line evidence: what was called, and roughly
+/// what came back. Code-built, bounded, and never the whole repository.
+fn typesafe_trace_evidence(items: &[Value], max: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for item in items.iter().rev() {
+        let kind = item.get("type").and_then(Value::as_str).unwrap_or("");
+        match kind {
+            "function_call_output" => {
+                let body = item.get("output").and_then(Value::as_str).unwrap_or("");
+                let failed = body.trim_start().starts_with("error:");
+                out.push(format!(
+                    "{}result: {}",
+                    if failed { "FAILED " } else { "" },
+                    crate::typesafe::harness::judge_preview(body, 200)
+                ));
+            }
+            "function_call" => {
+                out.push(format!(
+                    "call {} {}",
+                    item.get("name").and_then(Value::as_str).unwrap_or("?"),
+                    crate::typesafe::harness::judge_preview(
+                        item.get("arguments").and_then(Value::as_str).unwrap_or(""),
+                        160
+                    )
+                ));
+            }
+            _ => {}
+        }
+        if out.len() >= max {
+            break;
+        }
+    }
+    out.reverse();
+    out
+}
+
+/// Most times the skill layer may correct a single turn. A triggered skill
+/// should steer the work, not nag it.
+const MAX_SKILL_NUDGES: u8 = 2;
+
+/// Tools whose gate/verdict judgment would be noise rather than signal.
+///
+/// These are bookkeeping and self-description: a judgment tool call cannot be
+/// "risky" or "needs a human", a skill load cannot fail in an informative way,
+/// and a todo update is not work. Skipping them saves Jev questions without
+/// touching the cases that matter (repeated reads, retried commands, long
+/// result bodies). Deduplication still applies to real tools.
+const TYPESAFE_META_TOOLS: &[&str] = &["typesafe", "skill", "todo_write"];
+
+/// Should the gate/verdict judgment cover this tool?
+fn typesafe_judges_tool(tool: &str) -> bool {
+    !TYPESAFE_META_TOOLS.contains(&tool)
+}
+
+fn call_arguments(calls: &[FunctionCallRef], call_id: &str) -> String {
+    calls
+        .iter()
+        .find(|c| c.call_id == call_id)
+        .map(|c| c.arguments.clone())
+        .unwrap_or_default()
+}
+
 /// Last `keep_user_turns` user messages and any assistant reply immediately after each,
 /// as Responses-style user text items (lossy but preserves recent intent).
 fn recent_dialogue_items(
@@ -5486,6 +6251,147 @@ fn recent_dialogue_items(
         }
     }
     out
+}
+
+#[cfg(test)]
+mod jev_compaction_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn call(id: &str) -> Value {
+        json!({"type":"function_call","call_id":id,"name":"read_file","arguments":"{\"path\":\"a.rs\"}"})
+    }
+    fn call_args(id: &str, tool: &str, args: &str) -> Value {
+        json!({"type":"function_call","call_id":id,"name":tool,"arguments":args})
+    }
+    fn output(id: &str, body: &str) -> Value {
+        json!({"type":"function_call_output","call_id":id,"output":body})
+    }
+
+    /// With no key the Jev pre-pass must be a pure no-op: the caller keeps its
+    /// normal path, and nothing is dropped.
+    #[test]
+    fn jev_compaction_is_absent_without_a_key() {
+        let cfg = crate::config::TypesafeConfig {
+            enabled: true,
+            api_key: String::new(),
+            ..crate::config::TypesafeConfig::default()
+        };
+        // Force the ambient environment out of the way so this is deterministic.
+        for var in crate::typesafe::client::KEY_ENVS {
+            std::env::remove_var(var);
+        }
+        let items = vec![call("c1"), output("c1", "contents of a.rs")];
+        let opts = crate::typesafe::compact::CompactOptions::from_config(&cfg.compaction);
+        if crate::typesafe::client::api_key(&cfg).is_none() {
+            assert!(
+                crate::typesafe::compact::compact_items(&cfg, &items, &opts).is_none(),
+                "no key must never prune"
+            );
+        }
+    }
+
+    /// Meta tools are not worth a judgment: gating a judgment call cannot find
+    /// risk, and grading a skill load cannot find a failure. Real tools - reads,
+    /// shell, edits - always are.
+    #[test]
+    fn meta_tools_are_left_out_of_the_judgments() {
+        for t in ["typesafe", "skill", "todo_write"] {
+            assert!(!typesafe_judges_tool(t), "{t} is bookkeeping");
+        }
+        for t in [
+            "read_file",
+            "bash",
+            "grep",
+            "edit_file",
+            "web_fetch",
+            "agent",
+        ] {
+            assert!(typesafe_judges_tool(t), "{t} must still be judged");
+        }
+    }
+
+    /// Compaction's candidate facts are built in code, from the live transcript.
+    #[test]
+    fn call_facts_find_duplicates_and_repeated_failures() {
+        let items = vec![
+            call_args("c1", "read_file", "{\"path\":\"a.rs\"}"),
+            output("c1", "first contents"),
+            call_args("c2", "bash", "{\"command\":\"cargo test\"}"),
+            output("c2", "error: test failed"),
+        ];
+        let pending = vec![
+            // Same file as c1 -> a duplicate with a usable result.
+            FunctionCallRef {
+                call_id: "n1".into(),
+                name: "read_file".into(),
+                // Structurally identical, formatted differently.
+                arguments: "{ \"path\" : \"a.rs\" }".into(),
+            },
+            // Same command as c2, which failed -> a repeat of a failure.
+            FunctionCallRef {
+                call_id: "n2".into(),
+                name: "bash".into(),
+                arguments: "{\"command\":\"cargo test\"}".into(),
+            },
+            FunctionCallRef {
+                call_id: "n3".into(),
+                name: "read_file".into(),
+                arguments: "{\"path\":\"unseen.rs\"}".into(),
+            },
+        ];
+        let facts = typesafe_call_facts(&pending, &items);
+        assert!(
+            facts[0].0.is_some(),
+            "identical earlier call is a candidate"
+        );
+        assert_eq!(facts[0].1, 0, "that earlier call succeeded");
+        assert_eq!(facts[1].1, 1, "one prior identical failure");
+        assert!(
+            facts[1].0.is_none(),
+            "a failed call is not a usable duplicate"
+        );
+        assert!(facts[2].0.is_none(), "nothing to compare against");
+        assert_eq!(facts[2].1, 0);
+    }
+
+    #[test]
+    fn the_same_call_is_recognised_through_formatting() {
+        let items = vec![
+            json!({"type":"function_call","call_id":"c1","name":"bash","arguments":"{\"command\":\"cargo test\",\"timeout\":10}"}),
+            output("c1", "error: test failed"),
+            // Same call, key order and spacing differ: still the same call.
+            json!({"type":"function_call","call_id":"c2","name":"bash","arguments":"{ \"timeout\": 10, \"command\": \"cargo test\" }"}),
+            output("c2", "error: test failed"),
+        ];
+        let pending = vec![FunctionCallRef {
+            call_id: "n1".into(),
+            name: "bash".into(),
+            arguments: "{\"command\":\"cargo test\",\"timeout\":10}".into(),
+        }];
+        let facts = typesafe_call_facts(&pending, &items);
+        assert_eq!(facts[0].1, 2, "both earlier attempts count as failures");
+        assert!(
+            facts[0].0.is_none(),
+            "a failed call is not a usable duplicate"
+        );
+    }
+
+    /// The trace evidence handed to the skill check is bounded and one-lined.
+    #[test]
+    fn trace_evidence_is_bounded() {
+        let mut items = Vec::new();
+        for i in 0..40 {
+            items.push(call(&format!("c{i}")));
+            items.push(output(&format!("c{i}"), &"x".repeat(5_000)));
+        }
+        let evidence = typesafe_trace_evidence(&items, 24);
+        assert_eq!(evidence.len(), 24);
+        assert!(
+            evidence.iter().all(|e| e.chars().count() < 600),
+            "every line is bounded"
+        );
+    }
 }
 
 #[cfg(test)]

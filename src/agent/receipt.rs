@@ -135,7 +135,57 @@ pub fn path(session_id: &str) -> PathBuf {
     receipts_dir().join(format!("{safe}.jsonl"))
 }
 
+/// Cache handle for the tail of a receipt file.
+fn tail_cache(
+) -> &'static std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, ((u64, u64), String, u64)>>
+{
+    static TAIL: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, ((u64, u64), String, u64)>>,
+    > = std::sync::OnceLock::new();
+    TAIL.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// (byte length, mtime nanos) - the cache key for a file's tail.
+fn file_stamp(p: &Path) -> (u64, u64) {
+    std::fs::metadata(p)
+        .map(|m| {
+            let mtime = m
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_nanos() as u64)
+                .unwrap_or(0);
+            (m.len(), mtime)
+        })
+        .unwrap_or((0, 0))
+}
+
+/// Remember the tail a write just produced. Without this the cache could never
+/// hit: every append changes the file, so the next lookup's stamp always differs
+/// from the one cached before the write.
+fn remember_tail(p: &Path, hash: &str, next_seq: u64) {
+    if let Ok(mut g) = tail_cache().lock() {
+        g.insert(p.to_path_buf(), (file_stamp(p), hash.to_string(), next_seq));
+    }
+}
+
 fn tail_hash_and_seq(p: &Path) -> (String, u64) {
+    // This runs before every append, i.e. several times per tool call, and a full
+    // read+parse of a long receipt per append is quadratic. The tail is cached and
+    // validated by file length: a different length (another writer, truncation)
+    // falls back to the full read, which is always correct.
+    // Keyed by (length, mtime): length alone would serve a stale tail if a
+    // truncated-then-regrown file happened to land on the same byte count, and a
+    // stale prev-hash breaks the chain for every later entry.
+    let stamp = file_stamp(p);
+    let cache = tail_cache();
+    if let Ok(g) = cache.lock() {
+        if let Some((cached_stamp, hash, seq)) = g.get(p) {
+            if *cached_stamp == stamp {
+                return (hash.clone(), *seq);
+            }
+        }
+    }
     let text = std::fs::read_to_string(p).unwrap_or_default();
     let mut last: Option<Entry> = None;
     for line in text.lines() {
@@ -146,10 +196,14 @@ fn tail_hash_and_seq(p: &Path) -> (String, u64) {
             last = Some(e);
         }
     }
-    match last {
+    let out = match last {
         Some(e) => (e.hash, e.seq + 1),
         None => (String::new(), 1),
+    };
+    if let Ok(mut g) = cache.lock() {
+        g.insert(p.to_path_buf(), (stamp, out.0.clone(), out.1));
     }
+    out
 }
 
 /// Append `event` to the session receipt, chaining from the last entry.
@@ -181,6 +235,9 @@ fn record_at(p: &Path, event: Event) {
         {
             let _ = writeln!(f, "{line}");
         }
+        // The write is what advances the chain: cache the tail it produced so the
+        // next append in this process is a lookup instead of a full re-read.
+        remember_tail(p, &entry.hash, entry.seq.saturating_add(1));
     }
 }
 
@@ -192,6 +249,39 @@ pub fn verify(session_id: &str) -> VerifyResult {
 #[cfg(test)]
 mod export_tests {
     use super::*;
+
+    #[test]
+    fn append_chain_verifies_and_tail_cache_hits() {
+        // Regression guard for a cache that could never hit: it was populated
+        // *before* the write, and every write changes the (length, mtime) key the
+        // next lookup compares against, so every append re-read the whole file.
+        let p = std::env::temp_dir().join(format!(
+            "nur-receipt-{}.jsonl",
+            uuid::Uuid::new_v4().simple()
+        ));
+        for i in 0..3 {
+            record_at(
+                &p,
+                Event::Tool {
+                    name: format!("t{i}"),
+                    args_sha256: None,
+                    result_sha256: "x".into(),
+                    ok: true,
+                },
+            );
+            let stamp = file_stamp(&p);
+            let cached = tail_cache().lock().unwrap().get(&p).cloned();
+            assert_eq!(
+                cached.as_ref().map(|c| c.0),
+                Some(stamp),
+                "tail cache must describe the file the write just produced (append {i})"
+            );
+        }
+        let v = verify_at(&p);
+        assert!(v.ok, "chain broke at {:?}", v.first_bad);
+        assert_eq!(v.entries, 3);
+        let _ = std::fs::remove_file(&p);
+    }
 
     #[test]
     fn spans_from_chain_shapes_each_event() {

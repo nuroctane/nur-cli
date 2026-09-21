@@ -107,7 +107,10 @@ pub fn find_python() -> Option<String> {
         .or_else(|| find_bin("py"))
 }
 
-fn with_py_launcher(py: &str, cmd: &mut Command) {
+/// `py` on Windows needs `-3` before the script, otherwise it can resolve to a
+/// Python 2 launcher. Shared with the local-engine bridge, which has the same
+/// shape of helper script.
+pub(crate) fn with_py_launcher(py: &str, cmd: &mut Command) {
     if Path::new(py)
         .file_stem()
         .and_then(|s| s.to_str())

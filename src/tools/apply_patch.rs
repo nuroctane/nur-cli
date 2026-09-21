@@ -182,6 +182,18 @@ fn apply_unified_diff(original: &str, patch: &str) -> Result<String> {
                     );
                 } else if lines.is_empty() && old_lines_in_hunk.iter().all(|l| l.is_empty()) {
                     lines = new_lines_in_hunk;
+                } else if start + old_lines_in_hunk.len() > lines.len() {
+                    // Reachable on an empty file whose hunk carries non-empty old
+                    // lines: both branches above decline, and indexing here would
+                    // panic. Treat it as a mismatch and let the unique search
+                    // report a clean error.
+                    let found = find_slice_unique(&lines, &old_lines_in_hunk, old_start)?;
+                    apply_at(
+                        &mut lines,
+                        found,
+                        old_lines_in_hunk.len(),
+                        &new_lines_in_hunk,
+                    );
                 } else {
                     let slice = &lines[start..start + old_lines_in_hunk.len()];
                     let matches = slice

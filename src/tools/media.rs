@@ -119,7 +119,10 @@ mod provenance_tests {
         // load_media decodes nothing here; mime by extension.
         drop(user);
         let queued = queue_image_for_vision(&img).unwrap();
-        assert!(queued.user_pasted, "queue_image_for_vision marks user origin");
+        assert!(
+            queued.user_pasted,
+            "queue_image_for_vision marks user origin"
+        );
         let left = take_pending_media();
         assert_eq!(left.len(), 1);
         assert!(left[0].user_pasted);
@@ -560,7 +563,9 @@ impl Tool for ExtractFrames {
         let pattern = out_dir.join("frame_%02d.jpg");
         // Scale down wide frames so vision tokens stay reasonable.
         let vf = format!("fps={fps},scale='min(1280,iw)':-2");
-        let status = Command::new(&ffmpeg)
+        // Bounded: `.status()` waits forever on a stalled ffmpeg (odd container,
+        // huge file) and inherits stdin unless told otherwise.
+        let mut child = Command::new(&ffmpeg)
             .args([
                 "-y",
                 "-i",
@@ -573,10 +578,29 @@ impl Tool for ExtractFrames {
                 "3",
                 &pattern.to_string_lossy(),
             ])
+            .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .status()
+            .stderr(std::process::Stdio::null())
+            .spawn()
             .map_err(|e| NurError::Tool(format!("ffmpeg spawn failed: {e}")))?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if std::time::Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(NurError::Tool(format!(
+                        "ffmpeg timed out after 120s extracting frames from {}",
+                        full.display()
+                    )));
+                }
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(100)),
+                Err(e) => {
+                    return Err(NurError::Tool(format!("ffmpeg wait failed: {e}")));
+                }
+            }
+        };
 
         if !status.success() {
             return Err(NurError::Tool(format!(

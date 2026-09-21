@@ -170,17 +170,56 @@ Doctor / optional one-shot compress for [Headroom](https://github.com/headroomla
 Inline compression of large tool results is **on by default** (`[headroom] enabled`);
 missing install no-ops. Also `/headroom`.
 
+### `context`
+
+RLM prompt-as-variable store. Perception actions (`list` · `peek` · `slice` ·
+`search` · `inventory`) are read-only; **`register` and `delete` write and remove
+files under `~/.nur/context-store`, so they need approval** (Manual mode asks,
+Plan mode blocks) rather than riding the read-only shortcut. `anydoc` splits the
+same way: `convert`/`read`/`status` are perception, anything that registers a
+converted document is not.
+
+### `typesafe`
+
+System One judgments ([TypeSafe](https://docs.typesafe.ai), flagship model **Jev**)
+for the decisions an agent loop is already making: which tool or model, how risky,
+is this relevant, did that work, does this need a human. Actions: `ask` (batched -
+any mix of `choice` / `noul` / `score` in one request) · `choice` · `noul` · `score`
+· `pick` · `rank` · `classify` · `risk` · `verify` · `prune` · `spam` ·
+`needs_human` · `route` · `reset` · `status`. Also `/typesafe` · `/jev`.
+
+Options come from code (the caller's candidate list), answers come back with
+probabilities, and a `confidence` below `[typesafe] escalate_confidence` is an
+escalation rather than a judgment. Provider-agnostic: this boosts whichever model
+you are using. Key from `TYPESAFE_API_KEY`, `/auth` → `TypeSafe · Jev`, or
+`~/.nur/typesafe.key`. Details: [typesafe.md](./typesafe.md).
+
 ### `optmem`
 
 Permanent memory via [OptMem](https://github.com/VictorTaelin/OptMem) at `~/.optmem`
-(upstream path, not under `~/.nur`). Actions: `doctor` · `wake` · `note` · `nap` ·
-`recall` · `zoom` · `forget` · `config`. Also `/optmem` · `/memo`.
+(upstream path, not under `~/.nur`). Actions: `status` · `doctor` · `wake` · `note` ·
+`nap` · `recall` · `zoom` · `forget` · `config`. Also `/optmem` · `/memo`.
+
+**`nap` is housekeeping, not a task queue.** Upstream renders one pending
+compression block at a time and prints its instructions again after every applied
+block, so applying them one at a time reads as an endless instruction chain
+(observed live: six applied blocks before the agent stopped the chain by hand).
+nur therefore never forwards upstream's prompt as an imperative:
+
+- `nap` shows the next block, the count, and says plainly that nothing depends on it;
+- `nap` with `range` + `text` applies that one block;
+- `nap` with `lines=[…]` (one line per block, in order, max 24) **drains several in
+  one call** - the normal way to finish the queue;
+- after `[typesafe]`-style housekeeping limits (two single-block applies in a row),
+  nur stops showing the next block and points at `lines=[…]` instead.
+
+Nothing about the queue blocks a turn, and a non-empty queue is not an error.
 
 ### `egaki`
 
 Image/video generation via [egaki](https://github.com/remorses/egaki). Prefer
-`egaki login --provider chatgpt` when using a ChatGPT subscription. Also `/egaki`
-· `/image`.
+`egaki login --provider chatgpt` when using a ChatGPT subscription. Slash:
+`/egaki` (bare `/image` attaches a file for vision, it does not generate).
 
 ### `akarso`
 
@@ -196,6 +235,9 @@ Perceive and control the user's **real, default browser** — Arc, Chrome, Edge,
 Brave, or any Chromium browser — with login state preserved, via
 [agent-browser-cli](https://github.com/sleepinginsummer/agent-browser-cli).
 Perception is free: `tabs`, `scan`, `snapshot` (page → `@e` element refs),
+`pick` (the snapshot's indexed table → Jev chooses the operation and the target
+in one request, then you execute with `click`/`fill`; it refuses to pick when
+fewer than two elements parse),
 `tabtree`, `console`, `network`, `status`. Control needs approval in manual
 mode and is blocked in plan mode: `open`, `click`, `fill`, `send_keys`, `exec`,
 `close`. `screenshot` is plan-safe perception — pair it with `look` for vision.

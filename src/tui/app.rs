@@ -239,6 +239,11 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/optmem", "OptMem permanent memory (~/.optmem): wake | note | nap | recall"),
     ("/memo", "alias of /optmem"),
     ("/headroom", "context compression status / doctor (inline default on)"),
+    (
+        "/typesafe",
+        "Jev boost layer (TypeSafe System One): status | on | off | ask <state>",
+    ),
+    ("/jev", "alias of /typesafe"),
     ("/prewalk", "OMP-style: strong model plans, then smol at first edit - on|off|status|into <model>|reset"),
     ("/egaki", "image/video gen via egaki (login --provider chatgpt supported)"),
     ("/image", "/image <path> - show an image inline + attach it for vision"),
@@ -1153,16 +1158,22 @@ pub struct LoginModal {
 
 impl LoginModal {
     /// Providers matching the current filter (name / id / note, case-insensitive).
+    ///
+    /// Sidecar entries (TypeSafe · Jev) are pinned first: they carry a
+    /// credential like any provider, but they are a boost layer for every
+    /// provider rather than a model you can chat with.
     pub fn filtered(&self) -> Vec<&'static crate::providers::Provider> {
         let f = self.filter.trim().to_lowercase();
-        crate::providers::PROVIDERS
+        let matches = |p: &&'static crate::providers::Provider| {
+            f.is_empty()
+                || p.name.to_lowercase().contains(&f)
+                || p.id.to_lowercase().contains(&f)
+                || p.note.to_lowercase().contains(&f)
+        };
+        crate::providers::sidecar_providers()
             .iter()
-            .filter(|p| {
-                f.is_empty()
-                    || p.name.to_lowercase().contains(&f)
-                    || p.id.to_lowercase().contains(&f)
-                    || p.note.to_lowercase().contains(&f)
-            })
+            .chain(crate::providers::PROVIDERS.iter())
+            .filter(matches)
             .collect()
     }
 
@@ -1430,7 +1441,12 @@ impl ModelPicker {
             .filter(|m| {
                 f.is_empty()
                     || m.to_lowercase().contains(&f)
+                    // Match the friendly alias too - it is what the list renders,
+                    // so typing it must not say "no models match".
                     || crate::providers::opencode_model_alias(m)
+                        .map(|a| a.to_lowercase().contains(&f))
+                        .unwrap_or(false)
+                    || crate::providers::nous_model_alias(m)
                         .map(|a| a.to_lowercase().contains(&f))
                         .unwrap_or(false)
             })
@@ -6199,6 +6215,17 @@ impl App {
             }
         };
         let id = provider.id.to_string();
+        // The failover chain is a list of chat routes. A sidecar cannot serve a
+        // request, so adding it would leave a hole in every failover attempt.
+        if crate::providers::is_sidecar_provider(&id) {
+            if let Some(m) = &mut self.login {
+                m.error = Some(format!(
+                    "{} is a boost layer, not a failover target - it has no chat model",
+                    provider.name
+                ));
+            }
+            return;
+        }
         if id == self.cfg.provider {
             if let Some(m) = &mut self.login {
                 m.error = Some(format!("{} is your active provider", provider.name));
@@ -6998,17 +7025,33 @@ impl App {
         }
         let picks = m.filtered();
         if let Some(p) = picks.get(m.sel) {
+            let sidecar = crate::providers::is_sidecar_provider(p.id);
             m.provider_id = p.id.to_string();
             m.error = None;
             m.buf.clear();
-            m.can_import = true;
+            // Vendor-CLI session import stays available for real providers; a
+            // sidecar has no CLI session to import, so it skips the method
+            // window entirely.
+            m.can_import = !sidecar;
             m.method_sel = 0;
             // `/auth` captures a provider-scoped choice without changing the
             // active provider. `/provider` uses the same method window but
             // activates the provider after success.
-            m.fallback_key = m.manage_auth;
+            //
+            // A sidecar is always captured this way: TypeSafe/Jev is a boost
+            // layer, so collecting its key must never make it the active model
+            // route. It goes straight to the key stage - a key is its only
+            // credential method.
+            m.fallback_key = m.manage_auth || sidecar;
             m.form_scroll = 0;
-            m.stage = LoginStage::Method;
+            m.stage = if sidecar {
+                LoginStage::Key
+            } else {
+                LoginStage::Method
+            };
+            // No error note here: the key modal frames a sidecar as a
+            // "boost layer key" with its own hint line, so the error slot
+            // stays free for real problems (a too-short key, a bad paste).
         }
     }
 
@@ -7743,10 +7786,15 @@ impl App {
                 }
             }
             let name = provider.name.to_string();
-            self.finish_scoped_credential(
-                &provider_id,
-                format!("auth · {name} · API key saved as the selected credential"),
-            );
+            let message = if crate::providers::is_sidecar_provider(&provider_id) {
+                format!(
+                    "typesafe · Jev key saved - System One judgments now boost every provider \
+                     ({name})"
+                )
+            } else {
+                format!("auth · {name} · API key saved as the selected credential")
+            };
+            self.finish_scoped_credential(&provider_id, message);
             return;
         }
 

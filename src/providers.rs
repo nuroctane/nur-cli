@@ -77,6 +77,43 @@ pub const CLOUD_CODE_CLIENT_METADATA: &str =
 /// The three catalog ids that share Google's OAuth login and Cloud Code backend.
 pub const GOOGLE_FAMILY_IDS: &[&str] = &["google", "antigravity", "google-oauth"];
 
+/// TypeSafe System One (**Jev**) - pinned above the provider list.
+///
+/// Deliberately **not** a member of [`PROVIDERS`]: it cannot serve a chat
+/// request, so it must never become the active provider. It is a *boost layer*:
+/// one credential that gives every provider's model typed judgments (which tool,
+/// which skill, what stays in context, what needs a human) instead of paying a
+/// frontier model for the same if statements. See [`crate::typesafe`].
+///
+/// Its key is stored like any other provider credential
+/// (`nur auth login --provider typesafe`, or `TYPESAFE_API_KEY`), which is why
+/// `/login` collects it through the normal key flow - with the active provider
+/// left untouched.
+pub const TYPESAFE_PROVIDER: Provider = Provider {
+    id: "typesafe",
+    name: "TypeSafe · Jev",
+    base_url: "https://api.typesafe.ai/v1/systemone",
+    default_model: "jev-latest",
+    env_key: "TYPESAFE_API_KEY",
+    style: ApiStyle::ChatCompletions,
+    note: "System One judgments · boosts every provider (not a chat model)",
+    key_optional: false,
+    browser_auth: false,
+};
+
+/// Entries pinned at the top of `/login` with special borders.
+pub const SIDECAR_PROVIDERS: &[Provider] = &[TYPESAFE_PROVIDER];
+
+/// Is this provider a sidecar/boost layer rather than a chat model?
+pub fn is_sidecar_provider(id: &str) -> bool {
+    SIDECAR_PROVIDERS.iter().any(|p| p.id == id)
+}
+
+/// Sidecar entries, in presentation order (pinned above the catalog).
+pub fn sidecar_providers() -> &'static [Provider] {
+    SIDECAR_PROVIDERS
+}
+
 /// Is this a Google-family provider id (google / antigravity / google-oauth)?
 pub fn is_google_family(provider_id: &str) -> bool {
     GOOGLE_FAMILY_IDS.contains(&provider_id)
@@ -1530,7 +1567,13 @@ pub const PROVIDERS: &[Provider] = &[
 
 /// Look up a provider by id.
 pub fn by_id(id: &str) -> Option<&'static Provider> {
-    PROVIDERS.iter().find(|p| p.id == id)
+    PROVIDERS
+        .iter()
+        .find(|p| p.id == id)
+        // Sidecar entries (TypeSafe/Jev) are not part of the chat catalog, but
+        // they are still credential-bearing providers: `/login`, `nur auth
+        // login --provider typesafe` and the key store all resolve them here.
+        .or_else(|| SIDECAR_PROVIDERS.iter().find(|p| p.id == id))
 }
 
 /// Map a natural-language provider name to a catalog provider. Accepts catalog
@@ -1851,6 +1894,12 @@ pub fn delegated_providers_in_text(text: &str) -> Vec<String> {
         // cue — so a bare mention in a cue-free clause never counts.
         for alias in named_providers_in_text(clause) {
             if let Some(p) = resolve_provider_alias(&alias) {
+                // A sidecar (TypeSafe · Jev) is not somewhere work can be
+                // delegated: it answers typed questions, it does not run turns.
+                // "spawn a typesafe subagent" must not nudge a fan-out.
+                if is_sidecar_provider(p.id) {
+                    continue;
+                }
                 if seen.insert(p.id) {
                     out.push(alias);
                 }
@@ -2048,6 +2097,36 @@ pub fn provider_env_keys(provider_id: &str) -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The TypeSafe sidecar is pinned in the picker and reachable as a
+    /// credential, but it must never join the chat catalog or behave like a
+    /// delegation target.
+    #[test]
+    fn typesafe_is_a_pinned_sidecar_not_a_catalog_provider() {
+        assert_eq!(sidecar_providers().len(), 1);
+        assert_eq!(sidecar_providers()[0].id, "typesafe");
+        assert!(is_sidecar_provider("typesafe"));
+        assert!(!is_sidecar_provider("meta"));
+        assert!(
+            !PROVIDERS.iter().any(|p| p.id == "typesafe"),
+            "the chat catalog count and every doc that mirrors it stay valid"
+        );
+        // Resolvable as a credential-bearing id ...
+        assert_eq!(by_id("typesafe").map(|p| p.id), Some("typesafe"));
+        assert_eq!(
+            by_id("typesafe").map(|p| p.default_model),
+            Some("jev-latest")
+        );
+        // ... but never nudged as somewhere to delegate work.
+        let nudge = delegated_providers_in_text("spawn a typesafe subagent for this");
+        assert!(nudge.is_empty(), "{nudge:?}");
+        // A real provider in the same sentence still resolves.
+        let nudge = delegated_providers_in_text("spawn a grok subagent for this");
+        assert!(
+            !nudge.is_empty(),
+            "the sidecar must not break real delegation"
+        );
+    }
 
     #[test]
     fn named_providers_in_text_finds_aliases_without_false_positives() {
@@ -2276,7 +2355,10 @@ mod tests {
 
     #[test]
     fn commandcode_is_resolvable_by_alias_and_display_name() {
-        assert_eq!(resolve_provider_alias("commandcode").map(|p| p.id), Some("commandcode"));
+        assert_eq!(
+            resolve_provider_alias("commandcode").map(|p| p.id),
+            Some("commandcode")
+        );
         assert_eq!(
             resolve_provider_alias("command-code").map(|p| p.id),
             Some("commandcode")

@@ -6,6 +6,12 @@ model, and environment variable below are the exact current catalog values, not
 recommendations inferred from a vendor's marketing page.
 
 Set the listed environment variable and use `/login <id>` to select the row.
+
+`/login` also pins one entry that is deliberately **not** in this catalog:
+**TypeSafe · Jev** (id `typesafe`), shown first with its own borders. It is a
+credential that gives every provider typed judgments, not a chat model, so
+selecting it stores a key and never becomes your active provider. See
+[typesafe.md](./typesafe.md).
 `R` means Nur sends the Responses shape (`/responses`); `CC` means Chat
 Completions (`/chat/completions`); `AM` means the native Anthropic Messages
 shape (`/v1/messages`); and `GCC` means Google's Cloud Code native

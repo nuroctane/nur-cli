@@ -103,6 +103,23 @@ const BUNDLED: &[(&str, &str)] = &[
 
 /// Packs with extra files (Python reader, CORE.md). Paths relative to crate root.
 const MULTI_FILE_PACKS: &[(&str, &[(&str, &str)])] = &[
+    // TypeSafe (Jev): how to design and use typed judgments, and how the layer
+    // is wired into this harness (including the keyless local engines). Shipped
+    // as a pack rather than a bare SKILL.md so the `references/` file travels
+    // with it - an installed nur has no repository to read them from.
+    (
+        "typesafe-ai",
+        &[
+            (
+                "SKILL.md",
+                include_str!("../../skills/typesafe-ai/SKILL.md"),
+            ),
+            (
+                "references/nur-integration.md",
+                include_str!("../../skills/typesafe-ai/references/nur-integration.md"),
+            ),
+        ],
+    ),
     // Engine for `/takeover`, not a user-facing skill: no SKILL.md, so it is
     // never indexed or activated. `chagent` shells out to `session_reader.py`.
     (

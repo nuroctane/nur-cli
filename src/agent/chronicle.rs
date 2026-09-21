@@ -65,13 +65,62 @@ fn checkpoints_path(scope: &str) -> PathBuf {
     dir(scope).join("checkpoints.json")
 }
 
+/// Last known sequence per events file, keyed by (length, mtime).
+fn seq_cache(
+) -> &'static std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, ((u64, u64), u64)>> {
+    static SEQ: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, ((u64, u64), u64)>>,
+    > = std::sync::OnceLock::new();
+    SEQ.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+fn file_stamp(p: &std::path::Path) -> (u64, u64) {
+    std::fs::metadata(p)
+        .map(|m| {
+            let mtime = m
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_nanos() as u64)
+                .unwrap_or(0);
+            (m.len(), mtime)
+        })
+        .unwrap_or((0, 0))
+}
+
+/// Remember the sequence the write just produced (the new *last* sequence).
+/// Caching *before* the write can never hit: the append changes the file stamp
+/// the next lookup validates against, so every append would re-parse the log.
+fn remember_seq(path: &std::path::Path, last_seq: u64) {
+    if let Ok(mut g) = seq_cache().lock() {
+        g.insert(path.to_path_buf(), (file_stamp(path), last_seq));
+    }
+}
+
 fn next_seq(scope: &str) -> u64 {
-    let text = std::fs::read_to_string(events_path(scope)).unwrap_or_default();
+    // Called on every append, so a full parse per event is quadratic; cache the
+    // last seq and validate it against the file stamp.
+    // (length, mtime), for the same reason as the receipt tail cache: a length
+    // match alone can hide a replaced file and hand back a stale sequence.
+    let path = events_path(scope);
+    let stamp = file_stamp(&path);
+    let cache = seq_cache();
+    if let Ok(g) = cache.lock() {
+        if let Some((cached_stamp, last)) = g.get(&path) {
+            if *cached_stamp == stamp {
+                return last.saturating_add(1);
+            }
+        }
+    }
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
     let mut last = 0u64;
     for line in text.lines() {
         if let Ok(e) = serde_json::from_str::<ChronicleEvent>(line) {
             last = last.max(e.seq);
         }
+    }
+    if let Ok(mut g) = cache.lock() {
+        g.insert(path, (stamp, last));
     }
     last.saturating_add(1)
 }
@@ -109,6 +158,10 @@ pub fn append(
         .map_err(|e| e.to_string())?;
     let line = serde_json::to_string(&ev).map_err(|e| e.to_string())?;
     writeln!(f, "{line}").map_err(|e| e.to_string())?;
+    // The write is what advances the sequence: cache the new last sequence so
+    // the next append in this process is a lookup, not a full re-parse. Storing
+    // the *next* value here would double-increment on the next cache hit.
+    remember_seq(&p, ev.seq);
     Ok(ev)
 }
 
@@ -214,6 +267,31 @@ mod tests {
         assert!(cp.seq >= 1);
         let d = describe_at(&s, "before-ship").unwrap();
         assert!(d.contains("before-ship"));
+        let _ = std::fs::remove_dir_all(dir(&s));
+    }
+
+    #[test]
+    fn seq_cache_reflects_the_write_that_just_happened() {
+        // Same regression guard as the receipt tail cache: caching before the write
+        // can never hit, because the append changes the file stamp the next lookup
+        // validates against - so every append re-parsed the whole log.
+        let s = format!("chron-cache-{}", uuid::Uuid::new_v4().simple());
+        let p = events_path(&s);
+        for i in 0..3u64 {
+            let ev = append(&s, "turn", &format!("event {i}"), None).unwrap();
+            assert_eq!(ev.seq, i + 1, "sequences are 1-based and monotonic");
+            let cached = seq_cache().lock().unwrap().get(&p).cloned();
+            assert_eq!(
+                cached.as_ref().map(|c| c.0),
+                Some(file_stamp(&p)),
+                "seq cache must describe the log the write just produced"
+            );
+            assert_eq!(
+                cached.as_ref().map(|c| c.1),
+                Some(ev.seq),
+                "cache holds the last sequence written; the hit path adds one"
+            );
+        }
         let _ = std::fs::remove_dir_all(dir(&s));
     }
 }

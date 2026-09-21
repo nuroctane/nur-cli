@@ -128,7 +128,11 @@ fn is_python_script(bin: &std::path::Path) -> bool {
 
 /// The probed interpreter, cached: probing spawns a child per candidate and
 /// optmem calls arrive several times a session.
-fn python_runner_cached() -> Option<String> {
+///
+/// Shared with the local-engine bridge (`crate::jev_local`), which needs the same
+/// guarantee: `py -3` first, and never the Windows Store `python3.exe` alias stub
+/// (it exists on PATH but exits 9009).
+pub(crate) fn python_runner_cached() -> Option<String> {
     static RUNNER: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     RUNNER.get_or_init(python_runner).clone()
 }
@@ -165,9 +169,9 @@ pub fn run_memo(args: &[&str], timeout_ms: u64) -> Result<String, String> {
 
     let is_py = is_python_script(&bin)
         || bin
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("py"));
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("py"));
 
     if is_py {
         let py = python_runner_cached().ok_or_else(|| {
@@ -247,6 +251,189 @@ pub fn invalidate_wake_cache() {
     if let Ok(mut guard) = WAKE_CACHE.lock() {
         *guard = None;
     }
+}
+
+/// One pending OptMem compression, as upstream's `memo nap` describes it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NapPrompt {
+    /// Block range upstream asks for, inclusive (`36-37`).
+    pub lo: u64,
+    pub hi: u64,
+    /// How many compressions remain *after* this one, per upstream's own count.
+    pub remaining: usize,
+    /// Upstream's text for the block (the part worth compressing).
+    pub body: String,
+}
+
+impl NapPrompt {
+    /// `36-37`, the argument upstream expects.
+    pub fn range(&self) -> String {
+        format!("{}-{}", self.lo, self.hi)
+    }
+}
+
+/// Parse upstream's nap prompt.
+///
+/// Upstream prints (exact shape, verified against `memo nap`):
+///
+/// ```text
+/// Compress memories #36-37 into one line of at most 280 bytes.
+/// Keep what has lasting effect, drop what does not. Invent nothing.
+///
+///   #36 <text>
+///   #37 <text>
+///
+/// 20 compressions remain after this one.
+/// Run: ~\.optmem\memo nap 36-37 "<your line>"
+/// ```
+///
+/// `None` means "nothing pending" - the queue is empty, which is the normal end
+/// state and not an error.
+pub fn parse_nap_prompt(out: &str) -> Option<NapPrompt> {
+    let range_marker = "Compress memories #";
+    let idx = out.find(range_marker)?;
+    let rest = &out[idx + range_marker.len()..];
+    // "36-37 into one line..."
+    let range_str: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '-')
+        .collect();
+    let (lo, hi) = range_str.split_once('-')?;
+    let lo: u64 = lo.trim().parse().ok()?;
+    let hi: u64 = hi.trim().parse().ok()?;
+    if hi < lo {
+        return None;
+    }
+    // "20 compressions remain after this one."
+    let remaining = out
+        .lines()
+        .find_map(|l| {
+            let l = l.trim();
+            let n = l.split_whitespace().next()?;
+            if l.contains("compressions remain") {
+                n.parse::<usize>().ok()
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0);
+    // The block text: lines starting with two spaces and `#<id> `.
+    let mut body: Vec<&str> = Vec::new();
+    for line in out.lines() {
+        let t = line.trim_start_matches(' ');
+        if line.starts_with("  #") && t.starts_with('#') {
+            body.push(line.trim());
+        }
+    }
+    Some(NapPrompt {
+        lo,
+        hi,
+        remaining,
+        body: body.join(
+            "
+",
+        ),
+    })
+}
+
+/// How many single-block naps may be applied before the tool refuses to keep
+/// prompting. A finite housekeeping queue must never read as an instruction
+/// chain: past this, the caller is told to drain in one call or drop it.
+pub const NAP_CHAIN_MAX: usize = 2;
+
+/// Window after which the chain counter resets (a later, deliberate session of
+/// memory hygiene starts fresh).
+const NAP_CHAIN_TTL: Duration = Duration::from_secs(600);
+
+static NAP_CHAIN: Mutex<Option<(Instant, usize)>> = Mutex::new(None);
+
+/// Count one single-block nap application and return the running total for the
+/// current window.
+pub fn count_single_nap() -> usize {
+    let Ok(mut guard) = NAP_CHAIN.lock() else {
+        return 1;
+    };
+    let now = Instant::now();
+    let count = match guard.as_ref() {
+        Some((at, n)) if now.duration_since(*at) < NAP_CHAIN_TTL => n + 1,
+        _ => 1,
+    };
+    *guard = Some((now, count));
+    count
+}
+
+/// Reset the chain counter (a drain happened, or the user asked for hygiene).
+pub fn reset_nap_chain() {
+    if let Ok(mut guard) = NAP_CHAIN.lock() {
+        *guard = None;
+    }
+}
+
+/// Apply one compression. `line` is the model's own one-line summary.
+pub fn nap_apply(range: &str, line: &str) -> Result<String, String> {
+    run_memo(&["nap", range, line], 120_000).map(|out| {
+        invalidate_wake_cache();
+        out
+    })
+}
+
+/// What a drain did.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NapDrain {
+    pub applied: Vec<String>,
+    /// The next pending block, when lines ran out before the queue did.
+    pub pending: Option<NapPrompt>,
+    /// Set when the queue turned out to be empty (nothing left at all).
+    pub queue_cleared: bool,
+}
+
+/// Apply several compressions in one tool call, in order.
+///
+/// Upstream only renders the *next* pending block, so the ranges are discovered
+/// as we go: read the current prompt, apply the caller's line for it, read the
+/// next prompt, and so on. This is the difference between "one call drains N
+/// blocks" and "N calls, each revealing another prompt" - the latter is what
+/// turned housekeeping into an endless chain.
+///
+/// `runner` runs the memo binary (injected for tests).
+pub fn nap_drain_with(
+    lines: &[String],
+    mut runner: impl FnMut(&[&str]) -> Result<String, String>,
+) -> Result<NapDrain, String> {
+    let mut applied = Vec::new();
+    let mut pending_out = runner(&["nap"])?;
+    for line in lines {
+        let Some(p) = parse_nap_prompt(&pending_out) else {
+            // Nothing left to compress: stop early instead of erroring, so a
+            // drain that over-delivers lines still reports honestly.
+            return Ok(NapDrain {
+                applied,
+                pending: None,
+                queue_cleared: true,
+            });
+        };
+        let range = p.range();
+        let line = line.trim();
+        if line.is_empty() {
+            return Err(format!("nap drain: empty line for block #{range}"));
+        }
+        pending_out = runner(&["nap", &range, line])?;
+        applied.push(range);
+    }
+    invalidate_wake_cache();
+    let pending = parse_nap_prompt(&pending_out);
+    Ok(NapDrain {
+        queue_cleared: pending.is_none(),
+        applied,
+        pending,
+    })
+}
+
+/// [`nap_drain_with`] against the real memo binary.
+pub fn nap_drain(lines: &[String]) -> Result<NapDrain, String> {
+    let out = nap_drain_with(lines, |args| run_memo(args, 120_000))?;
+    reset_nap_chain();
+    Ok(out)
 }
 
 pub fn note(line: &str) -> Result<String, String> {
@@ -375,7 +562,10 @@ Without it you do not know who you are, or what was decided and tried.
 ## While working
 Call optmem(action=note, text="...") whenever you learn something worth keeping
 (one line, max 280 chars). Do not register redundant memories.
-If note asks a compression / merge: run optmem(action=nap) before your next action.
+OptMem compressions are **housekeeping**: `nap` shows the next pending block, and the
+queue is finite but long. Never let it outrank the user's request. If you touch it at
+all, pass `lines=[...]` to drain several blocks in ONE call (one line each, in order)
+rather than applying them one at a time turn after turn.
 Never edit files under the OptMem memory directory by hand.
 
 ## Search
@@ -398,6 +588,203 @@ optmem(action=recall, query=...) or optmem(action=zoom, range="a-b").
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The exact shape upstream prints (captured from `memo nap` on this
+    /// machine, 2026-09-20) - the parser must not drift from it.
+    const UPSTREAM_PROMPT: &str = "Compress memories #36-37 into one line of at most 280 bytes.\n\
+Keep what has lasting effect, drop what does not. Invent nothing.\n\n  #36 2026-09-16 VaultX RWA dApp review centralised: deliverables mirrored to D:\\BACKUP.\n  #37 2026-09-16 VaultX RWA dApp: client handoff set is proposal + appendix + reproduction/.\n\n20 compressions remain after this one.\nRun: ~\\.optmem\\memo nap 36-37 \"<your line>\"\n";
+
+    #[test]
+    fn parses_upstream_nap_prompt() {
+        let p = parse_nap_prompt(UPSTREAM_PROMPT).expect("range parsed");
+        assert_eq!(p.lo, 36);
+        assert_eq!(p.hi, 37);
+        assert_eq!(p.range(), "36-37");
+        assert_eq!(p.remaining, 20);
+        assert!(p.body.contains("#36 "), "{}", p.body);
+        assert!(p.body.contains("#37 "), "{}", p.body);
+        assert!(
+            p.body.contains("VaultX RWA dApp review centralised"),
+            "{}",
+            p.body
+        );
+        assert!(p.body.contains("client handoff set"), "{}", p.body);
+    }
+
+    #[test]
+    fn an_empty_queue_is_not_a_prompt() {
+        assert!(parse_nap_prompt("Saved as #42.\nNothing to compress.\n").is_none());
+        assert!(parse_nap_prompt("Compress memories #37-36 into one line").is_none());
+        assert!(parse_nap_prompt("").is_none());
+    }
+
+    /// One call, several blocks: the ranges are discovered as the queue moves,
+    /// which is the whole point - upstream only ever shows the next block.
+    #[test]
+    fn a_drain_applies_every_line_in_order() {
+        use std::cell::RefCell;
+        let calls: RefCell<Vec<Vec<String>>> = RefCell::new(Vec::new());
+        let prompt_for = |lo: u64, remaining: usize| {
+            // Block lines carry two leading spaces, so they must not follow a
+            // string continuation (which would strip the indent).
+            format!(
+                "Compress memories #{lo}-{hi} into one line of at most 280 bytes.\n  #{lo} text\n  #{hi} text\n{remaining} compressions remain after this one.\nRun: memo nap {lo}-{hi}\n",
+                hi = lo + 1
+            )
+        };
+        let drain = nap_drain_with(
+            &[
+                "first line".to_string(),
+                "second line".to_string(),
+                "third".to_string(),
+            ],
+            |args| {
+                calls
+                    .borrow_mut()
+                    .push(args.iter().map(|a| a.to_string()).collect());
+                Ok(match args {
+                    // bare read
+                    [only] if *only == "nap" => prompt_for(36, 20),
+                    // first apply -> next block is 38-39
+                    ["nap", "36-37", "first line"] => prompt_for(38, 19),
+                    ["nap", "38-39", "second line"] => prompt_for(40, 18),
+                    // Still more work: upstream renders the block after this one.
+                    ["nap", "40-41", "third"] => prompt_for(42, 3),
+                    other => panic!("unexpected memo call: {other:?}"),
+                })
+            },
+        )
+        .expect("drain succeeds");
+        assert_eq!(drain.applied, vec!["36-37", "38-39", "40-41"]);
+        assert!(!drain.queue_cleared, "the fake still had work queued");
+        let pending = drain
+            .pending
+            .expect("the next block is reported, not implied");
+        assert_eq!(pending.range(), "42-43");
+        assert_eq!(pending.remaining, 3);
+        // One bare read + three applies, in order.
+        let calls = calls.borrow();
+        assert_eq!(calls.len(), 4);
+        assert_eq!(calls[0], vec!["nap"]);
+        assert_eq!(calls[3], vec!["nap", "40-41", "third"]);
+    }
+
+    /// A drain that over-delivers lines stops honestly instead of erroring.
+    #[test]
+    fn a_drain_stops_when_the_queue_is_empty() {
+        let drain = nap_drain_with(
+            &["one".to_string(), "two".to_string(), "three".to_string()],
+            |args| match args {
+                ["nap"] => Ok(UPSTREAM_PROMPT.to_string()),
+                ["nap", "36-37", "one"] => {
+                    Ok("Saved as #36-37.\nNothing left to compress.\n".into())
+                }
+                other => panic!("must not call memo again: {other:?}"),
+            },
+        )
+        .expect("drain succeeds");
+        assert_eq!(drain.applied, vec!["36-37"]);
+        assert!(drain.queue_cleared, "the queue ran out mid-drain");
+    }
+
+    #[test]
+    fn a_drain_rejects_an_empty_line() {
+        let err = nap_drain_with(&["   ".to_string()], |_| Ok(UPSTREAM_PROMPT.to_string()))
+            .expect_err("empty line is rejected");
+        assert!(err.contains("empty line"), "{err}");
+    }
+
+    /// Live check against the real memo binary, in a scratch MEMORY_DIR so the
+    /// user's `~/.optmem/memory` is never touched.
+    ///
+    /// Ignored by default (it shells out to Python and writes files). This is
+    /// the check that proves the fix against upstream's actual output format
+    /// rather than a fake:
+    ///
+    /// ```text
+    /// cargo test --bin nur optmem_nap_drain_against_real_memo -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "live: runs the real memo binary in a scratch MEMORY_DIR"]
+    fn optmem_nap_drain_against_real_memo() {
+        if memo_bin().is_none() {
+            eprintln!("memo not installed - skipping");
+            return;
+        }
+        if python_runner_cached().is_none() {
+            eprintln!("no usable Python interpreter - skipping");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("nur-optmem-nap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        // Safety: this process hands memo a scratch memory dir, so nothing here
+        // can touch ~/.optmem/memory. Restored before returning.
+        let previous = std::env::var("MEMORY_DIR").ok();
+        std::env::set_var("MEMORY_DIR", &dir);
+        let result = std::panic::catch_unwind(|| {
+            // Six notes -> three pending pairs, once upstream decides to queue.
+            for i in 0..6 {
+                let _ = note(&format!(
+                    "scratch optmem test entry {i} - compressible housekeeping content"
+                ));
+            }
+            let before = run_memo(&["nap"], 60_000).expect("bare nap works");
+            println!("--- upstream prompt ---\n{before}");
+            let Some(first) = parse_nap_prompt(&before) else {
+                eprintln!("queue empty after 6 notes; nothing to drain in this run");
+                return;
+            };
+            let lines = vec![
+                "scratch: entries 0-1 compressed into one line".to_string(),
+                "scratch: entries 2-3 compressed into one line".to_string(),
+            ];
+            let drained = nap_drain(&lines).expect("drain works");
+            println!("applied: {:?}", drained.applied);
+            println!(
+                "cleared: {} pending: {:?}",
+                drained.queue_cleared, drained.pending
+            );
+            assert!(
+                !drained.applied.is_empty(),
+                "the drain applied at least one block (#{})",
+                first.range()
+            );
+            assert_eq!(
+                drained.applied[0],
+                first.range(),
+                "the drain starts from the block upstream was showing"
+            );
+            // The queue really moved: the next prompt is a later block.
+            if let Some(next) = &drained.pending {
+                assert!(
+                    next.lo > first.hi,
+                    "queue advanced: {} after {}",
+                    next.range(),
+                    first.range()
+                );
+            }
+        });
+        match previous {
+            Some(v) => std::env::set_var("MEMORY_DIR", v),
+            None => std::env::remove_var("MEMORY_DIR"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        if let Err(e) = result {
+            std::panic::resume_unwind(e);
+        }
+    }
+
+    /// The chain guard counts single-block applications and can be reset.
+    #[test]
+    fn the_chain_guard_counts_and_resets() {
+        reset_nap_chain();
+        assert_eq!(count_single_nap(), 1);
+        assert_eq!(count_single_nap(), 2);
+        assert!(count_single_nap() > NAP_CHAIN_MAX);
+        reset_nap_chain();
+        assert_eq!(count_single_nap(), 1, "reset starts a fresh window");
+        reset_nap_chain();
+    }
 
     #[test]
     fn memory_dir_default() {

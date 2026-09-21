@@ -480,6 +480,11 @@ pub fn context_window_for(provider: &str, model: &str) -> Option<u64> {
 /// Applying in both directions matters: clamping down only would ratchet the
 /// window permanently and never recover when switching back to a wide model.
 pub fn maybe_apply_context_window(cfg: &mut crate::config::Config) {
+    // The catalog is deliberately authoritative for a known provider/model: an
+    // older "only when still the default" rule let a stale stored window mask the
+    // model's real one forever, and auto-compaction could then never fire (see
+    // `catalog_window_applies_over_a_user_set_value`). Unknown models keep
+    // whatever the user configured.
     if let Some(w) = context_window_for(&cfg.provider, &cfg.model) {
         if (1000..=2_000_000).contains(&w) {
             cfg.context_window = w;

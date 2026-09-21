@@ -48,13 +48,28 @@ pub fn classify_value(name: &str, args: &Value) -> ToolCaps {
     }
 }
 
+/// Read the `action` field and check it against an allowlist. A missing action
+/// falls back to the tool's own default being treated as *not* read-only, which
+/// is fail-closed.
+fn action_is(args: &Value, allowed: &[&str]) -> bool {
+    args.get("action")
+        .and_then(|a| a.as_str())
+        .map(|a| allowed.contains(&a))
+        .unwrap_or(false)
+}
+
 /// Free / approval-skip in manual when true; allowed freely in plan mode when true
 /// (plan still has extra shell/browser exceptions in the agent loop).
 pub fn is_read_only(name: &str, args: &Value) -> bool {
     match name {
         "read_file" | "list_dir" | "grep" | "glob" | "web_fetch" | "web_search" | "look"
-        | "git_status" | "git_diff" | "skill" | "todo_write" | "submit_plan" | "context"
-        | "anydoc" => true,
+        | "git_status" | "git_diff" | "skill" | "todo_write" | "submit_plan" => true,
+        // These two are only *mostly* perception: `register`/`delete` write and
+        // remove files under ~/.nur/context-store, so they must take the approval
+        // path instead of riding the read-only shortcut (and the parallel batch,
+        // which skips approval entirely).
+        "context" => action_is(args, &["list", "peek", "slice", "search", "inventory"]),
+        "anydoc" => action_is(args, &["convert", "read", "status"]),
         "connectome" => args
             .get("action")
             .and_then(|a| a.as_str())
@@ -118,6 +133,7 @@ pub fn is_read_only(name: &str, args: &Value) -> bool {
         "bg" => crate::tools::bg_tool::is_read_only_action(&args.to_string()),
         "fractal" => crate::tools::fractal_tool::is_read_only_action(&args.to_string()),
         "headroom" => crate::tools::headroom_tool::is_read_only_action(&args.to_string()),
+        "typesafe" => crate::tools::typesafe_is_read_only(&args.to_string()),
         "optmem" => crate::tools::optmem_tool::is_read_only_action(&args.to_string()),
         "dogwood" => crate::tools::dogwood_tool::is_read_only_action(&args.to_string()),
         "egaki" => crate::tools::egaki_tool::is_read_only_action(&args.to_string()),
@@ -205,6 +221,52 @@ pub fn is_parallel_safe(name: &str, args_json: &str) -> bool {
 #[allow(dead_code)] // completes the string-adapter trio; for upcoming permission rules
 pub fn is_destructive_call(name: &str, args_json: &str) -> bool {
     classify(name, args_json).destructive
+}
+
+#[cfg(test)]
+mod audit_tests {
+    use super::*;
+
+    /// `context register|delete` writes and removes files under
+    /// ~/.nur/context-store, and `anydoc` registers a converted document. They
+    /// must not ride the read-only shortcut (auto-approved in Manual, free in
+    /// Plan, and dispatched in the parallel batch which skips approval).
+    #[test]
+    fn store_writing_actions_are_not_read_only() {
+        for action in ["list", "peek", "slice", "search", "inventory"] {
+            assert!(
+                is_read_only("context", &serde_json::json!({ "action": action })),
+                "context {action} is perception"
+            );
+        }
+        for action in ["register", "delete"] {
+            assert!(
+                !is_read_only("context", &serde_json::json!({ "action": action })),
+                "context {action} writes the store"
+            );
+        }
+        assert!(is_read_only(
+            "anydoc",
+            &serde_json::json!({ "action": "convert" })
+        ));
+        // An unknown/missing action is fail-closed for both.
+        assert!(!is_read_only("context", &serde_json::json!({})));
+        assert!(!is_read_only(
+            "anydoc",
+            &serde_json::json!({ "action": "definitely-not-one" })
+        ));
+    }
+
+    #[test]
+    fn the_plain_reads_stay_read_only() {
+        for name in ["read_file", "grep", "glob", "web_fetch", "git_diff"] {
+            assert!(is_read_only(name, &serde_json::json!({})));
+        }
+        assert!(!is_read_only(
+            "bash",
+            &serde_json::json!({ "command": "ls" })
+        ));
+    }
 }
 
 #[cfg(test)]

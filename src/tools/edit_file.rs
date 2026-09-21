@@ -52,6 +52,16 @@ impl Tool for EditFile {
     fn execute(&self, args: &Value, ctx: &ToolContext) -> Result<String> {
         let path = arg_str(args, "path")?;
         let old = arg_str(args, "old_string")?;
+        if old.is_empty() {
+            // `content.replace("", new)` inserts `new` between every character:
+            // one malformed call would rewrite the whole file. Use write_file to
+            // create content in a new/empty file.
+            return Err(NurError::Tool(
+                "old_string must not be empty - include the text you want to replace \
+                 (use write_file to create a file's contents)"
+                    .into(),
+            ));
+        }
         let new = arg_str(args, "new_string")?;
         let replace_all = args
             .get("replace_all")
@@ -333,6 +343,37 @@ fn splice_normalized(
     let tail_o = denormalized_offset(original, cursor_norm);
     out.push_str(&original[tail_o..]);
     out
+}
+
+#[cfg(test)]
+mod empty_old_string_tests {
+    use super::*;
+
+    /// `content.replace("", new)` inserts `new` between every character, so one
+    /// malformed call would rewrite the whole file. It must be refused.
+    #[test]
+    fn an_empty_old_string_is_refused_before_touching_the_file() {
+        let dir = std::env::temp_dir().join(format!("nur-empty-old-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let target = dir.join("keep.txt");
+        std::fs::write(&target, "original contents\n").unwrap();
+        let tool = EditFile;
+        let args = serde_json::json!({
+            "path": target.to_string_lossy(),
+            "old_string": "",
+            "new_string": "X",
+        });
+        let err = tool
+            .execute(&args, &crate::tools::ToolContext::default_for_test(&dir))
+            .expect_err("an empty old_string is an error");
+        assert!(err.to_string().contains("must not be empty"), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "original contents\n",
+            "the file must be untouched"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[cfg(test)]

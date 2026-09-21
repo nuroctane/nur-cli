@@ -497,7 +497,12 @@ impl UsageTracker {
     }
 
     fn write_status(&self) -> Result<()> {
-        let _g = self.lock.lock().ok();
+        // A poisoned lock (a panic elsewhere while holding it) must not panic the
+        // status writer: the guard is only an inter-process serialization hint.
+        let _g = self
+            .lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         ensure_dirs()?;
         let rates = self.active_rates();
         let snap = StatusSnapshot {

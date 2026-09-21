@@ -785,9 +785,12 @@ impl StreamAccumulator {
                     if let Some(o) = u.get("output_tokens").and_then(|x| x.as_u64()) {
                         base["completion_tokens"] = json!(o);
                     }
-                    if let Some(i) = u.get("input_tokens").and_then(|x| x.as_u64()) {
-                        base["prompt_tokens"] = json!(i);
-                    }
+                    // Deliberately NOT taking `input_tokens` from a message_delta:
+                    // this frame's prompt count excludes the cache read/creation
+                    // tokens that `chat_usage_from_anthropic` added at
+                    // message_start, so assigning it here would replace a correct
+                    // total with an undercount and hide context pressure from
+                    // auto-compaction.
                     let p = base["prompt_tokens"].as_u64().unwrap_or(0);
                     let c = base["completion_tokens"].as_u64().unwrap_or(0);
                     base["total_tokens"] = json!(p + c);

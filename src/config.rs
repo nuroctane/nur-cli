@@ -190,6 +190,10 @@ pub struct Config {
     /// OptMem permanent memory (upstream-pure ~/.optmem; default on).
     #[serde(default)]
     pub optmem: OptmemConfig,
+    /// TypeSafe System One judgments (Jev) woven through the harness. Active
+    /// only when a key is present; a no-op without one.
+    #[serde(default)]
+    pub typesafe: TypesafeConfig,
     /// Theme setup additions (accent override, inline-image protocol).
     #[serde(default)]
     pub theme_setup: ThemeConfig,
@@ -321,6 +325,295 @@ fn default_headroom_min_chars() -> u64 {
     2000
 }
 
+/// `[typesafe]` - TypeSafe System One judgments (Jev) for the harness itself.
+///
+/// Docs: <https://docs.typesafe.ai>. The layer activates only when a key is
+/// found (`TYPESAFE_API_KEY`, `nur auth login --provider typesafe`, or
+/// `~/.nur/typesafe.key`); without one every policy returns "no judgment" and
+/// the harness behaves exactly as it did before. Questions are batched and run
+/// in parallel, so a whole tool batch costs one round trip.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TypesafeConfig {
+    /// Master switch. Default **true**.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Key inline in the config. Prefer the env var or the credential store -
+    /// anything in this file is plain text on disk.
+    #[serde(default)]
+    pub api_key: String,
+    /// System One endpoint. Empty = `https://api.typesafe.ai/v1/systemone`.
+    #[serde(default)]
+    pub base_url: String,
+    /// System One model. Empty = `jev-latest` (TypeSafe's flagship).
+    #[serde(default)]
+    pub model: String,
+    /// Per-request timeout. Jev is fast; a long stall means something is wrong.
+    #[serde(default = "default_typesafe_timeout_ms")]
+    pub timeout_ms: u64,
+    /// Retries on 429/529/5xx, with exponential backoff.
+    #[serde(default = "default_typesafe_retries")]
+    pub retries: u32,
+    /// Questions merged into one request before splitting.
+    #[serde(default = "default_typesafe_batch")]
+    pub max_questions_per_request: usize,
+    /// Concurrent requests when a question set has to be split.
+    #[serde(default = "default_typesafe_parallel")]
+    pub max_parallel: usize,
+    /// Confidence at or above which a judgment may change behavior.
+    #[serde(default = "default_typesafe_act")]
+    pub act_confidence: f64,
+    /// Below this a judgment is handed to a bigger model or a human instead of
+    /// being acted on.
+    #[serde(default = "default_typesafe_escalate")]
+    pub escalate_confidence: f64,
+    /// Jev-scored compaction (tool calls dropped, survivors verbatim).
+    #[serde(default)]
+    pub compaction: TypesafeCompactionConfig,
+    /// Pre-execution gate and post-execution result judge.
+    #[serde(default)]
+    pub tool_gate: TypesafeToolGateConfig,
+    /// Skill layer: candidate rerank, requirement narrowing, usage check.
+    #[serde(default)]
+    pub skills: TypesafeSkillsConfig,
+    /// Model routing suggestions.
+    #[serde(default)]
+    pub routing: TypesafeRoutingConfig,
+    /// Per-turn tool-schema narrowing.
+    #[serde(default)]
+    pub tools: TypesafeToolsConfig,
+}
+
+/// `[typesafe.tools]` - narrowing the tool surface.
+///
+/// Off by default, and deliberately so: the tool schemas ride the provider's
+/// prompt cache (a live session showed 231k of 232k input tokens cached), so the
+/// blocks are nearly free per turn, while hiding a tool the model wanted costs a
+/// round trip. Enable it when the schema is genuinely not cached - a provider
+/// without prompt caching, or a session whose prefix changes every request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TypesafeToolsConfig {
+    /// Default **false**.
+    #[serde(default)]
+    pub subset: bool,
+    /// A specialist is dropped only when the answer is at least this confident
+    /// that the task does not need it (inclusive direction: keeping is safe).
+    #[serde(default = "default_typesafe_tool_keep")]
+    pub keep_probability: f64,
+}
+
+/// `[typesafe.compaction]` - port of fast-jev-compaction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TypesafeCompactionConfig {
+    /// Default **true**.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// When the prune is good enough, skip the summarizing model call entirely
+    /// and hand the model the pruned history verbatim. Default **true**.
+    #[serde(default = "default_true")]
+    pub replace_summary: bool,
+    /// Newest N items are never touched (the first item is always kept).
+    #[serde(default = "default_typesafe_preserve_recent")]
+    pub preserve_recent: usize,
+    /// Minimum keep probability for a call or result to survive.
+    #[serde(default = "default_typesafe_keep_threshold")]
+    pub keep_threshold: f64,
+    /// Characters of a dropped result retained before its note.
+    #[serde(default = "default_typesafe_truncate_head")]
+    pub truncate_head_chars: usize,
+    /// Estimated token ceiling for the state Jev sees.
+    #[serde(default = "default_typesafe_max_state_tokens")]
+    pub max_state_tokens: u64,
+    /// Below this reduction ratio, fall back to normal compaction.
+    #[serde(default = "default_typesafe_min_reduction")]
+    pub min_reduction: f64,
+    /// How many recent user prompts make up the goal shown to Jev.
+    #[serde(default = "default_typesafe_goal_prompts")]
+    pub goal_prompts: usize,
+}
+
+/// `[typesafe.tool_gate]` - judgments at the tool boundary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TypesafeToolGateConfig {
+    /// Default **true**.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Judge results after execution (did it work, keep it, keep it verbatim).
+    #[serde(default = "default_true")]
+    pub judge_results: bool,
+    /// Skip a call that confidently repeats an earlier call whose result is
+    /// still in context. Default **true** - that result is already there.
+    #[serde(default = "default_true")]
+    pub skip_redundant: bool,
+    /// Skip a call that confidently repeats a call that already failed. Default
+    /// **false**: a retry after fixing the cause is often exactly right, so this
+    /// is surfaced in the UI rather than enforced.
+    #[serde(default)]
+    pub skip_repeated_failures: bool,
+    /// Surface risk / needs-human judgments in the UI. Never blocks anything.
+    #[serde(default = "default_true")]
+    pub flag_risky: bool,
+    /// Chars of arguments/result shown to Jev per call.
+    #[serde(default = "default_typesafe_judge_preview")]
+    pub preview_chars: usize,
+    /// Most recent calls kept in the gate's state window.
+    #[serde(default = "default_typesafe_trace_window")]
+    pub trace_window: usize,
+}
+
+/// `[typesafe.skills]` - the skill layer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TypesafeSkillsConfig {
+    /// Default **true**.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Rerank skill candidates against the request when several match.
+    #[serde(default = "default_true")]
+    pub rerank: bool,
+    /// Narrow an activated skill's rule list to the rules this request triggers.
+    #[serde(default = "default_true")]
+    pub narrow_requirements: bool,
+    /// Check that an activated skill was actually carried out.
+    #[serde(default = "default_true")]
+    pub check_usage: bool,
+    /// Most rules injected from a narrowed skill.
+    #[serde(default = "default_typesafe_max_requirements")]
+    pub max_requirements: usize,
+}
+
+/// `[typesafe.routing]` - model routing.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TypesafeRoutingConfig {
+    /// Actually switch the model mid-session. Default **false** - nur never
+    /// changes the user's model out from under them without being asked.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Show the suggested model in the transcript. Default **true**.
+    #[serde(default = "default_true")]
+    pub suggest: bool,
+}
+
+fn default_typesafe_timeout_ms() -> u64 {
+    20_000
+}
+fn default_typesafe_retries() -> u32 {
+    2
+}
+fn default_typesafe_batch() -> usize {
+    // One source of truth: the client's own default batch size.
+    crate::typesafe::client::DEFAULT_MAX_QUESTIONS_PER_REQUEST
+}
+fn default_typesafe_parallel() -> usize {
+    4
+}
+fn default_typesafe_act() -> f64 {
+    0.85
+}
+fn default_typesafe_escalate() -> f64 {
+    0.5
+}
+fn default_typesafe_preserve_recent() -> usize {
+    6
+}
+fn default_typesafe_keep_threshold() -> f64 {
+    0.5
+}
+fn default_typesafe_truncate_head() -> usize {
+    300
+}
+fn default_typesafe_max_state_tokens() -> u64 {
+    25_000
+}
+fn default_typesafe_min_reduction() -> f64 {
+    0.25
+}
+fn default_typesafe_goal_prompts() -> usize {
+    3
+}
+fn default_typesafe_tool_keep() -> f64 {
+    0.75
+}
+fn default_typesafe_judge_preview() -> usize {
+    1_200
+}
+fn default_typesafe_trace_window() -> usize {
+    16
+}
+fn default_typesafe_max_requirements() -> usize {
+    8
+}
+
+impl Default for TypesafeCompactionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            replace_summary: true,
+            preserve_recent: default_typesafe_preserve_recent(),
+            keep_threshold: default_typesafe_keep_threshold(),
+            truncate_head_chars: default_typesafe_truncate_head(),
+            max_state_tokens: default_typesafe_max_state_tokens(),
+            min_reduction: default_typesafe_min_reduction(),
+            goal_prompts: default_typesafe_goal_prompts(),
+        }
+    }
+}
+
+impl Default for TypesafeToolGateConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            judge_results: true,
+            skip_redundant: true,
+            skip_repeated_failures: false,
+            flag_risky: true,
+            preview_chars: default_typesafe_judge_preview(),
+            trace_window: default_typesafe_trace_window(),
+        }
+    }
+}
+
+impl Default for TypesafeToolsConfig {
+    fn default() -> Self {
+        Self {
+            subset: false,
+            keep_probability: default_typesafe_tool_keep(),
+        }
+    }
+}
+
+impl Default for TypesafeSkillsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            rerank: true,
+            narrow_requirements: true,
+            check_usage: true,
+            max_requirements: default_typesafe_max_requirements(),
+        }
+    }
+}
+
+impl Default for TypesafeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            api_key: String::new(),
+            base_url: String::new(),
+            model: String::new(),
+            timeout_ms: default_typesafe_timeout_ms(),
+            retries: default_typesafe_retries(),
+            max_questions_per_request: default_typesafe_batch(),
+            max_parallel: default_typesafe_parallel(),
+            act_confidence: default_typesafe_act(),
+            escalate_confidence: default_typesafe_escalate(),
+            compaction: TypesafeCompactionConfig::default(),
+            tool_gate: TypesafeToolGateConfig::default(),
+            skills: TypesafeSkillsConfig::default(),
+            routing: TypesafeRoutingConfig::default(),
+            tools: TypesafeToolsConfig::default(),
+        }
+    }
+}
+
 impl Default for HeadroomConfig {
     fn default() -> Self {
         Self {
@@ -391,19 +684,27 @@ impl Default for ThemeConfig {
 /// Parse `#rgb` / `#rrggbb` (leading `#` optional) into ratatui RGB.
 pub fn parse_hex_color(s: &str) -> Option<ratatui::style::Color> {
     let t = s.trim().trim_start_matches('#');
-    let (r, g, b) = match t.len() {
-        3 => (&t[0..1], &t[1..2], &t[2..3]),
-        6 => (&t[0..2], &t[2..4], &t[4..6]),
+    // Hex is ASCII, but the string is not: slicing a 3-*byte* string like "日日"
+    // at byte offsets panics on a char boundary. Take chars and require ASCII hex.
+    if !t.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let digits: Vec<char> = t.chars().collect();
+    let (r, g, b): (String, String, String) = match digits.len() {
+        3 => (
+            format!("{}{}", digits[0], digits[0]),
+            format!("{}{}", digits[1], digits[1]),
+            format!("{}{}", digits[2], digits[2]),
+        ),
+        6 => (
+            digits[0..2].iter().collect(),
+            digits[2..4].iter().collect(),
+            digits[4..6].iter().collect(),
+        ),
         _ => return None,
     };
-    let chan = |h: &str| -> Option<u8> {
-        if h.len() == 1 {
-            u8::from_str_radix(&format!("{h}{h}"), 16).ok()
-        } else {
-            u8::from_str_radix(h, 16).ok()
-        }
-    };
-    Some(ratatui::style::Color::Rgb(chan(r)?, chan(g)?, chan(b)?))
+    let chan = |h: &str| u8::from_str_radix(h, 16).ok();
+    Some(ratatui::style::Color::Rgb(chan(&r)?, chan(&g)?, chan(&b)?))
 }
 
 /// `[helix_memory]` - optional HelixDB resident for the native memory stack.
@@ -589,6 +890,7 @@ impl Default for Config {
             theme: None,
             headroom: HeadroomConfig::default(),
             optmem: OptmemConfig::default(),
+            typesafe: TypesafeConfig::default(),
             theme_setup: ThemeConfig::default(),
             prewalk: PrewalkConfig::default(),
             compaction: CompactionConfig::default(),
@@ -922,6 +1224,21 @@ pub const VALID_EFFORTS: &[&str] = crate::providers::EFFORT_LADDER;
 
 impl Config {
     pub fn validate(&self) -> Result<()> {
+        // A sidecar (TypeSafe · Jev) is a credential that upgrades whatever
+        // model you run; it has no chat endpoint, so pointing the session at it
+        // would send every turn at a System One API that answers typed
+        // questions. Catch it here, where the message can say what to do.
+        if crate::providers::is_sidecar_provider(&self.provider) {
+            let name = crate::providers::by_id(&self.provider)
+                .map(|p| p.name)
+                .unwrap_or(self.provider.as_str());
+            return Err(NurError::Config(format!(
+                "provider '{name}' is not a chat model - it is the TypeSafe (Jev) boost layer. \
+                 Keep it as the credential that lifts every provider (tool `typesafe`, \
+                 `/typesafe`), and set `provider` to a chat provider such as '{}'.",
+                crate::providers::default_provider().id
+            )));
+        }
         // Effort is deliberately NOT a closed set. Rungs are provider-specific
         // and vendors keep adding them, so a name nur has not heard of is
         // forwarded (see `providers::nearest_effort`) rather than treated as a
@@ -980,6 +1297,87 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hex_colour_parsing_never_panics_on_multibyte_input() {
+        // `"日日"` is 6 bytes / 2 chars: byte-slicing it at 0..2 panicked on a char
+        // boundary before this was char-aware.
+        assert_eq!(parse_hex_color("日日"), None);
+        assert_eq!(parse_hex_color("日"), None);
+        assert_eq!(parse_hex_color("##ff"), None);
+        // Valid forms still parse, with and without '#'.
+        assert_eq!(
+            parse_hex_color("#e8b923"),
+            Some(ratatui::style::Color::Rgb(0xe8, 0xb9, 0x23))
+        );
+        assert_eq!(
+            parse_hex_color("abc"),
+            Some(ratatui::style::Color::Rgb(0xaa, 0xbb, 0xcc)),
+            "short form doubles each digit"
+        );
+        assert_eq!(parse_hex_color(""), None);
+    }
+
+    #[test]
+    fn typesafe_section_round_trips_and_keeps_defaults() {
+        // A partial section must not reset the rest (the common case: a user
+        // flips one switch).
+        let partial: Config = toml::from_str(
+            r#"
+provider = "meta"
+[typesafe]
+enabled = false
+[typesafe.compaction]
+min_reduction = 0.5
+"#,
+        )
+        .expect("partial [typesafe] parses");
+        assert!(!partial.typesafe.enabled);
+        assert_eq!(partial.typesafe.compaction.min_reduction, 0.5);
+        assert!(
+            partial.typesafe.compaction.replace_summary,
+            "unspecified keys keep their defaults"
+        );
+        assert_eq!(
+            partial.typesafe.act_confidence,
+            TypesafeConfig::default().act_confidence
+        );
+        assert!(partial.typesafe.tool_gate.skip_redundant);
+        assert!(partial.typesafe.skills.check_usage);
+        assert!(!partial.typesafe.routing.enabled, "routing stays opt-in");
+
+        // And a full save/load cycle preserves an explicit choice.
+        let mut cfg = Config::default();
+        cfg.typesafe.act_confidence = 0.9;
+        cfg.typesafe.max_questions_per_request = 8;
+        cfg.typesafe.model = "jev-latest".into();
+        let text = toml::to_string(&cfg).expect("config serializes");
+        assert!(text.contains("[typesafe]"), "{text}");
+        let back: Config = toml::from_str(&text).expect("config parses back");
+        assert_eq!(back.typesafe.act_confidence, 0.9);
+        assert_eq!(back.typesafe.max_questions_per_request, 8);
+        assert_eq!(back.typesafe.model, "jev-latest");
+    }
+
+    #[test]
+    fn a_sidecar_provider_is_rejected_as_the_active_route() {
+        let cfg = Config {
+            provider: "typesafe".into(),
+            ..Config::default()
+        };
+        let err = cfg
+            .validate()
+            .expect_err("typesafe cannot be the chat route");
+        let msg = err.to_string();
+        assert!(msg.contains("boost layer"), "{msg}");
+        assert!(msg.contains("typesafe"), "{msg}");
+        // A normal provider still validates.
+        let ok = Config {
+            provider: "meta".into(),
+            ..Config::default()
+        };
+        assert!(ok.validate().is_ok());
+    }
 
     #[test]
     fn provider_base_url_override_is_scoped_and_normalized() {

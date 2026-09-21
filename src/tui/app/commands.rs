@@ -253,6 +253,7 @@ impl App {
             "/plur" => self.cmd_plur(&arg),
             "/optmem" | "/memo" => self.cmd_optmem(&arg),
             "/headroom" => self.cmd_headroom(&arg),
+            "/typesafe" | "/jev" => self.cmd_typesafe(&arg),
             "/prewalk" => self.cmd_prewalk(&arg),
             "/egaki" => self.cmd_egaki(&arg),
             // `/image <path>`: show an image inline + queue it for vision.
@@ -476,7 +477,20 @@ impl App {
             let rest = parts.next().unwrap_or("").trim();
             match action {
                 "wake" => r#"{"action":"wake"}"#.to_string(),
-                "nap" => r#"{"action":"nap"}"#.to_string(),
+                "nap" => {
+                    // `/optmem nap` shows the next pending block; adding a range
+                    // and a one-line summary applies it, which is how a person
+                    // (or a model reading the block) finishes the queue without
+                    // chaining one call per block.
+                    let mut parts = rest.splitn(2, char::is_whitespace);
+                    let range = parts.next().unwrap_or("").trim();
+                    let line = parts.next().unwrap_or("").trim();
+                    if range.is_empty() || line.is_empty() {
+                        r#"{"action":"nap"}"#.to_string()
+                    } else {
+                        serde_json::json!({"action":"nap","range": range, "text": line}).to_string()
+                    }
+                }
                 "note" => {
                     if rest.is_empty() {
                         self.push_error("usage: /optmem note <one line>".into());
@@ -521,6 +535,71 @@ impl App {
             r#"{"action":"doctor"}"#.to_string()
         };
         self.run_slash_tool("headroom", &json);
+    }
+
+    /// `/typesafe` · `/jev` - the System One (Jev) boost layer.
+    ///
+    /// Bare (or `status` / `doctor`) reports what the layer is doing. `ask` and
+    /// the other judgment actions forward to the `typesafe` tool so the same
+    /// typed questions are available by hand.
+    fn cmd_typesafe(&mut self, arg: &str) {
+        let arg = arg.trim();
+        let lower = arg.to_ascii_lowercase();
+        if arg.is_empty()
+            || lower == "status"
+            || lower == "doctor"
+            || lower == "help"
+            || lower == "on"
+            || lower == "off"
+        {
+            if lower == "on" || lower == "off" {
+                self.cfg.typesafe.enabled = lower == "on";
+                let _ = crate::config::save_config(&self.cfg);
+            }
+            let report = crate::typesafe::doctor_report(&self.cfg.typesafe);
+            let on = self.cfg.typesafe.enabled;
+            let key = crate::typesafe::client::api_key(&self.cfg.typesafe);
+            let active = key.is_some() && crate::typesafe::harness::available(&self.cfg.typesafe);
+            let state = match (on, active) {
+                (false, _) => "OFF (typesafe.enabled = false; /typesafe on to re-enable)",
+                (true, true) => "ON · Jev judgments active for this provider and every other",
+                (true, false) => {
+                    "no key yet · set TYPESAFE_API_KEY, or /auth and pick `TypeSafe · Jev` \
+                     (it is pinned at the top of the list)"
+                }
+            };
+            self.push_info(format!("typesafe · {state}\n{report}"));
+            return;
+        }
+        // Split the *original* text: the proposition must reach the model as the
+        // user typed it (the old code judged a lowercased copy).
+        let (action, rest) = match arg.split_once(' ') {
+            Some((a, r)) => (a.to_ascii_lowercase(), r.trim()),
+            None => (String::new(), arg),
+        };
+        // `/typesafe <free text>` and `/typesafe ask <text>` are "one judgment by
+        // hand": a single yes/no judgment about what was typed. The tool's `ask`
+        // action takes a `questions=[…]` array, so pointing the slash command at it
+        // produced "ask requires questions=[...]" instead of a judgment - free text
+        // is a proposition, which is exactly what `noul` answers.
+        if matches!(action.as_str(), "" | "ask" | "noul") && rest.is_empty() {
+            self.push_info(
+                "typesafe · /typesafe ask <a proposition, e.g. \"the failing test is a \
+                 timeout\">  ·  pick <state>  ·  risk <state>  ·  status"
+                    .to_string(),
+            );
+            return;
+        }
+        let proposition = |text: &str| {
+            serde_json::json!({"action": "noul", "instructions": text}).to_string()
+        };
+        let json = match action.as_str() {
+            "ask" | "noul" => proposition(rest),
+            "pick" => serde_json::json!({"action": "pick", "state": rest}).to_string(),
+            "risk" => serde_json::json!({"action": "risk", "state": rest}).to_string(),
+            _ => proposition(arg),
+        };
+        self.run_slash_tool("typesafe", &json);
     }
 
     /// OMP-style prewalk UI: strong model plans + todos, then smol at first edit.
@@ -1271,11 +1350,22 @@ impl App {
 
     fn cmd_receipt(&mut self) {
         let text = crate::agent::receipt::render(&self.session_id);
+        // Verify the hash chain: the receipt is only evidence of what ran if each
+        // entry still links to the one before it.
+        let v = crate::agent::receipt::verify(&self.session_id);
+        let integrity = if v.ok {
+            format!("[chain verified · {} entries · intact]", v.entries)
+        } else {
+            format!(
+                "[chain BROKEN · first bad entry #{:?} · {} good before it]",
+                v.first_bad, v.entries
+            )
+        };
         // Also (re)export OTLP-flavoured spans for external tracing/tools.
         let n = crate::agent::receipt::export_spans(&self.session_id, None);
         self.push_note(
             Tone::Session,
-            format!("{text}\n[otlp spans exported · {n} spans → receipts/*.spans.jsonl]"),
+            format!("{text}\n{integrity}\n[otlp spans exported · {n} spans → receipts/*.spans.jsonl]"),
         );
     }
 
@@ -2507,8 +2597,9 @@ impl App {
             // Fallback: in-memory session goal (no session id / headless).
             match arg {
                 "" => match &self.session_goal {
-                    Some(g) => self
-                        .push_note(Tone::Plan, format!("goal · {g}\n  /goal clear to drop it")),
+                    Some(g) => {
+                        self.push_note(Tone::Plan, format!("goal · {g}\n  /goal clear to drop it"))
+                    }
                     None => self.push_info(
                         "no session goal set  ·  /goal <what you're trying to achieve>".into(),
                     ),
@@ -2541,8 +2632,7 @@ impl App {
             // Queued cards replay their text as the prompt (steer / cut in /
             // after-turn), so the card carries the full instruction.
             self.queue.push_back(model_prompt.clone());
-            self.cells
-                .push(Cell::Queued { text: model_prompt });
+            self.cells.push(Cell::Queued { text: model_prompt });
             self.scroll_to_bottom();
             self.push_note(
                 Tone::Plan,
@@ -3559,12 +3649,19 @@ mod goal_tests {
 
     #[test]
     fn setting_a_goal_is_a_work_order_management_is_not() {
-        assert_eq!(goal_set_objective("audit the contracts"), Some("audit the contracts"));
+        assert_eq!(
+            goal_set_objective("audit the contracts"),
+            Some("audit the contracts")
+        );
         assert_eq!(goal_set_objective("  ship v2  "), Some("ship v2"));
         for mgmt in [
             "", "get", "clear", "none", "off", "pause", "resume", "complete",
         ] {
-            assert_eq!(goal_set_objective(mgmt), None, "{mgmt:?} must not start a turn");
+            assert_eq!(
+                goal_set_objective(mgmt),
+                None,
+                "{mgmt:?} must not start a turn"
+            );
         }
     }
 

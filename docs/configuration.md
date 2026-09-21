@@ -86,6 +86,21 @@ auto_update = true
 | `kv_stable_compact` | bool | `true` | `true` preserves the recent working edge verbatim after a stable summary for provider prompt-cache reuse. `false` uses a classic reconstructed working-tail order. Compaction status reports the active strategy. |
 | `compaction.remote_enabled` | bool | `false` | Prefer remote summarizer when an endpoint is set |
 | `compaction.remote_endpoint` | string | unset | OMP-compatible compact URL; setting it opts in. Supports `{systemPrompt,prompt}` endpoints and OpenAI `/chat/completions`; failures fall back locally. The bounded transcript crosses this configured remote data boundary. Nur records endpoint origin, bounded input estimate, output estimate, and provider usage when returned in the session receipt. Env: `NUR_COMPACT_REMOTE_ENDPOINT` (+ `NUR_COMPACT_REMOTE=1` if only env) |
+| `typesafe.enabled` | bool | `true` | [TypeSafe](https://docs.typesafe.ai) (Jev) typed judgments for the harness: tool gate, result judge, Jev-scored compaction, skill checks, model routing. Needs a key (`TYPESAFE_API_KEY` or `/auth`); with none, every policy returns "no judgment" and behavior is unchanged. Full reference: [typesafe.md](./typesafe.md) |
+| `typesafe.model` | string | `jev-latest` | System One model that answers the questions |
+| `typesafe.base_url` | string | `https://api.typesafe.ai/v1/systemone` | System One endpoint. A **loopback** URL (127.0.0.1 / localhost / `[::1]`) needs no key and runs the whole judgment layer against a local engine - see [jev-local.md](./jev-local.md) |
+| `typesafe.act_confidence` | float | `0.85` | Confidence at or above which a judgment may change behavior |
+| `typesafe.escalate_confidence` | float | `0.5` | Below this the judgment is handed to a bigger model or a human instead of being acted on |
+| `typesafe.max_questions_per_request` | integer | `24` | Questions merged into one request before they are split and sent in parallel |
+| `typesafe.max_parallel` | integer | `4` | Concurrent requests when a question set is split |
+| `typesafe.compaction.replace_summary` | bool | `true` | When a Jev prune frees enough context, skip the summarizing model call entirely (survivors stay verbatim) |
+| `typesafe.compaction.min_reduction` | float | `0.25` | Reduction ratio required to take that path instead of summarizing |
+| `typesafe.tool_gate.skip_redundant` | bool | `true` | Answer a confident duplicate of a call whose result is still in context without re-running the tool |
+| `typesafe.tool_gate.skip_repeated_failures` | bool | `false` | Also skip identical repeats of a call that already failed (surfaced in the transcript, not enforced, by default) |
+| `typesafe.skills.narrow_requirements` | bool | `true` | Inject only the triggered skill's applicable rules as a checklist |
+| `typesafe.routing.enabled` | bool | `false` | Let the harness switch to the suggested model; `false` keeps the suggestion advisory |
+| `typesafe.tools.subset` | bool | `false` | Narrow the tool surface on the first round of a turn (one Noul per specialist; later rounds get the full surface). Off because tool schemas ride the prompt cache |
+| `typesafe.tools.keep_probability` | float | `0.75` | How confident the answer must be that a tool is *not* needed before it is dropped (keeping is the safe direction) |
 | `prewalk.enabled` | bool | `false` | After todos exist, first write/edit switches to `prewalk.into` / smol |
 | `prewalk.into` | string | unset | Cheap model for prewalk handoff (`/prewalk into …`, or `OMP_SMOL_MODEL` / OMP `modelRoles.smol`) |
 | `helix_memory.mode` | string | `auto` | `auto` enables only when `HELIX_URL`/`NUR_HELIX_URL` or a configured URL exists; `on` uses the configured/local endpoint; `off` disables the resident |
@@ -202,6 +217,11 @@ Reload without restart: `/permissions reload`.
 
 ## Tool hooks
 
+Hook **output is discarded** - exit status is the only channel (`0` allows, non-zero
+blocks the call in Manual/Auto and is reported to the model). stdout/stderr are not
+captured, so a hook that writes a lot cannot stall the call.
+
+
 Optional file: **`~/.nur/hooks.toml`**.
 
 ```toml
@@ -233,6 +253,8 @@ Non-zero **pre_tool** exit blocks the tool. Missing file = no hooks. Check statu
 | `META_API_KEY` | Optional key for Meta Model API provider |
 | `NUR_BASE_URL` | Override API base URL (self-hosted Ollama/vLLM/LiteLLM/gateways) |
 | `NUR_MODEL` | Override model id |
+| `NUR_JEV_LOCAL_URL` | Point the TypeSafe layer at a local System One engine (e.g. `http://127.0.0.1:8788`). Loopback needs no key, so `TYPESAFE_API_KEY` becomes optional. See [jev-local.md](./jev-local.md) |
+| `TYPESAFE_API_KEY` | TypeSafe (Jev) key for the harness boost layer. Aliases: `TYPESAFE_KEY`, `JEV_API_KEY`; also `/auth` → `TypeSafe · Jev`, or `~/.nur/typesafe.key`. It is a judgment credential, never the active chat provider |
 
 ### Provider reliability
 

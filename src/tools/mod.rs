@@ -15,6 +15,8 @@ pub mod fractal_tool;
 mod goal_tool;
 mod harness_tool;
 pub mod headroom_tool;
+pub mod typesafe_tool;
+pub use typesafe_tool::is_read_only_action as typesafe_is_read_only;
 mod ipython_tool;
 mod mem_tool;
 mod message_tool;
@@ -128,7 +130,7 @@ pub const SUBAGENT_TOOL_NAMES: &[&str] = &[
 /// restored after the first tool round. This avoids re-billing unrelated
 /// ecosystem schemas on the common inspect/edit/test loop without making an
 /// enabled tool permanently unreachable.
-const ROOT_CORE_TOOL_NAMES: &[&str] = &[
+pub(crate) const ROOT_CORE_TOOL_NAMES: &[&str] = &[
     "read_file",
     "list_dir",
     "write_file",
@@ -168,6 +170,17 @@ pub struct ToolContext {
 /// Tool contract. Capability methods are **fail-closed** by default
 /// (not free, not parallel, not destructive). Override or rely on the
 /// central classifier in [`capabilities`] via the default impls.
+impl ToolContext {
+    /// A context with no cancellation, for tests that exercise a tool directly.
+    #[cfg(test)]
+    pub fn default_for_test(cwd: &std::path::Path) -> Self {
+        Self {
+            cwd: cwd.to_path_buf(),
+            cancel: tokio_util::sync::CancellationToken::new(),
+        }
+    }
+}
+
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
@@ -255,6 +268,7 @@ impl ToolHost {
             Box::new(bg_tool::Bg),
             Box::new(fractal_tool::Fractal),
             Box::new(headroom_tool::Headroom),
+            Box::new(typesafe_tool::Typesafe),
             Box::new(optmem_tool::OptMem),
             Box::new(dogwood_tool::Dogwood),
             Box::new(egaki_tool::Egaki),
@@ -350,6 +364,26 @@ impl ToolHost {
         if has(&["external api", "openapi", "graphql", "mcp", "executor"]) {
             enabled.insert("executor");
         }
+        // A task that is *about* judgments gets the TypeSafe tool on the first
+        // round: it is the surface for asking a typed question directly, and
+        // waiting a round to expose it just burns the round. Every other task
+        // still gets it from the second round on, and the harness uses Jev
+        // internally either way.
+        if has(&[
+            "typesafe",
+            "jev",
+            "judgment",
+            "judgement",
+            "classify",
+            "rank these",
+            "which model",
+            "is this spam",
+            "relevant",
+            "needs a human",
+            "risky",
+        ]) {
+            enabled.insert("typesafe");
+        }
         all.into_iter()
             .filter(|tool| enabled.contains(tool.name.as_str()))
             .collect()
@@ -428,6 +462,7 @@ impl ToolHost {
             "bg" => bg_tool::Bg.execute(&args, ctx),
             "fractal" => fractal_tool::Fractal.execute(&args, ctx),
             "headroom" => headroom_tool::Headroom.execute(&args, ctx),
+            "typesafe" => typesafe_tool::Typesafe.execute(&args, ctx),
             "optmem" => optmem_tool::OptMem.execute(&args, ctx),
             "dogwood" => dogwood_tool::Dogwood.execute(&args, ctx),
             "egaki" => egaki_tool::Egaki.execute(&args, ctx),
@@ -558,9 +593,32 @@ pub(crate) fn arg_str(args: &Value, key: &str) -> Result<String> {
 pub(crate) fn arg_u64(args: &Value, key: &str) -> Option<u64> {
     args.get(key).and_then(|v| {
         v.as_u64()
-            .or_else(|| v.as_i64().map(|i| i as u64))
-            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+            // A negative number must not wrap: `-1 as u64` is a huge offset that
+            // silently produces an empty result instead of an error.
+            .or_else(|| v.as_i64().filter(|i| *i >= 0).map(|i| i as u64))
+            .or_else(|| {
+                v.as_str()
+                    .and_then(|s| s.trim().parse::<i64>().ok())
+                    .filter(|i| *i >= 0)
+                    .map(|i| i as u64)
+            })
     })
+}
+
+#[cfg(test)]
+mod arg_tests {
+    use super::*;
+
+    /// `-1 as u64` is a huge offset: `read_file {offset:-1}` used to silently
+    /// return an empty file instead of an error.
+    #[test]
+    fn negative_numbers_are_not_valid_offsets_or_limits() {
+        assert_eq!(arg_u64(&serde_json::json!({ "n": -1 }), "n"), None);
+        assert_eq!(arg_u64(&serde_json::json!({ "n": "-1" }), "n"), None);
+        assert_eq!(arg_u64(&serde_json::json!({ "n": 0 }), "n"), Some(0));
+        assert_eq!(arg_u64(&serde_json::json!({ "n": "12" }), "n"), Some(12));
+        assert_eq!(arg_u64(&serde_json::json!({ "n": 1.5 }), "n"), None);
+    }
 }
 
 #[cfg(test)]
@@ -571,6 +629,36 @@ mod tests {
     /// `dispatch` arm, and vice-versa. Because the two rosters live in separate
     /// functions (see the note on `dispatch`), this test is the guardrail: it
     /// locks the exact set so adding/removing a tool in only one place fails CI.
+    /// The task-shaped first-round profile must expose the judgment tool when
+    /// the task is a judgment, and must stay lean otherwise.
+    #[test]
+    fn a_judgment_shaped_task_gets_the_typesafe_tool_first_round() {
+        let host = ToolHost::default();
+        let names = |task: &str| -> Vec<String> {
+            host.root_tool_defs_for_task(task, false)
+                .into_iter()
+                .map(|d| d.name)
+                .collect()
+        };
+        assert!(
+            names("classify these support tickets and tell me which need a human")
+                .iter()
+                .any(|n| n == "typesafe"),
+            "a judgment task should not wait a round for the tool"
+        );
+        assert!(
+            !names("fix the failing test in src/lib.rs")
+                .iter()
+                .any(|n| n == "typesafe"),
+            "ordinary repo work keeps the lean profile"
+        );
+        // Second round and later always gets the full surface.
+        assert!(host
+            .root_tool_defs_for_task("fix the failing test", true)
+            .iter()
+            .any(|d| d.name == "typesafe"));
+    }
+
     #[test]
     fn roster_stays_in_sync() {
         let mut got: Vec<String> = ToolHost::default()
@@ -620,6 +708,7 @@ mod tests {
             "bg",
             "fractal",
             "headroom",
+            "typesafe",
             "optmem",
             "dogwood",
             "egaki",

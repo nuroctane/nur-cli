@@ -633,7 +633,30 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
             format!("{marker}{name_col:<25} {}{priv_badge}{fb}", p.note)
         };
         let style = if selected { name_style } else { note_style };
-        lines.push(Line::from(Span::styled(truncate(&text, col), style)).style(style));
+        // Sidecar entries (the Jev boost layer) get their own border so they
+        // read as a different kind of thing: a credential that upgrades every
+        // provider, not another model you can chat with.
+        if crate::providers::is_sidecar_provider(p.id) {
+            let bar = Style::default()
+                .fg(if selected {
+                    theme::ON_ACCENT_FG()
+                } else {
+                    theme::BLUE_100()
+                })
+                .add_modifier(Modifier::BOLD);
+            let body = if manage_auth {
+                format!("{name_col:<25} {auth}")
+            } else {
+                format!("{name_col:<25} {}{priv_badge}", p.note)
+            };
+            lines.push(Line::from(vec![
+                Span::styled(if selected { "❯▌" } else { " ▌" }, bar),
+                Span::styled(truncate(&body, col.saturating_sub(6)), style),
+                Span::styled(" ▐", bar),
+            ]));
+        } else {
+            lines.push(Line::from(Span::styled(truncate(&text, col), style)).style(style));
+        }
 
         // Hit row: absolute index i, screen y under filter header.
         let drawn = i - start;
@@ -1284,7 +1307,12 @@ fn draw_login_key(f: &mut Frame, app: &mut App, area: Rect) {
         rect,
     );
     let phase = modal_phase(app);
-    let title = if m.fallback_key {
+    let sidecar = crate::providers::is_sidecar_provider(provider.id);
+    let title = if sidecar {
+        // Not an error and not the active model: a credential that lifts every
+        // provider, so it gets its own framing rather than the generic key modal.
+        format!(" ⚡ {} · boost layer key ", provider.name)
+    } else if m.fallback_key {
         format!(" ↻ {} · provider-scoped key ", provider.name)
     } else {
         format!(" 🔑 {} ", provider.name)
@@ -1306,7 +1334,12 @@ fn draw_login_key(f: &mut Frame, app: &mut App, area: Rect) {
     if theme::blink_on(app.spinner_epoch.elapsed()) {
         field.push('▉');
     }
-    let key_hint = if provider.key_optional {
+    let key_hint = if sidecar {
+        format!(
+            "{} key · env {} · typed judgments for every provider (not your active model)",
+            provider.name, provider.env_key
+        )
+    } else if provider.key_optional {
         format!("{} API key  (optional for local)", provider.name)
     } else {
         format!("{} API key  ·  env {}", provider.name, provider.env_key)
@@ -6858,7 +6891,6 @@ fn draw_statusline(f: &mut Frame, app: &App, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         ));
     }
-
     let quitting = app
         .quit_armed
         .map(|t| t.elapsed().as_secs() < 2)
@@ -6909,6 +6941,26 @@ fn draw_statusline(f: &mut Frame, app: &App, area: Rect) {
             Span::raw(" ".to_string()),
         ]
     };
+
+    // TypeSafe/Jev chip — what the boost layer actually did this session
+    // (requests, tokens, tokens kept out of context, escalations). Empty when
+    // there is no key or nothing has been judged. Added last and only when it
+    // fits: a status chip must never push the permission mode and state off the
+    // right edge, which are the two things the user most needs to see.
+    if let Some(chip) = crate::typesafe::status_chip() {
+        let used: usize = left.iter().map(|s| s.content.width()).sum();
+        let reserved: usize = right.iter().map(|s| s.content.width()).sum();
+        let need = UnicodeWidthStr::width(chip.as_str()) + 3;
+        if used + reserved + need < area.width as usize {
+            left.push(sep());
+            left.push(Span::styled(
+                chip,
+                Style::default()
+                    .fg(theme::TEAL())
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+    }
 
     let left_w: usize = left.iter().map(|s| s.content.width()).sum();
     let right_w: usize = right.iter().map(|s| s.content.width()).sum();

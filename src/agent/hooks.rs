@@ -128,8 +128,12 @@ fn run_hook(
         .env("NUR_CWD", cwd.display().to_string())
         .env("NUR_SESSION", session_id)
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        // Discarded, not piped: nobody reads these pipes, so a hook that writes
+        // more than the OS pipe buffer (~64 KiB) would block on write, be killed
+        // at the deadline (exit 124), and the hook layer would treat that as a
+        // refusal for every tool call.
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
 
     let mut child = c.spawn()?;
     // Cooperative-ish timeout: wait with polling.
@@ -150,6 +154,45 @@ fn run_hook(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A hook that writes more than the OS pipe buffer used to block on write,
+    /// get killed at the deadline (exit 124), and then be reported as a refusal
+    /// for every tool call. Output is discarded, so it must simply exit 0.
+    #[test]
+    fn a_hook_that_floods_stdout_completes() {
+        let dir = std::env::temp_dir().join(format!("nur-hooks-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let (script, cmd) = if cfg!(windows) {
+            let path = dir.join("flood.cmd");
+            // `fsutil` is not needed: a for-loop writing a long line repeatedly.
+            std::fs::write(
+                &path,
+                "@echo off\r\nfor /L %%i in (1,1,2000) do @echo 0123456789012345678901234567890123456789012345678901234567890123\r\n",
+            )
+            .unwrap();
+            (path.clone(), path.to_string_lossy().to_string())
+        } else {
+            let path = dir.join("flood.sh");
+            std::fs::write(&path, "#!/bin/sh\ni=0\nwhile [ $i -lt 2000 ]; do echo 0123456789012345678901234567890123456789012345678901234567890123; i=$((i+1)); done\nexit 0\n").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
+            }
+            (path.clone(), path.to_string_lossy().to_string())
+        };
+        let started = std::time::Instant::now();
+        let code =
+            run_hook(&cmd, "read_file", "{}", &dir, "test-session", 20_000).expect("the hook runs");
+        let elapsed = started.elapsed();
+        assert_eq!(code, 0, "flooding stdout is not a failure");
+        assert!(
+            elapsed < std::time::Duration::from_secs(20),
+            "it must not be killed at the deadline: {elapsed:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = script;
+    }
 
     #[test]
     fn inactive_when_empty() {

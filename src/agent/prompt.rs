@@ -122,6 +122,13 @@ pub struct PromptContext {
     activation: String,
     /// Short label for TUI status when activation fires (e.g. `fable-method`).
     activation_label: Option<String>,
+    /// Name of the skill that activated this turn, for the skill layer's own
+    /// usage check (no separate reviewer - the skill machinery owns it).
+    activation_skill: Option<String>,
+    /// The skill's own checkable requirements, extracted by code.
+    activation_requirements: Vec<String>,
+    /// Path of the activated skill file (diagnostics + status).
+    activation_path: Option<String>,
     /// Provider aliases the user named in this turn's message (for agent.provider nudge).
     named_providers: Vec<String>,
 }
@@ -166,16 +173,28 @@ impl PromptContext {
         };
         // Skills: on-demand only. NL activation runs for every provider (not
         // gated by poor_mode). Subagents skip - they get a focused task prompt.
-        let (activation, activation_label) = if is_subagent {
-            (String::new(), None)
+        let (
+            activation,
+            activation_label,
+            activation_skill,
+            activation_requirements,
+            activation_path,
+        ) = if is_subagent {
+            (String::new(), None, None, Vec::new(), None)
         } else if let Some(text) = user_text {
             let loaded = load_skills(cwd);
             match skill_activation(text, &loaded) {
-                Some(a) => (a.section, Some(a.label)),
-                None => (String::new(), None),
+                Some(a) => (
+                    a.section,
+                    Some(a.label),
+                    Some(a.name),
+                    a.requirements,
+                    Some(a.path),
+                ),
+                None => (String::new(), None, None, Vec::new(), None),
             }
         } else {
-            (String::new(), None)
+            (String::new(), None, None, Vec::new(), None)
         };
         // Cross-provider nudge: only when the user *explicitly asks* to delegate
         // work to another backend this turn (e.g. "spawn a grok subagent",
@@ -200,6 +219,9 @@ impl PromptContext {
             optmem,
             activation,
             activation_label,
+            activation_skill,
+            activation_requirements,
+            activation_path,
             named_providers,
         }
     }
@@ -212,6 +234,18 @@ impl PromptContext {
     /// Short label for status UI (`fable-method`, `tdd`, …).
     pub fn skill_activation_label(&self) -> Option<&str> {
         self.activation_label.as_deref()
+    }
+
+    /// The activated skill's name, its own stated requirements and its path, for
+    /// the skill layer's usage check.
+    pub fn active_skill(&self) -> Option<(&str, &[String], &str)> {
+        self.activation_skill.as_deref().map(|n| {
+            (
+                n,
+                self.activation_requirements.as_slice(),
+                self.activation_path.as_deref().unwrap_or(""),
+            )
+        })
     }
 
     /// Render with the live bits: permission mode and the todo list, both of

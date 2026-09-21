@@ -46,9 +46,17 @@ impl Tool for WebSearch {
         if !status.is_success() {
             return Err(NurError::Tool(format!("search failed: HTTP {status}")));
         }
-        let body = resp
-            .text()
-            .map_err(|e| NurError::Tool(format!("search read: {e}")))?;
+        // Bounded like web_fetch: an unexpectedly large proxy/HTML response must
+        // not be buffered whole.
+        let body = {
+            use std::io::Read;
+            let mut capped = String::new();
+            let _ = resp
+                .take(2_000_000)
+                .read_to_string(&mut capped)
+                .map_err(|e| NurError::Tool(format!("search read: {e}")))?;
+            capped
+        };
 
         let results = parse_ddg_html(&body, max);
         if results.is_empty() {

@@ -15,6 +15,7 @@ mod fractal;
 mod gateway;
 mod gepa;
 mod headroom;
+mod jev_local;
 mod local;
 mod oauth;
 mod open_uri;
@@ -29,6 +30,7 @@ mod terminal_browser;
 mod theme;
 mod tools;
 mod tui;
+mod typesafe;
 mod usage;
 
 use agent::session::{print_sessions, Session};
@@ -157,6 +159,10 @@ async fn real_main() -> Result<()> {
             run_doctor()?;
             return Ok(());
         }
+        Some(Commands::Jev { action }) => {
+            run_jev(action.clone())?;
+            return Ok(());
+        }
         Some(Commands::Ecosystem { action }) => {
             match action {
                 cli::EcosystemCmd::Ensure { force } => {
@@ -246,11 +252,26 @@ async fn real_main() -> Result<()> {
     // personal accent color survives every `/theme` switch.
     theme::apply_theme_config_global(&cfg.theme_setup);
     theme::set_transparent(cfg.theme_setup.transparent);
+    // Override precedence: `--model` (explicit, always wins), then NUR_MODEL from
+    // a *user* environment, then config.
+    //
+    // Inherited values are excluded. nur exports NUR_MODEL/NUR_PROVIDER/
+    // NUR_SESSION_ID to its own children so the ADE/Orca hook can report
+    // usage, so `nur run` inside a nur session used to adopt the parent's model
+    // instead of its own config - observed live as a 400 (`Model
+    // "deepseek-v4.1-flash" is not supported on this endpoint`) because the
+    // parent's exported, already-mangled id replaced the correct
+    // `deepseek/deepseek-v4.1-flash` from config.toml.
     if let Some(m) = &cli.model {
         cfg.model = m.clone();
     } else if let Ok(m) = std::env::var("NUR_MODEL") {
-        if !m.trim().is_empty() {
+        if !m.trim().is_empty() && !launched_by_a_nur_session() {
             cfg.model = m;
+        } else if !m.trim().is_empty() {
+            theme::print_info(&format!(
+                "ignoring inherited NUR_MODEL={m} (this process was started by a nur session; \
+                 pass --model to override)"
+            ));
         }
     }
     // CLI `--model opencode-go/<id>` or bare Go id like `kimi-k3` must also
@@ -433,6 +454,9 @@ async fn real_main() -> Result<()> {
         ("NUR_STATUS_PATH", status_s.as_str()),
         ("NUR_USAGE_LOG_PATH", usage_s.as_str()),
         ("NUR_SESSION_ID", session.id.as_str()),
+        // Marker for children: their NUR_MODEL/NUR_PROVIDER are inherited
+        // context, not a user override (see `launched_by_a_nur_session`).
+        ("NUR_CHILD", "1"),
         ("NUR_MODEL", cfg.model.as_str()),
         ("NUR_PROVIDER", cfg.provider.as_str()),
         ("NUR_HOME", home_s.as_str()),
@@ -470,13 +494,30 @@ async fn real_main() -> Result<()> {
     let start_mode = if cli.yes {
         PermissionMode::Auto
     } else if let Some(m) = &cli.mode {
-        PermissionMode::parse(m).unwrap_or(PermissionMode::Manual)
+        // An invalid mode used to be downgraded to Manual silently: the user asks
+        // for auto-approval, gets prompts, and has no idea why.
+        PermissionMode::parse(m).ok_or_else(|| {
+            error::NurError::Config(format!(
+                "invalid --mode '{m}' - use manual, plan, or auto"
+            ))
+        })?
     } else {
         PermissionMode::Manual
     };
     let permission_mode = SharedMode::new(start_mode);
 
     match &cli.command {
+        // `nur jev` is dispatched (and returns) before the client is built: it
+        // manages a local engine and needs no provider credential.
+        Some(Commands::Jev { .. }) => {}
+        // `--continuous` drives the continuous runner, which is only wired to the
+        // no-subcommand path; accepting it on `run` silently ignored it.
+        Some(Commands::Run { .. }) if cli.continuous => {
+            return Err(error::NurError::Other(
+                "--continuous does not apply to `nur run` (that is one headless turn). Use                  `nur \"<goal>\" --continuous`, or drop the flag."
+                    .into(),
+            ));
+        }
         Some(Commands::Run { prompt, yes }) => {
             let prompt = prompt.join(" ");
             if *yes {
@@ -702,6 +743,108 @@ fn run_browser_setup(open: bool) -> Result<()> {
 }
 
 /// Headless health check for install, auth, config, and ecosystem.
+#[cfg(test)]
+mod child_env_tests {
+    /// The predicate reads the process environment, so this documents the
+    /// contract rather than mutating global state (env edits in tests race).
+    #[test]
+    fn the_child_marker_is_documented_and_set() {
+        // main sets NUR_CHILD when exporting child context.
+        let src = include_str!("main.rs");
+        assert!(
+            src.contains("(\"NUR_CHILD\", \"1\")"),
+            "child marker exported"
+        );
+        assert!(
+            src.contains("fn launched_by_a_nur_session"),
+            "the guard exists"
+        );
+        // And clap no longer binds --model to the exported variable.
+        let cli = include_str!("cli.rs");
+        assert!(
+            !cli.contains("env = \"NUR_MODEL\""),
+            "--model must not read the inherited NUR_MODEL"
+        );
+    }
+}
+
+/// `nur jev …` - the local-engine control surface.
+///
+/// Everything here is about making "typed decisions on this machine, no key" a
+/// single command: start an engine, point nur at it, check what this device can
+/// run. Nothing here is required for the hosted TypeSafe path.
+fn run_jev(action: cli::JevCmd) -> Result<()> {
+    let cfg = load_config().unwrap_or_default();
+    match action {
+        cli::JevCmd::Status => {
+            theme::print_info("nur jev · local typed decisions");
+            for line in jev_local::status_lines(&cfg.typesafe) {
+                println!("{line}");
+            }
+        }
+        cli::JevCmd::Start {
+            backend,
+            port,
+            verdict_model,
+            nimble_dir,
+            laya_model,
+            device,
+        } => {
+            // Forwarded verbatim: the bridge's own CLI is the source of truth for
+            // these, and a wrong one fails in the foreground with its own message.
+            let mut extra: Vec<String> = Vec::new();
+            for (flag, value) in [
+                ("--verdict-model", verdict_model),
+                ("--nimble-dir", nimble_dir),
+                ("--laya-model", laya_model),
+                ("--device", device),
+            ] {
+                if let Some(v) = value {
+                    extra.push(flag.to_string());
+                    extra.push(v);
+                }
+            }
+            let report = jev_local::start(&backend, port, &extra)?;
+            theme::print_ok(&report);
+            if jev_local::probe_port(port).is_some() {
+                theme::print_info(&format!(
+                    "point nur at it:  nur jev use --port {port}   (or export \
+                     NUR_JEV_LOCAL_URL=http://127.0.0.1:{port}/v1/systemone)"
+                ));
+            }
+        }
+        cli::JevCmd::Stop => {
+            let report = jev_local::stop()?;
+            theme::print_ok(&report);
+        }
+        cli::JevCmd::Use { port, hosted } => {
+            let report = if hosted {
+                jev_local::use_hosted()?
+            } else {
+                jev_local::use_port(port)?
+            };
+            theme::print_ok(&report);
+        }
+        cli::JevCmd::Selftest => {
+            let report = jev_local::selftest()?;
+            println!("{report}");
+            if !report.contains("all checks passed") {
+                return Err(error::NurError::Other(
+                    "the local bridge selftest reported failures".into(),
+                ));
+            }
+        }
+        cli::JevCmd::Probe => {
+            let info = jev_local::probe_backends()?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&info).unwrap_or_else(|_| "{}".into())
+            );
+        }
+    }
+    Ok(())
+}
+
 fn run_doctor() -> Result<()> {
     theme::print_info(&format!("nur doctor · v{}", env!("CARGO_PKG_VERSION")));
     println!();
@@ -763,6 +906,32 @@ fn run_doctor() -> Result<()> {
         } else {
             theme::print_ok(&line);
         }
+    }
+
+    // TypeSafe / Jev: the boost layer that budgets every other provider's
+    // tokens. Reported whether or not a key exists - the reason matters.
+    println!();
+    let ts_cfg = load_config().map(|c| c.typesafe).unwrap_or_default();
+    // A local engine needs no key, so "no key" is not the same as "inactive": the
+    // report must not tell a user with a working local bridge that Jev is off.
+    if ts_cfg.enabled && typesafe::harness::available(&ts_cfg) {
+        if typesafe::client::api_key(&ts_cfg).is_some() {
+            theme::print_ok("typesafe Jev judgments active (tool `typesafe` · /typesafe)");
+        } else {
+            theme::print_ok(&format!(
+                "typesafe Jev judgments active on this machine (local engine · {} · no key \
+                 needed)",
+                typesafe::client::effective_base_url(&ts_cfg)
+            ));
+        }
+    } else {
+        theme::print_info(
+            "typesafe inactive — set TYPESAFE_API_KEY or /auth → `TypeSafe · Jev` (pinned at the \
+             top of the provider list)",
+        );
+    }
+    for line in typesafe::doctor_report(&ts_cfg).lines() {
+        theme::print_info(&format!("  {line}"));
     }
 
     // Auto-update — the only place a user can see whether the launch check is
@@ -908,6 +1077,18 @@ fn which_bin(name: &str) -> Option<String> {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Did a nur session launch this process?
+///
+/// nur exports `NUR_SESSION_ID` (and now `NUR_CHILD`) plus its own model and
+/// provider to children, for the ADE/Orca hook and status reporting. Those
+/// exports describe the *parent* session, so they must never be read back as
+/// routing overrides - otherwise a child silently inherits the parent's model
+/// and provider, and any config it has of its own is ignored.
+fn launched_by_a_nur_session() -> bool {
+    std::env::var("NUR_CHILD").is_ok()
+        || std::env::var("NUR_SESSION_ID").is_ok_and(|v| !v.trim().is_empty())
+}
+
 async fn run_headless(
     client: ApiClient,
     cfg: Config,

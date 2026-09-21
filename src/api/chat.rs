@@ -156,8 +156,7 @@ pub fn build_body_opts(
     // replayed assistant message - both are documented to tolerate that.
     if deepseek_rules {
         for message in &mut messages {
-            let is_assistant =
-                message.get("role").and_then(|r| r.as_str()) == Some("assistant");
+            let is_assistant = message.get("role").and_then(|r| r.as_str()) == Some("assistant");
             let has_tool_calls = message.get("tool_calls").is_some();
             if is_assistant && !has_tool_calls {
                 if let Some(obj) = message.as_object_mut() {
@@ -172,13 +171,11 @@ pub fn build_body_opts(
         // synthesize the field on tool-call turns that lack it so the
         // validator passes. Non-thinking requests (no reasoning anywhere)
         // keep the field absent.
-        let thinking_conversation = messages
-            .iter()
-            .any(|m| {
-                m.get("reasoning_content")
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|s| !s.is_empty())
-            });
+        let thinking_conversation = messages.iter().any(|m| {
+            m.get("reasoning_content")
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| !s.is_empty())
+        });
         if thinking_conversation {
             for message in &mut messages {
                 let is_assistant =
@@ -186,8 +183,7 @@ pub fn build_body_opts(
                 let has_tool_calls = message.get("tool_calls").is_some();
                 if is_assistant && has_tool_calls {
                     if let Some(obj) = message.as_object_mut() {
-                        obj.entry("reasoning_content")
-                            .or_insert_with(|| json!(""));
+                        obj.entry("reasoning_content").or_insert_with(|| json!(""));
                     }
                 }
             }
@@ -619,7 +615,8 @@ fn attach_reasoning_content(shaped: &mut Value, reasoning: Option<&str>) {
         // while the reasoning is stranded on the empty one — DeepSeek
         // thinking mode then 400s ("reasoning_content must be passed back").
         if let Some(first) = output.first_mut() {
-            let is_assistant_message = first.get("type").and_then(|t| t.as_str()) == Some("message")
+            let is_assistant_message = first.get("type").and_then(|t| t.as_str())
+                == Some("message")
                 && first.get("role").and_then(|r| r.as_str()) == Some("assistant");
             if is_assistant_message {
                 let empty_or_absent = first
@@ -883,7 +880,9 @@ impl StreamAccumulator {
             self.model = v.get("model").and_then(|x| x.as_str()).map(String::from);
         }
         if let Some(u) = v.get("usage") {
-            if u.is_object() {
+            // An empty `{}` frame (some proxies emit one after the real usage)
+            // must not overwrite a usage object we already have.
+            if u.as_object().is_some_and(|m| !m.is_empty()) {
                 self.usage = Some(u.clone());
             }
         }
@@ -917,13 +916,15 @@ impl StreamAccumulator {
         let mut out: Vec<ChatDelta> = Vec::new();
         if let Some(delta) = delta {
             // Dedicated reasoning field, under either of its two spellings.
-            for key in ["reasoning_content", "reasoning"] {
-                if let Some(r) = delta.get(key).and_then(|c| c.as_str()) {
-                    if !r.is_empty() {
-                        self.reasoning.push_str(r);
-                        out.push(ChatDelta::Reasoning(r.to_string()));
-                    }
-                }
+            // Prefer the first present key: a proxy emitting both would otherwise
+            // append the same text twice.
+            let reasoning = ["reasoning_content", "reasoning"]
+                .iter()
+                .find_map(|key| delta.get(*key).and_then(|c| c.as_str()))
+                .filter(|r| !r.is_empty());
+            if let Some(r) = reasoning {
+                self.reasoning.push_str(r);
+                out.push(ChatDelta::Reasoning(r.to_string()));
             }
             if let Some(c) = delta.get("content").and_then(|c| c.as_str()) {
                 if !c.is_empty() {
@@ -1781,6 +1782,29 @@ mod tool_choice_tests {
     /// TWO message items - reasoning on an empty one, text on the next - so
     /// the tool_calls folded onto the text message while the reasoning was
     /// stranded upstream of it. The parse must keep them on ONE message.
+    /// A delta carrying both spellings appended the same text twice, and an
+    /// empty `usage: {}` frame could overwrite real usage.
+    #[test]
+    fn both_reasoning_spellings_do_not_duplicate_and_empty_usage_is_ignored() {
+        let mut acc = StreamAccumulator::default();
+        acc.push(
+            &json!({"usage": {"prompt_tokens": 11, "completion_tokens": 2, "total_tokens": 13}}),
+        );
+        acc.push(&json!({"usage": {}}));
+        acc.push(&json!({"choices": [{"delta": {
+            "reasoning_content": "first",
+            "reasoning": "first"
+        }}]}));
+        acc.push(&json!({"choices": [{"delta": {"reasoning": "second"}}]}));
+        assert_eq!(acc.reasoning, "firstsecond", "no duplicated reasoning text");
+        let usage = acc.usage.clone().unwrap_or_default();
+        assert_eq!(
+            usage.get("prompt_tokens").and_then(|v| v.as_u64()),
+            Some(11),
+            "an empty usage frame must not wipe the real one: {usage}"
+        );
+    }
+
     #[test]
     fn parse_merges_reasoning_into_the_text_message_of_a_tool_call_turn() {
         let raw = json!({
@@ -1870,9 +1894,15 @@ mod tool_choice_tests {
         let mut request = req_with_choice(Some("required"));
         request.model = "deepseek/deepseek-v4.1-flash".into();
         let body = build_body_for_provider(&request, false, "deepseek");
-        assert_eq!(body["tool_choice"], "auto", "deepseek thinking rejects required");
+        assert_eq!(
+            body["tool_choice"], "auto",
+            "deepseek thinking rejects required"
+        );
         let body = build_body_for_provider(&request, false, "commandcode");
-        assert_eq!(body["tool_choice"], "auto", "commandcode routes to deepseek");
+        assert_eq!(
+            body["tool_choice"], "auto",
+            "commandcode routes to deepseek"
+        );
         // Other providers with a NON-deepseek model keep the forced form
         // (the clamp is model-keyed, not provider-keyed).
         let plain = req_with_choice(Some("required"));

@@ -24,8 +24,10 @@ pub struct Cli {
     #[arg(value_name = "PROMPT")]
     pub prompt: Option<String>,
 
-    /// Model id (default from config / provider). Env: NUR_MODEL.
-    #[arg(short, long, env = "NUR_MODEL")]
+    /// Model id (default from config / provider). Env: NUR_MODEL — read in
+    /// `main`, not by clap: nur exports NUR_MODEL to its own children for the
+    /// ADE hook, and an inherited value must not re-route a child session.
+    #[arg(short, long)]
     pub model: Option<String>,
 
     /// Working directory
@@ -117,6 +119,11 @@ pub enum Commands {
     Ecosystem {
         #[command(subcommand)]
         action: EcosystemCmd,
+    },
+    /// Local System One engines (Jev contract): verdict · nimble · laya · mock
+    Jev {
+        #[command(subcommand)]
+        action: JevCmd,
     },
     /// Set up the real-Chrome `browser` tool for your default browser
     Browser {
@@ -231,6 +238,53 @@ pub enum BrowserCmd {
     Setup,
     /// Show detected default browser + extension staging state
     Status,
+}
+
+/// Local System One engines (`nur jev …`).
+///
+/// One bridge serves three open decision engines behind the same typed contract
+/// nur already speaks, so the whole harness boost works with no cloud key:
+/// `verdict` (openJev-verdict-2.0), `nimble` (Bespoke-Nimble-9B), `laya` (Laya
+/// Core ML, Apple Silicon only), plus `mock` for tests and demos.
+#[derive(Subcommand, Debug, Clone)]
+pub enum JevCmd {
+    /// Show the endpoint, credential source, bridge state, and which backends this machine can run
+    Status,
+    /// Start a local engine (writes ~/.nur/jev/bridge.json)
+    Start {
+        /// Engine to serve
+        #[arg(long, default_value = "verdict")]
+        backend: String,
+        /// Loopback port
+        #[arg(long, default_value_t = 8788)]
+        port: u16,
+        /// openJev/GLiClass model id or local checkout (`verdict`)
+        #[arg(long)]
+        verdict_model: Option<String>,
+        /// Directory holding the Nimble weights, if not ./nimble-model (`nimble`)
+        #[arg(long)]
+        nimble_dir: Option<String>,
+        /// Core ML bundle to load (`laya`)
+        #[arg(long)]
+        laya_model: Option<String>,
+        /// Device for the `verdict` backend
+        #[arg(long)]
+        device: Option<String>,
+    },
+    /// Stop the bridge started by `nur jev start`
+    Stop,
+    /// Point [typesafe] at the local bridge (needs no key); `--hosted` reverts
+    Use {
+        #[arg(long, default_value_t = 8788)]
+        port: u16,
+        /// Go back to the hosted TypeSafe endpoint instead
+        #[arg(long)]
+        hosted: bool,
+    },
+    /// Run the bridge's own mapping selftest (no model, no downloads)
+    Selftest,
+    /// List the backends this machine can run
+    Probe,
 }
 
 #[derive(Subcommand, Debug)]

@@ -26,6 +26,14 @@ pub struct SkillActivation {
     pub label: String,
     /// Full system-prompt section (header + body).
     pub section: String,
+    /// Real skill name (e.g. `tdd`), used by the skill layer's usage check.
+    pub name: String,
+    /// Skill file path, for diagnostics.
+    pub path: String,
+    /// Checkable requirements extracted from the skill's own body by code
+    /// (MUST/NEVER/ALWAYS lines, numbered steps). Empty when the skill states
+    /// none - then the usage check has nothing to judge and stays silent.
+    pub requirements: Vec<String>,
 }
 
 /// One natural-language → skill rule. First matching rule whose skill is
@@ -1264,15 +1272,62 @@ fn discover_by_description_intent<'a>(user_norm: &str, skills: &'a [Skill]) -> O
 
 /// Build activation section + metadata when a NL intent matches an installed skill.
 pub fn skill_activation(user_text: &str, skills: &[Skill]) -> Option<SkillActivation> {
-    let (sk, rule) = detect_skill_activation(user_text, skills)?;
+    if let Some((sk, rule)) = detect_skill_activation(user_text, skills) {
+        let label = if rule.skill_names.is_empty() {
+            sk.name.as_str()
+        } else {
+            rule.label
+        };
+        return Some(build_activation(sk, user_text, label, rule.why));
+    }
+    // Nothing matched by rule, name, or an unambiguous description overlap.
+    // Before giving up, let Jev look at the closest candidates: it is a Choice
+    // over skills the code already scored, so it can only select one of them.
+    let sk = jev_pick_skill(user_text, skills)?;
+    Some(build_activation(
+        &sk,
+        user_text,
+        &sk.name,
+        "Jev matched your wording to this skill's stated purpose",
+    ))
+}
+
+/// One activation, with the skill's own rules turned into a checklist.
+fn build_activation(sk: &Skill, user_text: &str, label: &str, why: &str) -> SkillActivation {
     let body = read_skill_body(sk);
     let body: String = body.chars().take(40_000).collect();
+    let requirements = extract_requirements(&body);
 
-    // Discovery fallback uses a generic label — surface the real skill name in UI.
-    let label = if rule.skill_names.is_empty() {
-        sk.name.as_str()
+    // The skill body is long. Jev narrows it to the rules this request actually
+    // triggers, and that short checklist goes in front - so a triggered skill is
+    // *used*, not skimmed. Rules always come from the skill's own text.
+    let narrowed = {
+        let cfg = crate::config::load_config()
+            .map(|c| c.typesafe)
+            .unwrap_or_default();
+        if cfg.skills.enabled && cfg.skills.narrow_requirements {
+            crate::typesafe::harness::select_requirements(
+                &cfg,
+                user_text,
+                &sk.name,
+                &requirements,
+                cfg.skills.max_requirements,
+            )
+        } else {
+            Vec::new()
+        }
+    };
+    let checklist = if narrowed.is_empty() {
+        String::new()
     } else {
-        rule.label
+        let mut s = String::from(
+            "\n## Rules Jev selected as active for THIS request \
+             (from the skill's own list - follow them)\n",
+        );
+        for (i, r) in narrowed.iter().enumerate() {
+            s.push_str(&format!("{}. {r}\n", i + 1));
+        }
+        s
     };
 
     let mut section = format!(
@@ -1281,10 +1336,10 @@ pub fn skill_activation(user_text: &str, skills: &[Skill]) -> Option<SkillActiva
          This is **not** optional flavor. For this entire turn you MUST follow the skill \
          below literally. Slash commands are never required — activation already happened.\n\
          Do **not** freestyle a shorter path. Load sibling `references/` under the skill \
-         directory when the skill points there.\n\n\
+         directory when the skill points there.\n{checklist}\n\
          ## Active skill: {name} (`{path}`)\n\n{body}\n",
         label = label,
-        why = rule.why,
+        why = why,
         name = sk.name,
         path = sk.path.display(),
         body = body,
@@ -1293,10 +1348,149 @@ pub fn skill_activation(user_text: &str, skills: &[Skill]) -> Option<SkillActiva
     // Keep section usable even if format! above is huge.
     let _ = &mut section;
 
-    Some(SkillActivation {
-        label: rule.label.to_string(),
+    SkillActivation {
+        label: label.to_string(),
         section,
-    })
+        name: sk.name.clone(),
+        path: sk.path.display().to_string(),
+        requirements,
+    }
+}
+
+/// Extract the skill's own checkable requirements, in body order.
+///
+/// Code, not a model: a line is a requirement when the skill itself marks it -
+/// MUST/NEVER/ALWAYS/REQUIRED/do not, or a numbered/bulleted step under a
+/// heading that talks about steps or rules. Everything is bounded and deduped so
+/// the resulting list is short enough to show Jev.
+pub fn extract_requirements(body: &str) -> Vec<String> {
+    const MAX_REQUIREMENTS: usize = 24;
+    const MAX_CHARS: usize = 200;
+    const MARKERS: &[&str] = &[
+        "must ",
+        "must,",
+        "never ",
+        "always ",
+        "required",
+        "do not ",
+        "don't ",
+        "never,",
+        "mandatory",
+        "before you ",
+        "you must",
+    ];
+    let mut out: Vec<String> = Vec::new();
+    let mut in_step_section = false;
+    for raw in body.lines() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // Section headings steer whether numbered items count as requirements.
+        if line.starts_with('#') {
+            let head = line.trim_start_matches('#').trim().to_ascii_lowercase();
+            in_step_section = head.contains("step")
+                || head.contains("rule")
+                || head.contains("workflow")
+                || head.contains("process")
+                || head.contains("checklist")
+                || head.contains("requirement")
+                || head.contains("must");
+            continue;
+        }
+        let low = line.to_ascii_lowercase();
+        let is_step = in_step_section
+            && (line.starts_with("- ")
+                || line.starts_with("* ")
+                || line.chars().next().is_some_and(|c| c.is_ascii_digit())
+                || line.starts_with("**"));
+        let marked = MARKERS.iter().any(|m| low.contains(m));
+        if !(is_step || marked) {
+            continue;
+        }
+        if low.starts_with("```") || low.contains("http://") || low.contains("https://") {
+            continue;
+        }
+        let cleaned: String = line
+            .trim_start_matches(['-', '*', ' '])
+            .chars()
+            .take(MAX_CHARS)
+            .collect();
+        let cleaned = cleaned.trim().to_string();
+        if cleaned.chars().count() < 12 {
+            continue;
+        }
+        if out.iter().any(|e| e == &cleaned) {
+            continue;
+        }
+        out.push(cleaned);
+        if out.len() >= MAX_REQUIREMENTS {
+            break;
+        }
+    }
+    out
+}
+
+/// Candidate skills Jev may choose from, by description-token overlap.
+///
+/// Always code-scored first, so the option set is real installed skills.
+pub fn jev_skill_candidates(user_text: &str, skills: &[Skill], limit: usize) -> Vec<Skill> {
+    let user_norm = normalize_intent_text(user_text);
+    let user_tokens = significant_tokens(&user_norm);
+    if user_tokens.len() < 3 {
+        return Vec::new();
+    }
+    let mut scored: Vec<(&Skill, usize)> = Vec::new();
+    for sk in skills {
+        let desc_norm = normalize_intent_text(&sk.description);
+        if desc_norm.is_empty() {
+            continue;
+        }
+        let desc_tokens = significant_tokens(&desc_norm);
+        if desc_tokens.len() < 3 {
+            continue;
+        }
+        let hits = user_tokens
+            .iter()
+            .filter(|t| desc_tokens.iter().any(|d| d == *t))
+            .count();
+        if hits >= 2 {
+            scored.push((sk, hits));
+        }
+    }
+    scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.name.cmp(&b.0.name)));
+    scored
+        .into_iter()
+        .take(limit.max(1))
+        .map(|(sk, _)| sk.clone())
+        .collect()
+}
+
+/// Let Jev pick among the code-scored skill candidates. Only acts on an
+/// `act`-band answer, and the answer is mapped back onto a real skill.
+fn jev_pick_skill(user_text: &str, skills: &[Skill]) -> Option<Skill> {
+    let cfg = crate::config::load_config()
+        .map(|c| c.typesafe)
+        .unwrap_or_default();
+    if !cfg.enabled || !cfg.skills.enabled || !cfg.skills.rerank {
+        return None;
+    }
+    let candidates = jev_skill_candidates(user_text, skills, 8);
+    if candidates.len() < 2 {
+        return None;
+    }
+    let pairs: Vec<(String, String)> = candidates
+        .iter()
+        .map(|s| {
+            (
+                s.name.clone(),
+                s.description.chars().take(300).collect::<String>(),
+            )
+        })
+        .collect();
+    let judged = crate::typesafe::harness::pick_skill(&cfg, user_text, &pairs);
+    let picked = judged.usable()?.clone();
+    candidates.into_iter().find(|s| s.name == picked)
 }
 
 fn read_skill_body(sk: &Skill) -> String {
@@ -1529,6 +1723,100 @@ pub fn skills_prompt_section(skills: &[Skill]) -> String {
 mod intent_tests {
     use super::*;
 
+    #[test]
+    fn requirements_are_extracted_from_the_skill_itself() {
+        let body = "
+# Setup
+Run `cargo build` first.
+
+## Rules
+- You MUST write the failing test first
+- NEVER edit generated files
+1. Always run the suite before finishing
+
+## Notes
+See https://example.com for background
+";
+        let rules = extract_requirements(body);
+        assert!(
+            rules
+                .iter()
+                .any(|r| r.contains("write the failing test first")),
+            "{rules:?}"
+        );
+        assert!(
+            rules
+                .iter()
+                .any(|r| r.contains("run the suite before finishing")),
+            "{rules:?}"
+        );
+        // A bare URL is not a requirement, and prose outside a rule section is
+        // not one either.
+        assert!(
+            !rules.iter().any(|r| r.contains("example.com")),
+            "{rules:?}"
+        );
+        assert!(
+            !rules.iter().any(|r| r.contains("cargo build")),
+            "{rules:?}"
+        );
+    }
+
+    #[test]
+    fn a_skill_with_no_marked_rules_yields_none() {
+        let body = "Just do good work and be helpful.
+
+Some prose about the skill.";
+        assert!(extract_requirements(body).is_empty());
+    }
+
+    #[test]
+    fn requirement_extraction_is_bounded_and_deduped() {
+        let mut body = String::from(
+            "## Steps
+",
+        );
+        for i in 0..80 {
+            body.push_str(&format!(
+                "{}. You MUST do step number {i}
+",
+                i + 1
+            ));
+        }
+        body.push_str(
+            "2. You MUST do step number 1
+",
+        );
+        let rules = extract_requirements(&body);
+        assert!(rules.len() <= 24, "bounded: {}", rules.len());
+        let mut sorted = rules.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), rules.len(), "deduped");
+    }
+
+    #[test]
+    fn jev_candidates_are_code_scored_skills_only() {
+        let mut a = fake_skill("alpha-skill");
+        a.description = "audit smart contract solidity reentrancy findings report".into();
+        let mut b = fake_skill("beta-skill");
+        b.description = "unrelated gardening advice for houseplants watering".into();
+        let skills = vec![a, b];
+        let picked = jev_skill_candidates(
+            "audit smart contract solidity reentrancy findings report",
+            &skills,
+            8,
+        );
+        assert!(
+            picked.iter().any(|s| s.name == "alpha-skill"),
+            "the overlapping skill must be a candidate"
+        );
+        assert!(
+            !picked.iter().any(|s| s.name == "beta-skill"),
+            "an unrelated skill must not be offered"
+        );
+    }
+
     fn fake_skill(name: &str) -> Skill {
         Skill {
             name: name.into(),
@@ -1583,8 +1871,7 @@ mod intent_tests {
         assert_eq!(rule.label, "sc-research");
 
         let (sk, _) =
-            detect_skill_activation("smart contract audit for this foundry repo", &skills)
-                .unwrap();
+            detect_skill_activation("smart contract audit for this foundry repo", &skills).unwrap();
         assert_eq!(sk.name, "sc-research");
 
         let (sk, _) =

@@ -447,10 +447,13 @@ Type these inside the `nur` TUI. Aliases are shown in the same row.
 | `/swarm` | Inline subagent activity grid — a live tiled pane per subagent (aliases `/subagents`, `/agents`). **Auto-surfaces the moment a subagent spawns**, so you no longer have to run it first to watch a fan-out. `detail` adds the status row, `off` freezes, `clear` drops finished runs, `hide` removes the card and suppresses auto-surfacing for the rest of the turn (it re-arms on the next turn). |
 | `/subagents` · `/agents` | Alias of `/swarm` — inline subagent grid, live panes per subagent |
 | `/fractal` | Recursive agent tree — hierarchical loops in git worktrees: `init` · `node list` · `node status <name>` · `node start <name>` · `attach <name>` · `open`. **`open`** launches fractal's own full-screen dashboard: nur hands the terminal over and restores it when you quit. ⚠️ **Unix only** — see below. |
-| `/optmem` · `/memo` | OptMem permanent memory (`~/.optmem`): `wake` · `note` · `nap` · `recall` · `doctor` |
+| `/optmem` · `/memo` | OptMem permanent memory (`~/.optmem`): `status` · `wake` · `note` · `nap` · `recall` · `zoom` · `forget` · `config` · `doctor` |
+| `/typesafe` · `/jev` | Jev (TypeSafe System One) boost layer: status · `on`/`off` · `ask <state>` ([docs/typesafe.md](./typesafe.md)) |
+| `/typesafe-ai` | Loads the TypeSafe *skill* (how to design and use judgments) - distinct from `/typesafe`, which is the layer's status/controls |
 | `/headroom` | Context compression doctor (inline tool-result compress on by default) |
 | `/prewalk` | OMP-style: strong model plans, then cheap/smol at first edit after todos (`on` \| `off` \| `status` \| `into <model>` \| `reset`). Off by default. |
-| `/egaki` · `/image` | Image/video gen via egaki (`login --provider chatgpt` supported) |
+| `/egaki` | Image/video gen via egaki (`login --provider chatgpt` supported) |
+| `/image <path>` | Show an image inline and attach it for vision (generation is `/egaki`) |
 | `/tb` · `/terminal-browser` | terminal-browser: `open` \| `ls` \| `action` \| `setup` (Windows host fallback via agent-browser-cli) |
 | `/factory-overnight` | Fractal-first overnight factory from `HANDOFF.md` (Unix preferred) |
 | `/pen` · `/drawings` · `/penecho` | Penecho canvas — ink, MathJax, plots, animations; `/drawings` lists saved canvases |

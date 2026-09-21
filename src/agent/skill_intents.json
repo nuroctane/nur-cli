@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-09-11T17:56:34.851586",
-  "total_skills": 1581,
+  "generated_at": "2026-09-18T22:30:06.718481",
+  "total_skills": 1583,
   "note": "Comprehensive skill intent index - 700+ skills, expanded NL triggers. Must be updated when adding skills per AGENTS.md. Run: python scripts/generate_skill_intents.py",
   "skills": [
     {
@@ -36952,6 +36952,18 @@
       ]
     },
     {
+      "name": "pr",
+      "description": "Use when writing a PR body.",
+      "path": "C:\\Users\\david\\.nur\\skills\\pr\\SKILL.md",
+      "triggers": [
+        "writing body"
+      ],
+      "keywords": [
+        "writing",
+        "body"
+      ]
+    },
+    {
       "name": "prelude",
       "description": "Prelude bootstrapping for TypeScript. Use when creating or rebuilding a prelude.ts from ambient generic helpers and types.",
       "path": "C:\\Users\\david\\.nur\\skills\\prelude\\SKILL.md",
@@ -42813,6 +42825,65 @@
       ]
     },
     {
+      "name": "typesafe-ai",
+      "description": "Build with TypeSafe: small units of AI intelligence you can use like programming primitives. Its System One models, including Jev, turn natural language and application state into typed judgments and probabilities that code can combine. Use when a step is a decision rather than writing - routing, ra",
+      "path": "C:\\Users\\david\\Laboratory\\nur-cli\\skills\\typesafe-ai\\SKILL.md",
+      "triggers": [
+        "build typesafe",
+        "/typesafe ai",
+        "/typesafe-ai",
+        "typesafe ai",
+        "typesafe-ai",
+        "/typesafe",
+        "/jev",
+        "typesafe",
+        "jev",
+        "use typesafe",
+        "use jev",
+        "with typesafe",
+        "with jev",
+        "system one",
+        "typesafe system one",
+        "jev latest",
+        "jev-latest",
+        "typed question",
+        "typed judgment",
+        "typed questions",
+        "typed judgments",
+        "confidence threshold",
+        "confidence gating",
+        "probability judgment",
+        "choice noul score",
+        "noul",
+        "noul question",
+        "score question",
+        "choice question"
+      ],
+      "keywords": [
+        "typesafe",
+        "build",
+        "small",
+        "units",
+        "intelligence",
+        "programming",
+        "primitives",
+        "system",
+        "models",
+        "including",
+        "jev",
+        "system-one",
+        "typed",
+        "judgment",
+        "probability",
+        "confidence",
+        "noul",
+        "escalation",
+        "routing",
+        "ranking",
+        "classification"
+      ]
+    },
+    {
       "name": "typeset",
       "description": "Typography pass covering font choice, modular scale, tracking, leading, weight hierarchy, and micro-typography details. Use when fonts feel generic (default Inter with no reason), the scale is ad hoc, hierarchy is flat, or the user says \"fix the typography\" / \"the text doesn't feel right\". Invoke wh",
       "path": "C:\\Users\\david\\.nur\\skills\\typeset\\SKILL.md",
@@ -43885,7 +43956,7 @@
     },
     {
       "name": "visual-edit",
-      "description": "Open a running local app in Design overview mode as URL-backed iframe screens for visual editing, flow review, duplication, and route-state exploration. Use when the user asks to inspect, compare, or edit a real local app visually in Design.",
+      "description": "Open a running local app in Design overview mode as URL-backed iframe screens for visual editing, flow review, duplication, route-state exploration, and source handoff. Use when the user asks to inspect or edit a real local app in Design, including through a browser-capable host without an MCP conne",
       "path": "C:\\Users\\david\\.nur\\skills\\visual-edit\\SKILL.md",
       "triggers": [
         "/visual edit",

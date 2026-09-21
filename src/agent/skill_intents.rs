@@ -154,6 +154,34 @@ mod tests {
         assert_eq!(found.unwrap().name, "fable-method");
     }
 
+    /// The TypeSafe (Jev) skill must be reachable by natural language: it is in
+    /// the generated index with the aliases a user would actually type.
+    #[test]
+    fn expanded_triggers_cover_typesafe() {
+        let cwd = std::env::current_dir().unwrap();
+        let skills = load_skills(&cwd);
+        assert!(
+            skills.iter().any(|s| s.name == "typesafe-ai"),
+            "the shipped typesafe-ai skill must be discoverable from the repo"
+        );
+        for phrase in [
+            "use typesafe for this decision",
+            // Bare "jev" is deliberately not a trigger: the index drops short
+            // single-token triggers to avoid false fires ("noul", "jev").
+            "wire system one judgments into the loop",
+            "typed judgments instead of a prompt",
+            "raise the confidence threshold",
+        ] {
+            let user = normalize_intent_text(phrase);
+            let found = find_by_expanded_triggers(&user, &skills);
+            assert_eq!(
+                found.map(|s| s.name.clone()),
+                Some("typesafe-ai".to_string()),
+                "phrase {phrase:?} should activate the TypeSafe skill"
+            );
+        }
+    }
+
     #[test]
     fn expanded_triggers_cover_scan() {
         let cwd = std::env::current_dir().unwrap();

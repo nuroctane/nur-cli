@@ -401,7 +401,11 @@ pub fn maybe_spill_oversized_prompt(session_id: &str, text: &str) -> Option<(Str
         "[Your message was too large to carry inline. {pointer}]\n\n\
          First {PREVIEW} characters:\n\n{head}\n\n\
          {marker}{tail}",
-        marker = if tail.is_empty() { "" } else { "\n\n...[middle elided]...\n\n" },
+        marker = if tail.is_empty() {
+            ""
+        } else {
+            "\n\n...[middle elided]...\n\n"
+        },
     );
     Some((name.to_string(), replacement))
 }
@@ -464,6 +468,73 @@ pub fn slice(session_id: &str, name: &str, start: usize, end: usize) -> Result<S
     ))
 }
 
+/// Reorder search hits by how well each answers `query`, in place.
+///
+/// Returns whether the order changed. Candidates are the hit lines themselves
+/// (code-built), so the answer can only *select* one of them; a hit the answer
+/// cannot place confidently keeps its line position, and ties keep line order.
+fn rank_hits_by_relevance(query: &str, hits: &mut Vec<String>) -> bool {
+    use crate::typesafe::{harness, policy};
+    let cfg = crate::config::load_config()
+        .map(|c| c.typesafe)
+        .unwrap_or_default();
+    if hits.len() < 4 || harness::ready(&cfg).is_none() {
+        return false;
+    }
+    let levels: Vec<String> = harness::RELEVANCE_LEVELS
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let judged = harness::rank(&cfg, query, hits, &levels);
+    let acted = |j: &policy::Judgment<f64>| j.action == policy::GateAction::Act;
+    if !judged.iter().any(acted) {
+        return false;
+    }
+    let scores = placement_scores(&judged);
+    let before = hits.clone();
+    *hits = reorder_by_scores(&before, &scores);
+    *hits != before
+}
+
+/// The score each hit may be ordered by: only a *placed* (acted) hit contributes
+/// one.
+///
+/// A sub-threshold answer must not reorder anything - the policy thresholds on
+/// confidence, and an unplaced hit is documented to keep its line position.
+/// Passing the raw score through for unplaced hits contradicted both; it looked
+/// harmless because the ordering test fed `(false, None)` and never production's
+/// `(false, Some(x))`.
+fn placement_scores(
+    judged: &[crate::typesafe::policy::Judgment<f64>],
+) -> Vec<(bool, Option<f64>)> {
+    judged
+        .iter()
+        .map(|j| {
+            let placed = j.action == crate::typesafe::policy::GateAction::Act;
+            (placed, placed.then(|| j.raw().copied()).flatten())
+        })
+        .collect()
+}
+
+/// Order hits by (placed confidently, score), keeping input order for everything
+/// else. Pure, so the ordering rule is testable without a judgment layer.
+fn reorder_by_scores(hits: &[String], scores: &[(bool, Option<f64>)]) -> Vec<String> {
+    let mut order: Vec<usize> = (0..hits.len()).collect();
+    let score_of = |i: usize| scores.get(i).copied().unwrap_or((false, None));
+    order.sort_by(|a, b| {
+        let (pa, sa) = score_of(*a);
+        let (pb, sb) = score_of(*b);
+        pb.cmp(&pa)
+            .then(
+                sb.unwrap_or(f64::NEG_INFINITY)
+                    .partial_cmp(&sa.unwrap_or(f64::NEG_INFINITY))
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+            .then(a.cmp(b))
+    });
+    order.iter().map(|i| hits[*i].clone()).collect()
+}
+
 pub fn search(
     session_id: &str,
     name: &str,
@@ -488,8 +559,19 @@ pub fn search(
             }
         }
     }
+    // Relevance order, when the judgment layer can supply one. Pattern search
+    // returns matches in *file* order, which for a long document is close to
+    // random with respect to the question being asked; a hit that actually
+    // answers the query should come first. Only confident placements move, and
+    // the header says the order came from a judgment rather than from the file.
+    let reranked = rank_hits_by_relevance(pattern, &mut hits);
     Ok(format!(
-        "var=`{}` pattern={pattern:?} hits={}/{max_hits} (line-limited)\n{}",
+        "var=`{}` pattern={pattern:?} hits={}/{max_hits} (line-limited){})\n{}",
+        if reranked {
+            ", ordered by relevance"
+        } else {
+            ""
+        },
         var.name,
         hits.len(),
         hits.join("\n")
@@ -691,6 +773,109 @@ pub fn clear_session(session_id: &str) {
         }
     }
     let _ = std::fs::remove_dir_all(session_dir(session_id));
+}
+
+#[cfg(test)]
+mod rerank_tests {
+    use super::{placement_scores, reorder_by_scores};
+
+    fn hits(n: usize) -> Vec<String> {
+        (0..n).map(|i| format!("L{}: hit {i}", i + 1)).collect()
+    }
+
+    #[test]
+    fn placed_hits_move_ahead_of_unplaced_ones() {
+        let h = hits(4);
+        // Hit 3 is confidently best, hit 1 confidently worst, 0 and 2 unplaced.
+        let scores = vec![
+            (false, None),
+            (true, Some(0.1)),
+            (false, None),
+            (true, Some(2.5)),
+        ];
+        let out = reorder_by_scores(&h, &scores);
+        assert_eq!(out[0], h[3], "the confident winner comes first");
+        assert_eq!(out[1], h[1], "the confident loser follows");
+        // Unplaced hits keep their relative line order.
+        assert_eq!(out[2], h[0]);
+        assert_eq!(out[3], h[2]);
+    }
+
+    #[test]
+    fn ties_and_missing_scores_keep_line_order() {
+        let h = hits(3);
+        let out = reorder_by_scores(&h, &[(true, Some(1.0)), (true, Some(1.0)), (false, None)]);
+        assert_eq!(out, h, "an all-equal ranking must not shuffle the hits");
+        let short = reorder_by_scores(&h, &[]);
+        assert_eq!(short, h, "no scores at all keeps the input order");
+    }
+
+    #[test]
+    fn a_sub_threshold_score_does_not_move_a_hit() {
+        // The bug this pins: `rank_hits_by_relevance` used to pass a hit's raw
+        // score through even when the policy had *not* acted on it, so a
+        // low-confidence placement reordered the results - the opposite of both
+        // the documented rule ("unplaced keeps its line position") and the module
+        // rule ("threshold on confidence, not on the answer").
+        //
+        // These tuples are what production now builds: `(placed, placed.then(score))`.
+        let h = hits(4);
+        let scores = vec![
+            (false, None),
+            (true, Some(0.1)),
+            (false, None),
+            (true, Some(2.5)),
+        ];
+        let out = reorder_by_scores(&h, &scores);
+        assert_eq!(out[0], h[3]);
+        assert_eq!(out[1], h[1]);
+        assert_eq!(out[2], h[0], "unplaced hits stay in line order");
+        assert_eq!(out[3], h[2]);
+    }
+
+    #[test]
+    fn only_a_placed_hit_contributes_a_score() {
+        // The mapping `rank_hits_by_relevance` feeds the ordering with. The old
+        // code passed `j.raw()` through for *every* hit, so a confident-looking
+        // score from an answer the policy refused to act on could still reorder
+        // the results among the unplaced ones.
+        use crate::typesafe::policy::{GateAction, Judgment, Thresholds};
+        let t = Thresholds::default();
+        let judged = vec![
+            Judgment::<f64>::from_answer("r0", Some(9.9), Some(0.2), &t), // unplaced, high score
+            Judgment::<f64>::from_answer("r1", Some(2.5), Some(0.95), &t), // placed
+            Judgment::<f64>::unavailable("r2", "no key"),                  // nothing at all
+        ];
+        assert_eq!(judged[0].action, GateAction::Escalate, "test premise");
+        let scores = placement_scores(&judged);
+        assert_eq!(
+            scores[0],
+            (false, None),
+            "an unacted hit carries no score, however high its raw value"
+        );
+        assert_eq!(scores[1], (true, Some(2.5)), "an acted hit carries its score");
+        assert_eq!(scores[2], (false, None));
+        // ... and ordering with those tuples keeps every unplaced hit in place.
+        let h = hits(3);
+        assert_eq!(reorder_by_scores(&h, &scores)[2], h[2]);
+    }
+
+    #[test]
+    fn every_hit_survives_a_reorder() {
+        let h = hits(5);
+        let scores = vec![
+            (true, Some(0.2)),
+            (false, None),
+            (true, Some(0.9)),
+            (false, None),
+            (true, Some(0.4)),
+        ];
+        let mut out = reorder_by_scores(&h, &scores);
+        out.sort();
+        let mut expected = h.clone();
+        expected.sort();
+        assert_eq!(out, expected, "reordering must not add or drop a hit");
+    }
 }
 
 #[cfg(test)]

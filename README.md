@@ -5,7 +5,9 @@
 ### Extremely efficient token spend
 
 **Use fewer paid tokens by default.**
-The harness supersedes stale duplicate reads, spills large tool results, preserves provider prompt caches, and compacts repeatedly using an OMP-style response reserve instead of a premature fixed percentage. It also supports local context estimates when providers omit usage, prompt caching, local models, and focused Oh My Pi delegation through a verified authenticated economy model. Native failover, cross-provider subagents, and delegated OMP work all report their actual token and cost impact in Nur's session budgets and `/usage` totals.
+The harness supersedes stale duplicate reads, spills large tool results, preserves provider prompt caches, and compacts repeatedly using an OMP-style response reserve instead of a premature fixed percentage. It also supports local context estimates when providers omit usage, prompt caching, local models, and focused Oh My Pi delegation through a verified authenticated economy model.
+
+[TypeSafe · Jev](https://docs.typesafe.ai) judgments run inside the harness rather than beside it: one batched request decides which tool calls are still worth their tokens, whether a result actually worked, and what a fresh context can drop - so compaction writes no summary, survivors stay verbatim, and the frontier model is never paid to answer an if-statement. Provider-agnostic (one key lifts every model), and keyless on this machine through three supported local engines - openJev-verdict-2.0, Bespoke-Nimble-9B, and Laya Core ML ([docs/jev-local.md](./docs/jev-local.md)). Native failover, cross-provider subagents, and delegated OMP work all report their actual token and cost impact in Nur's session budgets and `/usage` totals.
 
 </div>
 
@@ -255,6 +257,10 @@ sixel, or iTerm2 inline images - and are queued for model vision at the same
 time. Personal accent colors (`[theme] accent = "#..."` in `config.toml`)
 layer over any `/theme` pick. Details: [docs/vision.md](./docs/vision.md).
 
+**TypeSafe (Jev):** a system-one boost layer for whatever provider you are using -
+tool gate, result judge, compaction with no summary, skill checks, routing. One
+key, every provider. Details: [docs/typesafe.md](./docs/typesafe.md).
+
 ### Ecosystem
 
 | Piece | Role |
@@ -268,8 +274,10 @@ layer over any `/theme` pick. Details: [docs/vision.md](./docs/vision.md).
 | **AKM** | Skill package manager |
 | **[fractal](https://github.com/plasma-ai/fractal)** | Hierarchical recursive agent loops in git worktrees (`/fractal`). Apache-2.0. **Unix only** — fractal 1.0.0 imports `fcntl`, so use WSL on Windows. Python 3.12–3.14 |
 | **[Headroom](https://github.com/headroomlabs-ai/headroom)** | Inline tool-result compression (default on; `[headroom] enabled = false` to disable) |
+| **[TypeSafe · Jev](https://docs.typesafe.ai)** | System One typed judgments woven through the harness (`/typesafe` · tool `typesafe`): tool gate, result judge, Jev-scored compaction with no summary, skill checks, routing. Provider-agnostic - one key boosts every provider. See [docs/typesafe.md](./docs/typesafe.md) |
+| **[Local Jev engines](./docs/jev-local.md)** | Same typed contract on this machine, no key: openJev-verdict-2.0 (CPU), Bespoke-Nimble-9B (NVIDIA GPU / Apple Silicon MLX), Laya Core ML (Apple Silicon ANE), plus a mock backend. `nur jev start` · `nur jev use` |
 | **[OptMem](https://github.com/VictorTaelin/OptMem)** | Permanent memory at `~/.optmem` (`/optmem` · `/memo`) |
-| **[egaki](https://github.com/remorses/egaki)** | Image/video gen (`/egaki` · `/image`; ChatGPT-sub login supported) |
+| **[egaki](https://github.com/remorses/egaki)** | Image/video gen (`/egaki`; ChatGPT-sub login supported. `/image <path>` is vision attach) |
 | **[terminal-browser](https://terminal-browser.com/)** | In-terminal Chromium (`/tb`); Windows host fallback via agent-browser-cli |
 | **[HelixDB](https://github.com/HelixDB/helix-db)** | Optional graph-vector resident behind `mem`: local-first durable outbox, background mirror, scoped vector/text recall (`mem helix_status` / `helix_sync`) |
 | **[Text-to-CAD](https://www.texttocad.dev/)** | Auto-provisioned STEP-first CAD, DXF, G-code, robot-description, sourcing, validation, and review skills (`/cad`, `/cad-viewer`, …). MIT |
