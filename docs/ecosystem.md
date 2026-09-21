@@ -10,6 +10,8 @@ NurCLI ships with an auto-provisioned knowledge stack.
 | **PLUR** | Shared engram memory across tools and sessions |
 | **Ruflo** | Vector memory + swarm / hive-mind patterns |
 | **Executor** | MCP / OpenAPI gateway catalog |
+| **GraphJin** | GraphJin - governed GraphQL→SQL over live databases (`graphjin` tool · `/graphjin`). npm-installed when Node is present, with a SQLite demo config seeded under `~/.nur/graphjin/` so `graphjin serve --demo --path <dir>` works out of the box; point `GRAPHJIN_CONFIG_PATH` at a real database to go live |
+| **dogwood** | [Dogwood](https://github.com/dogwood-policy/dogwood) runtime verification for AI agents - a Cedar-extending policy language with temporal logic (since / formerly / once / count_within) over the tool-call event stream (`dogwood` tool). Auto-installed via cargo when available (`cargo install --git https://github.com/dogwood-policy/dogwood amzn-dogwood-cli`); default policy pack under `~/.nur/dogwood/`. The reference interpreter is an on-demand evaluation/guardrail, not a runtime gate |
 | **omp** | [Oh My Pi](https://omp.sh) coding-agent backend - metered, cancellation-aware `omp -p` delegation with authenticated economy-model discovery and isolated focused prompts (requires **omp >= 18.0.9**, Bun >= 1.3.14; `ecosystem ensure` auto-upgrades) |
 | **browser** | [agent-browser-cli](https://github.com/sleepinginsummer/agent-browser-cli) real **default browser** bridge (Arc / Chrome / Edge / Brave / …) - perception + control via the `browser` tool; `nur browser setup` stages the extension once |
 | **terminal-browser** | [terminal-browser.com](https://terminal-browser.com/) in-terminal Chromium (`terminal_browser` tool · `/tb`). Native/WSL when the upstream binary is present; on Windows Nur falls back to agent-browser-cli so open/snapshot/click still work |
@@ -18,10 +20,18 @@ NurCLI ships with an auto-provisioned knowledge stack.
 | **Plugins** | In-product marketplace (`/plugins` · `nur plugins`) - install Superpowers, Vercel, Firecrawl, Chrome DevTools, Figma, Sentry, Fable, … into `~/.nur/plugins` |
 | **Takeover** | `/takeover` (alias `/hijack`) imports **Claude Code · Codex · Cursor · Nur · Grok Build** sessions, powered by the bundled `resume-session` reader |
 | **AKM** | Agent knowledge package manager (requires Node.js) |
+| **t3code** | [t3code](https://github.com/pingdotgg/t3code) driver compatibility layer - env-isolated vendor-CLI auth probing, atomic `auth.json` writes, delegate probe, and pairing tokens (`t3code` tool). Probe-only: it stores no secrets and adds no provider |
 | **Headroom** | [headroom-ai](https://github.com/headroomlabs-ai/headroom) inline tool-result compression (default **on**; disable with `[headroom] enabled = false`) |
-| **OptMem** | [OptMem](https://github.com/VictorTaelin/OptMem) permanent memory under upstream `~/.optmem` (`/optmem` · `/memo`) |
+| **OptMem** | [OptMem](https://github.com/VictorTaelin/OptMem) permanent memory under upstream `~/.optmem` (`/optmem` · `/memo`). `nap lines=[...]` drains up to 24 blocks in one call and never forwards upstream's next imperative |
+| **Connectome** | Agent-native memory + continuity (arXiv:2606.24775 · [animalabs.ai/connectome](https://animalabs.ai/connectome)): hierarchical memories (recent / l1 / l2 / l3), an append-only chronicle, and checkpoints. `connectome` tool; injected into the system prompt while `native_memory = true` (default) |
+| **mem (HelixDB)** | Harmonized memory read/write across vector, knowledge graph, and hierarchical stores (`mem` tool). Optional HelixDB graph-vector resident via `[helix_memory]` (`HELIX_URL` / `NUR_HELIX_URL`, `HELIX_API_KEY`); local native memory stays authoritative with a durable outbox for failed mirrors |
 | **TypeSafe (Jev)** | [TypeSafe](https://docs.typesafe.ai) System One typed judgments wired through the harness (`typesafe` tool · `/typesafe` · `/jev` · `[typesafe]`). Provider-agnostic: one key lifts every provider and is never the active model. The pinned `/login` entry is a sidecar (bordered, first) so catalog counts and chat routing are untouched. Docs: [typesafe.md](./typesafe.md) |
+| **Local Jev engines** | Keyless System One backends served by one bridge (`src/jev_local.rs` + `scripts/jev_local_bridge.py`, embedded in the binary): openJev-verdict-2.0 (CPU), Bespoke-Nimble-9B (NVIDIA GPU / Apple Silicon MLX), Laya Core ML (Apple Silicon ANE, macOS 15+), plus a deterministic mock. `nur jev start` · `use` · `status` · `stop` · `selftest` · `probe`; engine flags are forwarded verbatim (`--verdict-model`, `--nimble-dir`, `--laya-model`, `--device`). Per-device refusals are actionable. Docs: [jev-local.md](./jev-local.md) |
 | **egaki** | [egaki](https://github.com/remorses/egaki) image/video/speech (`/egaki`; ChatGPT / xAI OAuth / BYOK / Egaki plan - bare `/image` attaches a file for vision instead) |
+| **tldraw** | Offline [tldraw](https://www.tldraw.com) boards (`tldraw` tool · `/draw <file.tldraw>` or `/draw <idea>`; `/draw excalidraw` and `/draw pen` route to those tools) |
+| **excalidraw** | Hand-drawn, publishable diagrams via [excalidraw-cli](https://github.com/ahmadawais/excalidraw-cli) (`excalidraw` tool · `/excalidraw <idea>`, also reachable through `/draw excalidraw`) |
+| **penecho** | penecho canvas beyond the chat box - ink, MathJax, plots, animations (npm `penecho` sidecar · `penecho` tool · `/pen` · `/drawings` · `/penecho`) |
+| **akarso** | akarso post, schedule, and reply across 14 social platforms (npm `akarso` · `akarso` tool · `/akarso` · `akarso` skill). Publishing, deleting, and connecting accounts are outward-facing and gated in manual mode |
 | **fractal** | [fractal](https://github.com/plasma-ai/fractal) hierarchical loops - Unix only; ecosystem ensure + loud warn on `node start` |
 | **infinite-headcount** | Factory skill pack auto-provisioned via ecosystem packs |
 | **sc-research** | First-party whitehat DeFi pack in-repo at `skills/security/SCA/` (`/sc-research` + protocol/tool playbooks + `hunting-x-linked-bounties` + historical vuln library + investigator-ops). DarkNavy `web3-skills` and Cyfrin `solskill` auto-provisioned. Lawful/in-scope only |
@@ -72,7 +82,7 @@ Also auto-provisioned via the skills CLI into `~/.agents/skills`: design (Emil),
 clone-website, cybersecurity (large), infinite-headcount, Text-to-CAD,
 mobile-harness, DarkNavy web3-skills, and Cyfrin solskill, plus dual-write of the
 default set when the CLI is available. First-party `/sc-research` (whitehat DeFi
-playbooks) ships bundled. Schema 26+ re-pulls those packs and the default plugins
+playbooks) ships bundled. Schema 27 re-pulls those packs and the default plugins
 so upstream skill edits land on the next ensure.
 
 ### `/plugins` catalog (browse by category)
@@ -168,7 +178,7 @@ fable-method · activated from your wording (no slash command needed)
 
 Only **installed** skills fire (marketplace plugin or skill pack). Unrelated chat does not activate anything. The injected skill is **mandatory for that turn** - the model must follow it, not freestyle a shorter path.
 
-### Context discipline (why 800+ skills do not blow the prompt)
+### Context discipline (why 1,000+ skills do not blow the prompt)
 
 Skills are **never** bulk-catalogued into the system prompt (that burned tokens
 and Claude/Anthropic usage on large installs). Activation is on-demand only:
@@ -338,7 +348,7 @@ Progressive skill packs loaded on demand.
 - `cad` / `cad-viewer` / `dxf` / `gcode` / `urdf` / `srdf` / `sdf` - STEP-first CAD, fabrication, robot descriptions, and visual review from Text-to-CAD
 - `mobile-harness` - Android, iOS, and cloud-phone control through the capability-gated `mobilerun-core` facade
 - `apple-design` - Apple-style interface design
-- And 800+ more...
+- And 1,000+ more (1,587 `SKILL.md` files ship in this repo)...
 
 **Browse skills:**
 
@@ -370,3 +380,8 @@ nur ecosystem status          # show readiness per component
 |----------|---------|
 | `CLAUDE_FLOW_DB_PATH` | Ruflo database path |
 | `CLAUDE_FLOW_MEMORY_PATH` | Ruflo home path |
+| `GRAPHJIN_CONFIG_PATH` | Override the GraphJin client config path |
+| `PENECHO_STATE_DIR` | Override the penecho state directory |
+| `HELIX_URL` / `NUR_HELIX_URL` | Select / activate the HelixDB memory resident (`[helix_memory] auto`) |
+| `HELIX_API_KEY` | Optional HelixDB bearer token |
+| `HEADROOM_PROTECT_READS` | Upstream Headroom knob: tools to keep out of inline compression; honored because the helper inherits the environment |

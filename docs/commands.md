@@ -68,6 +68,25 @@ nur run "explain what this repo does" -v
 
 ---
 
+### `nur jev`
+
+Local System One engines (see [jev-local.md](./jev-local.md)) - typed judgments on
+this machine with no API key:
+
+```bash
+nur jev status                        # endpoint, credential, bridge state, per-device support
+nur jev probe                         # the same, as JSON
+nur jev selftest                      # mapping checks incl. a served request (no model, no downloads)
+nur jev start --backend mock          # verdict | nimble | laya | mock
+nur jev start --backend nimble --nimble-dir D:/models/nimble-model
+nur jev use --port 8788               # point [typesafe] at the loopback bridge
+nur jev stop                          # stop the recorded bridge (verifies the port is free)
+nur jev use --hosted                  # back to api.typesafe.ai
+```
+
+Engine flags are forwarded to the bridge verbatim: `--verdict-model <id|path>`,
+`--nimble-dir <dir>`, `--laya-model <bundle>`, `--device cpu|cuda|mps`.
+
 ### `nur auth`
 
 Manage the stored API key (`~/.nur/auth.json`).
@@ -434,7 +453,8 @@ Type these inside the `nur` TUI. Aliases are shown in the same row.
 | `/usage` · `/cost` | Token usage + estimated cost this session |
 | `/context` | Context-window utilization |
 | `/status` | Session snapshot: model · mode · cwd · tokens |
-| `/doctor` | Health check: version · auth · ecosystem · shell |
+| `/doctor` | Health check: version · auth · ecosystem · shell · **TypeSafe/Jev (ready on a local engine with no key)** |
+| `/theme` | Live theme picker (21 themes) · `/theme <name>` sets one · `/theme transparent` toggles see-through |
 | `/fusion` | Multi-model debate → one synthesized answer |
 | `/local` | Run a model locally via bundled llama.cpp |
 | `/bench` | Benchmark models on your tasks; `/bench optimize <name\|all> [gens] [pop]` evolves the standing instruction against them (GEPA — costs tokens) |
@@ -470,6 +490,7 @@ Type these inside the `nur` TUI. Aliases are shown in the same row.
 | `/fable-judge` | Skill: adversarial verification of finished work |
 | `/tech-spec` | Skill: typed call-stack architecture handoff |
 | `/design-eng` | Skill: Emil design-eng UI/motion craft |
+| `/skeuo` | Skill: skeuomorphic UI (`/skeuomorphic-ui`) - depth, texture, physical affordances |
 | `/test-driven-development` | Skill: TDD red-green-refactor |
 | `/systematic-debugging` | Skill: root-cause-first debugging |
 | `/<skill>` | **Any installed skill** — sticky toggle, or `/<skill> <prompt>` one-shot |

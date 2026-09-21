@@ -172,15 +172,15 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 
 ---
 
-**v0.13.4**: Natural-language skill activation · Fable + Superpowers phrases · full skill mirror · NUR_* host-panel envs · plugins. **[Docs](https://www.nuroctane.xyz/cli)**
+**v0.37.1**: TypeSafe/Jev typed judgments wired through the harness (tool gate, result judge, Jev-scored compaction that writes no summary, skill-rule checks, model routing) · three keyless local engines on this machine (openJev-verdict-2.0, Bespoke-Nimble-9B, Laya Core ML) · OptMem compressions drain in one call · transcript paths that open · every doc trued up against the code (65 providers, 48 tools, 88 slash commands, 21 themes). **[Docs](https://www.nuroctane.xyz/cli)**
 
 | Surface | What ships |
 |---------|------------|
-| **TUI** | Streaming · duration chips · thought/tool cards · peek · drag-select · scrollbar · sessions · multi-provider `/login` · **`/model` picker** · **`/plugins` marketplace** · `/goal` `/bro` `/adhd` `/scan` `/btw` `/codesearch` `/mc` `/feedback` `/tips` · **every skill as `/name`** · **26 themes incl superred / banana / nous + transparency mode** · **provider logo in the busy line + tab title** · budgets · doctor |
+| **TUI** | Streaming · duration chips · thought/tool cards · peek · drag-select · scrollbar · sessions · multi-provider `/login` · **`/model` picker** · **`/plugins` marketplace** · `/goal` `/bro` `/adhd` `/scan` `/btw` `/codesearch` `/mc` `/feedback` `/tips` · **every skill as `/name`** · **21 themes incl superred / banana / nous + transparency mode** · **provider logo in the busy line + tab title** · **every path in the transcript is a link that opens** · **block-structured markdown** with theme-role colours · **LaTeX rendering** (image-peek build) · **`/receipt` verifies the hash chain** and exports spans · budgets · doctor |
 | **Agent** | Manual / plan / auto · tools · subagents · todos · auto-compact · session $ / token budgets · Esc cancel · Shift+Tab mid-turn · **NL skill auto-activation** |
 | **Vision** | `look` · `extract_frames` · prompt auto-attach · **inline images in the TUI** (kitty graphics protocol, sixel, iTerm2; Ctrl+V paste or `/image <path>`) |
-| **Tools** | read · edit · bash · web · **browser** · git · knowledge · agent · **excalidraw** |
-| **Ecosystem** | Graphify · PLUR · Ruflo · Executor · omp · browser · AKM · 800+ skills · **`/sc-research` whitehat DeFi + X bounty intel + historical vuln library** · **plugin marketplace** (Fable, Superpowers, Vercel, …) |
+| **Tools** | read · edit · bash · web · **browser** (incl. **element picking**) · git · knowledge · agent · **judgments** (`typesafe`) · **memory** (`optmem` `connectome` `mem`) · **diagrams** (`excalidraw` `tldraw` `penecho`) · **policy** (`dogwood`) · **background** (`bg`) · **async** (`admission` `goal` `proposal` `message`) · **docs** (`anydoc`) · **python REPL** (`repl`) · **excalidraw** |
+| **Ecosystem** | Graphify · GraphJin · PLUR · Ruflo · Executor · **TypeSafe/Jev** (+ **keyless local engines**) · **OptMem** · **Headroom** · **Connectome** · **dogwood** · omp · browser · AKM · 1,000+ skills · **`/sc-research` whitehat DeFi + X bounty intel + historical vuln library** · **plugin marketplace** (Fable, Superpowers, Vercel, …) |
 | **Hardening** | Sandbox · denylist · SSRF blocks · atomic `~/.nur` IO · permissions/hooks · SHA-256 install · `nur doctor` |
 
 ---
@@ -204,7 +204,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 ## Feature map
 
 ### Agent harness
-- **Multi-provider** via `/login` (64); Responses or Chat Completions adapter
+- **Multi-provider** via `/login` (65); Responses or Chat Completions adapter
 - Manual / plan / auto · Shift+Tab mid-turn
 - Tool loop, approvals, Esc cancel, subagents, todos, plan mode
 - Session budgets (`/budget`), tool-result spill, smarter auto-compact
@@ -235,9 +235,15 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 | browser | real default browser via agent-browser-cli |
 | terminal_browser | in-terminal Chromium ([terminal-browser.com](https://terminal-browser.com/)); Windows host fallback |
 | git | `git_status` `git_diff` |
-| knowledge | `graphify` `plur` `ruflo` `executor` `skill` `memory` |
-| diagrams | `excalidraw` (hand-drawn `.excalidraw` via excalidraw-cli) |
-| agent | `todo_write` `submit_plan` `agent` `omp` |
+| knowledge | `graphify` `graphjin` `plur` `ruflo` `executor` `skill` `memory` |
+| diagrams | `excalidraw` (hand-drawn `.excalidraw` via excalidraw-cli) · `tldraw` (offline desktop boards) · `penecho` (20k canvas: ink, MathJax, plots) |
+| judgments | `typesafe` (System One typed decisions: gate a call, judge a result, rank, route) |
+| memory | `optmem` (permanent, `~/.optmem`) · `connectome` (hierarchical + chronicle) · `mem` (vector/graph router) · `memory` · `plur` `ruflo` |
+| policy | `dogwood` (Cedar + temporal policy over an agent event stream) |
+| context | `context` (RLM store: register/peek/slice/search) · `anydoc` (PDF/DOCX/XLSX → markdown) |
+| background | `bg` (jobs that outlive the turn) · `admission` (async subagent handles) · `goal` · `proposal` (staged outputs) · `message` (peer mail) |
+| python | `repl` (long-lived kernel; state survives compaction) |
+| agent | `todo_write` `submit_plan` `agent` `omp` · `skill` `harness` |
 
 ### Vision
 
@@ -273,6 +279,11 @@ key, every provider. Details: [docs/typesafe.md](./docs/typesafe.md).
 | **Skills** | Progressive packs via `skill` |
 | **AKM** | Skill package manager |
 | **[fractal](https://github.com/plasma-ai/fractal)** | Hierarchical recursive agent loops in git worktrees (`/fractal`). Apache-2.0. **Unix only** — fractal 1.0.0 imports `fcntl`, so use WSL on Windows. Python 3.12–3.14 |
+| **[Connectome](https://arxiv.org/abs/2606.24775)** | Agent-native memory: hierarchical self-authored notes + an append-only chronicle (`connectome`) |
+| **[dogwood](https://github.com/dogwood-policy/dogwood)** | Cedar + temporal policy language for governing tool calls (`dogwood`; on-demand checker, not a runtime gate) |
+| **[tldraw](https://tldraw.dev)** | Offline desktop boards and interactive demos (`tldraw`) |
+| **[penecho](https://github.com/penecho/penecho)** | 20k canvas beyond chat: ink, MathJax, plots (`/pen` · `/drawings`) |
+| **[akarso](https://www.npmjs.com/package/akarso)** | Post/schedule across 14 social platforms (`/akarso`; outward-facing calls ask first) |
 | **[Headroom](https://github.com/headroomlabs-ai/headroom)** | Inline tool-result compression (default on; `[headroom] enabled = false` to disable) |
 | **[TypeSafe · Jev](https://docs.typesafe.ai)** | System One typed judgments woven through the harness (`/typesafe` · tool `typesafe`): tool gate, result judge, Jev-scored compaction with no summary, skill checks, routing. Provider-agnostic - one key boosts every provider. See [docs/typesafe.md](./docs/typesafe.md) |
 | **[Local Jev engines](./docs/jev-local.md)** | Same typed contract on this machine, no key: openJev-verdict-2.0 (CPU), Bespoke-Nimble-9B (NVIDIA GPU / Apple Silicon MLX), Laya Core ML (Apple Silicon ANE), plus a mock backend. `nur jev start` · `nur jev use` |

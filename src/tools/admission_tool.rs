@@ -32,7 +32,7 @@ impl Tool for AdmissionTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["get", "list"]},
+                "action": {"type": "string", "enum": ["get", "list", "all"]},
                 "id": {"type": "integer", "description": "Admission handle id (for get)"}
             },
             "required": ["action"]
@@ -69,8 +69,26 @@ impl Tool for AdmissionTool {
                     ))),
                 }
             }
+            "all" => {
+                // The description and the schema have always promised `all`; only
+                // get/list existed, so a model that followed either got an
+                // unknown-action error. Rendered in full, oldest first, so a fan-out
+                // can be read in one call instead of polling every handle.
+                let mut list = admission::list(&sid);
+                if list.is_empty() {
+                    return Ok("no admitted subagents in this session".into());
+                }
+                list.sort_by_key(|a| a.id);
+                Ok(list
+                    .iter()
+                    .map(admission::render)
+                    .collect::<Vec<_>>()
+                    .join("
+
+"))
+            }
             other => Err(NurError::Tool(format!(
-                "unknown admission action `{other}`; use get or list"
+                "unknown admission action `{other}`; use get, list or all"
             ))),
         }
     }

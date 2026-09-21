@@ -15,7 +15,14 @@ All native tools available to the NurCLI agent.
 | **browser** | `browser` `terminal_browser` | teal |
 | **knowledge** | `graphify` `graphjin` `plur` `ruflo` `akarso` `executor` `skill` `memory` | indigo / orange |
 | **delegate** | `omp` | - |
-| **agent** | `todo_write` `submit_plan` `agent` | - |
+| **agent** | `todo_write` `submit_plan` `agent` `harness` | - |
+| **memory** | `optmem` `connectome` `mem` `memory` `plur` `ruflo` | indigo |
+| **judgments** | `typesafe` | violet |
+| **context** | `context` `anydoc` | sky |
+| **async** | `bg` `admission` `goal` `proposal` `message` | amber |
+| **diagrams** | `excalidraw` `tldraw` `penecho` | pink |
+| **policy** | `dogwood` | cyan |
+| **python** | `repl` | teal |
 
 All of the above are **first-class** in the tool schema every turn (nothing is hidden behind a “search tools” gate). Capability flags (read-only / concurrency-safe / destructive) drive parallel batching and approvals.
 
@@ -83,6 +90,23 @@ Execute shell commands in the workspace cwd (cwd-scoped, not a full OS sandbox).
 ---
 
 ## Vision tools
+
+
+### `repl`
+
+Persistent Python kernel (Prime Intellect RLM "ipython" pattern): a long-lived
+interpreter whose variables, imports, and functions **survive across turns and
+compaction** - the subprocess outlives the chat window. Actions: `exec` (run
+Python, keep state) · `expr` (eval, returns `repr`) · `bash` (a temporary
+subshell; Python state persists) · `cd` (change the kernel cwd) · `status` ·
+`list` · `kill`. `code` carries the Python or shell text; `cwd` sets this cell's
+directory (defaults to the session cwd, and `cd` persists via `os.chdir`). Cells
+run on `python`/`python3`/`py` (override with `NUR_REPL_PYTHON`) and time out
+after 120s of no result (a blocking cell errors). Kernel state is stored under
+`~/.nur/repl/`. Only `status` and `list` are read-only and free. It is **not**
+for secrets - never paste keys or tokens into a cell.
+
+<!-- src/tools/ipython_tool.rs:79 actions: exec|expr|bash|cd|status|list|kill -->
 
 ### `look`
 
@@ -164,6 +188,26 @@ resident. Helix mirroring is local-first and never replaces the native archive.
 Explicit reads share one query embedding across these residents and deduplicate
 the merged context by memory ID automatically.
 
+
+### `connectome`
+
+Agent-native memory + continuity (arXiv:2606.24775 four modules + Anima
+Connectome): hierarchical self-authored memory (`recent`/`l1`/`l2`/`l3`), an
+append-only chronicle, and checkpoints. Actions: `remember` (`text`, `tier`
+default `l1`, `voice` `first_person`|`observed`, `tags`, `confidence`) · `recall`
+(`query`, `k` default 8) · `list` · `consolidate` · `promote` · `extract` ·
+`supersede` · `chronicle` (`text`, kind via `tier`) · `chronicle_tail` (`n`
+default 20) · `checkpoint` (`name`, `note`) · `restore` (`name` - a soft restore
+that describes the state as-of and never rewrites live history) · `status` ·
+`graph` (knowledge-graph entity + neighbor listing). Read-only and free: `recall`
+| `list` | `status` | `chronicle_tail` | `restore`; the rest write. Prefer
+first-person `remember` for on-policy continuity, and never store secrets. Scope
+defaults to `<project>:<NUR_SESSION_ID>` (or `<project>:global`); data is written
+under `~/.nur/native-memory/` and `~/.nur/chronicle/`. Complements `memory`,
+`optmem`, and `plur` - it does not replace them.
+
+<!-- src/tools/connectome_tool.rs:89 actions: status|list|remember|recall|consolidate|promote|supersede|extract|chronicle|chronicle_tail|checkpoint|restore|graph -->
+
 ### `headroom`
 
 Doctor / optional one-shot compress for [Headroom](https://github.com/headroomlabs-ai/headroom).
@@ -179,6 +223,25 @@ Plan mode blocks) rather than riding the read-only shortcut. `anydoc` splits the
 same way: `convert`/`read`/`status` are perception, anything that registers a
 converted document is not.
 
+
+### `anydoc`
+
+Convert PDF/DOCX/PPTX/XLSX/ODT/RTF/EPUB/CSV (and more) to clean GitHub-Flavored
+Markdown via [Firecrawl anydoc](https://github.com/firecrawl/anydoc) - the local
+`anydoc` Rust crate when built with `--features anydoc`, else an `anydoc` /
+`firecrawl-anydoc` CLI on PATH. Actions: `convert` - the only action, and the
+single dispatch path (`path` is required; the tooled `action` field is read but
+never matched, so any value still converts). `register` (default true) stores the
+markdown in the RLM context store as a `document` var (default name
+`doc_<stem>`); `max_chars` caps the inline return only (default 12000) - the full
+text stays in the store. Scanned-image PDFs are not supported (local text
+extraction only; `pdf-inspector` errors as unsupported) - they need Firecrawl
+hosted `/parse` OCR. Read-only and free in `capabilities` when `action` is
+`convert` (the allowlist also names `read`/`status`, neither of which the tool
+implements).
+
+<!-- src/tools/anydoc_tool.rs:47 actions: convert (action field ignored; only conversion implemented) -->
+
 ### `typesafe`
 
 System One judgments ([TypeSafe](https://docs.typesafe.ai), flagship model **Jev**)
@@ -193,6 +256,26 @@ probabilities, and a `confidence` below `[typesafe] escalate_confidence` is an
 escalation rather than a judgment. Provider-agnostic: this boosts whichever model
 you are using. Key from `TYPESAFE_API_KEY`, `/auth` → `TypeSafe · Jev`, or
 `~/.nur/typesafe.key`. Details: [typesafe.md](./typesafe.md).
+
+
+### `dogwood`
+
+Runtime verification for AI agents ([dogwood-policy/dogwood](https://github.com/dogwood-policy/dogwood)):
+a Cedar-extended policy language with temporal logic (`since`/`formerly`/`once`/
+`count_within`) over an agent's event stream, used to govern tool calls. Actions:
+`status` / `which` (report the `dogwood` CLI path and version, or the install
+hint) · `check-parse` (`policy=`) · `validate` (`policy=`, optional `schema=`,
+`event_schema=`, `providers=`, `macros=`) · `replay` (`policy=` + `trace=`) ·
+`lower` (`policy=` + `schema=`, `emit=cedar-policies|cedar-schema|cedar-json|both`)
+· `schema` (`schema_kind=action|event|providers` with `input=`, or `mcp` with
+`manifest=`). Every evaluation action is read-only and free. Requires the
+`dogwood` CLI on PATH: `cargo install --git https://github.com/dogwood-policy/dogwood amzn-dogwood-cli`.
+Each CLI call is capped at 120s. Caveat stated in the code: the reference
+interpreter is explicitly **not** production-grade enforcement - treat it as an
+on-demand evaluation/guardrail layer, not a trust anchor and not a runtime gate on
+every tool call.
+
+<!-- src/tools/dogwood_tool.rs:139 actions: status|which|check-parse|validate|replay|lower|schema -->
 
 ### `optmem`
 
@@ -322,6 +405,24 @@ List or load a skill pack (`SKILL.md`) into context.
 
 **Natural-language activation:** many workflow skills also auto-activate from plain wording (no slash, no first `skill` call). Examples: *think like fable*, *TDD this*, *debug systematically*, *polish the UI*, *resume from Claude*. When that fires, the harness injects the skill body for the whole turn and shows a status chip. Details: **[Ecosystem → Natural-language skill activation](ecosystem.md#natural-language-skill-activation)**.
 
+
+### `harness`
+
+Continual harness lite (Prime Agent `/refine`): append evidence-backed operating
+lessons to per-session supplemental state that outlives a chat window. Actions:
+`status` · `refine` (`lesson` required, max 2000 chars; optional `evidence`,
+truncated to 500 chars) · `rollback`. `refine` snapshots the current state first,
+appends the lesson as a bullet, and bumps `revision`; supplemental is capped at
+12000 chars (older notes trimmed, newest 8000 kept). `rollback` restores the most
+recent snapshot and bumps `revision` again. It **never** rewrites the immutable
+base system prompt - supplemental notes are injected separately (see
+`harness::prompt_block`). State and snapshots live under
+`~/.nur/harness/<session>/` (`state.json`, `snapshots/`); the session key is
+`session_id` or `NUR_SESSION_ID` (default `default`). Only `status` is read-only
+and free; `refine` and `rollback` are write-class.
+
+<!-- src/tools/harness_tool.rs:48 actions: status|refine|rollback -->
+
 ### `memory`
 
 Read or append to the cross-session memory journal (`~/.nur/memory.md`).
@@ -384,6 +485,69 @@ agent({
 })
 ```
 
+
+### `goal`
+
+Persistent goal (Prime Agent pattern): a durable objective that survives across
+turns. Actions: `get` · `set` (`text` required, optional `token_budget`) ·
+`complete` (optional `note`) · `pause` · `resume` · `clear`. Only `complete` marks
+successful completion. `get` is read-only and free; the rest write. State is
+stored per session under `~/.nur/goals/<session>.json`, keyed by `session_id` or
+`NUR_SESSION_ID` (default `default`). Also `/goal`.
+
+<!-- src/tools/goal_tool.rs:49 actions: get|set|complete|pause|resume|clear -->
+
+### `proposal`
+
+Retained-output proposals (Shepherd pattern): when the config key `proposal_mode`
+is on, write tools stage changes under `~/.nur/proposals/<session>/` instead of
+the workspace until you review them. Actions: `list` (free) · `apply` (copies the
+staged files into the current working directory) · `discard`. Review staged files
+before apply. The session key is `session_id` or `NUR_SESSION_ID` (default
+`default`).
+
+<!-- src/tools/proposal_tool.rs:46 actions: list|apply|discard -->
+
+### `admission`
+
+Retrieve results of asynchronously admitted subagents (Prime `rlm()` admission-handle
+model, RLM paper). A child spawned with `agent async=true` returns a handle id
+immediately and runs in the background; poll it here. Actions: `list` (handles in
+this session - id, state `running`/`done`/`failed`, description) and `get` with
+`id` (render one handle). `list` is read-only and free; `get` is not, so it takes
+the approval path. Handles live under `~/.nur/admissions/<session>/`, scoped by
+`NUR_SESSION_ID` (default `default`). `all` renders every handle in the session in one call (added because the
+description and schema had promised it while only `list`/`get` existed).
+
+<!-- src/tools/admission_tool.rs:45 actions: list|get|all -->
+
+### `message`
+
+Agent-to-agent messaging (a pi-peer port): per-session inboxes under
+`~/.nur/peers/`, real heartbeat presence, and true file receipts (consumed vs
+queued). Actions: `send` (`to=<peer name|id|all>`, `text=`) · `recv` (drain this
+session's inbox) · `peers` (a.k.a. `list` - presence, cwd, status) · `inbound`
+(show, or set with `policy=accept|ask|refuse`) · `status`. Read-only and free:
+`recv` | `status` | `peers` | `list`; `send` and `inbound` policy changes are
+write-class. Scope defaults to the project directory name (override with `scope=`).
+Boundary stated in the code: inbound peer mail carries **no authority** - it cannot
+approve actions or change config, and slash commands inside it are inert.
+
+<!-- src/tools/message_tool.rs:67 actions: send|recv|peers|list|inbound|status -->
+
+### `bg`
+
+Push long-running work off the agent turn so the CLI stays interactive. `run`
+spawns a shell command (Windows `cmd /C <command>`, elsewhere `sh -c <command>`)
+or a `program` + `args` pair, and returns a job id immediately. `list` / `chip`
+show running jobs, and `status` / `result` / `cancel` each take an `id`. Read-only
+(free): `list` | `status` | `result` | `chip`; `run` and `cancel` are write-class.
+Diagram tools (`tldraw install`, `penecho install`, long exports) accept
+`background=true` and route through this module. TUI: `/bg`, and the status chip
+shows running jobs. A `spawn_label` action used to be advertised in the description while nothing implemented it (and nothing called it): the description now lists exactly the implemented set.
+
+<!-- src/tools/bg_tool.rs:69 actions: list|chip|status|result|cancel|run -->
+
 ### `fractal`
 
 Bridge to **[fractal](https://github.com/plasma-ai/fractal)** (Apache-2.0) —
@@ -427,6 +591,46 @@ into its `config.env`; there is no linking.
 tool results are sent to the model provider and persisted to
 `~/.nur/sessions/*.json`, so echoing a live key would write it to disk in
 cleartext. Fill `AI_API_KEY` in `~/.penecho/config.env` yourself.
+
+
+### `tldraw`
+
+tldraw offline desktop app ([tldraw-offline](https://github.com/tldraw/tldraw-offline))
+for interactive `.tldraw` boards. `status` / `detect` report the app, the local
+API (port and token), and open docs; `install` downloads and runs the official
+platform installer (network access; `background=true` returns a bg job id);
+`create` writes a valid static Desktop `.tldraw` from a `shapes` list
+(contrast-safe, dark theme) and opens it; `open` / `run` launches a path and
+auto-enables document scripts; `enable_scripts` re-enables scripts on an open
+board; `api` runs JS (`code=`) against the live canvas (needs the app running with
+its local API); `screenshot` / `export_png` write a PNG (default
+`.nur/media/tldraw-*.png`); plus `list_docs` and `fit_camera`. Read-only (free):
+`status` | `detect`; everything else mutates the desktop or canvas and needs
+approval in manual mode. Boards go to the Desktop (reserved for tldraw; excalidraw
+refuses that path). Never invent `.tldraw` JSON with `write_file` - it is not a
+valid document and will not open usefully.
+
+<!-- src/tools/tldraw.rs:93 actions: status|detect|install|open|run|create|enable_scripts|api|screenshot|export_png|list_docs|fit_camera -->
+
+### `excalidraw`
+
+Create hand-drawn diagrams via [excalidraw-cli](https://github.com/ahmadawais/excalidraw-cli)
+and open them for the user. `create` writes a `.excalidraw` file from `elements`
+(a JSON array or string), `elements_path`, or `from_mermaid` (flowchart lines like
+`A[Start] --> B[End]`), then uploads it to excalidraw.com and opens the share URL
+in the default browser (`open=true` by default). `export` uploads an existing
+`path` and opens its share URL; `reference` prints the element-format reference;
+`status` reports the CLI path and version. `checkpoint` takes sub-actions via
+`checkpoint_action`: `list` (free) | `save` (`name` + `path`) | `load` | `remove`.
+Read-only (free): `status`, `reference`, and `checkpoint` `list`; `create`,
+`export`, and the other checkpoint mutators need approval in manual mode. Requires
+`excalidraw-cli` on PATH - `npm i -g excalidraw-cli`, or run `nur ecosystem` to
+auto-provision it when Node is available. Output defaults to
+`.nur/diagrams/<slug>.excalidraw`; Desktop is refused (that path is reserved for
+tldraw). It never OS-opens the local `.excalidraw` file - browser share URL only
+(avoids the Windows "Open with" dialog).
+
+<!-- src/tools/excalidraw.rs:101 actions: status|reference|ref|create|export|checkpoint -->
 
 ### `t3code`
 

@@ -24,6 +24,7 @@ repair or upgrade ecosystem components.
 | `usage` | Path to `usage.jsonl` |
 | `sessions` | Path to sessions directory |
 | `ecosystem` | Graphify, PLUR, Ruflo (and related packs) readiness |
+| `typesafe` | TypeSafe (Jev) layer: ready on a local engine with no key, or inactive |
 | `shell` | Bash / PowerShell backend |
 | `rg`, `git`, `node`, `npm`, `uv`, `ffmpeg` | Whether on PATH |
 | `vision` | look + extract_frames support |
@@ -34,11 +35,12 @@ repair or upgrade ecosystem components.
 **All green:**
 
 ```text
-nur doctor · v0.13.2
+nur doctor · v0.37.1
 
 binary  C:\Users\you\.local\bin\nur.exe
 config  model=muse-spark-1.2 effort=high max_turns=∞ budget=∞$/∞tok  (C:\Users\you\.nur\config.toml)
 auth    key set (…abcd)
+typesafe Jev judgments active on this machine (local engine · http://127.0.0.1:8788 · no key needed)
 home    C:\Users\you\.nur
 status  C:\Users\you\.nur\status.json
 usage   C:\Users\you\.nur\usage.jsonl
@@ -157,7 +159,7 @@ check `~/.nur/nur.log` for the underlying API error.
 
 ### Garbled text in the TUI on launch
 
-Logs go to `~/.nur/nur.log` (not stderr). If you still see noise, check that you're on **v0.13.2+** and no wrapper is redirecting `RUST_LOG` to the console at `warn` for syntect.
+Logs go to `~/.nur/nur.log` (not stderr). If you still see noise, check that you're on a current build (`nur update`) and no wrapper is redirecting `RUST_LOG` to the console at `warn` for syntect.
 
 ### Ecosystem components missing
 

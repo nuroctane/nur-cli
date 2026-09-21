@@ -61,6 +61,14 @@ fix the bug in src/main.rs where the parser hangs on empty input
 
 The agent will read files, run tools, and stream its response in real time.
 
+!!! tip "Sharper decisions, no key"
+    On this machine the **TypeSafe (Jev)** layer runs on a local engine with no
+    key: `nur jev start`, then `nur jev use` ([docs](jev-local.md)). It reaches
+    the harness as the `typesafe` tool and `/typesafe` · `/jev`, tightening which
+    tool calls still earn their tokens, whether a result worked, and what
+    compaction can drop. With no engine and no key, every policy returns "no
+    judgment" and behavior is unchanged ([docs](typesafe.md)).
+
 ---
 
 ## Common first commands
@@ -168,6 +176,7 @@ Nur matches the wording, injects the skill for that turn, and shows e.g. `fable-
 - **[Commands](commands.md)** - Full CLI reference (`nur update`, `nur doctor`, `nur plugins`, …)
 - **[TUI](tui.md)** - Keyboard shortcuts, slash commands
 - **[Tools](tools.md)** - What the agent can do
+- **[TypeSafe / Jev](typesafe.md)** - Keyless local judgments for the harness
 - **[Vision](vision.md)** - Send images and video to the model
 - **[Ecosystem](ecosystem.md)** - Graphify, PLUR, plugins marketplace
 - **[Configuration](configuration.md)** - Customise model, effort, context window

@@ -18,6 +18,7 @@ The active provider, endpoint, and default model are stored in
 | **Kimi Code (kimi.com)** | `KIMI_API_KEY` | Device code / Kimi CLI session |
 | **Anthropic Claude** | `ANTHROPIC_API_KEY` | Claude browser OAuth (`claude.com/cai/…`) or import `~/.claude` |
 | **Google Gemini** | `GEMINI_API_KEY` | Google Cloud ADC via `gcloud auth login --update-adc` |
+| **Antigravity** | `GEMINI_API_KEY` (fallback) | Google Cloud ADC / Antigravity CLI session (`gcloud auth login --update-adc`) |
 | **GitHub Copilot** | `COPILOT_GITHUB_TOKEN` (fine-grained PAT with Copilot Requests) | `gh auth login` (subscription token) |
 | **Cursor** | `CURSOR_API_KEY` (optional) | `cursor-agent login` → nur chat via Agent CLI (no key required) |
 | **OpenCode** | `OPENCODE_API_KEY` | `opencode auth login` (imports `~/.local/share/opencode/auth.json` → `opencode` / `opencode-go`) |
@@ -28,6 +29,7 @@ The active provider, endpoint, and default model are stored in
 | **Azure OpenAI** | `AZURE_OPENAI_API_KEY` | `az login` / Entra device code |
 | **Amazon Bedrock** | `AWS_BEARER_TOKEN_BEDROCK` | - (AWS SSO credentials require SigV4, which this route does not implement) |
 | **GitHub Models** | GitHub PAT (`models:read`) | `gh auth login` browser SSO |
+| **Nous Portal** | `NOUS_API_KEY` | Nous Portal device code (`hermes-cli`) or import `~/.hermes/auth.json` |
 | Gemini, Groq, … | Vendor dashboard | - |
 | **Poolside** | `POOLSIDE_API_KEY` | Free developer key at [platform.poolside.ai](https://platform.poolside.ai/) → API Keys |
 | OpenCode (Zen and Go), Vercel AI Gateway, GitHub Models, Helicone, … | Gateway key | - |
@@ -62,6 +64,16 @@ NurCLI resolves the current OAuth token before every model or inference request,
 the active and per-provider session stores synchronized after token rotation, and
 forces one refresh/retry if a provider rejects an access token early.
 
+`/login` also pins a **TypeSafe · Jev** sidecar at the top of the picker (id
+`typesafe`, its own borders). It is a credential, not a chat model: selecting it
+stores a key (`TYPESAFE_API_KEY` / `TYPESAFE_KEY` / `JEV_API_KEY`, `[typesafe]
+api_key`, or `nur auth login --provider typesafe`) that gives **every** provider
+typed judgments, but it never becomes your active provider and is not a catalog
+row. It can also run with **no key at all** against a local engine -
+`nur jev start`, or `NUR_JEV_LOCAL_URL=http://127.0.0.1:8788/v1/systemone`, where
+a loopback endpoint needs no credential. See [typesafe.md](./typesafe.md) and
+[jev-local.md](./jev-local.md).
+
 ## Supported browser and official-CLI sign-in
 
 NurCLI offers an end-to-end browser or official-CLI credential flow for exactly
@@ -74,6 +86,7 @@ these providers:
 | **Anthropic** | Loopback PKCE (Claude Code client) | `$CLAUDE_CONFIG_DIR` or `~/.claude` | `api.anthropic.com` (Bearer + `oauth-2025-04-20` beta) |
 | **Kimi** | Device code | `~/.kimi` | `api.kimi.com/coding/v1` |
 | **Google Gemini** | Google Cloud ADC via `gcloud` | ADC store | `generativelanguage.googleapis.com` |
+| **Antigravity** | Google Cloud ADC via `gcloud auth login --update-adc` (or the Antigravity/`agy` CLI) | Windows Credential Manager (`gemini:antigravity`) or Gemini/Antigravity CLI files, else gcloud ADC | `cloudcode-pa.googleapis.com` (Cloud Code `v1internal`) |
 | **Azure OpenAI** | Entra device login via `az` | Azure CLI session | Configured Azure resource |
 | **GitHub Models** | GitHub login via `gh` (`models` scope) | GitHub CLI session | `models.github.ai/inference` |
 | **GitHub Copilot** | GitHub login via `gh` | GitHub CLI session | `api.githubcopilot.com` |
@@ -84,6 +97,7 @@ these providers:
 | **Meta / Muse Code** | `muse login` (or first-run `muse`) | `$MUSE_CONFIG_DIR` or `~/.config/muse/auth.json` | `api.meta.ai/v1` (same host as an API key) |
 | **DeepSeek** | DeepSeek Harness `dsh web` → Settings → Models | `$DSH_HOME/.credentials.yaml` (default `~/.dsh`) | `api.deepseek.com/v1` (API key only; no official OAuth) |
 | **Z.AI / ZCode (GLM)** | in-app `/login zai-coding-plan` (Electron app) or `zcode login` (npm CLI) | `~/.zcode/v2/credentials.json` (AES-256-GCM `enc:v1:` envelopes nur decrypts on-device) + `~/.zcode/v2/config.json` (`$ZCODE_HOME`) | Coding Plan: `api.z.ai/api/coding/paas/v4`; general key: `api.z.ai/api/paas/v4` |
+| **Nous Portal** | Nous Portal device code (`hermes-cli` client id) | `~/.hermes/auth.json` (`providers.nous`; Hermes Agent) | `inference-api.nousresearch.com/v1` |
 
 #### Cursor details (CLI, no pasted key)
 
@@ -136,8 +150,9 @@ Credential resolution order for a catalog provider:
    then per-provider keys/sessions (`provider_keys.json` / `provider_sessions.json`),
    followed by the global `NUR_API_KEY` fallback.
 3. **Vendor CLI session** (Claude Code, Codex, Grok, Kimi, Cursor, OpenCode,
-   Antigravity / gcloud, Muse Code, DeepSeek Harness, ZCode, Qwen Code settings,
-   MiniMax CLI) when that provider has a first-party importer.
+   Antigravity / gcloud, Muse Code, DeepSeek Harness, ZCode, Nous Portal / Hermes
+   Agent, Command Code, Cline, Qwen Code settings, MiniMax CLI, Hugging Face
+   token) when that provider has a first-party importer.
 4. **Oh My Pi (OMP)** for every catalog provider - `omp token <provider>` reads
    `~/.omp/agent/agent.db` (see [Oh My Pi](https://github.com/can1357/oh-my-pi)).
    Nur maps ids (`openai` → `openai-codex`, `google` → `google-gemini-cli`, …).
@@ -402,6 +417,7 @@ Active **provider id / base URL / model** come from `~/.nur/config.toml`
 | `~/.nur/config.toml` | `provider`, `base_url`, `model`, … (no secret) |
 | Env `NUR_API_KEY` | Optional global override (never printed in logs) |
 | Env `META_API_KEY` | Optional key for the Meta Model API provider |
+| Env `TYPESAFE_API_KEY` | Optional key for the TypeSafe / Jev sidecar (`TYPESAFE_KEY` / `JEV_API_KEY`, or `~/.nur/typesafe.key`; local engines need none) |
 | Env `NUR_BASE_URL` | Optional API base override (self-hosted) |
 | `~/.nur/sessions/` | Session metadata (no key) |
 | `~/.nur/status.json` | Live token usage (no key) |

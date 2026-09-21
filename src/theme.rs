@@ -2232,7 +2232,7 @@ pub fn banner() {
     );
     println!(
         "  {}\n",
-        "fully loaded  ·  TUI · tools · Graphify/PLUR/Ruflo · 800+ skills".truecolor(120, 112, 96)
+        "fully loaded  ·  TUI · tools · Graphify/PLUR/Ruflo · 1,000+ skills".truecolor(120, 112, 96)
     );
 }
 

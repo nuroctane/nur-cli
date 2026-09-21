@@ -1532,15 +1532,26 @@ fn join_capture(handle: std::thread::JoinHandle<Vec<u8>>, timeout_ms: u64) -> Ve
 }
 
 fn kill_process_tree(child: &mut std::process::Child) {
+    // Kill the direct child FIRST. `TerminateProcess` is immediate, while
+    // `taskkill /T` walks the whole process table - measured at 30-60s on a
+    // loaded Windows box - and waiting for it made "cancel promptly" depend on
+    // how busy the machine was rather than on the cancellation itself.
+    let _ = child.kill();
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
+        // Then sweep the descendants, WITHOUT waiting: the direct child is
+        // already terminated, and this is best-effort cleanup of grandchildren.
+        // It must run before the caller reaps the child (see the wait in
+        // `run_capture_inner`) so the pid cannot be recycled underneath it.
         let _ = std::process::Command::new("taskkill")
             .args(["/PID", &child.id().to_string(), "/T", "/F"])
             .creation_flags(0x0800_0000)
-            .output();
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
     }
-    let _ = child.kill();
 }
 
 pub(crate) fn run_quiet(bin: &str, args: &[&str], cwd: Option<&Path>, timeout_ms: u64) -> bool {

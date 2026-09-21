@@ -25,7 +25,6 @@ impl Tool for Bg {
     fn description(&self) -> &str {
         "Background jobs — push long-running work off the agent turn so the CLI stays interactive. \
          action=run: spawn a shell command in the background (returns job id immediately). \
-         action=spawn_label: register a labeled job already started by another tool. \
          action=list|status|result|cancel|chip. \
          Diagram tools (penecho install, tldraw install, long exports) accept background=true too. \
          Use when a task would block the agent for more than a few seconds. \
@@ -131,7 +130,7 @@ impl Tool for Bg {
                 ))
             }
             other => Err(NurError::Tool(format!(
-                "unknown bg action '{other}' — use run|list|status|result|cancel"
+                "unknown bg action '{other}' — use run|list|status|result|cancel|chip"
             ))),
         }
     }

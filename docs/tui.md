@@ -121,6 +121,11 @@ See [Permission modes](#permission-modes) below for exactly what each mode allow
 | `/swarm` | Inline subagent grid — one live pane per subagent |
 | `/clear` | Clear the screen only — the model keeps full context and the session history is untouched (`/compact` shrinks context, `/new` starts fresh) |
 | `/new` | Start a new session |
+| `/steer <text>` | Inject a message into the *running* turn without cancelling it (tools, subagents and bg jobs keep going). While busy, a plain Enter queues a choice card instead of steering |
+| `/undo` | Revert the last file edit made this session (`write_file` `edit_file` `multi_edit`) |
+| `/receipt` | Session receipt: what actually ran (models, tools, privacy tiers) plus **hash-chain verification** and an OTLP span export |
+| `/commands` | Commands + keyboard shortcuts |
+| `/quit` | Quit (alias of `/exit`) |
 
 ### The swarm card
 
@@ -236,6 +241,7 @@ input height, sidegraph width) so peeks are not re-uploaded every tick.
 | `/skills` | List installed skills (also shows sticky session skills) |
 | `/ecosystem` | Show ecosystem status |
 | `/memory` | Show session memory |
+| `/optmem` · `/memo` | OptMem permanent memory (`~/.optmem`): `status` `wake` `note` `nap` `recall` `zoom` `forget` `config` `doctor`. `nap lines=[...]` drains several compressions in one call |
 
 ### Quick memory
 
@@ -254,6 +260,9 @@ The note is appended to your persistent memory file and recalled automatically i
 | `/model` | Show and switch models. Run bare to open a picker that fetches your provider's live model list (`/models`) - filter, arrow, and Enter to switch, or type any id. `/model <id>` switches directly (e.g. `/model gpt-5.5`) |
 | `/plugins` | Marketplace picker (same UX as provider/`/login` picker): filter, ↑↓/wheel, ↵ to install or enable/disable. Skills land in `~/.nur/plugins/<id>` and mirror **in full** (incl. `references/`) to `~/.nur/skills`. CLI: `nur plugins list\|install\|enable\|disable\|uninstall`. Natural-language phrases (e.g. *think like fable*) **or** `/skill-name` auto-activate skills — status chip confirms activation |
 | `/effort` | Change reasoning effort |
+| `/provider` | Choose the active provider and sign-in route (`/login` is an alias) |
+| `/auth` | Manage saved OAuth, API-key, CLI and OMP credentials for every provider |
+| `/headroom` | Context-compression status / doctor (inline tool-result compression is on by default) |
 | `/compact` | Manually compact context (thins old tool bodies; keeps recent turns; writes `.precompact.bak`) |
 | `/usage` | Show token usage and cost (`/cost`) — includes budget caps when set |
 | `/budget` | Optional caps (all **unlimited by default**): `/budget [cost\|tokens\|turns] <n\|unlimited\|0\|off> · clear · save` |
@@ -261,6 +270,13 @@ The note is appended to your persistent memory file and recalled automatically i
 | `/poor` | Toggle cost-saver prompt (skip PLUR/skills/memory; tools full). `/poor status` shows poor + budget. Does **not** set spend caps |
 | `/context` | Context-window utilization (bar + tokens) |
 | `/status` | Session snapshot: model · mode · cwd · tokens · cost |
+
+### Judgments (TypeSafe - Jev)
+
+| Command | Purpose |
+|---------|---------|
+| `/typesafe` · `/jev` | The Jev layer: status, `on`/`off`, and `ask <proposition>` for one judgment by hand. Keyless on this machine through a local engine - see [typesafe.md](./typesafe.md) and [jev-local.md](./jev-local.md) |
+| `/typesafe-ai` | The *skill*: how to design and use judgments (distinct from `/typesafe`, which is the layer's controls) |
 
 ### Project and shell
 
@@ -349,6 +365,26 @@ Uses the **Executor** gateway (`executor` tool). If MCP is missing:
 nur ecosystem ensure
 ```
 
+### Integrations
+
+| Command | Purpose |
+|---------|---------|
+| `/egaki` | Image / video / speech generation via egaki (`egaki login --provider chatgpt` supported) |
+| `/image <path>` | Show an image inline and attach it for vision (generation is `/egaki`) |
+| `/tb` · `/terminal-browser` | In-terminal browser: `open` \| `ls` \| `action` \| `setup` (Windows host fallback via agent-browser-cli) |
+| `/draw` | tldraw boards: open a `.tldraw`, `install`, or build one from an idea |
+| `/pen` · `/drawings` · `/penecho` | Penecho canvas (ink, MathJax, plots); `/drawings` lists saved canvases |
+| `/akarso` | Post / schedule / reply across 14 social platforms (`akarso` tool + skill; publishing asks first) |
+| `/openseo` | SEO research and audits through the OpenSEO MCP server |
+| `/dialkit` | Live-tune interface parameters (dialkit skill) |
+| `/cua` | Computer-use desktop driver: `on` (always-on, elevated) \| `off` (on demand, default) \| `status` |
+| `/failover` | Cross-provider failover in the provider picker (space toggles a provider into the chain) |
+| `/factory-overnight` | Fractal-first overnight factory driven from `HANDOFF.md` (Unix preferred) |
+| `/prewalk` | OMP-style staging: a strong model plans, then a cheap model takes over at the first edit (`on` \| `off` \| `status` \| `into <model>` \| `reset`) |
+| `/skeuo` | Activate the skeuomorphic-UI skill (`/skeuomorphic-ui`) |
+| `/fable-loop` · `/fable-judge` | Skills: orchestrated Fable multi-step loop · adversarial verification of finished work |
+| `/tech-spec` · `/test-driven-development` · `/systematic-debugging` | Skills: typed call-stack handoff · TDD red-green-refactor · root-cause-first debugging |
+
 ### Feedback
 
 ```text
@@ -406,6 +442,15 @@ Tool cards are colour-coded by family:
 | git | cyan | `git_status` `git_diff` |
 | knowledge | indigo / orange | `graphify` `plur` `ruflo` `skill` `memory` |
 
+### Display math
+
+`$$...$$` blocks render as images when the build carries the `image-peek` feature
+(the default release build does). Rendering is cache-only on the paint path: the
+UI thread never spawns Node or ImageMagick, and a background worker warms PNGs
+after each assistant message, so a block is already drawn by the time you scroll
+to it. Without `image-peek`, or when `katex`/`magick` are unavailable, the TeX
+source is left as-is rather than showing a broken box.
+
 ### Thought cards
 
 The model's reasoning is displayed in **violet thought cards** that are collapsed by default. Click to expand.
@@ -441,7 +486,7 @@ Any path in the transcript that exists on the machine is a link, and a click ope
 
 Precedence is deliberate: queue actions → path links → URLs → card expand. Clicking a path inside a collapsed tool card opens the path rather than toggling the card, and a note confirms what opened (or why it could not).
 
-`dir` is the palette's own `indigo`, which every preset already tunes for its identity (matrix green, gruvbox pink, heavenly purple), so folders correspond to the theme with no per-theme table to maintain. It is unused by any other transcript role (`md_link` carries URLs, `md_list` list markers, `md_code` code), and a test asserts it clears the contrast floor on both the canvas and a code band for all 23 themes.
+`dir` is the palette's own `indigo`, which every preset already tunes for its identity (matrix green, gruvbox pink, heavenly purple), so folders correspond to the theme with no per-theme table to maintain. It is unused by any other transcript role (`md_link` carries URLs, `md_list` list markers, `md_code` code), and a test asserts it clears the contrast floor on both the canvas and a code band for all 21 registered themes (`theme_ids()` in `src/theme.rs`).
 
 Detection is deliberately conservative (`src/open_uri.rs::find_path_spans`): a token must contain a separator, survive prose-punctuation trimming, resolve against the session working directory, and **exist** before it becomes a link - so a clickable path is always one that opens. Existence probes are cached for 10 seconds (a directory you just created becomes clickable within that window), and lines without a separator are skipped outright. A URL's own path segments are excluded, so `https://host/src` is a link to the host, not a folder.
 

@@ -41,6 +41,7 @@ NurCLI hardens shell execution by default:
 - **Session bak**: each session save copies the previous file to `*.json.bak` first
 - **Optional rules**: `permissions.toml` deny/ask/allow; plan mode still blocks code authoring / VCS
 - **Optional hooks**: `hooks.toml` pre/post tool shell (local only; you control the script)
+- **TypeSafe (Jev) guard**: the `typesafe` tool is declared read-only, so it runs without approval, and it refuses secret-shaped content in `state` / `query` / `candidates` before any request is sent. A loopback endpoint needs no key (local engine); a hosted endpoint needs `TYPESAFE_API_KEY`
 
 ---
 

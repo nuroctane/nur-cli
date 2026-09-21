@@ -13,6 +13,7 @@ before building the real embedding/KG layer so the "before" is honest.
 | **ruflo** | `~/.nur/ruflo/` (Meta DB) | AgentDB vector store (via CLI) | embedding/pattern memory, swarm/hive |
 | **context_store** | `~/.nur/context-store/` | RLM prompt-as-variable | large tool results / docs kept outside the window; peek/slice/search |
 | **native_memory** | `~/.nur/native-memory/` | hierarchical tiers (recent/l1/l2/l3) | agent-native memoirs from M1–M4 framework |
+| **connectome** (tool) | `~/.nur/native-memory/` + `~/.nur/chronicle/` | interface over the two above | self-authored `remember`/`recall` (tiers), `consolidate`, `extract`, `supersede`, `checkpoint`/`restore`, and `graph` over the same store |
 | **HelixDB** | configured `/v2/query` service + local `helix-outbox.jsonl` | tenant-partitioned vector/text index | optional background mirror and explicit-read accelerator for native memory |
 | **chronicle** | `~/.nur/chronicle/` | append-only event log | every event; checkpoints; time-travel |
 | **harness** (Continual) | `~/.nur/harness/` | refined supplemental lessons | `/refine` notes + rollback |

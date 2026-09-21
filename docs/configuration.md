@@ -70,9 +70,14 @@ auto_update = true
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `provider` | string | `nur` | Catalog id (`nur`, `openai`, `openrouter`, `ollama`, …). Set by TUI **`/login`** with matching `base_url` + `model` |
+| `provider` | string | `meta` | Catalog id (`meta`, `openai`, `openrouter`, `ollama`, …). Set by TUI **`/login`** with matching `base_url` + `model` |
 | `model` | string | `muse-spark-1.2` | Model id for the active provider |
 | `base_url` | string | `https://api.meta.ai/v1` | API base (no trailing path); providers use Responses or Chat Completions under this base |
+| `provider_privacy` | map | empty | Per-provider privacy you assert about your own account/endpoint (`{provider_id = "local" / "tee" / "zdr" / "standard"}`); set in the provider picker and overrides the built-in default |
+| `provider_base_urls` | map | empty | Per-provider base-URL overrides (`{provider_id = "https://…/v1"}`) so any provider - including `openai` - can point at an OpenAI-compatible endpoint (Azure, a proxy, LiteLLM, a mirror). Also honored via env `{PROVIDER}_BASE_URL` |
+| `fallback_providers` | array | empty | Opt-in cross-provider failover chain: catalog ids retried in order on 5xx/429/transport. Each fallback uses its own env-var key; empty = no failover |
+| `failover_allow_downgrade` | bool | `false` | Allow failover to a provider whose privacy tier is weaker than the active one. `false` means an outage never silently weakens data privacy |
+| `fusion_panel` | array | empty | Opt-in `/fusion` panel: catalog ids polled alongside the active model. `/fusion <question>` asks each and the active model synthesizes one answer. Empty = off |
 | `reasoning_effort` | string | `high` | Reasoning depth: `minimal`, `low`, `medium`, `high`, `xhigh` |
 | `max_turns` | integer | `0` | Max agent tool/model rounds per user prompt. **`0` = unlimited** (default). Set via config or `/budget turns` / `/turns` |
 | `max_session_cost_usd` | float? | unset (∞) | Optional session $ hard-stop. `/budget cost <usd>` · `/budget clear` |
@@ -91,27 +96,62 @@ auto_update = true
 | `typesafe.base_url` | string | `https://api.typesafe.ai/v1/systemone` | System One endpoint. A **loopback** URL (127.0.0.1 / localhost / `[::1]`) needs no key and runs the whole judgment layer against a local engine - see [jev-local.md](./jev-local.md) |
 | `typesafe.act_confidence` | float | `0.85` | Confidence at or above which a judgment may change behavior |
 | `typesafe.escalate_confidence` | float | `0.5` | Below this the judgment is handed to a bigger model or a human instead of being acted on |
+| `typesafe.api_key` | string | unset | Key inline in config. Prefer `TYPESAFE_API_KEY` or the credential store - anything here is plain text on disk |
+| `typesafe.timeout_ms` | integer | `20000` | Per-request timeout. Jev is fast; a long stall means something is wrong |
+| `typesafe.retries` | integer | `2` | Retries on 429/529/5xx with exponential backoff |
 | `typesafe.max_questions_per_request` | integer | `24` | Questions merged into one request before they are split and sent in parallel |
 | `typesafe.max_parallel` | integer | `4` | Concurrent requests when a question set is split |
+| `typesafe.compaction.enabled` | bool | `true` | Jev-scored compaction: drop tool calls, keep survivors verbatim |
 | `typesafe.compaction.replace_summary` | bool | `true` | When a Jev prune frees enough context, skip the summarizing model call entirely (survivors stay verbatim) |
 | `typesafe.compaction.min_reduction` | float | `0.25` | Reduction ratio required to take that path instead of summarizing |
+| `typesafe.compaction.preserve_recent` | integer | `6` | Newest N items never touched (the first item is always kept) |
+| `typesafe.compaction.keep_threshold` | float | `0.5` | Minimum keep probability for a call or result to survive |
+| `typesafe.compaction.truncate_head_chars` | integer | `300` | Chars of a dropped result retained before its note |
+| `typesafe.compaction.max_state_tokens` | integer | `25000` | Estimated token ceiling for the state Jev sees |
+| `typesafe.compaction.goal_prompts` | integer | `3` | Recent user prompts that make up the goal shown to Jev |
+| `typesafe.tool_gate.enabled` | bool | `true` | Pre-execution gate + post-execution result judge at the tool boundary |
+| `typesafe.tool_gate.judge_results` | bool | `true` | Judge results after execution (did it work, keep it, keep it verbatim) |
 | `typesafe.tool_gate.skip_redundant` | bool | `true` | Answer a confident duplicate of a call whose result is still in context without re-running the tool |
 | `typesafe.tool_gate.skip_repeated_failures` | bool | `false` | Also skip identical repeats of a call that already failed (surfaced in the transcript, not enforced, by default) |
+| `typesafe.tool_gate.flag_risky` | bool | `true` | Surface risk / needs-human judgments in the UI. Never blocks anything |
+| `typesafe.tool_gate.preview_chars` | integer | `1200` | Chars of arguments/result shown to Jev per call |
+| `typesafe.tool_gate.trace_window` | integer | `16` | Most recent calls kept in the gate's state window |
+| `typesafe.skills.enabled` | bool | `true` | Skill layer on/off |
+| `typesafe.skills.rerank` | bool | `true` | Rerank skill candidates against the request when several match |
 | `typesafe.skills.narrow_requirements` | bool | `true` | Inject only the triggered skill's applicable rules as a checklist |
+| `typesafe.skills.check_usage` | bool | `true` | Check that an activated skill was actually carried out |
+| `typesafe.skills.max_requirements` | integer | `8` | Most rules injected from a narrowed skill |
 | `typesafe.routing.enabled` | bool | `false` | Let the harness switch to the suggested model; `false` keeps the suggestion advisory |
+| `typesafe.routing.suggest` | bool | `true` | Show the suggested model in the transcript |
 | `typesafe.tools.subset` | bool | `false` | Narrow the tool surface on the first round of a turn (one Noul per specialist; later rounds get the full surface). Off because tool schemas ride the prompt cache |
 | `typesafe.tools.keep_probability` | float | `0.75` | How confident the answer must be that a tool is *not* needed before it is dropped (keeping is the safe direction) |
+| `headroom.enabled` | bool | `true` | [Headroom](https://github.com/headroomlabs-ai/headroom) inline compression of large tool results (needs the `headroom-ai` package; missing package = no-op) |
+| `headroom.mode` | string | `inline` | `inline` compresses tool results before they enter model context; `off` disables (proxy mode reserved) |
+| `headroom.min_chars` | integer | `2000` | Skip compression below this many chars |
+| `headroom.model` | string | active session model | Token-counter model passed to Headroom; empty = the active session model |
+| `optmem.enabled` | bool | `true` | [OptMem](https://github.com/VictorTaelin/OptMem) permanent memory under upstream `~/.optmem` (wake inject + `optmem` tool; `/optmem` · `/memo`) |
 | `prewalk.enabled` | bool | `false` | After todos exist, first write/edit switches to `prewalk.into` / smol |
 | `prewalk.into` | string | unset | Cheap model for prewalk handoff (`/prewalk into …`, or `OMP_SMOL_MODEL` / OMP `modelRoles.smol`) |
 | `helix_memory.mode` | string | `auto` | `auto` enables only when `HELIX_URL`/`NUR_HELIX_URL` or a configured URL exists; `on` uses the configured/local endpoint; `off` disables the resident |
 | `helix_memory.url` | string | local endpoint when on | HelixDB gateway base URL. Nur uses `/healthz` and typed `/v2/query` requests |
 | `helix_memory.api_key_env` | string | `HELIX_API_KEY` | Name of the env var containing the Helix bearer token. The token is never written to config or memory |
 | `helix_memory.timeout_ms` | integer | `1500` | Per-request deadline. Writes queue locally first and retry from the outbox on later writes or `helix_sync` |
+| `native_memory` | bool | `true` | Agent-native memory + Connectome continuity: inject hierarchical memories into the system prompt and run localized maintenance on compact |
+| `memory_embed_mode` | string | `auto` | Embedding mode: `auto` (API, fall back to local on error), `api` (require API), or `local` (offline n-gram hash embedding only) |
+| `memory_embed_model` | string | provider default | Embedding model for the vector store. Empty = provider default (`text-embedding-3-small`); falls back to the local embedding when the API path is unavailable |
+| `memory_model_extract` | bool | `false` | Let the active model write durable first-person memories from assistant turns (one cheap low-effort call per turn). Off by default |
+| `message_inbound` | string | `accept` | Inbound peer-mail policy (`~/.nur/peers`, `message` tool): `accept` / `ask` (flag for review) / `refuse` (drop) |
+| `proposal_mode` | bool | `false` | Shepherd-style retained outputs: `write_file` stages under `~/.nur/proposals/<session>/` until `proposal apply` |
+| `quality_gate` | string | empty | Shell command run as a quality gate before accepting DONE in autonomous mode. Empty = none |
+| `context_register_min_chars` | integer | `8000` | Auto-register tool results larger than this into the RLM context store (`0` = disabled) |
+| `subagent_depth` | integer | `1` | RLM-style subagent recursion depth. `1` = children only; each extra level multiplies cost |
+| `landlock` | bool | `false` | Shepherd-style OS sandbox via Linux Landlock for high-risk runs. Linux-only; no-op on Windows/macOS |
 | `poor_mode` | bool | `false` | Skip PLUR auto-inject and long memory (skill NL/slash activation still works) |
 | `theme` | string | unset | Picked theme id (`/theme`). Unset = Nur Gold until onboarding choice |
 | `theme_setup.accent` | hex string | unset | Personal accent color (`#rrggbb`) layered over **every** theme pick - recolors the accent ramp, highlights, and banner gradient. `theme_setup.accent_deep` / `theme_setup.accent_sky` optionally pin the ramp ends (derived automatically when absent) |
 | `theme_setup.protocol` | string | `auto` | Force the terminal graphics protocol for inline images: `kitty`, `sixel`, `iterm2`, `halfblocks`, or `auto` |
 | `theme_setup.inline_images` | bool | `true` | Master switch for inline pixel rendering in transcript + peeks |
+| `theme_setup.transparent` | bool | `false` | Skip painting panel/code backgrounds so a translucent terminal shows through (`/theme transparent`) |
 | `ecosystem_auto_ensure` | bool | `true` | Background TTL **repair** of packs on later TUI opens (first install is foreground via npx / one-liner / EXE / `nur install\); set `false` to skip repair |
 | `auto_update` | bool | `true` | On **every** launch (bare TUI, `nur "prompt"`, `nur run …`, gateway), check [GitHub Releases](https://github.com/nuroctane/nur-cli/releases/latest) and install a newer binary when available; it runs on a background thread so it never delays or breaks a run, and the new binary is picked up on the next launch. A 60s floor between network checks stops a script that loops `nur` from hammering the API — tune it with `NUR_AUTO_UPDATE_TTL_SECS` (`0` = check every run). Opt out with `false` or env `NUR_SKIP_AUTO_UPDATE=1`. Verify with `nur update --check`; `nur update` always runs the full update path |
 
@@ -252,7 +292,7 @@ Non-zero **pre_tool** exit blocks the tool. Missing file = no hooks. Check statu
 | `NUR_API_KEY` | API key (preferred) |
 | `META_API_KEY` | Optional key for Meta Model API provider |
 | `NUR_BASE_URL` | Override API base URL (self-hosted Ollama/vLLM/LiteLLM/gateways) |
-| `NUR_MODEL` | Override model id |
+| `NUR_MODEL` | Override model id for the active provider. A value inherited from a parent `nur` session is ignored (nur exports `NUR_MODEL` to its own children) - pass `--model` to override explicitly |
 | `NUR_JEV_LOCAL_URL` | Point the TypeSafe layer at a local System One engine (e.g. `http://127.0.0.1:8788`). Loopback needs no key, so `TYPESAFE_API_KEY` becomes optional. See [jev-local.md](./jev-local.md) |
 | `TYPESAFE_API_KEY` | TypeSafe (Jev) key for the harness boost layer. Aliases: `TYPESAFE_KEY`, `JEV_API_KEY`; also `/auth` → `TypeSafe · Jev`, or `~/.nur/typesafe.key`. It is a judgment credential, never the active chat provider |
 
@@ -261,6 +301,13 @@ Non-zero **pre_tool** exit blocks the tool. Missing file = no hooks. Check statu
 | Variable | Purpose |
 |----------|---------|
 | `NUR_PROVIDER_TURN_TIMEOUT_SECS` | Maximum time for one provider request before Nur cancels it (default `300`). Applies to Responses, Chat Completions, Anthropic Messages, Gemini Cloud Code, and Cursor Agent CLI transports |
+
+### Rendering
+
+| Variable | Purpose |
+|----------|---------|
+| `NUR_IMAGE_PROTOCOL` | Force the terminal graphics protocol for inline images (`kitty`, `sixel`, `iterm2`, `halfblocks`); overrides `theme_setup.protocol` |
+| `NUR_IMAGE_QUERY` | Set to `1` to run the full stdio graphics-capability probe on launch (default is the instant, non-blocking path) |
 
 ### Paths
 
@@ -278,7 +325,7 @@ Set by NurCLI for host integrations:
 | `NUR_STATUS_PATH` | Path to live status file |
 | `NUR_USAGE_LOG_PATH` | Path to usage log |
 | `NUR_SESSION_ID` | Current session id |
-| `NUR_PROVIDER` | Provider identifier (set to `nur`) |
+| `NUR_PROVIDER` | Provider id Nur exports to its own children (the active provider, e.g. `meta`) |
 
 ### Update control
 

@@ -6,14 +6,14 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "nur",
     version,
-    about = "NurCLI — multi-provider coding agent · vision · TUI · tools · 800+ skills",
+    about = "NurCLI — multi-provider coding agent · vision · TUI · tools · 1,000+ skills",
     long_about = "NurCLI — fully loaded multi-provider coding agent.\n\n\
 What you get:\n\
   · Streaming Nur-gold TUI — duration chips, expandable thought/tool cards,\n\
     click-to-peek, drag-select + scrollbar, Ctrl+A/C/V, sessions browser\n\
   · Vision — look (images/short video) · extract_frames (ffmpeg keyframes)\n\
   · Real agent harness — manual/plan/auto modes, tools, subagents, todos\n\
-  · Ecosystem — Graphify · PLUR · Ruflo · Executor · 800+ skills · AKM\n\
+  · Ecosystem — Graphify · PLUR · Ruflo · Executor · 1,000+ skills · AKM\n\
   · Hardened by default — sandbox, denylist, SSRF blocks, atomic ~/.nur IO\n\n\
 Providers: OpenAI, Anthropic, xAI, Gemini, Meta Model API, OpenRouter, local Ollama, …\n\
 Secrets stay in ~/.nur/ only.\n\

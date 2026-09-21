@@ -69,7 +69,17 @@ pub fn is_read_only(name: &str, args: &Value) -> bool {
         // path instead of riding the read-only shortcut (and the parallel batch,
         // which skips approval entirely).
         "context" => action_is(args, &["list", "peek", "slice", "search", "inventory"]),
-        "anydoc" => action_is(args, &["convert", "read", "status"]),
+        // `anydoc` does not dispatch on `action` at all: it always converts and,
+        // unless `register=false`, drops the markdown into ~/.nur/context-store.
+        // Classifying it by a made-up action name left the *default* call
+        // (register=true) auto-approved in Manual, free in Plan, and dispatched in
+        // the parallel batch that skips approval. Fail closed on the thing that
+        // actually decides: whether it writes.
+        "anydoc" => args
+            .get("register")
+            .and_then(|v| v.as_bool())
+            .map(|register| !register)
+            .unwrap_or(false),
         "connectome" => args
             .get("action")
             .and_then(|a| a.as_str())
@@ -245,14 +255,26 @@ mod audit_tests {
                 "context {action} writes the store"
             );
         }
-        assert!(is_read_only(
-            "anydoc",
-            &serde_json::json!({ "action": "convert" })
-        ));
-        // An unknown/missing action is fail-closed for both.
-        assert!(!is_read_only("context", &serde_json::json!({})));
+        // `anydoc` writes whenever it registers, and registering is the default.
+        assert!(
+            !is_read_only("anydoc", &serde_json::json!({ "path": "a.pdf" })),
+            "the default call registers a document"
+        );
         assert!(!is_read_only(
             "anydoc",
+            &serde_json::json!({ "path": "a.pdf", "register": true })
+        ));
+        assert!(
+            is_read_only(
+                "anydoc",
+                &serde_json::json!({ "path": "a.pdf", "register": false })
+            ),
+            "an unregistered conversion is perception"
+        );
+        // An unknown/missing action is fail-closed for `context`.
+        assert!(!is_read_only("context", &serde_json::json!({})));
+        assert!(!is_read_only(
+            "context",
             &serde_json::json!({ "action": "definitely-not-one" })
         ));
     }

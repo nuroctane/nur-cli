@@ -10,8 +10,9 @@ Set the listed environment variable and use `/login <id>` to select the row.
 `/login` also pins one entry that is deliberately **not** in this catalog:
 **TypeSafe · Jev** (id `typesafe`), shown first with its own borders. It is a
 credential that gives every provider typed judgments, not a chat model, so
-selecting it stores a key and never becomes your active provider. See
-[typesafe.md](./typesafe.md).
+selecting it stores a key and never becomes your active provider. It can also
+run with no key at all against a local engine (`NUR_JEV_LOCAL_URL`; see
+[jev-local.md](./jev-local.md)). See [typesafe.md](./typesafe.md).
 `R` means Nur sends the Responses shape (`/responses`); `CC` means Chat
 Completions (`/chat/completions`); `AM` means the native Anthropic Messages
 shape (`/v1/messages`); and `GCC` means Google's Cloud Code native
@@ -95,7 +96,7 @@ capability for this exact Nur route/model, so Nur must treat it as unverified.
 
 ## Catalog conformance check
 
-The matrix must have exactly 62 data rows, matching `PROVIDERS.len()`. A row
+The matrix must have exactly 65 data rows, matching `PROVIDERS.len()`. A row
 is a catalog contract, not a promise that a remote model is available to every
 account. The primary expected catalog mismatches are intentional placeholders:
 
