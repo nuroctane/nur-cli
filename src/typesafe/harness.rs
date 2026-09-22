@@ -1602,6 +1602,40 @@ mod tests {
                "probabilities": Value::Object(probs), "confidence": confidence})
     }
 
+    /// Jev is a tool models use, not a model. Its credentials are a separate
+    /// scoped slot, so every chat provider stays usable alongside them - the
+    /// harness never reads the active provider to decide whether Jev is ready.
+    #[test]
+    fn jev_credentials_coexist_with_every_chat_provider() {
+        let ts = cfg();
+        // Readiness is a function of the Jev credential alone. Walking the
+        // whole chat catalog must not change the answer, and no chat provider
+        // may need a Jev key to validate.
+        assert!(available(&ts), "an explicit Jev key is enough on its own");
+        for p in crate::providers::PROVIDERS.iter() {
+            let mut chat = crate::config::Config {
+                provider: p.id.to_string(),
+                typesafe: ts.clone(),
+                ..crate::config::Config::default()
+            };
+            assert!(
+                chat.validate().is_ok(),
+                "{} must stay valid with a Jev credential present",
+                p.id
+            );
+            assert_eq!(chat.provider, p.id, "the active route is untouched");
+            assert!(
+                available(&chat.typesafe),
+                "{} does not gate Jev readiness",
+                p.id
+            );
+            // Dropping the Jev key leaves the provider usable; the reverse
+            // direction (no chat key) is not Jev's business either.
+            chat.typesafe.api_key = String::new();
+            assert!(chat.validate().is_ok(), "a chat route stands without Jev");
+        }
+    }
+
     /// A sidecar is a credential, not a model: routing a subagent at it must be
     /// refused with a message that says what to do instead.
     #[test]
