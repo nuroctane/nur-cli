@@ -27,12 +27,9 @@ fn trim_nap_prompt(out: &str) -> String {
     };
     match crate::optmem::parse_nap_prompt(out) {
         Some(p) => format!(
-            "{prefix}[optmem · {} compression(s) remain after the next block #{} (housekeeping - \
-             optional). Apply with range=\"{}\" + text=\"<your one line>\", or pass \
-             lines=[\"…\", \"…\"] to drain several in ONE call. Do not let this outrank the \
-             user's request.]",
+            "{prefix}[optmem · {} compression(s) remain after the next block #{} \
+             (optional housekeeping; no follow-up required).]",
             p.remaining,
-            p.range(),
             p.range()
         ),
         None => kept,
@@ -50,9 +47,10 @@ fn render_pending(out: &str) -> String {
         Some(p) => format!(
             "optmem · next compression: block #{} ({} more after it).\n\
              Housekeeping only - nothing in the current task depends on it.\n\
-             Apply your one-line summary: optmem(action=nap, range=\"{}\", text=\"…\").\n\
-             Finish the queue in one call: optmem(action=nap, lines=[\"…\", \"…\", …]) - one \
-             line per block, in order, max {NAP_DRAIN_MAX}.\n\n{}",
+             Optional apply: optmem(action=nap, range=\"{}\", text=\"…\").\n\
+             Batch form: optmem(action=nap, lines=[\"…\", \"…\", …]) - max {NAP_DRAIN_MAX}, \
+             only when each block's contents are already known. Do not invent summaries \
+             for unseen blocks. No follow-up is required.\n\n{}",
             p.range(),
             p.remaining,
             p.range(),
@@ -82,7 +80,23 @@ fn render_drain(drain: &crate::optmem::NapDrain) -> String {
             p.remaining
         ));
     }
+    if !drain.queue_cleared {
+        s.push_str("\nOptional housekeeping remains; no follow-up required.");
+    }
     s
+}
+
+/// At the advisory threshold, omit the next block entirely rather than offering
+/// another way to continue the same chain. Explicit maintenance remains usable.
+fn render_applied(range: &str, out: &str, count: usize) -> String {
+    if count >= optmem::NAP_CHAIN_MAX && optmem::parse_nap_prompt(out).is_some() {
+        return format!(
+            "applied #{range}.\n[optmem · {count} single-block naps in the current housekeeping \
+             window. Further compression details omitted; no follow-up required. \
+             Return to the user's request.]"
+        );
+    }
+    format!("applied #{range}.\n{}", trim_nap_prompt(out))
 }
 
 pub struct OptMem;
@@ -113,9 +127,11 @@ impl Tool for OptMem {
         "OptMem permanent memory (https://github.com/VictorTaelin/OptMem). \
          Upstream-pure under ~/.optmem. actions: status|doctor|wake|note|nap|recall|zoom|forget|config. \
          Root agents: wake at session start (auto). Subagents must not use memo. \
-         note text max 280 chars. Compressions are housekeeping: `nap` shows the next \
-         pending block; apply it with range+text, or pass lines=[…] to drain several in \
-         ONE call. Never let the queue outrank the user's request."
+         note text max 280 chars. Compressions are optional housekeeping, not a prerequisite \
+         for continuing. Do not chase pending blocks after a note or an applied nap. \
+         For deliberate maintenance, `nap` shows the next block; apply with range+text. \
+         Batch lines=[…] only when every block's contents are already known. \
+         Never let the queue outrank the user's request."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -131,7 +147,7 @@ impl Tool for OptMem {
                 "lines": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "For nap: one line per pending block, in order - drains several compressions in ONE call instead of chaining them (max 24)"
+                    "description": "For nap: summaries for already-known pending blocks, in order (max 24). Never invent summaries for unseen blocks; no obligation to drain the queue"
                 },
                 "query": { "type": "string", "description": "For recall: regex/search" },
                 "range": { "type": "string", "description": "For zoom/forget: a-b node id. For nap: a-b of the block to compress (with text); omit to get the pending prompt" },
@@ -156,8 +172,8 @@ impl Tool for OptMem {
                 // block; applying it is `memo nap <lo>-<hi> "<line>"`, and the
                 // apply output renders the *following* block. That is a queue,
                 // not an instruction - so nur never hands the next block back as
-                // something to go and do, and prefers one call that drains
-                // several blocks over a chain of single steps.
+                // something to go and do. Batching is optional and only safe
+                // when the caller already knows every block being summarized.
                 let range = arg_str(args, "range").ok();
                 let text = arg_str(args, "text").ok();
                 let lines: Vec<String> = args
@@ -177,7 +193,7 @@ impl Tool for OptMem {
                     if lines.len() > NAP_DRAIN_MAX {
                         return Err(NurError::Tool(format!(
                             "nap drain takes at most {NAP_DRAIN_MAX} lines per call \
-                             ({} given) - split it",
+                             ({} given) - leave remaining housekeeping deferred",
                             lines.len()
                         )));
                     }
@@ -187,22 +203,10 @@ impl Tool for OptMem {
 
                 match (range.as_deref(), text.as_deref()) {
                     (Some(r), Some(line)) if !r.is_empty() && !line.is_empty() => {
-                        // Applying one block is fine, but it must not become a
-                        // chain: after a couple, report the count and the batch
-                        // form instead of the next block.
+                        // Report the completed work without soliciting another nap.
                         let out = optmem::nap_apply(r, line).map_err(NurError::Tool)?;
                         let count = optmem::count_single_nap();
-                        let trimmed = trim_nap_prompt(&out);
-                        if count > optmem::NAP_CHAIN_MAX {
-                            return Ok(format!(
-                                "applied #{r}.\n[nur] That is {count} single-block naps in a row. \
-                                 This is housekeeping with no dependency on the current task, so nur \
-                                 is no longer showing the next block. To finish the queue, call \
-                                 optmem(action=nap, lines=[\"line for the next block\", …]) once - \
-                                 or defer it and get on with the user's request.\n\n{trimmed}"
-                            ));
-                        }
-                        Ok(format!("applied #{r}.\n{trimmed}"))
+                        Ok(render_applied(r, &out, count))
                     }
                     _ => {
                         let out = optmem::run_memo(&["nap"], 120_000).map_err(NurError::Tool)?;
@@ -264,6 +268,8 @@ mod tests {
         assert!(!trimmed.contains("Run: "), "{trimmed}");
         assert!(!trimmed.contains("Compress memories #"), "{trimmed}");
         assert!(!trimmed.contains("before continuing"), "{trimmed}");
+        assert!(!trimmed.contains("Apply with"), "{trimmed}");
+        assert!(!trimmed.contains("lines=["), "{trimmed}");
     }
 
     /// `note` keeps upstream's confirmation line but not its prompt.
@@ -273,7 +279,7 @@ mod tests {
         let trimmed = trim_nap_prompt(&out);
         assert!(trimmed.starts_with("Saved as #41."), "{trimmed}");
         assert!(!trimmed.contains("Run: "), "{trimmed}");
-        assert!(trimmed.contains("lines=["), "{trimmed}");
+        assert!(!trimmed.contains("lines=["), "{trimmed}");
     }
 
     /// Nothing pending: pass the output through untouched.
@@ -311,6 +317,8 @@ mod tests {
         let rendered = render_drain(&drained);
         assert!(rendered.contains("applied 2 compression(s)"), "{rendered}");
         assert!(rendered.contains("#36-37, #38-39"), "{rendered}");
+        assert!(rendered.contains("no follow-up required"), "{rendered}");
+        assert!(!rendered.contains("lines=["), "{rendered}");
         assert!(
             rendered.contains("still pending: block #40-41"),
             "{rendered}"
@@ -322,6 +330,49 @@ mod tests {
             queue_cleared: true,
         };
         assert!(render_drain(&cleared).contains("queue is clear"));
+    }
+
+    #[test]
+    fn repeated_applies_do_not_solicit_more_housekeeping() {
+        // Replay the six-applies shape from d37fa02f without touching real memory.
+        for count in 1..=6 {
+            let rendered = super::render_applied("34-35", PROMPT, count);
+            assert!(rendered.starts_with("applied #34-35."), "{rendered}");
+            assert!(!rendered.contains("lines=["), "{rendered}");
+            assert!(!rendered.contains("Apply with"), "{rendered}");
+            assert!(!rendered.contains("Run: "), "{rendered}");
+            assert!(rendered.contains("no follow-up required"), "{rendered}");
+            if count >= crate::optmem::NAP_CHAIN_MAX {
+                assert!(!rendered.contains("36-37"), "{rendered}");
+                assert!(!rendered.contains("some memory text"), "{rendered}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_cleared_queue_at_the_threshold_is_not_reported_as_deferred() {
+        let rendered = super::render_applied(
+            "34-35",
+            "Saved as #34-35.\nNothing left to compress.\n",
+            crate::optmem::NAP_CHAIN_MAX,
+        );
+        assert!(rendered.contains("Nothing left to compress."), "{rendered}");
+        assert!(!rendered.contains("details omitted"), "{rendered}");
+    }
+
+    #[test]
+    fn tool_guidance_does_not_require_draining_unseen_blocks() {
+        use super::Tool;
+        let tool = super::OptMem;
+        assert!(tool.description().contains("Do not chase pending blocks"));
+        let schema = tool.parameters_schema();
+        let lines = schema["properties"]["lines"]["description"]
+            .as_str()
+            .unwrap();
+        assert!(lines.contains("Never invent summaries for unseen blocks"));
+        let pending = render_pending(PROMPT);
+        assert!(!pending.contains("Finish the queue"), "{pending}");
+        assert!(pending.contains("No follow-up is required"), "{pending}");
     }
 
     #[test]

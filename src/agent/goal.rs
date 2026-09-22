@@ -422,6 +422,12 @@ impl GoalVerification {
         self.confident_failures().is_empty()
     }
 
+    /// Only positive Act-band judgments for every part constitute verification.
+    /// Accepting an uncertain claim must not generate an evidence-backed lesson.
+    pub fn verified(&self) -> bool {
+        !self.parts.is_empty() && self.parts.iter().all(|(_, j)| j.usable() == Some(&true))
+    }
+
     pub fn summary(&self) -> String {
         let kept = self
             .parts
@@ -736,11 +742,29 @@ mod tests {
 
         let v = verify_completion_with(&fake_client(|_| 0.97), &cfg, &parts, &verify_state());
         assert!(v.passed());
+        assert!(v.verified());
         assert_eq!(v.summary(), "2/2 goal part(s) verified");
 
         // Coin flip: uncertain, never blocks.
         let v = verify_completion_with(&fake_client(|_| 0.55), &cfg, &parts, &verify_state());
         assert!(v.passed(), "uncertainty must not block completion");
+        assert!(
+            !v.verified(),
+            "acceptance is not verified evidence for a lesson"
+        );
+
+        let v = verify_completion_with(
+            &fake_client(|id| if id == "goal_part_0" { 0.97 } else { 0.55 }),
+            &cfg,
+            &parts,
+            &verify_state(),
+        );
+        assert!(v.passed());
+        assert!(
+            !v.verified(),
+            "partial verification must not file a verified win"
+        );
+        assert!(!GoalVerification { parts: Vec::new() }.verified());
     }
 
     #[test]

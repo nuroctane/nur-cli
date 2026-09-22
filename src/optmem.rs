@@ -338,7 +338,7 @@ pub fn parse_nap_prompt(out: &str) -> Option<NapPrompt> {
 
 /// How many single-block naps may be applied before the tool refuses to keep
 /// prompting. A finite housekeeping queue must never read as an instruction
-/// chain: past this, the caller is told to drain in one call or drop it.
+/// chain: at this threshold the next block is omitted, with no follow-up request.
 pub const NAP_CHAIN_MAX: usize = 2;
 
 /// Window after which the chain counter resets (a later, deliberate session of
@@ -562,10 +562,11 @@ Without it you do not know who you are, or what was decided and tried.
 ## While working
 Call optmem(action=note, text="...") whenever you learn something worth keeping
 (one line, max 280 chars). Do not register redundant memories.
-OptMem compressions are **housekeeping**: `nap` shows the next pending block, and the
-queue is finite but long. Never let it outrank the user's request. If you touch it at
-all, pass `lines=[...]` to drain several blocks in ONE call (one line each, in order)
-rather than applying them one at a time turn after turn.
+OptMem compressions are **optional housekeeping**, never a prerequisite for continuing.
+Do not chase pending blocks after a note or an applied nap; return to the user's request.
+For deliberate maintenance, `nap` shows the next block. Batch `lines=[...]` is only for
+blocks whose contents you already know; never invent summaries for unseen blocks.
+A remaining queue does not require another call.
 Never edit files under the OptMem memory directory by hand.
 
 ## Search

@@ -9,7 +9,7 @@ implement:
 | backend  | engine                                                              | device |
 |----------|---------------------------------------------------------------------|--------|
 | `verdict`| openJev-verdict-2.0 (ModernBERT-base + GLiClass, ~150M)             | CPU / any GPU |
-| `nimble` | Bespoke-Nimble-9B (Qwen3.5-9B LoRA, scores answer tokens)            | NVIDIA GPU / Apple Silicon |
+| `nimble` | Bespoke-Nimble-9B (Qwen3.5-9B LoRA, scores answer tokens)            | NVIDIA CUDA GPU with BF16 |
 | `laya`   | Laya Core ML (Core ML + Neural Engine)                              | Apple Silicon, macOS 15+ |
 | `mock`   | deterministic keyword scorer                                         | anywhere (tests, demos) |
 
@@ -325,8 +325,8 @@ class MockBackend(Backend):
 class VerdictBackend(Backend):
     """openJev-verdict-2.0: non-autoregressive Choice/Score/Noul at ~20-25 ms.
 
-    Uses the upstream package when it is importable (`openjev` / `rlcd` /
-    `core`, Apache-2.0) and calls its **batched** entry point once per request:
+    Uses the upstream package when it is importable (`core`, Apache-2.0)
+    and calls its **batched** entry point once per request:
 
         DecisionEngine(...).evaluate(context, queries) -> DecisionBatchResult
 
@@ -356,22 +356,27 @@ class VerdictBackend(Backend):
         self._engine = None
 
     def available(self) -> tuple[bool, str]:
-        try:
-            import core  # noqa: F401
-
-            return True, ""
-        except Exception:
-            pass
-        for module in ("openjev", "rlcd"):
+        if self.device not in ("cpu", "cuda", "mps"):
+            return False, f"unsupported torch device {self.device!r}; use cpu, cuda, or mps"
+        if self.device != "cpu":
             try:
-                __import__(module)
-                return True, ""
-            except Exception:
-                continue
-        return False, (
-            "pip install "
-            '"git+https://github.com/Heman10x-NGU/openJev-verdict-2.0"'
-        )
+                import torch
+            except Exception as exc:
+                return False, f"cannot verify torch device {self.device}: {exc}"
+            if self.device == "cuda" and not torch.cuda.is_available():
+                return False, "CUDA requested but torch reports no CUDA device"
+            if self.device == "mps" and not (
+                hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+            ):
+                return False, "MPS requested but torch reports no usable MPS device"
+        try:
+            from core import DecisionEngine, Choice, Level, Noul, Option, Score  # noqa: F401
+        except Exception as exc:
+            return False, (
+                'pip install "git+https://github.com/Heman10x-NGU/openJev-verdict-2.0" '
+                f"(core API import failed: {exc})"
+            )
+        return True, ""
 
     def _engine_or_raise(self):
         if self._engine is not None:
@@ -566,6 +571,12 @@ class NimbleBackend(Backend):
             # The card targets CUDA BF16; Apple Silicon runs the upstream MLX path
             # (see the repo README). Say what is missing instead of failing later.
             return False, "no CUDA device visible - Nimble expects an NVIDIA GPU (or use the MLX path upstream)"
+        try:
+            # Exclude software emulation: the reference helper loads BF16 weights.
+            if not torch.cuda.is_bf16_supported(including_emulation=False):
+                return False, "Nimble requires an NVIDIA CUDA GPU with native BF16 support"
+        except Exception as exc:
+            return False, f"cannot verify CUDA BF16 support: {exc}"
         return True, ""
 
     def _load(self):
@@ -642,16 +653,16 @@ class LayaBackend(Backend):
 
     Capacity follows the bundle, not the code. The default ANE bundle caps a
     request at 96 tokens (question + options + state) and raises a capacity
-    error beyond that; [FluidInference/laya-coreml](https://huggingface.co/FluidInference/laya-coreml)
-    ships fixed buckets of 128/256/512/1024 tokens x 32 options (fp16, plus
-    `e8` int8-embedding variants ~30% smaller at the same accuracy), and the
-    general 1024-token `laya-coreml` bundle takes longer states too. Pass
-    `--laya-max-tokens` when serving anything but the default bundle - the
-    bridge refuses over-capacity requests rather than silently truncating them.
+    error beyond that. The `aac6fef/laya-multilingual-coreml` bundle has a
+    1024-token context; pass `--laya-max-tokens 1024` for that bundle.
+    The bridge's preflight is approximate; general bundles may truncate upstream.
+    Third-party FluidInference bundles are not verified with this Python loader.
     """
 
     name = "laya"
     max_state_tokens = 96  # the default ANE bundle's 96-token total (question + options + state)
+    max_options = 32
+    max_levels = 32
     note = "Laya Core ML (Core ML + Neural Engine, macOS/Apple Silicon)"
 
     def __init__(self, model_id: str = "aac6fef/laya-multilingual-coreml-ane",
@@ -666,6 +677,15 @@ class LayaBackend(Backend):
         system = platform.system().lower()
         if system != "darwin" or machine not in ("arm64", "aarch64"):
             return False, f"Apple Silicon macOS required (this is {system}/{machine})"
+        version = platform.mac_ver()[0]
+        try:
+            major = int(version.split(".")[0])
+        except ValueError:
+            return False, f"cannot verify macOS 15+ requirement (reported {version!r})"
+        if major < 15:
+            return False, f"macOS 15+ required (this is {version})"
+        if not (3, 11) <= sys.version_info[:2] <= (3, 13):
+            return False, "Laya Core ML supports Python 3.11-3.13"
         try:
             import laya_coreml  # noqa: F401
         except Exception as exc:
@@ -689,10 +709,10 @@ class LayaBackend(Backend):
         elif kind == "choice":
             options = choice_options(question)
             spec["type"] = "choice"
-            spec["options"] = [label for label, _ in options]
+            spec["criteria"] = {label: rubric or label for label, rubric in options}
         else:
             spec["type"] = "score"
-            spec["options"] = score_levels(question)
+            spec["criteria"] = score_levels(question)
         result = agent.predict(state, {field: spec})
         answers = result.get("answers", {}) if isinstance(result, dict) else {}
         entry = answers.get(field, {}) or {}
@@ -937,11 +957,14 @@ class Handler(BaseHTTPRequestHandler):
         self._json(200, result)
 
 
-def describe_backends() -> dict[str, dict]:
+def describe_backends(args=None) -> dict[str, dict]:
     out: dict[str, dict] = {}
-    for name, cls in BACKENDS.items():
+    for name in BACKENDS:
         try:
-            instance = cls() if name != "nimble" else cls()
+            if args is None:
+                instance = BACKENDS[name]()
+            else:
+                instance = build_backend(name, args)
             ok, why = instance.available()
         except Exception as exc:  # pragma: no cover
             ok, why = False, f"{type(exc).__name__}: {exc}"
@@ -961,7 +984,7 @@ def _device_note(name: str) -> str:
     if name == "laya":
         return "Apple Silicon + macOS 15+ (Neural Engine)"
     if name == "nimble":
-        return "NVIDIA GPU with BF16 (or the upstream MLX path on Apple Silicon)"
+        return "NVIDIA CUDA GPU with native BF16 (MLX is not integrated)"
     if name == "verdict":
         return "CPU (any); GPU optional"
     return f"{system}/{machine}"
@@ -1224,11 +1247,12 @@ def _selftest_backends(check) -> None:
             if spec["type"] == "noul":
                 answer = {"type": "noul", "noul": 0.77}
             elif spec["type"] == "choice":
-                answer = {"type": "choice", "choice": spec["options"][0],
-                          "probabilities": {spec["options"][0]: 1.0}}
+                label = next(iter(spec["criteria"]))
+                answer = {"type": "choice", "choice": label,
+                          "probabilities": {label: 1.0}}
             else:
                 answer = {"type": "score", "score": 1.0,
-                          "probabilities": {str(i): 0.5 for i in range(len(spec["options"]))}}
+                          "probabilities": {str(i): 0.5 for i in range(len(spec["criteria"]))}}
             return {"answers": {field: answer}}
 
     laya_mod.load = lambda model_id, **kw: (laya_seen.__setitem__("model_id", model_id), LayaAgent())[1]
@@ -1236,11 +1260,11 @@ def _selftest_backends(check) -> None:
     laya._agent = LayaAgent()  # bypass the Apple-Silicon gate
     l_out = laya.decide_batch(nimble_items, "the customer reports a duplicate charge")
     check("laya: noul maps to type=noul and reads the probability", l_out[0]["true"] == 0.77, str(l_out[0]))
-    check("laya: choice maps to options and keeps the labels", l_out[1] == {"billing": 1.0}, str(l_out[1]))
+    check("laya: choice maps to criteria and keeps the labels", l_out[1] == {"billing": 1.0}, str(l_out[1]))
     check(
-        "laya: score maps its ordered levels onto option strings",
-        laya_seen["schema"]["decision"]["options"] == ["calm", "angry"],
-        str(laya_seen["schema"]["decision"]["options"]),
+        "laya: score maps its ordered levels onto criteria strings",
+        laya_seen["schema"]["decision"]["criteria"] == ["calm", "angry"],
+        str(laya_seen["schema"]["decision"]["criteria"]),
     )
     laya.decide("noul", nimble_items[0][1], "the customer reports a duplicate charge")
     check(
@@ -1550,7 +1574,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--laya-model", default="aac6fef/laya-multilingual-coreml-ane")
     parser.add_argument("--laya-max-tokens", type=int, default=None,
                         help="request-token capacity of the laya bundle (default 96, the ANE "
-                             "bundle's total; 128/256/512/1024 for the FluidInference buckets)")
+                             "bundle's total; use 1024 for aac6fef/laya-multilingual-coreml)")
     parser.add_argument("--selftest", action="store_true", help="check the mapping, no model needed")
     parser.add_argument("--probe", action="store_true", help="report usable backends and exit")
     parser.add_argument("--allow-unavailable", action="store_true",
@@ -1561,7 +1585,7 @@ def main(argv: list[str] | None = None) -> int:
         return selftest()
 
     if args.probe:
-        info = describe_backends()
+        info = describe_backends(args)
         print(json.dumps(info, indent=2))
         return 0 if any(v["available"] for v in info.values()) else 1
 

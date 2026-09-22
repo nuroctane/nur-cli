@@ -665,14 +665,16 @@ impl AgentRunner {
             self.config.provider.as_str(),
             "github-models" | "github-copilot"
         );
-        let prompt_ctx = PromptContext::build_with_opts(
+        let prompt_ctx = PromptContext::build_with_opts_async(
             &self.cwd,
             self.is_subagent,
             &self.config.model,
             &provider_label,
             self.config.poor_mode || limited_ctx,
             Some(user_text.as_str()),
-        );
+        )
+        .await
+        .map_err(|e| NurError::Other(format!("prompt context worker failed: {e}")))?;
         if prompt_ctx.has_skill_activation() {
             let label = prompt_ctx.skill_activation_label().unwrap_or("skill");
             let _ = tx.send(AgentEvent::Status(format!(
@@ -2033,6 +2035,13 @@ impl AgentRunner {
         }
         let failures = verdict.confident_failures();
         if verdict.passed() {
+            if !verdict.verified() {
+                let _ = tx.send(AgentEvent::Status(format!(
+                    "goal completed - claim accepted unverified ({}; uncertain or missing judgments)",
+                    verdict.summary()
+                )));
+                return;
+            }
             let _ = tx.send(AgentEvent::Status(format!(
                 "goal completed - Jev verified {}",
                 verdict.summary()

@@ -17,15 +17,16 @@ this repository next to it.
 
 | Backend | Engine | What it is | Device |
 |---------|--------|------------|--------|
-| `verdict` | [openJev-verdict-2.0](https://github.com/Heman10x-NGU/openJev-verdict-2.0) | ModernBERT-base + GLiClass head, ~150M, non-autoregressive, ~20-25 ms per decision, calibrated confidence | CPU (any), GPU optional |
+| `verdict` | [openJev-verdict-2.0 repository](https://github.com/Heman10x-NGU/openJev-verdict-2.0) | The repository's exposed `core.DecisionEngine` path: ModernBERT + GLiClass (not a separately published Verdict 2.0 architecture); model selected by `--verdict-model` | CPU; optional verified torch device |
 | `nimble` | [Bespoke-Nimble-9B](https://huggingface.co/bespokelabs/Bespoke-Nimble-9B) | Qwen3.5-9B LoRA that scores the allowed answer tokens directly (no reasoning, no free-form output) | NVIDIA GPU with BF16; upstream also ships an MLX path for Apple Silicon |
 | `laya` | [Laya Core ML](https://github.com/mizorewww/laya-coreml) | Core ML + Neural Engine, ~5 ms per short decision, 96-token cap on the ANE bundle | Apple Silicon, macOS 15+ |
 | `mock` | built in | Deterministic keyword scorer: exercises the entire path with no model, no downloads | anywhere |
 
-`nur jev status` reports which of these this machine can actually run, with the
-install step that is missing for each. That is the honest answer to "for
-supported devices": `laya` says Apple Silicon is required on a Windows box
-instead of failing later, and `nimble` says what to download.
+`nur jev status` reports import/device prerequisites, not a successful model
+load or inference check. No weights are loaded by the probe. `laya` checks Apple
+Silicon, macOS 15+ and Python 3.11-3.13; `nimble` checks for its helper and a
+CUDA device with native BF16 support. Model files, dependencies, memory capacity
+and inference still need verification on the target machine.
 
 ## Quick start
 
@@ -67,9 +68,13 @@ nur jev start --backend verdict
 ```
 
 The engine is constructed once and reused; weights come from Hugging Face on
-first use, then stay cached. Its own context budget (512 tokens) is enforced by
-the bridge as a *refusal* per question, so an oversized request yields "no
-judgment" rather than a truncated one.
+first use, then stay cached. This adapter calls the repository's `core.DecisionEngine`
+(GLiClass Verdict), not the separate `verdict2` architecture or confidence head.
+The default is the upstream generic `knowledgator/gliclass-modern-base-v2.0`;
+select `--verdict-model heman10x/rlcd-modernbert-151m` for its published Verdict
+checkpoint. Published Verdict 2.0 accuracy/calibration numbers do not describe
+this bridge's default model. The bridge uses a rough character-based 512-token
+budget check, not the model tokenizer; it is not proof against upstream truncation.
 
 `nimble` (NVIDIA GPU):
 
@@ -79,8 +84,12 @@ pip install -r nimble-model/requirements.txt
 nur jev start --backend nimble          # add --nimble-dir if not ./nimble-model
 ```
 
-Upstream limits, enforced by the bridge: at most 26 choices per question and no
-truncation past 2048 tokens.
+Upstream limits: at most 26 choices per question and no truncation past 2048
+tokens (the reference helper performs the exact token check). The bridge uses
+that model-card CUDA helper only; the separate MLX implementation in the Nimble
+GitHub repository is **not wired into this bridge**. The ~165 MiB download is a
+LoRA adapter, not a complete model: first load also requires the Qwen3.5-9B base
+checkpoint and enough GPU memory for the reference BF16 model.
 
 `laya` (Apple Silicon / macOS 15+):
 
@@ -91,9 +100,11 @@ nur jev start --backend laya
 #           --laya-max-tokens 1024                        (capacity of that bundle)
 ```
 
-The default ANE bundle allows 96 tokens including question, options and state;
-the bridge refuses anything longer instead of letting the engine raise a
-capacity error. Serving a bigger bundle? Pass its capacity explicitly -
+The default ANE bundle allows 96 tokens including question, options and state.
+The bridge applies an approximate preflight; the ANE runtime performs the exact
+capacity check and rejects oversized prompts. General-purpose bundles can
+truncate state upstream, so the bridge's character estimate is not a guarantee
+of lossless input. Serving a bigger bundle? Pass its capacity explicitly -
 [FluidInference/laya-coreml](https://huggingface.co/FluidInference/laya-coreml)
 ships fixed buckets of 128/256/512/1024 tokens x 32 options (fp16, plus `e8`
 int8-embedding variants ~30% smaller at the same accuracy), and the bridge
@@ -103,8 +114,9 @@ picks up whatever `--laya-max-tokens` says. Reported numbers on Apple silicon:
 [FluidUse](https://github.com/FluidInference/FluidUse) and its
 [Benchmarks.md](https://github.com/FluidInference/FluidUse/blob/main/Benchmarks.md).
 That project is Swift-only (a Swift package + CLI, no Python import or HTTP
-server), so nur cannot use it as a bridge backend directly; the buckets above
-are what to point `--laya-model` at through the Python path instead.
+server), so nur cannot use it as a bridge backend directly. Its published
+buckets are not verified compatible with `laya_coreml.load`; use a documented
+`aac6fef` bundle or a local export compatible with that Python loader.
 
 ## What the bridge guarantees
 
@@ -118,7 +130,16 @@ are what to point `--laya-model` at through the Python path instead.
 - **Refusals, not guesses.** An unsupported question type, an over-cap request, or
   a missing option set is reported per question. nur treats a missing answer as
   "no judgment" and keeps its own behavior for that question.
-- **Partial batches.** One bad question does not sink the others.
+- **Partial validation batches.** A malformed question does not sink valid ones.
+  An inference exception can still refuse the accepted batch.
+
+### Verification scope
+
+`python -m unittest discover -s scripts -p test_jev_local_bridge.py` exercises
+adapter schemas and device gates with small doubles; `python
+scripts/jev_local_bridge.py --selftest` exercises the model-free HTTP bridge.
+Neither establishes real model accuracy, GPU memory requirements, latency,
+calibration, nor Core ML fidelity. Those require target-device model runs.
 
 ## Eval sets: record, replay, promote
 

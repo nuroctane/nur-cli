@@ -8,7 +8,7 @@
 //! | backend   | engine                                             | device |
 //! |-----------|----------------------------------------------------|--------|
 //! | `verdict` | openJev-verdict-2.0 (ModernBERT-base + GLiClass)   | CPU / any GPU |
-//! | `nimble`  | Bespoke-Nimble-9B (Qwen3.5-9B LoRA)                | NVIDIA GPU / Apple Silicon (MLX) |
+//! | `nimble`  | Bespoke-Nimble-9B (Qwen3.5-9B LoRA)                | NVIDIA CUDA GPU with native BF16 |
 //! | `laya`    | Laya Core ML (Core ML + Neural Engine)             | Apple Silicon, macOS 15+ |
 //! | `mock`    | deterministic scorer                               | anywhere |
 //!

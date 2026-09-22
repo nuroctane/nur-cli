@@ -436,7 +436,7 @@ pub fn shared_client(cfg: &TypesafeConfig) -> Option<Arc<TypesafeClient>> {
         None => return None,
     };
     let fingerprint = format!(
-        "{}|{}|{}|{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}|{}|{}|{}",
         key_fingerprint(&key),
         base_url,
         cfg.model,
@@ -445,7 +445,10 @@ pub fn shared_client(cfg: &TypesafeConfig) -> Option<Arc<TypesafeClient>> {
         cfg.max_parallel,
         // Without this, editing `[typesafe] retries` mid-session kept using the
         // cached client's old value until restart.
-        cfg.retries
+        cfg.retries,
+        // Request planning is client state too: a changed ceiling must not keep
+        // using stale batches (or stale rejections) until process restart.
+        cfg.max_request_tokens
     );
     let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
     if let Ok(g) = cache.lock() {
@@ -883,6 +886,24 @@ mod tests {
             )
         });
         TypesafeClient::with_transport(&cfg(), Transport::Fake(t))
+    }
+
+    #[test]
+    fn shared_client_refreshes_when_request_ceiling_changes() {
+        let mut cfg = cfg();
+        cfg.model = "cache-request-ceiling-regression".into();
+        cfg.max_request_tokens = 1_234;
+        let first = shared_client(&cfg).expect("configured client");
+        let reused = shared_client(&cfg).expect("cached client");
+        assert!(Arc::ptr_eq(&first, &reused));
+        cfg.max_request_tokens = 0;
+        let unlimited = shared_client(&cfg).expect("updated client");
+        assert!(!Arc::ptr_eq(&first, &unlimited));
+        assert_eq!(unlimited.max_request_tokens, None);
+        cfg.max_request_tokens = 567;
+        let limited = shared_client(&cfg).expect("updated client");
+        assert_eq!(limited.max_request_tokens, Some(567));
+        assert!(!Arc::ptr_eq(&first, &limited));
     }
 
     #[test]

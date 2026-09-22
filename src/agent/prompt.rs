@@ -138,6 +138,46 @@ impl PromptContext {
         Self::build_with_opts(cwd, is_subagent, model, provider, false, None)
     }
 
+    /// Build the complete prompt on Tokio's blocking pool, for every provider.
+    /// Skill activation can perform blocking Jev HTTP calls, and the other
+    /// prompt sources can read disk or run subprocesses. None belongs on an
+    /// async worker. Keep all inputs owned until the build has finished.
+    ///
+    /// A failed worker is an explicit error, not an empty prompt or a retry on
+    /// the async worker: either would hide missing skills or block the runtime.
+    pub async fn build_with_opts_async(
+        cwd: &Path,
+        is_subagent: bool,
+        model: &str,
+        provider: &str,
+        poor_mode: bool,
+        user_text: Option<&str>,
+    ) -> Result<Self, tokio::task::JoinError> {
+        let cwd = cwd.to_path_buf();
+        let model = model.to_owned();
+        let provider = provider.to_owned();
+        let user_text = user_text.map(str::to_owned);
+        Self::build_off_thread(move || {
+            Self::build_with_opts(
+                &cwd,
+                is_subagent,
+                &model,
+                &provider,
+                poor_mode,
+                user_text.as_deref(),
+            )
+        })
+        .await
+    }
+
+    // Shared dispatch boundary so tests can exercise slow/panicking sources
+    // without depending on credentials, network, or installed skills.
+    async fn build_off_thread(
+        build: impl FnOnce() -> Self + Send + 'static,
+    ) -> Result<Self, tokio::task::JoinError> {
+        tokio::task::spawn_blocking(build).await
+    }
+
     /// `poor_mode`: skip PLUR inject and long memory excerpts to cut background
     /// token spend (toggle via `/poor`). Does **not** disable skill activation -
     /// NL and slash skills still fire.

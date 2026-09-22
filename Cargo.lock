@@ -1875,7 +1875,7 @@ dependencies = [
 
 [[package]]
 name = "nur-cli"
-version = "0.37.3"
+version = "0.37.4"
 dependencies = [
  "aes-gcm",
  "anydoc",

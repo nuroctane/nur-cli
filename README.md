@@ -172,6 +172,8 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 
 ---
 
+**v0.37.4**: Jev and memory hardening: OptMem queue output cannot solicit an indefinite compression chain, malformed probabilities never authorize actions, prompt-time judgments run off the async worker pool, and the local Verdict/Nimble/Laya adapters now probe and map their supported devices honestly. **[Local Jev docs](docs/jev-local.md)**
+
 **v0.37.3**: Cache-aware routing (`typesafe::route`): long sessions stay on the warm model, fresh children take the cheap one past a 15% margin, secret-touching tasks stay on ZDR/TEE/local. **[Docs](https://www.nuroctane.xyz/cli)**
 
 **v0.37.2**: Close-ended `question` modal (51 tools) · goal turns verify completion with Jev and stop on `BLOCKED:` · `nur jev eval` replays recorded judgments · request-size cap so a Jev batch is never sent oversized. OpenCode's free-tier 403 stays their client gate. **[Docs](https://www.nuroctane.xyz/cli)**

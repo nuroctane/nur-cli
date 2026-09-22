@@ -406,9 +406,10 @@ impl Answer {
                     .get("noul")
                     .and_then(Value::as_f64)
                     .ok_or_else(|| AnswerError("noul answer has no noul value".into()))?;
-                Ok(Self::Noul {
-                    noul: noul.clamp(0.0, 1.0),
-                })
+                if !(0.0..=1.0).contains(&noul) {
+                    return Err(AnswerError("noul value must be between 0 and 1".into()));
+                }
+                Ok(Self::Noul { noul })
             }
             "choice" => {
                 let choice = v
@@ -418,7 +419,7 @@ impl Answer {
                     .to_string();
                 Ok(Self::Choice {
                     choice,
-                    probabilities: read_probabilities(v.get("probabilities")),
+                    probabilities: read_probabilities(v.get("probabilities"))?,
                     confidence: v
                         .get("confidence")
                         .and_then(Value::as_f64)
@@ -439,7 +440,7 @@ impl Answer {
                 Ok(Self::Score {
                     score,
                     legend,
-                    probabilities: read_probabilities(v.get("probabilities")),
+                    probabilities: read_probabilities(v.get("probabilities"))?,
                     confidence: v
                         .get("confidence")
                         .and_then(Value::as_f64)
@@ -494,16 +495,13 @@ impl Answer {
     /// Noul answers carry none by design ("no separate confidence"), so nur
     /// derives an equivalent distance from the coin flip: `|p - 0.5| * 2`.
     /// That is nur's measure, not TypeSafe's - it exists so one threshold
-    /// policy can gate all three primitives. `None` for a missing value.
+    /// policy can gate all three primitives. `None` for a missing or out-of-range
+    /// value. Malformed probabilities must never be clamped into permission to act.
     pub fn confidence(&self) -> Option<f64> {
         match self {
-            Self::Noul { noul } => Some(((noul - 0.5).abs() * 2.0).clamp(0.0, 1.0)),
+            Self::Noul { noul } => (0.0..=1.0).contains(noul).then(|| (noul - 0.5).abs() * 2.0),
             Self::Choice { confidence, .. } | Self::Score { confidence, .. } => {
-                if confidence.is_nan() {
-                    None
-                } else {
-                    Some(confidence.clamp(0.0, 1.0))
-                }
+                (0.0..=1.0).contains(confidence).then_some(*confidence)
             }
         }
     }
@@ -569,16 +567,23 @@ impl Answer {
     }
 }
 
-fn read_probabilities(v: Option<&Value>) -> BTreeMap<String, f64> {
+fn read_probabilities(v: Option<&Value>) -> Result<BTreeMap<String, f64>, AnswerError> {
     let mut out = BTreeMap::new();
-    if let Some(obj) = v.and_then(Value::as_object) {
-        for (k, val) in obj {
-            if let Some(f) = val.as_f64() {
-                out.insert(k.clone(), f);
-            }
+    let Some(obj) = v.and_then(Value::as_object) else {
+        return Ok(out);
+    };
+    for (k, val) in obj {
+        let f = val
+            .as_f64()
+            .ok_or_else(|| AnswerError(format!("probability for {k:?} is not a number")))?;
+        if !(0.0..=1.0).contains(&f) {
+            return Err(AnswerError(format!(
+                "probability for {k:?} must be between 0 and 1"
+            )));
         }
+        out.insert(k.clone(), f);
     }
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -717,6 +722,59 @@ mod tests {
         for a in cases {
             let back = Answer::from_json(&a.to_json()).unwrap();
             assert_eq!(back, a);
+        }
+    }
+
+    #[test]
+    fn invalid_noul_probabilities_are_not_promoted_to_certainty() {
+        for p in [-1.0, -0.001, 1.001, 100.0] {
+            assert!(Answer::from_json(&serde_json::json!({"type":"noul","noul":p})).is_err());
+        }
+        for p in [0.0, 0.5, 1.0] {
+            let a = Answer::from_json(&serde_json::json!({"type":"noul","noul":p})).unwrap();
+            assert_eq!(a.noul(), Some(p));
+        }
+    }
+
+    #[test]
+    fn invalid_choice_and_score_probabilities_are_rejected() {
+        for value in [
+            serde_json::json!(-1),
+            serde_json::json!(1.001),
+            serde_json::json!("bad"),
+        ] {
+            for kind in ["choice", "score"] {
+                let mut answer = if kind == "choice" {
+                    serde_json::json!({"type":"choice", "choice":"a", "confidence":1.0})
+                } else {
+                    serde_json::json!({"type":"score", "score":0.0, "confidence":1.0})
+                };
+                answer["probabilities"] = serde_json::json!({"a": value.clone()});
+                assert!(Answer::from_json(&answer).is_err(), "{answer}");
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_confidence_never_authorizes_a_judgment() {
+        for confidence in [-1.0, 1.001, f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            let answers = [
+                Answer::Noul { noul: confidence },
+                Answer::Choice {
+                    choice: "read_file".into(),
+                    probabilities: BTreeMap::new(),
+                    confidence,
+                },
+                Answer::Score {
+                    score: 1.0,
+                    legend: BTreeMap::new(),
+                    probabilities: BTreeMap::new(),
+                    confidence,
+                },
+            ];
+            for answer in answers {
+                assert_eq!(answer.confidence(), None, "{answer:?}");
+            }
         }
     }
 
