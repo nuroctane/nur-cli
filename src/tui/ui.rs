@@ -188,6 +188,7 @@ fn draw_focused_modal(f: &mut Frame, app: &mut App, area: Rect) {
         Some(ModalFocus::Login) => draw_login(f, app, area),
         Some(ModalFocus::Model) => draw_model_picker(f, app, area),
         Some(ModalFocus::Plugin) => draw_plugin_picker(f, app, area),
+        Some(ModalFocus::Question) => draw_question(f, app, area),
         Some(ModalFocus::Approval) => draw_approval(f, app, area),
         Some(ModalFocus::Sessions) => draw_session_picker(f, app, area),
         Some(ModalFocus::Context) => draw_ctx_menu(f, app),
@@ -6534,7 +6535,7 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
     let tick = app.spinner_epoch.elapsed();
     // Border is calm-but-alive when ready for input (slow whole-border aurora
     // shimmer), and quietly dim while a turn runs or a modal owns focus.
-    let active_border = !app.busy && app.approval.is_none();
+    let active_border = !app.busy && app.approval.is_none() && app.question.is_none();
     let border_color = if active_border {
         theme::aurora_cell(tick, 0, 1, 3200)
     } else {
@@ -6583,7 +6584,10 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
         );
     }
 
-    let focused = app.approval.is_none() && app.picker.is_none() && app.login.is_none();
+    let focused = app.approval.is_none()
+        && app.question.is_none()
+        && app.picker.is_none()
+        && app.login.is_none();
     let sel = app.input.selection_range();
     // Same wash as the transcript's drag-select - one gesture, one colour.
     let sel_style = Style::default()
@@ -7094,6 +7098,133 @@ fn draw_palette(f: &mut Frame, app: &mut App, input_area: Rect) {
         inner,
     );
     draw_picker_scrollbar(f, &app.palette_hit, matches.len(), start, vis);
+}
+
+// ── question modal ─────────────────────────────────────────────────────────
+// OpenCode-style clarification: the model asks a close-ended question and the
+// user picks. Same frame language as the approval modal; the body is the
+// question plus numbered options instead of a diff preview.
+fn draw_question(f: &mut Frame, app: &App, area: Rect) {
+    let Some(q) = &app.question else { return };
+    let max_body = area.height.saturating_sub(6).clamp(8, 24) as usize;
+    let col_w = (area.width as usize).saturating_sub(8).clamp(20, 74);
+    let mut body: Vec<String> = wrap_text(&q.question, col_w);
+    body.push(String::new());
+    for (i, (label, desc)) in q.options.iter().enumerate().take(8) {
+        let cursor = if q.picker.cursor == i { "▸" } else { " " };
+        let tick = if q.multi_select {
+            if q.picker.checked.get(i).copied().unwrap_or(false) {
+                "[x]"
+            } else {
+                "[ ]"
+            }
+        } else {
+            ""
+        };
+        let head = format!("{cursor} {} {tick}", i + 1);
+        let head = head.trim_end().to_string();
+        let first_w = col_w.saturating_sub(head.len() + 1);
+        let mut first = truncate(label, first_w);
+        if first.len() < first_w {
+            first.push_str(&" ".repeat(first_w - first.len()));
+        }
+        body.push(format!("{head} {first}"));
+        if !desc.trim().is_empty() {
+            for dl in wrap_text(desc, col_w.saturating_sub(6)) {
+                body.push(format!("      {dl}"));
+            }
+        }
+    }
+    if q.options.len() > 8 {
+        body.push(format!(
+            "… +{} more (only the first 8 are pickable)",
+            q.options.len() - 8
+        ));
+    }
+    let shown: Vec<&str> = body.iter().map(|s| s.as_str()).take(max_body).collect();
+    let overflow = body.len() > max_body;
+    let content = shown.len() as u16 + if overflow { 1 } else { 0 };
+    let rect = fit_modal_rect(area, 78, content + 4, 48, 9);
+    f.render_widget(Clear, rect);
+    f.render_widget(
+        Block::default().style(Style::default().bg(theme::SURFACE_2())),
+        rect,
+    );
+    let hue = theme::META_BLUE();
+    let phase = modal_phase(app);
+    let footer = if q.multi_select {
+        "  1-8/space toggle · ↵ confirm · esc dismiss  "
+    } else {
+        "  1-8 pick · ↑↓ move · ↵ confirm · esc dismiss  "
+    };
+    draw_modal_frame(
+        f,
+        rect,
+        phase,
+        hue,
+        &format!(" ? {} ", q.header),
+        None,
+        footer,
+    );
+    let inner = modal_inner(rect);
+    let inner_w = (inner.width as usize).saturating_sub(4).max(20);
+    let mut lines: Vec<Line> = Vec::new();
+    for l in &shown {
+        lines.push(Line::from(Span::styled(
+            format!("  {}", truncate(l, inner_w)),
+            Style::default().fg(theme::FG()),
+        )));
+    }
+    if overflow {
+        lines.push(Line::from(Span::styled(
+            format!("  … +{} more lines", body.len() - max_body),
+            theme::style_faint(),
+        )));
+    }
+    // Highlight the cursor row.
+    let cursor_row = shown
+        .iter()
+        .position(|l| l.starts_with("▸"))
+        .unwrap_or(usize::MAX);
+    if cursor_row < lines.len() {
+        lines[cursor_row] = Line::from(Span::styled(
+            lines[cursor_row]
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>(),
+            Style::default()
+                .fg(theme::ON_ACCENT_FG())
+                .bg(theme::META_BLUE())
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    f.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
+        inner,
+    );
+}
+
+/// Greedy word wrap for modal bodies (no hyphenation; overlong words cut).
+fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(10);
+    let mut out = Vec::new();
+    for para in text.split('\n') {
+        let mut line = String::new();
+        for word in para.split_whitespace() {
+            if line.is_empty() {
+                line.push_str(word);
+            } else if line.chars().count() + 1 + word.chars().count() <= width {
+                line.push(' ');
+                line.push_str(word);
+            } else {
+                out.push(std::mem::take(&mut line));
+                line.push_str(word);
+            }
+        }
+        out.push(std::mem::take(&mut line));
+    }
+    out
 }
 
 // ── approval modal ─────────────────────────────────────────────────────────

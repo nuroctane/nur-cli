@@ -691,6 +691,83 @@ pub fn verify_result(
     .map(|label| Verification::from_label(&label).unwrap_or(Verification::Unclear))
 }
 
+/// Judge each part of a session goal against evidence of work done.
+///
+/// One Noul per part ("is this part achieved, given the evidence?"), batched
+/// into a single request - the verify-clause shape: the model supplies the
+/// claim (`goal` action=complete / DONE), Jev checks every part against the
+/// evidence, and the caller accepts the completion unless a part is
+/// *confidently* judged not done. Anything uncertain lets the completion
+/// stand: a coin flip is not evidence either way.
+///
+/// Works on whatever judgment layer is configured - hosted Jev or a local
+/// engine through the bridge - because it goes through the same batched
+/// `ask` path as every other harness question.
+pub fn judge_goal_parts(
+    cfg: &TypesafeConfig,
+    parts: &[String],
+    evidence: &Value,
+) -> Vec<Judgment<bool>> {
+    let Some(client) = ready(cfg) else {
+        return parts
+            .iter()
+            .map(|_| unavailable("goal_part", "no TypeSafe key"))
+            .collect();
+    };
+    judge_goal_parts_with(&client, cfg, parts, evidence)
+}
+
+/// [`judge_goal_parts`] with an explicit client (tests, live probes against a
+/// loopback bridge).
+pub fn judge_goal_parts_with(
+    client: &TypesafeClient,
+    cfg: &TypesafeConfig,
+    parts: &[String],
+    evidence: &Value,
+) -> Vec<Judgment<bool>> {
+    if parts.is_empty() {
+        return Vec::new();
+    }
+    let t = thresholds(cfg);
+    let questions: Vec<(String, Question)> = parts
+        .iter()
+        .enumerate()
+        .map(|(i, part)| {
+            (
+                format!("goal_part_{i}"),
+                Question::noul_with(
+                    format!(
+                        "Part {i} of the session goal: {part}\n\
+                         Given the evidence of work done (tool calls and their \
+                         results), is this part achieved? Answer yes only when \
+                         the evidence shows it done and verified - a bare claim \
+                         with no supporting evidence is a no."
+                    ),
+                    NoulCriteria {
+                        yes: Some("the evidence shows this part done and verified".into()),
+                        no: Some("not done, or no supporting evidence".into()),
+                    },
+                ),
+            )
+        })
+        .collect();
+    let Some(batch) = ask_batched(&client, evidence, questions) else {
+        return parts
+            .iter()
+            .map(|_| unavailable("goal_part", "typesafe request failed"))
+            .collect();
+    };
+    (0..parts.len())
+        .map(|i| {
+            let id = format!("goal_part_{i}");
+            match batch.get(&id) {
+                Some(a) => policy::noul_decision(a, &id, 0.5, &t),
+                None => unavailable(&id, "no answer for this part"),
+            }
+        })
+        .collect()
+}
+
 /// Pick the cheap model for this turn from the models actually configured.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelOption {
@@ -778,6 +855,11 @@ pub enum JudgeScope {
     /// before (risk) and after (verification, keep) together.
     #[cfg_attr(not(test), allow(dead_code))]
     Both,
+    /// Compaction only: the two questions fast-jev-compaction asks per call
+    /// (`keep_call`, `keep_result`) and nothing else. The verdict question is
+    /// not needed to decide what to prune, so paying for it would make every
+    /// compaction 50% more expensive for an answer nothing reads.
+    Compaction,
 }
 
 impl JudgeScope {
@@ -786,8 +868,26 @@ impl JudgeScope {
     }
 
     fn wants_post(&self) -> bool {
+        matches!(self, Self::Post | Self::Both | Self::Compaction)
+    }
+
+    /// Whether the "did it succeed" verdict is part of this pass. Compaction
+    /// does not read it.
+    fn wants_verdict(&self) -> bool {
         matches!(self, Self::Post | Self::Both)
     }
+}
+
+/// What one judgment cost, for the caller's stats and telemetry.
+///
+/// A question set larger than one request is split, so `requests` is the number
+/// of HTTP calls actually issued - not a guess.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct JudgeMeta {
+    pub requests: u64,
+    pub parallel: bool,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
 }
 
 /// One candidate call in a batch, with everything Jev needs - all of it built
@@ -879,17 +979,45 @@ impl ToolCallJudgment {
         self.repeated_failure.usable() == Some(&true)
     }
 
-    /// (drop the call, drop its result) for compaction. A dropped result with a
-    /// kept call is upstream's "truncate" branch, applied by the caller.
-    pub fn prune(&self) -> (bool, bool) {
-        let keep_call = self.keep_call.usable().copied().unwrap_or(true);
-        let keep_result = self.keep_result.usable().copied().unwrap_or(true);
-        (!keep_call, !keep_result)
+    /// (drop the call, drop its result) at a raw-probability bar, using the
+    /// shared [`prune_decision`] rule. `bar` is the pruning threshold, not a
+    /// policy band: see [`prune_decision`] for why those differ.
+    pub fn prune_at(&self, bar: f64) -> (bool, bool) {
+        prune_decision(self.keep_call_p, self.keep_result_p, bar)
     }
 
     /// A verdict worth a status line: an executed call that failed.
     pub fn failed(&self) -> bool {
         matches!(self.verification.usable(), Some(v) if v.is_problem())
+    }
+}
+
+/// Whether to drop a call and/or its result, given the two `noul` answers -
+/// the rule from
+/// [fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction).
+///
+/// `bar` is the *pruning* threshold on the raw probability, not a policy band.
+/// They answer different questions: `act_confidence` (0.85) decides whether an
+/// answer may change what the agent *does*, while this decides whether a tool
+/// result may leave the context. The risk here is bounded and recoverable - the
+/// result can be re-produced by re-running the tool, user and assistant text is
+/// never touched, and the pre-compaction transcript is written to disk - which
+/// is why the reference ships 0.5 while the Act band would be 0.925.
+/// `[typesafe.compaction] keep_threshold` is the knob; raise it to 0.925 to
+/// demand Act-band evidence before anything is pruned.
+///
+/// A missing answer keeps everything: an unavailable judgment is never treated
+/// as permission to delete.
+pub fn prune_decision(keep_call: Option<f64>, keep_result: Option<f64>, bar: f64) -> (bool, bool) {
+    let (Some(pc), Some(pr)) = (keep_call, keep_result) else {
+        return (false, false);
+    };
+    if pr >= bar {
+        (false, false)
+    } else if pc >= bar {
+        (false, true)
+    } else {
+        (true, true)
     }
 }
 
@@ -954,8 +1082,19 @@ pub fn judge_calls_with(
     items: &[ToolCallItem],
     scope: JudgeScope,
 ) -> Vec<ToolCallJudgment> {
+    judge_calls_with_meta(client, cfg, state, items, scope).0
+}
+
+/// [`judge_calls_with`] plus what the request cost.
+pub fn judge_calls_with_meta(
+    client: &TypesafeClient,
+    cfg: &TypesafeConfig,
+    state: &Value,
+    items: &[ToolCallItem],
+    scope: JudgeScope,
+) -> (Vec<ToolCallJudgment>, JudgeMeta) {
     if items.is_empty() {
-        return Vec::new();
+        return (Vec::new(), JudgeMeta::default());
     }
     let t = thresholds(cfg);
     let calls: Value = Value::Array(
@@ -1055,20 +1194,22 @@ pub fn judge_calls_with(
             ));
         }
         if scope.wants_post() && item.result_preview.is_some() {
-            questions.push((
-                format!("verification_{n}"),
-                Question::choice(
-                    format!(
-                        "Did tool call {0} ({1}) accomplish its intent?",
-                        n, item.tool
+            if scope.wants_verdict() {
+                questions.push((
+                    format!("verification_{n}"),
+                    Question::choice(
+                        format!(
+                            "Did tool call {0} ({1}) accomplish its intent?",
+                            n, item.tool
+                        ),
+                        verify_labels
+                            .iter()
+                            .cloned()
+                            .map(|l| ChoiceOption::described(l.clone(), verification_rubric(&l)))
+                            .collect(),
                     ),
-                    verify_labels
-                        .iter()
-                        .cloned()
-                        .map(|l| ChoiceOption::described(l.clone(), verification_rubric(&l)))
-                        .collect(),
-                ),
-            ));
+                ));
+            }
             questions.push((
                 format!("keep_call_{n}"),
                 Question::noul_with(
@@ -1113,11 +1254,20 @@ pub fn judge_calls_with(
     let batch = match batch {
         Some(b) => b,
         None => {
-            return items
-                .iter()
-                .map(|i| ToolCallJudgment::blank(i.index, "typesafe request failed"))
-                .collect()
+            return (
+                items
+                    .iter()
+                    .map(|i| ToolCallJudgment::blank(i.index, "typesafe request failed"))
+                    .collect(),
+                JudgeMeta::default(),
+            )
         }
+    };
+    let meta = JudgeMeta {
+        requests: batch.requests.max(1) as u64,
+        parallel: batch.parallel,
+        input_tokens: batch.input_tokens,
+        output_tokens: batch.output_tokens,
     };
 
     let noul_of = |id: &str| -> Judgment<bool> {
@@ -1127,55 +1277,65 @@ pub fn judge_calls_with(
         }
     };
 
-    items
-        .iter()
-        .enumerate()
-        .map(|(n, item)| {
-            let risk = match batch.get(&format!("risk_{n}")) {
-                Some(a) => Judgment::from_answer(
-                    format!("risk_{n}"),
-                    a.score()
-                        .map(|s| RiskBand::from_score(s, RISK_LEVELS.len())),
-                    a.confidence(),
-                    &t,
-                ),
-                None => Judgment::unavailable(format!("risk_{n}"), "no answer for this question"),
-            };
-            let verification = match batch.get(&format!("verification_{n}")) {
-                Some(a) => {
-                    let labels: Vec<String> = batch
-                        .get(&format!("verification_{n}"))
-                        .and_then(|_| Some(verify_labels.clone()))
-                        .unwrap_or_else(|| verify_labels.clone());
-                    let value = a
-                        .resolve_verbatim(&labels)
-                        .and_then(|l| Verification::from_label(l))
-                        .or_else(|| a.choice().and_then(Verification::from_label));
-                    Judgment::from_answer(format!("verification_{n}"), value, a.confidence(), &t)
+    (
+        items
+            .iter()
+            .enumerate()
+            .map(|(n, item)| {
+                let risk = match batch.get(&format!("risk_{n}")) {
+                    Some(a) => Judgment::from_answer(
+                        format!("risk_{n}"),
+                        a.score()
+                            .map(|s| RiskBand::from_score(s, RISK_LEVELS.len())),
+                        a.confidence(),
+                        &t,
+                    ),
+                    None => {
+                        Judgment::unavailable(format!("risk_{n}"), "no answer for this question")
+                    }
+                };
+                let verification = match batch.get(&format!("verification_{n}")) {
+                    Some(a) => {
+                        let labels: Vec<String> = batch
+                            .get(&format!("verification_{n}"))
+                            .and_then(|_| Some(verify_labels.clone()))
+                            .unwrap_or_else(|| verify_labels.clone());
+                        let value = a
+                            .resolve_verbatim(&labels)
+                            .and_then(|l| Verification::from_label(l))
+                            .or_else(|| a.choice().and_then(Verification::from_label));
+                        Judgment::from_answer(
+                            format!("verification_{n}"),
+                            value,
+                            a.confidence(),
+                            &t,
+                        )
+                    }
+                    None => Judgment::unavailable(
+                        format!("verification_{n}"),
+                        "no answer for this question",
+                    ),
+                };
+                let keep_call = noul_of(&format!("keep_call_{n}"));
+                let keep_result = noul_of(&format!("keep_result_{n}"));
+                ToolCallJudgment {
+                    index: item.index,
+                    needs_human: noul_of(&format!("needs_human_{n}")),
+                    redundant: noul_of(&format!("redundant_{n}")),
+                    repeated_failure: noul_of(&format!("repeat_fail_{n}")),
+                    risk,
+                    verification,
+                    keep_call_p: batch.get(&format!("keep_call_{n}")).and_then(Answer::noul),
+                    keep_result_p: batch
+                        .get(&format!("keep_result_{n}"))
+                        .and_then(Answer::noul),
+                    keep_call,
+                    keep_result,
                 }
-                None => Judgment::unavailable(
-                    format!("verification_{n}"),
-                    "no answer for this question",
-                ),
-            };
-            let keep_call = noul_of(&format!("keep_call_{n}"));
-            let keep_result = noul_of(&format!("keep_result_{n}"));
-            ToolCallJudgment {
-                index: item.index,
-                needs_human: noul_of(&format!("needs_human_{n}")),
-                redundant: noul_of(&format!("redundant_{n}")),
-                repeated_failure: noul_of(&format!("repeat_fail_{n}")),
-                risk,
-                verification,
-                keep_call_p: batch.get(&format!("keep_call_{n}")).and_then(Answer::noul),
-                keep_result_p: batch
-                    .get(&format!("keep_result_{n}"))
-                    .and_then(Answer::noul),
-                keep_call,
-                keep_result,
-            }
-        })
-        .collect()
+            })
+            .collect(),
+        meta,
+    )
 }
 
 fn verification_rubric(label: &str) -> String {

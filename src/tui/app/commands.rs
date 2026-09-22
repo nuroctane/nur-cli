@@ -590,9 +590,8 @@ impl App {
             );
             return;
         }
-        let proposition = |text: &str| {
-            serde_json::json!({"action": "noul", "instructions": text}).to_string()
-        };
+        let proposition =
+            |text: &str| serde_json::json!({"action": "noul", "instructions": text}).to_string();
         let json = match action.as_str() {
             "ask" | "noul" => proposition(rest),
             "pick" => serde_json::json!({"action": "pick", "state": rest}).to_string(),
@@ -1365,7 +1364,9 @@ impl App {
         let n = crate::agent::receipt::export_spans(&self.session_id, None);
         self.push_note(
             Tone::Session,
-            format!("{text}\n{integrity}\n[otlp spans exported · {n} spans → receipts/*.spans.jsonl]"),
+            format!(
+                "{text}\n{integrity}\n[otlp spans exported · {n} spans → receipts/*.spans.jsonl]"
+            ),
         );
     }
 
@@ -2583,7 +2584,12 @@ impl App {
         if self.gen_session_scope().is_some() {
             match arg {
                 "" => self.cmd_goal_persistent("get"),
-                "clear" | "none" | "off" => self.cmd_goal_persistent("clear"),
+                "clear" | "none" | "off" => {
+                    // Both goal stores, or the standing context keeps haunting
+                    // every turn after the persistent goal is gone.
+                    self.session_goal = None;
+                    self.cmd_goal_persistent("clear")
+                }
                 "pause" => self.cmd_goal_persistent("pause"),
                 "resume" => self.cmd_goal_persistent("resume"),
                 "complete" => self.cmd_goal_persistent("complete"),
@@ -2622,6 +2628,80 @@ impl App {
         }
     }
 
+    /// End-of-turn guard for goal-driven turns: while the tracked goal is still
+    /// Active, a clean turn end usually means the model stalled, not that the
+    /// goal is done - so re-drive it (bounded) instead of handing back a
+    /// summary of unfinished work. Returns true when a continuation started.
+    pub(super) fn maybe_goal_continue(&mut self, auto_left: u8) -> bool {
+        use agent::goal::GoalTurnEnd;
+        let max = agent::goal::MAX_GOAL_AUTO_CONTINUES;
+        // Only a still-Active tracked goal re-drives: completed / paused /
+        // cleared / exhausted all hand back to the user.
+        let goal_text = agent::goal::load(&self.session_id)
+            .filter(|g| g.status == agent::goal::GoalStatus::Active)
+            .map(|g| g.text);
+        let Some(goal_text) = goal_text else {
+            return false;
+        };
+        // A declared blocker is a legal ending: surface it, do not re-drive.
+        let final_text = self
+            .cells
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                Cell::Assistant { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        if let Some(blocker) = agent::goal::find_blocker(&final_text) {
+            self.push_note(
+                Tone::Plan,
+                format!(
+                    "goal BLOCKED - needs you:\n{blocker}\n  resolve it, then send \
+                     any message to resume (or /goal clear)"
+                ),
+            );
+            return false;
+        }
+        match agent::goal::goal_turn_end(
+            auto_left,
+            true,
+            !self.queue.is_empty(),
+            Option::<&str>::None,
+        ) {
+            GoalTurnEnd::Stop => {
+                if self.queue.is_empty() && auto_left == 0 {
+                    self.push_note(
+                        Tone::Plan,
+                        format!(
+                            "goal still active - auto-continue budget used ({max}) · \
+                             send any message to keep going, /goal pause to suspend, \
+                             /goal clear to drop"
+                        ),
+                    );
+                }
+                false
+            }
+            GoalTurnEnd::Continue => {
+                let used = max - auto_left + 1;
+                let did_work = !self.tool_cells.is_empty();
+                self.push_note(
+                    Tone::Plan,
+                    format!(
+                        "goal still active - continuing automatically ({used}/{max}) · \
+                         Esc stops · /goal pause|clear ends it"
+                    ),
+                );
+                let prompt = goal_continuation_prompt(&goal_text, did_work, used, max);
+                let display = format!("goal · continue ({used}/{max})");
+                self.start_turn_labeled(&display, &prompt);
+                self.turn_kind = TurnMode::Goal {
+                    auto_left: auto_left - 1,
+                };
+                true
+            }
+        }
+    }
     /// A newly submitted goal starts working NOW: idle → a turn whose model
     /// prompt drives toward the goal until it is demonstrably achieved; busy →
     /// the goal turn is queued to run right after the current one (the queued
@@ -2645,6 +2725,11 @@ impl App {
         } else {
             let display = format!("/goal {goal}");
             self.start_turn_labeled(&display, &model_prompt);
+            // Mark the turn goal-driven so the harness auto-continues it while
+            // the tracked goal stays active (Esc / /goal clear|pause stops it).
+            self.turn_kind = TurnMode::Goal {
+                auto_left: agent::goal::MAX_GOAL_AUTO_CONTINUES,
+            };
         }
     }
 
@@ -3631,6 +3716,14 @@ fn goal_set_objective(arg: &str) -> Option<&str> {
 
 /// The model prompt for a goal-driven turn: the goal verbatim plus the
 /// autonomy contract (keep going across rounds, verify before finishing).
+///
+/// The stop protocol is explicit because models otherwise end the turn with a
+/// summary while work remains. Exactly three endings are legal:
+/// 1. call tool `goal` action=complete with an evidence note, after verifying
+///    EVERY part of the goal against fresh tool output;
+/// 2. a line `BLOCKED: <exactly what you need from the user>` when only the
+///    user can unblock (credentials, approvals, decisions, missing access);
+/// 3. otherwise keep using tools - the harness will keep re-driving the turn.
 fn goal_turn_prompt(goal: &str) -> String {
     format!(
         "{goal}\n\n\
@@ -3638,8 +3731,37 @@ fn goal_turn_prompt(goal: &str) -> String {
          autonomously: plan, execute, and keep going across tool rounds \
          until it is demonstrably achieved or you hit a blocker only the \
          user can resolve. Do not stop between steps to ask permission. \
-         Before finishing, re-read the goal and verify every part is done; \
-         close with a completion check and list anything that remains."
+         This turn may ONLY end in one of three ways: (1) every part of the \
+         goal is done and verified against fresh tool output - then call tool \
+         `goal` action=complete with a note listing the evidence for each \
+         part, and close with a per-part completion check; (2) only the user \
+         can unblock you - then end with a line `BLOCKED: <exactly what you \
+         need: credentials, approvals, decisions, access>` and do nothing \
+         else; (3) otherwise keep working with your tools - ending with a \
+         plain summary while parts remain is not an ending, and the harness \
+         will send you back in. Never claim completion without tool-verified \
+         evidence. Before finishing, re-read the goal and verify every part \
+         is done; close with a completion check and list anything that remains."
+    )
+}
+
+/// Follow-up prompt for a harness-driven auto-continuation: the previous turn
+/// ended without completing the goal and without declaring a blocker.
+fn goal_continuation_prompt(goal: &str, did_work: bool, used: u8, max: u8) -> String {
+    let stall = if did_work {
+        "Your last round made progress but the goal is not complete."
+    } else {
+        "Your last round ended without taking any tool action and without \
+         declaring a blocker - stopping silently is not an ending."
+    };
+    format!(
+        "Continuing the session goal (auto-continuation {used}/{max}; the goal \
+         is still active and no blocker was declared).\n\nGoal:\n{goal}\n\n\
+         {stall} Take the next concrete steps with your tools now. If every \
+         part is done and verified, call tool `goal` action=complete with the \
+         evidence and close with a per-part completion check. If only the \
+         user can unblock you, end with `BLOCKED: <exactly what you need>`. \
+         Do not end with a summary while work remains."
     )
 }
 
@@ -3672,5 +3794,21 @@ mod goal_tests {
         assert!(p.contains("demonstrably achieved"));
         assert!(p.contains("completion check"));
         assert!(p.contains("Do not stop between steps"));
+        // The stop protocol: three legal endings, blocker line, evidence rule.
+        assert!(p.contains("BLOCKED:"));
+        assert!(p.contains("action=complete"));
+        assert!(p.contains("Never claim completion without tool-verified"));
+    }
+
+    #[test]
+    fn continuation_prompt_names_progress_state_and_budget() {
+        let stalled = goal_continuation_prompt("ship it", false, 1, 5);
+        assert!(stalled.contains("ship it"));
+        assert!(stalled.contains("without taking any tool action"));
+        assert!(stalled.contains("auto-continuation 1/5"));
+        assert!(stalled.contains("BLOCKED:"));
+        let working = goal_continuation_prompt("ship it", true, 4, 5);
+        assert!(working.contains("made progress"));
+        assert!(working.contains("auto-continuation 4/5"));
     }
 }

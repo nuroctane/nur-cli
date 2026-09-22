@@ -535,6 +535,21 @@ approve actions or change config, and slash commands inside it are inert.
 
 <!-- src/tools/message_tool.rs:67 actions: send|recv|peers|list|inbound|status -->
 
+### `question`
+
+Close-ended user questions (OpenCode-desktop-style clarification): `question`
+(required), `header` (short modal title), `options` (`label` + optional
+`description`, 2-8 items, required), `multiSelect` (default false). The TUI
+shows a modal - `1-8` pick, arrows + Enter, Space toggles multi-select, Esc
+dismisses; headless `nur run` answers over stdin the same way. Fenced on
+purpose: goal-driven turns, subagents, and headless integrations never
+interrupt the user (they get a redirect to `BLOCKED:` instead), and a Jev gate
+resolves the question without a modal when context, tools, or a safe default
+suffice. A dismissed question returns guidance, never an invented answer - do
+not re-ask immediately.
+
+<!-- src/tools/question_tool.rs:30 no action enum; executed by the loop, not dispatch -->
+
 ### `bg`
 
 Push long-running work off the agent turn so the CLI stays interactive. `run`

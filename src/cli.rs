@@ -267,6 +267,10 @@ pub enum JevCmd {
         /// Core ML bundle to load (`laya`)
         #[arg(long)]
         laya_model: Option<String>,
+        /// Request-token capacity of the laya bundle (`laya`; default 96, the ANE
+        /// bundle's total - 128/256/512/1024 for the FluidInference buckets)
+        #[arg(long)]
+        laya_max_tokens: Option<u64>,
         /// Device for the `verdict` backend
         #[arg(long)]
         device: Option<String>,
@@ -285,6 +289,19 @@ pub enum JevCmd {
     Selftest,
     /// List the backends this machine can run
     Probe,
+    /// Replay a recorded judgment set through the current layer and report
+    /// agreement (tune wording/thresholds on dev, confirm on a reserved set)
+    Eval {
+        /// Recorded set under ~/.nur/jev/evals (record with NUR_JEV_RECORD=<set>)
+        #[arg(long)]
+        set: String,
+        /// Held-out set replayed the same way after the dev set
+        #[arg(long)]
+        reserved: Option<String>,
+        /// Replay at most this many records (quick smoke run)
+        #[arg(long)]
+        limit: Option<usize>,
+    },
 }
 
 #[derive(Subcommand, Debug)]

@@ -37,7 +37,7 @@ pub use permissions::{PermissionRules, RuleDecision, SharedPermissions};
 #[allow(unused_imports)]
 pub use r#loop::{
     compact_session, resolve_prewalk_into, run_collect, spawn_turn, AgentEvent, AgentRunner,
-    ApprovalDecision,
+    ApprovalDecision, QuestionAnswer,
 };
 pub use session::Session;
 pub use todos::{shared_empty, SharedTodos};

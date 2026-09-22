@@ -15,6 +15,7 @@ mod fractal;
 mod gateway;
 mod gepa;
 mod headroom;
+mod jev_eval;
 mod jev_local;
 mod local;
 mod oauth;
@@ -497,9 +498,7 @@ async fn real_main() -> Result<()> {
         // An invalid mode used to be downgraded to Manual silently: the user asks
         // for auto-approval, gets prompts, and has no idea why.
         PermissionMode::parse(m).ok_or_else(|| {
-            error::NurError::Config(format!(
-                "invalid --mode '{m}' - use manual, plan, or auto"
-            ))
+            error::NurError::Config(format!("invalid --mode '{m}' - use manual, plan, or auto"))
         })?
     } else {
         PermissionMode::Manual
@@ -788,6 +787,7 @@ fn run_jev(action: cli::JevCmd) -> Result<()> {
             verdict_model,
             nimble_dir,
             laya_model,
+            laya_max_tokens,
             device,
         } => {
             // Forwarded verbatim: the bridge's own CLI is the source of truth for
@@ -803,6 +803,10 @@ fn run_jev(action: cli::JevCmd) -> Result<()> {
                     extra.push(flag.to_string());
                     extra.push(v);
                 }
+            }
+            if let Some(n) = laya_max_tokens {
+                extra.push("--laya-max-tokens".to_string());
+                extra.push(n.to_string());
             }
             let report = jev_local::start(&backend, port, &extra)?;
             theme::print_ok(&report);
@@ -840,6 +844,34 @@ fn run_jev(action: cli::JevCmd) -> Result<()> {
                 "{}",
                 serde_json::to_string_pretty(&info).unwrap_or_else(|_| "{}".into())
             );
+        }
+        cli::JevCmd::Eval {
+            set,
+            reserved,
+            limit,
+        } => {
+            use crate::typesafe::harness;
+            let Some(_) = harness::ready(&cfg.typesafe) else {
+                return Err(error::NurError::Other(
+                    "no judgment layer active - set a Jev key (nur auth login --provider \
+                     typesafe) or point at a local engine (nur jev start + nur jev use)"
+                        .into(),
+                ));
+            };
+            let records = jev_eval::load_set(&set).map_err(error::NurError::Other)?;
+            let client = harness::ready(&cfg.typesafe).expect("checked above");
+            let report = jev_eval::run_eval_with(&client, &records, limit.unwrap_or(usize::MAX));
+            println!("{}", jev_eval::format_report(&set, &report));
+            if let Some(held) = reserved {
+                let held_records = jev_eval::load_set(&held).map_err(error::NurError::Other)?;
+                let held_report =
+                    jev_eval::run_eval_with(&client, &held_records, limit.unwrap_or(usize::MAX));
+                println!("{}", jev_eval::format_report(&held, &held_report));
+                println!(
+                    "tune wording and thresholds on `{set}`; `{held}` is reserved - promote \
+                     only when the reserved run agrees too"
+                );
+            }
         }
     }
     Ok(())
@@ -1198,6 +1230,51 @@ async fn run_headless(
                     theme::print_info(&format!("todos\n{text}"));
                 }
             }
+            // Same channel as the TUI modal, over stdin: numbered options.
+            AgentEvent::QuestionRequest {
+                question,
+                header,
+                options,
+                multi_select,
+                respond,
+            } => {
+                let answer = tokio::task::spawn_blocking(move || {
+                    eprintln!();
+                    eprintln!("  {header}: {question}");
+                    for (i, (label, desc)) in options.iter().enumerate() {
+                        if desc.trim().is_empty() {
+                            eprintln!("    {}: {label}", i + 1);
+                        } else {
+                            eprintln!("    {}: {label} - {desc}", i + 1);
+                        }
+                    }
+                    eprint!(
+                        "  pick [1-{}]{} or empty to skip: ",
+                        options.len(),
+                        if multi_select {
+                            " (comma-separated)"
+                        } else {
+                            ""
+                        }
+                    );
+                    let mut line = String::new();
+                    let _ = std::io::stdin().read_line(&mut line);
+                    let picks: Vec<String> = line
+                        .split([',', ' '])
+                        .filter_map(|t| t.trim().parse::<usize>().ok())
+                        .filter(|n| *n >= 1 && *n <= options.len())
+                        .map(|n| options[n - 1].0.clone())
+                        .collect();
+                    if picks.is_empty() || (!multi_select && picks.len() != 1) {
+                        agent::QuestionAnswer::dismissed()
+                    } else {
+                        agent::QuestionAnswer::picked(picks)
+                    }
+                })
+                .await
+                .unwrap_or_else(|_| agent::QuestionAnswer::dismissed());
+                let _ = respond.send(answer);
+            }
             AgentEvent::LoginRequired {
                 provider_id,
                 provider_name,
@@ -1277,6 +1354,7 @@ async fn run_continuous(
     permission_mode.set(PermissionMode::Auto);
     ade::set_title_prompt(goal);
     let quality_gate = cfg.quality_gate.clone();
+    let ts_cfg = cfg.typesafe.clone();
 
     let runner = Arc::new(AgentRunner {
         client,
@@ -1315,6 +1393,10 @@ async fn run_continuous(
     let mut usage = Some(usage);
     let mut iter = 0u32;
     let mut errors_in_a_row = 0u32;
+    // Steps with no tool activity and no DONE: a model that stalls out
+    // without declaring `BLOCKED:` would otherwise burn `max_iters` doing
+    // nothing. Three idle steps in a row stops the run with the stall shown.
+    let mut idle_in_a_row = 0u32;
 
     loop {
         if cancel.is_cancelled() {
@@ -1343,6 +1425,7 @@ async fn run_continuous(
             bool,
         );
         let mut done: Option<ContinuousTurnResult> = None;
+        let mut tools_this_step = 0u32;
         while let Some(ev) = rx.recv().await {
             if midline && !matches!(ev, AgentEvent::TextDelta(_)) {
                 println!();
@@ -1360,6 +1443,7 @@ async fn run_continuous(
                     }
                 }
                 AgentEvent::ToolStart { name, args, .. } => {
+                    tools_this_step += 1;
                     if verbose {
                         theme::print_tool(&name, &truncate_line(&args, 120));
                     }
@@ -1384,6 +1468,11 @@ async fn run_continuous(
                     done = Some((s, u, result, interrupted));
                     break;
                 }
+                // Headless by design: no one to answer. The model gets the
+                // redirect text and proceeds, defers, or declares BLOCKED:.
+                AgentEvent::QuestionRequest { respond, .. } => {
+                    let _ = respond.send(agent::QuestionAnswer::unavailable());
+                }
                 _ => {}
             }
         }
@@ -1403,10 +1492,109 @@ async fn run_continuous(
                 }
                 match agent::continuous::accept_done(&text, &cwd, &quality_gate) {
                     Ok(true) => {
+                        // DONE is a claim, not proof: when the model tracked
+                        // the goal with tool `goal` and it is still Active,
+                        // the claim is premature - send it back in.
+                        let premature = session
+                            .as_ref()
+                            .and_then(|s| crate::agent::goal::load(&s.id))
+                            .is_some_and(|g| g.status == crate::agent::goal::GoalStatus::Active);
+                        if premature {
+                            theme::print_info(
+                                "continuous · DONE claimed but the tracked goal is still \
+                                 Active - continuing (call goal action=complete with evidence, \
+                                 or declare BLOCKED:)",
+                            );
+                            if let Some(s) = session.as_mut() {
+                                s.push_user(
+                                    "[harness] You replied DONE but the tracked goal is still \
+                                     Active: no goal action=complete was recorded. Either keep \
+                                     working, or call goal action=complete with the evidence \
+                                     for every part, or reply BLOCKED: <what you need>.",
+                                );
+                            }
+                            continue;
+                        }
+                        // A tracked goal already completed in-loop was verified
+                        // there; otherwise verify the DONE claim part by part
+                        // against the transcript before it counts.
+                        let tracked_done = session
+                            .as_ref()
+                            .and_then(|s| crate::agent::goal::load(&s.id))
+                            .is_some_and(|g| g.status == crate::agent::goal::GoalStatus::Completed);
+                        if !tracked_done {
+                            let parts = crate::agent::goal::split_parts(goal);
+                            let evidence = session
+                                .as_ref()
+                                .map(|s| {
+                                    crate::agent::goal::completion_evidence(&s.input_items, 12_000)
+                                })
+                                .unwrap_or_default();
+                            let state = serde_json::json!({ "goal": goal, "evidence": evidence });
+                            let verify_cfg = ts_cfg.clone();
+                            let verdict = tokio::task::spawn_blocking(move || {
+                                crate::agent::goal::verify_completion(&verify_cfg, &parts, &state)
+                            })
+                            .await
+                            .unwrap_or_else(|_| {
+                                crate::agent::goal::GoalVerification { parts: Vec::new() }
+                            });
+                            if !verdict.unavailable() && !verdict.parts.is_empty() {
+                                if verdict.passed() {
+                                    theme::print_ok(&format!(
+                                        "continuous · goal complete (DONE, Jev verified {})",
+                                        verdict.summary()
+                                    ));
+                                    break;
+                                }
+                                let detail = verdict
+                                    .confident_failures()
+                                    .iter()
+                                    .map(|(part, conf)| {
+                                        format!("- {part} (confidently not done, conf {conf:.2})")
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n");
+                                theme::print_info(
+                                    "continuous · DONE rejected by Jev verification - continuing",
+                                );
+                                if let Some(s) = session.as_mut() {
+                                    s.push_user(&format!(
+                                        "[harness] DONE rejected: Jev judged these goal parts \
+                                         NOT done against the transcript evidence:\n{detail}\n\
+                                         Keep working the failed parts. Reply DONE only when \
+                                         every part is done and verified, or BLOCKED: <what \
+                                         you need>."
+                                    ));
+                                }
+                                continue;
+                            }
+                        }
                         theme::print_ok("continuous · goal complete (DONE)");
                         break;
                     }
-                    Ok(false) => {}
+                    Ok(false) => {
+                        // A declared blocker is a legal ending: report it and
+                        // stop instead of burning steps to max_iters.
+                        if let Some(blocker) = crate::agent::goal::find_blocker(&text) {
+                            theme::print_info("continuous · goal BLOCKED - needs you; stopping");
+                            theme::print_info(&format!("blocked: {blocker}"));
+                            break;
+                        }
+                        if tools_this_step == 0 {
+                            idle_in_a_row += 1;
+                            if idle_in_a_row >= 3 {
+                                theme::print_info(
+                                    "continuous · 3 steps with no tool activity and no \
+                                     DONE/BLOCKED - stopping (model stalled; re-run with \
+                                     a smaller-scoped goal)",
+                                );
+                                break;
+                            }
+                        } else {
+                            idle_in_a_row = 0;
+                        }
+                    }
                     Err(gate_err) => {
                         // Prime pattern: failed quality gate returns output to the agent.
                         theme::print_info(&format!(

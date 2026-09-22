@@ -17,20 +17,30 @@ use std::process::Command;
 /// Prompt for iteration `iter` (1-based) of a continuous run toward `goal`.
 /// The first step states the goal and the completion protocol; later steps
 /// lean on the retained session context and just ask for continued progress.
+///
+/// The stop protocol mirrors `/goal` turns: the run ends on a `DONE` line
+/// with a verified goal, or on a `BLOCKED: <what is needed>` line when only
+/// the user can unblock. A plain summary while work remains is not an ending.
 pub fn continuous_prompt(goal: &str, iter: u32) -> String {
     if iter <= 1 {
         format!(
             "You are running in continuous, self-directed mode. Goal:\n\n{goal}\n\n\
              Make concrete progress toward this goal now, using your tools. Prefer tool \
-             `goal` action=set for durable tracking. When — and only when — the goal is \
-             fully complete and verified (and any quality gate would pass), reply with a \
-             line containing exactly DONE and call goal action=complete. Otherwise, do \
-             the next useful step and stop; you will be prompted to continue."
+             `goal` action=set for durable tracking. This run ends in exactly two \
+             ways: (1) every part of the goal is done and verified against fresh \
+             tool output (and any quality gate would pass) - then reply with a \
+             line containing exactly DONE and call goal action=complete with the \
+             evidence; (2) only the user can unblock you - then reply with a line \
+             `BLOCKED: <exactly what you need>` and stop. Otherwise, do \
+             the next useful step and stop; you will be prompted to continue. Never \
+             claim DONE without tool-verified evidence."
         )
     } else {
-        "Continue toward the goal. If it is now fully complete and verified, reply with \
-         a line containing exactly DONE (and goal.complete). Otherwise make the next \
-         concrete step of progress and stop."
+        "Continue toward the goal. If every part is now done and verified, reply with \
+         a line containing exactly DONE (and goal.complete with the evidence). If only \
+         the user can unblock you, reply with a line `BLOCKED: <exactly what you need>`. \
+         Otherwise make the next concrete step of progress and stop; never end with a \
+         summary while work remains."
             .to_string()
     }
 }
@@ -98,6 +108,11 @@ mod tests {
         assert!(
             p.contains("DONE"),
             "must explain the DONE completion signal"
+        );
+        assert!(p.contains("BLOCKED:"), "must explain the blocker signal");
+        assert!(
+            p.contains("tool-verified evidence"),
+            "must demand evidence for DONE"
         );
     }
 

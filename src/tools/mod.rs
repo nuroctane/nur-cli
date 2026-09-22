@@ -23,6 +23,7 @@ mod message_tool;
 pub mod optmem_tool;
 pub mod penecho_tool;
 mod proposal_tool;
+pub mod question_tool;
 pub mod t3code_tool;
 pub use browser::is_read_only_action as browser_is_read_only;
 pub mod capabilities;
@@ -155,6 +156,7 @@ pub(crate) const ROOT_CORE_TOOL_NAMES: &[&str] = &[
     "mem",
     "skill",
     "memory",
+    "question",
     "todo_write",
     "submit_plan",
     "agent",
@@ -255,6 +257,7 @@ impl ToolHost {
             Box::new(ipython_tool::ReplTool),
             Box::new(admission_tool::AdmissionTool),
             Box::new(message_tool::MessageTool),
+            Box::new(question_tool::QuestionTool),
             Box::new(mem_tool::MemTool),
             Box::new(graphify::Graphify),
             Box::new(graphjin::GraphJin),
@@ -449,6 +452,7 @@ impl ToolHost {
             "repl" => ipython_tool::ReplTool.execute(&args, ctx),
             "admission" => admission_tool::AdmissionTool.execute(&args, ctx),
             "message" => message_tool::MessageTool.execute(&args, ctx),
+            "question" => question_tool::QuestionTool.execute(&args, ctx),
             "mem" => mem_tool::MemTool.execute(&args, ctx),
             "graphify" => graphify::Graphify.execute(&args, ctx),
             "graphjin" => graphjin::GraphJin.execute(&args, ctx),
@@ -695,6 +699,7 @@ mod tests {
             "repl",
             "admission",
             "message",
+            "question",
             "mem",
             "graphify",
             "graphjin",

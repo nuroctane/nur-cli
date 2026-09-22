@@ -182,6 +182,66 @@ impl Question {
         }
     }
 
+    /// Rebuild a question from its wire shape ([`Question::to_json`] output).
+    /// Eval replay needs this: records store exactly what was sent, and a
+    /// replay must ask the same questions again. Round-trip is pinned by test
+    /// (choice option order is canonicalized - the wire map sorts keys - and
+    /// order never matters since candidates resolve by label).
+    pub fn from_wire_json(v: &Value) -> Result<Self, String> {
+        let kind = v.get("type").and_then(Value::as_str).unwrap_or("");
+        let instructions = v.get("instructions").cloned().unwrap_or(Value::Null);
+        let q = match kind {
+            "noul" => {
+                let criteria = v
+                    .get("criteria")
+                    .and_then(Value::as_object)
+                    .map(|c| NoulCriteria {
+                        yes: c.get("true").and_then(Value::as_str).map(str::to_string),
+                        no: c.get("false").and_then(Value::as_str).map(str::to_string),
+                    });
+                Self::Noul {
+                    instructions,
+                    criteria,
+                }
+            }
+            "choice" => {
+                let obj = v
+                    .get("criteria")
+                    .and_then(Value::as_object)
+                    .ok_or_else(|| "choice record has no criteria map".to_string())?;
+                let options = obj
+                    .iter()
+                    .map(|(label, rubric)| ChoiceOption {
+                        label: label.clone(),
+                        rubric: rubric.as_str().map(str::to_string),
+                    })
+                    .collect::<Vec<_>>();
+                Self::Choice {
+                    instructions,
+                    options,
+                }
+            }
+            "score" => {
+                let levels = v
+                    .get("criteria")
+                    .and_then(Value::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|l| l.as_str().map(str::to_string))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                Self::Score {
+                    instructions,
+                    levels,
+                }
+            }
+            other => return Err(format!("record has unknown question type {other:?}")),
+        };
+        q.validate().map_err(|e| e.to_string())?;
+        Ok(q)
+    }
+
     /// Reject malformed questions before spending a request.
     pub fn validate(&self) -> Result<(), QuestionError> {
         let instructions_empty = match self {
@@ -398,6 +458,37 @@ impl Answer {
         }
     }
 
+    /// Serialize one entry of the response `answers` map, mirroring
+    /// [`Answer::from_json`]. Used for eval records (record now, replay
+    /// later); `from_json(to_json(a)) == a` is pinned by test.
+    pub fn to_json(&self) -> Value {
+        match self {
+            Self::Noul { noul } => serde_json::json!({"type": "noul", "noul": noul}),
+            Self::Choice {
+                choice,
+                probabilities,
+                confidence,
+            } => serde_json::json!({
+                "type": "choice",
+                "choice": choice,
+                "probabilities": probabilities,
+                "confidence": confidence,
+            }),
+            Self::Score {
+                score,
+                legend,
+                probabilities,
+                confidence,
+            } => serde_json::json!({
+                "type": "score",
+                "score": score,
+                "legend": legend,
+                "probabilities": probabilities,
+                "confidence": confidence,
+            }),
+        }
+    }
+
     /// Upstream `confidence` for Choice/Score.
     ///
     /// Noul answers carry none by design ("no separate confidence"), so nur
@@ -566,6 +657,67 @@ mod tests {
             Question::noul("   ").validate(),
             Err(QuestionError::EmptyInstructions)
         );
+    }
+
+    #[test]
+    fn wire_round_trip_is_lossless() {
+        let cases = vec![
+            Question::noul_with(
+                "Is this still needed?",
+                NoulCriteria {
+                    yes: Some("still relevant".into()),
+                    no: None,
+                },
+            ),
+            Question::choice(
+                "Which tool next?",
+                vec![
+                    ChoiceOption::described("read_file", "inspect a file"),
+                    ChoiceOption::new("grep"),
+                ],
+            ),
+            Question::score("How risky?", vec!["safe".into(), "risky".into()]),
+        ];
+        for q in cases {
+            let mut back = Question::from_wire_json(&q.to_json()).unwrap();
+            // The wire criteria map sorts option keys canonically; order
+            // never matters (candidates resolve by label), so compare sorted.
+            if let Question::Choice { options, .. } = &mut back {
+                options.sort_by(|a, b| a.label.cmp(&b.label));
+            }
+            let mut want = q.clone();
+            if let Question::Choice { options, .. } = &mut want {
+                options.sort_by(|a, b| a.label.cmp(&b.label));
+            }
+            assert_eq!(back, want);
+        }
+        assert!(Question::from_wire_json(&serde_json::json!({"type":"nope"})).is_err());
+    }
+
+    #[test]
+    fn answer_round_trip_is_lossless() {
+        let cases = vec![
+            Answer::Noul { noul: 0.92 },
+            Answer::Choice {
+                choice: "read_file".into(),
+                probabilities: [("read_file".into(), 0.9), ("grep".into(), 0.1)]
+                    .into_iter()
+                    .collect(),
+                confidence: 0.81,
+            },
+            Answer::Score {
+                score: 1.6,
+                legend: [("0".into(), "safe".into()), ("1".into(), "risky".into())]
+                    .into_iter()
+                    .collect(),
+                probabilities: [("0".into(), 0.1), ("1".into(), 0.9)].into_iter().collect(),
+                confidence: 0.7,
+            },
+        ];
+        for a in cases {
+            let back = Answer::from_json(&a.to_json()).unwrap();
+            assert_eq!(back, a);
+        }
     }
 
     #[test]

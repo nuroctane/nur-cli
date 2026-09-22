@@ -84,12 +84,34 @@ whole conversation with each tool result replaced by a short note
 - should the **call** stay, knowing it was made with these arguments?
 - should the **result** stay verbatim, or can the tool just be re-run?
 
+The two answers are compared against `keep_threshold` (default `0.5`, the
+reference's), with no hidden floor above it:
+
 | `p(keep_result)` | `p(keep_call)` | action |
 |---|---|---|
-| `>= 0.75` | any | keep both, byte for byte |
-| `<= 0.25` | `>= 0.75` | keep the call, truncate the result to a head + one-line note |
-| `<= 0.25` | `<= 0.25` | drop call and result together |
-| in between | any | **keep** - a coin flip is not evidence that a result is safe to lose |
+| `>= keep_threshold` | any | keep both, byte for byte |
+| below | `>= keep_threshold` | keep the call, truncate the result to a head + one-line note |
+| below | below | drop call and result together |
+| missing | any | **keep** - an unjudged call is never deleted |
+
+`keep_threshold` is a *pruning* bar, not a policy band, and the two answer
+different questions. `act_confidence` (0.85) decides whether an answer may change
+what the agent **does**; this decides whether a tool result may leave the
+context. The risk is bounded and recoverable - the tool can be re-run, user and
+assistant text is never touched, and the pre-compaction transcript is written to
+`.precompact.bak` - which is why the reference ships 0.5. Raise it to `0.925`
+(the Act band) if you want pruning to demand the same confidence as acting; the
+`prune` action and the automatic path read the same key, so they always agree.
+
+Budgeting follows the reference too: the state is fitted to `max_state_tokens`
+in stages (tool inputs 1000 → 200 → 60 characters, long texts abridged head+tail,
+old texts collapsed, then dropped), and questions are split so that **state plus
+one batch of questions** stays under `max_request_tokens` (30000, under System
+One's ~32k request limit). The state is re-sent with every batch, so a large
+state means smaller batches - or a fallback, never a request the endpoint would
+reject. A call is only judged when its result is present and neither side of the
+pair is pinned, and the result note says `error` or `ok`, because an error is the
+result most worth keeping.
 
 Text written by the user or the model is never touched, no result is ever left
 without its call, and any failure (no key, transport error, unfittable state)
@@ -97,13 +119,55 @@ falls back to normal compaction instead of deleting anything.
 
 If the reduction is at least `min_reduction` (0.25 default), the summarizing
 model call is skipped: no frontier tokens, no lossy summary. Otherwise the pruned
-items feed the normal summarizer, so it is cheaper either way.
+items feed the normal summarizer, so it is cheaper either way. A result barely
+longer than the head it would keep is left alone rather than churned, and the
+report names what happened - calls kept, truncated, dropped and pinned, the
+fitting stage, the state size, how many requests it took and how long in ms.
 
 This is a port of [fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction);
 the operation/target selection shape follows
 [jev-ultrafast](https://github.com/browser-use/jev-ultrafast) (Jev picks from an
 indexed, code-built candidate list; the model is only called when text must
 actually be generated).
+
+### Where else this can pay off (measured, not wired)
+
+The survey that produced the seams above ranked what is still unwired by
+(tokens or turns saved) per unit of risk:
+
+1. **The tool-result spill** (`src/tools/spill.rs`, 12 000 chars, head-only
+   preview). It clamps *every* tool body, and the head is the wrong window for
+   stack traces, log tails and search results. A `score` over cheap code-built
+   slices (head, tail, match windows) choosing the 12 000 that matter is the
+   largest single lever; the full body is on disk and re-readable, so a wrong
+   call costs one turn.
+2. **The per-turn prompt blocks** (`src/agent/prompt.rs`): memory, PLUR, OptMem,
+   project instructions. Judged in aggregate today only for skills.
+3. **Compaction's own thinning** (`src/agent/loop.rs`): the summarizer path still
+   head-thins old bodies to 800 chars, losing tails the way (1) does.
+4. **Shell retention** (`src/tools/shell.rs`): 80k/40k heads that the spill then
+   cuts to 12k anyway.
+5. **"First N" caps** in `web_search` (8 results, unranked), `grep`, `glob`.
+6. **Per-field verify on extraction** (`harness::verify_result` judges the whole
+   output today): check each extracted field against its cited evidence and
+   bounce only the unsupported fields, AgentRun-style, instead of one
+   pass/fail over the result. (The same shape already ships for goals:
+   `goal complete` / DONE claims are judged part by part and only a confident
+   not-done reopens the goal.)
+7. **Learning notes from traces** (shipped for goals): a verified `goal
+   complete` files a code-built lesson draft (goal head, verified count,
+   tools used, turns/tokens) into the session's refined notes via
+   `/refine` machinery, unless already noted. Generalize to any verified
+   outcome when the win proves out.
+8. **Node-level replay evals** (shipped for judgments): `NUR_JEV_RECORD=<set>`
+   records every batched ask to `~/.nur/jev/evals/<set>.jsonl`;
+   `nur jev eval --set <dev> [--reserved <heldout>]` replays through the
+   current layer and reports agreement, `expected`-label accuracy, and cost.
+   Next: promote recorded traces into labeled workflow evals.
+
+Each is a candidate, not a promise: they change what the model sees, so they
+want the same treatment as compaction - a documented bar, a fallback when the
+judgment is unavailable, and a test that pins the recovery path.
 
 ## Use it
 
@@ -181,6 +245,7 @@ model = "jev-latest"                  # TypeSafe's flagship System One model
 timeout_ms = 20000
 max_questions_per_request = 24        # batched; split + parallel beyond this
 max_parallel = 4
+max_request_tokens = 30000            # one request: state + its questions
 act_confidence = 0.85
 escalate_confidence = 0.50
 

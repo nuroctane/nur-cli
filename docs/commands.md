@@ -82,10 +82,13 @@ nur jev start --backend nimble --nimble-dir D:/models/nimble-model
 nur jev use --port 8788               # point [typesafe] at the loopback bridge
 nur jev stop                          # stop the recorded bridge (verifies the port is free)
 nur jev use --hosted                  # back to api.typesafe.ai
+nur jev eval --set <name>             # replay a recorded judgment set (NUR_JEV_RECORD)
+nur jev eval --set <dev> --reserved <heldout> --limit 20
 ```
 
 Engine flags are forwarded to the bridge verbatim: `--verdict-model <id|path>`,
-`--nimble-dir <dir>`, `--laya-model <bundle>`, `--device cpu|cuda|mps`.
+`--nimble-dir <dir>`, `--laya-model <bundle>`, `--laya-max-tokens <n>`,
+`--device cpu|cuda|mps`.
 
 ### `nur auth`
 
@@ -480,7 +483,7 @@ Type these inside the `nur` TUI. Aliases are shown in the same row.
 | `/draw` | Open / build **tldraw offline** boards (`/draw <file.tldraw>`, `/draw install`, `/draw <idea>`). New static boards save to the **Desktop**. Opening a board auto-enables document scripts (canvas API `script-workspace` → applied) for interactive agent-shape files. |
 | `/steer` | Inject a message into the running turn without cancelling it |
 | `/scan` | Map the codebase → shareable foglamp scan |
-| `/goal` | Set a standing session goal |
+| `/goal` | Set a standing session goal (starts a goal-driven turn; stalls auto-continue while the goal is active) |
 | `/btw` | One-off note attached to the next message |
 | `/bro` | Chill mode: plain words, straight answers (toggle) |
 | `/adhd` | Sticky ADHD-friendly output for this session (toggle) |

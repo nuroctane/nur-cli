@@ -2,8 +2,8 @@
 //! approval modals, and a persistent usage statusline (bottom-left).
 
 use crate::agent::{
-    self, AgentEvent, AgentRunner, ApprovalDecision, PermissionMode, Session, SharedMode,
-    SharedPermissions, SharedTodos,
+    self, AgentEvent, AgentRunner, ApprovalDecision, PermissionMode, QuestionAnswer, Session,
+    SharedMode, SharedPermissions, SharedTodos,
 };
 use crate::api::ApiClient;
 use crate::config::Config;
@@ -898,6 +898,12 @@ impl Cell {
 #[derive(PartialEq)]
 enum TurnMode {
     Chat,
+    /// A `/goal` work order (or one of its harness auto-continuations).
+    /// `auto_left` bounds how many more times the harness may re-drive the
+    /// turn while the tracked goal stays active.
+    Goal {
+        auto_left: u8,
+    },
     Compact,
 }
 
@@ -1057,6 +1063,19 @@ pub struct ApprovalState {
     pub name: String,
     pub args: String,
     pub respond: Option<oneshot::Sender<ApprovalDecision>>,
+}
+
+/// OpenCode-style clarification modal: the model asks a close-ended question
+/// and the user picks 1-8 (arrows+Enter, Space toggles multi-select, Esc
+/// dismisses). The picker itself lives in `tools::question_tool` (tested);
+/// this is the live modal state around it.
+pub struct QuestionState {
+    pub question: String,
+    pub header: String,
+    pub options: Vec<(String, String)>,
+    pub multi_select: bool,
+    pub picker: crate::tools::question_tool::QuestionPicker,
+    pub respond: Option<oneshot::Sender<QuestionAnswer>>,
 }
 
 /// Secure in-TUI sign-in (`/login`). API keys are masked; browser flows never
@@ -1942,6 +1961,7 @@ pub(super) enum ModalFocus {
     Login,
     Model,
     Plugin,
+    Question,
     Approval,
     Sessions,
     Context,
@@ -2240,6 +2260,7 @@ pub struct App {
     pub u_last: TokenUsage,
 
     pub approval: Option<ApprovalState>,
+    pub question: Option<QuestionState>,
     pub picker: Option<SessionPicker>,
     /// When the picker modal opened (Instant). Keys that arrive in the first ~300ms
     /// of an async-loaded picker (sessions/takeover scan disk + subprocess readers
@@ -2702,6 +2723,7 @@ pub async fn run_tui(
         u_session,
         u_last: TokenUsage::default(),
         approval: None,
+        question: None,
         picker: None,
         palette_idx: 0,
         palette_scroll: 0,
@@ -2825,6 +2847,7 @@ pub async fn run_tui(
         let frame_ms = if app.busy
             || app.picker.is_some()
             || app.approval.is_some()
+            || app.question.is_some()
             || app.login.is_some()
             || app.model_picker.is_some()
             || app.theme_picker.is_some()
@@ -2858,6 +2881,7 @@ pub async fn run_tui(
             || app.theme_picker.is_some()
             || app.plugin_picker.is_some()
             || app.approval.is_some()
+            || app.question.is_some()
             || app.picker.is_some()
             || app.ctx_menu.is_some();
         if event::poll(wait)? {
@@ -3186,6 +3210,7 @@ impl App {
             (self.login.is_some(), ModalFocus::Login),
             (self.model_picker.is_some(), ModalFocus::Model),
             (self.plugin_picker.is_some(), ModalFocus::Plugin),
+            (self.question.is_some(), ModalFocus::Question),
             (self.approval.is_some(), ModalFocus::Approval),
             (self.picker.is_some(), ModalFocus::Sessions),
             (self.ctx_menu.is_some(), ModalFocus::Context),
@@ -3924,6 +3949,7 @@ impl App {
                 ModalFocus::Login => self.on_login_key(key),
                 ModalFocus::Model => self.on_model_picker_key(key),
                 ModalFocus::Plugin => self.on_plugin_picker_key(key),
+                ModalFocus::Question => self.on_question_key(key),
                 ModalFocus::Approval => self.on_approval_key(key),
                 ModalFocus::Sessions => self.on_picker_key(key.code),
                 ModalFocus::Context => self.on_ctx_menu_key(key.code),
@@ -4382,7 +4408,10 @@ impl App {
     /// Works while a turn is streaming. Approval/login modals no longer kill
     /// an in-progress scrollbar drag or wheel scroll.
     fn on_mouse(&mut self, m: event::MouseEvent) {
-        if let Some(focus) = self.modal_focus().filter(|f| *f != ModalFocus::Approval) {
+        if let Some(focus) = self
+            .modal_focus()
+            .filter(|f| *f != ModalFocus::Approval && *f != ModalFocus::Question)
+        {
             self.scrollbar_drag = false;
             self.selecting = false;
             self.select_anchor = None;
@@ -4395,7 +4424,7 @@ impl App {
                 ModalFocus::Sessions => self.on_picker_mouse(m),
                 ModalFocus::Context => self.on_ctx_menu_mouse(m),
                 ModalFocus::Update => self.on_update_modal_mouse(m),
-                ModalFocus::Approval => unreachable!(),
+                ModalFocus::Approval | ModalFocus::Question => unreachable!(),
             }
             return;
         }
@@ -4442,8 +4471,9 @@ impl App {
 
         // Approval is a modal *overlay* but must not brick scroll/select forever.
         // Allow wheel + continue an in-progress scrollbar drag; new clicks on
-        // the transcript are ignored until the modal is dismissed.
-        let approval_open = self.approval.is_some();
+        // the transcript are ignored until the modal is dismissed. The
+        // question modal behaves identically while open.
+        let approval_open = self.approval.is_some() || self.question.is_some();
 
         match m.kind {
             MouseEventKind::ScrollUp => {
@@ -8070,6 +8100,65 @@ impl App {
         }
     }
 
+    /// Answer the open clarification modal. Digits/arrows move, Space toggles
+    /// (multi-select), Enter confirms, Esc dismisses. Modified keys are
+    /// ignored for the same reason as the approval modal: this modal swallows
+    /// every key while open, so Ctrl/Alt combos must not leak through as
+    /// answers.
+    fn on_question_key(&mut self, key: KeyEvent) {
+        use crate::tools::question_tool::{PickerEvent, PickerKey};
+        if key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            return;
+        }
+        let mapped = match key.code {
+            KeyCode::Up | KeyCode::Char('k') => Some(PickerKey::Up),
+            KeyCode::Down | KeyCode::Char('j') => Some(PickerKey::Down),
+            KeyCode::Char(c) if c.is_ascii_digit() => {
+                // 1-based shortcuts; 0 and 9+ have no option (max 8) and the
+                // picker bounds-check ignores them.
+                let i = (c as u8 - b'0') as usize;
+                if i == 0 {
+                    None
+                } else {
+                    Some(PickerKey::Number(i - 1))
+                }
+            }
+            KeyCode::Char(' ') => Some(PickerKey::Toggle),
+            KeyCode::Enter => Some(PickerKey::Confirm),
+            KeyCode::Esc => Some(PickerKey::Dismiss),
+            _ => None,
+        };
+        let Some(pk) = mapped else { return };
+        // Borrow dance: press first, then take+send only on a finished event.
+        let event = match self.question.as_mut() {
+            Some(q) => {
+                let labels: Vec<String> = q.options.iter().map(|(l, _)| l.clone()).collect();
+                q.picker.press(pk, &labels)
+            }
+            None => return,
+        };
+        match event {
+            PickerEvent::Picked(selected) => {
+                if let Some(mut q) = self.question.take() {
+                    if let Some(respond) = q.respond.take() {
+                        let _ = respond.send(QuestionAnswer::picked(selected));
+                    }
+                }
+            }
+            PickerEvent::Dismissed => {
+                if let Some(mut q) = self.question.take() {
+                    if let Some(respond) = q.respond.take() {
+                        let _ = respond.send(QuestionAnswer::dismissed());
+                    }
+                }
+            }
+            PickerEvent::Moved | PickerEvent::Toggled | PickerEvent::Ignored => {}
+        }
+    }
+
     // ── submission ─────────────────────────────────────────────────────
     fn submit_text(&mut self, text: &str) {
         let text = text.trim().to_string();
@@ -9416,6 +9505,24 @@ impl App {
                     respond: Some(respond),
                 });
             }
+            AgentEvent::QuestionRequest {
+                question,
+                header,
+                options,
+                multi_select,
+                respond,
+            } => {
+                let picker =
+                    crate::tools::question_tool::QuestionPicker::new(options.len(), multi_select);
+                self.question = Some(QuestionState {
+                    question,
+                    header,
+                    options,
+                    multi_select,
+                    picker,
+                    respond: Some(respond),
+                });
+            }
             AgentEvent::Usage { session, last } => {
                 self.u_session = session;
                 self.u_last = last;
@@ -9518,6 +9625,7 @@ impl App {
                 self.set_sidegraph_live(false);
                 // Turn done - restore mouse modes in case title OSC / host dropped them.
                 enable_mouse();
+                let mut goal_continued = false;
                 match (&self.turn_kind, result, interrupted) {
                     (_, _, true) => {
                         // Already pushed "cancelled" on Esc; keep a quiet final line.
@@ -9545,12 +9653,38 @@ impl App {
                         }
                         self.push_turn_done(turn_dur, was_interrupt);
                     }
+                    (TurnMode::Goal { .. }, Err(e), _) => {
+                        // A failed goal turn hands back like a chat error: the
+                        // user sees the failure and decides. No auto-continue
+                        // on errors - re-driving a broken route burns budget.
+                        let was_interrupt = e.contains("interrupted");
+                        if !was_interrupt {
+                            let e =
+                                annotate_model_unavailable(&e, &self.cfg.provider, &self.cfg.model);
+                            self.push_error(e);
+                        }
+                        self.push_turn_done(turn_dur, was_interrupt);
+                    }
                     (TurnMode::Chat, Ok(_), _) => {
                         // Always post turn + thought timers at end of finished output.
                         self.push_turn_done(turn_dur, false);
                     }
+                    (TurnMode::Goal { auto_left }, Ok(_), _) => {
+                        // Copy the budget out first: the match holds `&self`,
+                        // and everything below needs `&mut self`.
+                        let left = *auto_left;
+                        // Always post turn + thought timers at end of finished output.
+                        self.push_turn_done(turn_dur, false);
+                        // Goal-driven turn finished cleanly: while the tracked
+                        // goal is still active the model stalling out is the
+                        // common case, so re-drive it (bounded) instead of
+                        // handing back a summary of unfinished work.
+                        goal_continued = self.maybe_goal_continue(left);
+                    }
                 }
-                self.turn_kind = TurnMode::Chat;
+                if !goal_continued {
+                    self.turn_kind = TurnMode::Chat;
+                }
                 // Drop queued prompts after cancel so we don't surprise-run them -
                 // unless send-now asked to preserve the queue for interjection.
                 if interrupted && !self.preserve_queue_on_interrupt {

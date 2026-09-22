@@ -5,8 +5,13 @@ use thiserror::Error;
 /// Some endpoints answer with a status and nothing else — Poolside's platform
 /// returns a bodyless 403 for a bad key — which rendered as
 /// `API error (403): ` and told the user nothing. Anything that *did* parse a
-/// message is passed straight through unchanged.
+/// message is passed straight through unchanged, except a recognized
+/// provider-side gate (OpenCode free tier), which gets actionable guidance
+/// appended.
 fn api_message(status: u16, message: &str) -> String {
+    if let Some(guided) = opencode_free_tier_guidance(message) {
+        return guided;
+    }
     if !message.trim().is_empty() {
         return message.to_string();
     }
@@ -22,6 +27,26 @@ fn api_message(status: u16, message: &str) -> String {
     }
 }
 
+/// OpenCode Zen answers third-party clients on free-tier models with a 403
+/// along the lines of "OpenCode's free tier can only be used from within
+/// OpenCode". The gate is enforced server-side by OpenCode (it is not a nur
+/// bug, a bad key, or a missing header), so the raw message alone leaves the
+/// user with no next step. Append the two ways out: a non-free model on the
+/// same provider, or another provider entirely.
+fn opencode_free_tier_guidance(message: &str) -> Option<String> {
+    let lower = message.to_ascii_lowercase();
+    if !(lower.contains("free tier") && lower.contains("within opencode")) {
+        return None;
+    }
+    Some(format!(
+        "{message}\n\
+         OpenCode gates its free tier to its own first-party client, so free \
+         models (*-free, big-pickle, ox-alpha-free) fail from nur with this 403 \
+         no matter the key or headers. To keep working: switch to a non-free \
+         model on the same provider (/model), or switch provider (/model or \
+         `nur auth login --provider <other>`)."
+    ))
+}
 /// How to name the status in the message. `0` is not an HTTP code — it is our
 /// marker for "the response was 200 and the failure arrived inside the stream",
 /// and printing it as `API error (0)` read like a bug in nur rather than a
@@ -136,5 +161,35 @@ mod tests {
         assert!(api_message(503, "").contains("provider failed on its side"));
         assert!(api_message(404, "").contains("model id"));
         assert!(api_message(418, "").contains("no details returned"));
+    }
+
+    #[test]
+    fn an_opencode_free_tier_403_names_the_gate_and_the_way_out() {
+        let e = NurError::Api {
+            status: 403,
+            message: "OpenCode's free tier can only be used from within OpenCode".into(),
+        };
+        let s = e.to_string();
+        assert!(
+            s.contains("free tier can only be used"),
+            "keeps upstream text: {s}"
+        );
+        assert!(s.contains("/model"), "must say how to fix it: {s}");
+        assert!(
+            s.contains("first-party client"),
+            "must say whose gate it is: {s}"
+        );
+
+        // Matching is case-insensitive; anything else passes through untouched.
+        let varied = api_message(
+            403,
+            "OPENCODE'S FREE TIER can only be used FROM WITHIN OPENCODE",
+        );
+        assert!(varied.contains("/model"), "{varied}");
+        assert_eq!(
+            api_message(403, "API key is not valid"),
+            "API key is not valid"
+        );
+        assert_eq!(opencode_free_tier_guidance("rate limited"), None);
     }
 }

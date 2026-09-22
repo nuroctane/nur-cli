@@ -13,9 +13,9 @@ impl Tool for GoalTool {
     }
 
     fn description(&self) -> &str {
-        "Persistent goal (Prime Agent pattern): durable objective across turns. \
-         Actions: get | set | complete | pause | resume | clear. \
-         Only goal.complete marks successful completion. Optional token_budget on set."
+        "Persistent goal (Prime Agent pattern): durable objective across turns; the loop \
+         verifies complete claims part by part when a judgment layer is available. \
+         Actions: get | set | complete | pause | resume | clear."
     }
 
     fn parameters_schema(&self) -> Value {

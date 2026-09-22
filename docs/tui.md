@@ -92,6 +92,26 @@ mid-sentence in the composer, and finishing that sentence should not run a tool.
 Keys held with `Ctrl` or `Alt` are ignored here for the same reason: `Ctrl+A` is
 "select all" everywhere else, and must never be read as "always approve".
 
+### Question modal
+
+When the agent needs your answer to proceed, it calls the `question` tool and
+the TUI shows the options:
+
+| Key | Action |
+|-----|--------|
+| `1`-`8` | Pick that option immediately |
+| `↑` · `↓` (`k` · `j`) | Move the cursor |
+| `Space` | Toggle (multi-select questions only) |
+| `Enter` | Confirm the cursor (single-select) or the checked set (multi-select) |
+| `Esc` | Dismiss without answering |
+
+Unlike approval, `Enter` **does** confirm here - picking is reversible
+conversation, not a side effect. An empty multi-select confirm is ignored so
+`Enter` never submits nothing. Dismissed questions come back as guidance text
+(proceed, defer, or declare `BLOCKED:`), never as an invented answer. Goal
+turns, subagents, and headless runs never open this modal; a Jev gate resolves
+the question silently first when context or a safe default suffices.
+
 ---
 
 ## Slash commands
@@ -332,9 +352,21 @@ Full detail: [Authentication](authentication.md).
 
 | Command | Behaviour |
 |---------|-----------|
-| `/goal <text>` | Standing goal for this session. Prepended as context on **every** turn (not shown as a user bubble). |
+| `/goal <text>` | Standing goal for this session. Prepended as context on **every** turn (not shown as a user bubble). Submitting a new objective also starts a goal-driven turn immediately. |
 | `/goal` | Show the current goal |
-| `/goal clear` | Drop the goal (`none` / `off` also work) |
+| `/goal clear` | Drop the goal (`none` / `off` also work). Also clears the standing context. |
+| `/goal pause` · `/goal resume` | Suspend / resume the tracked goal without losing it |
+| `/goal complete` | Mark the tracked goal complete yourself |
+
+A goal-driven turn ends in exactly three ways: `goal` action=complete with
+per-part evidence, a `BLOCKED: <what is needed>` line when only you can
+unblock it, or continued tool work. While the tracked goal stays active the
+harness auto-continues a stalled turn (up to 5 continuations, visible as
+`goal · continue (n/5)` cards) instead of handing back an unfinished summary.
+Completion claims are verified part by part against the transcript by Jev -
+hosted key or local engine, whichever is configured - and only a confident
+not-done reopens the goal; with no judgment layer the claim is accepted and
+marked unverified. Esc stops the chain; `/goal pause` suspends it; `/goal clear` drops it.
 | `/btw <note>` | Queues a one-off note that rides along with your **next** message only (stackable) |
 | `/bro` | Toggle chill mode: every turn asks for plain, low-jargon, no-preamble replies. `/bro on` / `/bro off` force a state. Tone only — facts, caveats, and bad news stay complete and accurate. `/status` shows when it's on. |
 | `/adhd` | Sticky ADHD-friendly shape for every reply this session (action-first, numbered steps, no fluff). `/adhd off` clears it. |

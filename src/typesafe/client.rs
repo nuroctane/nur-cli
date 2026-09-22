@@ -141,6 +141,9 @@ pub struct TypesafeClient {
     retries: u32,
     max_questions: usize,
     max_parallel: usize,
+    /// Estimated ceiling for one request (state + questions). `None` keeps the
+    /// count-only split, which is what the tests and any old caller expect.
+    max_request_tokens: Option<u64>,
     transport: Transport,
 }
 
@@ -407,6 +410,7 @@ pub fn client(cfg: &TypesafeConfig) -> Availability {
             .max_questions_per_request
             .clamp(1, super::questions::MAX_CHOICE_OPTIONS),
         max_parallel: cfg.max_parallel.clamp(1, 16),
+        max_request_tokens: Some(cfg.max_request_tokens).filter(|t| *t > 0),
         transport: Transport::Http(http),
     }))
 }
@@ -480,6 +484,7 @@ impl TypesafeClient {
                 .max_questions_per_request
                 .clamp(1, super::questions::MAX_CHOICE_OPTIONS),
             max_parallel: cfg.max_parallel.clamp(1, 16),
+            max_request_tokens: Some(cfg.max_request_tokens).filter(|t| *t > 0),
             transport,
         }
     }
@@ -519,7 +524,12 @@ impl TypesafeClient {
                 .map_err(|e| format!("question {id:?} is malformed: {e}"))?;
         }
         let per = per_request.clamp(1, super::questions::MAX_CHOICE_OPTIONS);
-        let chunks = plan_batches(questions.len(), per);
+        // The state is re-sent with every batch, so the split has to account for
+        // it: a request the endpoint would reject is never built.
+        let state_tokens = serde_json::to_string(state)
+            .map(|body| super::compact::estimate_tokens(&body))
+            .unwrap_or(0);
+        let chunks = plan_batches_fitting(questions, state_tokens, per, self.max_request_tokens)?;
         let mut out = Batch {
             model: self.model.clone(),
             requests: chunks.len(),
@@ -530,6 +540,8 @@ impl TypesafeClient {
         if chunks.len() == 1 {
             let one = self.ask_chunk(state, questions, &chunks[0])?;
             merge_chunk(&mut out, one);
+            // Eval record when NUR_JEV_RECORD names a set; no-op otherwise.
+            crate::jev_eval::maybe_record(&out.model, state, questions, &out.answers);
             return Ok(out);
         }
 
@@ -571,6 +583,7 @@ impl TypesafeClient {
         if failed_chunks == 0 {
             telemetry::record_parallel(chunks.len().saturating_sub(1) as u64);
         }
+        crate::jev_eval::maybe_record(&out.model, state, questions, &out.answers);
         Ok(out)
     }
 
@@ -669,6 +682,57 @@ impl TypesafeClient {
 enum PostError {
     Retryable(String),
     Permanent(String),
+}
+
+/// Tokens the request envelope (`model`, keys, framing) adds around the state
+/// and its questions. The reference uses the same figure.
+const REQUEST_OVERHEAD_TOKENS: u64 = 20;
+
+/// Split questions into batches that each fit **one request**: at most `per`
+/// questions, and - when `max_request_tokens` is set - so that the state, which
+/// is re-sent with every batch, plus the batch's questions stay under it.
+///
+/// Ported from fast-jev-compaction's `batchCalls`. The point is that a request
+/// the endpoint would reject is never built: the state is usually the expensive
+/// half, so a big state means smaller batches rather than a failed judgment.
+/// Returns `Err` when the state alone leaves no room for a single question, so
+/// the caller can fall back instead of sending something doomed.
+pub fn plan_batches_fitting(
+    questions: &[(String, Question)],
+    state_tokens: u64,
+    per: usize,
+    max_request_tokens: Option<u64>,
+) -> Result<Vec<Vec<usize>>, String> {
+    let per = per.max(1);
+    let Some(limit) = max_request_tokens.filter(|l| *l > 0) else {
+        return Ok(plan_batches(questions.len(), per));
+    };
+    let budget = limit
+        .saturating_sub(state_tokens)
+        .saturating_sub(REQUEST_OVERHEAD_TOKENS);
+    let mut out: Vec<Vec<usize>> = Vec::new();
+    let mut current: Vec<usize> = Vec::new();
+    let mut used = 0u64;
+    for (i, (id, q)) in questions.iter().enumerate() {
+        // The same JSON that will be sent, so the estimate matches the payload.
+        let cost = super::compact::estimate_tokens(id)
+            + super::compact::estimate_tokens(&q.to_json().to_string());
+        if !current.is_empty() && (current.len() >= per || used + cost > budget) {
+            out.push(std::mem::take(&mut current));
+            used = 0;
+        }
+        if current.is_empty() && cost > budget {
+            return Err(format!(
+                "the state uses ~{state_tokens} of the {limit}-token request ceiling, leaving no room for question {id:?}"
+            ));
+        }
+        current.push(i);
+        used += cost;
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    Ok(out)
 }
 
 /// Split `n` questions into index chunks of at most `per`.
@@ -940,8 +1004,8 @@ mod tests {
                             // nonblocking mode: force blocking so the request is
                             // read in full and the response written completely.
                             let _ = stream.set_nonblocking(false);
-                            let _ = stream
-                                .set_read_timeout(Some(std::time::Duration::from_secs(10)));
+                            let _ =
+                                stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
                             let mut buf = [0u8; 16 * 1024];
                             let mut raw: Vec<u8> = Vec::new();
                             let mut done = false;

@@ -359,6 +359,12 @@ pub struct TypesafeConfig {
     /// Concurrent requests when a question set has to be split.
     #[serde(default = "default_typesafe_parallel")]
     pub max_parallel: usize,
+    /// Estimated ceiling for **one request**: the state plus its questions.
+    /// Ported from fast-jev-compaction (`maxRequestTokens`, default 30000), which
+    /// keeps a request under System One's ~32k limit. A batch that cannot fit is
+    /// never sent, so a judgment never fails for being oversized.
+    #[serde(default = "default_typesafe_max_request_tokens")]
+    pub max_request_tokens: u64,
     /// Confidence at or above which a judgment may change behavior.
     #[serde(default = "default_typesafe_act")]
     pub act_confidence: f64,
@@ -514,6 +520,9 @@ fn default_typesafe_escalate() -> f64 {
 fn default_typesafe_preserve_recent() -> usize {
     6
 }
+fn default_typesafe_max_request_tokens() -> u64 {
+    30_000
+}
 fn default_typesafe_keep_threshold() -> f64 {
     0.5
 }
@@ -601,6 +610,7 @@ impl Default for TypesafeConfig {
             model: String::new(),
             timeout_ms: default_typesafe_timeout_ms(),
             retries: default_typesafe_retries(),
+            max_request_tokens: default_typesafe_max_request_tokens(),
             max_questions_per_request: default_typesafe_batch(),
             max_parallel: default_typesafe_parallel(),
             act_confidence: default_typesafe_act(),

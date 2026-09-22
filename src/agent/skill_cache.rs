@@ -247,15 +247,14 @@ mod tests {
         // would push cached toward cold's multi-second territory.
         assert!(
             cached_elapsed <= cold_elapsed,
-            "cached load ({:?}) must not be slower than the cold scan ({:?})",
-            cached_elapsed,
-            cold_elapsed
+            "cached load ({cached_elapsed:?}) must not be slower than the cold scan ({cold_elapsed:?})"
         );
+        // Relative, not a wall-clock cap. A 2s absolute bound failed whenever
+        // the suite ran this bench beside other tests (both passes slowed,
+        // cache still won). A full accidental rescan lands near 1:1.
         assert!(
-            cold_elapsed.is_zero()
-                || cached_elapsed.as_millis() < 2_000,
-            "cached load regressed to a scan: {:?}",
-            cached_elapsed
+            cached_elapsed.as_secs_f64() * 1.2 < cold_elapsed.as_secs_f64().max(0.001),
+            "cached load ({cached_elapsed:?}) is not cheaper than the cold scan ({cold_elapsed:?})"
         );
     }
 }

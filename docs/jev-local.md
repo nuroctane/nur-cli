@@ -35,10 +35,11 @@ nur jev probe                        # the same, as JSON (scripts and CI)
 nur jev selftest                     # mapping checks incl. a real served request - no model needed
 nur jev start --backend mock         # or verdict | nimble | laya
 # engine options are forwarded to the bridge verbatim:
-#   --verdict-model <id|path>   --nimble-dir <dir>   --laya-model <bundle>   --device cpu|cuda|mps
+#   --verdict-model <id|path>   --nimble-dir <dir>   --laya-model <bundle>   --laya-max-tokens <n>   --device cpu|cuda|mps
 nur jev use --port 8788              # point [typesafe] at it (loopback needs no key)
 nur jev stop                         # stop it
 nur jev use --hosted                 # go back to api.typesafe.ai
+nur jev eval --set <name>            # replay a recorded judgment set, report agreement
 ```
 
 `nur jev use` writes `[typesafe] base_url`, which survives restarts. The
@@ -87,10 +88,23 @@ truncation past 2048 tokens.
 pip install laya-coreml
 nur jev start --backend laya
 # optional: --laya-model aac6fef/laya-multilingual-coreml  (the 1024-token model)
+#           --laya-max-tokens 1024                        (capacity of that bundle)
 ```
 
-The ANE bundle allows 96 tokens including question, options and state; the bridge
-refuses anything longer instead of letting the engine raise a capacity error.
+The default ANE bundle allows 96 tokens including question, options and state;
+the bridge refuses anything longer instead of letting the engine raise a
+capacity error. Serving a bigger bundle? Pass its capacity explicitly -
+[FluidInference/laya-coreml](https://huggingface.co/FluidInference/laya-coreml)
+ships fixed buckets of 128/256/512/1024 tokens x 32 options (fp16, plus `e8`
+int8-embedding variants ~30% smaller at the same accuracy), and the bridge
+picks up whatever `--laya-max-tokens` says. Reported numbers on Apple silicon:
+3.7 ms per short question, 5.2 ms median over laya's ten published suites
+(3,899 questions) at PyTorch-identical accuracy - see
+[FluidUse](https://github.com/FluidInference/FluidUse) and its
+[Benchmarks.md](https://github.com/FluidInference/FluidUse/blob/main/Benchmarks.md).
+That project is Swift-only (a Swift package + CLI, no Python import or HTTP
+server), so nur cannot use it as a bridge backend directly; the buckets above
+are what to point `--laya-model` at through the Python path instead.
 
 ## What the bridge guarantees
 
@@ -105,6 +119,28 @@ refuses anything longer instead of letting the engine raise a capacity error.
   a missing option set is reported per question. nur treats a missing answer as
   "no judgment" and keeps its own behavior for that question.
 - **Partial batches.** One bad question does not sink the others.
+
+## Eval sets: record, replay, promote
+
+Every batched ask can be recorded and replayed - the measured-iteration loop,
+without re-running the agent:
+
+```bash
+NUR_JEV_RECORD=goal-triage nur <goal> --continuous   # record this run's judgments
+nur jev eval --set goal-triage                       # replay through the current layer
+nur jev eval --set goal-triage --reserved goal-holdout --limit 20
+```
+
+Replay re-asks each record through whichever layer is configured (hosted key or
+local engine) and reports per-primitive agreement (same pick, same side of the
+coin flip, score within half a level), accuracy against hand-added `expected`
+labels where a record carries them (`{qid: {"choice"|"noul"|"score": ...}}`),
+and what the replay cost. Tune wording and thresholds on the dev set; promote
+only when the reserved run agrees too. Records live at
+`~/.nur/jev/evals/<set>.jsonl` - plain JSONL, so a set can be hand-built,
+trimmed, or labeled with any editor. Agreement is stability, not correctness:
+100% agreement with a bad reference only proves determinism, which is exactly
+why `expected` labels exist.
 
 ## Accounting
 

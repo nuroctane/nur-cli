@@ -75,6 +75,15 @@ pub enum AgentEvent {
         args: String,
         respond: oneshot::Sender<ApprovalDecision>,
     },
+    /// The model asked the user a close-ended question (`question` tool).
+    /// The TUI shows a modal; headless runners answer `dismissed`.
+    QuestionRequest {
+        question: String,
+        header: String,
+        options: Vec<(String, String)>,
+        multi_select: bool,
+        respond: oneshot::Sender<QuestionAnswer>,
+    },
     Usage {
         session: TokenUsage,
         last: TokenUsage,
@@ -92,6 +101,44 @@ pub enum ApprovalDecision {
     Approve,
     ApproveAlways,
     Deny,
+}
+
+/// The user's answer to a `question` tool call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuestionAnswer {
+    /// Labels picked in the modal (at most one unless multi-select).
+    pub selected: Vec<String>,
+    /// True when the question was dismissed, redirected, or asked somewhere
+    /// with no interactive user: proceed, do not re-ask.
+    pub dismissed: bool,
+    /// Short reason shown when dismissed (`"dismissed"`, `"headless"`, ...).
+    pub reason: &'static str,
+}
+
+impl QuestionAnswer {
+    pub fn picked(selected: Vec<String>) -> Self {
+        Self {
+            selected,
+            dismissed: false,
+            reason: "",
+        }
+    }
+
+    pub fn dismissed() -> Self {
+        Self {
+            selected: Vec::new(),
+            dismissed: true,
+            reason: "dismissed",
+        }
+    }
+
+    pub fn unavailable() -> Self {
+        Self {
+            selected: Vec::new(),
+            dismissed: true,
+            reason: "no interactive user",
+        }
+    }
 }
 
 // Tool capability classification (read-only / parallel / destructive) lives in
@@ -183,6 +230,10 @@ pub async fn run_collect(
                 // anything that slips through. Callers should use Auto mode.
                 AgentEvent::ApprovalRequest { respond, .. } => {
                     let _ = respond.send(ApprovalDecision::Deny);
+                }
+                // No interactive user either - the model proceeds or defers.
+                AgentEvent::QuestionRequest { respond, .. } => {
+                    let _ = respond.send(QuestionAnswer::unavailable());
                 }
                 _ => {}
             }
@@ -1654,6 +1705,33 @@ impl AgentRunner {
 
             // Single sequential tool (mutating / agent / memory append)
             let call = &calls[idx];
+
+            // `question` is answered by the user through a modal, not by
+            // dispatch: asking permission to ask is absurd, and it must never
+            // ride the parallel batch (it is not parallel-safe, so it lands
+            // here) or the Jev pre-gate (it is a meta tool).
+            if call.name == "question" {
+                *tool_seq += 1;
+                let id = *tool_seq;
+                let _ = tx.send(AgentEvent::ToolStart {
+                    id,
+                    name: call.name.clone(),
+                    args: call.arguments.clone(),
+                });
+                let (body, ok) = self.run_question_call(call, session, tx, cancel).await?;
+                let _ = tx.send(AgentEvent::ToolEnd {
+                    id,
+                    name: call.name.clone(),
+                    result: body.clone(),
+                    ok,
+                });
+                session
+                    .input_items
+                    .push(function_call_output_item(&call.call_id, &body));
+                idx += 1;
+                continue;
+            }
+
             *tool_seq += 1;
             let id = *tool_seq;
             let _ = tx.send(AgentEvent::ToolStart {
@@ -1897,7 +1975,144 @@ impl AgentRunner {
         // what the call was for? Reported, never rewritten - the bodies stay
         // verbatim.
         self.typesafe_judge_results(&ts_results, session, tx).await;
+        // A `goal` action=complete claim in this response is checked part by
+        // part against the transcript before it counts.
+        self.maybe_verify_goal_completion(&ts_results, session, tx)
+            .await;
         Ok(())
+    }
+
+    /// Verify a `goal` action=complete claim against transcript evidence.
+    ///
+    /// Fires only when this response actually completed the tracked goal: one
+    /// batched Jev request (hosted or local engine, whichever is configured)
+    /// judges every part, and only a *confident* not-done reopens the goal
+    /// with the verdict fed back as a harness message. No judgment layer, a
+    /// failed request, or an uncertain verdict accepts the claim - the same
+    /// confidence policy the rest of the harness uses.
+    async fn maybe_verify_goal_completion(
+        &self,
+        results: &[TsToolResult],
+        session: &mut Session,
+        tx: &mpsc::UnboundedSender<AgentEvent>,
+    ) {
+        let completed_here = results.iter().any(|r| {
+            r.tool == "goal"
+                && r.ok
+                && super::goal::args_action(&r.args).as_deref() == Some("complete")
+        });
+        if !completed_here {
+            return;
+        }
+        let goal = match super::goal::load(&session.id) {
+            Some(g) if g.status == super::goal::GoalStatus::Completed => g,
+            _ => return,
+        };
+        let cfg = self.config.typesafe.clone();
+        if !cfg.enabled || crate::typesafe::harness::ready(&cfg).is_none() {
+            let _ = tx.send(AgentEvent::Status(
+                "goal completed - no judgment layer active, claim accepted \
+                 unverified (set a Jev key or start a local engine for verified completion)"
+                    .into(),
+            ));
+            return;
+        }
+        let parts = super::goal::split_parts(&goal.text);
+        let evidence = super::goal::completion_evidence(&session.input_items, 12_000);
+        let state = serde_json::json!({ "goal": goal.text, "evidence": evidence });
+        let verdict = tokio::task::spawn_blocking(move || {
+            super::goal::verify_completion(&cfg, &parts, &state)
+        })
+        .await
+        .unwrap_or_else(|_| super::goal::GoalVerification { parts: Vec::new() });
+        if verdict.unavailable() || verdict.parts.is_empty() {
+            let _ = tx.send(AgentEvent::Status(
+                "goal completed - verification request failed, claim accepted unverified".into(),
+            ));
+            return;
+        }
+        let failures = verdict.confident_failures();
+        if verdict.passed() {
+            let _ = tx.send(AgentEvent::Status(format!(
+                "goal completed - Jev verified {}",
+                verdict.summary()
+            )));
+            // Ledger entry (AgentRun-style trace): what was verified, against
+            // what evidence, so later runs can learn from this one.
+            let scope = Self::goal_ledger_scope(session);
+            let _ = super::chronicle::append(
+                &scope,
+                "goal_complete",
+                &format!(
+                    "goal completed ({}) · evidence: {} tool item(s) in transcript",
+                    verdict.summary(),
+                    session.input_items.len(),
+                ),
+                None,
+            );
+            // Learning note: file the win as an evidence-backed lesson draft
+            // (code-built facts only, never model prose), unless this goal is
+            // already noted. Rollback via /refine management if it misleads.
+            let tools = super::goal::tools_used(&session.input_items);
+            let (lesson, lesson_evidence) = super::goal::completion_lesson(
+                &goal.text,
+                &verdict.summary(),
+                &tools,
+                goal.tokens_used,
+                goal.continuation_count,
+            );
+            let already_noted = super::harness::load(&session.id)
+                .supplemental
+                .contains(&goal.text.chars().take(40).collect::<String>());
+            if !already_noted {
+                if super::harness::refine(&session.id, &lesson, &lesson_evidence).is_ok() {
+                    let _ = tx.send(AgentEvent::Status(
+                        "lesson filed from this goal (/refine management rolls it back)".into(),
+                    ));
+                }
+            }
+            return;
+        }
+        // Confidently not done: reopen and show exactly which parts failed,
+        // so the next round works the gap instead of re-claiming.
+        let detail = failures
+            .iter()
+            .map(|(part, conf)| format!("- {part} (confidently not done, conf {conf:.2})"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let _ = super::goal::reopen(&session.id);
+        let scope = Self::goal_ledger_scope(session);
+        let _ = super::chronicle::append(
+            &scope,
+            "goal_rejected",
+            &format!(
+                "completion claim rejected ({} failed) · evidence: {} tool item(s)",
+                failures.len(),
+                session.input_items.len(),
+            ),
+            None,
+        );
+        session.input_items.push(user_text_item(&format!(
+            "[harness] Completion rejected: Jev judged these goal parts NOT done \
+             against the transcript evidence:\n{detail}\nKeep working the failed \
+             parts with your tools. Call `goal` action=complete again only when \
+             every part is done and verified, or end with BLOCKED: <what you need> \
+             if only the user can unblock you."
+        )));
+        let _ = tx.send(AgentEvent::Status(format!(
+            "goal completion rejected by Jev verification ({} failed) - goal reopened",
+            failures.len()
+        )));
+    }
+
+    /// Chronicle scope for goal ledger entries: same project:session namespacing
+    /// the memory tiers use, so a later run can read what past goals verified.
+    fn goal_ledger_scope(session: &Session) -> String {
+        let proj = std::path::Path::new(&session.cwd)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("workspace");
+        format!("{proj}:{}", session.id)
     }
 
     /// Drop specialist tools the task confidently does not need.
@@ -1960,7 +2175,11 @@ impl AgentRunner {
             // `None` from the policy layer means "no confident answer" (escalate
             // or confirm band) - keep the tool.
             if let Some(p) = needed {
-                if *p < keep_floor {
+                // `tool_need` only ever hands back a banded probability, so a call
+                // it *needed* can arrive as 0.93. Comparing that against a raised
+                // `keep_floor` inverted the rule and dropped tools the judgment had
+                // just said were needed; only the low mode may drop.
+                if *p <= 1.0 - keep_floor {
                     dropped.push(name.clone());
                 }
             }
@@ -2515,6 +2734,127 @@ impl AgentRunner {
         // Media is flushed by `execute_calls` once *all* calls are answered —
         // a user item here would land between a later call and its output.
         Ok(())
+    }
+
+    /// Run one `question` tool call: validate, apply the no-interrupt rules,
+    /// optionally let Jev resolve it without bothering the user, else show
+    /// the modal and wait for the answer. Returns the tool result + ok.
+    /// Cancellation aborts the whole turn (Err), never the question alone.
+    async fn run_question_call(
+        &self,
+        call: &FunctionCallRef,
+        session: &Session,
+        tx: &mpsc::UnboundedSender<AgentEvent>,
+        cancel: &CancellationToken,
+    ) -> Result<(String, bool)> {
+        use crate::tools::question_tool::{self, UserAnswer};
+        let parsed = match question_tool::parse_args(&call.arguments) {
+            Ok(q) => q,
+            Err(e) => return Ok((format!("error: invalid question call: {e}"), false)),
+        };
+        // Goal-driven turns never interrupt the user: the BLOCKED: protocol
+        // is the way to ask. (Also covers /goal auto-continuations.)
+        if let Some(g) = super::goal::load(&session.id) {
+            if g.status == super::goal::GoalStatus::Active {
+                return Ok((
+                    question_tool::format_answer(
+                        &UserAnswer::Dismissed {
+                            reason: "goal-driven turn",
+                        },
+                        &parsed.options,
+                    ) + " - goal-driven turns do not interrupt the user; end with \
+                         BLOCKED: <what you need> instead",
+                    true,
+                ));
+            }
+        }
+        if self.is_subagent {
+            return Ok((
+                question_tool::format_answer(
+                    &UserAnswer::Dismissed {
+                        reason: "subagent turn",
+                    },
+                    &parsed.options,
+                ) + " - subagents cannot prompt the user; proceed with your best \
+                     judgment or declare BLOCKED:",
+                true,
+            ));
+        }
+        // Jev first: a question resolvable from context, tools, or a safe
+        // default should never pop a modal.
+        if self.question_needs_user(&parsed, session).await == Some(false) {
+            return Ok((
+                "Jev judged this question resolvable without interrupting the user \
+                 (answerable from context, tools, or a safe default) - resolve it \
+                 yourself and keep working; do not ask."
+                    .to_string(),
+                true,
+            ));
+        }
+        let (otx, orx) = oneshot::channel();
+        let _ = tx.send(AgentEvent::QuestionRequest {
+            question: parsed.question.clone(),
+            header: parsed.header.clone(),
+            options: parsed.options.clone(),
+            multi_select: parsed.multi_select,
+            respond: otx,
+        });
+        let answer = tokio::select! {
+            _ = cancel.cancelled() => return Err(NurError::Interrupted),
+            r = orx => r.unwrap_or_else(|_| QuestionAnswer::dismissed()),
+        };
+        let user_answer = if answer.dismissed {
+            UserAnswer::Dismissed {
+                reason: answer.reason,
+            }
+        } else {
+            UserAnswer::Picked(answer.selected)
+        };
+        Ok((
+            question_tool::format_answer(&user_answer, &parsed.options),
+            true,
+        ))
+    }
+
+    /// Does this question need the user? `Some(false)` only on a confident
+    /// Jev "resolvable without interrupting" - `None` (no layer) and
+    /// `Some(true)` both show the modal, since interrupting is the safe
+    /// default when unsure.
+    async fn question_needs_user(
+        &self,
+        parsed: &crate::tools::question_tool::ParsedQuestion,
+        session: &Session,
+    ) -> Option<bool> {
+        let cfg = self.config.typesafe.clone();
+        if !cfg.enabled || crate::typesafe::harness::ready(&cfg).is_none() {
+            return None;
+        }
+        let labels: Vec<String> = parsed.options.iter().map(|(l, _)| l.clone()).collect();
+        let state = serde_json::json!({
+            "task": typesafe_goal(session, 3),
+            "question": parsed.question,
+            "options": labels,
+        });
+        let cfg_for_task = cfg.clone();
+        let judged = tokio::task::spawn_blocking(move || {
+            crate::typesafe::harness::noul(
+                &cfg_for_task,
+                &state,
+                "question_needs_user",
+                "Can this question be resolved WITHOUT asking the user - from the \
+                 conversation context, available tools, or a safe default the user \
+                 would accept? Answer yes when interrupting is unnecessary; no only \
+                 when the user's answer is genuinely required to proceed.",
+                None,
+                0.5,
+            )
+        })
+        .await
+        .ok()?;
+        match judged.usable() {
+            Some(true) => Some(false),
+            _ => Some(true),
+        }
     }
 
     async fn check_approval(
@@ -5673,6 +6013,31 @@ pub async fn compact_session(
 ) -> Result<String> {
     snapshot_before_compact(session);
 
+    let early_mem_scope = {
+        let proj = std::path::Path::new(&session.cwd)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("workspace");
+        format!("{proj}:{}", session.id)
+    };
+
+    // Native-memory upkeep runs on *every* compaction path, including the Jev fast
+    // path below. It used to sit after that path's early return, so enabling Jev
+    // quietly stopped the tier ladder from ageing (recent→l1→l2→l3) and stopped
+    // consolidation for every successful fast-path compaction.
+    if runner.config.native_memory {
+        let _ = super::native_memory::consolidate_localized(&early_mem_scope, 32);
+        // closes the tier-ladder gap: age-progress recent→l1 and l2→l3 so deep
+        // tiers are produced automatically, not only by manual remember/consolidate.
+        let _ = super::native_memory::promote_aged(&early_mem_scope);
+        let _ = super::chronicle::append(
+            &early_mem_scope,
+            "compact",
+            "context compacted - native memory tiers preserved",
+            None,
+        );
+    }
+
     // Jev-scored compaction first. This is the cheapest release valve in the
     // harness: Jev is shown the whole conversation with tool results replaced by
     // short notes, and asked two questions per tool call - does the call still
@@ -5846,18 +6211,6 @@ pub async fn compact_session(
             .unwrap_or("workspace");
         format!("{proj}:{}", session.id)
     };
-    if runner.config.native_memory {
-        let _ = super::native_memory::consolidate_localized(&mem_scope, 32);
-        // closes the tier-ladder gap: age-progress recent→l1 and l2→l3 so deep
-        // tiers are produced automatically, not only by manual remember/consolidate.
-        let _ = super::native_memory::promote_aged(&mem_scope);
-        let _ = super::chronicle::append(
-            &mem_scope,
-            "compact",
-            "context compacted - recent edge summarized; native memory tiers preserved",
-            None,
-        );
-    }
     let store_inv = super::context_store::prompt_inventory(&session.id);
     let mem_inv = if runner.config.native_memory {
         super::native_memory::prompt_block(&mem_scope, "", 1_200)
@@ -6205,7 +6558,7 @@ const MAX_SKILL_NUDGES: u8 = 2;
 /// and a todo update is not work. Skipping them saves Jev questions without
 /// touching the cases that matter (repeated reads, retried commands, long
 /// result bodies). Deduplication still applies to real tools.
-const TYPESAFE_META_TOOLS: &[&str] = &["typesafe", "skill", "todo_write"];
+const TYPESAFE_META_TOOLS: &[&str] = &["typesafe", "skill", "todo_write", "question"];
 
 /// Should the gate/verdict judgment cover this tool?
 fn typesafe_judges_tool(tool: &str) -> bool {

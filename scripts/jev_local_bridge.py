@@ -640,16 +640,25 @@ class LayaBackend(Backend):
     Upstream API is `laya.load(model_id)` then `agent.predict(text, schema)` with
     `noul` / `choice` / `score` question types - the same primitives nur uses.
 
-    Limits: macOS 15+ on Apple Silicon; the ANE bundle caps a request at 96
-    tokens (question + options + state) and raises a capacity error beyond that.
+    Capacity follows the bundle, not the code. The default ANE bundle caps a
+    request at 96 tokens (question + options + state) and raises a capacity
+    error beyond that; [FluidInference/laya-coreml](https://huggingface.co/FluidInference/laya-coreml)
+    ships fixed buckets of 128/256/512/1024 tokens x 32 options (fp16, plus
+    `e8` int8-embedding variants ~30% smaller at the same accuracy), and the
+    general 1024-token `laya-coreml` bundle takes longer states too. Pass
+    `--laya-max-tokens` when serving anything but the default bundle - the
+    bridge refuses over-capacity requests rather than silently truncating them.
     """
 
     name = "laya"
-    max_state_tokens = 96  # the ANE bundle's 96-token total (question + options + state)
+    max_state_tokens = 96  # the default ANE bundle's 96-token total (question + options + state)
     note = "Laya Core ML (Core ML + Neural Engine, macOS/Apple Silicon)"
 
-    def __init__(self, model_id: str = "aac6fef/laya-multilingual-coreml-ane"):
+    def __init__(self, model_id: str = "aac6fef/laya-multilingual-coreml-ane",
+                 max_tokens: int | None = None):
         self.model_id = model_id
+        if max_tokens is not None and max_tokens > 0:
+            self.max_state_tokens = max_tokens
         self._agent = None
 
     def available(self) -> tuple[bool, str]:
@@ -733,7 +742,7 @@ def build_backend(name: str, args: argparse.Namespace) -> Backend:
     if name == "nimble":
         return NimbleBackend(model_dir=args.nimble_dir)
     if name == "laya":
-        return LayaBackend(model_id=args.laya_model)
+        return LayaBackend(model_id=args.laya_model, max_tokens=args.laya_max_tokens)
     return MockBackend()
 
 
@@ -1539,6 +1548,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--verdict-model", default=None, help="openJev/GLiClass model name or path")
     parser.add_argument("--nimble-dir", default="nimble-model", help="Bespoke-Nimble-9B directory")
     parser.add_argument("--laya-model", default="aac6fef/laya-multilingual-coreml-ane")
+    parser.add_argument("--laya-max-tokens", type=int, default=None,
+                        help="request-token capacity of the laya bundle (default 96, the ANE "
+                             "bundle's total; 128/256/512/1024 for the FluidInference buckets)")
     parser.add_argument("--selftest", action="store_true", help="check the mapping, no model needed")
     parser.add_argument("--probe", action="store_true", help="report usable backends and exit")
     parser.add_argument("--allow-unavailable", action="store_true",

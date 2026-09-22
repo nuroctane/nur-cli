@@ -332,7 +332,15 @@ fn fetch_once(
         .build()
         .map_err(|e| ModelFetchError::request(format!("client error: {e}")))?;
 
-    let mut req = client.get(url);
+    // One Accept. `RequestBuilder::header` appends, so a trailing
+    // `application/json` used to ride along with GitHub's vendor type and
+    // Poolside's problem+json and some gateways answered the wrong one.
+    let accept = match provider_id {
+        "github-models" if !api_key.is_empty() => "application/vnd.github+json",
+        "poolside" if !api_key.is_empty() => "application/json, application/problem+json",
+        _ => "application/json",
+    };
+    let mut req = client.get(url).header("Accept", accept);
     if !api_key.is_empty() {
         match provider_id {
             "anthropic" => {
@@ -354,7 +362,6 @@ fn fetch_once(
             "github-models" => {
                 req = req
                     .bearer_auth(api_key)
-                    .header("Accept", "application/vnd.github+json")
                     .header("X-GitHub-Api-Version", "2022-11-28");
             }
             "github-copilot" => {
@@ -370,9 +377,7 @@ fn fetch_once(
                 // Platform and self-hosted deployments; asking for it means a
                 // failure comes back as a readable RFC 7807 body instead of a
                 // bare status line.
-                req = req
-                    .bearer_auth(api_key)
-                    .header("Accept", "application/json, application/problem+json");
+                req = req.bearer_auth(api_key);
             }
             "openai" if oauth.is_some() => {
                 req = req.bearer_auth(api_key);
@@ -410,7 +415,6 @@ fn fetch_once(
             }
         }
     }
-    req = req.header("Accept", "application/json");
 
     let res = req
         .send()

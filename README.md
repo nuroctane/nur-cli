@@ -172,6 +172,8 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 
 ---
 
+**v0.37.2**: Close-ended `question` modal (51 tools) · goal turns verify completion with Jev and stop on `BLOCKED:` · `nur jev eval` replays recorded judgments · request-size cap so a Jev batch is never sent oversized. OpenCode's free-tier 403 stays their client gate. **[Docs](https://www.nuroctane.xyz/cli)**
+
 **v0.37.1**: TypeSafe/Jev typed judgments wired through the harness (tool gate, result judge, Jev-scored compaction that writes no summary, skill-rule checks, model routing) · three keyless local engines on this machine (openJev-verdict-2.0, Bespoke-Nimble-9B, Laya Core ML) · OptMem compressions drain in one call · transcript paths that open · every doc trued up against the code (65 providers, 48 tools, 88 slash commands, 21 themes). **[Docs](https://www.nuroctane.xyz/cli)**
 
 | Surface | What ships |
@@ -179,7 +181,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 | **TUI** | Streaming · duration chips · thought/tool cards · peek · drag-select · scrollbar · sessions · multi-provider `/login` · **`/model` picker** · **`/plugins` marketplace** · `/goal` `/bro` `/adhd` `/scan` `/btw` `/codesearch` `/mc` `/feedback` `/tips` · **every skill as `/name`** · **21 themes incl superred / banana / nous + transparency mode** · **provider logo in the busy line + tab title** · **every path in the transcript is a link that opens** · **block-structured markdown** with theme-role colours · **LaTeX rendering** (image-peek build) · **`/receipt` verifies the hash chain** and exports spans · budgets · doctor |
 | **Agent** | Manual / plan / auto · tools · subagents · todos · auto-compact · session $ / token budgets · Esc cancel · Shift+Tab mid-turn · **NL skill auto-activation** |
 | **Vision** | `look` · `extract_frames` · prompt auto-attach · **inline images in the TUI** (kitty graphics protocol, sixel, iTerm2; Ctrl+V paste or `/image <path>`) |
-| **Tools** | read · edit · bash · web · **browser** (incl. **element picking**) · git · knowledge · agent · **judgments** (`typesafe`) · **memory** (`optmem` `connectome` `mem`) · **diagrams** (`excalidraw` `tldraw` `penecho`) · **policy** (`dogwood`) · **background** (`bg`) · **async** (`admission` `goal` `proposal` `message`) · **docs** (`anydoc`) · **python REPL** (`repl`) · **excalidraw** |
+| **Tools** | read · edit · bash · web · **browser** (incl. **element picking**) · git · knowledge · agent · **judgments** (`typesafe`) · **memory** (`optmem` `connectome` `mem`) · **diagrams** (`excalidraw` `tldraw` `penecho`) · **policy** (`dogwood`) · **background** (`bg`) · **async** (`admission` `goal` `proposal` `message` `question`) · **docs** (`anydoc`) · **python REPL** (`repl`) · **excalidraw** |
 | **Ecosystem** | Graphify · GraphJin · PLUR · Ruflo · Executor · **TypeSafe/Jev** (+ **keyless local engines**) · **OptMem** · **Headroom** · **Connectome** · **dogwood** · omp · browser · AKM · 1,000+ skills · **`/sc-research` whitehat DeFi + X bounty intel + historical vuln library** · **plugin marketplace** (Fable, Superpowers, Vercel, …) |
 | **Hardening** | Sandbox · denylist · SSRF blocks · atomic `~/.nur` IO · permissions/hooks · SHA-256 install · `nur doctor` |
 

@@ -16,16 +16,24 @@
 //! to its normal path - a probability is not proof that a result is safe to
 //! delete.
 //!
+//! Ported from
+//! [fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction):
+//! the two-question shape, the pinning rule, the staged state fitting, the
+//! tokenizer-free estimate, the request-token budget for batching, and the
+//! decision rule all follow that reference, so the same transcript produces the
+//! same pruning here and there.
+//!
 //! Differences from upstream, all deliberate:
 //!
 //! - nur's transcript is a flat item array (calls, results, text), not
 //!   role-tagged messages, so pairing is by `call_id` alone and pinning is by
 //!   item position.
-//! - One [`judge_calls`](super::harness::judge_calls) request serves the whole
-//!   non-pinned set (batched and run in parallel), instead of re-sending state
-//!   per handful of questions.
-//! - Token counts use upstream's tokenizer-free estimate, calibrated to land a
-//!   little above what Jev reports.
+//! - One batched request serves the whole candidate set (split by the request
+//!   budget, run in parallel), instead of one state re-send per handful.
+//! - The questions are exactly upstream's two (`keep_call`, `keep_result`) with
+//!   no verdict question, because compaction never reads a verdict.
+//! - A question that comes back unanswered keeps its content, and a `None`
+//!   answer is never read as permission to delete.
 
 use super::harness::{self, JudgeScope, ToolCallItem};
 use super::telemetry;
@@ -50,6 +58,11 @@ pub struct CallPair {
     pub arguments: String,
     /// Characters in the result body (`0` when there is no result yet).
     pub result_chars: usize,
+    /// Whether the result body is a failure. The reference carries an explicit
+    /// `isError`; nur's transcript keeps the reason in the body (the loop writes
+    /// `error: …`), so the flag is read from it - Jev should know that an error
+    /// is an error, because those are the results worth keeping.
+    pub is_error: bool,
 }
 
 /// What to do with one call, after Jev's answers.
@@ -101,8 +114,12 @@ pub struct Stats {
     /// Fitting stage the state needed (`full`, `args1000`, …).
     pub stage: String,
     pub state_tokens_estimate: u64,
-    /// Requests spent on the judgment.
+    /// Calls kept because they are inside the pinned window.
+    pub pinned: usize,
+    /// Requests spent on the judgment (a split batch counts each).
     pub requests: usize,
+    /// How long the judgment took, end to end.
+    pub ms: u64,
 }
 
 impl Stats {
@@ -194,23 +211,40 @@ pub struct Outcome {
     pub stats: Stats,
 }
 
-/// Token estimate without a tokenizer, mirroring upstream's calibration: a word
-/// per six letters, half a token per digit, about one per other symbol. It
-/// deliberately lands a little above Jev's own count.
+/// Token estimate without a tokenizer, ported from fast-jev-compaction.
+///
+/// Pieces are runs of letters, runs of digits, and single non-space symbols: a
+/// word costs `1 + (len - 1) / 6`, a digit half a token, any other symbol 0.9.
+/// Calibrated to land a little above what Jev reports (2-18% over on real
+/// transcripts); a plain characters-per-token ratio undercounts JSON-heavy
+/// states by up to 40%, and an undercount builds a request the endpoint then
+/// rejects.
 pub fn estimate_tokens(text: &str) -> u64 {
-    let mut letters = 0u64;
-    let mut digits = 0u64;
-    let mut other = 0u64;
-    for c in text.chars() {
+    let chars: Vec<char> = text.chars().collect();
+    let mut tokens = 0.0f64;
+    let mut i = 0usize;
+    while i < chars.len() {
+        let c = chars[i];
         if c.is_ascii_alphabetic() {
-            letters += 1;
+            let start = i;
+            while i < chars.len() && chars[i].is_ascii_alphabetic() {
+                i += 1;
+            }
+            tokens += 1.0 + ((i - start - 1) / 6) as f64;
         } else if c.is_ascii_digit() {
-            digits += 1;
+            let start = i;
+            while i < chars.len() && chars[i].is_ascii_digit() {
+                i += 1;
+            }
+            tokens += (i - start) as f64 / 2.0;
         } else {
-            other += 1;
+            if !c.is_whitespace() {
+                tokens += 0.9;
+            }
+            i += 1;
         }
     }
-    letters.div_ceil(6) + digits.div_ceil(2) + other
+    tokens.ceil() as u64
 }
 
 fn item_type(v: &Value) -> &str {
@@ -249,6 +283,7 @@ pub fn collect_calls(items: &[Value]) -> Vec<CallPair> {
                     .unwrap_or_default()
                     .to_string(),
                 result_chars: 0,
+                is_error: false,
             });
         }
     }
@@ -267,20 +302,35 @@ pub fn collect_calls(items: &[Value]) -> Vec<CallPair> {
             .find(|p| p.call_id == call_id && p.output_index.is_none())
         {
             pair.output_index = Some(i);
-            pair.result_chars = item
-                .get("output")
-                .and_then(Value::as_str)
-                .map(|s| s.chars().count())
-                .unwrap_or(0);
+            let body = item.get("output").and_then(Value::as_str).unwrap_or("");
+            pair.result_chars = body.chars().count();
+            pair.is_error = result_is_error(body);
         }
     }
     out
+}
+
+/// Whether a tool result body is a failure.
+///
+/// The tool dispatch writes failures as `error: …` (and two refusals have their
+/// own fixed wording), so this reads the harness's own convention rather than
+/// inventing a marker in the transcript.
+fn result_is_error(body: &str) -> bool {
+    let text = body.trim_start();
+    if text
+        .get(..6)
+        .is_some_and(|p| p.eq_ignore_ascii_case("error:"))
+    {
+        return true;
+    }
+    text.starts_with("blocked · plan mode") || text.starts_with("user denied this tool call")
 }
 
 /// One line describing a call for the state Jev reads.
 fn call_line(pair: &CallPair, arg_budget: usize) -> String {
     let args = collapse(&pair.arguments, arg_budget);
     let result = match pair.output_index {
+        Some(_) if pair.is_error => format!("error, {} chars (omitted)", pair.result_chars),
         Some(_) => format!("ok, {} chars (omitted)", pair.result_chars),
         None => "no result yet".to_string(),
     };
@@ -353,6 +403,11 @@ fn build_state(
                     // Pinned text (the newest items, and the first) is what Jev
                     // needs to judge relevance - it stays whole in the state.
                     text
+                } else if stage >= 5 {
+                    // Last resort before giving up: old text leaves the state
+                    // entirely, the way upstream leaves out old messages that
+                    // carry no call. The call lines being judged stay.
+                    continue;
                 } else if stage >= 4 {
                     format!("[… {} chars omitted …]", text.chars().count())
                 } else if stage >= 3 {
@@ -400,10 +455,11 @@ fn items_chars(items: &[Value]) -> usize {
     items.iter().map(item_chars).sum()
 }
 
-/// Fit the state into the token ceiling, escalating through stages. Each stage
-/// is applied only when the previous one was not enough.
-/// Fit the state into the token ceiling, escalating through stages. Each stage
-/// is applied only when the previous one was not enough.
+/// Fit the state into the token ceiling, escalating through stages, each
+/// applied only when the previous one was not enough: full, tool inputs at 200
+/// then 60 characters, long texts abridged head+tail, old texts collapsed to a
+/// note, old texts dropped. `None` when even that does not fit - the caller
+/// keeps its normal compaction path, exactly as the reference throws.
 fn fit_state(
     items: &[Value],
     calls: &[CallPair],
@@ -435,57 +491,52 @@ fn pinned_mask(len: usize, preserve_recent: usize) -> Vec<bool> {
     pinned
 }
 
-/// The probability above which a "keep" answer is trusted, and below which a
-/// "let it go" answer is. Between them nothing is deleted: a coin flip is not
-/// evidence that a result is safe to lose.
-fn confident(p: f64, threshold: f64) -> Option<bool> {
-    let bar = threshold.max(0.75);
-    if p >= bar {
-        return Some(true);
-    }
-    if p <= 1.0 - bar {
-        return Some(false);
-    }
-    None
-}
-
-/// Turn one pair + its judgment into a decision. Conservative by construction:
-/// an ambiguous answer keeps the content.
-fn decide_pair(pc: Option<f64>, pr: Option<f64>, threshold: f64) -> (Decision, String) {
-    let (Some(pc), Some(pr)) = (pc, pr) else {
-        return (
+/// Turn one pair + its judgment into a decision, using the rule that the
+/// `prune` action and this module share (`harness::prune_decision`).
+///
+/// `bar` is `keep_threshold` exactly as configured - nothing raises it behind
+/// the user's back. 0.5 is the reference's default; 0.925 is the Act band, for
+/// anyone who wants pruning to demand the same confidence as acting.
+fn decide_pair(pc: Option<f64>, pr: Option<f64>, bar: f64) -> (Decision, String) {
+    let (drop_call, drop_result) = harness::prune_decision(pc, pr, bar);
+    match (drop_call, drop_result) {
+        (false, false) => (
             Decision::KeepBoth,
-            "no usable answer for this call - kept".to_string(),
-        );
-    };
-    match (confident(pr, threshold), confident(pc, threshold)) {
-        (Some(true), _) => (
-            Decision::KeepBoth,
-            format!("result still needed verbatim (p={pr:.2})"),
+            match (pc, pr) {
+                (Some(c), Some(r)) => format!("kept (p_call={c:.2}, p_result={r:.2})"),
+                _ => "kept - no usable answer, and an unjudged call is never deleted".to_string(),
+            },
         ),
-        (Some(false), Some(true)) => (
+        (false, true) => (
             Decision::TruncateResult,
-            format!("result re-runnable (p={pr:.2}); the call itself still matters (p={pc:.2})"),
+            format!(
+                "result below {bar:.2} (p={:.2}) and re-runnable; the call itself still matters",
+                pr.unwrap_or(0.0)
+            ),
         ),
-        (Some(false), Some(false)) => (
+        (true, true) => (
             Decision::DropBoth,
-            format!("call and result both stale (p_call={pc:.2}, p_result={pr:.2})"),
+            format!(
+                "call and result both below {bar:.2} (p_call={:.2}, p_result={:.2})",
+                pc.unwrap_or(0.0),
+                pr.unwrap_or(0.0)
+            ),
         ),
-        (Some(false), None) => (
-            Decision::TruncateResult,
-            format!("result re-runnable (p={pr:.2}); the call is unjudged (p={pc:.2})"),
-        ),
-        (None, _) => (
-            Decision::KeepBoth,
-            format!("ambiguous result answer (p={pr:.2}) - kept"),
-        ),
+        // `prune_decision` cannot return this: a dropped call always takes its
+        // result with it. Kept rather than guessed at.
+        (true, false) => (Decision::KeepBoth, "inconsistent answer - kept".to_string()),
     }
 }
 
-fn truncate_note(chars: usize) -> String {
+fn truncate_note(chars: usize, is_error: bool) -> String {
+    let what = if is_error {
+        "a result that was an error"
+    } else {
+        "a tool result"
+    };
     format!(
-        "\n[… {chars} chars dropped by Jev-scored compaction: this tool can be re-run; \
-         the call kept above is unchanged …]"
+        "\n[… {chars} chars dropped by Jev-scored compaction from {what}; the \
+         call kept above is unchanged, and the tool can be re-run …]"
     )
 }
 
@@ -507,18 +558,24 @@ fn apply_decisions(
     use std::collections::HashSet;
     let is_pinned = |i: usize| pinned.get(i).copied().unwrap_or(false);
     let mut drop_idx: HashSet<usize> = HashSet::new();
-    let mut truncate_at: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    // index -> (chars to keep, whether the result was an error)
+    let mut truncate_at: std::collections::HashMap<usize, (usize, bool)> =
+        std::collections::HashMap::new();
     for (pair, outcome) in calls.iter().zip(decisions.iter()) {
-        if is_pinned(pair.call_index)
-            || pair.output_index.is_some_and(is_pinned)
-        {
+        if is_pinned(pair.call_index) || pair.output_index.is_some_and(is_pinned) {
             continue;
         }
         match outcome.decision {
             Decision::KeepBoth => {}
             Decision::TruncateResult => {
                 if let Some(oi) = pair.output_index {
-                    truncate_at.insert(oi, truncate_head_chars);
+                    // The reference skips a result that is barely longer than the
+                    // head it would keep: replacing 320 characters with 300 plus a
+                    // note buys nothing and churns the transcript.
+                    let body = item_text(&items[oi]);
+                    if body.chars().count() > truncate_head_chars + 120 {
+                        truncate_at.insert(oi, (truncate_head_chars, pair.is_error));
+                    }
                 }
             }
             Decision::DropBoth => {
@@ -540,7 +597,7 @@ fn apply_decisions(
         if drop_idx.contains(&i) {
             continue;
         }
-        if let Some(head) = truncate_at.get(&i) {
+        if let Some((head, is_error)) = truncate_at.get(&i) {
             let body = item_text(item);
             let kept: String = body.chars().take(*head).collect();
             let dropped = body.chars().count().saturating_sub(*head);
@@ -548,7 +605,7 @@ fn apply_decisions(
             if let Some(obj) = next.as_object_mut() {
                 obj.insert(
                     "output".into(),
-                    Value::String(format!("{kept}{}", truncate_note(dropped))),
+                    Value::String(format!("{kept}{}", truncate_note(dropped, *is_error))),
                 );
             }
             out.push(next);
@@ -585,9 +642,14 @@ fn compact_items_with(
         return None;
     }
     let pinned = pinned_mask(items.len(), opts.preserve_recent);
+    // The reference's candidate rule: a call with no result has nothing to drop
+    // yet, and a pin on *either* side protects the pair - judging a call whose
+    // result is inside the window would spend a question on an answer that can
+    // never be applied (and used to be filtered out only after the fact).
+    let is_pinned = |i: usize| pinned.get(i).copied().unwrap_or(false);
     let judged_pairs: Vec<CallPair> = calls
         .iter()
-        .filter(|p| !pinned.get(p.call_index).copied().unwrap_or(false))
+        .filter(|p| p.output_index.is_some_and(|oi| !is_pinned(oi)) && !is_pinned(p.call_index))
         .cloned()
         .collect();
     if judged_pairs.is_empty() {
@@ -612,13 +674,27 @@ fn compact_items_with(
         .collect();
 
     let state_value = json!({
+        "context": "A coding assistant conversation is being compacted to free context. \
+                    `transcript` is the whole conversation so far, oldest first; tool \
+                    outputs are replaced by a short note and long texts may be abridged. \
+                    Each question asks whether one tool call, or the full output of that \
+                    call, still needs to stay in the transcript verbatim. Whatever is not \
+                    kept is deleted permanently, but the assistant can always re-run a \
+                    tool or re-read a file.",
         "goal": opts.goal,
         "transcript": state,
-        "note": "Items are numbered [#]. Tool results were replaced by short notes; \
-                 nothing else was summarized or rewritten.",
     });
-    let judged =
-        harness::judge_calls_with(client, cfg, &state_value, &tool_items, JudgeScope::Post);
+    let started = std::time::Instant::now();
+    // Exactly the reference's two questions per call - no verdict question,
+    // which compaction never reads.
+    let (judged, meta) = harness::judge_calls_with_meta(
+        client,
+        cfg,
+        &state_value,
+        &tool_items,
+        JudgeScope::Compaction,
+    );
+    let elapsed_ms = started.elapsed().as_millis() as u64;
     if judged.is_empty() {
         return None;
     }
@@ -670,7 +746,7 @@ fn compact_items_with(
         &pinned,
     );
 
-    let mut stats = Stats {
+    let stats = Stats {
         items_before: items.len(),
         items_after: after.len(),
         chars_before: items_chars(items),
@@ -692,19 +768,21 @@ fn compact_items_with(
             .iter()
             .filter(|o| o.decision != Decision::KeepBoth)
             .count(),
+        pinned: pinned_outcomes.len(),
+        ms: elapsed_ms,
         stage: match stage {
             0 => "full",
             1 => "args200",
             2 => "args60",
             3 => "texts-abridged",
             4 => "old-texts-collapsed",
+            5 => "old-texts-dropped",
             _ => "calls-only",
         }
         .to_string(),
         state_tokens_estimate: state_tokens,
-        requests: 1,
+        requests: meta.requests.max(1) as usize,
     };
-    stats.requests = 1;
 
     let chars_saved = stats.chars_before.saturating_sub(stats.chars_after) as u64;
     let frontier_avoided = u64::from(stats.reduction_ratio() >= opts.min_reduction);
@@ -744,6 +822,47 @@ mod tests {
 
     fn big(s: &str, n: usize) -> String {
         s.repeat(n)
+    }
+
+    /// A client that records every question id the harness asked, so a test can
+    /// assert that a call was (or was not) judged at all.
+    fn recording_client(
+        f: impl Fn(&str) -> f64 + Send + Sync + 'static,
+    ) -> (TypesafeClient, Arc<std::sync::Mutex<Vec<String>>>) {
+        let seen: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorder = seen.clone();
+        let t: Arc<super::super::client::TransportFn> = Arc::new(move |body: &Value| {
+            let qs = body
+                .get("questions")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            let mut answers = serde_json::Map::new();
+            for (id, q) in qs {
+                if let Ok(mut g) = recorder.lock() {
+                    g.push(id.clone());
+                }
+                let a = match q.get("type").and_then(Value::as_str) {
+                    Some("noul") => json!({"type":"noul","noul": f(&id)}),
+                    _ => json!({"type":"score","score":0.0,"legend":{"0":"x"},
+                                "probabilities":{"0":1.0},"confidence":0.9}),
+                };
+                answers.insert(id, a);
+            }
+            Ok(
+                json!({"model":"jev-latest","answers":Value::Object(answers),
+                      "usage":{"input_tokens":5,"output_tokens":1}}),
+            )
+        });
+        let cfg = TypesafeConfig {
+            enabled: true,
+            api_key: "k".into(),
+            ..TypesafeConfig::default()
+        };
+        (
+            TypesafeClient::with_transport(&cfg, Transport::Fake(t)),
+            seen,
+        )
     }
 
     fn client(f: impl Fn(&str) -> f64 + Send + Sync + 'static) -> TypesafeClient {
@@ -807,7 +926,11 @@ mod tests {
         for _ in 0..6 {
             items.push(text_item(&"y".repeat(4_000)));
         }
-        items.push(call_item("c1", "read_file", &format!("{{\"path\":\"{}\"}}", "p".repeat(80))));
+        items.push(call_item(
+            "c1",
+            "read_file",
+            &format!("{{\"path\":\"{}\"}}", "p".repeat(80)),
+        ));
         items.push(result_item("c1", &"z".repeat(4_000)));
         items.push(text_item("recent note A"));
         items.push(text_item("recent note B"));
@@ -818,7 +941,10 @@ mod tests {
 
         let (state, stage, _) =
             fit_state(&items, &calls, &pinned, 400).expect("fits at some stage");
-        assert!(stage >= 3, "a tight budget must reach a deep stage: {stage}");
+        assert!(
+            stage >= 3,
+            "a tight budget must reach a deep stage: {stage}"
+        );
         // The pinned items keep their text verbatim.
         assert!(state.contains("goal: fix the failing test"), "{state}");
         assert!(state.contains("recent note A"), "{state}");
@@ -835,7 +961,11 @@ mod tests {
         let mask = pinned_mask(5, 2);
         assert_eq!(mask, vec![true, false, false, true, true]);
         let mask = pinned_mask(3, 6);
-        assert_eq!(mask, vec![true, true, true], "over-wide preserve keeps everything");
+        assert_eq!(
+            mask,
+            vec![true, true, true],
+            "over-wide preserve keeps everything"
+        );
         assert!(pinned_mask(0, 3).is_empty());
     }
 
@@ -978,9 +1108,9 @@ mod tests {
             text_item("go"),
             call_item("c1", "read_file", "{\"path\":\"a.rs\"}"),
             result_item("c1", &big("A", 400)),
-            call_item("c2", "grep", "{}"),      // index 3: judged (window is 4,5)
-            result_item("c2", &big("B", 400)),  // index 4: pinned
-            text_item("latest turn"),           // index 5: pinned
+            call_item("c2", "grep", "{}"), // index 3: judged (window is 4,5)
+            result_item("c2", &big("B", 400)), // index 4: pinned
+            text_item("latest turn"),      // index 5: pinned
         ];
         let calls = collect_calls(&items);
         let pinned = pinned_mask(items.len(), 2);
@@ -1011,7 +1141,11 @@ mod tests {
             .filter_map(|i| i.get("call_id").and_then(Value::as_str))
             .collect();
         assert!(ids.contains(&"c2"), "the pinned result is still there");
-        assert_eq!(ids.iter().filter(|i| **i == "c1").count(), 2, "c1 untouched");
+        assert_eq!(
+            ids.iter().filter(|i| **i == "c1").count(),
+            2,
+            "c1 untouched"
+        );
         // Nothing pinned was dropped or shortened.
         for (i, item) in items.iter().enumerate() {
             if !pinned[i] {
@@ -1022,6 +1156,157 @@ mod tests {
                 "pinned item {i} came through byte-identical"
             );
         }
+    }
+
+    /// The bar is `keep_threshold` as configured. It used to be silently raised
+    /// to 0.75, so a user setting the documented default of 0.5 got decisions
+    /// made at a stricter bar than the one they could see.
+    #[test]
+    fn the_bar_is_the_configured_one() {
+        // p_result 0.6 sits above 0.5 and below 0.75, so the two bars disagree.
+        let at_default = decide_pair(Some(0.8), Some(0.6), 0.5);
+        assert_eq!(
+            at_default.0,
+            Decision::KeepBoth,
+            "at the reference bar the result stays: {}",
+            at_default.1
+        );
+        let strict = decide_pair(Some(0.8), Some(0.6), 0.75);
+        assert_eq!(
+            strict.0,
+            Decision::TruncateResult,
+            "a raised bar prunes it instead: {}",
+            strict.1
+        );
+        // The shipped default is the reference's 0.5, not an invisible 0.75.
+        let cfg = TypesafeCompactionConfig::default();
+        assert_eq!(cfg.keep_threshold, 0.5);
+        // The Act band is reachable for anyone who wants it, and it cuts the
+        // other way: at 0.925 nothing survives on a 0.9 answer, because keeping
+        // is what now has to clear the bar.
+        assert_eq!(
+            decide_pair(Some(0.9), Some(0.3), 0.925).0,
+            Decision::DropBoth
+        );
+        assert_eq!(
+            decide_pair(Some(0.95), Some(0.3), 0.925).0,
+            Decision::TruncateResult
+        );
+    }
+
+    /// A dropped call always takes its result with it - the rule cannot produce
+    /// "drop the call but keep the result".
+    #[test]
+    fn a_dropped_call_never_keeps_its_result() {
+        for (pc, pr) in [(0.05, 0.05), (0.0, 0.49), (0.1, 0.2)] {
+            let (drop_call, drop_result) = harness::prune_decision(Some(pc), Some(pr), 0.5);
+            assert!(!(drop_call && !drop_result), "call={pc} result={pr}");
+        }
+        // A missing answer is never permission to delete.
+        assert_eq!(
+            harness::prune_decision(None, Some(0.0), 0.5),
+            (false, false)
+        );
+        assert_eq!(
+            harness::prune_decision(Some(0.0), None, 0.5),
+            (false, false)
+        );
+    }
+
+    /// The reference's candidate rule: a call with no result has nothing to
+    /// drop, and a pin on either side of the pair protects it. Neither is worth
+    /// a question.
+    #[test]
+    fn only_calls_with_unpinned_results_are_judged() {
+        let items = vec![
+            text_item("go"),
+            call_item("pending", "read_file", "{}"), // no result yet
+            call_item("c1", "read_file", "{\"path\":\"a.rs\"}"),
+            result_item("c1", &big("A", 900)),
+            call_item("c2", "grep", "{}"),
+            result_item("c2", &big("B", 900)), // pinned: newest item
+        ];
+        let cfg = TypesafeConfig {
+            enabled: true,
+            api_key: "k".into(),
+            ..TypesafeConfig::default()
+        };
+        let (client, seen) = recording_client(|_| 0.1); // "drop everything" if asked
+        let mut opts = opts();
+        opts.preserve_recent = 2; // c2's result is inside the window
+        let outcome = compact_with(&client, &cfg, &items, &opts).expect("compaction ran");
+        let asked = seen.lock().unwrap().clone();
+        assert!(
+            asked.iter().all(|q| q.ends_with("_0")),
+            "only the first candidate is judged, got {asked:?}"
+        );
+        assert_eq!(asked.len(), 2, "one call, two questions: {asked:?}");
+        assert_eq!(outcome.stats.calls_considered, 1);
+        assert_eq!(outcome.stats.pinned, 1, "c2's pair is pinned");
+    }
+
+    /// A result barely longer than the head it would keep is left alone:
+    /// replacing 350 characters with 300 plus a note buys nothing and churns the
+    /// transcript (the reference's own guard).
+    #[test]
+    fn a_short_result_is_never_rewritten() {
+        let items = vec![
+            text_item("go"),
+            call_item("c1", "read_file", "{}"),
+            result_item("c1", &big("A", 350)),
+            text_item("ok"),
+        ];
+        let mut opts = opts();
+        opts.truncate_head_chars = 300;
+        let calls = collect_calls(&items);
+        let decisions = vec![CallOutcome {
+            call_id: "c1".into(),
+            tool: "read_file".into(),
+            decision: Decision::TruncateResult,
+            keep_call: Some(0.9),
+            keep_result: Some(0.1),
+            reason: "re-runnable".into(),
+        }];
+        let pinned = pinned_mask(items.len(), 1);
+        let out = apply_decisions(&items, &calls, &decisions, 300, &pinned);
+        assert_eq!(
+            out[2].get("output").and_then(Value::as_str),
+            items[2].get("output").and_then(Value::as_str),
+            "350 chars is not worth truncating to 300"
+        );
+        // A genuinely long result still gets the head plus a note (the trailing
+        // text keeps the newest-window pin off the result).
+        let long = vec![
+            text_item("go"),
+            call_item("c1", "bash", "{}"),
+            result_item("c1", &big("L", 40_000)),
+            text_item("still working"),
+        ];
+        let calls = collect_calls(&long);
+        let out = apply_decisions(&long, &calls, &decisions, 300, &pinned_mask(long.len(), 1));
+        let body = out[2].get("output").and_then(Value::as_str).unwrap();
+        assert!(body.len() < 1_000, "truncated: {} chars", body.len());
+        assert!(body.contains("dropped by Jev-scored compaction"));
+    }
+
+    /// Errors are the results worth keeping, so the state says which is which.
+    #[test]
+    fn an_error_result_is_labelled_in_the_state() {
+        let items = vec![
+            call_item("c1", "bash", "{}"),
+            result_item("c1", "error: command not found"),
+            call_item("c2", "bash", "{}"),
+            result_item("c2", "fine"),
+        ];
+        let calls = collect_calls(&items);
+        assert!(
+            calls[0].is_error,
+            "harness errors are written as `error: ...`"
+        );
+        assert!(!calls[1].is_error);
+        let state = build_state(&items, &calls, &|_| false, 0);
+        assert!(state.contains("error, 24 chars (omitted)"), "{state}");
+        assert!(state.contains("ok, 4 chars (omitted)"), "{state}");
     }
 
     #[test]

@@ -143,6 +143,21 @@ pub fn probe_port(port: u16) -> Option<serde_json::Value> {
     get_local(port, "/health", Duration::from_millis(800))
 }
 
+/// Is something (bridge or not) listening on this loopback port?
+fn tcp_busy(port: u16) -> bool {
+    let addr: SocketAddr = match format!("127.0.0.1:{port}").parse() {
+        Ok(addr) => addr,
+        Err(_) => return false,
+    };
+    TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()
+}
+
+/// A free loopback port to suggest when the requested one is taken.
+fn suggest_port() -> Option<u16> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").ok()?;
+    listener.local_addr().ok().map(|a| a.port())
+}
+
 /// Which backends this machine can actually run, per the bridge's own probe.
 pub fn probe_backends() -> Result<serde_json::Value> {
     let script = ensure_bridge_script()?;
@@ -224,6 +239,18 @@ pub fn start(backend: &str, port: u16, extra: &[String]) -> Result<String> {
             serde_json::to_string(&existing).unwrap_or_default()
         ));
     }
+    // The health probe only recognizes a bridge (/health with a JSON body).
+    // Anything else holding the port (a test echo server, another app) would
+    // fail to bind in the child while this function records a bogus pid and
+    // reports "not answering yet". Refuse up front instead.
+    if tcp_busy(port) {
+        return Err(NurError::Other(format!(
+            "port {port} is already in use by another process (and it is not a Jev \
+             bridge) - stop it, or start the bridge on a free port: `nur jev start \
+             --port {}`",
+            suggest_port().unwrap_or(8788)
+        )));
+    }
     let pid = spawn_detached(backend, port, extra)?;
     let endpoint = format!("http://127.0.0.1:{port}/v1/systemone");
     // Recorded before waiting on purpose: a bridge that is still loading a model
@@ -289,11 +316,7 @@ fn resolve_interpreter(py: &str) -> Option<String> {
     }
     let out = crate::ecosystem::run_capture(
         py,
-        &[
-            "-3",
-            "-c",
-            "import sys;sys.stdout.write(sys.executable)",
-        ],
+        &["-3", "-c", "import sys;sys.stdout.write(sys.executable)"],
         None,
         10_000,
     )
@@ -727,6 +750,20 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         drop(listener);
         assert!(probe_port(port).is_none());
+    }
+
+    #[test]
+    fn an_occupied_port_is_busy_but_not_a_bridge() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        // A plain listener is not a bridge (no /health JSON)...
+        assert!(probe_port(port).is_none());
+        // ...but the port is taken, so `start` must refuse rather than
+        // record a bogus pid (regression: an echo server once squatted the
+        // requested port and start reported "not answering yet").
+        assert!(tcp_busy(port));
+        assert!(start("mock", port, &[]).is_err());
+        drop(listener);
     }
 
     #[test]

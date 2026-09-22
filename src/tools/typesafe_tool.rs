@@ -646,16 +646,19 @@ fn prune(cfg: &crate::config::TypesafeConfig, args: &Value) -> Result<String> {
         })
         .collect();
     let state = json!({ "goal": goal, "note": "items are the calls listed under `calls`" });
-    let judged = harness::judge_calls(cfg, &state, &candidates, harness::JudgeScope::Post);
+    // The same two questions and the same bar the automatic compaction uses, so
+    // asking by hand and letting the harness prune cannot disagree.
+    let judged = harness::judge_calls(cfg, &state, &candidates, harness::JudgeScope::Compaction);
     if judged.is_empty() {
         return Ok(typesafe::status(cfg));
     }
+    let bar = cfg.compaction.keep_threshold.clamp(0.0, 1.0);
     let mut out = vec![format!(
-        "typesafe · context pruning for {} call(s) - kept items stay verbatim",
+        "typesafe · context pruning for {} call(s) at keep_threshold {bar:.2} - kept items stay          verbatim",
         judged.len()
     )];
     for j in &judged {
-        let (drop_call, drop_result) = j.prune();
+        let (drop_call, drop_result) = j.prune_at(bar);
         let raw = candidates.get(j.index);
         let name = raw.map(|c| c.tool.as_str()).unwrap_or("?");
         let verdict = match (drop_call, drop_result) {
