@@ -1081,7 +1081,7 @@ pub struct QuestionState {
     pub vis_rows: usize,
     /// Free-form fallback activated with `o` or by selecting the Other row.
     pub typing: bool,
-    pub typed: String,
+    pub typed: crate::tools::question_tool::AnswerDraft,
     /// Coalesce trackpad wheel floods to one option step per tick.
     pub last_step_at: Instant,
     pub respond: Option<oneshot::Sender<QuestionAnswer>>,
@@ -8142,6 +8142,11 @@ impl App {
     fn on_question_key(&mut self, key: KeyEvent) {
         use crate::tools::question_tool::{PickerEvent, PickerKey};
         if key.modifiers.contains(KeyModifiers::CONTROL) {
+            if key.code == KeyCode::Char('u') {
+                if let Some(q) = self.question.as_mut().filter(|q| q.typing) {
+                    q.typed.clear();
+                }
+            }
             return;
         }
         if let Some(q) = self.question.as_mut() {
@@ -8149,10 +8154,9 @@ impl App {
                 match key.code {
                     KeyCode::Esc => {
                         q.typing = false;
-                        q.typed.clear();
                     }
-                    KeyCode::Enter if !q.typed.trim().is_empty() => {
-                        let text = q.typed.trim().to_string();
+                    KeyCode::Enter if !q.typed.text.trim().is_empty() => {
+                        let text = q.typed.text.trim().to_string();
                         if let Some(mut q) = self.question.take() {
                             if let Some(respond) = q.respond.take() {
                                 let _ = respond.send(QuestionAnswer::typed(text));
@@ -8160,10 +8164,15 @@ impl App {
                         }
                     }
                     KeyCode::Backspace => {
-                        q.typed.pop();
+                        q.typed.backspace();
                     }
+                    KeyCode::Delete => q.typed.delete(),
+                    KeyCode::Left => q.typed.left(),
+                    KeyCode::Right => q.typed.right(),
+                    KeyCode::Home => q.typed.home(),
+                    KeyCode::End => q.typed.end(),
                     KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::ALT) => {
-                        q.typed.push(c);
+                        q.typed.insert(&c.to_string());
                     }
                     _ => {}
                 }
@@ -8173,10 +8182,12 @@ impl App {
         if key.modifiers.contains(KeyModifiers::ALT) {
             return;
         }
-        if matches!(key.code, KeyCode::Char('o') | KeyCode::Char('O')) {
+        if matches!(
+            key.code,
+            KeyCode::Char('o') | KeyCode::Char('O') | KeyCode::Tab
+        ) {
             if let Some(q) = self.question.as_mut() {
                 q.typing = true;
-                q.typed.clear();
             }
             return;
         }
@@ -9604,7 +9615,7 @@ impl App {
                     scroll: 0,
                     vis_rows: 1,
                     typing: false,
-                    typed: String::new(),
+                    typed: Default::default(),
                     last_step_at: Instant::now() - Duration::from_secs(1),
                     respond: Some(respond),
                 });
@@ -10267,9 +10278,8 @@ impl App {
             return;
         }
         if let Some(q) = &mut self.question {
-            if q.typing {
-                q.typed.push_str(&field_text);
-            }
+            q.typing = true;
+            q.typed.insert(&field_text);
             return;
         }
         if self.approval.is_some()

@@ -601,12 +601,16 @@ fn apply_decisions(
             let body = item_text(item);
             let kept: String = body.chars().take(*head).collect();
             let dropped = body.chars().count().saturating_sub(*head);
+            let replacement = format!("{kept}{}", truncate_note(dropped, *is_error));
+            // The note itself costs tokens. A character-only threshold can
+            // expand short or whitespace-heavy results on every compaction.
+            if estimate_tokens(&replacement) >= estimate_tokens(&body) {
+                out.push(item.clone());
+                continue;
+            }
             let mut next = item.clone();
             if let Some(obj) = next.as_object_mut() {
-                obj.insert(
-                    "output".into(),
-                    Value::String(format!("{kept}{}", truncate_note(dropped, *is_error))),
-                );
+                obj.insert("output".into(), Value::String(replacement));
             }
             out.push(next);
             continue;
@@ -1287,6 +1291,24 @@ mod tests {
         let body = out[2].get("output").and_then(Value::as_str).unwrap();
         assert!(body.len() < 1_000, "truncated: {} chars", body.len());
         assert!(body.contains("dropped by Jev-scored compaction"));
+
+        let sparse = vec![
+            text_item("go"),
+            call_item("c1", "read_file", "{}"),
+            result_item("c1", &format!("ok{}", " ".repeat(500))),
+            text_item("still working"),
+        ];
+        let out = apply_decisions(
+            &sparse,
+            &collect_calls(&sparse),
+            &decisions,
+            300,
+            &pinned_mask(sparse.len(), 1),
+        );
+        assert_eq!(
+            out, sparse,
+            "compaction must not increase provider input tokens"
+        );
     }
 
     /// Errors are the results worth keeping, so the state says which is which.

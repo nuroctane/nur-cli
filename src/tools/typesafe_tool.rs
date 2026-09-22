@@ -767,13 +767,8 @@ fn route(cfg: &crate::config::TypesafeConfig, args: &Value) -> Result<String> {
     ));
     match j.usable() {
         Some(o) => out.push(format!(
-            "route: {}{}",
+            "route: {} (suggestion only; automatic child routing is not connected)",
             o.label(),
-            if cfg.routing.enabled {
-                " (routing enabled - the harness may switch)"
-            } else {
-                " (suggestion only; set [typesafe.routing] enabled = true to let the harness switch)"
-            }
         )),
         None => out.push("route: not confident enough to recommend a switch".into()),
     }

@@ -457,7 +457,7 @@ Type these inside the `nur` TUI. Aliases are shown in the same row.
 | `/context` | Context-window utilization |
 | `/status` | Session snapshot: model · mode · cwd · tokens |
 | `/doctor` | Health check: version · auth · ecosystem · shell · **TypeSafe/Jev (ready on a local engine with no key)** |
-| `/theme` | Live theme picker (21 themes) · `/theme <name>` sets one · `/theme transparent` toggles see-through |
+| `/theme` | Live theme picker (41 themes) · `/theme <name>` sets one · `/theme transparent` toggles see-through |
 | `/fusion` | Multi-model debate → one synthesized answer |
 | `/local` | Run a model locally via bundled llama.cpp |
 | `/bench` | Benchmark models on your tasks; `/bench optimize <name\|all> [gens] [pop]` evolves the standing instruction against them (GEPA — costs tokens) |

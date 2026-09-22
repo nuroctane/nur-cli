@@ -172,7 +172,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 
 ---
 
-**v0.37.4**: Jev and memory hardening: OptMem queue output cannot solicit an indefinite compression chain, malformed probabilities never authorize actions, prompt-time judgments run off the async worker pool, and the local Verdict/Nimble/Laya adapters now probe and map their supported devices honestly. **[Local Jev docs](docs/jev-local.md)**
+**v0.38.0**: 18 new chromatic themes (41 total), including six tinted-paper palettes; editable custom question answers with Unicode-aware caret movement and paste; lower Jev judgment overhead, bounded local reuse, and improved request scheduling. **[Theme collection](docs/themes.md)** · **[Jev evaluation](docs/jev-performance-evaluation.md)**
 
 **v0.37.3**: Cache-aware routing (`typesafe::route`): long sessions stay on the warm model, fresh children take the cheap one past a 15% margin, secret-touching tasks stay on ZDR/TEE/local. **[Docs](https://www.nuroctane.xyz/cli)**
 
@@ -182,7 +182,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 
 | Surface | What ships |
 |---------|------------|
-| **TUI** | Streaming · duration chips · thought/tool cards · peek · drag-select · scrollbar · sessions · multi-provider `/login` · **`/model` picker** · **`/plugins` marketplace** · `/goal` `/bro` `/adhd` `/scan` `/btw` `/codesearch` `/mc` `/feedback` `/tips` · **every skill as `/name`** · **21 themes incl superred / banana / nous + transparency mode** · **provider logo in the busy line + tab title** · **every path in the transcript is a link that opens** · **block-structured markdown** with theme-role colours · **LaTeX rendering** (image-peek build) · **`/receipt` verifies the hash chain** and exports spans · budgets · doctor |
+| **TUI** | Streaming · duration chips · thought/tool cards · peek · drag-select · scrollbar · sessions · multi-provider `/login` · **`/model` picker** · **`/plugins` marketplace** · `/goal` `/bro` `/adhd` `/scan` `/btw` `/codesearch` `/mc` `/feedback` `/tips` · **every skill as `/name`** · **41 themes including 18 chromatic studies + transparency mode** · **provider logo in the busy line + tab title** · **every path in the transcript is a link that opens** · **block-structured markdown** with theme-role colours · **LaTeX rendering** (image-peek build) · **`/receipt` verifies the hash chain** and exports spans · budgets · doctor |
 | **Agent** | Manual / plan / auto · tools · subagents · todos · auto-compact · session $ / token budgets · Esc cancel · Shift+Tab mid-turn · **NL skill auto-activation** |
 | **Vision** | `look` · `extract_frames` · prompt auto-attach · **inline images in the TUI** (kitty graphics protocol, sixel, iTerm2; Ctrl+V paste or `/image <path>`) |
 | **Tools** | read · edit · bash · web · **browser** (incl. **element picking**) · git · knowledge · agent · **judgments** (`typesafe`) · **memory** (`optmem` `connectome` `mem`) · **diagrams** (`excalidraw` `tldraw` `penecho`) · **policy** (`dogwood`) · **background** (`bg`) · **async** (`admission` `goal` `proposal` `message` `question`) · **docs** (`anydoc`) · **python REPL** (`repl`) · **excalidraw** |

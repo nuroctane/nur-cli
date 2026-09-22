@@ -7109,8 +7109,15 @@ fn draw_question(f: &mut Frame, app: &mut App, area: Rect) {
     let Some(q) = app.question.as_mut() else {
         return;
     };
-    let max_body = area.height.saturating_sub(6).clamp(8, 24) as usize;
-    let col_w = (area.width as usize).saturating_sub(8).clamp(20, 74);
+    draw_question_state(f, q, area, phase);
+}
+
+fn draw_question_state(f: &mut Frame, q: &mut super::app::QuestionState, area: Rect, phase: usize) {
+    // Scroll against the actual inner rectangle. A minimum of eight body rows
+    // used to put the selected option below the visible area on short terminals.
+    let available = modal_inner(fit_modal_rect(area, 78, area.height, 48, 9));
+    let max_body = (available.height as usize).clamp(1, 24);
+    let col_w = (available.width as usize).saturating_sub(2).max(1);
     let mut body: Vec<String> = wrap_text(&q.question, col_w);
     if body.len() > 4 {
         let hidden = body.len() - 4;
@@ -7131,10 +7138,11 @@ fn draw_question(f: &mut Frame, app: &mut App, area: Rect) {
         };
         let head = format!("{cursor} {} {tick}", i + 1);
         let head = head.trim_end().to_string();
-        let first_w = col_w.saturating_sub(head.len() + 1);
+        let first_w = col_w.saturating_sub(UnicodeWidthStr::width(head.as_str()) + 1);
         let mut first = truncate(label, first_w);
-        if first.len() < first_w {
-            first.push_str(&" ".repeat(first_w - first.len()));
+        let first_cells = UnicodeWidthStr::width(first.as_str());
+        if first_cells < first_w {
+            first.push_str(&" ".repeat(first_w - first_cells));
         }
         body.push(format!("{head} {first}"));
         if !desc.trim().is_empty() {
@@ -7146,19 +7154,10 @@ fn draw_question(f: &mut Frame, app: &mut App, area: Rect) {
     body.push(String::new());
     if q.typing {
         let prefix = "▸ Other: ";
-        let room = col_w.saturating_sub(prefix.chars().count() + 1).max(8);
-        let tail: String = q
-            .typed
-            .chars()
-            .rev()
-            .take(room)
-            .collect::<String>()
-            .chars()
-            .rev()
-            .collect();
-        body.push(format!("{prefix}{tail}_"));
+        let room = col_w.saturating_sub(UnicodeWidthStr::width(prefix));
+        body.push(format!("{prefix}{}", q.typed.visible(room)));
     } else {
-        body.push("  o Other - type a different answer".to_string());
+        body.push("  o/tab Other - type a different answer".to_string());
     }
     q.vis_rows = max_body.max(1);
     let cursor_line = if q.typing {
@@ -7188,7 +7187,7 @@ fn draw_question(f: &mut Frame, app: &mut App, area: Rect) {
     );
     let hue = theme::META_BLUE();
     let footer = if q.typing {
-        "  type answer · ↵ submit · esc options  "
+        "  ←→ edit · home/end · ctrl+u clear · ↵ send · esc options  "
     } else if q.multi_select {
         "  ↑↓/pg/home/end · 1-8/space toggle · o other · ↵ confirm  "
     } else {
@@ -7204,7 +7203,7 @@ fn draw_question(f: &mut Frame, app: &mut App, area: Rect) {
         footer,
     );
     let inner = modal_inner(rect);
-    let inner_w = (inner.width as usize).saturating_sub(4).max(20);
+    let inner_w = (inner.width as usize).saturating_sub(2);
     let mut lines: Vec<Line> = Vec::new();
     for l in &shown {
         lines.push(Line::from(Span::styled(
@@ -8089,18 +8088,7 @@ mod tests {
         };
         std::fs::create_dir_all(&dir).expect("dump dir");
         let sample = SAMPLE_ANSWER;
-        for theme_id in [
-            "gold",
-            "mono",
-            "solarized",
-            "heavenly",
-            "noir",
-            "synthwave",
-            "matrix",
-            "pearl",
-            "nous",
-            "gruvbox",
-        ] {
+        for theme_id in theme::theme_ids() {
             assert!(theme::set_theme(theme_id), "unknown theme {theme_id}");
             for width in [100u16, 72] {
                 let mut lines = Vec::new();
@@ -8257,6 +8245,59 @@ See the [token store notes](https://example.test/docs/token-store) for the stora
             for width in 0..24 {
                 assert!(UnicodeWidthStr::width(truncate(text, width).as_str()) <= width);
             }
+        }
+    }
+
+    #[test]
+    fn question_picker_keeps_last_option_and_typed_caret_visible() {
+        use ratatui::{backend::TestBackend, Terminal};
+        for (width, height) in [(40, 12), (72, 24), (100, 40)] {
+            let mut q = super::super::app::QuestionState {
+                question: "Choose an approach or write your own answer".into(),
+                header: "Approach".into(),
+                options: (1..=8)
+                    .map(|i| {
+                        (
+                            format!("Option {i}"),
+                            "A longer description that wraps on compact terminals".into(),
+                        )
+                    })
+                    .collect(),
+                multi_select: true,
+                picker: crate::tools::question_tool::QuestionPicker::new(8, true),
+                scroll: 0,
+                vis_rows: 1,
+                typing: false,
+                typed: Default::default(),
+                last_step_at: std::time::Instant::now(),
+                respond: None,
+            };
+            q.picker.cursor = 7;
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|f| draw_question_state(f, &mut q, f.area(), 0))
+                .unwrap();
+            let text = |terminal: &Terminal<TestBackend>| {
+                terminal
+                    .backend()
+                    .buffer()
+                    .content
+                    .iter()
+                    .map(|c| c.symbol())
+                    .collect::<String>()
+            };
+            assert!(text(&terminal).contains("Option 8"));
+            q.typing = true;
+            q.typed
+                .insert("A long alternative with unicode 界 and editable text");
+            q.typed.left();
+            terminal
+                .draw(|f| draw_question_state(f, &mut q, f.area(), 0))
+                .unwrap();
+            assert!(
+                text(&terminal).contains('▏'),
+                "typed caret clipped at {width}x{height}"
+            );
         }
     }
 

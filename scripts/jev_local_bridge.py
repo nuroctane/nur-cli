@@ -32,6 +32,8 @@ candidate strings, or the request is refused.
 from __future__ import annotations
 
 import argparse
+import hashlib
+from collections import OrderedDict
 import json
 import math
 import platform
@@ -193,7 +195,9 @@ def answer_for(kind: str, q: dict, probabilities: dict[str, float]) -> dict:
             "confidence": 0.0,
         }
     if kind == "noul":
-        p_yes = probabilities.get("true", probabilities.get("yes", 0.5))
+        p_yes = probabilities.get("true", probabilities.get("yes"))
+        if p_yes is None or not math.isfinite(float(p_yes)):
+            raise ContractError("noul produced no finite yes/no probability")
         return {"type": "noul", "noul": max(0.0, min(1.0, float(p_yes)))}
     if kind == "choice":
         options = [label for label, _ in choice_options(q)]
@@ -224,10 +228,25 @@ def answer_for(kind: str, q: dict, probabilities: dict[str, float]) -> dict:
 
 def estimate_tokens(text: str) -> int:
     """Same tokenizer-free estimate nur uses, so both sides agree on sizes."""
-    letters = sum(1 for c in text if c.isascii() and c.isalpha())
-    digits = sum(1 for c in text if c.isascii() and c.isdigit())
-    other = len(text) - letters - digits
-    return (letters + 5) // 6 + (digits + 1) // 2 + other
+    tokens = 0.0
+    i = 0
+    while i < len(text):
+        c = text[i]
+        if c.isascii() and c.isalpha():
+            start = i
+            while i < len(text) and text[i].isascii() and text[i].isalpha():
+                i += 1
+            tokens += 1 + (i - start - 1) // 6
+        elif c.isascii() and c.isdigit():
+            start = i
+            while i < len(text) and text[i].isascii() and text[i].isdigit():
+                i += 1
+            tokens += (i - start) / 2
+        else:
+            if not c.isspace():
+                tokens += 0.9
+            i += 1
+    return math.ceil(tokens)
 
 
 # --------------------------------------------------------------------------- #
@@ -253,6 +272,54 @@ class Backend:
     # silently truncates the caller's candidate set.
     max_options = MAX_CHOICE_OPTIONS
     max_levels = MAX_SCORE_LEVELS
+    cache_size = 256
+    cache_ttl = 60.0
+    cache_hits = 0
+
+    def decide_cached(self, items: list[tuple[str, dict]], state: str) -> list[dict[str, float]]:
+        """Exact, bounded reuse; caller holds the backend lock through inference.
+
+        Never cache a refusal, a malformed answer, or raw state. Question order
+        and option order remain significant. Instance-local storage isolates models.
+        """
+        if self.cache_size <= 0:
+            return self.decide_batch(items, state)
+        if not hasattr(self, "_decision_cache"):
+            self._decision_cache = OrderedDict()
+        cache = self._decision_cache
+        now = time.monotonic()
+        for key in list(cache):
+            if now - cache[key][0] >= self.cache_ttl:
+                del cache[key]
+        state_hash = hashlib.sha256(state.encode("utf-8")).digest()
+        keys = [hashlib.sha256(state_hash + json.dumps([kind, q], ensure_ascii=False).encode("utf-8")).digest()
+                for kind, q in items]
+        resolved = {}
+        pending = {}
+        for key, item in zip(keys, items):
+            if key in cache:
+                resolved[key] = dict(cache[key][1])
+                cache.move_to_end(key)
+                self.cache_hits += 1
+            elif key in pending:
+                self.cache_hits += 1
+            else:
+                pending[key] = item
+        if pending:
+            distributions = self.decide_batch(list(pending.values()), state)
+            if len(distributions) != len(pending):
+                raise ContractError("backend returned the wrong number of distributions")
+            for (key, (kind, q)), probabilities in zip(pending.items(), distributions):
+                resolved[key] = probabilities
+                try:
+                    answer_for(kind, q, probabilities)
+                except (ContractError, TypeError, ValueError, AttributeError):
+                    continue
+                cache[key] = (time.monotonic(), dict(probabilities))
+                while len(cache) > self.cache_size:
+                    cache.popitem(last=False)
+        return [dict(resolved[key]) if isinstance(resolved[key], dict) else resolved[key]
+                for key in keys]
 
     def available(self) -> tuple[bool, str]:
         return True, ""
@@ -824,7 +891,7 @@ def handle_evaluate(backend: Backend, body: dict) -> dict:
             # instances for Nimble, one silently discarded) and a HF forward pass
             # is not thread-safe to begin with.
             with backend_lock(backend.name):
-                distributions = backend.decide_batch(
+                distributions = backend.decide_cached(
                     [(kind, q) for _, kind, q in accepted], text
                 )
         except ContractError as exc:
@@ -897,6 +964,7 @@ class Handler(BaseHTTPRequestHandler):
                     "backend": self.backend.name,
                     "note": self.backend.note,
                     "max_state_tokens": self.backend.max_state_tokens,
+                    "cache_hits": self.backend.cache_hits,
                     "stats": {
                         "requests": self.stats["requests"],
                         "questions": self.stats["questions"],
@@ -1576,6 +1644,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="request-token capacity of the laya bundle (default 96, the ANE "
                              "bundle's total; use 1024 for aac6fef/laya-multilingual-coreml)")
     parser.add_argument("--selftest", action="store_true", help="check the mapping, no model needed")
+    parser.add_argument("--cache-size", type=int, default=256,
+                        help="maximum cached local judgments for 60 seconds; 0 disables reuse")
     parser.add_argument("--probe", action="store_true", help="report usable backends and exit")
     parser.add_argument("--allow-unavailable", action="store_true",
                         help="serve even when the backend is not usable (it will refuse requests)")
@@ -1590,6 +1660,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if any(v["available"] for v in info.values()) else 1
 
     backend = build_backend(args.backend, args)
+    backend.cache_size = max(0, min(args.cache_size, 4096))
     ok, why = backend.available()
     if not ok and not args.allow_unavailable:
         print(f"backend '{args.backend}' is not usable here: {why}", file=sys.stderr)

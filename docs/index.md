@@ -1,5 +1,9 @@
 # NurCLI
 
+**v0.38.0:** [18 new chromatic themes](themes.md), 41 palettes total, editable
+custom answers in the [question dialog](tui.md#question-modal), and
+[lower Jev judgment overhead](jev-performance-evaluation.md).
+
 **Fully loaded multi-provider terminal coding agent.** Not a thin wrapper.
 
 Custom Rust harness, dense gold TUI, **native vision**, 51 tools, a knowledge stack, and a hardened sandbox. Pick any of **65 providers** with `/login` (`/provider`), any model via `--model` / `/model`. **TypeSafe - Jev** typed judgments run *inside* the loop: which tool calls still earn their tokens, whether a result actually worked, what a fresh context can drop, which skill rules matter, which model is adequate - and they are **keyless on this machine** through three bundled local engines. Install marketplace plugins with `/plugins` (same picker UX as providers).
@@ -60,7 +64,7 @@ That's the normal upgrade. Pulls / rebuilds when you have a Laboratory checkout,
 | **Hardening** | Sandbox · bash denylist · SSRF blocks · atomic `~/.nur` IO · session **`.json.bak`** · **permissions.toml** · optional **hooks.toml** · API retries · install SHA-256 · `nur doctor` |
 | **Host panels** | Live `status.json` / `usage.jsonl` · **`NUR_*`** env exports · Orca hook (`nur-hook.cmd`) |
 
-**Current version: v0.37.4**
+**Current version: v0.38.0**
 
 ---
 

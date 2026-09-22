@@ -443,7 +443,7 @@ pub struct TypesafeToolGateConfig {
     /// Default **true**.
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// Judge results after execution (did it work, keep it, keep it verbatim).
+    /// Judge results after execution (did it work). Retention is judged at compaction.
     #[serde(default = "default_true")]
     pub judge_results: bool,
     /// Skip a call that confidently repeats an earlier call whose result is
@@ -489,8 +489,8 @@ pub struct TypesafeSkillsConfig {
 /// `[typesafe.routing]` - model routing.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TypesafeRoutingConfig {
-    /// Actually switch the model mid-session. Default **false** - nur never
-    /// changes the user's model out from under them without being asked.
+    /// Reserved opt-in for automatic child routing, currently not connected to
+    /// execution. The route tool returns suggestions; the parent model stays put.
     #[serde(default)]
     pub enabled: bool,
     /// Show the suggested model in the transcript. Default **true**.

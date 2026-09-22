@@ -536,7 +536,7 @@ impl TypesafeClient {
         let mut out = Batch {
             model: self.model.clone(),
             requests: chunks.len(),
-            parallel: chunks.len() > 1,
+            parallel: chunks.len() > 1 && self.max_parallel > 1,
             ..Batch::default()
         };
 
@@ -548,29 +548,39 @@ impl TypesafeClient {
             return Ok(out);
         }
 
-        // Real concurrency: batches are independent HTTP calls. `scope` keeps
-        // the borrow of `questions`/`state` without cloning the payload, and
-        // groups of `max_parallel` bound how many are in flight at once.
-        let mut results: Vec<Result<Batch, String>> = Vec::with_capacity(chunks.len());
-        for group in chunks.chunks(self.max_parallel) {
-            let part = std::thread::scope(|scope| {
-                let handles: Vec<_> = group
-                    .iter()
-                    .map(|chunk| scope.spawn(move || self.ask_chunk(state, questions, chunk)))
-                    .collect();
-                handles
-                    .into_iter()
-                    .map(|h| {
-                        h.join()
-                            .unwrap_or_else(|_| Err("typesafe batch thread panicked".to_string()))
+        // A bounded worker pool starts the next chunk as soon as a slot opens.
+        // A slow request/retry must not stall every later chunk at a group barrier.
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let mut indexed = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..self.max_parallel.max(1).min(chunks.len()))
+                .map(|_| {
+                    scope.spawn(|| {
+                        let mut results = Vec::new();
+                        loop {
+                            let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let Some(chunk) = chunks.get(i) else { break };
+                            let result =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    self.ask_chunk(state, questions, chunk)
+                                }))
+                                .unwrap_or_else(|_| {
+                                    Err("typesafe batch thread panicked".to_string())
+                                });
+                            results.push((i, result));
+                        }
+                        results
                     })
-                    .collect::<Vec<_>>()
-            });
-            results.extend(part);
-        }
+                })
+                .collect();
+            handles
+                .into_iter()
+                .flat_map(|h| h.join().expect("batch worker panicked"))
+                .collect::<Vec<_>>()
+        });
+        indexed.sort_by_key(|(i, _)| *i);
 
         let mut failed_chunks = 0usize;
-        for r in results {
+        for (_, r) in indexed {
             match r {
                 Ok(b) => merge_chunk(&mut out, b),
                 Err(e) => {
@@ -583,7 +593,7 @@ impl TypesafeClient {
         // Counted on chunk failures rather than on `errors` being empty: an
         // answer-level error merged from a chunk is not a lost chunk, and it
         // must not suppress the parallel-capability signal.
-        if failed_chunks == 0 {
+        if failed_chunks == 0 && out.parallel {
             telemetry::record_parallel(chunks.len().saturating_sub(1) as u64);
         }
         crate::jev_eval::maybe_record(&out.model, state, questions, &out.answers);
@@ -986,6 +996,44 @@ mod tests {
         let qs = vec![("bad".to_string(), Question::choice("pick", vec![]))];
         assert!(client.ask(&json!("s"), &qs).is_err());
         assert!(seen.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_slow_chunk_does_not_hold_up_the_next_wave() {
+        let progressed = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let signal = progressed.clone();
+        let mut config = cfg();
+        config.max_parallel = 2;
+        config.retries = 0;
+        let client = TypesafeClient::with_transport(
+            &config,
+            Transport::Fake(Arc::new(move |body| {
+                let questions = body["questions"].as_object().unwrap();
+                if questions.contains_key("q0") {
+                    let (lock, changed) = &*signal;
+                    let (done, _) = changed
+                        .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(3), |done| {
+                            !*done
+                        })
+                        .unwrap();
+                    assert!(*done, "q2 must start while q0 is still in flight");
+                }
+                if questions.contains_key("q2") {
+                    let (lock, changed) = &*signal;
+                    *lock.lock().unwrap() = true;
+                    changed.notify_all();
+                }
+                Ok(
+                    json!({"answers": questions.keys().map(|id| (id.clone(), json!({"type":"noul", "noul":0.9}))).collect::<Map<_, _>>() }),
+                )
+            })),
+        );
+        let qs: Vec<_> = (0..3)
+            .map(|i| (format!("q{i}"), Question::noul("test")))
+            .collect();
+        let batch = client.ask_batched(&json!("s"), &qs, 1).unwrap();
+        assert_eq!(batch.answers.len(), 3);
+        assert!(batch.errors.is_empty());
     }
 
     /// A loopback HTTP server for tests.

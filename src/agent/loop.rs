@@ -2520,7 +2520,7 @@ impl AgentRunner {
                 &cfg_for_task,
                 &state,
                 &items,
-                crate::typesafe::harness::JudgeScope::Post,
+                crate::typesafe::harness::JudgeScope::Verify,
             )
         })
         .await

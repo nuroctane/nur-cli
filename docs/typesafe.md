@@ -70,11 +70,19 @@ confidence `0.5`, the escalation floor, so "act on this keep/drop answer" and
 | **Tool results** | did that call accomplish what it was for | failures are flagged in the transcript; bodies stay byte-identical |
 | **Compaction** | which tool calls and results are still worth their tokens | stale calls and results are dropped, survivors stay verbatim, and no summary is written - so the frontier summarization call is skipped entirely |
 | **Skills** | which of a triggered skill's own rules this request needs, and whether the skill was actually carried out | the applicable rules are injected as a short checklist; on a confident shortfall the skill layer steers the turn with the specific rule that was skipped |
-| **Routing** | the cheapest adequate model for a task | a suggestion by default; `[typesafe.routing] enabled = true` lets the harness switch |
+| **Routing** | the cheapest adequate model for a task | the `route` tool action returns a suggestion; automatic child routing is not connected to the execution loop |
 | **Retrieval / ranking** | which candidates are actually relevant | the `rank` action scores every candidate in one request; the model calls it when it is juggling candidates, and context-store search reranks its hits through it |
 | **Escalation** | nothing - this is local policy | below the floor the answer is reported and never obeyed; the caller falls back to its own default, and the transcript says so |
 
 ## Compaction
+
+Live tool-result checks ask only whether execution succeeded. Retention questions
+are deferred until compaction, where their answers can actually prune the current
+transcript. This removes two of the former three questions per live result check
+without changing its verdict. Split requests use bounded workers that immediately
+take the next batch, so a slow request does not hold up a whole later group.
+Result truncation also checks its estimated token saving before adding a note;
+an expanded replacement is left untouched.
 
 The highest-value wiring, and the one to start with. Instead of summarizing old
 turns (lossy: a path, an exact error, or a constraint can vanish), Jev sees the
@@ -271,12 +279,12 @@ trace_window = 16                     # recent calls kept in the gate's window
 [typesafe.skills]
 enabled = true
 rerank = true                         # choose among code-scored skill candidates
-narrow_requirements = true            # inject only the rules this request triggers
+narrow_requirements = true            # add selected-rule checklist alongside full skill
 check_usage = true                    # steer when a triggered skill is not followed
 max_requirements = 8                  # most rules injected from a narrowed skill
 
 [typesafe.routing]
-enabled = false                       # never switch the user's model unasked
+enabled = false                       # reserved; automatic child routing is not connected
 suggest = true
 ```
 
@@ -351,7 +359,7 @@ judgment and the tokens it saved sit in the same ledger.
 
 Wired today (all in the loop, all provider-agnostic): tool gate, result judge,
 Jev-scored compaction with no summary, skill requirement narrowing + usage check
-+ candidate rerank, model routing suggestion, batched candidate ranking, inbound
++ candidate rerank, batched candidate ranking, inbound
 peer-mail spam labeling, and session accounting.
 
 Also wired, and worth knowing about:
@@ -361,8 +369,9 @@ Also wired, and worth knowing about:
   devices: [jev-local.md](./jev-local.md).
 - **Inbound peer-mail spam labeling** (one batched request, labels never drops).
 - **On-demand pruning and ranking** through the `typesafe` tool (`prune`, `rank`).
-- **Routing** as a suggestion by default (`[typesafe.routing] enabled = true` lets
-  the harness switch models).
+- **Routing** via the `route` tool action. The cache-aware child routing helpers
+  are currently separate from subagent execution; the routing flag alone does
+  not switch a child or parent model.
 
 Two more, on request and off by default where the trade-off is real:
 

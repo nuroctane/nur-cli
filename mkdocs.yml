@@ -61,11 +61,13 @@ nav:
   - Configuration: configuration.md
   - Commands: commands.md
   - TUI: tui.md
+  - Themes: themes.md
   - Tools: tools.md
   - Vision: vision.md
   - Ecosystem: ecosystem.md
   - TypeSafe - Jev: typesafe.md
   - Local Jev engines: jev-local.md
+  - Jev performance evaluation: jev-performance-evaluation.md
   - Memory Routing: research/memory-routing.md
   - "Evaluation: Ax & GraphJin": integrations-ax-graphjin.md
   - Security: security.md

@@ -120,6 +120,17 @@ buckets are not verified compatible with `laya_coreml.load`; use a documented
 
 ## What the bridge guarantees
 
+- **Bounded exact reuse.** Verdict, Nimble, Laya and mock reuse up to 256
+  successful judgments for 60 seconds within one backend instance. Reuse requires
+  identical state and question content, including option order. The cache stores
+  hashes and distributions, never raw state; failed or malformed answers are not
+  cached. `/health` reports `cache_hits`. Pass `--cache-size 0` when measuring raw
+  inference or evaluating model variability; changing models requires restarting
+  the bridge and clears its cache.
+- **Matching size estimates.** The bridge uses the Rust client's run-based token
+  estimate, including its treatment of whitespace. It remains an approximation,
+  not the backend tokenizer or proof against truncation.
+
 - **Answers are the caller's own options.** A `choice` answer is keyed by the
   option labels nur supplied, never by a model-authored string; an unknown string
   cannot appear because the option set is the scoring set.

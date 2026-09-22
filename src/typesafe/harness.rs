@@ -853,6 +853,9 @@ pub enum JudgeScope {
     /// After execution: did it succeed, is the call still worth knowing about,
     /// is the result still needed verbatim.
     Post,
+    /// Live result checks only consume the verdict. Retention is judged later,
+    /// against the current goal and transcript, when compaction can apply it.
+    Verify,
     /// Both passes in one request - calls that already have results, judged
     /// before (risk) and after (verification, keep) together.
     #[cfg_attr(not(test), allow(dead_code))]
@@ -870,13 +873,16 @@ impl JudgeScope {
     }
 
     fn wants_post(&self) -> bool {
-        matches!(self, Self::Post | Self::Both | Self::Compaction)
+        matches!(
+            self,
+            Self::Post | Self::Verify | Self::Both | Self::Compaction
+        )
     }
 
     /// Whether the "did it succeed" verdict is part of this pass. Compaction
     /// does not read it.
     fn wants_verdict(&self) -> bool {
-        matches!(self, Self::Post | Self::Both)
+        matches!(self, Self::Post | Self::Verify | Self::Both)
     }
 }
 
@@ -1211,6 +1217,9 @@ pub fn judge_calls_with_meta(
                             .collect(),
                     ),
                 ));
+            }
+            if matches!(scope, JudgeScope::Verify) {
+                continue;
             }
             questions.push((
                 format!("keep_call_{n}"),
@@ -1911,6 +1920,19 @@ mod tests {
         assert!(ids.iter().any(|i| i == "verification_0"));
         // Pre-scope questions must not be asked here.
         assert!(!ids.iter().any(|i| i == "risk_0"));
+
+        seen.lock().unwrap().clear();
+        let verified = judge_calls_with(&client, &cfg(), &json!({}), &items, JudgeScope::Verify);
+        let requests = seen.lock().unwrap();
+        let questions = requests[0]["questions"].as_object().unwrap();
+        assert_eq!(
+            questions.len(),
+            1,
+            "live checks must not buy unused retention answers"
+        );
+        assert!(questions.contains_key("verification_0"));
+        assert_eq!(verified[0].keep_result_p, None);
+        assert_eq!(verified[0].keep_call_p, None);
     }
 
     #[test]

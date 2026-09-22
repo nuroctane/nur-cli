@@ -99,11 +99,19 @@ the TUI shows the options:
 
 | Key | Action |
 |-----|--------|
-| `1`-`8` | Pick that option immediately |
+| `1`-`8` | Pick immediately, or toggle that option in multi-select |
 | `↑` · `↓` (`k` · `j`) | Move the cursor |
 | `Space` | Toggle (multi-select questions only) |
 | `Enter` | Confirm the cursor (single-select) or the checked set (multi-select) |
 | `Esc` | Dismiss without answering |
+| `Page Up` / `Page Down`, `Home` / `End` | Navigate options |
+| `o` / `Tab`, or paste | Open a custom typed answer |
+
+In the custom-answer field, use Left/Right, Home/End, Backspace and Delete to
+edit at the caret. Ctrl+U clears the field; Enter submits a nonblank answer.
+Escape returns to the options while preserving your draft. Press `o` or Tab to
+resume it. Pasted line breaks become spaces, and Unicode text is measured in
+terminal cells so the caret stays visible on narrow terminals.
 
 Unlike approval, `Enter` **does** confirm here - picking is reversible
 conversation, not a side effect. An empty multi-select confirm is ignored so
@@ -239,7 +247,7 @@ changes. Nur forces a full `terminal.clear()` (not only a ratatui `Clear`) when:
 - the window resizes or focus returns
 - `/sidegraph` opens or closes (horizontal split)
 - a click-to-peek closes (image pixels sit outside the cell buffer)
-- `/theme` supports type-to-filter search, paste, and Ctrl+U to clear. It previews live as you move. Enter saves; Esc or the close button restores the previous palette. The preview and list use separate regions so visible rows and mouse targets stay aligned.
+- `/theme` offers [41 themes, including 18 chromatic studies](themes.md), with type-to-filter search, paste, and Ctrl+U to clear. It previews live as you move. Enter saves; Esc or the close button restores the previous palette. The preview and list use separate regions so visible rows and mouse targets stay aligned.
 - Theme, provider, model, plugin, and session pickers fit their content and available terminal height. A proportional rail shows when more choices are off screen. Use arrows or the wheel for one choice, Page Up/Down for a page, and Home/End for the first/last choice. Click a row to select; click the selected row again to activate it.
 - Theme, provider, model, and plugin searches accept typing or paste; Ctrl+U clears the filter. Plugin descriptions and operation status have reserved space below the choices. Pasting into a dialog stays in that dialog.
 - Sign-in forms support wheel and Page Up/Down scrolling on short terminals; their close buttons follow the same back/cancel path as Escape.
@@ -518,7 +526,7 @@ Any path in the transcript that exists on the machine is a link, and a click ope
 
 Precedence is deliberate: queue actions → path links → URLs → card expand. Clicking a path inside a collapsed tool card opens the path rather than toggling the card, and a note confirms what opened (or why it could not).
 
-`dir` is the palette's own `indigo`, which every preset already tunes for its identity (matrix green, gruvbox pink, heavenly purple), so folders correspond to the theme with no per-theme table to maintain. It is unused by any other transcript role (`md_link` carries URLs, `md_list` list markers, `md_code` code), and a test asserts it clears the contrast floor on both the canvas and a code band for all 21 registered themes (`theme_ids()` in `src/theme.rs`).
+`dir` is the palette's own `indigo`, which every preset already tunes for its identity (matrix green, gruvbox pink, heavenly purple), so folders correspond to the theme with no per-theme table to maintain. It is unused by any other transcript role (`md_link` carries URLs, `md_list` list markers, `md_code` code), and a test asserts it clears the contrast floor on both the canvas and a code band for all 41 registered themes (`theme_ids()` in `src/theme.rs`).
 
 Detection is deliberately conservative (`src/open_uri.rs::find_path_spans`): a token must contain a separator, survive prose-punctuation trimming, resolve against the session working directory, and **exist** before it becomes a link - so a clickable path is always one that opens. Existence probes are cached for 10 seconds (a directory you just created becomes clickable within that window), and lines without a separator are skipped outright. A URL's own path segments are excluded, so `https://host/src` is a link to the host, not a folder.
 

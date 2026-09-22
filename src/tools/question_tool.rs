@@ -177,6 +177,89 @@ pub enum UserAnswer {
     Dismissed { reason: &'static str },
 }
 
+/// Editable single-line fallback. Cursor offsets always remain UTF-8 boundaries.
+#[derive(Debug, Default)]
+pub struct AnswerDraft {
+    pub text: String,
+    cursor: usize,
+}
+
+impl AnswerDraft {
+    pub fn insert(&mut self, text: &str) {
+        let clean: String = text
+            .chars()
+            .filter_map(|c| match c {
+                '\n' | '\r' | '\t' => Some(' '),
+                c if c.is_control() => None,
+                c => Some(c),
+            })
+            .collect();
+        self.text.insert_str(self.cursor, &clean);
+        self.cursor += clean.len();
+    }
+    pub fn left(&mut self) {
+        self.cursor = self.text[..self.cursor]
+            .char_indices()
+            .next_back()
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+    }
+    pub fn right(&mut self) {
+        self.cursor += self.text[self.cursor..]
+            .chars()
+            .next()
+            .map(char::len_utf8)
+            .unwrap_or(0);
+    }
+    pub fn home(&mut self) {
+        self.cursor = 0;
+    }
+    pub fn end(&mut self) {
+        self.cursor = self.text.len();
+    }
+    pub fn clear(&mut self) {
+        self.text.clear();
+        self.cursor = 0;
+    }
+    pub fn backspace(&mut self) {
+        let end = self.cursor;
+        self.left();
+        self.text.replace_range(self.cursor..end, "");
+    }
+    pub fn delete(&mut self) {
+        if let Some(c) = self.text[self.cursor..].chars().next() {
+            self.text.drain(self.cursor..self.cursor + c.len_utf8());
+        }
+    }
+    /// Keep the insertion point visible, measuring terminal cells rather than bytes.
+    pub fn visible(&self, width: usize) -> String {
+        use unicode_width::UnicodeWidthChar;
+        if width == 0 {
+            return String::new();
+        }
+        let mut used = 1;
+        let mut start = self.cursor;
+        for (i, c) in self.text[..self.cursor].char_indices().rev() {
+            let cells = c.width().unwrap_or(0);
+            if used + cells > width {
+                break;
+            }
+            start = i;
+            used += cells;
+        }
+        let mut out = format!("{}▏", &self.text[start..self.cursor]);
+        for c in self.text[self.cursor..].chars() {
+            let cells = c.width().unwrap_or(0);
+            if used + cells > width {
+                break;
+            }
+            out.push(c);
+            used += cells;
+        }
+        out
+    }
+}
+
 pub fn format_answer(answer: &UserAnswer, options: &[(String, String)]) -> String {
     match answer {
         UserAnswer::Picked(selected) => {
@@ -304,6 +387,33 @@ pub fn parse_args(arguments: &str) -> std::result::Result<ParsedQuestion, String
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn typed_answer_edits_unicode_at_the_caret_and_bounds_its_view() {
+        let mut draft = AnswerDraft::default();
+        draft.insert("a界🙂z");
+        draft.left();
+        draft.backspace();
+        draft.insert("é");
+        assert_eq!(draft.text, "a界éz");
+        draft.home();
+        draft.delete();
+        draft.right();
+        draft.insert("\n\t\u{1b}ok");
+        assert_eq!(draft.text, "界  okéz");
+        for width in 1..15 {
+            let shown = draft.visible(width);
+            assert!(unicode_width::UnicodeWidthStr::width(shown.as_str()) <= width);
+            assert!(shown.contains('▏'));
+        }
+        draft.end();
+        draft.right();
+        draft.delete();
+        assert_eq!(draft.text, "界  okéz");
+        draft.clear();
+        draft.backspace();
+        assert_eq!(draft.visible(2), "▏");
+    }
 
     fn sample(multi: bool) -> Value {
         json!({

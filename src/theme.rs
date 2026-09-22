@@ -212,6 +212,80 @@ pub const THEMES: &[(&str, &str)] = &[
     ("superred", "Superred - ember black to blazing scarlet"),
     ("banana", "Banana - ripe yellow on warm peel"),
     ("nous", "Nous - Hermes cream, indigo dusk, portal gold"),
+    // Chromatic studies: deliberately unexpected three-hue relationships.
+    (
+        "acid-orchid",
+        "Acid Orchid - electric citron, orchid + ice on aubergine",
+    ),
+    (
+        "blood-orange",
+        "Blood Orange - persimmon, glacier mint + lilac on oxblood",
+    ),
+    (
+        "petrol-peach",
+        "Petrol Peach - apricot, ultraviolet + jade on petroleum",
+    ),
+    (
+        "ultraviolet-milk",
+        "Ultraviolet Milk - lavender, yolk + sea glass on violet ink",
+    ),
+    (
+        "copper-candy",
+        "Copper Candy - acid pink, verdigris + brass on burnt umber",
+    ),
+    (
+        "radioactive-jam",
+        "Radioactive Jam - laser lime, raspberry + periwinkle",
+    ),
+    (
+        "glacier-rust",
+        "Glacier Rust - polar cyan, hot terracotta + butter",
+    ),
+    (
+        "black-sesame",
+        "Black Sesame - wasabi, sakura + porcelain on sesame ink",
+    ),
+    (
+        "velvet-circuit",
+        "Velvet Circuit - electric blue, guava + sulphur on burgundy",
+    ),
+    (
+        "infrared-tide",
+        "Infrared Tide - hot coral, turquoise + violet on deep algae",
+    ),
+    (
+        "cobalt-saffron",
+        "Cobalt Saffron - turmeric, cerulean + rose on cobalt ink",
+    ),
+    (
+        "bruise-bloom",
+        "Bruise Bloom - peach, toxic mint + iris on plum charcoal",
+    ),
+    // Chromatic papers: colored grounds rather than another white variant.
+    (
+        "pistachio-ink",
+        "Pistachio Ink - mulberry, petrol + burnt orange on green paper",
+    ),
+    (
+        "rose-concrete",
+        "Rose Concrete - bottle green, cobalt + garnet on blush cement",
+    ),
+    (
+        "butter-signal",
+        "Butter Signal - royal violet, pine + vermilion on yellow paper",
+    ),
+    (
+        "lilac-ochre",
+        "Lilac Ochre - bronze, indigo + forest on lilac paper",
+    ),
+    (
+        "apricot-carbon",
+        "Apricot Carbon - deep teal, aubergine + carmine on apricot",
+    ),
+    (
+        "blueprint-rose",
+        "Blueprint Rose - raspberry, ultramarine + olive on blue paper",
+    ),
 ];
 
 /// Every registered theme id.
@@ -993,7 +1067,7 @@ fn preset(id: &str) -> Option<Palette> {
             md_h2: Color::Rgb(129, 161, 193),
             md_h3: Color::Rgb(180, 142, 173),
             md_link: Color::Rgb(136, 192, 208),
-            md_quote: Color::Rgb(116, 125, 138),
+            md_quote: Color::Rgb(124, 133, 146),
             md_list: Color::Rgb(163, 190, 140),
             assistant_fg: Color::Rgb(234, 237, 242),
             assistant_dim: Color::Rgb(145, 154, 168),
@@ -1473,8 +1547,124 @@ fn preset(id: &str) -> Option<Palette> {
             aurora: ring12(Color::Rgb(255, 220, 160), Color::Rgb(64, 58, 150)),
             ..GOLD
         },
+        "acid-orchid" => chromatic(0x190f25, 0xf4f2dd, 0xdbff63, 0xf09cfa, 0x86e7ec),
+        "blood-orange" => chromatic(0x260e18, 0xffeee0, 0xffa06e, 0x83e5c6, 0xc7adff),
+        "petrol-peach" => chromatic(0x082528, 0xf7eddf, 0xffbc94, 0xc0acff, 0x8fe1ab),
+        "ultraviolet-milk" => chromatic(0x201339, 0xf6efff, 0xcbb6ff, 0xf3df6f, 0x89e9cf),
+        "copper-candy" => chromatic(0x281b18, 0xffeee5, 0xff9bdd, 0x85dfcc, 0xe8ce84),
+        "radioactive-jam" => chromatic(0x251127, 0xf6f3dd, 0xc9fa70, 0xff9cb7, 0xabbfff),
+        "glacier-rust" => chromatic(0x10232e, 0xe9f4f0, 0x83e8f2, 0xffac88, 0xebe19d),
+        "black-sesame" => chromatic(0x1b201c, 0xf5f0e2, 0xc8e69a, 0xeeb4cc, 0xb4dcf0),
+        "velvet-circuit" => chromatic(0x271026, 0xf9edf7, 0x99caff, 0xffaac2, 0xe7ed7b),
+        "infrared-tide" => chromatic(0x092924, 0xf2f2e5, 0xffa49e, 0x80e6d7, 0xcab0ff),
+        "cobalt-saffron" => chromatic(0x101c3c, 0xf6f1e4, 0xf3d372, 0x8fdafa, 0xf4b0d0),
+        "bruise-bloom" => chromatic(0x252032, 0xf6efe5, 0xf6c397, 0xa1efbe, 0xcbb6ff),
+        "pistachio-ink" => chromatic(0xe6efd2, 0x242e23, 0x792963, 0x165c69, 0x8c3e19),
+        "rose-concrete" => chromatic(0xf0dedf, 0x33282d, 0x155b49, 0x344896, 0x8b2546),
+        "butter-signal" => chromatic(0xf6edbf, 0x302a24, 0x6333a0, 0x145d52, 0x96391e),
+        "lilac-ochre" => chromatic(0xe9e1f1, 0x2e2938, 0x805018, 0x46428e, 0x285d45),
+        "apricot-carbon" => chromatic(0xf4dfc9, 0x342b29, 0x175b64, 0x67417c, 0x932f4b),
+        "blueprint-rose" => chromatic(0xdceaf2, 0x28303b, 0x912d60, 0x314e94, 0x526019),
         _ => return None,
     })
+}
+
+/// Three-hue studies share tonal construction, not hue selection. Each study
+/// specifies its ground, ink and three pigments; every semantic role is then
+/// assigned deliberately so no unrelated gold-theme colors leak through.
+fn chromatic(ground: u32, ink: u32, primary: u32, secondary: u32, tertiary: u32) -> Palette {
+    let rgb = |n: u32| Color::Rgb((n >> 16) as u8, (n >> 8) as u8, n as u8);
+    let (bg, fg, a, b, c) = (
+        rgb(ground),
+        rgb(ink),
+        rgb(primary),
+        rgb(secondary),
+        rgb(tertiary),
+    );
+    let light = ground > 0x808080;
+    let surface = lerp(bg, fg, 0.025);
+    let surface_2 = lerp(bg, fg, 0.05);
+    let surface_3 = lerp(bg, fg, 0.085);
+    let muted = lerp(fg, bg, 0.24);
+    let faint = lerp(fg, bg, 0.34);
+    let success = if light { rgb(0x236044) } else { rgb(0x92dfad) };
+    let warn = if light { rgb(0x805019) } else { rgb(0xf3d181) };
+    let error = if light { rgb(0x9c304b) } else { rgb(0xff9ba9) };
+    let ab = ramp6(a, b);
+    let bc = ramp6(b, c);
+    Palette {
+        nur_gold: a,
+        nur_gold_deep: lerp(a, fg, 0.15),
+        nur_gold_sky: c,
+        on_accent_fg: if light { rgb(0xffffff) } else { rgb(0x09090c) },
+        bg,
+        surface,
+        surface_2,
+        surface_3,
+        fg,
+        muted,
+        faint,
+        border: lerp(bg, a, 0.38),
+        code_bg: surface,
+        md_code: c,
+        md_h1: a,
+        md_h2: b,
+        md_h3: c,
+        md_link: b,
+        md_quote: muted,
+        md_list: c,
+        assistant_fg: fg,
+        assistant_dim: muted,
+        success,
+        warn,
+        error,
+        diff_add_fg: success,
+        diff_add_bg: lerp(bg, success, 0.07),
+        diff_del_fg: error,
+        diff_del_bg: lerp(bg, error, 0.07),
+        diff_meta: b,
+        user: a,
+        blue_050: fg,
+        blue_100: lerp(fg, a, 0.2),
+        blue_150: lerp(fg, a, 0.4),
+        blue_200: c,
+        blue_250: lerp(a, c, 0.5),
+        blue_300: a,
+        blue_400: a,
+        blue_500: b,
+        blue_600: c,
+        indigo: b,
+        periwinkle: lerp(b, c, 0.5),
+        violet: b,
+        lavender: c,
+        magenta: a,
+        pink: lerp(a, c, 0.5),
+        rose: a,
+        coral: c,
+        amber: warn,
+        gold: a,
+        orange: c,
+        lime: success,
+        mint: c,
+        seafoam: lerp(b, c, 0.5),
+        teal: b,
+        cyan: c,
+        gradient: [ab[0], ab[2], ab[4], bc[1], bc[3], bc[5]],
+        aurora: [
+            a,
+            lerp(a, b, 0.33),
+            lerp(a, b, 0.66),
+            b,
+            lerp(b, c, 0.33),
+            lerp(b, c, 0.66),
+            c,
+            lerp(c, b, 0.33),
+            lerp(c, b, 0.66),
+            b,
+            lerp(b, a, 0.33),
+            lerp(b, a, 0.66),
+        ],
+    }
 }
 
 /// Switch the active theme by id. Returns `false` for an unknown id (palette
@@ -2232,7 +2422,8 @@ pub fn banner() {
     );
     println!(
         "  {}\n",
-        "fully loaded  ·  TUI · tools · Graphify/PLUR/Ruflo · 1,000+ skills".truecolor(120, 112, 96)
+        "fully loaded  ·  TUI · tools · Graphify/PLUR/Ruflo · 1,000+ skills"
+            .truecolor(120, 112, 96)
     );
 }
 
@@ -2416,6 +2607,12 @@ mod tests {
     /// legible against that accent.
     #[test]
     fn every_registered_theme_resolves_and_highlights_stay_legible() {
+        let ids = super::theme_ids();
+        assert_eq!(ids.len(), 41);
+        assert_eq!(
+            ids.iter().collect::<std::collections::HashSet<_>>().len(),
+            ids.len()
+        );
         for (id, label) in super::THEMES {
             assert!(!label.is_empty(), "{id} needs a menu label");
             let p =
@@ -2435,6 +2632,21 @@ mod tests {
                     "{id}: dir spans are only {r:.2}:1 on the {what} - \
                      directory paths must stay readable in every theme"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn chromatic_studies_keep_text_readable_on_every_surface() {
+        for (id, _) in super::THEMES.iter().skip(23) {
+            let p = super::preset(id).unwrap();
+            for bg in [p.bg, p.surface, p.surface_2, p.surface_3, p.code_bg] {
+                for fg in [
+                    p.fg, p.muted, p.faint, p.md_code, p.md_h1, p.md_h2, p.md_h3, p.md_link,
+                    p.indigo, p.success, p.warn, p.error,
+                ] {
+                    assert!(contrast(fg, bg) >= 3.0, "{id}: {fg:?} on {bg:?}");
+                }
             }
         }
     }
