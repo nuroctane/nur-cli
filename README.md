@@ -172,6 +172,8 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 
 ---
 
+**v0.37.3**: Cache-aware routing (`typesafe::route`): long sessions stay on the warm model, fresh children take the cheap one past a 15% margin, secret-touching tasks stay on ZDR/TEE/local. **[Docs](https://www.nuroctane.xyz/cli)**
+
 **v0.37.2**: Close-ended `question` modal (51 tools) · goal turns verify completion with Jev and stop on `BLOCKED:` · `nur jev eval` replays recorded judgments · request-size cap so a Jev batch is never sent oversized. OpenCode's free-tier 403 stays their client gate. **[Docs](https://www.nuroctane.xyz/cli)**
 
 **v0.37.1**: TypeSafe/Jev typed judgments wired through the harness (tool gate, result judge, Jev-scored compaction that writes no summary, skill-rule checks, model routing) · three keyless local engines on this machine (openJev-verdict-2.0, Bespoke-Nimble-9B, Laya Core ML) · OptMem compressions drain in one call · transcript paths that open · every doc trued up against the code (65 providers, 48 tools, 88 slash commands, 21 themes). **[Docs](https://www.nuroctane.xyz/cli)**

@@ -465,7 +465,9 @@ pub fn tool_need(
                 format!("need_{i}"),
                 Question::noul_with(
                     format!(
-                        "Does this task need the `{name}` tool? Answer yes only if carrying out                          the task is likely to require it; a tool that would merely be nice to                          have is a no."
+                        "Does this task need the `{name}` tool? Answer yes only if carrying out \
+                         the task is likely to require it; a tool that would merely be nice to \
+                         have is a no."
                     ),
                     NoulCriteria {
                         yes: Some("the task cannot be done well without it".into()),

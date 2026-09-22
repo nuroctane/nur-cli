@@ -24,7 +24,7 @@
 //! | tool results | [`harness::judge_calls`] (`JudgeScope::Post`) | did it succeed, keep call, keep result verbatim |
 //! | compaction | [`compact`] | which tool calls/results to drop - survivors stay verbatim, no summary |
 //! | skills | [`harness::select_requirements`], [`harness::judge_skill_use`] | which of a skill's stated rules apply, was the skill followed |
-//! | routing | [`harness::pick_model`], [`harness::pick`] | cheapest adequate model, next handler |
+//! | routing | [`harness::pick_model`], [`route`] | cheapest adequate model on a *fresh* context; the parent session stays |
 //! | retrieval | [`harness::rank_indices`] | which chunks are worth their tokens |
 //! | escalation | [`policy`] | act / confirm / hand to a human, by confidence |
 //!
@@ -44,6 +44,7 @@ pub mod compact;
 pub mod harness;
 pub mod policy;
 pub mod questions;
+pub mod route;
 pub mod telemetry;
 
 use crate::config::TypesafeConfig;
