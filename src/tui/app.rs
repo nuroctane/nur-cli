@@ -9734,7 +9734,7 @@ impl App {
                         self.push_turn_done(turn_dur, true);
                     }
                     (TurnMode::Compact, Ok(summary), _) => {
-                        self.push_info(format!("context compacted - summary:\n{summary}"));
+                        self.push_info(summary);
                         self.push_turn_done(turn_dur, false);
                     }
                     (TurnMode::Compact, Err(e), _) => {

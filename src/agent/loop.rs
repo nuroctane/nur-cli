@@ -773,7 +773,9 @@ impl AgentRunner {
             {
                 last_compact_input = input_now;
                 let _ = tx.send(AgentEvent::Status("auto-compacting context…".into()));
-                match compact_session(self, session, usage).await {
+                match compact_session_with_mode(self, session, usage, CompactionMode::Pressure)
+                    .await
+                {
                     Ok(_) => {
                         compactions += 1;
                         let _ =
@@ -918,7 +920,14 @@ impl AgentRunner {
                         let _ = tx.send(AgentEvent::Status(format!(
                             "request preflight: {reason} - compacting before sending"
                         )));
-                        match compact_session(self, session, usage).await {
+                        match compact_session_with_mode(
+                            self,
+                            session,
+                            usage,
+                            CompactionMode::Pressure,
+                        )
+                        .await
+                        {
                             Ok(_) => {
                                 compactions = compactions.saturating_add(1);
                                 let _ = tx.send(AgentEvent::Status(
@@ -1067,7 +1076,14 @@ impl AgentRunner {
                         let _ = tx.send(AgentEvent::Status(
                             "provider rejected the context window - compacting and retrying".into(),
                         ));
-                        match compact_session(self, session, usage).await {
+                        match compact_session_with_mode(
+                            self,
+                            session,
+                            usage,
+                            CompactionMode::Pressure,
+                        )
+                        .await
+                        {
                             Ok(_) => {
                                 compactions = compactions.saturating_add(1);
                                 let _ = tx.send(AgentEvent::Status(
@@ -3016,6 +3032,143 @@ fn plan_mode_allows(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_compact_honors_jev_even_without_large_savings() {
+        for reduction in [0.0, 0.01, 0.24, 0.25, 0.9] {
+            assert!(CompactionMode::Manual.jev_wins(true, reduction, 0.25));
+            assert!(!CompactionMode::Manual.jev_wins(false, reduction, 0.25));
+        }
+        assert!(!CompactionMode::Pressure.jev_wins(true, 0.24, 0.25));
+        assert!(!CompactionMode::Pressure.jev_wins(true, 0.0, 0.0));
+        assert!(CompactionMode::Pressure.jev_wins(true, 0.25, 0.25));
+        assert!(!CompactionMode::Pressure.jev_wins(false, 0.9, 0.25));
+    }
+
+    #[test]
+    fn compaction_receipt_excludes_generated_summary_contents() {
+        let status = "[compact: thinned 2 tool bodies · jev pre-pass: no usable judgments; summary fallback]";
+        assert_eq!(
+            compact_receipt_detail(&format!("private conversation [compact: fake]\n\n{status}")),
+            status
+        );
+        assert_eq!(
+            compact_receipt_detail("[compact: jev unchanged - no candidates]"),
+            "[compact: jev unchanged - no candidates]"
+        );
+        assert_eq!(
+            compact_receipt_detail("private content"),
+            "compaction completed"
+        );
+    }
+
+    #[tokio::test]
+    async fn manual_compact_does_not_summarize_when_jev_cannot_prune() {
+        let mut config = Config::default();
+        config.native_memory = false;
+        config.typesafe.enabled = true;
+        config.typesafe.api_key = "test-only".into();
+        config.typesafe.base_url = "invalid://jev-test".into();
+        config.typesafe.retries = 0;
+        config.typesafe.compaction.enabled = true;
+        config.typesafe.compaction.replace_summary = true;
+        config.typesafe.compaction.preserve_recent = 0;
+        let cwd = PathBuf::from(".");
+        let runner = compaction_test_runner(config);
+        for with_tool in [false, true] {
+            let mut session = Session::new("test", ".");
+            session.input_items = vec![user_text_item("preserve my goal")];
+            if with_tool {
+                session.input_items.push(serde_json::json!({
+                    "type": "function_call", "call_id": "c1", "name": "read_file", "arguments": "{}"
+                }));
+                session
+                    .input_items
+                    .push(function_call_output_item("c1", "original result"));
+                session
+                    .input_items
+                    .push(user_text_item("latest working note"));
+            }
+            let before = session.input_items.clone();
+            let mut usage = UsageTracker::new(session.id.clone(), "test".into(), cwd.clone());
+            let report = compact_session(&runner, &mut session, &mut usage)
+                .await
+                .unwrap();
+            assert!(report.starts_with("[compact: jev unchanged"), "{report}");
+            assert!(
+                report.contains(if with_tool {
+                    "no usable retention judgments"
+                } else {
+                    "no completed tool pairs"
+                }),
+                "{report}"
+            );
+            assert_eq!(session.input_items, before);
+            let recorded = std::fs::read_to_string(receipt::path(&session.id)).unwrap();
+            assert!(recorded.contains("jev_unchanged"));
+            assert!(!recorded.contains("preserve my goal"));
+            let _ = std::fs::remove_file(receipt::path(&session.id));
+        }
+    }
+
+    fn compaction_test_runner(config: Config) -> AgentRunner {
+        let cwd = PathBuf::from(".");
+        AgentRunner {
+            client: ApiClient::new("invalid://primary-must-not-run", "test-only").unwrap(),
+            config,
+            cwd: cwd.clone(),
+            permission_mode: SharedMode::new(PermissionMode::Auto),
+            verbose: false,
+            approved_tools: Arc::new(Mutex::new(HashSet::new())),
+            tools: ToolHost::default(),
+            permissions: SharedPermissions::load(&cwd),
+            hooks: HooksConfig::default(),
+            is_subagent: true, // Do not update the user's latest-session pointer.
+            subagent_depth: 0,
+            prewalk_override: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "uses the configured Jev endpoint and credentials; opt-in live smoke"]
+    async fn manual_compact_live_jev() {
+        let mut config = crate::config::load_config().expect("load configured Jev");
+        assert!(config.typesafe.enabled && config.typesafe.compaction.enabled);
+        config.native_memory = false;
+        config.typesafe.compaction.replace_summary = true;
+        config.typesafe.compaction.min_reduction = 1.0;
+        config.typesafe.compaction.preserve_recent = 1;
+        let runner = compaction_test_runner(config);
+        let mut session = Session::new("compaction-smoke", ".");
+        session.input_items = vec![
+            user_text_item("The temporary scratch file has been deleted. The task is complete."),
+            serde_json::json!({"type":"function_call", "call_id":"old", "name":"read_file", "arguments":"{\"path\":\"scratch.txt\"}"}),
+            function_call_output_item("old", &"obsolete scratch data ".repeat(80)),
+            user_text_item(
+                "Everything from scratch.txt is obsolete; preserve this final instruction.",
+            ),
+        ];
+        let mut usage = UsageTracker::new(
+            session.id.clone(),
+            "compaction-smoke".into(),
+            PathBuf::from("."),
+        );
+        let report = compact_session(&runner, &mut session, &mut usage)
+            .await
+            .unwrap();
+        assert!(
+            report.starts_with("[compact: jev-scored")
+                || report.contains("judgments kept the transcript"),
+            "actual usable Jev judgment required: {report}"
+        );
+        let recorded = std::fs::read_to_string(receipt::path(&session.id)).unwrap();
+        assert!(recorded.contains("auxiliary_inference"));
+        assert!(recorded.contains("jev_pruned") || recorded.contains("jev_unchanged"));
+        println!(
+            "{report}\nreceipt: {}",
+            receipt::path(&session.id).display()
+        );
+    }
 
     #[test]
     fn provider_turn_timeout_is_bounded_and_configurable() {
@@ -6036,6 +6189,72 @@ pub async fn compact_session(
     session: &mut Session,
     usage: &mut UsageTracker,
 ) -> Result<String> {
+    compact_session_with_mode(runner, session, usage, CompactionMode::Manual).await
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CompactionMode {
+    Manual,
+    Pressure,
+}
+
+impl CompactionMode {
+    fn jev_wins(self, replace_summary: bool, reduction: f64, minimum: f64) -> bool {
+        replace_summary && (self == Self::Manual || (reduction > 0.0 && reduction >= minimum))
+    }
+}
+
+async fn compact_session_with_mode(
+    runner: &AgentRunner,
+    session: &mut Session,
+    usage: &mut UsageTracker,
+    mode: CompactionMode,
+) -> Result<String> {
+    let before = session.input_items.len();
+    let result = compact_session_inner(runner, session, usage, mode).await;
+    record_auxiliary_telemetry(&session.id);
+    receipt::record(
+        &session.id,
+        receipt::Event::Compaction {
+            trigger: if mode == CompactionMode::Manual {
+                "manual"
+            } else {
+                "context_pressure"
+            }
+            .into(),
+            strategy: match &result {
+                Ok(s) if s.starts_with("[compact: jev unchanged") => "jev_unchanged",
+                Ok(s) if s.starts_with("[compact: jev-scored") => "jev_pruned",
+                Ok(_) => "summary",
+                Err(_) => "failed",
+            }
+            .into(),
+            detail: result
+                .as_ref()
+                .map(|s| compact_receipt_detail(s))
+                .unwrap_or_else(|_| "compaction failed; transcript backup preserved".into()),
+            items_before: before,
+            items_after: session.input_items.len(),
+        },
+    );
+    result
+}
+
+fn compact_receipt_detail(report: &str) -> String {
+    // The summary is user content. Only the final code-generated status belongs
+    // in the receipt, even if the summary itself contains a compact marker.
+    report
+        .rfind("[compact:")
+        .map(|i| report[i..].to_string())
+        .unwrap_or_else(|| "compaction completed".into())
+}
+
+async fn compact_session_inner(
+    runner: &AgentRunner,
+    session: &mut Session,
+    usage: &mut UsageTracker,
+    mode: CompactionMode,
+) -> Result<String> {
     snapshot_before_compact(session);
 
     let early_mem_scope = {
@@ -6058,7 +6277,7 @@ pub async fn compact_session(
         let _ = super::chronicle::append(
             &early_mem_scope,
             "compact",
-            "context compacted - native memory tiers preserved",
+            "compaction requested - native memory upkeep completed",
             None,
         );
     }
@@ -6079,37 +6298,52 @@ pub async fn compact_session(
         let for_task = items.clone();
         let cfg = ts.clone();
         let outcome = tokio::task::spawn_blocking(move || {
-            crate::typesafe::compact::compact_items(&cfg, &for_task, &opts)
+            crate::typesafe::compact::try_compact_items(&cfg, &for_task, &opts)
         })
         .await
-        .ok()
-        .flatten();
-        if let Some(outcome) = outcome {
-            let pretty = outcome.stats.summary();
-            if ts.compaction.replace_summary
-                && outcome.stats.reduction_ratio() >= ts.compaction.min_reduction
-            {
-                let mut new_items = vec![user_text_item(&format!(
-                    "[Context pruned by Jev-scored compaction - no summary was written, and \
-                     nothing below was rewritten. {} stale tool call(s) and {} result(s) were \
-                     removed ({}); everything remaining is verbatim. The full transcript is in \
-                     the precompact backup, and any removed result can be reproduced by \
-                     re-running its tool.]\n\n{pretty}",
-                    outcome.stats.dropped_calls,
-                    outcome.stats.dropped_results,
-                    outcome.decision_counts()
-                ))];
-                new_items.extend(outcome.items);
-                let kept = new_items.len();
-                session.input_items = new_items;
-                runner.persist_session(session);
-                return Ok(format!(
-                    "[compact: jev-scored, no summary · {pretty} · {kept} items kept verbatim · \
+        .unwrap_or(Err(crate::typesafe::compact::CompactSkip::NoJudgments));
+        match outcome {
+            Ok(outcome) => {
+                let pretty = outcome.stats.summary();
+                if mode.jev_wins(
+                    ts.compaction.replace_summary,
+                    outcome.stats.reduction_ratio(),
+                    ts.compaction.min_reduction,
+                ) {
+                    crate::typesafe::telemetry::record_prune(0, 0, 0, 1);
+                    if outcome.items == items {
+                        return Ok(format!("[compact: jev unchanged - judgments kept the transcript; no summary written · {pretty}]"));
+                    }
+                    // Keep reporting out of the provider transcript: a verbose
+                    // synthetic banner can cost more tokens than a small prune.
+                    let decisions = outcome.decision_counts();
+                    let kept = outcome.items.len();
+                    session.input_items = outcome.items;
+                    runner.persist_session(session);
+                    return Ok(format!(
+                    "[compact: jev-scored, no summary · {pretty} · {decisions} · {kept} items retained · \
                      precompact bak written]"
                 ));
+                }
+                items = outcome.items;
+                jev_note = Some(format!(
+                    "{pretty}; summary required by {}",
+                    if ts.compaction.replace_summary {
+                        "automatic context recovery threshold"
+                    } else {
+                        "replace_summary=false"
+                    }
+                ));
             }
-            items = outcome.items;
-            jev_note = Some(pretty);
+            Err(reason) => {
+                if mode == CompactionMode::Manual
+                    && ts.compaction.replace_summary
+                    && reason != crate::typesafe::compact::CompactSkip::Unavailable
+                {
+                    return Ok(format!("[compact: jev unchanged - {reason}; transcript preserved, no summary written]"));
+                }
+                jev_note = Some(format!("{reason}; summary fallback"));
+            }
         }
     }
 

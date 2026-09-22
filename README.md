@@ -172,7 +172,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 
 ---
 
-**v0.38.0**: 18 new chromatic themes (41 total), including six tinted-paper palettes; editable custom question answers with Unicode-aware caret movement and paste; lower Jev judgment overhead, bounded local reuse, and improved request scheduling. **[Theme collection](docs/themes.md)** · **[Jev evaluation](docs/jev-performance-evaluation.md)**
+**v0.38.1**: Manual `/compact` honors configured Jev regardless of reduction, with explicit outcome receipts. Includes v0.38.0: 18 new chromatic themes (41 total), including six tinted-paper palettes; editable custom question answers with Unicode-aware caret movement and paste; lower Jev judgment overhead, bounded local reuse, and improved request scheduling. **[Theme collection](docs/themes.md)** · **[Jev evaluation](docs/jev-performance-evaluation.md)**
 
 **v0.37.3**: Cache-aware routing (`typesafe::route`): long sessions stay on the warm model, fresh children take the cheap one past a 15% margin, secret-touching tasks stay on ZDR/TEE/local. **[Docs](https://www.nuroctane.xyz/cli)**
 

@@ -433,7 +433,7 @@ Type these inside the `nur` TUI. Aliases are shown in the same row.
 | `/exit` · `/quit` | Quit |
 | `/clear` | Clear the transcript display only — context and saved session history are untouched |
 | `/new` | Start a fresh session |
-| `/compact` | Summarize the conversation to free context |
+| `/compact` | Honor configured Jev pruning without a summary; otherwise summarize ([details](typesafe.md)) |
 | `/sessions` · `/resume` | Browse & open past nur sessions (`/resume <id>` also works). Press **`c`** to switch to the takeover window |
 | `/takeover` · `/hijack` | Cross-agent session migration. Opens the takeover window (same chrome as `/sessions`) listing migratable **Claude Code · Codex · Cursor · Grok Build** sessions from **all** workspaces (**`Tab`** narrows to here); **↵** imports one and resumes it natively. Press **`c`** to switch back to sessions. `/takeover ls [agent]` lists them; `/takeover <agent> [id\|latest]` imports directly |
 | `/login` | Provider + API key or browser sign-in |

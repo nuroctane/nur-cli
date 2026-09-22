@@ -121,13 +121,24 @@ reject. A call is only judged when its result is present and neither side of the
 pair is pinned, and the result note says `error` or `ok`, because an error is the
 result most worth keeping.
 
-Text written by the user or the model is never touched, no result is ever left
-without its call, and any failure (no key, transport error, unfittable state)
-falls back to normal compaction instead of deleting anything.
+Jev pruning never rewrites user/model text or leaves a result without its call.
+With Jev configured and `replace_summary = true` (the default), explicit
+**`/compact` honors Jev regardless of the reduction percentage**. A successful
+prune skips the summarizing model call. If everything is worth keeping, there
+are no eligible old tool pairs, the state cannot fit, or judgments fail, it
+preserves the transcript and explains why. It does not silently summarize.
+This also applies to a configured local Jev endpoint.
 
-If the reduction is at least `min_reduction` (0.25 default), the summarizing
-model call is skipped: no frontier tokens, no lossy summary. Otherwise the pruned
-items feed the normal summarizer, so it is cheaper either way. A result barely
+**Automatic context recovery** still requires a positive reduction of at least
+`min_reduction` (0.25 default) to skip summarization; otherwise it summarizes
+the surviving items so the next request can fit. Missing credentials, disabled
+Jev/compaction, or explicit `replace_summary = false` retain the normal summary
+path. A key does not override an explicit disable setting.
+
+`/receipt` records the trigger, strategy (`jev_pruned`, `jev_unchanged`,
+`summary`, or `failed`), item counts and reason, without summary contents.
+The manual result no longer labels a Jev prune or no-op as a summary.
+A result barely
 longer than the head it would keep is left alone rather than churned, and the
 report names what happened - calls kept, truncated, dropped and pinned, the
 fitting stage, the state size, how many requests it took and how long in ms.
@@ -259,12 +270,12 @@ escalate_confidence = 0.50
 
 [typesafe.compaction]
 enabled = true
-replace_summary = true                # skip the summarizing call when a prune is enough
+replace_summary = true                # honor manual Jev; automatic recovery also checks min_reduction
 preserve_recent = 6                   # newest items never touched (the first always is)
 keep_threshold = 0.5
 truncate_head_chars = 300
 max_state_tokens = 25000              # token ceiling for the state Jev sees
-min_reduction = 0.25                  # below this, fall back to normal compaction
+min_reduction = 0.25                  # automatic recovery only: below this, also summarize
 goal_prompts = 3                      # recent user turns shown as the ongoing goal
 
 [typesafe.tool_gate]

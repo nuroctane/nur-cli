@@ -56,6 +56,14 @@ pub enum Event {
         output_tokens: u64,
         usage_reported: bool,
     },
+    /// Compaction policy and result, without transcript contents or credentials.
+    Compaction {
+        trigger: String,
+        strategy: String,
+        detail: String,
+        items_before: usize,
+        items_after: usize,
+    },
     /// Billable or potentially billable work outside the primary chat call,
     /// such as remote embeddings and Headroom compression.
     AuxiliaryInference {
@@ -136,9 +144,9 @@ pub fn path(session_id: &str) -> PathBuf {
 }
 
 /// Cache handle for the tail of a receipt file.
-fn tail_cache(
-) -> &'static std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, ((u64, u64), String, u64)>>
-{
+fn tail_cache() -> &'static std::sync::Mutex<
+    std::collections::HashMap<std::path::PathBuf, ((u64, u64), String, u64)>,
+> {
     static TAIL: std::sync::OnceLock<
         std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, ((u64, u64), String, u64)>>,
     > = std::sync::OnceLock::new();
@@ -430,6 +438,18 @@ fn spans_from_chain(session_id: &str, text: &str) -> Vec<serde_json::Value> {
                     "detail": detail,
                 }),
             ),
+            Event::Compaction {
+                trigger,
+                strategy,
+                detail,
+                items_before,
+                items_after,
+            } => (
+                format!("compaction {trigger}: {strategy}"),
+                "internal".to_string(),
+                serde_json::json!({ "trigger": trigger, "strategy": strategy, "detail": detail,
+                    "items_before": items_before, "items_after": items_after }),
+            ),
             Event::RemoteCompaction {
                 endpoint_origin,
                 input_tokens_estimate,
@@ -608,6 +628,9 @@ pub fn render(session_id: &str) -> String {
                     if *ok { "ok" } else { "error" }
                 ));
             }
+            Event::Compaction { trigger, strategy, detail, items_before, items_after } => rows.push(format!(
+                "  #{:<3} compact {trigger} {strategy} {items_before}->{items_after} items  {detail}", e.seq
+            )),
             Event::RemoteCompaction {
                 endpoint_origin,
                 input_tokens_estimate,

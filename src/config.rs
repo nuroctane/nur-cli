@@ -413,8 +413,8 @@ pub struct TypesafeCompactionConfig {
     /// Default **true**.
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// When the prune is good enough, skip the summarizing model call entirely
-    /// and hand the model the pruned history verbatim. Default **true**.
+    /// Manual /compact honors Jev without summarizing; automatic recovery also
+    /// requires min_reduction. Default **true**.
     #[serde(default = "default_true")]
     pub replace_summary: bool,
     /// Newest N items are never touched (the first item is always kept).
@@ -429,7 +429,7 @@ pub struct TypesafeCompactionConfig {
     /// Estimated token ceiling for the state Jev sees.
     #[serde(default = "default_typesafe_max_state_tokens")]
     pub max_state_tokens: u64,
-    /// Below this reduction ratio, fall back to normal compaction.
+    /// Automatic context recovery only: below this ratio, also summarize.
     #[serde(default = "default_typesafe_min_reduction")]
     pub min_reduction: f64,
     /// How many recent user prompts make up the goal shown to Jev.

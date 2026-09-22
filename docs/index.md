@@ -1,6 +1,6 @@
 # NurCLI
 
-**v0.38.0:** [18 new chromatic themes](themes.md), 41 palettes total, editable
+**v0.38.1:** Manual `/compact` honors configured Jev, with explicit outcome receipts. Includes [18 new chromatic themes](themes.md), 41 palettes total, editable
 custom answers in the [question dialog](tui.md#question-modal), and
 [lower Jev judgment overhead](jev-performance-evaluation.md).
 
@@ -64,7 +64,7 @@ That's the normal upgrade. Pulls / rebuilds when you have a Laboratory checkout,
 | **Hardening** | Sandbox · bash denylist · SSRF blocks · atomic `~/.nur` IO · session **`.json.bak`** · **permissions.toml** · optional **hooks.toml** · API retries · install SHA-256 · `nur doctor` |
 | **Host panels** | Live `status.json` / `usage.jsonl` · **`NUR_*`** env exports · Orca hook (`nur-hook.cmd`) |
 
-**Current version: v0.38.0**
+**Current version: v0.38.1**
 
 ---
 

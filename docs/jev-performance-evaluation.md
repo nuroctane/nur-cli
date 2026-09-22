@@ -19,7 +19,9 @@ the configured primary provider/model.
 ## What currently saves primary-provider tokens
 
 The existing compaction path can remove stale tool bodies and avoid a frontier
-summarization request when the configured reduction threshold is met. Optional
+summarization request. Since v0.38.1, manual `/compact` honors configured Jev
+regardless of reduction; automatic recovery still checks the configured
+threshold. See [compaction behavior](typesafe.md). Optional
 tool-schema narrowing can reduce schemas sent to the primary provider. These
 changes reduce judgment overhead and avoid compaction growth; they do not
 establish a measured end-to-end provider-token saving percentage.
@@ -36,10 +38,20 @@ fields alone is not evidence of parallel inference acceleration.
 
 ## Validation and limits
 
-The default-feature Rust binary suite passed 1,026 tests, with 13 explicitly
-ignored integration/preview tests. The bridge adapter suite and model-free HTTP
+The default-feature Rust binary suite passed 1,033 tests, with 14 explicitly
+ignored integration/preview tests (the live Jev smoke was then run separately). The bridge adapter suite and model-free HTTP
 selftest passed. Tests use injected judgments and backend doubles to verify
 contracts, request scheduling and conservative fallback behavior.
+
+The v0.38.1 follow-up also ran an opt-in synthetic transcript through the actual
+manual compaction entry point using the configured hosted endpoint. Jev
+`jev-1.13.0` answered two retention questions in one request (849 input and 42
+output tokens reported), removing one obsolete call/result pair. The primary
+summarizer was deliberately unreachable, and `min_reduction` was set to 1.0;
+manual compaction succeeded without summarization. The receipt identified
+`manual` / `jev_pruned`. This verifies integration, not general accuracy or
+end-to-end savings. Repeat explicitly with
+`cargo test --bin nur manual_compact_live_jev -- --ignored --nocapture`.
 
 The active Python environment has no Verdict package or Nimble model directory.
 Laya requires Apple Silicon macOS and cannot run on this Windows host. Therefore

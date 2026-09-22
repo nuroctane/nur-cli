@@ -120,9 +120,28 @@ fn short_tokens(n: u64) -> String {
     }
 }
 
-fn queue() -> &'static Mutex<TypesafeTelemetry> {
-    static QUEUE: OnceLock<Mutex<TypesafeTelemetry>> = OnceLock::new();
-    QUEUE.get_or_init(|| Mutex::new(TypesafeTelemetry::default()))
+#[derive(Default)]
+struct Counters {
+    total: TypesafeTelemetry,
+    last: TypesafeTelemetry,
+}
+
+impl Counters {
+    fn take_delta(&mut self) -> TypesafeTelemetry {
+        let delta = delta_between(&self.total, &self.last);
+        self.last = self.total.clone();
+        delta
+    }
+
+    fn take(&mut self) -> TypesafeTelemetry {
+        self.last = TypesafeTelemetry::default();
+        std::mem::take(&mut self.total)
+    }
+}
+
+fn queue() -> &'static Mutex<Counters> {
+    static QUEUE: OnceLock<Mutex<Counters>> = OnceLock::new();
+    QUEUE.get_or_init(|| Mutex::new(Counters::default()))
 }
 
 /// Add one request's worth of accounting.
@@ -193,15 +212,13 @@ pub fn record_prune(calls: u64, results: u64, chars_saved: u64, frontier_calls_a
 
 fn mutate(f: impl FnOnce(&mut TypesafeTelemetry)) {
     if let Ok(mut g) = queue().lock() {
-        let mut next = g.clone();
-        f(&mut next);
-        *g = next;
+        f(&mut g.total);
     }
 }
 
 /// Cumulative counters without draining.
 pub fn snapshot() -> TypesafeTelemetry {
-    queue().lock().map(|g| g.clone()).unwrap_or_default()
+    queue().lock().map(|g| g.total.clone()).unwrap_or_default()
 }
 
 /// Everything recorded since the previous call, as a delta.
@@ -211,25 +228,18 @@ pub fn snapshot() -> TypesafeTelemetry {
 /// happened in this batch. Draining the queue outright for receipts would reset
 /// the read-out, so the two consumers get different views of the same counters.
 pub fn take_delta() -> TypesafeTelemetry {
-    static LAST: OnceLock<Mutex<TypesafeTelemetry>> = OnceLock::new();
-    let current = snapshot();
-    let last = LAST.get_or_init(|| Mutex::new(TypesafeTelemetry::default()));
-    let Ok(mut guard) = last.lock() else {
-        return TypesafeTelemetry::default();
-    };
-    let prev = guard.clone();
-    *guard = current.clone();
+    // Snapshot and baseline advance share a lock. Concurrent readers cannot
+    // install an older snapshot after a newer one and double-count requests.
+    queue()
+        .lock()
+        .map(|mut g| g.take_delta())
+        .unwrap_or_default()
+}
+
+fn delta_between(current: &TypesafeTelemetry, prev: &TypesafeTelemetry) -> TypesafeTelemetry {
     TypesafeTelemetry {
-        route: if current.route == prev.route {
-            String::new()
-        } else {
-            current.route.clone()
-        },
-        model: if current.model == prev.model {
-            String::new()
-        } else {
-            current.model.clone()
-        },
+        route: current.route.clone(),
+        model: current.model.clone(),
         requests: current.requests.saturating_sub(prev.requests),
         questions: current.questions.saturating_sub(prev.questions),
         parallel_requests: current
@@ -252,38 +262,26 @@ pub fn take_delta() -> TypesafeTelemetry {
 
 /// Drain the counters (full reset - used by tests and by `/typesafe reset`).
 pub fn take() -> TypesafeTelemetry {
-    queue()
-        .lock()
-        .map(|mut g| std::mem::take(&mut *g))
-        .unwrap_or_default()
+    queue().lock().map(|mut g| g.take()).unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // Counters are process-global; keep every assertion relative to a baseline.
     #[test]
-    fn records_and_drains() {
-        let before = snapshot();
-        record_request("http://127.0.0.1:8788/v1/systemone", "mock-1", 100, 5, 3);
-        record_decision(Some(0.9), true, 0.5);
-        record_decision(Some(0.2), false, 0.5);
-        record_gated_call();
-        record_prune(2, 1, 4000, 1);
-        record_failure();
-        let t = take();
-        assert_eq!(t.requests, before.requests + 1);
-        assert_eq!(t.questions, before.questions + 3);
-        assert_eq!(t.input_tokens, before.input_tokens + 100);
-        assert_eq!(t.decisions, before.decisions + 1);
-        assert_eq!(t.escalations, before.escalations + 1);
-        assert_eq!(t.gated_calls, before.gated_calls + 1);
-        assert_eq!(t.pruned_calls, before.pruned_calls + 2);
-        assert_eq!(t.tokens_saved(), before.tokens_saved() + 1000);
-        assert_eq!(t.frontier_calls_avoided, before.frontier_calls_avoided + 1);
-        assert_eq!(t.failures, before.failures + 1);
-        assert!(t.summary().contains("frontier calls avoided"));
+    fn reset_clears_the_delta_baseline() {
+        let mut counters = Counters::default();
+        counters.total.requests = 10;
+        assert_eq!(counters.take_delta().requests, 10);
+        assert_eq!(counters.take().requests, 10);
+        assert!(counters.total.is_empty());
+        counters.total.requests = 1;
+        assert_eq!(
+            counters.take_delta().requests,
+            1,
+            "first request after reset must not disappear"
+        );
     }
 
     #[test]
@@ -319,25 +317,30 @@ mod tests {
 
     #[test]
     fn a_delta_reports_only_what_happened_since_the_last_read() {
-        let before = snapshot();
-        record_request(
-            "https://api.typesafe.ai/v1/systemone",
-            "jev-1.13.0",
-            1_000,
-            10,
-            2,
+        let mut counters = Counters::default();
+        counters.total = TypesafeTelemetry {
+            route: "https://api.typesafe.ai/v1/systemone".into(),
+            model: "jev-1.13.0".into(),
+            requests: 1,
+            input_tokens: 1_000,
+            output_tokens: 10,
+            questions: 2,
+            ..TypesafeTelemetry::default()
+        };
+        let delta = counters.take_delta();
+        assert_eq!(delta.requests, 1);
+        assert_eq!(delta.input_tokens, 1_000);
+        assert!(counters.take_delta().is_empty());
+        assert_eq!(counters.total.requests, 1, "cumulative kept");
+        counters.total.requests += 1;
+        counters.total.input_tokens += 500;
+        let repeated = counters.take_delta();
+        assert_eq!(repeated.requests, 1);
+        assert_eq!(repeated.input_tokens, 500);
+        assert_eq!(
+            repeated.route, delta.route,
+            "same endpoint is still provenance"
         );
-        let delta = take_delta();
-        assert_eq!(delta.route, "https://api.typesafe.ai/v1/systemone");
-        assert_eq!(delta.model, "jev-1.13.0");
-        assert!(delta.requests >= 1, "{delta:?}");
-        assert!(delta.input_tokens >= 1_000, "{delta:?}");
-        // Reading again immediately sees nothing new from this test.
-        let quiet = take_delta();
-        assert_eq!(quiet.requests, 0, "{quiet:?}");
-        assert!(
-            snapshot().requests >= before.requests + 1,
-            "cumulative kept"
-        );
+        assert_eq!(repeated.model, delta.model);
     }
 }

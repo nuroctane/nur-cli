@@ -291,7 +291,7 @@ The note is appended to your persistent memory file and recalled automatically i
 | `/provider` | Choose the active provider and sign-in route (`/login` is an alias) |
 | `/auth` | Manage saved OAuth, API-key, CLI and OMP credentials for every provider |
 | `/headroom` | Context-compression status / doctor (inline tool-result compression is on by default) |
-| `/compact` | Manually compact context (thins old tool bodies; keeps recent turns; writes `.precompact.bak`) |
+| `/compact` | Honor configured Jev pruning without a summary; preserve history if no prune is possible; write `.precompact.bak` ([details](typesafe.md)) |
 | `/usage` | Show token usage and cost (`/cost`) — includes budget caps when set |
 | `/budget` | Optional caps (all **unlimited by default**): `/budget [cost\|tokens\|turns] <n\|unlimited\|0\|off> · clear · save` |
 | `/turns` | Agent rounds per prompt (default unlimited). Alias of `/budget turns` |

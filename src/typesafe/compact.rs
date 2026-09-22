@@ -630,20 +630,60 @@ pub fn compact_items(
     items: &[Value],
     opts: &CompactOptions,
 ) -> Option<Outcome> {
-    let client = harness::ready(cfg)?;
-    compact_items_with(cfg, items, opts, &client)
+    try_compact_items(cfg, items, opts).ok()
 }
 
-/// [`compact_items`] against an injected client (tests, replay).
+/// Why no Jev pruning could be applied. A missing judgment is never a delete.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompactSkip {
+    Unavailable,
+    NoCandidates,
+    StateTooLarge,
+    NoJudgments,
+}
+
+impl std::fmt::Display for CompactSkip {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Unavailable => "Jev is disabled or has no configured credential/endpoint",
+            Self::NoCandidates => "no completed tool pairs outside the protected recent window",
+            Self::StateTooLarge => "the judgment state cannot fit the configured Jev state budget",
+            Self::NoJudgments => {
+                "no usable retention judgments returned (request failed or answers missing)"
+            }
+        })
+    }
+}
+
+pub fn try_compact_items(
+    cfg: &TypesafeConfig,
+    items: &[Value],
+    opts: &CompactOptions,
+) -> Result<Outcome, CompactSkip> {
+    let client = harness::ready(cfg).ok_or(CompactSkip::Unavailable)?;
+    try_compact_items_with(cfg, items, opts, &client)
+}
+
+#[cfg(test)]
 fn compact_items_with(
     cfg: &TypesafeConfig,
     items: &[Value],
     opts: &CompactOptions,
     client: &super::client::TypesafeClient,
 ) -> Option<Outcome> {
+    try_compact_items_with(cfg, items, opts, client).ok()
+}
+
+/// [`compact_items`] against an injected client (tests, replay).
+fn try_compact_items_with(
+    cfg: &TypesafeConfig,
+    items: &[Value],
+    opts: &CompactOptions,
+    client: &super::client::TypesafeClient,
+) -> Result<Outcome, CompactSkip> {
     let calls = collect_calls(items);
     if calls.is_empty() {
-        return None;
+        return Err(CompactSkip::NoCandidates);
     }
     let pinned = pinned_mask(items.len(), opts.preserve_recent);
     // The reference's candidate rule: a call with no result has nothing to drop
@@ -657,9 +697,10 @@ fn compact_items_with(
         .cloned()
         .collect();
     if judged_pairs.is_empty() {
-        return None;
+        return Err(CompactSkip::NoCandidates);
     }
-    let (state, stage, state_tokens) = fit_state(items, &calls, &pinned, opts.max_state_tokens)?;
+    let (state, stage, state_tokens) = fit_state(items, &calls, &pinned, opts.max_state_tokens)
+        .ok_or(CompactSkip::StateTooLarge)?;
 
     let tool_items: Vec<ToolCallItem> = judged_pairs
         .iter()
@@ -700,7 +741,7 @@ fn compact_items_with(
     );
     let elapsed_ms = started.elapsed().as_millis() as u64;
     if judged.is_empty() {
-        return None;
+        return Err(CompactSkip::NoJudgments);
     }
     // If literally nothing was answered, do not prune: an unavailable judgment
     // must never look like permission to delete.
@@ -708,7 +749,7 @@ fn compact_items_with(
         .iter()
         .all(|j| j.keep_result_p.is_none() && j.keep_call_p.is_none())
     {
-        return None;
+        return Err(CompactSkip::NoJudgments);
     }
 
     let outcomes: Vec<CallOutcome> = judged_pairs
@@ -789,17 +830,16 @@ fn compact_items_with(
     };
 
     let chars_saved = stats.chars_before.saturating_sub(stats.chars_after) as u64;
-    let frontier_avoided = u64::from(stats.reduction_ratio() >= opts.min_reduction);
     telemetry::record_prune(
         stats.dropped_calls as u64,
         stats.dropped_results as u64,
         chars_saved,
-        frontier_avoided,
+        0, // Only the caller knows whether it actually skipped summarization.
     );
 
     let mut all = pinned_outcomes;
     all.extend(outcomes);
-    Some(Outcome {
+    Ok(Outcome {
         items: after,
         outcomes: all,
         stats,
@@ -1337,15 +1377,40 @@ mod tests {
             text_item("go"),
             call_item("c1", "read_file", "{}"),
             result_item("c1", &big("A", 300)),
+            text_item("recent working note"),
+            text_item("latest goal"),
         ];
         let cfg = TypesafeConfig {
             enabled: true,
             api_key: "k".into(),
+            retries: 0,
             ..TypesafeConfig::default()
         };
         let t: Arc<super::super::client::TransportFn> = Arc::new(|_| Err("down".into()));
         let client = TypesafeClient::with_transport(&cfg, Transport::Fake(t));
         assert!(compact_with(&client, &cfg, &items, &opts()).is_none());
+        assert_eq!(
+            try_compact_items_with(&cfg, &items, &opts(), &client).err(),
+            Some(CompactSkip::NoJudgments)
+        );
+    }
+
+    #[test]
+    fn protected_history_skips_judgment_without_spending_a_request() {
+        let (client, seen) = recording_client(|_| 0.0);
+        let cfg = TypesafeConfig::default();
+        let items = vec![
+            text_item("go"),
+            call_item("c1", "bash", "{}"),
+            result_item("c1", "ok"),
+        ];
+        let mut options = opts();
+        options.preserve_recent = items.len();
+        assert_eq!(
+            try_compact_items_with(&cfg, &items, &options, &client).err(),
+            Some(CompactSkip::NoCandidates)
+        );
+        assert!(seen.lock().unwrap().is_empty());
     }
 
     #[test]

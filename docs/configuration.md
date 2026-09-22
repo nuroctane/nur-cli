@@ -103,8 +103,8 @@ auto_update = true
 | `typesafe.max_parallel` | integer | `4` | Concurrent requests when a question set is split |
 | `typesafe.max_request_tokens` | integer | `30000` | Estimated ceiling for one request (state + its questions). Ported from fast-jev-compaction; keeps a request under System One's ~32k limit |
 | `typesafe.compaction.enabled` | bool | `true` | Jev-scored compaction: drop tool calls, keep survivors verbatim |
-| `typesafe.compaction.replace_summary` | bool | `true` | When a Jev prune frees enough context, skip the summarizing model call entirely (survivors stay verbatim) |
-| `typesafe.compaction.min_reduction` | float | `0.25` | Reduction ratio required to take that path instead of summarizing |
+| `typesafe.compaction.replace_summary` | bool | `true` | Manual `/compact` honors configured Jev without summarizing, even at zero reduction; automatic recovery also checks `min_reduction` |
+| `typesafe.compaction.min_reduction` | float | `0.25` | Automatic recovery only: positive reduction required to skip summarization |
 | `typesafe.compaction.preserve_recent` | integer | `6` | Newest N items never touched (the first item is always kept) |
 | `typesafe.compaction.keep_threshold` | float | `0.5` | Minimum keep probability for a call or result to survive |
 | `typesafe.compaction.truncate_head_chars` | integer | `300` | Chars of a dropped result retained before its note |
