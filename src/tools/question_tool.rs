@@ -171,6 +171,8 @@ pub fn parse_question(args: &Value) -> std::result::Result<ParsedQuestion, Strin
 pub enum UserAnswer {
     /// Labels the user picked (exactly one unless multi-select).
     Picked(Vec<String>),
+    /// A free-form answer supplied when none of the labels fit.
+    Typed(String),
     /// Esc / no interactive user / redirected: proceed, do not re-ask.
     Dismissed { reason: &'static str },
 }
@@ -188,6 +190,7 @@ pub fn format_answer(answer: &UserAnswer, options: &[(String, String)]) -> Strin
                 .join(", ");
             format!("user selected: {shown}")
         }
+        UserAnswer::Typed(text) => format!("user typed: {text}"),
         UserAnswer::Dismissed { reason } => format!(
             "user did not answer ({reason}) - proceed with your best judgment, defer the \
              decision, or declare BLOCKED: <what you need>; do not re-ask the same question \
@@ -367,6 +370,10 @@ mod tests {
                 &opts
             ),
             "user selected: Bun - fast startup, Node"
+        );
+        assert_eq!(
+            format_answer(&UserAnswer::Typed("Use Deno instead".into()), &opts),
+            "user typed: Use Deno instead"
         );
         let d = format_answer(&UserAnswer::Dismissed { reason: "esc" }, &opts);
         assert!(d.contains("do not re-ask"), "{d}");

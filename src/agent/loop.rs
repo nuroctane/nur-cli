@@ -108,6 +108,8 @@ pub enum ApprovalDecision {
 pub struct QuestionAnswer {
     /// Labels picked in the modal (at most one unless multi-select).
     pub selected: Vec<String>,
+    /// Free-form response typed by the user when the offered options do not fit.
+    pub typed: Option<String>,
     /// True when the question was dismissed, redirected, or asked somewhere
     /// with no interactive user: proceed, do not re-ask.
     pub dismissed: bool,
@@ -119,6 +121,16 @@ impl QuestionAnswer {
     pub fn picked(selected: Vec<String>) -> Self {
         Self {
             selected,
+            typed: None,
+            dismissed: false,
+            reason: "",
+        }
+    }
+
+    pub fn typed(text: String) -> Self {
+        Self {
+            selected: Vec::new(),
+            typed: Some(text),
             dismissed: false,
             reason: "",
         }
@@ -127,6 +139,7 @@ impl QuestionAnswer {
     pub fn dismissed() -> Self {
         Self {
             selected: Vec::new(),
+            typed: None,
             dismissed: true,
             reason: "dismissed",
         }
@@ -135,6 +148,7 @@ impl QuestionAnswer {
     pub fn unavailable() -> Self {
         Self {
             selected: Vec::new(),
+            typed: None,
             dismissed: true,
             reason: "no interactive user",
         }
@@ -2816,6 +2830,8 @@ impl AgentRunner {
             UserAnswer::Dismissed {
                 reason: answer.reason,
             }
+        } else if let Some(text) = answer.typed {
+            UserAnswer::Typed(text)
         } else {
             UserAnswer::Picked(answer.selected)
         };

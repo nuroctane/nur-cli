@@ -1075,6 +1075,15 @@ pub struct QuestionState {
     pub options: Vec<(String, String)>,
     pub multi_select: bool,
     pub picker: crate::tools::question_tool::QuestionPicker,
+    /// First rendered body line. Updated after navigation so the cursor remains visible.
+    pub scroll: usize,
+    /// Rendered body rows available in the most recent frame.
+    pub vis_rows: usize,
+    /// Free-form fallback activated with `o` or by selecting the Other row.
+    pub typing: bool,
+    pub typed: String,
+    /// Coalesce trackpad wheel floods to one option step per tick.
+    pub last_step_at: Instant,
     pub respond: Option<oneshot::Sender<QuestionAnswer>>,
 }
 
@@ -3934,7 +3943,7 @@ impl App {
     fn on_key(&mut self, key: event::KeyEvent) {
         if matches!(
             self.modal_focus(),
-            Some(ModalFocus::Theme | ModalFocus::Model | ModalFocus::Plugin)
+            Some(ModalFocus::Theme | ModalFocus::Model | ModalFocus::Plugin | ModalFocus::Question)
         ) && ((key.code == KeyCode::Char('v') && key.modifiers.contains(KeyModifiers::CONTROL))
             || (key.code == KeyCode::Insert && key.modifiers.contains(KeyModifiers::SHIFT)))
         {
@@ -4468,6 +4477,33 @@ impl App {
         self.mouse_row = m.row;
         // Hover affordance: the thumb widens when the pointer is on the rail.
         self.scrollbar_hover = self.scrollbar_drag || self.hit_scrollbar(m.column, m.row);
+
+        if self.question.is_some() {
+            match m.kind {
+                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                    let dir = if matches!(m.kind, MouseEventKind::ScrollUp) {
+                        -1
+                    } else {
+                        1
+                    };
+                    let now = Instant::now();
+                    let step = self.question.as_ref().is_some_and(|q| {
+                        now.duration_since(q.last_step_at) >= Duration::from_millis(45)
+                    });
+                    if step {
+                        if let Some(q) = self.question.as_mut() {
+                            q.last_step_at = now;
+                        }
+                        self.on_question_key(KeyEvent::new(
+                            if dir < 0 { KeyCode::Up } else { KeyCode::Down },
+                            KeyModifiers::NONE,
+                        ));
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
 
         // Approval is a modal *overlay* but must not brick scroll/select forever.
         // Allow wheel + continue an in-progress scrollbar drag; new clicks on
@@ -8100,17 +8136,62 @@ impl App {
         }
     }
 
-    /// Answer the open clarification modal. Digits/arrows move, Space toggles
-    /// (multi-select), Enter confirms, Esc dismisses. Modified keys are
-    /// ignored for the same reason as the approval modal: this modal swallows
-    /// every key while open, so Ctrl/Alt combos must not leak through as
-    /// answers.
+    /// Answer the open clarification modal. Arrows, PageUp/PageDown, Home/End
+    /// use the same bounded navigation contract as every scrollable picker.
+    /// `o` opens a free-form fallback when no offered option fits.
     fn on_question_key(&mut self, key: KeyEvent) {
         use crate::tools::question_tool::{PickerEvent, PickerKey};
-        if key
-            .modifiers
-            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-        {
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            return;
+        }
+        if let Some(q) = self.question.as_mut() {
+            if q.typing {
+                match key.code {
+                    KeyCode::Esc => {
+                        q.typing = false;
+                        q.typed.clear();
+                    }
+                    KeyCode::Enter if !q.typed.trim().is_empty() => {
+                        let text = q.typed.trim().to_string();
+                        if let Some(mut q) = self.question.take() {
+                            if let Some(respond) = q.respond.take() {
+                                let _ = respond.send(QuestionAnswer::typed(text));
+                            }
+                        }
+                    }
+                    KeyCode::Backspace => {
+                        q.typed.pop();
+                    }
+                    KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::ALT) => {
+                        q.typed.push(c);
+                    }
+                    _ => {}
+                }
+                return;
+            }
+        }
+        if key.modifiers.contains(KeyModifiers::ALT) {
+            return;
+        }
+        if matches!(key.code, KeyCode::Char('o') | KeyCode::Char('O')) {
+            if let Some(q) = self.question.as_mut() {
+                q.typing = true;
+                q.typed.clear();
+            }
+            return;
+        }
+        if matches!(
+            key.code,
+            KeyCode::PageUp | KeyCode::PageDown | KeyCode::Home | KeyCode::End
+        ) {
+            if let Some(q) = self.question.as_mut() {
+                let count = q.options.len();
+                if let Some(target) =
+                    navigation_target(key.code, q.picker.cursor, count, q.vis_rows)
+                {
+                    q.picker.cursor = target;
+                }
+            }
             return;
         }
         let mapped = match key.code {
@@ -9520,6 +9601,11 @@ impl App {
                     options,
                     multi_select,
                     picker,
+                    scroll: 0,
+                    vis_rows: 1,
+                    typing: false,
+                    typed: String::new(),
+                    last_step_at: Instant::now() - Duration::from_secs(1),
                     respond: Some(respond),
                 });
             }
@@ -10138,7 +10224,14 @@ impl App {
         if text.is_empty() {
             return;
         }
-        let field_text: String = text.chars().filter(|c| !c.is_control()).collect();
+        let field_text: String = text
+            .chars()
+            .filter_map(|c| match c {
+                '\n' | '\t' => Some(' '),
+                c if c.is_control() => None,
+                c => Some(c),
+            })
+            .collect();
         if self.theme_picker.is_some() {
             self.filter_themes(Some(&field_text), false);
             return;
@@ -10170,6 +10263,12 @@ impl App {
                 pp.sel = 0;
                 pp.scroll = 0;
                 pp.clamp_scroll();
+            }
+            return;
+        }
+        if let Some(q) = &mut self.question {
+            if q.typing {
+                q.typed.push_str(&field_text);
             }
             return;
         }

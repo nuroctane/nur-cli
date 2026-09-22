@@ -7104,11 +7104,19 @@ fn draw_palette(f: &mut Frame, app: &mut App, input_area: Rect) {
 // OpenCode-style clarification: the model asks a close-ended question and the
 // user picks. Same frame language as the approval modal; the body is the
 // question plus numbered options instead of a diff preview.
-fn draw_question(f: &mut Frame, app: &App, area: Rect) {
-    let Some(q) = &app.question else { return };
+fn draw_question(f: &mut Frame, app: &mut App, area: Rect) {
+    let phase = modal_phase(app);
+    let Some(q) = app.question.as_mut() else {
+        return;
+    };
     let max_body = area.height.saturating_sub(6).clamp(8, 24) as usize;
     let col_w = (area.width as usize).saturating_sub(8).clamp(20, 74);
     let mut body: Vec<String> = wrap_text(&q.question, col_w);
+    if body.len() > 4 {
+        let hidden = body.len() - 4;
+        body.truncate(4);
+        body.push(format!("… +{hidden} question line(s)"));
+    }
     body.push(String::new());
     for (i, (label, desc)) in q.options.iter().enumerate().take(8) {
         let cursor = if q.picker.cursor == i { "▸" } else { " " };
@@ -7135,15 +7143,43 @@ fn draw_question(f: &mut Frame, app: &App, area: Rect) {
             }
         }
     }
-    if q.options.len() > 8 {
-        body.push(format!(
-            "… +{} more (only the first 8 are pickable)",
-            q.options.len() - 8
-        ));
+    body.push(String::new());
+    if q.typing {
+        let prefix = "▸ Other: ";
+        let room = col_w.saturating_sub(prefix.chars().count() + 1).max(8);
+        let tail: String = q
+            .typed
+            .chars()
+            .rev()
+            .take(room)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+        body.push(format!("{prefix}{tail}_"));
+    } else {
+        body.push("  o Other - type a different answer".to_string());
     }
-    let shown: Vec<&str> = body.iter().map(|s| s.as_str()).take(max_body).collect();
-    let overflow = body.len() > max_body;
-    let content = shown.len() as u16 + if overflow { 1 } else { 0 };
+    q.vis_rows = max_body.max(1);
+    let cursor_line = if q.typing {
+        body.len().saturating_sub(1)
+    } else {
+        body.iter().position(|l| l.starts_with('▸')).unwrap_or(0)
+    };
+    if cursor_line < q.scroll {
+        q.scroll = cursor_line;
+    } else if cursor_line >= q.scroll + q.vis_rows {
+        q.scroll = cursor_line + 1 - q.vis_rows;
+    }
+    q.scroll = q.scroll.min(body.len().saturating_sub(q.vis_rows));
+    let shown: Vec<&str> = body
+        .iter()
+        .skip(q.scroll)
+        .take(q.vis_rows)
+        .map(String::as_str)
+        .collect();
+    let overflow = q.scroll > 0 || q.scroll + shown.len() < body.len();
+    let content = shown.len() as u16;
     let rect = fit_modal_rect(area, 78, content + 4, 48, 9);
     f.render_widget(Clear, rect);
     f.render_widget(
@@ -7151,11 +7187,12 @@ fn draw_question(f: &mut Frame, app: &App, area: Rect) {
         rect,
     );
     let hue = theme::META_BLUE();
-    let phase = modal_phase(app);
-    let footer = if q.multi_select {
-        "  1-8/space toggle · ↵ confirm · esc dismiss  "
+    let footer = if q.typing {
+        "  type answer · ↵ submit · esc options  "
+    } else if q.multi_select {
+        "  ↑↓/pg/home/end · 1-8/space toggle · o other · ↵ confirm  "
     } else {
-        "  1-8 pick · ↑↓ move · ↵ confirm · esc dismiss  "
+        "  ↑↓/pg/home/end · 1-8 pick · o other · ↵ confirm  "
     };
     draw_modal_frame(
         f,
@@ -7175,13 +7212,8 @@ fn draw_question(f: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(theme::FG()),
         )));
     }
-    if overflow {
-        lines.push(Line::from(Span::styled(
-            format!("  … +{} more lines", body.len() - max_body),
-            theme::style_faint(),
-        )));
-    }
-    // Highlight the cursor row.
+    let _ = overflow; // viewport position is communicated by clipped content and cursor.
+                      // Highlight the cursor row.
     let cursor_row = shown
         .iter()
         .position(|l| l.starts_with("▸"))
