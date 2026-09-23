@@ -35,7 +35,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let est_w = (area.width as usize).saturating_sub(5).max(8);
     let vcount = app.input.visual_line_count(est_w).max(1);
     const INPUT_VIEW_MAX: usize = 8;
-    let input_body = vcount.clamp(1, INPUT_VIEW_MAX) as u16;
+    let input_body =
+        vcount.clamp(1, INPUT_VIEW_MAX) as u16 + u16::from(!app.draft_image_indices().is_empty());
     let busy_h = if app.busy { 1 } else { 0 };
 
     let chunks = Layout::default()
@@ -2161,10 +2162,11 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
         Vec::new();
     let mut hit_swarm_panes: Vec<Vec<(u64, usize, usize)>> = Vec::new();
     let mut plain_lines: Vec<String> = Vec::new();
-    // cell_idx → first wrapped row for inline image cells (overlay anchors).
-    let mut image_cells: Vec<(usize, usize)> = Vec::new();
 
     for (cell_idx, cell) in app.cells.iter().enumerate() {
+        if matches!(cell, Cell::Image { queued: true, .. }) {
+            continue;
+        }
         if let Cell::User(text) = cell {
             // Animated separator before every turn except the very first — a
             // quiet shimmering rule so you can see where each exchange begins.
@@ -2316,13 +2318,6 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
                 Vec::new()
             };
             plain_lines.push(plain);
-            if matches!(cell, Cell::Image { .. }) && i == 0 {
-                // Row 0 of an Image cell is the blank spacer; the caption row
-                // (i == 1) is where reserved canvas starts.
-            }
-            if matches!(cell, Cell::Image { .. }) && i == 1 {
-                image_cells.push((cell_idx, wrapped.len()));
-            }
             wrapped.push(line);
             owner.push(current);
             // A User cell renders spacer → top border → padding → first text
@@ -2437,10 +2432,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
         body_rect,
     );
 
-    // Inline images: paint real pixels (kitty / sixel / iTerm2) over the rows
-    // each Cell::Image reserved in the wrap cache. Runs after the Paragraph so
-    // the protocol sequences land on empty canvas, never on text.
-    overlay_inline_images(f, app, &image_cells, vis_lo, body_rect);
+    // User attachments are compact rows; pixels are rendered only in the explicit peek.
 
     if let Some(prompt) = sticky {
         let banner = Rect {
@@ -5491,22 +5483,13 @@ fn draw_pane(
     }
 }
 
-/// User prompt as a bordered card — a rounded Nur-gold frame with a padding
-/// row above/below and inner margins, so prompts read as distinct blocks in
-/// the transcript. Every border/padding row belongs to the prompt cell, which
-/// also makes the right-click / double-click context-menu hitbox much larger
-/// than the text alone.
-/// Placeholder rows for an inline image cell. The real pixels are overlaid at
-/// draw time by `overlay_inline_images` (kitty/sixel/iTerm2 sit outside the
-/// cell buffer); these rows reserve layout space and carry a caption + hint so
-/// text-only terminals still see the image reference.
+/// Compact attachment reference. Pixels belong only in the explicit peek;
+/// transcript height never depends on image dimensions or terminal protocol.
 fn image_cell_lines(path: &str, label: &str, width: usize, out: &mut Vec<Line<'static>>) {
     let w = width.max(12);
     let accent = Style::default().fg(theme::NUR_GOLD());
     let faint = theme::style_faint();
-    // Reserve rows proportional to the image aspect ratio (capped) so the
-    // overlay lands on empty canvas instead of covering transcript text.
-    let rows = image_reserved_rows(path, w);
+
     out.push(Line::default());
     out.push(Line::from(vec![
         Span::styled("◈ ".to_string(), accent),
@@ -5518,47 +5501,10 @@ fn image_cell_lines(path: &str, label: &str, width: usize, out: &mut Vec<Line<'s
             faint,
         ),
     ]));
-    for _ in 0..rows {
-        out.push(Line::from(Span::raw(String::new())));
-    }
-}
-
-/// How many blank rows to reserve under an inline image: derived from the
-/// decoded aspect ratio and the terminal cell shape (assume ~9x18 px cells,
-/// the same default ratatui-image uses), clamped to a sane band.
-#[cfg(feature = "image-peek")]
-fn image_reserved_rows(path: &str, width_cells: usize) -> usize {
-    const MIN_ROWS: usize = 4;
-    const MAX_ROWS: usize = 18;
-    let Ok(meta) = std::fs::metadata(path) else {
-        return MIN_ROWS;
-    };
-    if meta.len() > 20 * 1024 * 1024 {
-        return MIN_ROWS;
-    }
-    let dims = (|| -> Option<(u32, u32)> {
-        let img = image::ImageReader::open(path)
-            .ok()?
-            .with_guessed_format()
-            .ok()?
-            .decode()
-            .ok()?;
-        Some((img.width(), img.height()))
-    })();
-    let Some((iw, ih)) = dims else {
-        return MIN_ROWS;
-    };
-    if iw == 0 || ih == 0 {
-        return MIN_ROWS;
-    }
-    // Cell aspect ≈ 0.5 (w:h). Image height in cells = width_cells * (ih/iw) * (cell_w/cell_h).
-    let h_cells = (width_cells as f64 * (ih as f64 / iw as f64) * 0.5) as usize;
-    h_cells.clamp(MIN_ROWS, MAX_ROWS)
-}
-
-#[cfg(not(feature = "image-peek"))]
-fn image_reserved_rows(_path: &str, _width_cells: usize) -> usize {
-    3
+    out.push(Line::from(Span::styled(
+        "  click to peek",
+        theme::style_faint(),
+    )));
 }
 
 fn user_prompt_card(text: &str, width: usize, out: &mut Vec<Line<'static>>) {
@@ -6531,6 +6477,21 @@ fn draw_busy_line(f: &mut Frame, app: &App, area: Rect) {
 /// Max soft-wrapped rows shown in the composer before scrolling.
 const INPUT_VIEW_MAX: usize = 8;
 
+fn draft_attachment_line(count: usize, width: u16) -> Line<'static> {
+    let controls = if width >= 48 {
+        "F4 preview · Shift+F4 remove"
+    } else {
+        "F4 preview"
+    };
+    Line::from(Span::styled(
+        format!(
+            "◈ {count} image{} · {controls}",
+            if count == 1 { "" } else { "s" }
+        ),
+        Style::default().fg(theme::META_BLUE()),
+    ))
+}
+
 fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
     let tick = app.spinner_epoch.elapsed();
     // Border is calm-but-alive when ready for input (slow whole-border aurora
@@ -6566,8 +6527,17 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
         .border_style(Style::default().fg(border_color))
         .style(theme::style_surface())
         .title(title);
-    let inner = block.inner(area);
+    let mut inner = block.inner(area);
     f.render_widget(block, area);
+    let draft = app.draft_image_indices();
+    if !draft.is_empty() && inner.height > 1 {
+        f.render_widget(
+            Paragraph::new(draft_attachment_line(draft.len(), inner.width)),
+            Rect::new(inner.x, inner.y, inner.width, 1),
+        );
+        inner.y += 1;
+        inner.height -= 1;
+    }
 
     // A single bright node scans along the top edge when ready — subtle life.
     if active_border && area.width > 4 {
@@ -7805,61 +7775,6 @@ fn summarize_args(tool: &str, args: &str) -> String {
 }
 
 /// Last two path components — enough to recognize a repo without eating the row.
-/// Paint real pixels over the rows reserved by each visible `Cell::Image`.
-///
-/// `image_cells` is `(cell_idx, absolute_first_wrapped_row)` captured while the
-/// transcript wrap cache was built; `vis_lo` is the first visible wrapped row
-/// and `body` the on-screen paragraph rect, so an image renders only when its
-/// anchor row is actually scrolled into view.
-#[cfg(feature = "image-peek")]
-fn overlay_inline_images(
-    f: &mut ratatui::Frame,
-    app: &mut super::app::App,
-    image_cells: &[(usize, usize)],
-    vis_lo: usize,
-    body: Rect,
-) {
-    if !app.cfg.theme_setup.inline_images {
-        return;
-    }
-    for (cell_idx, abs_row) in image_cells {
-        let Some(Cell::Image { path, .. }) = app.cells.get(*cell_idx) else {
-            continue;
-        };
-        let path = path.clone();
-        // Anchor row relative to the viewport. `abs_row - 1` skips the blank
-        // spacer row so pixels start right under the caption line.
-        let rel = abs_row.saturating_sub(1).saturating_sub(vis_lo) as u16;
-        if rel >= body.height {
-            continue; // scrolled off
-        }
-        // How many reserved rows remain on screen (caption + blank canvas).
-        let available = (body.height - rel) as usize;
-        let want = image_reserved_rows(&path, body.width as usize) + 1;
-        let h = want.min(available).min(u16::MAX as usize) as u16;
-        if h < 2 {
-            continue;
-        }
-        let rect = Rect::new(body.x, body.y + rel, body.width, h);
-        // Clear the reserved canvas first so halfblocks glyphs never bleed
-        // through a kitty/sixel overlay.
-        f.render_widget(ratatui::widgets::Clear, rect);
-        if let Some(proto) = app.image_protocol(&path) {
-            f.render_stateful_widget(ratatui_image::StatefulImage::default(), rect, proto);
-        }
-    }
-}
-
-#[cfg(not(feature = "image-peek"))]
-fn overlay_inline_images(
-    _f: &mut ratatui::Frame,
-    _app: &mut super::app::App,
-    _image_cells: &[(usize, usize)],
-    _vis_lo: usize,
-    _body: Rect,
-) {
-}
-
 fn image_cell_caption_path(p: &str) -> String {
     let parts: Vec<&str> = p.split(['\\', '/']).filter(|s| !s.is_empty()).collect();
     match parts.len() {
@@ -7992,7 +7907,76 @@ fn draw_ctx_menu(f: &mut Frame, app: &mut App) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn image_attachment_never_reserves_a_pixel_canvas() {
+        for width in [20, 40, 80, 160] {
+            let mut lines = Vec::new();
+            image_cell_lines("paste/screenshot.png", "image · 123 KB", width, &mut lines);
+            assert_eq!(lines.len(), 3);
+            let rows = wrap::wrap_lines(&lines, width as u16);
+            assert!(rows.len() <= 3);
+            assert!(rows
+                .iter()
+                .any(|line| line_to_plain(line).contains("click to peek")));
+        }
+    }
+
     use super::*;
+
+    #[test]
+    #[ignore]
+    fn attachment_preview() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let dir = std::path::Path::new(".nur/attachment-preview");
+        std::fs::create_dir_all(dir).unwrap();
+        for width in [40u16, 80] {
+            let mut lines = Vec::new();
+            user_prompt_card("Can you improve this screen?", width as usize, &mut lines);
+            image_cell_lines(
+                ".nur/media/paste/screenshot.png",
+                "image · 42 KB",
+                width as usize,
+                &mut lines,
+            );
+            lines.push(Line::from(""));
+            lines.push(Line::from("  Working on your request..."));
+            lines.push(Line::from(""));
+            lines.push(draft_attachment_line(2, width));
+            lines.push(Line::from("  Add a follow-up message..."));
+            let rows = wrap::wrap_lines(&lines, width);
+            let height = rows.len() as u16;
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|f| {
+                    f.render_widget(Block::default().style(theme::style_canvas()), f.area());
+                    f.render_widget(Paragraph::new(rows.clone()), f.area());
+                })
+                .unwrap();
+            let hex = |c: Color| match c {
+                Color::Rgb(r, g, b) => format!("#{r:02X}{g:02X}{b:02X}"),
+                _ => "reset".into(),
+            };
+            let mut output = format!(
+                "# theme=attachments width={width} rows={height} bg={} fg={}\n",
+                hex(theme::BG()),
+                hex(theme::FG())
+            );
+            let buffer = terminal.backend().buffer();
+            for y in 0..height {
+                for x in 0..width {
+                    let cell = &buffer[(x, y)];
+                    output.push_str(&format!(
+                        "{y}\t{x}\t{}\t{}\t{}\t{}\n",
+                        hex(cell.fg),
+                        hex(cell.bg),
+                        cell.modifier.bits(),
+                        cell.symbol()
+                    ));
+                }
+            }
+            std::fs::write(dir.join(format!("attachments-{width}.tsv")), output).unwrap();
+        }
+    }
 
     /// Dev harness: render a representative assistant answer through the *real*
     /// prose pipeline (`assistant_prose_lines` → `wrap::wrap_lines` → the same

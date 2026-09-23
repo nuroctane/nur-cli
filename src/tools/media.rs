@@ -126,6 +126,15 @@ mod provenance_tests {
         let left = take_pending_media();
         assert_eq!(left.len(), 1);
         assert!(left[0].user_pasted);
+        assert!(queue_user_images(&[img.clone(), dir.join("missing.png")]).is_err());
+        assert!(
+            take_pending_media().is_empty(),
+            "failed batch must not queue its first image"
+        );
+        queue_user_images(&[img.clone()]).unwrap();
+        let sent = take_pending_media();
+        assert_eq!(sent.len(), 1);
+        assert!(sent[0].user_pasted);
         let _ = std::fs::remove_dir_all(&dir);
         reset();
     }
@@ -240,6 +249,24 @@ pub fn queue_image_for_vision(path: &Path) -> Result<MediaAttach> {
     m.user_pasted = true;
     push_pending(m.clone())?;
     Ok(m)
+}
+
+/// Commit a draft atomically; failed file loading cannot attach half a message.
+pub fn queue_user_images(paths: &[PathBuf]) -> Result<()> {
+    let mut images = Vec::new();
+    for path in paths {
+        let mut image = load_media(path, false)?;
+        image.user_pasted = true;
+        images.push(image);
+    }
+    let mut pending = PENDING
+        .lock()
+        .map_err(|_| NurError::Tool("media queue lock".into()))?;
+    if pending.len() + images.len() > MAX_PENDING {
+        return Err(NurError::Tool("too many pending images (max 10)".into()));
+    }
+    pending.extend(images);
+    Ok(())
 }
 
 /// Load a workspace media file into a data URL (and pending queue if push=true).

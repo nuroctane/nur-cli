@@ -246,7 +246,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/jev", "alias of /typesafe"),
     ("/prewalk", "OMP-style: strong model plans, then smol at first edit - on|off|status|into <model>|reset"),
     ("/egaki", "image/video gen via egaki (login --provider chatgpt supported)"),
-    ("/image", "/image <path> - show an image inline + attach it for vision"),
+    ("/image", "/image <path> - stage a vision attachment (F4 preview)"),
     ("/tb", "terminal-browser: open|ls|action|setup (Windows host fallback ok)"),
     ("/terminal-browser", "alias of /tb"),
     ("/factory-overnight", "fractal-first overnight factory from HANDOFF.md"),
@@ -309,13 +309,45 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/quit", "quit  (alias of /exit)"),
 ];
 
+#[derive(Clone)]
+pub struct QueuedPrompt {
+    pub text: String,
+    pub images: Vec<(String, String)>,
+}
+impl From<String> for QueuedPrompt {
+    fn from(text: String) -> Self {
+        Self {
+            text,
+            images: Vec::new(),
+        }
+    }
+}
+
+fn queued_position(
+    cells: &[Cell],
+    queue: &VecDeque<QueuedPrompt>,
+    cell_idx: usize,
+) -> Option<usize> {
+    let Cell::Queued { text } = cells.get(cell_idx)? else {
+        return None;
+    };
+    let occurrence = cells[..cell_idx]
+        .iter()
+        .filter(|cell| matches!(cell, Cell::Queued { text: other } if other == text))
+        .count();
+    queue
+        .iter()
+        .enumerate()
+        .filter(|(_, prompt)| &prompt.text == text)
+        .nth(occurrence)
+        .map(|(index, _)| index)
+}
+
 pub enum Cell {
     Banner,
     User(String),
-    /// An image the user pasted (Ctrl+V) or referenced with /image - shown
-    /// inline via the terminal's graphics protocol (kitty/sixel/iTerm2) and
-    /// queued for model vision on the next turn. `queued` tracks whether the
-    /// pixels are already in the media pending queue.
+    /// User attachment. Drafts (`queued`) live in the composer until sent;
+    /// sent attachments are compact transcript rows with an explicit peek.
     Image {
         path: String,
         label: String,
@@ -2171,7 +2203,7 @@ pub struct App {
     pub mouse_row: u16,
 
     pub input: InputState,
-    pub queue: VecDeque<String>,
+    pub queue: VecDeque<QueuedPrompt>,
     /// When true, a cancel (send-now interject) keeps the queue so the follow-up
     /// can start immediately after the interrupted turn ends.
     preserve_queue_on_interrupt: bool,
@@ -3875,6 +3907,13 @@ impl App {
         if cell_idx >= self.cells.len() {
             return;
         }
+        if self.peek_open == Some(cell_idx) {
+            self.close_peek();
+        } else if let Some(index) = self.peek_open.as_mut() {
+            if *index > cell_idx {
+                *index -= 1;
+            }
+        }
         self.cells.remove(cell_idx);
         self.tool_cells.retain(|_, i| *i != cell_idx);
         for i in self.tool_cells.values_mut() {
@@ -4099,6 +4138,25 @@ impl App {
                 self.should_quit = true;
                 return;
             }
+            KeyCode::F(4) => {
+                let draft = self.draft_image_indices();
+                if let Some(last) = draft.last().copied() {
+                    let selected = self.peek_open.filter(|i| draft.contains(i));
+                    if shift {
+                        let idx = selected.unwrap_or(last);
+                        self.close_peek();
+                        self.remove_cell(idx);
+                    } else {
+                        let idx = selected
+                            .and_then(|i| draft.iter().position(|v| *v == i))
+                            .map(|i| draft[(i + 1) % draft.len()])
+                            .unwrap_or(draft[0]);
+                        self.close_peek();
+                        self.open_stable_peek(idx);
+                    }
+                }
+                return;
+            }
             // Ctrl+V / Shift+Insert: clipboard → exactly one chip, then lock drip.
             // An IMAGE clipboard is checked first: it carries no text, so the
             // old text-only path silently did nothing on Ctrl+V.
@@ -4214,7 +4272,7 @@ impl App {
                     self.palette_scroll = 0;
                     return;
                 }
-                if self.input.text().trim().is_empty() {
+                if self.input.text().trim().is_empty() && self.draft_image_indices().is_empty() {
                     return;
                 }
                 let submitted = self.input.submit();
@@ -8253,7 +8311,11 @@ impl App {
 
     // ── submission ─────────────────────────────────────────────────────
     fn submit_text(&mut self, text: &str) {
-        let text = text.trim().to_string();
+        let text = if text.trim().is_empty() && !self.draft_image_indices().is_empty() {
+            "Please inspect the attached image(s).".to_string()
+        } else {
+            text.trim().to_string()
+        };
         if text.is_empty() {
             return;
         }
@@ -8291,7 +8353,11 @@ impl App {
             if payload.is_empty() {
                 return;
             }
-            self.queue.push_back(payload.clone());
+            let images = self.take_draft_images();
+            self.queue.push_back(QueuedPrompt {
+                text: payload.clone(),
+                images,
+            });
             self.cells.push(Cell::Queued { text: payload });
             self.scroll_to_bottom();
             self.refresh_sidegraph();
@@ -8315,17 +8381,24 @@ impl App {
             Some(Cell::Queued { text }) => text.clone(),
             _ => return,
         };
-        // Remove this occurrence from the queue (first match).
-        if let Some(i) = self.queue.iter().position(|t| t == &text) {
-            self.queue.remove(i);
-        }
+        // Repeated text can carry different images; select the clicked occurrence.
+        let Some(i) = queued_position(&self.cells, &self.queue, cell_idx) else {
+            return;
+        };
+        let queued = self.queue.remove(i).unwrap();
         // Drop the Queued card from the transcript.
         self.remove_cell(cell_idx);
         self.refresh_sidegraph();
         if self.busy {
-            self.steer_now(&text);
+            if self.publish_images(&queued.images).is_ok() {
+                self.steer_now(&text);
+                self.echo_images(&queued.images);
+            } else {
+                self.cells.push(Cell::Queued { text: text.clone() });
+                self.queue.push_back(queued);
+            }
         } else {
-            self.start_turn(&text);
+            self.start_attached_turn(&text, queued.images);
         }
     }
 
@@ -8337,13 +8410,31 @@ impl App {
             Some(Cell::Queued { text }) => text.clone(),
             _ => return,
         };
-        if let Some(i) = self.queue.iter().position(|t| t == &text) {
-            self.queue.remove(i);
-        }
+        let Some(i) = queued_position(&self.cells, &self.queue, cell_idx) else {
+            return;
+        };
+        let queued = self.queue.remove(i).unwrap();
         self.remove_cell(cell_idx);
         self.refresh_sidegraph();
         if self.busy {
-            self.queue.push_front(text.clone());
+            self.queue.push_front(queued);
+            let first = self
+                .cells
+                .iter()
+                .position(|cell| matches!(cell, Cell::Queued { .. }))
+                .unwrap_or(self.cells.len());
+            self.cells
+                .insert(first, Cell::Queued { text: text.clone() });
+            for index in self.tool_cells.values_mut() {
+                if *index >= first {
+                    *index += 1;
+                }
+            }
+            if let Some(index) = self.peek_open.as_mut() {
+                if *index >= first {
+                    *index += 1;
+                }
+            }
             self.preserve_queue_on_interrupt = true;
             self.interrupt();
             self.push_note(
@@ -8352,7 +8443,7 @@ impl App {
                     .into(),
             );
         } else {
-            self.start_turn(&text);
+            self.start_attached_turn(&text, queued.images);
         }
     }
 
@@ -8363,27 +8454,65 @@ impl App {
         self.queue_send_now(cell_idx);
     }
 
-    /// Push a message into the live steer queue and echo it in the transcript.
-    /// The agent loop drains it at the next round boundary.
-    ///
-    /// Push an inline image card into the transcript. Pixels are already
-    /// queued for model vision by the caller (`meta.bytes` shown in the
-    /// caption); the card renders via the terminal graphics protocol.
+    pub fn draft_image_indices(&self) -> Vec<usize> {
+        self.cells
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| matches!(c, Cell::Image { queued: true, .. }).then_some(i))
+            .collect()
+    }
+
+    fn take_draft_images(&mut self) -> Vec<(String, String)> {
+        let images = self
+            .cells
+            .iter()
+            .filter_map(|c| match c {
+                Cell::Image {
+                    path,
+                    label,
+                    queued: true,
+                } => Some((path.clone(), label.clone())),
+                _ => None,
+            })
+            .collect();
+        self.remove_cells_matching(|c| matches!(c, Cell::Image { queued: true, .. }));
+        images
+    }
+
+    fn publish_images(&mut self, images: &[(String, String)]) -> Result<()> {
+        let result = crate::tools::media::queue_user_images(
+            &images
+                .iter()
+                .map(|(p, _)| std::path::PathBuf::from(p))
+                .collect::<Vec<_>>(),
+        );
+        if let Err(e) = result {
+            self.push_error(format!("attachment not sent: {e}"));
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    fn echo_images(&mut self, images: &[(String, String)]) {
+        for (path, label) in images {
+            self.cells.push(Cell::Image {
+                path: path.clone(),
+                label: label.clone(),
+                queued: false,
+            });
+        }
+    }
+
     fn attach_image_cell(&mut self, path: &str, meta: &crate::tools::media::MediaAttach) {
-        let label = match meta.kind {
-            crate::tools::media::MediaKind::Video => "video attached",
-            crate::tools::media::MediaKind::Image => "image pasted",
-        };
+        if self.draft_image_indices().len() >= 10 {
+            self.push_error("attachment limit reached (10 images per message)".into());
+            return;
+        }
         self.cells.push(Cell::Image {
             path: path.to_string(),
-            label: format!("{label} · {:.0} KB", meta.bytes as f64 / 1024.0),
+            label: format!("image · {:.0} KB", meta.bytes as f64 / 1024.0),
             queued: true,
         });
-        self.scroll_to_bottom();
-        self.push_note(
-            Tone::Mode,
-            "image attached · shown inline + queued for vision on your next message".into(),
-        );
     }
 
     /// When the steer text names a cross-provider target (claude/grok/gemini/…),
@@ -9257,13 +9386,10 @@ impl App {
 
     /// Drop a queued follow-up without sending.
     fn queue_dismiss(&mut self, cell_idx: usize) {
-        let text = match self.cells.get(cell_idx) {
-            Some(Cell::Queued { text }) => text.clone(),
-            _ => return,
+        let Some(i) = queued_position(&self.cells, &self.queue, cell_idx) else {
+            return;
         };
-        if let Some(i) = self.queue.iter().position(|t| t == &text) {
-            self.queue.remove(i);
-        }
+        self.queue.remove(i);
         self.remove_cell(cell_idx);
         self.refresh_sidegraph();
         self.push_note(
@@ -9273,7 +9399,36 @@ impl App {
     }
 
     fn start_turn(&mut self, prompt: &str) {
+        let images = self.take_draft_images();
+        self.start_attached_turn(prompt, images);
+    }
+
+    fn start_attached_turn(&mut self, prompt: &str, images: Vec<(String, String)>) {
+        if !self.authed || self.session.is_none() || self.usage.is_none() {
+            self.input.insert_str(prompt);
+            for (path, label) in images {
+                self.cells.push(Cell::Image {
+                    path,
+                    label,
+                    queued: true,
+                });
+            }
+            self.push_error("message not sent - sign in and wait for the current turn".into());
+            return;
+        }
+        if self.publish_images(&images).is_err() {
+            self.input.insert_str(prompt);
+            for (path, label) in images {
+                self.cells.push(Cell::Image {
+                    path,
+                    label,
+                    queued: true,
+                });
+            }
+            return;
+        }
         self.start_turn_labeled(prompt, prompt);
+        self.echo_images(&images);
     }
 
     /// Start a turn where the transcript shows `display` but the model receives
@@ -9789,13 +9944,15 @@ impl App {
                     self.remove_cells_matching(|c| matches!(c, Cell::Queued { .. }));
                 } else if let Some(next) = self.queue.pop_front() {
                     self.preserve_queue_on_interrupt = false;
-                    // Drop matching Queued cards for this text.
-                    let next_clone = next.clone();
-                    self.remove_cells_matching(|c| match c {
-                        Cell::Queued { text } => text == &next_clone,
-                        _ => false,
-                    });
-                    self.submit_text(&next);
+                    // Each card owns one occurrence, even for repeated text.
+                    if let Some(index) = self
+                        .cells
+                        .iter()
+                        .position(|c| matches!(c, Cell::Queued { text } if text == &next.text))
+                    {
+                        self.remove_cell(index);
+                    }
+                    self.start_attached_turn(&next.text, next.images);
                 } else {
                     self.preserve_queue_on_interrupt = false;
                 }
@@ -10292,8 +10449,7 @@ impl App {
         }
 
         // Image clipboard wins when the OS clipboard holds a bitmap (screenshot
-        // → Ctrl+V). The pixels go inline into the transcript AND queue for
-        // model vision on the next turn. Checked BEFORE the empty-text return:
+        // → Ctrl+V). Stage it in the composer until send. Checked before empty text:
         // terminals deliver an empty bracketed paste when the clipboard holds
         // only an image.
         if try_attach_clipboard_image_impl(self) {
@@ -10495,7 +10651,7 @@ fn try_attach_clipboard_image_impl(app: &mut App) -> bool {
         return false;
     };
     match crate::tools::media::save_clipboard_image(&app.cwd, &bytes, &ext)
-        .and_then(|p| crate::tools::media::queue_image_for_vision(&p).map(|m| (p, m)))
+        .and_then(|p| crate::tools::media::load_media(&p, false).map(|m| (p, m)))
     {
         Ok((path, meta)) => {
             app.attach_image_cell(&path.display().to_string(), &meta);
@@ -10506,6 +10662,11 @@ fn try_attach_clipboard_image_impl(app: &mut App) -> bool {
             true // the clipboard DID hold an image - do not fall through to text
         }
     }
+}
+
+#[cfg(not(feature = "image-peek"))]
+fn try_attach_clipboard_image_impl(_app: &mut App) -> bool {
+    false
 }
 
 /// Clipboard image bytes (png/rgba), for Ctrl+V image paste. Returns
@@ -10597,6 +10758,7 @@ fn cells_to_ui_log(cells: &[Cell]) -> Vec<crate::agent::session::UiLogItem> {
                 thought_ms: None,
                 interrupted: false,
             }),
+            Cell::Image { queued: true, .. } => {}
             Cell::Image { label, path, .. } => out.push(UiLogItem {
                 kind: "image".into(),
                 text: format!("{label} · {path}"),
@@ -10885,6 +11047,44 @@ pub fn fmt_num(n: u64) -> String {
 mod tests {
     use super::*;
     use crate::tui::input::InputState;
+
+    #[test]
+    fn repeated_queued_text_keeps_the_clicked_attachment_owner() {
+        let cells = vec![
+            Cell::Queued {
+                text: "inspect".into(),
+            },
+            Cell::Queued {
+                text: "inspect".into(),
+            },
+        ];
+        let queue = VecDeque::from([
+            QueuedPrompt {
+                text: "inspect".into(),
+                images: vec![("first.png".into(), "image".into())],
+            },
+            QueuedPrompt {
+                text: "inspect".into(),
+                images: vec![("second.png".into(), "image".into())],
+            },
+        ]);
+        let index = queued_position(&cells, &queue, 1).unwrap();
+        assert_eq!(queue[index].images[0].0, "second.png");
+    }
+
+    #[test]
+    fn draft_images_do_not_enter_transcript_history() {
+        let mut image = Cell::Image {
+            path: "draft.png".into(),
+            label: "image".into(),
+            queued: true,
+        };
+        assert!(cells_to_ui_log(std::slice::from_ref(&image)).is_empty());
+        if let Cell::Image { queued, .. } = &mut image {
+            *queued = false;
+        }
+        assert_eq!(cells_to_ui_log(&[image])[0].kind, "image");
+    }
 
     #[test]
     fn auth_manager_exposes_every_supported_credential_path() {

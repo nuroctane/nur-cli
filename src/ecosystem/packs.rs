@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 /// Skill sources installed via the `skills` CLI (vercel-labs/skills).
 const SKILL_PACKS: &[(&str, &str)] = &[
+    ("ferdinandobons/startup-skill", "startup-skill"),
     // Emil Kowalski - design engineering / animation taste
     ("emilkowalski/skills", "design"),
     // Website reverse-engineering skill (clone-website)
@@ -612,7 +613,7 @@ pub fn install_skill_packs(skills_cli: &ComponentStatus) -> (Vec<String>, Vec<St
             ok.push((*label).into());
             continue;
         }
-        // skills add <source> -g -a agents -y --copy
+        // skills add <source> -g -a universal -y --copy
         // Design + cyber: install all skills in the repo.
         // Clone-website: full-depth search for nested SKILL.md under .claude/skills.
         let args = skill_pack_install_args(source, label);
@@ -646,7 +647,7 @@ pub fn install_skill_packs(skills_cli: &ComponentStatus) -> (Vec<String>, Vec<St
 }
 
 fn skill_pack_install_args<'a>(source: &'a str, label: &'a str) -> Vec<&'a str> {
-    let mut args = vec!["add", source, "-g", "-a", "agents", "-y", "--copy"];
+    let mut args = vec!["add", source, "-g", "-a", "universal", "-y", "--copy"];
     if label == "clone-website" {
         args.extend(["--full-depth", "-s", "clone-website"]);
     } else {
@@ -1029,7 +1030,7 @@ mod tests {
     #[test]
     fn pack_install_targets_only_the_agents_root() {
         let args = skill_pack_install_args("earthtojake/text-to-cad", "text-to-cad");
-        assert!(args.windows(2).any(|pair| pair == ["-a", "agents"]));
+        assert!(args.windows(2).any(|pair| pair == ["-a", "universal"]));
         assert!(args.windows(2).any(|pair| pair == ["-s", "*"]));
         assert!(!args.contains(&"--all"));
     }

@@ -1,7 +1,7 @@
 # Vision
 
 Native multimodal support: send images and short video to the model - and see
-them **inline in the TUI** via your terminal's graphics protocol.
+them in an **on-demand preview** using your terminal's graphics protocol.
 
 ## Overview
 
@@ -9,19 +9,24 @@ NurCLI attaches workspace media on the Responses-style multimodal path (`input_i
 `input_video`) when the active provider supports it. The model can **see** workspace images
 and short video clips directly.
 
-Since v0.28, pasted and attached images also render **inline in the transcript**
-using the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/),
-sixel, or iTerm2 inline images (via `ratatui-image`), with a halfblocks fallback on
-text-only terminals.
+Pasted images stay in a compact composer attachment row until you send. F4
+opens a preview and cycles through multiple images; Shift+F4 removes the
+previewed image (or the last attachment when no preview is open). Esc closes
+the preview. Enter can send an image-only message. After sending, a small
+attachment row offers click-to-peek; pixels never cover the running prompt
+header or consume a large transcript area. Images queued while a turn runs
+travel with that follow-up rather than entering the active request.
+
+Previews use kitty, sixel, or iTerm2 graphics with a halfblocks fallback.
 
 ---
 
-## Inline image display
+## Image attachments and previews
 
 | Input | What happens |
 |-------|--------------|
-| **Ctrl+V an image** (screenshot, copied file) | Saved under `.nur/media/paste/`, rendered inline in the transcript, queued for vision |
-| **`/image <path>`** | Renders the workspace image inline + queues it for vision |
+| **Ctrl+V an image** (screenshot, copied file) | Saved under `.nur/media/paste/`, staged in the composer, sent for vision with your message |
+| **`/image <path>`** | Stages the workspace image in the composer |
 | **`look` tool call** | Click the tool card to peek the full-size render |
 | **LaTeX equations** | Rendered to PNG and shown inline in answer cards (existing behavior) |
 

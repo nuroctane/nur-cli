@@ -256,7 +256,7 @@ impl App {
             "/typesafe" | "/jev" => self.cmd_typesafe(&arg),
             "/prewalk" => self.cmd_prewalk(&arg),
             "/egaki" => self.cmd_egaki(&arg),
-            // `/image <path>`: show an image inline + queue it for vision.
+            // `/image <path>`: stage a draft image for vision.
             // (egaki generation keeps /egaki; bare `/image` is attach-only.)
             "/image" => self.cmd_image_attach(&arg),
             "/tb" | "/terminal-browser" => self.cmd_terminal_browser(&arg),
@@ -733,8 +733,7 @@ impl App {
         self.run_slash_tool("terminal_browser", &json);
     }
 
-    /// `/image <path>` - show a workspace image inline (terminal graphics
-    /// protocol) and queue it for model vision on the next turn.
+    /// `/image <path>` stages a workspace image in the composer until send.
     fn cmd_image_attach(&mut self, arg: &str) {
         let raw = arg.trim().trim_matches('"').trim_matches('\'');
         if raw.is_empty() {
@@ -747,7 +746,7 @@ impl App {
         } else {
             self.cwd.join(candidate)
         };
-        match crate::tools::media::queue_image_for_vision(&candidate) {
+        match crate::tools::media::load_media(&candidate, false) {
             Ok(meta) => {
                 self.attach_image_cell(&candidate.display().to_string(), &meta);
             }
@@ -2711,7 +2710,7 @@ impl App {
         if self.busy {
             // Queued cards replay their text as the prompt (steer / cut in /
             // after-turn), so the card carries the full instruction.
-            self.queue.push_back(model_prompt.clone());
+            self.queue.push_back(model_prompt.clone().into());
             self.cells.push(Cell::Queued { text: model_prompt });
             self.scroll_to_bottom();
             self.push_note(

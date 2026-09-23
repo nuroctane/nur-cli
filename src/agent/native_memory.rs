@@ -74,6 +74,9 @@ pub struct MemoryEntry {
     pub text: String,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// T-Mem-inspired future query cues. Retrieval metadata, never evidence.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub triggers: Vec<String>,
     /// 0.0–1.0 confidence (Connectome lessons pattern).
     #[serde(default = "default_confidence")]
     pub confidence: f32,
@@ -216,6 +219,30 @@ pub fn remember(
     confidence: f32,
     source: &str,
 ) -> Result<MemoryEntry, String> {
+    remember_with_triggers(scope, text, tier, voice, tags, confidence, source, &[])
+}
+
+/// Store explicit future-query cues alongside grounded memory evidence.
+pub fn remember_with_triggers(
+    scope: &str,
+    text: &str,
+    tier: Tier,
+    voice: Voice,
+    tags: &[String],
+    confidence: f32,
+    source: &str,
+    triggers: &[String],
+) -> Result<MemoryEntry, String> {
+    let mut cues = Vec::new();
+    for trigger in triggers.iter().take(8) {
+        let cue: String = trigger.trim().chars().take(160).collect();
+        if looks_secret(&cue) {
+            return Err("refused: trigger looks like a secret".into());
+        }
+        if !cue.is_empty() && !cues.contains(&cue) {
+            cues.push(cue);
+        }
+    }
     let text = text.trim();
     if text.is_empty() {
         return Err("memory text required".into());
@@ -233,6 +260,7 @@ pub fn remember(
         voice,
         text: text.to_string(),
         tags: tags.iter().take(12).cloned().collect(),
+        triggers: cues,
         confidence: confidence.clamp(0.0, 1.0),
         created_unix: now,
         updated_unix: now,
@@ -293,6 +321,17 @@ fn score(entry: &MemoryEntry, query_tokens: &[String], now: u64) -> f32 {
             hits += 1;
         }
     }
+    // Cues route to the evidence; they are never appended to its text.
+    let cue_hits = entry
+        .triggers
+        .iter()
+        .map(|cue| {
+            let tokens = tokenize(cue);
+            query_tokens.iter().filter(|t| tokens.contains(t)).count() as u32
+        })
+        .max()
+        .unwrap_or(0);
+    hits = hits.max(cue_hits);
     if hits == 0 {
         return 0.0;
     }
@@ -362,6 +401,9 @@ pub fn recall(scope: &str, query: &str, k: usize) -> Vec<(MemoryEntry, f32)> {
 fn e_text_has(e: &MemoryEntry, term: &str) -> bool {
     e.text.to_ascii_lowercase().contains(term)
         || e.tags.iter().any(|t| t.to_ascii_lowercase() == *term)
+        || e.triggers
+            .iter()
+            .any(|cue| tokenize(cue).iter().any(|t| t == term))
 }
 
 /// Thin inverted index (term → doc frequency). Built per recall from the live
@@ -381,7 +423,12 @@ impl InvertedIndex {
                     *df.entry(t).or_default() += 1;
                 }
             }
-            for t in e.tags.iter().filter_map(|s| tokenize(s).into_iter().next()) {
+            for t in e
+                .tags
+                .iter()
+                .chain(e.triggers.iter())
+                .flat_map(|s| tokenize(s))
+            {
                 if seen.insert(t.clone()) {
                     *df.entry(t).or_default() += 1;
                 }
@@ -396,6 +443,19 @@ impl InvertedIndex {
 }
 
 // ─── M4 Maintenance (localized) ──────────────────────────────────────────────
+
+fn merged_triggers(batch: &[MemoryEntry]) -> Vec<String> {
+    let mut cues = Vec::new();
+    for cue in batch.iter().flat_map(|entry| &entry.triggers) {
+        if !cues.contains(cue) {
+            cues.push(cue.clone());
+            if cues.len() == 8 {
+                break;
+            }
+        }
+    }
+    cues
+}
 
 /// Paper finding: localized maintenance is more cost-efficient than global
 /// reorganization. Promote the oldest L1 batch into a single L2 merge note
@@ -446,6 +506,7 @@ pub fn consolidate_localized(scope: &str, max_l1: usize) -> Result<String, Strin
         voice: Voice::FirstPerson,
         text: merged_body,
         tags: vec!["consolidated".into(), "era".into()],
+        triggers: merged_triggers(&batch),
         confidence: 0.65,
         created_unix: now,
         updated_unix: now,
@@ -596,6 +657,7 @@ fn fold_into_era(
             lines.join("\n")
         ),
         tags: vec!["era".into(), "consolidated".into()],
+        triggers: merged_triggers(batch),
         confidence: 0.6,
         created_unix: now,
         updated_unix: now,
@@ -824,6 +886,41 @@ pub fn parse_model_extraction(output: &str) -> Vec<(String, Voice)> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn future_query_cues_recall_facts_without_becoming_evidence() {
+        let s = scope();
+        let entry = MemoryEntry {
+            id: "cue-test".into(),
+            tier: Tier::L1,
+            voice: Voice::FirstPerson,
+            text: "I cannot eat peanuts.".into(),
+            tags: vec![],
+            triggers: vec!["choosing restaurant dinner".into()],
+            confidence: 0.9,
+            created_unix: now_unix(),
+            updated_unix: now_unix(),
+            source: "test".into(),
+            retired: false,
+        };
+        append_entry(&s, &entry).unwrap();
+        let hits = recall(&s, "restaurant dinner", 4);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].0.text, entry.text);
+        assert!(recall(&s, "rust compiler", 4).is_empty());
+        let prompt = prompt_block(&s, "restaurant dinner", 1000);
+        assert!(prompt.contains("I cannot eat peanuts."));
+        assert!(!prompt.contains("choosing restaurant dinner"));
+        let folded = fold_into_era(vec![entry.clone()], Tier::L2, &[entry.clone()], now_unix());
+        assert_eq!(folded.last().unwrap().triggers, entry.triggers);
+        let mut legacy = serde_json::to_value(&entry).unwrap();
+        legacy.as_object_mut().unwrap().remove("triggers");
+        assert!(serde_json::from_value::<MemoryEntry>(legacy)
+            .unwrap()
+            .triggers
+            .is_empty());
+        let _ = std::fs::remove_dir_all(scope_dir(&s));
+    }
+
     fn scope() -> String {
         format!("test-{}", uuid::Uuid::new_v4().simple())
     }
@@ -952,6 +1049,7 @@ mod tests {
             voice: Voice::Observed,
             text: "A durable source fact that must remain auditable".into(),
             tags: vec!["fact".into()],
+            triggers: Vec::new(),
             confidence: 0.8,
             created_unix: 1,
             updated_unix: 1,

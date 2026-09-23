@@ -172,7 +172,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 
 ---
 
-**v0.38.1**: Manual `/compact` honors configured Jev regardless of reduction, with explicit outcome receipts. Includes v0.38.0: 18 new chromatic themes (41 total), including six tinted-paper palettes; editable custom question answers with Unicode-aware caret movement and paste; lower Jev judgment overhead, bounded local reuse, and improved request scheduling. **[Theme collection](docs/themes.md)** · **[Jev evaluation](docs/jev-performance-evaluation.md)**
+**v0.38.2**: Compact image attachments stay in the composer until send, with F4 previews and per-message queue ownership. Adds T-Mem-inspired memory retrieval cues and four startup workflow skills. Includes Jev-first manual compaction, 41 themes, and editable custom question answers. **[Vision](docs/vision.md)** · **[Theme collection](docs/themes.md)** · **[Jev evaluation](docs/jev-performance-evaluation.md)**
 
 **v0.37.3**: Cache-aware routing (`typesafe::route`): long sessions stay on the warm model, fresh children take the cheap one past a 15% margin, secret-touching tasks stay on ZDR/TEE/local. **[Docs](https://www.nuroctane.xyz/cli)**
 
@@ -184,7 +184,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 |---------|------------|
 | **TUI** | Streaming · duration chips · thought/tool cards · peek · drag-select · scrollbar · sessions · multi-provider `/login` · **`/model` picker** · **`/plugins` marketplace** · `/goal` `/bro` `/adhd` `/scan` `/btw` `/codesearch` `/mc` `/feedback` `/tips` · **every skill as `/name`** · **41 themes including 18 chromatic studies + transparency mode** · **provider logo in the busy line + tab title** · **every path in the transcript is a link that opens** · **block-structured markdown** with theme-role colours · **LaTeX rendering** (image-peek build) · **`/receipt` verifies the hash chain** and exports spans · budgets · doctor |
 | **Agent** | Manual / plan / auto · tools · subagents · todos · auto-compact · session $ / token budgets · Esc cancel · Shift+Tab mid-turn · **NL skill auto-activation** |
-| **Vision** | `look` · `extract_frames` · prompt auto-attach · **inline images in the TUI** (kitty graphics protocol, sixel, iTerm2; Ctrl+V paste or `/image <path>`) |
+| **Vision** | `look` · `extract_frames` · prompt auto-attach · **compact image attachments with on-demand previews** (Ctrl+V paste or `/image <path>`, F4 preview) |
 | **Tools** | read · edit · bash · web · **browser** (incl. **element picking**) · git · knowledge · agent · **judgments** (`typesafe`) · **memory** (`optmem` `connectome` `mem`) · **diagrams** (`excalidraw` `tldraw` `penecho`) · **policy** (`dogwood`) · **background** (`bg`) · **async** (`admission` `goal` `proposal` `message` `question`) · **docs** (`anydoc`) · **python REPL** (`repl`) · **excalidraw** |
 | **Ecosystem** | Graphify · GraphJin · PLUR · Ruflo · Executor · **TypeSafe/Jev** (+ **keyless local engines**) · **OptMem** · **Headroom** · **Connectome** · **dogwood** · omp · browser · AKM · 1,000+ skills · **`/sc-research` whitehat DeFi + X bounty intel + historical vuln library** · **plugin marketplace** (Fable, Superpowers, Vercel, …) |
 | **Hardening** | Sandbox · denylist · SSRF blocks · atomic `~/.nur` IO · permissions/hooks · SHA-256 install · `nur doctor` |
@@ -262,11 +262,13 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 nur "steal UI design tokens from demo.mp4 and scaffold a matching component"
 ```
 
-**Inline rendering (v0.28+):** pasted screenshots (`Ctrl+V`) and `/image <path>`
-render as real pixels inside the TUI on terminals that support the
+**Image attachments:** pasted screenshots (`Ctrl+V`) and `/image <path>`
+stay in a compact composer row until sent. F4 previews or cycles images;
+Shift+F4 removes one. Sent attachments offer click-to-peek. Previews render
+as real pixels on terminals that support the
 [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/),
-sixel, or iTerm2 inline images - and are queued for model vision at the same
-time. Personal accent colors (`[theme] accent = "#..."` in `config.toml`)
+sixel, or iTerm2 inline images. Queued follow-ups keep their own attachments.
+Personal accent colors (`[theme] accent = "#..."` in `config.toml`)
 layer over any `/theme` pick. Details: [docs/vision.md](./docs/vision.md).
 
 **TypeSafe (Jev):** a system-one boost layer for whatever provider you are using -

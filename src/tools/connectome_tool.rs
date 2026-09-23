@@ -67,6 +67,10 @@ impl Tool for ConnectomeTool {
                     "enum": ["first_person", "observed"],
                     "description": "first_person = on-policy self-authored (preferred)"
                 },
+                "triggers": {
+                    "type": "array", "items": {"type": "string"}, "maxItems": 8,
+                    "description": "Optional future situations/questions that should recall this fact (max 160 characters each). Retrieval cues only, not factual evidence."
+                },
                 "tags": {
                     "type": "array",
                     "items": {"type": "string"}
@@ -145,7 +149,16 @@ impl Tool for ConnectomeTool {
                     .get("confidence")
                     .and_then(|v| v.as_f64())
                     .unwrap_or(0.75) as f32;
-                let e = native_memory::remember(
+                let triggers: Vec<String> = args
+                    .get("triggers")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let e = native_memory::remember_with_triggers(
                     &scope,
                     &text,
                     tier,
@@ -153,6 +166,7 @@ impl Tool for ConnectomeTool {
                     &tags,
                     conf,
                     "connectome_tool",
+                    &triggers,
                 )
                 .map_err(NurError::Tool)?;
                 let _ = chronicle::append(

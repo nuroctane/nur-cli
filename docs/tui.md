@@ -60,7 +60,8 @@ Mouse/keyboard interaction tips that used to live under the art are behind
 |-----|--------|
 | **Ctrl+A** | Select-all input (or whole transcript if input empty) |
 | **Ctrl+C** | Copy selection (transcript or input); else interrupt / double-tap quit |
-| **Ctrl+V** | Paste into input |
+| **Ctrl+V** | Paste text or stage an image in the composer |
+| **F4 / Shift+F4** | Preview/cycle draft images / remove the selected draft image |
 | **Ctrl+X** | Cut input selection (or whole input) |
 | `Enter` | Send message |
 | `Shift+Enter` | Newline in input |
@@ -410,7 +411,7 @@ nur ecosystem ensure
 | Command | Purpose |
 |---------|---------|
 | `/egaki` | Image / video / speech generation via egaki (`egaki login --provider chatgpt` supported) |
-| `/image <path>` | Show an image inline and attach it for vision (generation is `/egaki`) |
+| `/image <path>` | Stage an image in the composer for vision; F4 previews it (generation is `/egaki`) |
 | `/tb` · `/terminal-browser` | In-terminal browser: `open` \| `ls` \| `action` \| `setup` (Windows host fallback via agent-browser-cli) |
 | `/draw` | tldraw boards: open a `.tldraw`, `install`, or build one from an idea |
 | `/pen` · `/drawings` · `/penecho` | Penecho canvas (ink, MathJax, plots); `/drawings` lists saved canvases |

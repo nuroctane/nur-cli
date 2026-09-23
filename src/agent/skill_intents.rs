@@ -141,6 +141,32 @@ mod tests {
     use crate::agent::skills::{load_skills, normalize_intent_text};
 
     #[test]
+    fn startup_pack_has_slash_and_natural_language_routes() {
+        for (name, phrase) in [
+            ("startup-design", "validate my startup"),
+            ("startup-competitors", "competitor battle cards"),
+            ("startup-positioning", "position my startup"),
+            ("startup-pitch", "pitch my startup"),
+        ] {
+            let entry = parsed_entries().iter().find(|e| e.name == name).unwrap();
+            assert!(entry.triggers.contains(&format!("/{name}")));
+            let skill = Skill {
+                name: name.into(),
+                description: entry.description.clone(),
+                body: String::new(),
+                path: std::path::PathBuf::from("SKILL.md"),
+            };
+            let skills = vec![skill];
+            assert_eq!(
+                find_by_expanded_triggers(&normalize_intent_text(phrase), &skills)
+                    .unwrap()
+                    .name,
+                name
+            );
+        }
+    }
+
+    #[test]
     fn expanded_triggers_cover_fable() {
         let cwd = std::env::current_dir().unwrap();
         let skills = load_skills(&cwd);

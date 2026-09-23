@@ -206,6 +206,15 @@ defaults to `<project>:<NUR_SESSION_ID>` (or `<project>:global`); data is writte
 under `~/.nur/native-memory/` and `~/.nur/chronicle/`. Complements `memory`,
 `optmem`, and `plur` - it does not replace them.
 
+`remember` also accepts optional `triggers`: up to eight short future-query
+cues (160 characters each). For example, a factual food restriction can carry
+`["choosing a restaurant", "planning dinner"]`. Recall searches these cues,
+but only the stored fact becomes memory evidence in the prompt. This adopts
+the separation of retrieval cues and evidence from
+[T-Mem](https://github.com/Sherlockwz/T-Mem); it is a bounded native adaptation,
+not the upstream extraction, embedding, reranking, or evaluation pipeline.
+No additional model call or service is required. Existing memories remain compatible.
+
 <!-- src/tools/connectome_tool.rs:89 actions: status|list|remember|recall|consolidate|promote|supersede|extract|chronicle|chronicle_tail|checkpoint|restore|graph -->
 
 ### `headroom`

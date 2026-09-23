@@ -53,7 +53,8 @@ const ECOSYSTEM_MARKER: &str = "ecosystem.json";
 /// 27: upstream sync: omp floor 17.2.0 → 18.0.9 (+ OMP_APP_NAME attribution),
 ///     ruflo refresh below 3.38.19 (corrupted npm publishes), penecho 1.1.4
 ///     provider model docs, terminal-browser macOS/Linux status.
-pub(crate) const ECOSYSTEM_SCHEMA: u32 = 27;
+/// 28: startup validation, competitors, positioning and pitch skill pack.
+pub(crate) const ECOSYSTEM_SCHEMA: u32 = 28;
 /// Re-run ensure at most once per this many seconds unless forced.
 const ENSURE_TTL_SECS: u64 = 86_400;
 

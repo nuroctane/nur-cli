@@ -334,6 +334,12 @@ MCP / OpenAPI gateway catalog.
 
 Progressive skill packs loaded on demand.
 
+The MIT-licensed [startup-skill](https://github.com/ferdinandobons/startup-skill)
+pack adds `/startup-design`, `/startup-competitors`, `/startup-positioning`, and
+`/startup-pitch`. Natural-language activation includes "validate my startup",
+"competitor battlecards", "position my startup", and "pitch my startup".
+These are on-demand workflows, not background services.
+
 **Built-in skills include:**
 
 - `design-eng` - UI polish and animation

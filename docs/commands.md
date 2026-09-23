@@ -476,7 +476,7 @@ Type these inside the `nur` TUI. Aliases are shown in the same row.
 | `/headroom` | Context compression doctor (inline tool-result compress on by default) |
 | `/prewalk` | OMP-style: strong model plans, then cheap/smol at first edit after todos (`on` \| `off` \| `status` \| `into <model>` \| `reset`). Off by default. |
 | `/egaki` | Image/video gen via egaki (`login --provider chatgpt` supported) |
-| `/image <path>` | Show an image inline and attach it for vision (generation is `/egaki`) |
+| `/image <path>` | Stage an image in the composer for vision; F4 previews it (generation is `/egaki`) |
 | `/tb` · `/terminal-browser` | terminal-browser: `open` \| `ls` \| `action` \| `setup` (Windows host fallback via agent-browser-cli) |
 | `/factory-overnight` | Fractal-first overnight factory from `HANDOFF.md` (Unix preferred) |
 | `/pen` · `/drawings` · `/penecho` | Penecho canvas — ink, MathJax, plots, animations; `/drawings` lists saved canvases |
