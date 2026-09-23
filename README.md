@@ -172,7 +172,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 
 ---
 
-**v0.38.2**: Compact image attachments stay in the composer until send, with F4 previews and per-message queue ownership. Adds T-Mem-inspired memory retrieval cues and four startup workflow skills. Includes Jev-first manual compaction, 41 themes, and editable custom question answers. **[Vision](docs/vision.md)** · **[Theme collection](docs/themes.md)** · **[Jev evaluation](docs/jev-performance-evaluation.md)**
+**v0.38.3**: F6 opens a session inspector for changes, tools, agents, and context. Compact successful tool rows keep the transcript readable; viewport-only row preparation and quieter idle rendering reduce UI work. Includes compact image attachments, Jev-first manual compaction, 41 themes, and editable custom question answers. **[TUI](docs/tui.md)** · **[Vision](docs/vision.md)** · **[Theme collection](docs/themes.md)** · **[Jev evaluation](docs/jev-performance-evaluation.md)**
 
 **v0.37.3**: Cache-aware routing (`typesafe::route`): long sessions stay on the warm model, fresh children take the cheap one past a 15% margin, secret-touching tasks stay on ZDR/TEE/local. **[Docs](https://www.nuroctane.xyz/cli)**
 
@@ -276,6 +276,10 @@ tool gate, result judge, compaction with no summary, skill checks, routing. One
 key, every provider. Details: [docs/typesafe.md](./docs/typesafe.md).
 
 ### Ecosystem
+
+The TUI includes an **F6 session inspector** for changes, tools, agents, and
+context, with compact completed-tool rows and viewport-based transcript
+rendering. See [TUI controls](docs/tui.md#session-inspector-and-compact-activity).
 
 | Piece | Role |
 |-------|------|

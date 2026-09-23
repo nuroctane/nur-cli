@@ -58,7 +58,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .sidegraph_width
         .unwrap_or(default_sg_w)
         .clamp(24, max_sg_w.max(24));
-    let sg_drawn = app.sidegraph_open && chunks[0].width >= sg_w + 35;
+    let inspector_wide = app.inspector.open && chunks[0].width >= 90;
+    let sg_drawn = !app.inspector.open && app.sidegraph_open && chunks[0].width >= sg_w + 35;
     let drawn_sg_w = if sg_drawn { sg_w } else { 0 };
 
     // `Block::style` restyles cells but does not blank symbols. When a region
@@ -86,7 +87,15 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     f.render_widget(Block::default().style(theme::style_canvas()), area);
 
-    if sg_drawn {
+    if inspector_wide {
+        let row = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(40), Constraint::Length(42)])
+            .split(chunks[0]);
+        app.sidegraph_body = Rect::default();
+        draw_transcript(f, app, row[0]);
+        super::inspector::draw(f, app, row[1]);
+    } else if sg_drawn {
         app.sidegraph_narrow = false;
         let row = Layout::default()
             .direction(Direction::Horizontal)
@@ -95,7 +104,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_transcript(f, app, row[0]);
         draw_sidegraph_panel(f, app, row[1]);
     } else {
-        if app.sidegraph_open && !app.sidegraph_narrow {
+        if app.sidegraph_open && !app.inspector.open && !app.sidegraph_narrow {
             app.sidegraph_narrow = true;
             app.push_note(
                 theme::Tone::Neutral,
@@ -140,6 +149,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     draw_input(f, app, chunks[2]); // publishes input_inner for click-to-caret
     draw_statusline(f, app, chunks[3]);
+
+    if app.inspector.open && !inspector_wide {
+        super::inspector::draw(f, app, chunks[0]);
+    }
 
     if !app.palette_matches().is_empty() && app.modal_focus().is_none() && !app.peek_is_open() {
         draw_palette(f, app, chunks[2]);
@@ -2122,6 +2135,32 @@ fn fit_wrap_cache(
     parts.resize_with(cells_len, Vec::new);
 }
 
+fn visible_rows(top: usize, height: usize, total: usize) -> std::ops::Range<usize> {
+    top.min(total)..top.saturating_add(height).min(total)
+}
+
+fn compact_tool_line(
+    name: &str,
+    args: &str,
+    duration: Option<Duration>,
+    width: usize,
+    out: &mut Vec<Line<'static>>,
+) {
+    let time = duration.map(theme::fmt_duration).unwrap_or_default();
+    let suffix = format!(" · {time} · click to peek");
+    let available = width.saturating_sub(name.len() + suffix.len() + 6);
+    out.push(Line::from(vec![
+        Span::styled("▸ ", Style::default().fg(theme::dim(theme::FG(), 0.2))),
+        Span::styled("✓ ", theme::style_success()),
+        Span::styled(name.to_string(), Style::default().fg(theme::FG())),
+        Span::styled(
+            format!(" {}", truncate(&summarize_args(name, args), available)),
+            Style::default().fg(theme::dim(theme::FG(), 0.2)),
+        ),
+        Span::styled(suffix, Style::default().fg(theme::dim(theme::FG(), 0.2))),
+    ]));
+}
+
 // ── transcript ─────────────────────────────────────────────────────────────
 fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     // Wide scrollbar rail (2 cols) so drag is easy to grab.
@@ -2131,10 +2170,14 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     let inner_w = area.width.saturating_sub(2 + sb_w).max(10);
     // Spinner frame bucket so animated cells re-wrap only when the glyph changes.
     let spin_i = (app.spinner_epoch.elapsed().as_millis() / theme::SPINNER_MS) as u64;
-    let elapsed = app.spinner_epoch.elapsed();
-
     // Per-cell wrap cache: finished rows are stable; live thinking/tools/stream
     // only recompute when content or spinner frame changes.
+    let palette = (theme::current(), theme::transparent());
+    if app.wrap_cache_palette != Some(palette) {
+        app.wrap_cache_palette = Some(palette);
+        app.wrap_cache_keys.clear();
+        app.wrap_cache_parts.clear();
+    }
     fit_wrap_cache(
         &mut app.wrap_cache_width,
         &mut app.wrap_cache_keys,
@@ -2143,49 +2186,27 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
         app.cells.len(),
     );
 
-    let mut wrapped: Vec<Line<'static>> = Vec::new();
-    let mut owner: Vec<Option<usize>> = Vec::new(); // index into `prompts`
-    let mut is_prompt_head: Vec<bool> = Vec::new();
-    let mut prompts: Vec<String> = Vec::new();
-    let mut prompt_cells: Vec<usize> = Vec::new(); // prompt ordinal → cell index
-    let mut current: Option<usize> = None;
-
-    // Rebuild hit-test maps: headers, peekable lines, exact "click to peek" span.
-    let mut hit_headers: Vec<Option<usize>> = Vec::new();
-    let mut line_cells: Vec<Option<usize>> = Vec::new();
-    let mut line_cell_all: Vec<Option<usize>> = Vec::new();
-    let mut hit_click_to_peek: Vec<Option<(usize, usize, usize)>> = Vec::new();
-    let mut hit_expand_phrase: Vec<Option<(usize, usize, usize)>> = Vec::new();
-    let mut hit_queue_actions: Vec<Vec<(usize, usize, usize, u8)>> = Vec::new();
-    let mut hit_urls: Vec<Vec<(usize, usize, String)>> = Vec::new();
-    let mut hit_paths: Vec<Vec<(usize, usize, std::path::PathBuf, crate::open_uri::PathKind)>> =
-        Vec::new();
-    let mut hit_swarm_panes: Vec<Vec<(u64, usize, usize)>> = Vec::new();
-    let mut plain_lines: Vec<String> = Vec::new();
-
+    // Cache finished cell layout, then index rows without cloning styled text.
+    // Only visible rows need link discovery, filesystem checks and hit testing.
+    let mut row_index = super::row_index::RowIndex::default();
+    let mut prompts = Vec::new();
+    let mut prompt_cells = Vec::new();
+    let mut current = None;
+    let mut plain_dirty = app.plain_lines.is_empty();
     for (cell_idx, cell) in app.cells.iter().enumerate() {
         if matches!(cell, Cell::Image { queued: true, .. }) {
             continue;
         }
         if let Cell::User(text) = cell {
-            // Animated separator before every turn except the very first — a
-            // quiet shimmering rule so you can see where each exchange begins.
             if !prompts.is_empty() {
-                wrapped.push(turn_separator(inner_w as usize, elapsed));
-                owner.push(Some(prompts.len()));
-                is_prompt_head.push(false);
-                hit_headers.push(None);
-                line_cells.push(None);
-                line_cell_all.push(None);
-                hit_click_to_peek.push(None);
-                hit_expand_phrase.push(None);
-                hit_queue_actions.push(Vec::new());
-                hit_urls.push(Vec::new());
-                hit_paths.push(Vec::new());
-                hit_swarm_panes.push(Vec::new());
-                plain_lines.push(String::new());
+                let row = row_index.len();
+                row_index.push(None, 1, Some(prompts.len()), 0);
+                if plain_dirty || row >= app.plain_lines.len() {
+                    app.plain_lines.truncate(row);
+                    app.plain_lines.push(String::new());
+                }
             }
-            prompts.push(text.clone());
+            prompts.push(text);
             prompt_cells.push(cell_idx);
             current = Some(prompts.len() - 1);
         }
@@ -2197,6 +2218,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
                 .map(|p| p.is_empty() && key != 0)
                 .unwrap_or(true);
         if need {
+            plain_dirty = true;
             let mut cell_out: Vec<Line<'static>> = Vec::new();
             cell_lines(app, cell, cell_idx, inner_w as usize, &mut cell_out);
             let w = wrap::wrap_lines(&cell_out, inner_w);
@@ -2207,164 +2229,35 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
                 *k = key;
             }
         }
-        let w = app
-            .wrap_cache_parts
-            .get(cell_idx)
-            .cloned()
-            .unwrap_or_default();
-        let collapsible = cell.is_collapsible();
-        let peekable = cell.is_peekable();
-        // Swarm-card pane hit-boxes, indexed by the card's own body-relative row.
-        // The card emits: row 0 = blank, row 1 = header, then panes/rows. So a
-        // wrapped line at intra-cell index `i` maps to pane row `i - 2`.
-        let swarm_pane_rows: Option<Vec<Vec<(u64, usize, usize)>>> =
-            if let Cell::Swarm { detail, .. } = cell {
-                Some(swarm_card_pane_hits(inner_w as usize, *detail))
-            } else {
-                None
-            };
-        let mut header_marked = false;
-        for (i, mut line) in w.into_iter().enumerate() {
-            // First non-empty line of a collapsible card is the click target.
-            let empty = line
-                .spans
-                .iter()
-                .all(|s| s.content.chars().all(|c| c.is_whitespace()));
-            let is_header = collapsible && !header_marked && !empty;
-            if is_header {
-                header_marked = true;
-            }
-            let plain = line_to_plain(&line);
-            // Exact hitbox for the words "click to peek" (display columns).
-            let ctp = if is_header {
-                if let Some(byte_i) = plain.find("click to peek") {
-                    let start = UnicodeWidthStr::width(&plain[..byte_i]);
-                    let end = start + UnicodeWidthStr::width("click to peek");
-                    Some((cell_idx, start, end))
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            // Expand / collapse phrase on header (and "… · ▸ expands" body hint).
-            let exp = {
-                let phrases = ["▸ expands", "▾ collapse", "click ▾ to collapse", "▸ expand"];
-                let mut found = None;
-                for p in phrases {
-                    if let Some(byte_i) = plain.find(p) {
-                        let start = UnicodeWidthStr::width(&plain[..byte_i]);
-                        let end = start + UnicodeWidthStr::width(p);
-                        found = Some((cell_idx, start, end));
-                        break;
-                    }
-                }
-                found
-            };
-            // Queued follow-up actions (steer / cut in / dismiss; "send now" legacy alias).
-            let mut qa: Vec<(usize, usize, usize, u8)> = Vec::new();
-            if matches!(cell, Cell::Queued { .. }) {
-                // Prefer the word "steer" when both appear; also accept "send now".
-                if let Some(byte_i) = plain.find("steer") {
-                    let start = UnicodeWidthStr::width(&plain[..byte_i]);
-                    let end = start + UnicodeWidthStr::width("steer");
-                    qa.push((cell_idx, start, end, 0u8)); // inject mid-turn
-                } else if let Some(byte_i) = plain.find("send now") {
-                    let start = UnicodeWidthStr::width(&plain[..byte_i]);
-                    let end = start + UnicodeWidthStr::width("send now");
-                    qa.push((cell_idx, start, end, 0u8));
-                }
-                if let Some(byte_i) = plain.find("cut in") {
-                    let start = UnicodeWidthStr::width(&plain[..byte_i]);
-                    let end = start + UnicodeWidthStr::width("cut in");
-                    qa.push((cell_idx, start, end, 3u8)); // cancel + front
-                }
-                if let Some(byte_i) = plain.find("dismiss") {
-                    let start = UnicodeWidthStr::width(&plain[..byte_i]);
-                    let end = start + UnicodeWidthStr::width("dismiss");
-                    qa.push((cell_idx, start, end, 1u8));
-                }
-            }
-            // Clickable http(s) URLs on this visual line (after wrap).
-            let urls = crate::open_uri::find_url_spans(&plain);
-            // Path links: a token that exists on disk opens on click - a
-            // directory in the file manager, a file in its default app, exactly
-            // like a URL opens in the browser. Only existing paths are returned,
-            // so a clickable path is always one that opens. Directories are
-            // painted in the `dir` role so they read apart from the files
-            // beside them; a file keeps the colour it already had.
-            let mut paths = crate::open_uri::find_path_spans(&plain, &app.cwd);
-            // A URL's own path segments must not double as path links.
-            if !urls.is_empty() {
-                paths.retain(|(lo, _hi, _p, _k)| {
-                    !urls.iter().any(|(ulo, uhi, _)| lo >= ulo && lo < uhi)
-                });
-            }
-            if !paths.is_empty() {
-                let hue = theme::DIR();
-                for (lo, hi, _p, kind) in &paths {
-                    if *kind == crate::open_uri::PathKind::Dir {
-                        paint_columns_fg(&mut line, *lo, *hi, hue);
-                    }
-                }
-            }
-            // Swarm-card pane hits for this row (card row i → pane row i-2).
-            let sp: Vec<(u64, usize, usize)> = if let Some(rows) = &swarm_pane_rows {
-                i.checked_sub(2)
-                    .and_then(|pane_row| rows.get(pane_row))
-                    .cloned()
-                    .unwrap_or_default()
-            } else {
-                Vec::new()
-            };
-            plain_lines.push(plain);
-            wrapped.push(line);
-            owner.push(current);
-            // A User cell renders spacer → top border → padding → first text
-            // row; any of those on screen means the prompt itself is visible.
-            is_prompt_head.push(matches!(cell, Cell::User(_)) && i <= 3);
-            hit_headers.push(if is_header { Some(cell_idx) } else { None });
-            line_cells.push(if peekable && !empty {
-                Some(cell_idx)
-            } else {
-                None
-            });
-            line_cell_all.push(if !empty { Some(cell_idx) } else { None });
-            hit_click_to_peek.push(ctp);
-            hit_expand_phrase.push(exp);
-            hit_queue_actions.push(qa);
-            hit_urls.push(urls);
-            hit_paths.push(paths);
-            hit_swarm_panes.push(sp);
+        let first_row = row_index.len();
+        let lines = &app.wrap_cache_parts[cell_idx];
+        row_index.push(
+            Some(cell_idx),
+            lines.len(),
+            current,
+            if matches!(cell, Cell::User(_)) { 3 } else { 0 },
+        );
+        if plain_dirty || row_index.len() > app.plain_lines.len() {
+            app.plain_lines.truncate(first_row);
+            app.plain_lines.extend(lines.iter().map(line_to_plain));
         }
     }
-    app.hit_headers = hit_headers;
-    app.line_cells = line_cells;
-    app.line_cell_all = line_cell_all;
-    app.hit_click_to_peek = hit_click_to_peek;
-    app.hit_expand_phrase = hit_expand_phrase;
-    app.hit_queue_actions = hit_queue_actions;
-    app.hit_urls = hit_urls;
-    app.hit_paths = hit_paths;
-    app.hit_swarm_panes = hit_swarm_panes;
-    app.plain_lines = plain_lines;
-
-    let total = wrapped.len() as u16;
+    app.plain_lines.truncate(row_index.len());
+    let total = row_index.len();
     let viewport = area.height;
 
     // Sticky banner takes rows off the body — max_scroll must use body height
     // or the thumb/drag math fights the sticky and feels janky.
-    const STICKY_H: u16 = 4;
+    const STICKY_H: u16 = 2;
     // Pre-pass sticky using full viewport estimate, then refine.
-    let max_scroll_full = total.saturating_sub(viewport);
+    let max_scroll_full = total.saturating_sub(viewport as usize);
     let top_guess = max_scroll_full.saturating_sub(app.scroll_from_bottom.min(max_scroll_full));
-    let sticky_guess: bool = sticky_owner(
-        &owner,
-        &is_prompt_head,
-        top_guess as usize,
-        (top_guess as usize + viewport as usize).min(wrapped.len()),
-    )
-    .is_some();
+    let sticky_guess: bool = row_index
+        .sticky_owner(
+            top_guess as usize,
+            (top_guess as usize + viewport as usize).min(row_index.len()),
+        )
+        .is_some();
     let sticky_h = if sticky_guess { STICKY_H } else { 0 };
     let body_h = viewport.saturating_sub(sticky_h);
 
@@ -2372,7 +2265,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     app.view_h = body_h;
     app.view_total = total;
 
-    let max_scroll = total.saturating_sub(body_h);
+    let max_scroll = total.saturating_sub(body_h as usize);
     if app.scroll_from_bottom > max_scroll {
         app.scroll_from_bottom = max_scroll;
     }
@@ -2380,9 +2273,9 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     app.transcript_top = top;
 
     let vis_lo = top as usize;
-    let vis_hi = (vis_lo + body_h as usize).min(wrapped.len());
-    let sticky_oi = sticky_owner(&owner, &is_prompt_head, vis_lo, vis_hi);
-    let sticky: Option<String> = sticky_oi.map(|oi| prompts[oi].clone());
+    let vis_hi = (vis_lo + body_h as usize).min(row_index.len());
+    let sticky_oi = row_index.sticky_owner(vis_lo, vis_hi);
+    let sticky: Option<String> = sticky_oi.map(|oi| prompts[oi].to_string());
     let sticky_cell = sticky_oi.and_then(|oi| prompt_cells.get(oi).copied());
     // Freeze sticky while drag-selecting: sticky appearing/disappearing mid-drag
     // changes body height and makes the highlight jump under the pointer.
@@ -2396,7 +2289,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     let body_h = viewport.saturating_sub(sticky_h);
     // Re-sync if sticky appearance changed body height.
     app.view_h = body_h;
-    let max_scroll = total.saturating_sub(body_h);
+    let max_scroll = total.saturating_sub(body_h as usize);
     if app.scroll_from_bottom > max_scroll {
         app.scroll_from_bottom = max_scroll;
     }
@@ -2405,20 +2298,140 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
 
     let text_w = inner_w;
 
-    let sel = app.selection;
-    let visible: Vec<Line> = wrapped
-        .into_iter()
-        .enumerate()
-        .skip(top as usize)
-        .take(body_h as usize)
-        .map(|(abs_i, line)| {
-            if let Some(range) = sel {
-                apply_selection_style(line, abs_i, range)
+    let total_rows = row_index.len();
+    app.hit_headers.resize(total_rows, None);
+    app.line_cells.resize(total_rows, None);
+    app.line_cell_all.resize(total_rows, None);
+    app.hit_click_to_peek.resize(total_rows, None);
+    app.hit_expand_phrase.resize(total_rows, None);
+    app.hit_queue_actions.resize_with(total_rows, Vec::new);
+    app.hit_urls.resize_with(total_rows, Vec::new);
+    app.hit_paths.resize_with(total_rows, Vec::new);
+    app.hit_swarm_panes.resize_with(total_rows, Vec::new);
+    let mut visible = Vec::with_capacity(body_h as usize);
+    for abs_i in visible_rows(top as usize, body_h as usize, total_rows) {
+        let (cell_idx, i) = row_index.row(abs_i);
+        let Some(cell_idx) = cell_idx else {
+            app.hit_headers[abs_i] = None;
+            app.line_cells[abs_i] = None;
+            app.line_cell_all[abs_i] = None;
+            app.hit_click_to_peek[abs_i] = None;
+            app.hit_expand_phrase[abs_i] = None;
+            app.hit_queue_actions[abs_i].clear();
+            app.hit_urls[abs_i].clear();
+            app.hit_paths[abs_i].clear();
+            app.hit_swarm_panes[abs_i].clear();
+            visible.push(turn_separator(inner_w as usize, Duration::ZERO));
+            continue;
+        };
+        let cell = &app.cells[cell_idx];
+        let mut line = app.wrap_cache_parts[cell_idx][i].clone();
+        let collapsible = cell.is_collapsible();
+        let peekable = cell.is_peekable();
+        let swarm_pane_rows = if let Cell::Swarm { detail, .. } = cell {
+            Some(swarm_card_pane_hits(inner_w as usize, *detail))
+        } else {
+            None
+        };
+        // First non-empty line of a collapsible card is the click target.
+        let empty = line
+            .spans
+            .iter()
+            .all(|s| s.content.chars().all(|c| c.is_whitespace()));
+        let is_header = collapsible
+            && app.wrap_cache_parts[cell_idx][..i]
+                .iter()
+                .all(|line| line.spans.iter().all(|span| span.content.trim().is_empty()))
+            && !empty;
+        let plain = line_to_plain(&line);
+        // Exact hitbox for the words "click to peek" (display columns).
+        let ctp = if is_header {
+            if let Some(byte_i) = plain.find("click to peek") {
+                let start = UnicodeWidthStr::width(&plain[..byte_i]);
+                let end = start + UnicodeWidthStr::width("click to peek");
+                Some((cell_idx, start, end))
             } else {
-                line
+                None
             }
-        })
-        .collect();
+        } else {
+            None
+        };
+        // Expand / collapse phrase on header (and "… · ▸ expands" body hint).
+        let exp = {
+            let phrases = ["▸ expands", "▾ collapse", "click ▾ to collapse", "▸ expand"];
+            let mut found = None;
+            for p in phrases {
+                if let Some(byte_i) = plain.find(p) {
+                    let start = UnicodeWidthStr::width(&plain[..byte_i]);
+                    let end = start + UnicodeWidthStr::width(p);
+                    found = Some((cell_idx, start, end));
+                    break;
+                }
+            }
+            found
+        };
+        // Queued follow-up actions (steer / cut in / dismiss; "send now" legacy alias).
+        let mut qa: Vec<(usize, usize, usize, u8)> = Vec::new();
+        if matches!(cell, Cell::Queued { .. }) {
+            // Prefer the word "steer" when both appear; also accept "send now".
+            if let Some(byte_i) = plain.find("steer") {
+                let start = UnicodeWidthStr::width(&plain[..byte_i]);
+                let end = start + UnicodeWidthStr::width("steer");
+                qa.push((cell_idx, start, end, 0u8)); // inject mid-turn
+            } else if let Some(byte_i) = plain.find("send now") {
+                let start = UnicodeWidthStr::width(&plain[..byte_i]);
+                let end = start + UnicodeWidthStr::width("send now");
+                qa.push((cell_idx, start, end, 0u8));
+            }
+            if let Some(byte_i) = plain.find("cut in") {
+                let start = UnicodeWidthStr::width(&plain[..byte_i]);
+                let end = start + UnicodeWidthStr::width("cut in");
+                qa.push((cell_idx, start, end, 3u8)); // cancel + front
+            }
+            if let Some(byte_i) = plain.find("dismiss") {
+                let start = UnicodeWidthStr::width(&plain[..byte_i]);
+                let end = start + UnicodeWidthStr::width("dismiss");
+                qa.push((cell_idx, start, end, 1u8));
+            }
+        }
+        // Only visible rows discover links; unchanged rows reuse bounded metadata.
+        let (urls, paths) = app.link_cache.get(&app.cwd, &plain);
+        if !paths.is_empty() {
+            let hue = theme::DIR();
+            for (lo, hi, _p, kind) in &paths {
+                if *kind == crate::open_uri::PathKind::Dir {
+                    paint_columns_fg(&mut line, *lo, *hi, hue);
+                }
+            }
+        }
+        // Swarm-card pane hits for this row (card row i → pane row i-2).
+        let sp: Vec<(u64, usize, usize)> = if let Some(rows) = &swarm_pane_rows {
+            i.checked_sub(2)
+                .and_then(|pane_row| rows.get(pane_row))
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        app.hit_headers[abs_i] = if is_header { Some(cell_idx) } else { None };
+        app.line_cells[abs_i] = if peekable && !empty {
+            Some(cell_idx)
+        } else {
+            None
+        };
+        app.line_cell_all[abs_i] = if !empty { Some(cell_idx) } else { None };
+        app.hit_click_to_peek[abs_i] = ctp;
+        app.hit_expand_phrase[abs_i] = exp;
+        app.hit_queue_actions[abs_i] = qa;
+        app.hit_urls[abs_i] = urls;
+        app.hit_paths[abs_i] = paths;
+        app.hit_swarm_panes[abs_i] = sp;
+        visible.push(if let Some(range) = app.selection {
+            apply_selection_style(line, abs_i, range)
+        } else {
+            line
+        });
+    }
 
     let body_rect = Rect {
         x: area.x + 1,
@@ -2491,6 +2504,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
 /// The prompt owning the topmost visible line — but only when that prompt's own
 /// lines have scrolled off. If you can already see the prompt, pinning a copy of
 /// it would just be noise.
+#[cfg(test)]
 fn sticky_owner(
     owner: &[Option<usize>],
     is_prompt_head: &[bool],
@@ -2506,116 +2520,34 @@ fn sticky_owner(
     }
 }
 
-/// Full-width sticky prompt banner — title bar, padded prompt text with wide
-/// margins, and a bottom hairline so it reads as a card pinned over the
-/// transcript. The whole rect (including padding) is the right/double-click
-/// hitbox for the prompt's context menu.
+/// Compact sticky prompt label above the transcript. The whole rect, including
+/// padding, is the right/double-click hitbox for the prompt's context menu.
 fn draw_sticky_banner(f: &mut Frame, prompt: &str, area: Rect) {
     f.render_widget(Clear, area);
-    let bar = Style::default().bg(theme::META_BLUE());
-    let surface = Style::default().bg(theme::SURFACE());
-
-    // Row 0: solid Nur-gold title bar.
-    let title = Rect {
-        x: area.x,
-        y: area.y,
-        width: area.width,
-        height: 1,
-    };
+    f.render_widget(Block::default().style(theme::style_surface()), area);
+    let text = truncate(
+        &prompt.replace('\n', " "),
+        area.width.saturating_sub(10) as usize,
+    );
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
-                "  PROMPT  ".to_string(),
+                " ❯ you  ",
                 Style::default()
-                    .fg(theme::ON_ACCENT_FG())
-                    .bg(theme::META_BLUE())
+                    .fg(theme::FG())
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(
-                " · scroll follows this turn · double/right-click for menu ".to_string(),
-                Style::default()
-                    .fg(theme::BLUE_100())
-                    .bg(theme::META_BLUE()),
-            ),
-        ]))
-        .style(bar),
-        title,
+            Span::styled(text, theme::style_user()),
+        ])),
+        area,
     );
-
-    // Middle rows: prompt text with wide side margins on the surface.
-    let hairline_h: u16 = if area.height >= 3 { 1 } else { 0 };
-    if area.height >= 2 {
-        let body = Rect {
-            x: area.x,
-            y: area.y + 1,
-            width: area.width,
-            height: area.height.saturating_sub(1 + hairline_h),
-        };
-        let text = prompt.replace('\n', " ");
-        // Wider margins all around: 5-col gutter each side.
-        let avail = (area.width as usize).saturating_sub(10).max(8);
-        let mut lines: Vec<Line> = Vec::new();
-        let chars: Vec<char> = text.chars().collect();
-        let mut i = 0;
-        let rows = body.height as usize;
-        for r in 0..rows {
-            if i >= chars.len() && r > 0 {
-                break;
-            }
-            let end = (i + avail).min(chars.len());
-            let mut chunk: String = chars[i..end].iter().collect();
-            i = end;
-            // More prompt than rows: elide the tail.
-            if r + 1 == rows && i < chars.len() {
-                chunk.push('…');
-            }
-            let prefix = if r == 0 { "  ❯  " } else { "     " };
-            lines.push(Line::from(vec![
-                Span::styled(
-                    prefix.to_string(),
-                    Style::default()
-                        .fg(theme::META_BLUE())
-                        .bg(theme::SURFACE())
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    chunk,
-                    Style::default()
-                        .fg(theme::FG())
-                        .bg(theme::SURFACE())
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ]));
-            if i >= chars.len() {
-                break;
-            }
-        }
-        f.render_widget(Paragraph::new(lines).style(surface), body);
-    }
-
-    // Bottom hairline: separates the pinned card from the scrolling body.
-    if hairline_h == 1 {
-        let edge = Rect {
-            x: area.x,
-            y: area.bottom().saturating_sub(1),
-            width: area.width,
-            height: 1,
-        };
-        f.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                "▁".repeat(area.width as usize),
-                Style::default().fg(theme::BORDER()).bg(theme::SURFACE()),
-            ))),
-            edge,
-        );
-    }
 }
 
 /// Vertical scrollbar with a fractional (1/8-cell) thumb, hover and drag
 /// states. Geometry comes from [`ScrollMetrics`] (tui-scrollbar-style subcell
 /// math) so the thumb glides instead of jumping whole rows; drag is handled in
 /// `App::on_mouse` with a grab offset so the thumb never leaps to the pointer.
-fn draw_scrollbar(f: &mut Frame, app: &App, track: Rect, top: u16, total: u16, viewport: u16) {
+fn draw_scrollbar(f: &mut Frame, app: &App, track: Rect, top: usize, total: usize, viewport: u16) {
     if track.height == 0 || track.width == 0 {
         return;
     }
@@ -2902,6 +2834,10 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
             duration,
             expanded,
         } => {
+            if *ok == Some(true) && !*expanded {
+                compact_tool_line(name, args, *duration, width, out);
+                return;
+            }
             out.push(Line::default());
             let hue = theme::tool_color(name);
             let running = ok.is_none();
@@ -5507,62 +5443,22 @@ fn image_cell_lines(path: &str, label: &str, width: usize, out: &mut Vec<Line<'s
     )));
 }
 
-fn user_prompt_card(text: &str, width: usize, out: &mut Vec<Line<'static>>) {
-    let w = width.max(12);
-    let border = Style::default().fg(theme::META_BLUE());
-    let label = Style::default()
-        .fg(theme::META_BLUE_SKY())
-        .add_modifier(Modifier::BOLD);
-    // Inner text width: "│  " + text + "  │"
-    let text_w = w.saturating_sub(6).max(4);
-
+fn user_prompt_card(text: &str, _width: usize, out: &mut Vec<Line<'static>>) {
     out.push(Line::default());
-
-    // Top border with a " ❯ you " label woven in.
-    let title = " ❯ you ";
-    let dashes = w.saturating_sub(2 + 1 + title.chars().count());
-    out.push(Line::from(vec![
-        Span::styled("╭─".to_string(), border),
-        Span::styled(title.to_string(), label),
-        Span::styled(format!("{}╮", "─".repeat(dashes)), border),
-    ]));
-
-    // Padding row + wrapped text rows + padding row, all inside │ … │.
-    let blank_inner = |out: &mut Vec<Line<'static>>| {
-        out.push(Line::from(vec![
-            Span::styled("│".to_string(), border),
-            Span::raw(" ".repeat(w.saturating_sub(2))),
-            Span::styled("│".to_string(), border),
-        ]));
-    };
-    blank_inner(out);
-    for src in text.lines() {
-        let chars: Vec<char> = src.chars().collect();
-        let mut i = 0usize;
-        loop {
-            let end = (i + text_w).min(chars.len());
-            let chunk: String = chars[i..end].iter().collect();
-            let pad = text_w.saturating_sub(chunk.chars().count());
-            out.push(Line::from(vec![
-                Span::styled("│  ".to_string(), border),
-                Span::styled(chunk, theme::style_user()),
-                Span::raw(" ".repeat(pad)),
-                Span::styled("  │".to_string(), border),
-            ]));
-            i = end;
-            if i >= chars.len() {
-                break;
-            }
-        }
-        if chars.is_empty() {
-            blank_inner(out);
-        }
-    }
-    blank_inner(out);
     out.push(Line::from(Span::styled(
-        format!("╰{}╯", "─".repeat(w.saturating_sub(2))),
-        border,
+        "❯ you",
+        Style::default()
+            .fg(theme::FG())
+            .add_modifier(Modifier::BOLD),
     )));
+    // The shared wrapper owns Unicode display widths and continuation gutters.
+    for line in text.lines() {
+        out.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(line.to_string(), theme::style_user()),
+        ]));
+    }
+    out.push(Line::default());
 }
 
 /// Highlight drag-selected characters with a Nur-gold selection wash.
@@ -6493,12 +6389,10 @@ fn draft_attachment_line(count: usize, width: u16) -> Line<'static> {
 }
 
 fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
-    let tick = app.spinner_epoch.elapsed();
-    // Border is calm-but-alive when ready for input (slow whole-border aurora
-    // shimmer), and quietly dim while a turn runs or a modal owns focus.
+    // Stable focus chrome; motion belongs to active operations.
     let active_border = !app.busy && app.approval.is_none() && app.question.is_none();
     let border_color = if active_border {
-        theme::aurora_cell(tick, 0, 1, 3200)
+        theme::META_BLUE()
     } else {
         theme::BORDER()
     };
@@ -6514,9 +6408,9 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
         Span::styled(t, theme::style_faint())
     } else {
         Span::styled(
-            format!(" {provider} "),
+            format!(" {provider} · F6 inspect "),
             Style::default()
-                .fg(theme::aurora_cell(tick, 3, 6, 3200))
+                .fg(theme::META_BLUE())
                 .add_modifier(Modifier::BOLD),
         )
     };
@@ -6537,21 +6431,6 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
         );
         inner.y += 1;
         inner.height -= 1;
-    }
-
-    // A single bright node scans along the top edge when ready — subtle life.
-    if active_border && area.width > 4 {
-        let inner_w = area.width.saturating_sub(2) as usize;
-        let cycle = 2000u128;
-        let t = theme::ease_out((tick.as_millis() % cycle) as f64 / cycle as f64);
-        let hx = ((t * inner_w as f64) as usize).min(inner_w.saturating_sub(1)) as u16;
-        let buf = f.buffer_mut();
-        buf[(area.x + 1 + hx, area.y)].set_char('━').set_style(
-            Style::default()
-                .fg(theme::BLUE_050())
-                .bg(theme::SURFACE())
-                .add_modifier(Modifier::BOLD),
-        );
     }
 
     let focused = app.approval.is_none()
@@ -6809,7 +6688,11 @@ fn draw_statusline(f: &mut Frame, app: &App, area: Rect) {
     // Each metric gets its own hue from the standard ramp so the statusline is
     // scannable at a glance instead of one grey run-on.
     // Separators slowly cycle the aurora ring so the whole strip feels alive.
-    let statick = app.spinner_epoch.elapsed();
+    let statick = if app.busy {
+        app.spinner_epoch.elapsed()
+    } else {
+        Duration::ZERO
+    };
     let sep = || {
         Span::styled(
             "  ·  ".to_string(),
@@ -7567,8 +7450,7 @@ fn cell_wrap_key(cell: &Cell, spin_i: u64) -> u64 {
     match cell {
         Cell::Banner => {
             1u8.hash(&mut h);
-            // Banner gradient shimmers — re-wrap each spinner frame.
-            spin_i.hash(&mut h);
+            // Finished chrome is stable; animate only active work.
         }
         Cell::User(t) => {
             2u8.hash(&mut h);
@@ -7907,6 +7789,143 @@ fn draw_ctx_menu(f: &mut Frame, app: &mut App) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn viewport_limits_work_and_handles_empty_or_past_end_scroll() {
+        assert_eq!(visible_rows(9_960, 40, 10_000).count(), 40);
+        assert_eq!(visible_rows(9_990, 40, 10_000).count(), 10);
+        assert!(visible_rows(10, 40, 0).is_empty());
+        assert!(visible_rows(usize::MAX, 40, 10).is_empty());
+    }
+
+    #[test]
+    fn compact_success_rows_fit_without_hiding_peek() {
+        let mut lines = Vec::new();
+        compact_tool_line(
+            "read_file",
+            r#"{"path":"src/agent/loop.rs"}"#,
+            Some(Duration::from_millis(42)),
+            80,
+            &mut lines,
+        );
+        assert_eq!(wrap::wrap_lines(&lines, 80).len(), 1);
+        assert!(line_to_plain(&lines[0]).contains("click to peek"));
+        let mut prompt = Vec::new();
+        user_prompt_card("修复这个问题 🦀", 20, &mut prompt);
+        assert!(wrap::wrap_lines(&prompt, 20)
+            .iter()
+            .all(|line| UnicodeWidthStr::width(line_to_plain(line).as_str()) <= 20));
+    }
+
+    /// Isolated row-materialization benchmark, not an end-to-end TUI latency claim.
+    #[test]
+    #[ignore]
+    fn viewport_row_benchmark() {
+        let cwd = std::env::current_dir().unwrap();
+        let lines: Vec<_> = (0..10_000)
+            .map(|i| {
+                Line::from(format!(
+                    "result {i}: src/tui/ui.rs https://example.com/item/{i}"
+                ))
+            })
+            .collect();
+        let start = std::time::Instant::now();
+        for line in &lines {
+            let line = std::hint::black_box(line.clone());
+            let text = line_to_plain(&line);
+            std::hint::black_box(crate::open_uri::find_url_spans(&text));
+            std::hint::black_box(crate::open_uri::find_path_spans(&text, &cwd));
+        }
+        let full = start.elapsed();
+        let mut cache = super::super::links::LinkCache::default();
+        let start = std::time::Instant::now();
+        for index in visible_rows(9_960, 40, lines.len()) {
+            let line = std::hint::black_box(lines[index].clone());
+            std::hint::black_box(cache.get(&cwd, &line_to_plain(&line)));
+        }
+        eprintln!(
+            "10,000 rows / 40 visible: full materialization {:?}; visible cold {:?}",
+            full,
+            start.elapsed()
+        );
+        let start = std::time::Instant::now();
+        for index in visible_rows(9_960, 40, lines.len()) {
+            std::hint::black_box(cache.get(&cwd, &line_to_plain(&lines[index])));
+        }
+        eprintln!("visible warm {:?}", start.elapsed());
+    }
+
+    #[test]
+    #[ignore]
+    fn ui_pass_preview() {
+        use super::super::inspector::{draw_rows, Inspector, Target};
+        use ratatui::{backend::TestBackend, Terminal};
+        let dir = std::path::Path::new(".nur/ui-pass-preview");
+        std::fs::create_dir_all(dir).unwrap();
+        for theme_id in theme::theme_ids() {
+            assert!(theme::set_theme(theme_id));
+            for width in [60u16, 120] {
+                let height = 22;
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                let mut inspector = Inspector::default();
+                let rows = vec![
+                    (
+                        "✓ edit_file · 42ms".into(),
+                        Some(Target::Cell(0)),
+                        theme::SUCCESS(),
+                    ),
+                    (
+                        "  src/agent/session.rs".into(),
+                        Some(Target::Cell(0)),
+                        theme::FG(),
+                    ),
+                    (String::new(), None, theme::FG()),
+                    (
+                        "✓ apply_patch · 18ms".into(),
+                        Some(Target::Cell(1)),
+                        theme::SUCCESS(),
+                    ),
+                    ("  src/tui/ui.rs".into(), Some(Target::Cell(1)), theme::FG()),
+                ];
+                terminal.draw(|f| {
+                f.render_widget(Block::default().style(theme::style_canvas()), f.area());
+                let main_width = if width >= 90 { width-42 } else { width };
+                let mut lines = Vec::new();
+                user_prompt_card("Make the harness calmer and faster.", main_width as usize, &mut lines);
+                compact_tool_line("read_file", r#"{"path":"src/tui/ui.rs"}"#, Some(Duration::from_millis(28)), main_width as usize, &mut lines);
+                compact_tool_line("edit_file", r#"{"path":"src/agent/session.rs"}"#, Some(Duration::from_millis(42)), main_width as usize, &mut lines);
+                lines.push(Line::default());
+                lines.extend(assistant_prose_lines("Updated the transcript and inspector.\n\n- Completed tools stay compact.\n- Details open when you need them."));
+                f.render_widget(Paragraph::new(wrap::wrap_lines(&lines, main_width)), Rect::new(0,0,main_width,18));
+                let panel = if width >= 90 { Rect::new(width-42,0,42,18) } else { Rect::new(0,0,width,18) };
+                draw_rows(f, &mut inspector, &rows, panel);
+                f.render_widget(Paragraph::new("What should we work on next?").block(Block::default().borders(Borders::ALL).title(" NUR · F6 inspect ").style(theme::style_surface())), Rect::new(0,19,width,3));
+            }).unwrap();
+                let hex = |c: Color| match c {
+                    Color::Rgb(r, g, b) => format!("#{r:02X}{g:02X}{b:02X}"),
+                    _ => "reset".into(),
+                };
+                let mut output = format!(
+                    "# theme={theme_id} width={width} rows={height} bg={} fg={}\n",
+                    hex(theme::BG()),
+                    hex(theme::FG())
+                );
+                for y in 0..height {
+                    for x in 0..width {
+                        let cell = &terminal.backend().buffer()[(x, y)];
+                        output.push_str(&format!(
+                            "{y}\t{x}\t{}\t{}\t{}\t{}\n",
+                            hex(cell.fg),
+                            hex(cell.bg),
+                            cell.modifier.bits(),
+                            cell.symbol()
+                        ));
+                    }
+                }
+                std::fs::write(dir.join(format!("{theme_id}-{width}.tsv")), output).unwrap();
+            }
+        }
+    }
+
     #[test]
     fn image_attachment_never_reserves_a_pixel_canvas() {
         for width in [20, 40, 80, 160] {

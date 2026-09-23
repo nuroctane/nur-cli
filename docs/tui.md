@@ -2,6 +2,32 @@
 
 The Nur-gold terminal UI for interactive sessions.
 
+## Session inspector and compact activity
+
+Press **F6** to open a shared inspector with **Changes**, **Tools**, **Agents**,
+and **Context** tabs. It docks beside the conversation at 90 columns or wider;
+in a narrow terminal it covers the transcript while leaving the composer usable.
+Use **Alt+1–4** or click a tab, and scroll with the wheel or **Alt+PgUp/PgDn**.
+F6 closes it; Esc closes it when no detail preview is open.
+
+Changes lists file-edit tool calls from this session, including their success
+or failure status; it is not a live Git working-tree diff. Click a change or tool
+to open its existing full-detail preview. Agent rows open the agent trace.
+Context shows the provider, model, cumulative session token usage, queued
+messages, and draft attachment count. `/context` still provides detailed
+context inspection.
+
+Completed successful tools occupy a compact summary row; running operations
+and errors retain their details. Click the chevron to expand or **click to peek**
+for the full result. Prompts use a simple text gutter, and the pinned prompt
+uses two rows. The composer stays visually still while idle.
+
+Transcript rendering indexes cached cell heights, builds styled rows and
+interaction metadata only for the visible viewport, and caches link detection.
+Full-history text remains available for selection. Idle redraws are limited to
+one per second; input and incoming agent events still trigger immediate redraws.
+Scroll offsets use full-width counters so long histories do not wrap at 65,535 rows.
+
 !!! quote "Built with Ratatui"
     The entire interface — cards, borders, animations, drag-select, and the
     scrollbar — is built on **[Ratatui](https://ratatui.rs/)**
@@ -62,6 +88,9 @@ Mouse/keyboard interaction tips that used to live under the art are behind
 | **Ctrl+C** | Copy selection (transcript or input); else interrupt / double-tap quit |
 | **Ctrl+V** | Paste text or stage an image in the composer |
 | **F4 / Shift+F4** | Preview/cycle draft images / remove the selected draft image |
+| **F6** | Toggle the session inspector (Changes / Tools / Agents / Context) |
+| **Alt+1–4** | Select an inspector tab while it is open |
+| **Alt+PgUp / Alt+PgDn** | Scroll the inspector; the mouse wheel also works |
 | **Ctrl+X** | Cut input selection (or whole input) |
 | `Enter` | Send message |
 | `Shift+Enter` | Newline in input |

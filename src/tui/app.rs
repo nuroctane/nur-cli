@@ -2025,11 +2025,11 @@ pub struct App {
     pub cells: Vec<Cell>,
     tool_cells: HashMap<u64, usize>,
     /// Lines scrolled back from the newest line (0 = following the bottom).
-    pub scroll_from_bottom: u16,
+    pub scroll_from_bottom: usize,
     /// Transcript viewport height + wrapped line count, refreshed each draw so
     /// PageUp/Home can scroll in real pages instead of guessing.
     pub view_h: u16,
-    pub view_total: u16,
+    pub view_total: usize,
     /// Full input box (border + body) for hit-testing hover/wheel/drag.
     pub input_area: ratatui::layout::Rect,
     /// Inner text area of the input box (updated every draw) for click-to-caret.
@@ -2141,8 +2141,10 @@ pub struct App {
     pub plain_lines: Vec<String>,
     /// Per-cell wrap cache - avoids re-wrapping the whole transcript every frame.
     pub wrap_cache_width: u16,
+    pub wrap_cache_palette: Option<(crate::theme::Palette, bool)>,
     pub wrap_cache_keys: Vec<u64>,
     pub wrap_cache_parts: Vec<Vec<ratatui::text::Line<'static>>>,
+    pub link_cache: super::links::LinkCache,
     /// Per wrapped transcript line: `Some(cell_idx)` when that line is a
     /// collapsible card header (click to expand/collapse).
     pub hit_headers: Vec<Option<usize>>,
@@ -2174,7 +2176,7 @@ pub struct App {
     /// `(run_id, col_lo, col_hi)`; col range is the pane's horizontal extent.
     pub hit_swarm_panes: Vec<Vec<(u64, usize, usize)>>,
     /// First visible wrapped-line index in the transcript body (for hit-tests).
-    pub transcript_top: u16,
+    pub transcript_top: usize,
     /// Brief highlight after toggle: (cell_idx, when).
     pub expand_flash: Option<(usize, Instant)>,
     /// Unused (hover peeks removed - kept so field layout stays simple).
@@ -2220,6 +2222,7 @@ pub struct App {
     /// rendered as boxed nodes with connectors. Rebuilt on turn events while
     /// `sidegraph_live`; the renderer re-reads the swarm registry each frame.
     pub sidegraph_open: bool,
+    pub inspector: super::inspector::Inspector,
     pub sidegraph_live: bool,
     pub sidegraph_model: Option<SideGraphModel>,
     /// Lines scrolled back from the newest line (0 = following the bottom).
@@ -2691,8 +2694,10 @@ pub async fn run_tui(
         select_autoscroll_at: None,
         plain_lines: Vec::new(),
         wrap_cache_width: 0,
+        wrap_cache_palette: None,
         wrap_cache_keys: Vec::new(),
         wrap_cache_parts: Vec::new(),
+        link_cache: Default::default(),
         hit_headers: Vec::new(),
         line_cells: Vec::new(),
         line_cell_all: Vec::new(),
@@ -2721,6 +2726,7 @@ pub async fn run_tui(
         swarm_autoshow_seen_id: 0,
         swarm_autoshow_suppressed: false,
         sidegraph_open: false,
+        inspector: Default::default(),
         sidegraph_live: false,
         sidegraph_model: None,
         sidegraph_scroll: 0,
@@ -2861,7 +2867,7 @@ pub async fn run_tui(
     // scrollbar-drag and text-select never lag behind the ambient repaint
     // (especially while a turn is streaming at ~30fps).
     const FRAME_BUSY_MS: u64 = 33; // ~30fps under load
-    const FRAME_IDLE_MS: u64 = 90; // ~11fps ambient shimmer
+    const FRAME_IDLE_MS: u64 = 90; // poll background work without repainting idle chrome
     let mut dirty = true;
     let mut last_draw = Instant::now();
     let mut last_title = Instant::now();
@@ -3191,7 +3197,12 @@ pub async fn run_tui(
         }
 
         // 3) Ambient / animation dirty flags.
-        if last_draw.elapsed().as_millis() as u64 >= frame_ms {
+        let repaint_ms = if frame_ms == FRAME_IDLE_MS {
+            1000
+        } else {
+            frame_ms
+        };
+        if last_draw.elapsed().as_millis() as u64 >= repaint_ms {
             dirty = true;
         }
         if let Some((_, t)) = app.expand_flash {
@@ -3419,21 +3430,21 @@ impl App {
         self.view_h.saturating_sub(2).max(1)
     }
 
-    fn max_scroll(&self) -> u16 {
+    fn max_scroll(&self) -> usize {
         // Prefer live wrapped-line count so scrollbar math stays correct while
         // a turn is streaming (view_total is only refreshed at draw time).
-        let total = (self.plain_lines.len() as u16).max(self.view_total);
-        let h = self.view_h.max(1);
+        let total = self.plain_lines.len().max(self.view_total);
+        let h = self.view_h.max(1) as usize;
         total.saturating_sub(h)
     }
 
     pub fn scroll_up(&mut self, n: u16) {
         let max = self.max_scroll();
-        self.scroll_from_bottom = self.scroll_from_bottom.saturating_add(n).min(max);
+        self.scroll_from_bottom = self.scroll_from_bottom.saturating_add(n as usize).min(max);
     }
 
     pub fn scroll_down(&mut self, n: u16) {
-        self.scroll_from_bottom = self.scroll_from_bottom.saturating_sub(n);
+        self.scroll_from_bottom = self.scroll_from_bottom.saturating_sub(n as usize);
     }
 
     fn scroll_to_top(&mut self) {
@@ -3445,7 +3456,7 @@ impl App {
     }
 
     /// Absolute jump used by scrollbar thumb drag (0 = latest, max = oldest).
-    pub fn set_scroll_from_bottom(&mut self, v: u16) {
+    pub fn set_scroll_from_bottom(&mut self, v: usize) {
         self.scroll_from_bottom = v.min(self.max_scroll());
     }
 
@@ -4072,6 +4083,36 @@ impl App {
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
+        if key.code == KeyCode::F(6) {
+            self.inspector.open = !self.inspector.open;
+            self.close_peek();
+            self.needs_full_redraw = true;
+            return;
+        }
+        if self.inspector.open {
+            if alt {
+                if key.code == KeyCode::PageDown {
+                    self.inspector.scroll =
+                        (self.inspector.scroll + 10).min(self.inspector.max_scroll);
+                    return;
+                }
+                if key.code == KeyCode::PageUp {
+                    self.inspector.scroll = self.inspector.scroll.saturating_sub(10);
+                    return;
+                }
+                if let KeyCode::Char(c @ '1'..='4') = key.code {
+                    self.inspector.tab = c as usize - '1' as usize;
+                    self.inspector.scroll = 0;
+                    return;
+                }
+            }
+            if key.code == KeyCode::Esc && !self.peek_is_open() {
+                self.inspector.open = false;
+                self.needs_full_redraw = true;
+                return;
+            }
+        }
+
         // Reverse history search (Ctrl+R) owns the keyboard while active. A
         // `false` return means it accepted/closed and the key should fall
         // through to normal handling (e.g. an arrow that also moves the caret).
@@ -4475,6 +4516,44 @@ impl App {
     /// Works while a turn is streaming. Approval/login modals no longer kill
     /// an in-progress scrollbar drag or wheel scroll.
     fn on_mouse(&mut self, m: event::MouseEvent) {
+        if self.modal_focus().is_none()
+            && !self.peek_is_open()
+            && self.inspector.open
+            && rect_contains(self.inspector.area, m.column, m.row)
+        {
+            match m.kind {
+                MouseEventKind::ScrollDown => {
+                    self.inspector.scroll =
+                        (self.inspector.scroll + 3).min(self.inspector.max_scroll)
+                }
+                MouseEventKind::ScrollUp => {
+                    self.inspector.scroll = self.inspector.scroll.saturating_sub(3)
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some(tab) = self
+                        .inspector
+                        .tabs
+                        .iter()
+                        .position(|r| rect_contains(*r, m.column, m.row))
+                    {
+                        self.inspector.tab = tab;
+                        self.inspector.scroll = 0;
+                    } else if let Some((_, cell)) = self
+                        .inspector
+                        .rows
+                        .iter()
+                        .find(|(r, _)| rect_contains(*r, m.column, m.row))
+                    {
+                        match *cell {
+                            super::inspector::Target::Cell(index) => self.open_stable_peek(index),
+                            super::inspector::Target::Agent(id) => self.open_swarm_peek(id),
+                        }
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
         if let Some(focus) = self
             .modal_focus()
             .filter(|f| *f != ModalFocus::Approval && *f != ModalFocus::Question)
@@ -5174,8 +5253,8 @@ impl App {
     /// Visible top line from live scroll state (not only last-draw `transcript_top`).
     /// Needed so edge-scroll during drag maps to the post-scroll viewport.
     fn live_transcript_top(&self) -> usize {
-        let total = self.plain_lines.len() as u16;
-        let h = self.view_h.max(1);
+        let total = self.plain_lines.len();
+        let h = self.view_h.max(1) as usize;
         let max_scroll = total.saturating_sub(h);
         let sfb = self.scroll_from_bottom.min(max_scroll);
         max_scroll.saturating_sub(sfb) as usize
@@ -5574,7 +5653,7 @@ impl App {
     /// Subcell scrollbar geometry for the current transcript (same fractional
     /// model the renderer uses, so hit-tests match what's on screen).
     fn scrollbar_metrics(&self) -> ScrollMetrics {
-        let total = (self.plain_lines.len() as u16).max(self.view_total);
+        let total = self.plain_lines.len().max(self.view_total);
         ScrollMetrics::new(
             total as usize,
             self.view_h as usize,
@@ -5629,8 +5708,8 @@ impl App {
         let pos = ScrollMetrics::subcell_at_row(rel);
         let thumb_start = pos.saturating_sub(self.scrollbar_grab);
         // `offset` counts lines from the top; scroll_from_bottom from the end.
-        let offset = m.offset_for_thumb_start(thumb_start) as u16;
-        let max = m.max_offset() as u16;
+        let offset = m.offset_for_thumb_start(thumb_start);
+        let max = m.max_offset();
         self.set_scroll_from_bottom(max.saturating_sub(offset));
     }
 

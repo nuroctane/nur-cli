@@ -17,7 +17,7 @@ use std::time::Duration;
 /// Every themeable color, in one flat record. Presets fill this in; the active
 /// one lives behind [`ACTIVE`] and is read via the `UPPER_CASE()` accessors so
 /// existing call sites (`theme::NUR_GOLD()`) keep reading like named colors.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)] // Presets intentionally define the complete visual vocabulary.
 pub struct Palette {
     pub nur_gold: Color,

@@ -1,6 +1,8 @@
 # NurCLI
 
-**v0.38.2:** [Compact image attachments](vision.md) with on-demand previews and
+**v0.38.3:** [Session inspector and compact activity](tui.md#session-inspector-and-compact-activity),
+viewport-only transcript row preparation, and quieter idle rendering.
+[Compact image attachments](vision.md) with on-demand previews and
 per-message queue ownership, [memory retrieval cues](tools.md#connectome), and
 four [startup workflow skills](ecosystem.md). Includes 41 themes, editable
 question answers, and [Jev-first compaction](jev-performance-evaluation.md).
@@ -65,7 +67,7 @@ That's the normal upgrade. Pulls / rebuilds when you have a Laboratory checkout,
 | **Hardening** | Sandbox · bash denylist · SSRF blocks · atomic `~/.nur` IO · session **`.json.bak`** · **permissions.toml** · optional **hooks.toml** · API retries · install SHA-256 · `nur doctor` |
 | **Host panels** | Live `status.json` / `usage.jsonl` · **`NUR_*`** env exports · Orca hook (`nur-hook.cmd`) |
 
-**Current version: v0.38.2**
+**Current version: v0.38.3**
 
 ---
 
