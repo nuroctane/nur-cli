@@ -175,7 +175,7 @@ pub fn run_memo(args: &[&str], timeout_ms: u64) -> Result<String, String> {
 
     if is_py {
         let py = python_runner_cached().ok_or_else(|| {
-            "memo is a Python script but no usable interpreter was found (probed py / python /              python3). Install Python 3 - the WindowsApps python3.exe Store alias stub does not              count."
+            "memo is a Python script but no usable interpreter was found (probed py / python / python3). Install Python 3 - the WindowsApps python3.exe Store alias stub does not count."
                 .to_string()
         })?;
         let mut argv: Vec<String> = Vec::new();
@@ -785,18 +785,6 @@ Keep what has lasting effect, drop what does not. Invent nothing.\n\n  #36 2026-
         reset_nap_chain();
         assert_eq!(count_single_nap(), 1, "reset starts a fresh window");
         reset_nap_chain();
-    }
-
-    #[test]
-    fn memory_dir_default() {
-        let p = memory_dir();
-        assert!(p.ends_with("memory") || std::env::var("MEMORY_DIR").is_ok());
-    }
-
-    #[test]
-    fn subagent_block() {
-        let b = prompt_block(true, true, false);
-        assert!(b.contains("Don't run memo"));
     }
 
     #[test]

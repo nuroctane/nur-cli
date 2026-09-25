@@ -18,7 +18,7 @@
 use super::{arg_str, Tool, ToolContext};
 use crate::error::{NurError, Result};
 use crate::typesafe::{self, harness, policy, questions};
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 
 pub struct Typesafe;
 
@@ -53,7 +53,9 @@ impl Tool for Typesafe {
          how risky, is this relevant, does this need a human, did that work. \
          actions: ask (batched, any mix of question types) | choice | noul | score \
          | pick (choose among candidate strings you supply) | rank (score every \
-         candidate in one request) | classify | risk | verify | prune (what still          earns its context) | spam | needs_human | route (cheapest adequate model          for a task) | reset | status. Multiple \
+         candidate in one request) | classify | risk | verify | prune (what still \
+         earns its context) | spam | needs_human | route (cheapest adequate model \
+         for a fresh subagent) | reset | status. Multiple \
          independent questions in one `ask` cost a single round trip. Answers come \
          back with probabilities and `confidence`; below [typesafe] \
          escalate_confidence (0.5) the judgment is not trustworthy - escalate to a \
@@ -654,7 +656,7 @@ fn prune(cfg: &crate::config::TypesafeConfig, args: &Value) -> Result<String> {
     }
     let bar = cfg.compaction.keep_threshold.clamp(0.0, 1.0);
     let mut out = vec![format!(
-        "typesafe · context pruning for {} call(s) at keep_threshold {bar:.2} - kept items stay          verbatim",
+        "typesafe · context pruning for {} call(s) at keep_threshold {bar:.2} - kept items stay verbatim",
         judged.len()
     )];
     for j in &judged {
@@ -737,6 +739,7 @@ fn needs_human(cfg: &crate::config::TypesafeConfig, args: &Value) -> Result<Stri
 /// Cheapest adequate model for a task, from the models this machine can
 /// actually reach. Suggestion only unless `[typesafe.routing] enabled = true`.
 fn route(cfg: &crate::config::TypesafeConfig, args: &Value) -> Result<String> {
+    use crate::typesafe::route;
     let task = arg_str(args, "instructions")
         .or_else(|_| arg_str(args, "query"))
         .or_else(|_| arg_str(args, "state"))
@@ -746,7 +749,8 @@ fn route(cfg: &crate::config::TypesafeConfig, args: &Value) -> Result<String> {
             "route requires instructions=<what the task is>".into(),
         ));
     }
-    let options = crate::tools::typesafe_tool::keyed_model_options(12);
+    let active = crate::config::load_config().unwrap_or_default();
+    let options = route::keyed_model_options(&active.provider, &active.model, 12);
     if options.len() < 2 {
         return Ok(format!(
             "typesafe · routing needs at least two reachable models; found {}. \
@@ -765,72 +769,41 @@ fn route(cfg: &crate::config::TypesafeConfig, args: &Value) -> Result<String> {
             .collect::<Vec<_>>()
             .join(", ")
     ));
-    match j.usable() {
-        Some(o) => out.push(format!(
-            "route: {} (suggestion only; automatic child routing is not connected)",
-            o.label(),
-        )),
-        None => out.push("route: not confident enough to recommend a switch".into()),
+    let Some(pick) = j.usable() else {
+        out.push("route: not confident enough to recommend a switch".into());
+        return Ok(out.join("\n"));
+    };
+    let here = crate::pricing::rates_for(&active.provider, &active.model);
+    let there = crate::pricing::rates_for(&pick.provider, &pick.model);
+    let w = route::Workload::for_pack(route::estimate_tokens(&task));
+    // This session already holds its context warm: moving it is not what the
+    // router is for. A cheaper model pays off on a fresh child.
+    let stay = route::parent_should_stay(&(&here).into(), &(&there).into(), &w);
+    out.push(format!(
+        "route: {} for a fresh subagent on this task. This session {} on {} - {}.",
+        pick.label(),
+        if stay {
+            "stays"
+        } else {
+            "could move, but stays"
+        },
+        options[0].label(),
+        if stay {
+            "re-sending its context to another model costs more than finishing here"
+        } else {
+            "the parent is never re-routed mid-session"
+        }
+    ));
+    if cfg.routing.enabled {
+        out.push(
+            "automatic: an `agent` call without provider/model is routed by the same judgment \
+             when the hop is known-price, 15% cheaper and no weaker in privacy"
+                .into(),
+        );
     }
     Ok(out.join("\n"))
 }
 
-/// The models this machine can actually reach, as router candidates.
-///
-/// Built in code: the active route, then each keyed catalog provider's default
-/// model. The router can only pick from this list.
-pub fn keyed_model_options(limit: usize) -> Vec<harness::ModelOption> {
-    let cfg = crate::config::load_config().unwrap_or_default();
-    let mut out: Vec<harness::ModelOption> = Vec::new();
-    let mut push = |provider: &str, model: &str, note: String| {
-        if out.len() >= limit || model.trim().is_empty() {
-            return;
-        }
-        if out
-            .iter()
-            .any(|o| o.provider == provider && o.model == model)
-        {
-            return;
-        }
-        out.push(harness::ModelOption {
-            provider: provider.to_string(),
-            model: model.to_string(),
-            note,
-        });
-    };
-    // The route in use always counts: it is certainly reachable.
-    push(
-        &cfg.provider,
-        &cfg.model,
-        "the model currently in use - strongest context, already paid for".into(),
-    );
-    for p in crate::providers::PROVIDERS {
-        if crate::auth::load_provider_key(p.id).is_none() {
-            continue;
-        }
-        push(p.id, p.default_model, format!("{} · {}", p.name, p.note));
-    }
-    out
-}
-
-/// Build the JSON body for a `noul` question with structured instructions.
-#[allow(dead_code)]
-fn noul_body(instructions: Value, criteria: Option<questions::NoulCriteria>) -> Value {
-    let mut m = Map::new();
-    m.insert("type".into(), json!("noul"));
-    m.insert("instructions".into(), instructions);
-    if let Some(c) = criteria {
-        let mut crit = Map::new();
-        if let Some(y) = c.yes {
-            crit.insert("true".into(), json!(y));
-        }
-        if let Some(n) = c.no {
-            crit.insert("false".into(), json!(n));
-        }
-        m.insert("criteria".into(), Value::Object(crit));
-    }
-    Value::Object(m)
-}
 #[cfg(test)]
 mod tests {
     use super::*;

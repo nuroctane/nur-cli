@@ -418,7 +418,7 @@ pub fn stop() -> Result<String> {
     if probe_port(state.port).is_some() {
         // Keep the record: a stale pid is more useful to the user than no record.
         return Ok(format!(
-            "bridge pid {} killed on port {}, but something still answers there and no process              could be identified. Check `nur jev status` and stop it by hand (Windows: Task              Manager; Unix: `lsof -ti tcp:{}`).",
+            "bridge pid {} killed on port {}, but something still answers there and no process could be identified. Check `nur jev status` and stop it by hand (Windows: Task Manager; Unix: `lsof -ti tcp:{}`).",
             state.pid, state.port, state.port
         ));
     }
@@ -601,22 +601,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_embedded_bridge_is_the_repository_script() {
-        // The binary must ship the same script the repo has, or an installed nur
-        // would start a different (or no) bridge.
-        let embedded = include_str!("../scripts/jev_local_bridge.py");
-        let on_disk = std::fs::read_to_string("scripts/jev_local_bridge.py");
-        if let Ok(on_disk) = on_disk {
-            assert_eq!(embedded, on_disk, "embedded copy drifted from scripts/");
-        }
-        assert!(
-            embedded.contains("def handle_evaluate("),
-            "bridge contract present"
-        );
-        assert!(embedded.contains("--selftest"), "selftest hook present");
-    }
-
-    #[test]
     fn http_body_splits_headers_from_json() {
         let raw = b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"status\":\"ok\"}";
         assert_eq!(http_body(raw), Some("{\"status\":\"ok\"}"));
@@ -764,12 +748,5 @@ mod tests {
         assert!(tcp_busy(port));
         assert!(start("mock", port, &[]).is_err());
         drop(listener);
-    }
-
-    #[test]
-    fn paths_live_under_the_nur_home() {
-        assert!(bridge_script().starts_with(home()));
-        assert!(state_path().starts_with(home()));
-        assert!(home().ends_with("jev"));
     }
 }

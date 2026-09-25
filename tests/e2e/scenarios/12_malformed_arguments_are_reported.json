@@ -1,0 +1,13 @@
+{
+  "description": "Malformed JSON arguments become an error result instead of a crash or a silent default.",
+  "prompt": "Write with broken arguments.",
+  "script": [
+    {"tool_calls": [{"name": "write_file", "arguments": "{\"path\": \"broken.txt\", \"contents\": "}]},
+    {"text": "Recovered from bad arguments."}
+  ],
+  "expect": {
+    "absent_files": ["broken.txt"],
+    "stdout_contains": ["Recovered from bad arguments."],
+    "requests": 2
+  }
+}

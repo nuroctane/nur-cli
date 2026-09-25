@@ -1,0 +1,13 @@
+{
+  "description": "A pre_tool hook that exits non-zero blocks the tool, and the model is told why.",
+  "prompt": "Write a file.",
+  "setup_home_files": {"hooks.toml": "pre_tool = 'exit 3'\n"},
+  "script": [
+    {"tool_calls": [{"name": "write_file", "arguments": {"path": "blocked.txt", "contents": "no"}}]},
+    {"text": "The hook blocked it."}
+  ],
+  "expect": {
+    "absent_files": ["blocked.txt"],
+    "tool_results": [{"request": 2, "contains": ["pre_tool hook blocked write_file"]}]
+  }
+}

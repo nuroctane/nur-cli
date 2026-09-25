@@ -18,8 +18,6 @@ const PASTE_CHIP_MIN_CHARS: usize = 40;
 
 #[derive(Clone, Debug)]
 pub struct PasteBlock {
-    #[allow(dead_code)]
-    pub id: u32,
     pub content: String,
 }
 
@@ -233,7 +231,7 @@ impl InputState {
             if !self.pastes.contains_key(&id)
                 && !self.buffer.iter().any(|c| paste_id_of(*c) == Some(id))
             {
-                self.pastes.insert(id, PasteBlock { id, content });
+                self.pastes.insert(id, PasteBlock { content });
                 return Some(id);
             }
         }
@@ -288,7 +286,6 @@ impl InputState {
         self.pastes.contains_key(&id)
     }
 
-    #[allow(dead_code)]
     pub fn paste_at(&self, idx: usize) -> Option<&PasteBlock> {
         let c = *self.buffer.get(idx)?;
         let id = paste_id_of(c)?;
@@ -455,10 +452,10 @@ impl InputState {
         self.selection_anchor = None;
     }
 
-    /// Paste from clipboard / bracketed paste. Large blobs → one chip.
-    /// Returns Some(id) if chip was created, None if raw inserted.
-    #[allow(dead_code)]
-    pub fn insert_paste(&mut self, s: &str) -> Option<u32> {
+    /// The paste rule in one call: small pastes stay raw, large ones chip.
+    /// Production applies the same rule when it flushes a paste burst.
+    #[cfg(test)]
+    fn insert_paste(&mut self, s: &str) -> Option<u32> {
         let normalized = normalize_paste(s);
         if normalized.is_empty() {
             return None;
@@ -638,14 +635,6 @@ impl InputState {
         while self.cursor < n && self.buffer[self.cursor].is_alphanumeric() {
             self.cursor += 1;
         }
-    }
-
-    /// True if char index `i` lies inside the active selection.
-    #[allow(dead_code)]
-    pub fn is_selected(&self, i: usize) -> bool {
-        self.selection_range()
-            .map(|(lo, hi)| i >= lo && i < hi)
-            .unwrap_or(false)
     }
 
     pub fn delete_word_back(&mut self) {
@@ -864,25 +853,6 @@ impl InputState {
         }
         let dcol = self.display_col_of_index(self.cursor);
         self.cursor = self.index_at_display_col(line + 1, dcol);
-    }
-
-    #[allow(dead_code)]
-    pub fn move_to_line_col(&mut self, target_line: usize, target_col: usize) {
-        // target_col is **buffer** columns (legacy); prefer display helpers for mouse.
-        let mut line = 0;
-        let mut idx = 0;
-        while idx < self.buffer.len() && line < target_line {
-            if self.buffer[idx] == '\n' {
-                line += 1;
-            }
-            idx += 1;
-        }
-        let mut col = 0;
-        while idx < self.buffer.len() && self.buffer[idx] != '\n' && col < target_col {
-            idx += 1;
-            col += 1;
-        }
-        self.cursor = idx;
     }
 
     pub fn history_prev(&mut self) {

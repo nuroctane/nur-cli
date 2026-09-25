@@ -16,9 +16,21 @@
 //! band never changes what the harness does. A missing judgment is the old
 //! behavior (the prompt the model wrote, on the model the user picked).
 
+use super::harness::{self, ModelOption};
 use super::policy::{GateAction, Judgment};
+use crate::config::Config;
+use crate::pricing::ModelRates;
 use crate::providers::Privacy;
 use serde_json::Value;
+
+/// Parent context offered to a child, at most: recent tool results plus the
+/// reports of earlier subagents (so a child does not redo finished work).
+const CHILD_CONTEXT_RESULTS: usize = 6;
+/// How many kept chunks ride along, and how much room they may take.
+const CHILD_KEEP_CHUNKS: usize = 4;
+const CHILD_CONTEXT_CHARS: usize = 6_000;
+/// Model candidates offered to the router.
+const ROUTE_CANDIDATES: usize = 12;
 
 /// USD per 1M tokens. `cache_read` is what a warm parent pays to keep tokens it
 /// already holds; the published comparison treats that as already paid (`0`).
@@ -290,6 +302,209 @@ pub fn recent_result_chunks(items: &[Value], limit: usize) -> Vec<String> {
     }
 }
 
+/// The models this machine can actually reach, as router candidates: the
+/// route in use first (certainly reachable, already warm), then each keyed
+/// catalog provider's default model. The router can only pick from this list.
+pub fn keyed_model_options(provider: &str, model: &str, limit: usize) -> Vec<ModelOption> {
+    let mut out: Vec<ModelOption> = Vec::new();
+    let mut push = |provider: &str, model: &str, note: String| {
+        if out.len() >= limit || model.trim().is_empty() {
+            return;
+        }
+        if out
+            .iter()
+            .any(|o| o.provider == provider && o.model == model)
+        {
+            return;
+        }
+        out.push(ModelOption {
+            provider: provider.to_string(),
+            model: model.to_string(),
+            note,
+        });
+    };
+    push(
+        provider,
+        model,
+        "the model currently in use - strongest context, already paid for".into(),
+    );
+    for p in crate::providers::PROVIDERS {
+        if crate::auth::load_provider_key(p.id).is_none() {
+            continue;
+        }
+        push(p.id, p.default_model, format!("{} · {}", p.name, p.note));
+    }
+    out
+}
+
+impl From<&ModelRates> for Rates {
+    fn from(r: &ModelRates) -> Self {
+        Self {
+            input_per_mtok: r.input_per_mtok_usd,
+            output_per_mtok: r.output_per_mtok_usd,
+            cache_read_per_mtok: r.cache_read_per_mtok_usd,
+        }
+    }
+}
+
+/// A price nur actually knows. The fallback is invented list pricing, and a
+/// cost comparison built on invented prices is noise, so it never routes.
+fn known_price(r: &ModelRates) -> bool {
+    r.source != "builtin-fallback"
+}
+
+/// Candidate parent context for a child, oldest first.
+pub fn child_context(items: &[Value]) -> Vec<String> {
+    let mut out = recent_result_chunks(items, CHILD_CONTEXT_RESULTS);
+    out.extend(prior_agent_jobs(items).into_iter().map(|j| {
+        format!(
+            "earlier subagent task: {} -> report: {}",
+            j.prompt, j.output
+        )
+    }));
+    out
+}
+
+/// Why a cheaper child model was or was not used. Pure: every gate is code.
+#[derive(Debug, Clone, PartialEq)]
+pub enum HopVerdict {
+    Hop { stay_usd: f64, hop_usd: f64 },
+    UnknownPrice,
+    NotCheaper,
+    PrivacyDowngrade,
+    Sensitive,
+}
+
+/// Gate a child hop from the parent's model to `next`.
+///
+/// Jev's pick is only a candidate. The hop happens when both prices are known,
+/// it is at least 15% cheaper for this pack ([`child_switch_pays`]), it never
+/// lands below the parent's privacy tier (the same floor failover keeps), and
+/// a secret-touching task stays on zero-data-retention, TEE or local.
+pub fn decide_hop(
+    parent: (&ModelRates, Privacy),
+    next: (&ModelRates, Privacy),
+    sensitive: bool,
+    pack_tokens: u64,
+) -> HopVerdict {
+    if !known_price(parent.0) || !known_price(next.0) {
+        return HopVerdict::UnknownPrice;
+    }
+    if next.1.rank() < parent.1.rank() {
+        return HopVerdict::PrivacyDowngrade;
+    }
+    if !hop_allowed(sensitive, next.1) {
+        return HopVerdict::Sensitive;
+    }
+    let (here, there) = (Rates::from(parent.0), Rates::from(next.0));
+    let w = Workload::for_pack(pack_tokens);
+    if !child_switch_pays(&here, &there, &w) {
+        return HopVerdict::NotCheaper;
+    }
+    HopVerdict::Hop {
+        stay_usd: child_total_usd(&here, &here, &w),
+        hop_usd: child_total_usd(&there, &here, &w),
+    }
+}
+
+/// Where an un-routed subagent runs and what it is shown.
+#[derive(Debug, Clone)]
+pub struct ChildPlan {
+    /// The task, plus any parent context a confident judgment kept.
+    pub prompt: String,
+    /// A cheaper model that passed every gate; `None` stays on the parent.
+    pub hop: Option<ModelOption>,
+    /// One transcript line when routing made a decision worth showing.
+    pub note: Option<String>,
+}
+
+/// Cache-aware routing for a subagent the model did not route itself.
+///
+/// Two judgments run in parallel: which reachable model is the cheapest
+/// adequate one for the task, and which parent-context chunks are directly
+/// useful to it. `None` (routing off, no Jev, nothing to decide) means the
+/// caller keeps today's behavior: the task alone, on the parent's model.
+pub fn plan_child(config: &Config, task: &str, context: &[String]) -> Option<ChildPlan> {
+    let cfg = &config.typesafe;
+    if !cfg.enabled || !cfg.routing.enabled || harness::ready(cfg).is_none() {
+        return None;
+    }
+    let options = keyed_model_options(&config.provider, &config.model, ROUTE_CANDIDATES);
+    let levels: Vec<String> = harness::RELEVANCE_LEVELS
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let (pick, judged) = std::thread::scope(|s| {
+        let pick =
+            s.spawn(|| (options.len() >= 2).then(|| harness::pick_model(cfg, task, &options)));
+        let ranked = s.spawn(|| {
+            if context.is_empty() {
+                Vec::new()
+            } else {
+                harness::rank(cfg, task, context, &levels)
+            }
+        });
+        (
+            pick.join().ok().flatten(),
+            ranked.join().unwrap_or_default(),
+        )
+    });
+
+    let kept: Vec<&str> = kept_chunks(&judged, CHILD_KEEP_CHUNKS)
+        .into_iter()
+        .filter_map(|i| context.get(i).map(String::as_str))
+        .collect();
+    let budget = task.chars().count() + CHILD_CONTEXT_CHARS;
+    let prompt = assemble_child_prompt(task, &kept, budget);
+
+    let choice = pick
+        .and_then(|j| j.usable().cloned())
+        .filter(|o| !(o.provider == config.provider && o.model == config.model));
+    let Some(choice) = choice else {
+        let note = (!kept.is_empty()).then(|| {
+            format!(
+                "subagent · {} parent-context chunk(s) kept for the child",
+                kept.len()
+            )
+        });
+        return Some(ChildPlan {
+            prompt,
+            hop: None,
+            note,
+        });
+    };
+
+    let privacy = |id: &str| crate::providers::effective_privacy(&config.provider_privacy, id);
+    let verdict = decide_hop(
+        (
+            &crate::pricing::rates_for(&config.provider, &config.model),
+            privacy(&config.provider),
+        ),
+        (
+            &crate::pricing::rates_for(&choice.provider, &choice.model),
+            privacy(&choice.provider),
+        ),
+        touches_secrets(task) || touches_secrets(&prompt),
+        estimate_tokens(&prompt),
+    );
+    let label = choice.label();
+    let (hop, note) = match verdict {
+        HopVerdict::Hop { stay_usd, hop_usd } => (
+            Some(choice),
+            format!("subagent · routed to {label} (est ${hop_usd:.4} vs ${stay_usd:.4} on the parent model)"),
+        ),
+        HopVerdict::UnknownPrice => (None, format!("subagent · stays on the parent model: no known price for {label}")),
+        HopVerdict::NotCheaper => (None, format!("subagent · stays on the parent model: {label} is not 15% cheaper for this task")),
+        HopVerdict::PrivacyDowngrade => (None, format!("subagent · stays on the parent model: {label} is a weaker privacy tier")),
+        HopVerdict::Sensitive => (None, format!("subagent · stays on the parent model: the task touches secrets and {label} is not ZDR, TEE or local")),
+    };
+    Some(ChildPlan {
+        prompt,
+        hop,
+        note: Some(note),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -375,6 +590,79 @@ mod tests {
         assert!(hop_allowed(true, Privacy::Zdr));
         assert!(hop_allowed(true, Privacy::Local));
         assert!(hop_allowed(false, Privacy::Standard));
+    }
+
+    fn rates(input: f64, output: f64, source: &str) -> ModelRates {
+        ModelRates {
+            input_per_mtok_usd: input,
+            output_per_mtok_usd: output,
+            cache_read_per_mtok_usd: 0.0,
+            cache_write_per_mtok_usd: None,
+            context_window: None,
+            source: source.into(),
+            note: String::new(),
+            provider_id: String::new(),
+            model_id: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_child_hops_only_when_every_code_gate_passes() {
+        let opus = rates(5.0, 25.0, "models.dev");
+        let small = rates(0.25, 1.25, "models.dev");
+        let pack = 2_000;
+        assert!(matches!(
+            decide_hop((&opus, Privacy::Zdr), (&small, Privacy::Zdr), false, pack),
+            HopVerdict::Hop { hop_usd, stay_usd } if hop_usd < stay_usd
+        ));
+        // Invented fallback prices never justify a hop.
+        let guessed = rates(0.1, 0.1, "builtin-fallback");
+        assert_eq!(
+            decide_hop((&opus, Privacy::Zdr), (&guessed, Privacy::Zdr), false, pack),
+            HopVerdict::UnknownPrice
+        );
+        // Never below the parent's privacy tier, even when much cheaper.
+        assert_eq!(
+            decide_hop(
+                (&opus, Privacy::Zdr),
+                (&small, Privacy::Standard),
+                false,
+                pack
+            ),
+            HopVerdict::PrivacyDowngrade
+        );
+        // A secret-touching task stays on ZDR or better.
+        assert_eq!(
+            decide_hop(
+                (&opus, Privacy::Standard),
+                (&small, Privacy::Standard),
+                true,
+                pack
+            ),
+            HopVerdict::Sensitive
+        );
+        // Equal prices are not a reason to move.
+        assert_eq!(
+            decide_hop((&opus, Privacy::Zdr), (&opus, Privacy::Zdr), false, pack),
+            HopVerdict::NotCheaper
+        );
+    }
+
+    #[test]
+    fn child_context_offers_results_and_earlier_reports() {
+        let items = vec![
+            serde_json::json!({"type":"function_call","call_id":"c1","name":"grep","arguments":"{}"}),
+            serde_json::json!({"type":"function_call_output","call_id":"c1","output":"src/auth.rs:12 fn login"}),
+            serde_json::json!({"type":"function_call","call_id":"a1","name":"agent","arguments":"{\"prompt\":\"map auth\"}"}),
+            serde_json::json!({"type":"function_call_output","call_id":"a1","output":"auth lives in src/auth.rs"}),
+        ];
+        let ctx = child_context(&items);
+        assert_eq!(ctx.len(), 2, "{ctx:?}");
+        assert!(ctx[0].starts_with("grep: "), "{ctx:?}");
+        assert!(
+            ctx[1].contains("map auth") && ctx[1].contains("auth lives"),
+            "{ctx:?}"
+        );
     }
 
     #[test]

@@ -132,7 +132,7 @@ impl App {
                 // conversation, and the session's replay log is untouched.
                 self.push_note(
                     Tone::Neutral,
-                    "screen cleared - the model still has the full context, and the session                      history is intact (/compact to actually shrink context, /new for a                      fresh session)"
+                    "screen cleared - the model still has the full context, and the session history is intact (/compact to actually shrink context, /new for a fresh session)"
                         .into(),
                 );
             }
@@ -351,7 +351,7 @@ impl App {
             // that suggested it. Say which case this is.
             if COMMANDS.iter().any(|(c, _)| *c == cmd) {
                 self.push_error(format!(
-                    "{cmd} is a skill that isn't installed here - /plugins to install it,                      or /skills to see what is available"
+                    "{cmd} is a skill that isn't installed here - /plugins to install it, or /skills to see what is available"
                 ));
             } else {
                 self.push_error(format!("unknown command: {cmd} - try /help"));

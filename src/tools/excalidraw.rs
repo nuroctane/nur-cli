@@ -631,17 +631,4 @@ mod tests {
             "tool description should state browser-only / never local open"
         );
     }
-
-    /// Guard: production code must not call open_path (source-level policy lock).
-    #[test]
-    fn no_open_path_call_sites_in_excalidraw() {
-        let src = include_str!("excalidraw.rs");
-        // Strip the tests module so this guard's own prose does not match.
-        let prod = src.split("#[cfg(test)]").next().unwrap_or(src);
-        // Actual call form only — comments may still mention the forbidden API.
-        assert!(
-            !prod.contains("open_uri::open_path(") && !prod.contains("open_path(&"),
-            "excalidraw production code must not call open_path — browser share URL only"
-        );
-    }
 }

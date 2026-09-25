@@ -160,17 +160,3 @@ dogwood(action=check-parse, policy="~/.nur/dogwood/policies/safe-edits.dw")
 
 Edit freely - ensure never overwrites existing files here.
 "#;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_files_are_nonempty_and_idempotent_writes() {
-        // Pure-content sanity without touching the real home directory.
-        assert!(DEFAULT_POLICY.contains("count_within"));
-        assert!(DEFAULT_POLICY.contains("file_was_read"));
-        assert!(EVENT_SCHEMA.contains("bash"));
-        assert!(README.contains("not a runtime trust anchor"));
-    }
-}

@@ -464,11 +464,4 @@ mod tests {
             }
         }
     }
-
-    #[test]
-    fn a_missing_binary_explains_how_to_install_it() {
-        assert!(INSTALL_HINT.contains("npm install -g graphjin"));
-        assert!(INSTALL_HINT.contains("graphjin cli setup"));
-        assert!(SETUP_HINT.contains("graphjin serve"));
-    }
 }

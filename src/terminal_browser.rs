@@ -42,15 +42,6 @@ pub fn resolve_runtime() -> Option<Runtime> {
     None
 }
 
-#[allow(dead_code)]
-pub fn find_terminal_browser() -> Option<String> {
-    match resolve_runtime()? {
-        Runtime::Native(p) => Some(p),
-        Runtime::Wsl => Some("wsl:terminal-browser".into()),
-        Runtime::Host(p) => Some(format!("host:{p}")),
-    }
-}
-
 fn find_native_bin() -> Option<String> {
     if let Some(bin) = find_bin(BIN) {
         return Some(bin);

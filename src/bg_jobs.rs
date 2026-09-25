@@ -235,16 +235,6 @@ pub fn list_jobs() -> Vec<JobInfo> {
     v
 }
 
-/// Count of jobs currently running — cheap for a future statusline count
-/// beyond the label chip in [`status_chip`].
-#[allow(dead_code)]
-pub fn running_count() -> usize {
-    list_jobs()
-        .into_iter()
-        .filter(|j| j.state == JobState::Running)
-        .count()
-}
-
 pub fn get(id: u64) -> Option<JobInfo> {
     let reg = registry();
     let g = reg.lock().unwrap_or_else(|e| e.into_inner());

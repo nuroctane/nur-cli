@@ -65,7 +65,7 @@ Does **everything**: Rust if needed, prereqs, build, PATH, ecosystem packs, brow
 | Ecosystem | `ecosystem ensure --force` (graphify · plur · ruflo · omp · browser · skills) |
 | Browser | Stages Chromium extension for your default browser |
 | Hook | Orca hook if present |
-| Auth | Saves `NUR_API_KEY` or a Meta-provider `META_API_KEY` if set in the environment |
+| Auth | Saves `NUR_API_KEY` if set in the environment (vendor keys such as `META_API_KEY` are read by their own provider, not saved) |
 | Launch | Opens the installed `nur` TUI |
 
 Re-download + re-run the release EXE to upgrade. Force again anytime: `nur install`.
@@ -231,7 +231,7 @@ External CLIs / packs (not inside the `nur` binary):
 | Piece | Notes |
 |-------|--------|
 | Orca hook | `nur install-hook` when Orca is present |
-| Env-based auth | `NUR_API_KEY` or Meta-provider `META_API_KEY` -> saved under `~/.nur/auth.json` only |
+| Env-based auth | `NUR_API_KEY` -> saved under `~/.nur/auth.json` only |
 | Jev local engine | Keyless TypeSafe judgments - `nur jev start --backend verdict` (any CPU) · `nimble` (NVIDIA GPU / Apple Silicon MLX) · `laya` (Apple Silicon macOS 15+, no Intel Mac, no Windows). `nur jev status` shows what this device can run. See [jev-local.md](jev-local.md) |
 
 `nur jev start` writes `~/.nur/jev/bridge.json`; `nur jev use` points `[typesafe]`

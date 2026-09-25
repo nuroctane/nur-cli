@@ -462,17 +462,14 @@ fn rows<'a>(value: &'a Value, key: &str) -> Vec<&'a Value> {
         .unwrap_or_default()
 }
 
-/// Query Helix for an explicit, non-empty routed recall. The production memory
-/// router shares one embedding across residents via `search_with_embedding`;
-/// this convenience entry point remains useful to direct callers and the live
-/// integration test.
-#[allow(dead_code)]
-pub fn search(scope: &str, query: &str, k: usize) -> Result<Vec<HelixHit>, String> {
+/// Embed and search in one call, for the live integration test. Production
+/// reads through the memory router, which supplies its own embedding.
+#[cfg(test)]
+fn search(scope: &str, query: &str, k: usize) -> Result<Vec<HelixHit>, String> {
     if query.trim().is_empty() {
         return Ok(Vec::new());
     }
-    let query_embedding = embed::embed(query);
-    search_with_embedding(scope, query, &query_embedding, k)
+    search_with_embedding(scope, query, &embed::embed(query), k)
 }
 
 /// Query Helix with an embedding already computed by the memory router.

@@ -1,0 +1,13 @@
+{
+  "description": "A call to a tool that does not exist becomes an error result, and the turn goes on.",
+  "prompt": "Use a missing tool.",
+  "script": [
+    {"tool_calls": [{"name": "no_such_tool", "arguments": {}}]},
+    {"text": "Recovered from the unknown tool."}
+  ],
+  "expect": {
+    "tool_results": [{"request": 2, "contains": ["no_such_tool"]}],
+    "stdout_contains": ["Recovered from the unknown tool."],
+    "requests": 2
+  }
+}

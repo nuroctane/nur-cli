@@ -105,21 +105,6 @@ fn paths_equal_loose(a: &Path, b: &Path) -> bool {
     norm(a) == norm(b)
 }
 
-#[allow(dead_code)]
-fn bootstrap_complete() -> bool {
-    let text = match fs::read_to_string(marker_path()) {
-        Ok(t) => t,
-        Err(_) => return false,
-    };
-    let Ok(m) = serde_json::from_str::<BootstrapMarker>(&text) else {
-        return false;
-    };
-    m.schema >= BOOTSTRAP_SCHEMA
-        && m.ecosystem_ok
-        && install_binary_path().is_file()
-        && !m.version.is_empty()
-}
-
 /// Interactive TUI launch should run a full one-stop install first when:
 /// - user double-clicked a **release artifact** (`nur-windows-*.exe`), or
 /// - there is **no** installed `~/.local/bin/nur` yet (first-time cargo binary), or
@@ -147,6 +132,13 @@ pub fn should_bootstrap_on_launch() -> bool {
     }
     // No install on disk yet (e.g. bare `target/release/nur`) → offer full setup once.
     true
+}
+
+/// Whether a launch may start the background ecosystem repair (global npm/uv
+/// installs, the executor daemon). `NUR_SKIP_BOOTSTRAP=1` turns off every
+/// launch-time install, not only the one-stop bootstrap.
+pub fn should_repair_ecosystem() -> bool {
+    !env_truthy("NUR_SKIP_BOOTSTRAP")
 }
 
 fn env_truthy(key: &str) -> bool {
@@ -476,7 +468,6 @@ fn auto_update_opt_out_var() -> Option<&'static str> {
 /// Effective floor, overridable per-shell for testing/CI. `0` = check every run.
 fn auto_update_min_interval_secs() -> u64 {
     let raw = env::var("NUR_AUTO_UPDATE_TTL_SECS")
-        .or_else(|_| env::var("META_AUTO_UPDATE_TTL_SECS"))
         .ok();
     parse_min_interval(raw.as_deref())
 }
@@ -1128,15 +1119,12 @@ fn now_secs() -> u64 {
 }
 
 fn env_api_key() -> Option<String> {
-    for k in ["NUR_API_KEY", "META_API_KEY"] {
-        if let Ok(v) = env::var(k) {
-            let t = v.trim().to_string();
-            if !t.is_empty() {
-                return Some(t);
-            }
-        }
-    }
-    None
+    // NUR_API_KEY only: a vendor variable such as META_API_KEY is read by its
+    // own provider, never saved as the generic active key.
+    env::var("NUR_API_KEY")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 fn prepend_path(dir: &Path) {
@@ -1165,25 +1153,9 @@ fn same_file(a: &Path, b: &Path) -> bool {
 }
 
 /// Install target is only `nur` / `nur.exe`. Delete any identical copy of this
-/// binary under a foreign agent name.
+/// binary under a foreign agent name - only identical copies: `muse` is Meta's
+/// own Muse Code CLI, which the Meta sign-in looks for on PATH.
 fn scrub_impostor_bins(dest_dir: &Path, nur_bin: &Path) {
-    const RETIRED_PRODUCT_FILES: &[&str] = &[
-        "muse.exe",
-        "muse",
-        "muse-opencode.cmd",
-        "muse-opencode.ps1",
-        "muse.sha256",
-        "meta.exe",
-        "meta",
-        "meta.sha256",
-    ];
-    for name in RETIRED_PRODUCT_FILES {
-        let path = dest_dir.join(name);
-        if path.is_file() && fs::remove_file(&path).is_ok() {
-            theme::print_info(&format!("removed retired launcher {name}"));
-        }
-    }
-
     let Some(our_hash) = file_sha256(nur_bin) else {
         return;
     };
@@ -1589,11 +1561,6 @@ mod auto_update_tests {
         );
     }
 
-    #[test]
-    fn default_floor_is_small_enough_to_feel_like_every_run() {
-        const { assert!(AUTO_UPDATE_MIN_INTERVAL_SECS <= 60) };
-    }
-
     // ── install dir override ──────────────────────────────────────────────
 
     #[test]
@@ -1646,23 +1613,26 @@ mod auto_update_tests {
         assert_eq!(cleanup_stale_update_temps(&dir, 0), 0);
     }
 
+    /// The install used to delete `muse`/`meta` launchers by name, which also
+    /// deleted Meta's real Muse Code CLI from a shared bin dir. Only an
+    /// identical copy of nur under a foreign name may go.
     #[test]
-    fn scrub_removes_retired_launchers_even_when_their_hash_differs() {
-        let dir = std::env::temp_dir().join(format!("nur-retired-{}", std::process::id()));
+    fn scrub_keeps_a_vendor_cli_and_removes_only_copies_of_nur() {
+        let dir = std::env::temp_dir().join(format!("nur-scrub-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let nur = dir.join(if cfg!(windows) { "nur.exe" } else { "nur" });
         fs::write(&nur, b"current").unwrap();
-        for name in ["muse.exe", "muse-opencode.cmd", "meta.exe", "meta.sha256"] {
-            fs::write(dir.join(name), b"different").unwrap();
-        }
+        let muse = dir.join(if cfg!(windows) { "muse.exe" } else { "muse" });
+        fs::write(&muse, b"meta muse code").unwrap();
+        let copy = dir.join(if cfg!(windows) { "codex.exe" } else { "codex" });
+        fs::write(&copy, b"current").unwrap();
 
         scrub_impostor_bins(&dir, &nur);
 
         assert!(nur.is_file());
-        for name in ["muse.exe", "muse-opencode.cmd", "meta.exe", "meta.sha256"] {
-            assert!(!dir.join(name).exists(), "{name} survived cleanup");
-        }
+        assert!(muse.is_file(), "a different binary named muse is not ours");
+        assert!(!copy.exists(), "an identical copy of nur under a foreign name goes");
         let _ = fs::remove_dir_all(&dir);
     }
 

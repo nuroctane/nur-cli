@@ -219,6 +219,12 @@ formatted arguments and `✓ return { … }` blocks, answering, steers, queued
 follow-ups, and the settled turn. Text word-wraps inside each box; durations ride
 in the bottom border.
 
+Completed tool calls are grouped into one track per tool, to the right of the
+trunk. Each track's arrowhead under the root rail and the links between its own
+nodes carry its category colour (search, edit, exec, agents and knowledge each
+take a theme role, so every theme keeps them distinct), while the trunk's links
+stay faint.
+
 Because nodes are placed by coordinate rather than concatenated as strings, a box
 cannot render wider than its own borders, and content is clipped only at paint
 time — which is what gives panning something real to reveal.
@@ -568,16 +574,17 @@ When a write tool requests approval, the TUI shows a compact diff preview of wha
 
 Edit tools (`edit_file`, `write_file`, `multi_edit`, `apply_patch`) render a **green/red unified diff inline** in the transcript — added lines in green bands, removed in red, with a `+adds -dels` chip on the card header. Cards always show **click to peek**; the peek dialogue opens the **full path + content/diff** (not just the short card preview).
 
-### Queued follow-ups — send now
+### Queued follow-ups - steer · cut in · dismiss
 
 While a turn is running, typing and sending queues a follow-up. The transcript shows a **queued** card with:
 
 | Action | What it does |
 |--------|--------------|
-| **send now** | Interjects next: cancels the current turn if busy, then runs this follow-up with full prior session context. |
+| **steer** | Injects the follow-up into the running turn without cancelling it: tools, subagents and background jobs keep going, and the message lands at the next model round. When idle, it starts a normal turn. |
+| **cut in** | Cancels the current turn and runs this follow-up next, with the full prior session context. |
 | **dismiss** | Drops the follow-up without sending. |
 
-If you do nothing, the queue still drains when the current turn finishes (unless you cancelled without **send now**).
+Left alone, a queued follow-up runs after the current turn finishes.
 
 ### Prompt menu — fork · edit · revert · copy
 

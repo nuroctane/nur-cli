@@ -80,15 +80,6 @@ pub fn media_dir(cwd: &Path) -> PathBuf {
     d
 }
 
-#[allow(dead_code)]
-pub fn run_egaki(args: &[&str], cwd: Option<&Path>, timeout_ms: u64) -> Result<String, String> {
-    let bin = find_egaki().ok_or_else(|| {
-        "egaki not on PATH - npm i -g egaki@latest (ChatGPT: egaki login --provider chatgpt)"
-            .to_string()
-    })?;
-    run_capture(&bin, args, cwd, timeout_ms)
-}
-
 pub fn run_egaki_cancelled(
     args: &[&str],
     cwd: Option<&Path>,
@@ -114,11 +105,5 @@ mod tests {
         let m = media_dir(&t);
         assert!(m.is_dir());
         let _ = fs::remove_dir_all(&t);
-    }
-
-    #[test]
-    fn credentials_path_under_config_egaki() {
-        let p = credentials_path();
-        assert!(p.ends_with(Path::new("egaki").join("credentials.json")));
     }
 }

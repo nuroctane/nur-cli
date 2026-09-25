@@ -54,7 +54,6 @@ pub async fn run_subagent(
         config: cfg.clone(),
         cwd: cwd.clone(),
         permission_mode: mode,
-        verbose: false,
         approved_tools: Arc::new(Mutex::new(HashSet::new())),
         tools: host,
         permissions: super::SharedPermissions::load(&cwd),

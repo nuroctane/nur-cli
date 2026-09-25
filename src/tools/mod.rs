@@ -68,8 +68,7 @@ use std::sync::{Arc, Mutex};
 
 #[allow(unused_imports)] // full capability surface re-exported; loop uses a subset
 pub use capabilities::{
-    classify as classify_tool, is_concurrency_safe, is_destructive_call, is_parallel_safe,
-    is_read_only_call, ToolCaps,
+    classify as classify_tool, is_concurrency_safe, is_read_only_call, ToolCaps,
 };
 pub use sandbox::{is_dangerous_workspace, resolve_safe_workspace};
 pub use shell::shell_backend;
@@ -189,25 +188,6 @@ pub trait Tool: Send + Sync {
     fn parameters_schema(&self) -> Value;
     fn execute(&self, args: &Value, ctx: &ToolContext) -> Result<String>;
 
-    /// Approval-free in manual when true; plan mode allows freely when true.
-    /// (Capability surface on the trait; the agent loop currently classifies
-    /// via the free `capabilities::*` fns by name+args.)
-    #[allow(dead_code)]
-    fn is_read_only(&self, args: &Value) -> bool {
-        capabilities::is_read_only(self.name(), args)
-    }
-
-    /// May join a concurrent batch. Must imply `is_read_only`.
-    #[allow(dead_code)]
-    fn is_concurrency_safe(&self, args: &Value) -> bool {
-        capabilities::classify_value(self.name(), args).concurrency_safe
-    }
-
-    /// High-impact / irreversible mutator (writes, shell, agent, …).
-    #[allow(dead_code)]
-    fn is_destructive(&self, args: &Value) -> bool {
-        capabilities::is_destructive(self.name(), args)
-    }
 }
 
 /// Stateful tool host (todos/plan/steer share with TUI).

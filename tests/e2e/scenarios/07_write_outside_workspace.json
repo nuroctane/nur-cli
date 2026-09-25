@@ -1,0 +1,9 @@
+{
+  "description": "Auto mode must not let a relative path escape the workspace.",
+  "prompt": "Write a file one level up.",
+  "script": [
+    {"tool_calls": [{"name": "write_file", "arguments": {"path": "../escaped.txt", "contents": "escaped"}}]},
+    {"text": "Tried."}
+  ],
+  "expect": {"absent_files": ["../escaped.txt"], "stdout_contains": ["Tried."]}
+}

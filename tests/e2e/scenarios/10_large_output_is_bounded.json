@@ -1,0 +1,9 @@
+{
+  "description": "A huge tool result reaches the model bounded, not as a 400k-character message.",
+  "prompt": "Print a lot.",
+  "script": [
+    {"tool_calls": [{"name": "bash", "arguments": {"command": "python -c \"print('x' * 400000)\""}}]},
+    {"text": "Printed."}
+  ],
+  "expect": {"max_tool_result_chars": 60000, "stdout_contains": ["Printed."], "requests": 2}
+}

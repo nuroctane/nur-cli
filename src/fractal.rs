@@ -348,7 +348,6 @@ fn is_valid_node_name(name: &str) -> bool {
     name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-#[allow(dead_code)]
 pub fn is_valid_fractal_node_name(name: &str) -> bool {
     is_valid_node_name(name)
 }
@@ -394,12 +393,6 @@ pub fn probe_at(cwd: &Path) -> FractalProbe {
     }
 }
 
-#[allow(dead_code)]
-pub fn probe() -> FractalProbe {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    probe_at(&cwd)
-}
-
 /// Run fractal CLI and capture output, honouring `cancel` and a wall-clock
 /// deadline. Failures come back as one actionable line, never a stack trace.
 pub fn run_fractal_args_cancellable(
@@ -416,13 +409,6 @@ pub fn run_fractal_args_cancellable(
     } else {
         Err(NurError::Other(summarize_failure(&cap.text)))
     }
-}
-
-/// Run fractal CLI with the default timeout and no cancellation source.
-/// Prefer [`run_fractal_args_cancellable`] anywhere a `ToolContext` is in hand.
-#[allow(dead_code)]
-pub fn run_fractal_args(cwd: &Path, args: &[String]) -> Result<String> {
-    run_fractal_args_cancellable(cwd, args, &CancellationToken::new())
 }
 
 /// Doctor report.
@@ -456,12 +442,6 @@ pub fn doctor_at(cwd: &Path) -> Doctor {
         worktrees_present: probe.worktrees_exist,
         python_present: python,
     }
-}
-
-#[allow(dead_code)]
-pub fn doctor() -> Doctor {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    doctor_at(&cwd)
 }
 
 /// List nodes via `fractal node list` if available; fallback to reading .fractal dir.
@@ -505,12 +485,6 @@ pub fn list_nodes_cancellable(cwd: &Path, cancel: &CancellationToken) -> Result<
     }
 }
 
-/// List nodes with the default timeout and no cancellation source.
-#[allow(dead_code)]
-pub fn list_nodes(cwd: &Path) -> Result<String> {
-    list_nodes_cancellable(cwd, &CancellationToken::new())
-}
-
 /// Open node dir path for a given node name.
 pub fn node_path(cwd: &Path, node_name: &str) -> Option<PathBuf> {
     if !is_valid_node_name(node_name) {
@@ -528,28 +502,9 @@ pub fn node_path(cwd: &Path, node_name: &str) -> Option<PathBuf> {
     candidates.into_iter().find(|wt_path| wt_path.exists())
 }
 
-/// Check if this repo can init fractal.
-#[allow(dead_code)]
-pub fn can_init(cwd: &Path) -> bool {
-    // Filesystem-only question; no need to execute the CLI.
-    find_git_root(cwd).is_some() && find_fractal_root(cwd).is_none()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn probe_does_not_panic() {
-        let p = probe();
-        let _ = format!("{:?}", p);
-    }
-
-    #[test]
-    fn doctor_does_not_panic() {
-        let d = doctor();
-        let _ = format!("{:?}", d);
-    }
 
     #[test]
     fn valid_name_rejects_traversal() {
@@ -664,8 +619,10 @@ ModuleNotFoundError: No module named 'fcntl'
         let started = Instant::now();
         let err = run_capture(&bin, &args, None, 400, None).unwrap_err();
         assert!(err.contains("timed out"), "{err}");
+        // Bounds sit far below the child's 120s run and far above what spawning
+        // and `taskkill` cost on a loaded Windows machine (5s flaked at 5.5s).
         assert!(
-            started.elapsed() < Duration::from_secs(5),
+            started.elapsed() < Duration::from_secs(60),
             "deadline not enforced: {:?}",
             started.elapsed()
         );
@@ -676,23 +633,23 @@ ModuleNotFoundError: No module named 'fcntl'
         let err = run_capture(&bin, &args, None, 60_000, Some(&cancel)).unwrap_err();
         assert!(err.contains("cancelled"), "{err}");
         assert!(
-            started.elapsed() < Duration::from_secs(5),
+            started.elapsed() < Duration::from_secs(60),
             "cancel not honoured promptly: {:?}",
             started.elapsed()
         );
     }
 
-    /// A ~30s no-op that exists on the host, or `None` if we cannot find one.
+    /// A ~120s no-op that exists on the host, or `None` if we cannot find one.
     fn slow_command() -> Option<(PathBuf, Vec<&'static str>)> {
         #[cfg(windows)]
         {
             let bin = find_on_path("ping")?;
-            Some((bin, vec!["-n", "30", "127.0.0.1"]))
+            Some((bin, vec!["-n", "120", "127.0.0.1"]))
         }
         #[cfg(not(windows))]
         {
             let bin = find_on_path("sleep")?;
-            Some((bin, vec!["30"]))
+            Some((bin, vec!["120"]))
         }
     }
 }

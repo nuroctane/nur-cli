@@ -15,13 +15,6 @@ pub fn is_oauth_token(key: &str) -> bool {
     k.starts_with("sk-ant-oat") || k.starts_with("sk-ant-oat01-")
 }
 
-/// Anthropic beta header required for OAuth bearer tokens against the API.
-#[allow(dead_code)]
-pub const OAUTH_BETA: &str = "oauth-2025-04-20";
-/// Claude Code product beta — required with subscription OAuth (`sk-ant-oat…`)
-/// so Messages requests are accepted as a first-party Claude Code client.
-#[allow(dead_code)]
-pub const CLAUDE_CODE_BETA: &str = "claude-code-20250219";
 /// Combined beta list for Claude OAuth / Claude Code sessions.
 /// Mirrors Claude Code: oauth + product beta (+ oidc federation used by Code ≥2.1).
 pub const OAUTH_BETAS: &str = "oauth-2025-04-20,claude-code-20250219,oidc-federation-2026-04-01";
@@ -73,16 +66,6 @@ pub fn normalize_model_id(model: &str) -> String {
         _ => {}
     }
     m.to_string()
-}
-
-/// Build a Messages API body from a Responses request.
-///
-/// When `oauth` is true (Claude Code / `sk-ant-oat…` session), the system prompt
-/// is emitted as **content blocks** with [`CLAUDE_CODE_SYSTEM_IDENTITY`] first so
-/// Anthropic assigns the subscription rate-limit pool.
-#[allow(dead_code)] // non-oauth convenience; production uses build_body_with_oauth
-pub fn build_body(req: &ResponseRequest, stream: bool) -> Value {
-    build_body_with_oauth(req, stream, false)
 }
 
 /// Like [`build_body`], with an explicit OAuth/Claude Code session flag.
@@ -892,7 +875,7 @@ mod tests {
     fn output_reserve_is_serialized_as_anthropic_max_tokens() {
         let mut request = req();
         request.max_output_tokens = Some(4096);
-        assert_eq!(build_body(&request, false)["max_tokens"], 4096);
+        assert_eq!(build_body_with_oauth(&request, false, false)["max_tokens"], 4096);
     }
 
     fn messages_of(input: Value) -> Vec<Value> {
@@ -1174,7 +1157,7 @@ mod tests {
 
     #[test]
     fn body_is_messages_shape_not_chat_completions() {
-        let b = build_body(&req(), false);
+        let b = build_body_with_oauth(&req(), false, false);
         // Retired Sonnet 4 id must not be sent to the first-party Claude API.
         assert_eq!(b["model"], DEFAULT_SONNET);
         assert!(b.get("max_tokens").is_some());

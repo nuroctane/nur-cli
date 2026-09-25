@@ -268,7 +268,6 @@ fn draw_login_method(f: &mut Frame, app: &mut App, area: Rect) {
         close,
         body: inner,
         scope: Rect::default(),
-        foreign: Rect::default(),
         rows: Vec::new(),
     };
     let options: Vec<(&str, String)> = super::app::login_method_choices(&provider, m.can_import)
@@ -306,7 +305,7 @@ fn draw_login_method(f: &mut Frame, app: &mut App, area: Rect) {
         let title_style = if selected {
             Style::default()
                 .fg(theme::ON_ACCENT_FG())
-                .bg(theme::META_BLUE())
+                .bg(theme::NUR_GOLD())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
@@ -314,9 +313,7 @@ fn draw_login_method(f: &mut Frame, app: &mut App, area: Rect) {
                 .add_modifier(Modifier::BOLD)
         };
         let sub_style = if selected {
-            Style::default()
-                .fg(theme::BLUE_100())
-                .bg(theme::META_BLUE())
+            Style::default().fg(theme::BLUE_100()).bg(theme::NUR_GOLD())
         } else {
             theme::style_faint()
         };
@@ -408,7 +405,7 @@ fn draw_login_browser(f: &mut Frame, app: &mut App, area: Rect) {
                 m.browser_user_code.clone(),
                 Style::default()
                     .fg(theme::ON_ACCENT_FG())
-                    .bg(theme::META_BLUE())
+                    .bg(theme::NUR_GOLD())
                     .add_modifier(Modifier::BOLD),
             ),
         ]));
@@ -542,7 +539,6 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
         close,
         body: inner,
         scope: Rect::default(),
-        foreign: Rect::default(),
         rows: Vec::new(),
     };
 
@@ -606,15 +602,13 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
         let name_style = if selected {
             Style::default()
                 .fg(theme::ON_ACCENT_FG())
-                .bg(theme::META_BLUE())
+                .bg(theme::NUR_GOLD())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme::FG())
         };
         let note_style = if selected {
-            Style::default()
-                .fg(theme::BLUE_100())
-                .bg(theme::META_BLUE())
+            Style::default().fg(theme::BLUE_100()).bg(theme::NUR_GOLD())
         } else {
             theme::style_faint()
         };
@@ -745,7 +739,6 @@ fn draw_model_picker(f: &mut Frame, app: &mut App, area: Rect) {
         close,
         body: inner,
         scope: Rect::default(),
-        foreign: Rect::default(),
         rows: Vec::new(),
     };
 
@@ -851,7 +844,7 @@ fn draw_model_picker(f: &mut Frame, app: &mut App, area: Rect) {
         let style = if selected {
             Style::default()
                 .fg(theme::ON_ACCENT_FG())
-                .bg(theme::META_BLUE())
+                .bg(theme::NUR_GOLD())
                 .add_modifier(Modifier::BOLD)
         } else if is_current {
             Style::default()
@@ -935,7 +928,6 @@ fn draw_theme_picker(f: &mut Frame, app: &mut App, area: Rect) {
         close,
         body: inner,
         scope: Rect::default(),
-        foreign: Rect::default(),
         rows: Vec::new(),
     };
 
@@ -1179,7 +1171,6 @@ fn draw_plugin_picker(f: &mut Frame, app: &mut App, area: Rect) {
         close,
         body: inner,
         scope: Rect::default(),
-        foreign: Rect::default(),
         rows: Vec::new(),
     };
 
@@ -1244,7 +1235,7 @@ fn draw_plugin_picker(f: &mut Frame, app: &mut App, area: Rect) {
             let style = if selected {
                 Style::default()
                     .fg(theme::ON_ACCENT_FG())
-                    .bg(theme::META_BLUE())
+                    .bg(theme::NUR_GOLD())
                     .add_modifier(Modifier::BOLD)
             } else if p.enabled {
                 Style::default()
@@ -1522,7 +1513,7 @@ fn draw_session_picker(f: &mut Frame, app: &mut App, area: Rect) {
     };
     // Both windows default to every workspace and narrow with Tab.
     let right = Some(scope_label);
-    draw_modal_frame(f, rect, phase, theme::META_BLUE(), &title, right, footer);
+    draw_modal_frame(f, rect, phase, theme::NUR_GOLD(), &title, right, footer);
 
     let pad = 2u16;
     let inner = Rect {
@@ -1550,7 +1541,6 @@ fn draw_session_picker(f: &mut Frame, app: &mut App, area: Rect) {
         close,
         body: inner,
         scope,
-        foreign: Rect::default(),
         rows: Vec::new(),
     };
 
@@ -1611,7 +1601,7 @@ fn draw_session_picker(f: &mut Frame, app: &mut App, area: Rect) {
     {
         let selected = i == sel;
         let bg = if selected {
-            theme::META_BLUE()
+            theme::NUR_GOLD()
         } else {
             theme::SURFACE_2()
         };
@@ -1642,7 +1632,7 @@ fn draw_session_picker(f: &mut Frame, app: &mut App, area: Rect) {
                 .fg(if selected {
                     theme::BG()
                 } else {
-                    theme::META_BLUE()
+                    theme::NUR_GOLD()
                 })
                 .bg(bg)
                 .add_modifier(Modifier::BOLD),
@@ -1772,7 +1762,6 @@ fn draw_update_modal(f: &mut Frame, app: &mut App, area: Rect) {
         u.hit = super::app::UpdateHit {
             frame: rect,
             close,
-            body: inner,
             update_btn,
         };
     }
@@ -2370,18 +2359,13 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
             }
             found
         };
-        // Queued follow-up actions (steer / cut in / dismiss; "send now" legacy alias).
+        // Queued follow-up actions: steer / cut in / dismiss.
         let mut qa: Vec<(usize, usize, usize, u8)> = Vec::new();
         if matches!(cell, Cell::Queued { .. }) {
-            // Prefer the word "steer" when both appear; also accept "send now".
             if let Some(byte_i) = plain.find("steer") {
                 let start = UnicodeWidthStr::width(&plain[..byte_i]);
                 let end = start + UnicodeWidthStr::width("steer");
                 qa.push((cell_idx, start, end, 0u8)); // inject mid-turn
-            } else if let Some(byte_i) = plain.find("send now") {
-                let start = UnicodeWidthStr::width(&plain[..byte_i]);
-                let end = start + UnicodeWidthStr::width("send now");
-                qa.push((cell_idx, start, end, 0u8));
             }
             if let Some(byte_i) = plain.find("cut in") {
                 let start = UnicodeWidthStr::width(&plain[..byte_i]);
@@ -2489,7 +2473,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
                 tag,
                 Style::default()
                     .fg(theme::ON_ACCENT_FG())
-                    .bg(theme::META_BLUE())
+                    .bg(theme::NUR_GOLD())
                     .add_modifier(Modifier::BOLD),
             )),
             r,
@@ -2561,11 +2545,11 @@ fn draw_scrollbar(f: &mut Frame, app: &App, track: Rect, top: usize, total: usiz
 
     // Thumb hue steps up as you interact: idle → hover → drag.
     let thumb_fg = if app.scrollbar_drag {
-        theme::META_BLUE_SKY()
+        theme::NUR_GOLD_SKY()
     } else if app.scrollbar_hover {
         theme::BLUE_250()
     } else {
-        theme::META_BLUE()
+        theme::NUR_GOLD()
     };
     let track_fg = if !scrollable {
         theme::dim(theme::BORDER(), 0.4)
@@ -3138,7 +3122,7 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                     "steer".to_string(),
                     Style::default()
                         .fg(theme::ON_ACCENT_FG())
-                        .bg(theme::META_BLUE())
+                        .bg(theme::NUR_GOLD())
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled("  ·  ".to_string(), theme::style_faint()),
@@ -3165,7 +3149,7 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
         }
         Cell::Graph { lines, live } => {
             out.push(Line::default());
-            let hue = theme::META_BLUE();
+            let hue = theme::NUR_GOLD();
             let head = if *live {
                 "◈ execution graph · live"
             } else {
@@ -4030,388 +4014,6 @@ fn sg_draw_box(c: &mut SgCanvas, n: &SgLay) {
     }
 }
 
-/// Place the spine, then stamp boxes and edge polylines into a canvas.
-#[allow(dead_code)]
-fn sg_paint(spine: &mut [SgLay], back_edge: Option<(usize, usize)>, panel_w: usize) -> SgCanvas {
-    if spine.is_empty() {
-        return SgCanvas::new(panel_w.max(1), 1);
-    }
-    let content_w = spine.iter().map(sg_span_w).max().unwrap_or(SG_NODE_W);
-    let gutter = if back_edge.is_some() { 16 } else { 1 };
-    let canvas_w = content_w.max(panel_w) + gutter;
-
-    // Every spine node shares one centre line, so the trunk never needs a jog.
-    let base_left = canvas_w.saturating_sub(gutter).saturating_sub(content_w) / 2;
-    let node_x = base_left + (content_w - SG_NODE_W) / 2;
-    let cx = node_x + SG_NODE_W / 2;
-
-    let mut y = 0usize;
-    for n in spine.iter_mut() {
-        n.x = node_x;
-        n.y = y;
-        if !n.kids.is_empty() {
-            let k = n.kids.len();
-            let kids_w = k * SG_NODE_W + SG_GAP * (k - 1);
-            let kleft = cx.saturating_sub(kids_w / 2);
-            let ky = y + n.h + 2;
-            // Equal-height siblings keep the fan-in rail straight.
-            let kh = n.kids.iter().map(|kd| kd.h).max().unwrap_or(0);
-            for (i, kid) in n.kids.iter_mut().enumerate() {
-                kid.x = kleft + i * (SG_NODE_W + SG_GAP);
-                kid.y = ky;
-                kid.h = kh;
-            }
-        }
-        y += sg_subtree_h(n) + 2;
-    }
-    let canvas_h = y.saturating_sub(1);
-    let mut c = SgCanvas::new(canvas_w, canvas_h.max(1));
-    let edge = theme::style_faint();
-
-    for i in 0..spine.len() {
-        let n = &spine[i];
-        sg_draw_box(&mut c, n);
-        let box_st = Style::default().fg(n.hue);
-        let mut exit_y = n.y + n.h - 1;
-
-        if !n.kids.is_empty() {
-            let lc = n.kids.first().map(|k| k.center()).unwrap_or(cx);
-            let rc = n.kids.last().map(|k| k.center()).unwrap_or(cx);
-            let centers: Vec<usize> = n.kids.iter().map(|k| k.center()).collect();
-
-            // Fan-out: drop from the parent onto a rail, then into each child.
-            c.put(cx, n.y + n.h - 1, '┬', box_st);
-            let rail_y = n.y + n.h;
-            for x in lc..=rc {
-                let ch = sg_junction(x == cx, centers.contains(&x), x > lc, x < rc);
-                c.put(x, rail_y, ch, edge);
-            }
-            for kid in &n.kids {
-                c.put(kid.center(), rail_y + 1, '▼', edge);
-                sg_draw_box(&mut c, kid);
-            }
-
-            // Fan-in: children rejoin the trunk on a second rail.
-            let kb = n.kids.iter().map(|k| k.y + k.h - 1).max().unwrap_or(rail_y);
-            let fin_y = kb + 1;
-            for kid in &n.kids {
-                c.put(
-                    kid.center(),
-                    kid.y + kid.h - 1,
-                    '┴',
-                    Style::default().fg(kid.hue),
-                );
-            }
-            // Only stub downward if the trunk actually continues below.
-            let continues = i + 1 < spine.len();
-            for x in lc..=rc {
-                let ch = sg_junction(centers.contains(&x), continues && x == cx, x > lc, x < rc);
-                c.put(x, fin_y, ch, edge);
-            }
-            exit_y = fin_y;
-        }
-
-        // Trunk link to the next node.
-        if i + 1 < spine.len() {
-            let next_y = spine[i + 1].y;
-            if n.kids.is_empty() {
-                c.put(cx, exit_y, '┬', box_st);
-            }
-            if next_y >= 2 {
-                c.vline(cx, exit_y + 1, next_y.saturating_sub(2), edge);
-            }
-            c.put(cx, next_y.saturating_sub(1), '▼', edge);
-        }
-    }
-
-    // Re-entry back-edge: a steer sends control back into reasoning. This is
-    // the one loop nur actually has — drawn only when both ends exist.
-    if let Some((from_i, to_i)) = back_edge {
-        let st = Style::default().fg(theme::WARN());
-        let (fx, fy, fh) = (spine[from_i].x, spine[from_i].y, spine[from_i].h);
-        let (tx, ty, th) = (spine[to_i].x, spine[to_i].y, spine[to_i].h);
-        let fy = fy + fh / 2;
-        let ty = ty + th / 2;
-        let gx = base_left + content_w + 3;
-        if gx < canvas_w && ty < fy {
-            for x in (fx + SG_NODE_W)..gx {
-                c.put(x, fy, '─', st);
-            }
-            c.put(gx, fy, '┘', st);
-            for yy in (ty + 1)..fy {
-                c.put(gx, yy, '│', st);
-            }
-            c.put(gx, ty, '┐', st);
-            for x in (tx + SG_NODE_W + 1)..gx {
-                c.put(x, ty, '─', st);
-            }
-            c.put(tx + SG_NODE_W, ty, '◄', st);
-            c.text(gx + 2, ty, "↻ re-entry", st);
-        }
-    }
-
-    c
-}
-
-/// Turn the graph model into placed-node input: the root prompt, one node per
-/// step, live subagents fanned out under the `agent` tool that spawned them.
-#[allow(dead_code)]
-fn sg_build_spine(
-    model: &crate::tui::app::SideGraphModel,
-    this_turn: &[crate::agent::swarm::AgentRun],
-    tick: Duration,
-    running: bool,
-) -> (Vec<SgLay>, Option<(usize, usize)>) {
-    use crate::tui::app::{SgNode, SgState};
-
-    let mut spine: Vec<SgLay> = Vec::new();
-
-    let rq = if model.query.is_empty() {
-        "(no query yet — send a prompt)".to_string()
-    } else {
-        model.query.clone()
-    };
-    let mut root = SgLay::new(
-        "■",
-        theme::NUR_GOLD(),
-        "root prompt",
-        "",
-        theme::CYAN(),
-        vec![(rq, theme::style_status().fg.unwrap_or(theme::MUTED()))],
-    );
-    root.double = true;
-    spine.push(root);
-
-    if model.nodes.is_empty() {
-        if running {
-            spine.push(SgLay::new(
-                theme::spinner_frame(tick),
-                theme::NUR_GOLD(),
-                "thinking",
-                "",
-                theme::VIOLET(),
-                Vec::new(),
-            ));
-        }
-        return (spine, None);
-    }
-
-    let n_nodes = model.nodes.len();
-    let mut last_thinking: Option<usize> = None;
-    let mut back_edge: Option<(usize, usize)> = None;
-
-    for (i, node) in model.nodes.iter().enumerate() {
-        let is_last = i + 1 == n_nodes;
-        match node {
-            SgNode::Thinking {
-                excerpt,
-                live: l,
-                started,
-                duration,
-                ..
-            } => {
-                let (glyph, ghue, dur) = if *l {
-                    (
-                        theme::spinner_frame(tick).to_string(),
-                        theme::NUR_GOLD(),
-                        theme::fmt_elapsed_live(started.elapsed()),
-                    )
-                } else {
-                    (
-                        "◇".to_string(),
-                        theme::VIOLET(),
-                        duration.map(theme::fmt_duration).unwrap_or_default(),
-                    )
-                };
-                last_thinking = Some(spine.len());
-                spine.push(SgLay::new(
-                    &glyph,
-                    ghue,
-                    "reasoning",
-                    &dur,
-                    theme::VIOLET(),
-                    vec![(excerpt.clone(), theme::MUTED())],
-                ));
-            }
-            SgNode::Tool {
-                name,
-                args_formatted,
-                result_formatted,
-                state,
-                started,
-                duration,
-                agent,
-                ..
-            } => {
-                let (glyph, hue, dur) = match state {
-                    SgState::Running => (
-                        theme::spinner_frame(tick).to_string(),
-                        theme::NUR_GOLD(),
-                        theme::fmt_elapsed_live(started.elapsed()),
-                    ),
-                    SgState::Ok => (
-                        "✓".to_string(),
-                        theme::SUCCESS(),
-                        duration.map(theme::fmt_duration).unwrap_or_default(),
-                    ),
-                    SgState::Failed => (
-                        "✗".to_string(),
-                        theme::ERROR(),
-                        duration.map(theme::fmt_duration).unwrap_or_default(),
-                    ),
-                };
-                // Hue is assigned from the field the text came from, never
-                // sniffed back out of the rendered string.
-                let mut raw: Vec<(String, Color)> = args_formatted
-                    .iter()
-                    .map(|a| (a.clone(), theme::NUR_GOLD_SKY()))
-                    .collect();
-                if let Some(res) = result_formatted {
-                    let rhue = if matches!(state, SgState::Failed) {
-                        theme::ERROR()
-                    } else {
-                        theme::SUCCESS()
-                    };
-                    raw.extend(res.iter().map(|r| (r.clone(), rhue)));
-                }
-
-                let show_children = *agent
-                    && !this_turn.is_empty()
-                    && (is_last || matches!(state, SgState::Running));
-                let mut lay = SgLay::new(&glyph, hue, name, &dur, hue, raw);
-
-                if show_children {
-                    let mut children = this_turn.to_vec();
-                    children.sort_by_key(|r| {
-                        (
-                            r.state != crate::agent::swarm::RunState::Running,
-                            std::cmp::Reverse(r.id),
-                        )
-                    });
-                    let shown = SG_MAX_KIDS.min(children.len());
-                    if children.len() > shown {
-                        lay.details.push((
-                            format!("… +{} more subagents", children.len() - shown),
-                            theme::FAINT(),
-                        ));
-                        lay.h += 1;
-                    }
-                    for run in children.iter().take(shown) {
-                        let (chue, cglyph) = run_look(run.state, tick);
-                        let elapsed = if run.state == crate::agent::swarm::RunState::Running {
-                            theme::fmt_elapsed_live(run.elapsed())
-                        } else {
-                            theme::fmt_duration(run.elapsed())
-                        };
-                        let mut kid_details: Vec<(String, Color)> = Vec::new();
-                        kid_details.push((run.task.clone(), theme::MUTED()));
-                        if let Some(t) = run.tool.as_deref() {
-                            let short: String = t.chars().take(32).collect();
-                            let ell = if t.chars().count() > 32 { "…" } else { "" };
-                            kid_details.push((format!("⚒ {}{}", short, ell), chue));
-                        }
-                        if !run.activity.trim().is_empty() {
-                            let act = run.activity.lines().next().unwrap_or("").trim();
-                            if !act.is_empty() && act != run.task {
-                                let clipped: String = act.chars().take(40).collect();
-                                let ell = if act.chars().count() > 40 { "…" } else { "" };
-                                kid_details.push((format!("{clipped}{ell}"), theme::FAINT()));
-                            }
-                        }
-                        if run.tools_done > 0 || run.tokens > 0 {
-                            let mut stats = format!("{}⚒", run.tools_done);
-                            if run.tools_failed > 0 {
-                                stats.push_str(&format!(" {}✗", run.tools_failed));
-                            }
-                            if run.tokens > 0 {
-                                stats.push_str(&format!(" {} tok", run.tokens));
-                            }
-                            kid_details.push((stats, theme::FAINT()));
-                        }
-                        let mut kid = SgLay::new(
-                            &cglyph.to_string(),
-                            chue,
-                            &format!("#{}·{}", run.id, run.kind),
-                            &elapsed,
-                            chue,
-                            kid_details,
-                        );
-                        kid.run_id = Some(run.id);
-                        lay.kids.push(kid);
-                    }
-                }
-                spine.push(lay);
-            }
-            SgNode::Answering {
-                text_excerpt,
-                cell_idx,
-            } => spine.push(SgLay::new_with_cell(
-                "✎",
-                theme::CYAN(),
-                "answering",
-                "",
-                theme::CYAN(),
-                vec![(text_excerpt.clone(), theme::MUTED())],
-                Some(*cell_idx),
-            )),
-            SgNode::Steer { text, .. } => {
-                if let Some(t) = last_thinking {
-                    back_edge = Some((spine.len(), t));
-                }
-                spine.push(SgLay::new(
-                    "↻",
-                    theme::WARN(),
-                    "steer",
-                    "",
-                    theme::WARN(),
-                    vec![(text.clone(), theme::MUTED())],
-                ));
-            }
-            SgNode::Queued { text } => spine.push(SgLay::new(
-                "↗",
-                theme::MUTED(),
-                "queued",
-                "",
-                theme::MUTED(),
-                vec![(text.clone(), theme::MUTED())],
-            )),
-            SgNode::Done {
-                duration,
-                interrupted,
-                ..
-            } => {
-                let (glyph, hue, status_str) = if *interrupted {
-                    ("◼", theme::WARN(), "interrupted")
-                } else {
-                    ("✓", theme::SUCCESS(), "completed")
-                };
-                spine.push(SgLay::new(
-                    glyph,
-                    hue,
-                    "turn",
-                    &theme::fmt_duration(*duration),
-                    hue,
-                    vec![(status_str.to_string(), hue)],
-                ));
-            }
-            SgNode::Prompt { text, .. } => {
-                let mut lay = SgLay::new(
-                    "■",
-                    theme::CYAN(),
-                    "prompt",
-                    "",
-                    theme::CYAN(),
-                    vec![(text.clone(), theme::MUTED())],
-                );
-                lay.double = true;
-                spine.push(lay);
-            }
-        }
-    }
-
-    (spine, back_edge)
-}
-
 // ── sidegraph forest: categorized trees ───────────────────────────────────────
 // Many trees per category, live tools own tree delegated on completion.
 
@@ -4457,20 +4059,6 @@ fn sg_cat_hue(cat: SgCat) -> Color {
     }
 }
 
-#[allow(dead_code)]
-fn sg_cat_label(cat: SgCat) -> &'static str {
-    match cat {
-        SgCat::Main => "reasoning",
-
-        SgCat::Search => "search",
-        SgCat::Edit => "edit",
-        SgCat::Exec => "exec",
-        SgCat::Agent => "agent",
-        SgCat::Knowledge => "knowledge",
-        SgCat::Other => "other",
-    }
-}
-
 fn sg_cat_order(cat: SgCat) -> usize {
     match cat {
         SgCat::Main => 0,
@@ -4483,10 +4071,12 @@ fn sg_cat_order(cat: SgCat) -> usize {
     }
 }
 
-#[allow(dead_code)]
 struct SgToolTrack {
     name: String,
     cat: SgCat,
+    /// Category colour for the track's own links, so a column reads as
+    /// search / edit / exec / … at a glance. Costs nothing per frame: the
+    /// canvas is cached by fingerprint and this only changes a style.
     hue: Color,
     nodes: Vec<SgLay>,
 }
@@ -5087,12 +4677,15 @@ fn sg_paint_forest(forest: &mut SgForest, panel_w: usize) -> SgCanvas {
             let ch = sg_junction(is_root, is_center, left, right);
             c.put(x, rail_y, ch, edge);
         }
-        for &tc in &centers {
-            c.put(tc, rail_y + 1, '▼', edge);
+        // Each column's arrowhead carries its category colour; the rail stays faint.
+        for (&tc, &kind) in centers.iter().zip(center_kinds.iter()) {
+            c.put(tc, rail_y + 1, '▼', Style::default().fg(sg_cat_hue(kind)));
         }
 
         // draw central main then live (stacked same X)
-        let mut draw_nodes = |nodes: &[SgLay], tc: usize| {
+        // `link` styles the vertical links between a column's own nodes: faint
+        // on the central spine, the track colour on a tool track.
+        let mut draw_nodes = |nodes: &[SgLay], tc: usize, link: Style| {
             for (i, n) in nodes.iter().enumerate() {
                 sg_draw_box(&mut c, n);
                 if !n.kids.is_empty() {
@@ -5132,28 +4725,28 @@ fn sg_paint_forest(forest: &mut SgForest, panel_w: usize) -> SgCanvas {
                     if continues {
                         let next_y = nodes[i + 1].y;
                         if next_y > fin_y + 1 {
-                            c.vline(tc, fin_y + 1, next_y - 2, edge);
-                            c.put(tc, next_y - 1, '▼', edge);
+                            c.vline(tc, fin_y + 1, next_y - 2, link);
+                            c.put(tc, next_y - 1, '▼', link);
                         }
                     }
                 } else if i + 1 < nodes.len() {
                     let next_y = nodes[i + 1].y;
                     c.put(tc, n.y + n.h - 1, '┬', Style::default().fg(n.hue));
                     if next_y >= 2 {
-                        c.vline(tc, n.y + n.h, next_y - 2, edge);
+                        c.vline(tc, n.y + n.h, next_y - 2, link);
                     }
-                    c.put(tc, next_y - 1, '▼', edge);
+                    c.put(tc, next_y - 1, '▼', link);
                 }
             }
         };
 
         if !forest.main.is_empty() {
             let tc = centers[0];
-            draw_nodes(&forest.main, tc);
+            draw_nodes(&forest.main, tc, edge);
         }
         if !forest.live.is_empty() {
             let tc = centers[0];
-            draw_nodes(&forest.live, tc);
+            draw_nodes(&forest.live, tc, edge);
         }
         for (idx, tt) in forest.tool_tracks.iter().enumerate() {
             let center_idx = if forest.main.is_empty() && forest.live.is_empty() {
@@ -5163,7 +4756,7 @@ fn sg_paint_forest(forest: &mut SgForest, panel_w: usize) -> SgCanvas {
             };
             if center_idx < centers.len() {
                 let tc = centers[center_idx];
-                draw_nodes(&tt.nodes, tc);
+                draw_nodes(&tt.nodes, tc, Style::default().fg(tt.hue));
             }
         }
 
@@ -5502,7 +5095,7 @@ fn apply_selection_style(line: Line<'static>, line_idx: usize, range: TextRange)
         mid,
         Style::default()
             .fg(theme::ON_ACCENT_FG())
-            .bg(theme::META_BLUE())
+            .bg(theme::NUR_GOLD())
             .add_modifier(Modifier::BOLD),
     ));
     if !after.is_empty() {
@@ -5544,7 +5137,7 @@ fn draw_hover_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
                     theme::SUCCESS()
                 }
             }
-            _ => theme::META_BLUE(),
+            _ => theme::NUR_GOLD(),
         };
         let (diff, image) = if let Cell::Image { path, .. } = cell {
             // Pasted/attached image: peek shows the full-size render.
@@ -6286,7 +5879,7 @@ fn banner_lines(app: &App, out: &mut Vec<Line<'static>>) {
         Span::styled("model  ".to_string(), theme::style_faint()),
         Span::styled(
             app.cfg.model.clone(),
-            Style::default().fg(theme::META_BLUE_SKY()),
+            Style::default().fg(theme::NUR_GOLD_SKY()),
         ),
         Span::styled("    provider  ".to_string(), theme::style_faint()),
         Span::styled(provider.clone(), Style::default().fg(theme::SEAFOAM())),
@@ -6335,7 +5928,7 @@ fn draw_busy_line(f: &mut Frame, app: &App, area: Rect) {
         ));
         spans.push(Span::styled(
             format!("  {}  ", capitalize(&app.status)),
-            Style::default().fg(theme::META_BLUE_SKY()),
+            Style::default().fg(theme::NUR_GOLD_SKY()),
         ));
         spans.push(Span::styled(live, theme::style_faint()));
         // Decorative ease-out activity strip, per-cell aurora colour.
@@ -6384,7 +5977,7 @@ fn draft_attachment_line(count: usize, width: u16) -> Line<'static> {
             "◈ {count} image{} · {controls}",
             if count == 1 { "" } else { "s" }
         ),
-        Style::default().fg(theme::META_BLUE()),
+        Style::default().fg(theme::NUR_GOLD()),
     ))
 }
 
@@ -6392,7 +5985,7 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
     // Stable focus chrome; motion belongs to active operations.
     let active_border = !app.busy && app.approval.is_none() && app.question.is_none();
     let border_color = if active_border {
-        theme::META_BLUE()
+        theme::NUR_GOLD()
     } else {
         theme::BORDER()
     };
@@ -6410,7 +6003,7 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
         Span::styled(
             format!(" {provider} · F6 inspect "),
             Style::default()
-                .fg(theme::META_BLUE())
+                .fg(theme::NUR_GOLD())
                 .add_modifier(Modifier::BOLD),
         )
     };
@@ -6441,16 +6034,16 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
     // Same wash as the transcript's drag-select - one gesture, one colour.
     let sel_style = Style::default()
         .fg(theme::ON_ACCENT_FG())
-        .bg(theme::META_BLUE())
+        .bg(theme::NUR_GOLD())
         .add_modifier(Modifier::BOLD);
     let normal = Style::default().fg(theme::FG());
     let chip_style = Style::default()
-        .fg(theme::META_BLUE())
+        .fg(theme::NUR_GOLD())
         .bg(theme::SURFACE())
         .add_modifier(Modifier::BOLD);
     let chip_sel_style = Style::default()
         .fg(theme::ON_ACCENT_FG())
-        .bg(theme::META_BLUE())
+        .bg(theme::NUR_GOLD())
         .add_modifier(Modifier::BOLD);
 
     // Reverse history search (Ctrl+R) takes over the composer body so the user
@@ -6461,7 +6054,7 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
             Span::styled(
                 "❯ ".to_string(),
                 Style::default()
-                    .fg(theme::META_BLUE())
+                    .fg(theme::NUR_GOLD())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(format!("(reverse-search)`{query}`: "), theme::style_faint()),
@@ -6520,7 +6113,7 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
         let mut spans = vec![Span::styled(
             "❯ ".to_string(),
             Style::default()
-                .fg(theme::META_BLUE())
+                .fg(theme::NUR_GOLD())
                 .add_modifier(Modifier::BOLD),
         )];
         spans.push(Span::styled(
@@ -6541,7 +6134,7 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
             let mut spans = vec![Span::styled(
                 prefix.to_string(),
                 Style::default()
-                    .fg(theme::META_BLUE())
+                    .fg(theme::NUR_GOLD())
                     .add_modifier(Modifier::BOLD),
             )];
             let mut run = String::new();
@@ -6565,7 +6158,7 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
                         } else {
                             Style::default()
                                 .fg(theme::ON_ACCENT_FG())
-                                .bg(theme::META_BLUE())
+                                .bg(theme::NUR_GOLD())
                                 .add_modifier(Modifier::BOLD)
                         }
                     } else if is_sel {
@@ -6587,7 +6180,7 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
                         if is_sel {
                             Style::default()
                                 .fg(theme::ON_ACCENT_FG())
-                                .bg(theme::META_BLUE())
+                                .bg(theme::NUR_GOLD())
                                 .add_modifier(Modifier::BOLD)
                         } else {
                             theme::style_cursor_on()
@@ -6679,7 +6272,7 @@ fn draw_statusline(f: &mut Frame, app: &App, area: Rect) {
     } else if app.busy {
         Span::styled(
             format!("{} ", theme::spinner_frame(tick)),
-            Style::default().fg(theme::META_BLUE()),
+            Style::default().fg(theme::NUR_GOLD()),
         )
     } else {
         Span::styled("● ".to_string(), theme::style_success())
@@ -6874,7 +6467,7 @@ fn draw_palette(f: &mut Frame, app: &mut App, input_area: Rect) {
         f,
         rect,
         phase,
-        theme::META_BLUE(),
+        theme::NUR_GOLD(),
         " ⌘  commands ",
         None,
         " ↑↓/wheel · PgUp/Dn · ↵ fill/run · esc/✕ ",
@@ -6924,22 +6517,22 @@ fn draw_palette(f: &mut Frame, app: &mut App, input_area: Rect) {
                         head,
                         Style::default()
                             .fg(theme::ON_ACCENT_FG())
-                            .bg(theme::META_BLUE())
+                            .bg(theme::NUR_GOLD())
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         body,
                         Style::default()
                             .fg(theme::ON_ACCENT_FG())
-                            .bg(theme::META_BLUE()),
+                            .bg(theme::NUR_GOLD()),
                     ),
-                    Span::styled(" ".repeat(pad), Style::default().bg(theme::META_BLUE())),
+                    Span::styled(" ".repeat(pad), Style::default().bg(theme::NUR_GOLD())),
                 ])
             } else {
                 Line::from(vec![
                     Span::styled(
                         format!(" {name:<12}"),
-                        Style::default().fg(theme::META_BLUE_SKY()),
+                        Style::default().fg(theme::NUR_GOLD_SKY()),
                     ),
                     Span::styled(format!(" {desc}"), theme::style_faint()),
                 ])
@@ -7038,7 +6631,7 @@ fn draw_question_state(f: &mut Frame, q: &mut super::app::QuestionState, area: R
         Block::default().style(Style::default().bg(theme::SURFACE_2())),
         rect,
     );
-    let hue = theme::META_BLUE();
+    let hue = theme::NUR_GOLD();
     let footer = if q.typing {
         "  ←→ edit · home/end · ctrl+u clear · ↵ send · esc options  "
     } else if q.multi_select {
@@ -7079,7 +6672,7 @@ fn draw_question_state(f: &mut Frame, q: &mut super::app::QuestionState, area: R
                 .collect::<String>(),
             Style::default()
                 .fg(theme::ON_ACCENT_FG())
-                .bg(theme::META_BLUE())
+                .bg(theme::NUR_GOLD())
                 .add_modifier(Modifier::BOLD),
         ));
     }
@@ -7148,7 +6741,7 @@ fn draw_approval(f: &mut Frame, app: &App, area: Rect) {
         } else if l.starts_with('-') && !l.starts_with("---") {
             Style::default().fg(theme::ERROR())
         } else if l.starts_with("@@") || l.starts_with("path ") || l.starts_with("cmd ") {
-            Style::default().fg(theme::META_BLUE_SKY())
+            Style::default().fg(theme::NUR_GOLD_SKY())
         } else {
             Style::default().fg(theme::MUTED())
         };
@@ -7741,7 +7334,7 @@ fn draw_ctx_menu(f: &mut Frame, app: &mut App) {
         f,
         frame,
         phase,
-        theme::META_BLUE(),
+        theme::NUR_GOLD(),
         " prompt ",
         None,
         "  ↑↓/wheel move  ·  ↵ choose  ·  esc  ",
@@ -7759,7 +7352,7 @@ fn draw_ctx_menu(f: &mut Frame, app: &mut App) {
     {
         let selected = i == sel;
         let (fg, bg) = if selected {
-            (theme::BG(), theme::META_BLUE())
+            (theme::BG(), theme::NUR_GOLD())
         } else {
             (theme::FG(), theme::SURFACE_2())
         };
@@ -8822,16 +8415,6 @@ mod sidegraph_canvas_tests {
     use crate::tui::app::{SgNode, SgState, SideGraphModel};
     use std::time::{Duration, Instant};
 
-    fn render(model: &SideGraphModel, panel_w: usize) -> Vec<String> {
-        let (mut spine, back) = sg_build_spine(model, &[], Duration::from_millis(0), model.running);
-        let canvas = sg_paint(&mut spine, back, panel_w);
-        canvas
-            .to_lines()
-            .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
-            .collect()
-    }
-
     fn demo_model() -> SideGraphModel {
         let now = Instant::now();
         SideGraphModel {
@@ -8962,99 +8545,6 @@ mod sidegraph_canvas_tests {
         }
     }
 
-    /// A steer is a real re-entry into reasoning — the one loop nur has.
-    #[test]
-    fn steer_produces_a_back_edge_to_the_preceding_reasoning() {
-        let m = demo_model();
-        let (spine, back) = sg_build_spine(&m, &[], Duration::from_millis(0), true);
-        let (from, to) = back.expect("steer should create a back-edge");
-        assert!(to < from, "back-edge must point upward");
-        assert_eq!(spine[to].title, "reasoning");
-        assert_eq!(spine[from].title, "steer");
-    }
-
-    /// No fabricated control flow: the old renderer emitted "Yes"/"Yes->Yes"
-    /// from `i % 3` and labelled a fan-out as a loop.
-    #[test]
-    fn renders_no_invented_branch_labels() {
-        let out = render(&demo_model(), 40).join("\n");
-        for fake in ["Yes->Yes", "Yes→Yes", "Programs (1)", "∞ loop"] {
-            assert!(
-                !out.contains(fake),
-                "fabricated label {fake:?} still rendered"
-            );
-        }
-    }
-
-    /// The canvas is allowed to be wider than the panel — that is exactly what
-    /// gives horizontal panning something to reveal.
-    #[test]
-    fn canvas_can_exceed_panel_width_so_panning_has_range() {
-        let mut m = demo_model();
-        m.nodes.truncate(1);
-        let (mut spine, back) = sg_build_spine(&m, &[], Duration::from_millis(0), true);
-        // Two parallel children under the first step.
-        let kid = |id: u64| {
-            SgLay::new(
-                "◐",
-                theme::NUR_GOLD(),
-                &format!("#{id}·explore"),
-                "2s",
-                theme::NUR_GOLD(),
-                vec![("scan the tui module".into(), theme::MUTED())],
-            )
-        };
-        spine[1].kids = vec![kid(1), kid(2)];
-        let canvas = sg_paint(&mut spine, back, 30);
-        let widest = canvas
-            .to_lines()
-            .iter()
-            .map(|l| l.width())
-            .max()
-            .unwrap_or(0);
-        assert!(
-            widest > 30,
-            "fan-out canvas ({widest}) should exceed the 30-col panel"
-        );
-    }
-
-    #[test]
-    fn print_demo_graph() {
-        println!("\n=== sidegraph · sequential spine (panel 40) ===");
-        for l in render(&demo_model(), 40) {
-            println!("{l}");
-        }
-
-        println!("\n=== sidegraph · parallel subagent fan-out (panel 40) ===");
-        let mut m = demo_model();
-        m.nodes.truncate(2);
-        let (mut spine, back) = sg_build_spine(&m, &[], Duration::from_millis(0), true);
-        let kid = |id: u64, task: &str| {
-            SgLay::new(
-                "◐",
-                theme::NUR_GOLD(),
-                &format!("#{id}·explore"),
-                "2.1s",
-                theme::NUR_GOLD(),
-                vec![(task.to_string(), theme::MUTED())],
-            )
-        };
-        spine[2].kids = vec![
-            kid(1, "map command registration"),
-            kid(2, "trace the render path"),
-            kid(3, "audit mouse handling"),
-        ];
-        let canvas = sg_paint(&mut spine, back, 40);
-        for l in canvas.to_lines() {
-            let s: String = l
-                .spans
-                .iter()
-                .map(|sp| sp.content.as_ref())
-                .collect::<String>();
-            println!("{s}");
-        }
-    }
-
     #[test]
     fn forest_many_trees_per_category() {
         let mut m = demo_model();
@@ -9122,6 +8612,53 @@ mod sidegraph_canvas_tests {
             "forest canvas {} should exceed panel 40 to make panning useful",
             widest
         );
+    }
+
+    /// Each tool track reads as its category: the arrowhead under the rail and
+    /// the links between the track's own nodes carry the category colour,
+    /// while the central spine's links stay faint.
+    #[test]
+    fn tool_tracks_carry_their_category_colour() {
+        let mut m = demo_model();
+        let now = std::time::Instant::now();
+        let tool = |name: &str, cell_idx: usize| SgNode::Tool {
+            name: name.into(),
+            args_formatted: vec!["arg".into()],
+            result_formatted: Some(vec!["✓".into()]),
+            state: SgState::Ok,
+            started: now,
+            duration: Some(Duration::from_millis(10)),
+            agent: false,
+            cell_idx,
+        };
+        m.nodes.push(tool("grep", 20));
+        m.nodes.push(tool("grep", 21));
+        m.nodes.push(tool("edit_file", 22));
+        let mut forest = sg_build_forest(&m, &[], Duration::from_millis(0), false);
+        let canvas = sg_paint_forest(&mut forest, 40);
+        let at = |x: usize, y: usize| canvas.px[y * canvas.w + x];
+        let rail_y = forest.root.y + forest.root.h;
+        for track in &forest.tool_tracks {
+            let hue = sg_cat_hue(track.cat);
+            let tc = track.nodes[0].center();
+            let head = at(tc, rail_y + 1);
+            assert_eq!((head.ch, head.style.fg), ('▼', Some(hue)), "{}", track.name);
+            for pair in track.nodes.windows(2) {
+                let link = at(tc, pair[1].y - 1);
+                assert_eq!((link.ch, link.style.fg), ('▼', Some(hue)), "{}", track.name);
+            }
+        }
+        let grep = forest
+            .tool_tracks
+            .iter()
+            .find(|t| t.name == "grep")
+            .unwrap();
+        assert_eq!(grep.nodes.len(), 2, "both greps share one track");
+        let spine = &forest.main;
+        if spine.len() >= 2 {
+            let link = at(spine[0].center(), spine[1].y - 1);
+            assert_eq!(link.style, theme::style_faint(), "the spine stays faint");
+        }
     }
 
     /// M2 regression: the fan-out rail must connect the root ┬ to the central

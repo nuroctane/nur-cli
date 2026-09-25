@@ -1,11 +1,11 @@
-mod ansi;
+pub(crate) mod ansi;
 mod app;
 mod grid;
 mod input;
 mod inspector;
 mod links;
-mod row_index;
 mod markdown;
+mod row_index;
 mod scrollbar;
 mod ui;
 mod wrap;

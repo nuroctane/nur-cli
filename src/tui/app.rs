@@ -351,7 +351,6 @@ pub enum Cell {
     Image {
         path: String,
         label: String,
-        #[allow(dead_code)]
         queued: bool,
     },
     Assistant {
@@ -740,14 +739,6 @@ impl Cell {
                 | Cell::Assistant { .. }
                 | Cell::Image { .. }
         )
-    }
-
-    #[allow(dead_code)]
-    pub fn expanded(&self) -> bool {
-        match self {
-            Cell::Thinking { expanded, .. } | Cell::Tool { expanded, .. } => *expanded,
-            _ => false,
-        }
     }
 
     pub fn toggle_expanded(&mut self) {
@@ -1778,21 +1769,17 @@ pub struct SessionPicker {
 
 /// Update-available modal - opencode-style UX with parity to other pickers (session, model, login, peek).
 #[derive(Debug, Clone, Default)]
-#[allow(dead_code)]
 pub struct UpdateHit {
     pub frame: ratatui::layout::Rect,
     pub close: ratatui::layout::Rect,
-    pub body: ratatui::layout::Rect,
     pub update_btn: ratatui::layout::Rect,
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct UpdateModal {
     pub current: String,
     pub remote: String,
     pub hit: UpdateHit,
-    pub announced_at: std::time::Instant,
 }
 
 impl UpdateModal {
@@ -1801,7 +1788,6 @@ impl UpdateModal {
             current,
             remote,
             hit: UpdateHit::default(),
-            announced_at: std::time::Instant::now(),
         }
     }
 }
@@ -1813,14 +1799,9 @@ pub struct PickerHit {
     /// Top-right close control (✕).
     pub close: ratatui::layout::Rect,
     /// List body (rows).
-    #[allow(dead_code)]
     pub body: ratatui::layout::Rect,
     /// Scope chip ("here" / "all") - click to toggle.
     pub scope: ratatui::layout::Rect,
-    /// Window-switch chip ("takeover" / "sessions").
-    /// Reserved for a future clickable chip; the switch is keyboard-driven (`c`).
-    #[allow(dead_code)]
-    pub foreign: ratatui::layout::Rect,
     /// Visible row index → screen rect (for click-to-select).
     pub rows: Vec<(usize, ratatui::layout::Rect)>,
 }
@@ -5827,17 +5808,6 @@ impl App {
         }
     }
 
-    /// Map a terminal (column, row) click onto the input buffer caret.
-    #[allow(dead_code)]
-    fn click_input(&mut self, col: u16, row: u16) {
-        if let Some((vrow, dcol)) = self.input_pos_at(col, row) {
-            let w = self.input_usable_w.max(1);
-            let idx = self.input.index_at_visual(vrow, dcol, w);
-            self.input.set_cursor_index(idx);
-            self.ensure_input_caret_visible();
-        }
-    }
-
     // ── session picker (`/sessions` · `/resume`) ─────────────
     /// Native nur sessions as picker rows. `Err` carries a message to surface.
     fn native_session_rows(&self) -> std::result::Result<Vec<SessionRow>, String> {
@@ -7435,7 +7405,7 @@ impl App {
                 }
             }
             // Manual Claude OAuth (and similar): type/paste the auth code, Enter submits
-            // it to the background waiter via ~/.nur/oauth_paste_code.txt.
+            // it to this login attempt's in-memory waiter.
             KeyCode::Enter => {
                 let code = self
                     .login
@@ -7445,9 +7415,17 @@ impl App {
                 if code.is_empty() {
                     return;
                 }
-                if let Err(e) = crate::auth::save_manual_oauth_code(&code) {
+                let submitted = self
+                    .login
+                    .as_ref()
+                    .and_then(|m| m.oauth_cancel.as_ref())
+                    .ok_or_else(|| {
+                        crate::error::NurError::Other("no active browser sign-in".into())
+                    })
+                    .and_then(|cancel| cancel.submit_manual_code(&code));
+                if let Err(e) = submitted {
                     if let Some(m) = &mut self.login {
-                        m.error = Some(format!("could not write pasted code: {e}"));
+                        m.error = Some(format!("could not submit pasted code: {e}"));
                     }
                     return;
                 }
@@ -7575,15 +7553,6 @@ impl App {
                                 tokens.expires_at,
                                 tokens.meta.clone(),
                             )
-                            .and_then(|()| {
-                                crate::auth::choose_provider_oauth(
-                                    &provider_id,
-                                    &tokens.access_token,
-                                    tokens.refresh_token.clone(),
-                                    tokens.expires_at,
-                                    tokens.meta.clone(),
-                                )
-                            })
                         } else {
                             crate::auth::save_api_key_for(&tokens.access_token, Some(&provider_id))
                                 .and_then(|()| {
@@ -8455,7 +8424,7 @@ impl App {
     /// Inject a queued follow-up **without interrupting** the live turn (steer).
     /// Tools, subagents, and background jobs keep running; the message lands
     /// at the next model round. Idle → start a normal turn.
-    fn queue_send_now(&mut self, cell_idx: usize) {
+    fn queue_steer(&mut self, cell_idx: usize) {
         let text = match self.cells.get(cell_idx) {
             Some(Cell::Queued { text }) => text.clone(),
             _ => return,
@@ -8524,13 +8493,6 @@ impl App {
         } else {
             self.start_attached_turn(&text, queued.images);
         }
-    }
-
-    /// Steer a queued follow-up into the **running** turn (alias of send now):
-    /// inject mid-turn without cancelling. Idle → start a turn.
-    fn queue_steer(&mut self, cell_idx: usize) {
-        // Same non-interrupt path as send now.
-        self.queue_send_now(cell_idx);
     }
 
     pub fn draft_image_indices(&self) -> Vec<usize> {
@@ -9097,7 +9059,14 @@ impl App {
         // Default: launch skill-driven turn so agent can interpret directive (name, path, caps, completion reqs)
         let display = format!("/fractal {arg_trim}");
         let model_prompt = format!(
-            "Fractal directive: {arg_trim}\n\n             Use the `fractal` skill (skills/fractal/SKILL.md) and `fractal` tool to handle this.              Steps: probe (tool action=probe), doctor if needed, then interpret directive into name/path/title/scope/base/... and caps (max-depth, max-children, max-descendants, max-cost, timeouts).              If the directive asks to continue a node, use `fractal node list --path=<path>` to resolve it.              Commit fractal artifacts via `fractal init <path> --agent=<agent>` autonomously (idempotent).              After init, draft NODE.md Instructions and Completion Requirements from the directive, show interpreted parameters table, ask for missing name/path and any skipped drafts if needed.              Use tool action=node list / node status / node start as required. Report worktree paths and next steps.              Note: fractal launches nodes via tmux detached, so TUI stays responsive; use `fractal node attach <name>` for interactive."
+            "Fractal directive: {arg_trim}\n\n\
+             Use the `fractal` skill (skills/fractal/SKILL.md) and `fractal` tool to handle this.\n\
+             Steps: probe (tool action=probe), doctor if needed, then interpret directive into name/path/title/scope/base/... and caps (max-depth, max-children, max-descendants, max-cost, timeouts).\n\
+             If the directive asks to continue a node, use `fractal node list --path=<path>` to resolve it.\n\
+             Commit fractal artifacts via `fractal init <path> --agent=<agent>` autonomously (idempotent).\n\
+             After init, draft NODE.md Instructions and Completion Requirements from the directive, show interpreted parameters table, ask for missing name/path and any skipped drafts if needed.\n\
+             Use tool action=node list / node status / node start as required. Report worktree paths and next steps.\n\
+             Note: fractal launches nodes via tmux detached, so TUI stays responsive; use `fractal node attach <name>` for interactive."
         );
         self.start_turn_labeled(&display, &model_prompt);
     }
@@ -9146,7 +9115,7 @@ impl App {
         // First User cell is the root prompt (query), subsequent Users that appear
         // after a TurnDone become Prompt nodes (double-bordered like root, titled
         // "prompt"). Users that appear mid-turn (while in_turn) are Steers with
-        // back-edge. This way interruption or "send now" does not clear the graph
+        // back-edge. This way interruption or a steer does not clear the graph
         // - new prompts flow in after previous Done nodes, like the transcript.
         let mut query = String::new();
         let mut nodes: Vec<SgNode> = Vec::new();
@@ -9597,7 +9566,6 @@ impl App {
             config: self.cfg.clone(),
             cwd: self.cwd.clone(),
             permission_mode: self.permission_mode.clone(),
-            verbose: false,
             approved_tools: self.approved_tools.clone(),
             tools: host,
             permissions: self.permissions.clone(),
@@ -10127,9 +10095,8 @@ impl App {
             for (cell_idx, lo, hi, action) in actions {
                 if local_x >= *lo && local_x < *hi {
                     match action {
-                        0 => self.queue_send_now(*cell_idx), // steer: inject mid-turn
+                        0 => self.queue_steer(*cell_idx), // inject mid-turn
                         1 => self.queue_dismiss(*cell_idx),
-                        2 => self.queue_steer(*cell_idx), // alias of steer
                         3 => self.queue_cut_in(*cell_idx), // cancel + front
                         _ => {}
                     }
@@ -10697,7 +10664,6 @@ impl App {
 
     /// Clear the paste merge session - called when the user types / moves
     /// caret / deletes, so the next paste starts a fresh chip.
-    #[allow(dead_code)]
     fn clear_paste_merge_state(&mut self) {
         self.active_paste_id = None;
         // Keep active_paste_at for a short grace? No - break immediately on edit.

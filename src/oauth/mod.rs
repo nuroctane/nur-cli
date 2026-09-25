@@ -44,17 +44,6 @@ pub fn antigravity_resolve_project_id(access_token: &str) -> Result<String> {
     flows::antigravity::resolve_project_id(access_token)
 }
 
-/// Full Code Assist setup (loadCodeAssist + free-tier onboardUser when needed).
-/// Returns (project_id, tier_id). Used for login, import, and 403 recovery.
-#[allow(dead_code)] // public API; force variant is what the Cloud Code 403 path uses
-pub fn antigravity_setup_code_assist(
-    access_token: &str,
-    env_project: Option<&str>,
-) -> Result<(String, String)> {
-    let s = flows::antigravity::setup_code_assist(access_token, env_project)?;
-    Ok((s.project_id, s.tier_id))
-}
-
 /// Force Code Assist re-onboard even when `currentTier` already exists.
 /// Used once on Cloud Code Private API 403 recovery.
 pub fn antigravity_setup_code_assist_force(
@@ -105,12 +94,57 @@ pub fn expires_in_to_at(expires_in: Option<u64>) -> Option<u64> {
 pub fn device_poll_sleep(base_interval_secs: u64, slow_down: bool, attempt: u32) -> Duration {
     let mut secs = base_interval_secs.max(3);
     if slow_down {
-        // RFC 8628: increase interval on slow_down (we add 5s, cap 30s).
-        secs = (secs.saturating_add(5)).min(30);
+        // Never shorten the interval requested by the authorization server.
+        secs = secs.saturating_add(5);
     }
     // 0–500ms jitter from attempt (no extra RNG dependency).
     let jitter_ms = ((attempt.wrapping_mul(37) + 11) % 501) as u64;
     Duration::from_millis(secs.saturating_mul(1000).saturating_add(jitter_ms))
+}
+
+/// Per-flow polling state: slow_down applies to every subsequent request.
+pub(crate) struct DevicePoll {
+    interval: u64,
+    attempt: u32,
+}
+
+impl DevicePoll {
+    pub fn new(interval: u64) -> Self {
+        Self {
+            interval: interval.max(3),
+            attempt: 0,
+        }
+    }
+
+    pub fn slow_down(&mut self) {
+        self.interval = self.interval.saturating_add(5);
+    }
+
+    pub fn wait(&mut self, cancel: &CancelFlag, deadline: std::time::Instant) -> Result<()> {
+        let delay = device_poll_sleep(self.interval, false, self.attempt);
+        self.attempt = self.attempt.saturating_add(1);
+        let started = std::time::Instant::now();
+        loop {
+            if cancel.is_cancelled() {
+                return Err(NurError::Other("login cancelled".into()));
+            }
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return Err(NurError::Other(
+                    "device login expired; start sign-in again".into(),
+                ));
+            }
+            let remaining = delay.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                return Ok(());
+            }
+            std::thread::sleep(
+                remaining
+                    .min(deadline - now)
+                    .min(Duration::from_millis(100)),
+            );
+        }
+    }
 }
 
 /// Best-effort remote revoke. Returns a human note (may be empty).
@@ -151,17 +185,44 @@ pub fn revoke_session(auth: &Auth) -> Result<String> {
 
 /// Cancel handle shared between TUI and background OAuth task.
 #[derive(Clone, Default)]
-pub struct CancelFlag(Arc<AtomicBool>);
+pub struct CancelFlag(Arc<AtomicBool>, Arc<std::sync::Mutex<Option<String>>>);
 
 impl CancelFlag {
     pub fn new() -> Self {
-        Self(Arc::new(AtomicBool::new(false)))
+        Self::default()
     }
     pub fn cancel(&self) {
+        let mut code = self
+            .1
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.0.store(true, Ordering::SeqCst);
+        *code = None;
     }
     pub fn is_cancelled(&self) -> bool {
         self.0.load(Ordering::SeqCst)
+    }
+
+    /// A paste belongs only to this login attempt, never to another process or
+    /// a later retry. Codes remain in memory instead of a shared disk mailbox.
+    pub fn submit_manual_code(&self, text: &str) -> Result<()> {
+        let code = crate::auth::validate_manual_oauth_code(text)?;
+        let mut slot = self
+            .1
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.is_cancelled() {
+            return Err(NurError::Other("login cancelled".into()));
+        }
+        *slot = Some(code);
+        Ok(())
+    }
+
+    pub(crate) fn take_manual_code(&self) -> Option<String> {
+        self.1
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
     }
 }
 
@@ -192,33 +253,50 @@ pub fn refresh_tokens(provider: &str, auth: &Auth, refresh: &str) -> Result<OAut
     }
 }
 
-/// Whether this catalog id supports browser sign-in.
-#[allow(dead_code)]
-pub fn supports_browser(provider_id: &str) -> bool {
-    crate::providers::by_id(provider_id)
-        .map(|p| p.browser_auth)
-        .unwrap_or(false)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn browser_supported_ids() {
-        assert!(supports_browser("openai"));
-        assert!(supports_browser("xai"));
-        assert!(supports_browser("kimi"));
-        assert!(supports_browser("anthropic"));
-        assert!(supports_browser("google"));
-        assert!(supports_browser("github-copilot"));
-        assert!(supports_browser("cursor"));
-        assert!(supports_browser("opencode"));
-        assert!(supports_browser("meta"));
-        assert!(supports_browser("deepseek"));
-        assert!(supports_browser("zhipu"));
-        assert!(supports_browser("cline"));
-        assert!(!supports_browser("qwen"));
+    fn manual_codes_are_attempt_scoped_and_cleared_on_cancel() {
+        let first = CancelFlag::new();
+        let second = CancelFlag::new();
+        first.submit_manual_code(" code#state ").unwrap();
+        assert!(second.take_manual_code().is_none());
+        assert_eq!(
+            first.clone().take_manual_code().as_deref(),
+            Some("code#state")
+        );
+        assert!(first.take_manual_code().is_none());
+        first.submit_manual_code("another-code").unwrap();
+        first.cancel();
+        assert!(first.take_manual_code().is_none());
+        assert!(first.submit_manual_code("late-code").is_err());
+        assert!(second.submit_manual_code("\n").is_err());
+        assert!(second.submit_manual_code("a\nb").is_err());
+    }
+
+    #[test]
+    fn device_poll_backoff_is_cumulative_and_never_shortens_server_interval() {
+        let mut poll = DevicePoll::new(45);
+        poll.slow_down();
+        assert_eq!(poll.interval, 50);
+        poll.slow_down();
+        assert_eq!(poll.interval, 55);
+        assert!(device_poll_sleep(poll.interval, false, 1).as_secs() >= 55);
+        assert!(device_poll_sleep(60, true, 1).as_secs() >= 65);
+    }
+
+    #[test]
+    fn device_poll_cancel_and_expiry_prevent_another_request() {
+        let cancel = CancelFlag::new();
+        cancel.cancel();
+        let now = std::time::Instant::now();
+        assert!(DevicePoll::new(60)
+            .wait(&cancel, now + Duration::from_secs(120))
+            .is_err());
+        assert!(now.elapsed() < Duration::from_secs(1));
+        assert!(DevicePoll::new(60).wait(&CancelFlag::new(), now).is_err());
     }
 
     #[test]
@@ -278,6 +356,7 @@ mod tests {
             "deepseek",
             "zhipu",
         ];
+        let browser_auth = |id: &str| crate::providers::by_id(id).is_some_and(|p| p.browser_auth);
         for id in crate::providers::oauth_browser_provider_ids() {
             assert!(
                 LOGIN.contains(id),
@@ -289,12 +368,12 @@ mod tests {
                     || (*id == "google" && REFRESH.contains(&"google-oauth")),
                 "provider '{id}' is browser_auth but missing from refresh_tokens match"
             );
-            assert!(supports_browser(id), "supports_browser({id}) false");
+            assert!(browser_auth(id), "catalog browser_auth({id}) is false");
         }
         // Inverse: every LOGIN id must be browser_auth in the catalog.
         for id in LOGIN {
             assert!(
-                supports_browser(id),
+                browser_auth(id),
                 "login_browser has '{id}' but catalog browser_auth=false"
             );
         }

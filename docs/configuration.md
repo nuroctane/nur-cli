@@ -122,8 +122,8 @@ auto_update = true
 | `typesafe.skills.narrow_requirements` | bool | `true` | Inject only the triggered skill's applicable rules as a checklist |
 | `typesafe.skills.check_usage` | bool | `true` | Check that an activated skill was actually carried out |
 | `typesafe.skills.max_requirements` | integer | `8` | Most rules injected from a narrowed skill |
-| `typesafe.routing.enabled` | bool | `false` | Let the harness switch to the suggested model; `false` keeps the suggestion advisory |
-| `typesafe.routing.suggest` | bool | `true` | Show the suggested model in the transcript |
+| `typesafe.routing.enabled` | bool | `true` | Run an `agent` call that names no provider/model on a cheaper reachable model when it is known-price, at least 15% cheaper and no weaker in privacy, with parent context Jev judged directly useful. The parent session never moves |
+| `typesafe.routing.suggest` | bool | `true` | Show routing decisions in the transcript |
 | `typesafe.tools.subset` | bool | `false` | Narrow the tool surface on the first round of a turn (one Noul per specialist; later rounds get the full surface). Off because tool schemas ride the prompt cache |
 | `typesafe.tools.keep_probability` | float | `0.75` | How confident the answer must be that a tool is *not* needed before it is dropped (keeping is the safe direction) |
 | `headroom.enabled` | bool | `true` | [Headroom](https://github.com/headroomlabs-ai/headroom) inline compression of large tool results (needs the `headroom-ai` package; missing package = no-op) |

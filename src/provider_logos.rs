@@ -12,15 +12,10 @@
 //! Nous Research wordmark from their GitHub org avatar, and Cline's official
 //! app icon (glyph only - the dark tile it sits on is dropped).
 
-/// One provider logo: embedded PNG + emoji fallback.
+/// One provider logo (embedded PNG). The text-only fallback is [`title_emoji`].
 #[derive(Clone, Copy)]
 pub struct Logo {
     pub png: &'static [u8],
-    /// Emoji fallback for text-only surfaces (consumed by the tab-title
-    /// path via [`title_emoji`]; kept here so the mapping lives in one
-    /// place).
-    #[allow(dead_code)]
-    pub emoji: &'static str,
 }
 
 const ANTHROPIC_PNG: &[u8] = include_bytes!("../assets/provider-logos/anthropic.png");
@@ -42,7 +37,6 @@ const XAI_PNG: &[u8] = include_bytes!("../assets/provider-logos/xai.png");
 /// Map a catalog provider id to its logo. Unlisted ids (local servers,
 /// niche gateways) fall back to a generic orbit glyph.
 pub fn for_provider(provider_id: &str) -> Option<Logo> {
-    let emoji = title_emoji(provider_id);
     let png: &'static [u8] = match provider_id {
         "openai" | "openai-cc" => OPENAI_PNG,
         "anthropic" => ANTHROPIC_PNG,
@@ -61,7 +55,7 @@ pub fn for_provider(provider_id: &str) -> Option<Logo> {
         "cline" => CLINE_PNG,
         _ => return None,
     };
-    Some(Logo { png, emoji })
+    Some(Logo { png })
 }
 
 /// Emoji for the terminal tab title, looked up by provider id OR the user
@@ -136,9 +130,8 @@ mod tests {
     }
 
     #[test]
-    fn for_provider_returns_logo_with_matching_emoji() {
-        let logo = for_provider("deepseek").expect("deepseek has a logo");
-        assert_eq!(logo.emoji, title_emoji("deepseek"));
+    fn listed_providers_have_a_logo_and_others_fall_back() {
+        assert!(for_provider("deepseek").is_some());
         assert!(for_provider("unknown-gateway").is_none());
     }
 
@@ -146,9 +139,7 @@ mod tests {
     /// emoji must resolve (an empty glyph would leave the title bare).
     #[test]
     fn cline_has_a_logo_and_a_title_emoji() {
-        let logo = for_provider("cline").expect("cline has a logo");
-        assert_eq!(logo.emoji, title_emoji("cline"));
+        assert!(for_provider("cline").is_some(), "cline has a logo");
         assert_eq!(title_emoji("cline"), "\u{1F916}");
-        assert!(!logo.emoji.is_empty());
     }
 }

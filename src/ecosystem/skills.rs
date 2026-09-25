@@ -4,7 +4,6 @@
 use crate::config::nur_home;
 use crate::error::Result;
 use std::fs;
-use std::path::PathBuf;
 
 /// Skills we used to ship and now retire on upgrade. Without this sweep an
 /// existing install keeps discovering (and NL-activating) them forever, since
@@ -82,15 +81,6 @@ pub fn install_bundled_skills() -> Result<Vec<String>> {
     }
 
     Ok(installed)
-}
-
-#[allow(dead_code)]
-pub fn skill_paths() -> Vec<PathBuf> {
-    let mut out = vec![nur_home().join("skills")];
-    if let Some(home) = dirs::home_dir() {
-        out.push(home.join(".agents").join("skills"));
-    }
-    out
 }
 
 const BUNDLED: &[(&str, &str)] = &[

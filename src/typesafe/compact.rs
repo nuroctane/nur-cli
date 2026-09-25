@@ -620,19 +620,6 @@ fn apply_decisions(
     out
 }
 
-/// Compact `items` with Jev's judgments.
-///
-/// `None` means "do not prune": no calls to judge, no TypeSafe key, a state that
-/// cannot be fitted, or a request that failed. The caller then keeps its normal
-/// compaction path, which is the honest fallback - never a silent delete.
-pub fn compact_items(
-    cfg: &TypesafeConfig,
-    items: &[Value],
-    opts: &CompactOptions,
-) -> Option<Outcome> {
-    try_compact_items(cfg, items, opts).ok()
-}
-
 /// Why no Jev pruning could be applied. A missing judgment is never a delete.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompactSkip {
@@ -1417,7 +1404,7 @@ mod tests {
     fn nothing_to_judge_returns_none() {
         let cfg = TypesafeConfig::default();
         let items = vec![text_item("just text")];
-        assert!(compact_items(&cfg, &items, &opts()).is_none());
+        assert!(try_compact_items(&cfg, &items, &opts()).is_err());
     }
 
     /// Test seam naming: compaction against an injected client.

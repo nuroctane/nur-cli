@@ -403,7 +403,6 @@ fn remember(nur_provider: &str, entry: CacheEntry) {
 }
 
 /// Invalidate the short-lived omp token cache (after `/login` or logout).
-#[allow(dead_code)]
 pub fn invalidate_omp_token_cache() {
     if let Ok(mut cache) = cache().lock() {
         cache.clear();
@@ -412,7 +411,6 @@ pub fn invalidate_omp_token_cache() {
 
 /// Read OMP `modelRoles` (smol/slow/plan/…) when available — used to seed
 /// nur economy / subagent cheap-model hints without inventing role names.
-#[allow(dead_code)] // consumed by omp economy routing / future role sync
 pub fn omp_model_role(role: &str) -> Option<String> {
     let bin = crate::ecosystem::find_omp()?;
     let output = crate::ecosystem::run_capture(

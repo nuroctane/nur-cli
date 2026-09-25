@@ -134,9 +134,6 @@ pub struct PromptContext {
 }
 
 impl PromptContext {
-    pub fn build(cwd: &Path, is_subagent: bool, model: &str, provider: &str) -> Self {
-        Self::build_with_opts(cwd, is_subagent, model, provider, false, None)
-    }
 
     /// Build the complete prompt on Tokio's blocking pool, for every provider.
     /// Skill activation can perform blocking Jev HTTP calls, and the other
@@ -595,19 +592,6 @@ Direct technical markdown. Fence code with languages.
     }
 }
 
-/// One-shot convenience (used outside the turn loop).
-#[allow(dead_code)]
-pub fn system_instructions(
-    cwd: &Path,
-    mode: PermissionMode,
-    is_subagent: bool,
-    todos_render: &str,
-    model: &str,
-    provider: &str,
-) -> String {
-    PromptContext::build(cwd, is_subagent, model, provider).render(mode, todos_render)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -633,7 +617,7 @@ mod tests {
 
     #[test]
     fn child_prompt_matches_the_focused_non_recursive_tool_surface() {
-        let prompt = PromptContext::build(Path::new("."), true, "test-model", "test-provider")
+        let prompt = PromptContext::build_with_opts(Path::new("."), true, "test-model", "test-provider", false, None)
             .render(PermissionMode::Auto, "(no todos)");
         assert!(prompt.contains("read_file"));
         assert!(prompt.contains("write_file"));

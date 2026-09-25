@@ -96,23 +96,52 @@ pub fn login_browser(provider_id: &str, tx: ProgressTx, cancel: CancelFlag) {
 /// cline).
 fn watch_login_output(reader: impl Read + Send + 'static, tx: ProgressTx) {
     thread::spawn(move || {
-        let mut lines = std::io::BufReader::new(reader).lines();
-        while let Some(Ok(line)) = lines.next() {
+        stream_login_output(reader, &tx, |url| {
+            let _ = open_browser(url);
+        })
+    });
+}
+
+// Drain both pipes until EOF, including after the URL. Closing a pipe on the
+// first URL can break the vendor process; waiting for EOF hides its login code.
+fn stream_login_output(reader: impl Read, tx: &ProgressTx, mut open: impl FnMut(&str)) {
+    let mut opened = false;
+    for line in std::io::BufReader::new(reader)
+        .lines()
+        .map_while(std::result::Result::ok)
+    {
+        let line = crate::tui::ansi::strip(&line);
+        let snippet: String = line.chars().take(240).collect();
+        if !snippet.trim().is_empty() {
+            send(tx, BrowserLoginProgress::Status(snippet));
+        }
+        if line.contains("microsoft.com/devicelogin") {
+            send_az_device_code(tx, &line);
+        }
+        if let Some(code) = line
+            .split_once("one-time code:")
+            .and_then(|(_, tail)| tail.split_whitespace().next())
+        {
+            send(
+                tx,
+                BrowserLoginProgress::DeviceCode {
+                    verification_url: "https://github.com/login/device".into(),
+                    user_code: code.to_string(),
+                },
+            );
+        }
+        if !opened {
             for word in line.split_whitespace() {
-                let url =
-                    word.trim_matches(|c: char| c == ')' || c == '(' || c == '"' || c == '\'');
+                let url = word.trim_matches(|c: char| matches!(c, ')' | '(' | '"' | '\'' | '`'));
                 if url.starts_with("https://") {
-                    send(&tx, BrowserLoginProgress::OpenUrl(url.to_string()));
-                    let _ = open_browser(url);
-                    return;
+                    send(tx, BrowserLoginProgress::OpenUrl(url.to_string()));
+                    open(url);
+                    opened = true;
+                    break;
                 }
             }
-            let snippet: String = line.chars().take(160).collect();
-            if !snippet.trim().is_empty() {
-                send(&tx, BrowserLoginProgress::Status(snippet));
-            }
         }
-    });
+    }
 }
 
 /// Import tokens from a first-party CLI session / OMP when present.
@@ -145,13 +174,11 @@ pub fn import_existing_session(provider_id: &str) -> Result<Option<OAuthTokens>>
         // antigravity::import_existing already ends with a google ADC probe,
         // so one call covers the whole family - the old second
         // google::import_existing here spawned `gcloud` twice per resolution.
-        "google" | "antigravity" | "google-oauth" => {
-            match antigravity::import_existing() {
-                Ok(Some(t)) => Ok(Some(t)),
-                Ok(None) => Ok(None),
-                Err(_) => Ok(None),
-            }
-        }
+        "google" | "antigravity" | "google-oauth" => match antigravity::import_existing() {
+            Ok(Some(t)) => Ok(Some(t)),
+            Ok(None) => Ok(None),
+            Err(_) => Ok(None),
+        },
         _ => Ok(None),
     };
     match specific {
@@ -445,7 +472,7 @@ pub mod cursor {
             )
         })
     }
-#[cfg(test)]
+    #[cfg(test)]
     mod tests {
         use super::*;
 
@@ -460,10 +487,7 @@ pub mod cursor {
 
             // A JWT whose exp is already past is a signed-out session, not a
             // credential - the import used to hand it back as success.
-            let dead = format!(
-                "x.{}.y",
-                URL_SAFE_NO_PAD.encode(br#"{"exp":1}"#)
-            );
+            let dead = format!("x.{}.y", URL_SAFE_NO_PAD.encode(br#"{"exp":1}"#));
             assert!(tokens_from_key(dead, "cursor-cli", None).is_none());
         }
 
@@ -483,9 +507,15 @@ pub mod cursor {
         #[test]
         fn token_from_json_prefers_key_fields() {
             let v = serde_json::json!({"access_token": "crsr_access_token_value_1"});
-            assert_eq!(token_from_json(&v).as_deref(), Some("crsr_access_token_value_1"));
+            assert_eq!(
+                token_from_json(&v).as_deref(),
+                Some("crsr_access_token_value_1")
+            );
             let nested = serde_json::json!({"auth": {"api_key": "crsr_nested_key_value_1"}});
-            assert_eq!(token_from_json(&nested).as_deref(), Some("crsr_nested_key_value_1"));
+            assert_eq!(
+                token_from_json(&nested).as_deref(),
+                Some("crsr_nested_key_value_1")
+            );
             // Bare `token` is deliberately ignored (often an unrelated id).
             let bare = serde_json::json!({"token": "crsr_bare_token_value_1"});
             assert_eq!(token_from_json(&bare), None);
@@ -658,7 +688,7 @@ pub mod opencode {
         Ok(None)
     }
 
-        fn opencode_bin() -> Option<PathBuf> {
+    fn opencode_bin() -> Option<PathBuf> {
         which_cli("opencode").or_else(|| {
             #[cfg(windows)]
             {
@@ -791,7 +821,7 @@ pub mod opencode {
             )
         })
     }
-#[cfg(test)]
+    #[cfg(test)]
     mod tests {
         use super::*;
 
@@ -990,17 +1020,6 @@ fn gcloud_bin() -> Option<PathBuf> {
     resolve_cli("gcloud", &["gcloud.cmd"], &dirs)
 }
 
-#[allow(dead_code)]
-fn agy_bin() -> Option<PathBuf> {
-    let mut dirs = Vec::new();
-    if let Some(home) = dirs::home_dir() {
-        dirs.push(home.join("AppData").join("Local").join("agy").join("bin"));
-        dirs.push(home.join(".gemini").join("antigravity-cli").join("bin"));
-        dirs.push(home.join("AppData").join("Roaming").join("agy").join("bin"));
-    }
-    resolve_cli("agy", &["agy.cmd", "agy.exe"], &dirs)
-}
-
 fn az_bin() -> Option<PathBuf> {
     let mut dirs = Vec::new();
     #[cfg(windows)]
@@ -1017,18 +1036,6 @@ fn az_bin() -> Option<PathBuf> {
         }
     }
     resolve_cli("az", &["az.cmd"], &dirs)
-}
-
-#[allow(dead_code)] // legacy Bedrock SSO helper; bearer-only catalog path is advertised
-fn aws_bin() -> Option<PathBuf> {
-    let mut dirs = Vec::new();
-    #[cfg(windows)]
-    {
-        if let Ok(pf) = std::env::var("ProgramFiles") {
-            dirs.push(PathBuf::from(pf).join("Amazon").join("AWSCLIV2"));
-        }
-    }
-    resolve_cli("aws", &["aws.cmd", "aws.exe"], &dirs)
 }
 
 fn gh_bin() -> Option<PathBuf> {
@@ -1119,7 +1126,9 @@ fn wait_localhost_code_on(
                     }
                 }
                 let state_valid = validate_callback_state(expected_state, state.as_deref()).is_ok();
-                let accepted = code.is_some() && state_valid;
+                let valid_code = code.as_deref().is_some_and(|c| !c.trim().is_empty())
+                    && line.starts_with("GET ");
+                let accepted = valid_code && error.is_none() && state_valid;
                 let body = if accepted {
                     "<html><body><h2>Signed in - you can close this tab and return to NurCLI.</h2></body></html>"
                 } else {
@@ -1145,7 +1154,7 @@ fn wait_localhost_code_on(
                 }
                 match code {
                     // A code WITH a matching state completes the login.
-                    Some(c) if state_valid => return Ok(c),
+                    Some(c) if accepted => return Ok(c),
                     // A code with a WRONG state is not ours: stray tab,
                     // prefetcher, replay. Keep listening - aborting here let
                     // any single probe kill a legitimate in-progress login.
@@ -1159,7 +1168,6 @@ fn wait_localhost_code_on(
         }
     }
 }
-
 
 /// Wait for a spawned vendor-CLI login to finish: success, failure, cancel,
 /// or a hard deadline (these loops used to run unbounded on cancel alone, so
@@ -1178,14 +1186,16 @@ fn wait_child_with_deadline(
         if started.elapsed() > timeout {
             let _ = child.kill();
             return Err(NurError::Other(
-                "vendor login did not finish in time - run the vendor's login command in a                  terminal, then retry /login (nur imports that session)"
+                "vendor login did not finish in time - run the vendor's login command in a terminal, then retry /login (nur imports that session)"
                     .into(),
             ));
         }
         match child.try_wait() {
             Ok(Some(status)) if status.success() => return Ok(()),
             Ok(Some(status)) => {
-                return Err(NurError::Other(format!("login process failed (exit {status})")))
+                return Err(NurError::Other(format!(
+                    "login process failed (exit {status})"
+                )))
             }
             Ok(None) => thread::sleep(Duration::from_millis(200)),
             Err(e) => return Err(NurError::Other(e.to_string())),
@@ -2101,21 +2111,14 @@ pub mod xai {
                 900
             });
         let base_interval = device.interval.max(3);
-        let mut attempt = 0u32;
-        let mut slow = false;
+        let mut poll = super::super::DevicePoll::new(base_interval);
         let mut terminal_errors: Vec<String> = Vec::new();
 
         while std::time::Instant::now() < deadline {
             if cancel.is_cancelled() {
                 return Err(NurError::Other("login cancelled".into()));
             }
-            thread::sleep(crate::oauth::device_poll_sleep(
-                base_interval,
-                slow,
-                attempt,
-            ));
-            attempt = attempt.saturating_add(1);
-            slow = false;
+            poll.wait(cancel, deadline)?;
             for turl in &token_urls {
                 let form = [
                     ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
@@ -2135,10 +2138,10 @@ pub mod xai {
                 });
                 match classify_device_poll_error(&parsed) {
                     DevicePollOutcome::NoError => {}
-                    DevicePollOutcome::Pending => continue,
+                    DevicePollOutcome::Pending => break,
                     DevicePollOutcome::SlowDown => {
-                        slow = true;
-                        continue;
+                        poll.slow_down();
+                        break;
                     }
                     DevicePollOutcome::Unparseable => continue,
                     DevicePollOutcome::Terminal(reason) => {
@@ -2212,10 +2215,8 @@ pub mod xai {
     }
 
     pub fn import_grok_cli() -> Result<Option<OAuthTokens>> {
-        let mut candidates: Vec<PathBuf> = vec![crate::t3code::driver_config_dir(
-            crate::t3code::DriverId::Grok,
-        )
-        .join("auth.json")];
+        let mut candidates: Vec<PathBuf> =
+            vec![crate::t3code::driver_config_dir(crate::t3code::DriverId::Grok).join("auth.json")];
         // No CWD-relative fallback when home is unavailable.
         if let Some(home) = dirs::home_dir() {
             candidates.push(home.join(".grok").join("auth.json"));
@@ -2256,8 +2257,7 @@ pub mod xai {
                 .and_then(|x| x.as_str())
                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                 .map(|dt| dt.timestamp() as u64);
-            let is_expired = expires_at
-                .is_some_and(|exp| exp <= crate::oauth::now_unix() + 300);
+            let is_expired = expires_at.is_some_and(|exp| exp <= crate::oauth::now_unix() + 300);
             let refresh = sess
                 .get("refresh_token")
                 .and_then(|x| x.as_str())
@@ -2322,8 +2322,7 @@ pub mod xai {
     /// All candidate endpoints refused with definitive errors and nothing is
     /// pending anywhere - surface the collected reasons as one failure.
     fn terminal_failure(errors: &[String], endpoint_count: usize) -> Option<String> {
-        (errors.len() >= endpoint_count)
-            .then(|| format!("xAI token error: {}", errors.join("; ")))
+        (errors.len() >= endpoint_count).then(|| format!("xAI token error: {}", errors.join("; ")))
     }
     #[cfg(test)]
     mod tests {
@@ -2362,10 +2361,9 @@ pub mod xai {
             assert_eq!(ok.access_token.as_deref(), Some("at"));
             assert_eq!(ok.error, None);
 
-            let err: TokenResp = serde_json::from_str(
-                r#"{"error":"access_denied","error_description":"nope"}"#,
-            )
-            .unwrap();
+            let err: TokenResp =
+                serde_json::from_str(r#"{"error":"access_denied","error_description":"nope"}"#)
+                    .unwrap();
             assert_eq!(err.access_token, None);
             assert_eq!(err.error.as_deref(), Some("access_denied"));
 
@@ -2393,7 +2391,10 @@ pub mod xai {
                 error: error.map(str::to_string),
                 error_description: desc.map(str::to_string),
             };
-            assert_eq!(classify_device_poll_error(&mk(None, None)), DevicePollOutcome::NoError);
+            assert_eq!(
+                classify_device_poll_error(&mk(None, None)),
+                DevicePollOutcome::NoError
+            );
             assert_eq!(
                 classify_device_poll_error(&mk(Some(""), None)),
                 DevicePollOutcome::NoError
@@ -2420,7 +2421,10 @@ pub mod xai {
             let mut errors: Vec<String> = Vec::new();
             // First endpoint refuses.
             errors.push("expired_token gone".to_string());
-            assert!(terminal_failure(&errors, 3).is_none(), "2 endpoints still pending");
+            assert!(
+                terminal_failure(&errors, 3).is_none(),
+                "2 endpoints still pending"
+            );
             // Nothing pending anywhere -> next cycle would collect all three.
             errors.push("access_denied no".to_string());
             errors.push("server_error boom".to_string());
@@ -2620,7 +2624,10 @@ pub mod nous {
         match import_hermes_cli() {
             Ok(Some(t)) if !t.access_token.is_empty() || t.refresh_token.is_some() => {
                 let dead = t.meta.as_ref().is_some_and(|m| {
-                    m.extra.get("hermes_error").and_then(|v| v.as_bool()).unwrap_or(false)
+                    m.extra
+                        .get("hermes_error")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
                 }) || expired_jwt(&t.access_token)
                     || crate::auth::oauth_expired(t.expires_at);
                 if !dead {
@@ -2636,7 +2643,7 @@ pub mod nous {
                 send(
                     tx,
                     BrowserLoginProgress::Status(
-                        "Hermes Nous session is expired or quarantined — starting the Portal                          device login instead…"
+                        "Hermes Nous session is expired or quarantined — starting the Portal device login instead…"
                             .into(),
                     ),
                 );
@@ -2693,20 +2700,13 @@ pub mod nous {
             });
         // Server asks for >=1s; device_poll_sleep floors at 3s, so polling is
         // always slower than the Portal cap (RFC 8628-compliant and safe).
-        let base_interval = device.interval.clamp(1, 5);
-        let mut slow = false;
-        let mut attempt = 0u32;
+        let base_interval = device.interval.max(3);
+        let mut poll = super::super::DevicePoll::new(base_interval);
         while std::time::Instant::now() < deadline {
             if cancel.is_cancelled() {
                 return Err(NurError::Other("login cancelled".into()));
             }
-            thread::sleep(crate::oauth::device_poll_sleep(
-                base_interval,
-                slow,
-                attempt,
-            ));
-            attempt = attempt.saturating_add(1);
-            slow = false;
+            poll.wait(cancel, deadline)?;
             let res = client
                 .post(format!("{PORTAL}/api/oauth/token"))
                 .form(&[
@@ -2735,7 +2735,7 @@ pub mod nous {
                     continue;
                 }
                 Some("slow_down") => {
-                    slow = true;
+                    poll.slow_down();
                     continue;
                 }
                 Some(err) => {
@@ -3088,10 +3088,7 @@ pub mod commandcode {
         Denied(String),
     }
 
-    fn handle_connection(
-        stream: &mut std::net::TcpStream,
-        expected_state: &str,
-    ) -> CallbackHit {
+    fn handle_connection(stream: &mut std::net::TcpStream, expected_state: &str) -> CallbackHit {
         // Read to end of headers, then content-length body bytes.
         let mut buf: Vec<u8> = Vec::with_capacity(4096);
         let mut chunk = [0u8; 4096];
@@ -3101,10 +3098,7 @@ pub mod commandcode {
                 Ok(n) => buf.extend_from_slice(&chunk[..n]),
                 Err(_) => return CallbackHit::None,
             }
-            if let Some(pos) = buf
-                .windows(4)
-                .position(|w| w == b"\r\n\r\n")
-            {
+            if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
                 break pos + 4;
             }
             if buf.len() > 64 * 1024 {
@@ -3125,13 +3119,20 @@ pub mod commandcode {
                     .then(|| v.trim().to_string())
             })
             .filter(|v| !v.is_empty());
-        let wants_private_network = head.to_ascii_lowercase().contains(
-            "access-control-request-private-network: true",
-        );
+        let wants_private_network = head
+            .to_ascii_lowercase()
+            .contains("access-control-request-private-network: true");
         let cors = allowed_origin(origin.as_deref());
 
         if method == "OPTIONS" {
-            write_response(stream, "204 No Content", "text/plain", "", cors, wants_private_network);
+            write_response(
+                stream,
+                "204 No Content",
+                "text/plain",
+                "",
+                cors,
+                wants_private_network,
+            );
             return CallbackHit::None;
         }
 
@@ -3140,7 +3141,14 @@ pub mod commandcode {
             None => (target.clone(), None),
         };
         if path != CALLBACK_PATH {
-            write_response(stream, "404 Not Found", "text/html", "Not Found", cors, false);
+            write_response(
+                stream,
+                "404 Not Found",
+                "text/html",
+                "Not Found",
+                cors,
+                false,
+            );
             return CallbackHit::None;
         }
 
@@ -3178,9 +3186,7 @@ pub mod commandcode {
                 .and_then(|v| {
                     v.as_object().map(|o| {
                         o.iter()
-                            .filter_map(|(k, v)| {
-                                v.as_str().map(|s| (k.clone(), s.to_string()))
-                            })
+                            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
                             .collect()
                     })
                 })
@@ -3188,10 +3194,8 @@ pub mod commandcode {
         } else {
             parse_form_pairs(&String::from_utf8_lossy(&body_bytes))
         };
-        let query_pairs: Vec<(String, String)> = query
-            .as_deref()
-            .map(parse_form_pairs)
-            .unwrap_or_default();
+        let query_pairs: Vec<(String, String)> =
+            query.as_deref().map(parse_form_pairs).unwrap_or_default();
         let lookup = |name: &str| -> Option<String> {
             field(&body_pairs, name)
                 .or_else(|| field(&query_pairs, name))
@@ -3369,7 +3373,8 @@ pub mod commandcode {
         /// form path uses (state included) - it used to be dropped entirely.
         #[test]
         fn legacy_json_payload_parses() {
-            let body = br#"{"apiKey":"cc_sk_9","state":"s","userId":"u","userName":"n","keyName":"k"}"#;
+            let body =
+                br#"{"apiKey":"cc_sk_9","state":"s","userId":"u","userName":"n","keyName":"k"}"#;
             let v: serde_json::Value = serde_json::from_slice(body).unwrap();
             let pairs: Vec<(String, String)> = v
                 .as_object()
@@ -3469,7 +3474,10 @@ pub mod commandcode {
             let mut resp = String::new();
             let _ = client.read_to_string(&mut resp);
             assert!(resp.starts_with("HTTP/1.1 403"), "{resp}");
-            assert!(server.join().unwrap(), "mismatched state must not yield creds");
+            assert!(
+                server.join().unwrap(),
+                "mismatched state must not yield creds"
+            );
         }
 
         #[test]
@@ -3786,17 +3794,12 @@ pub mod kimi {
                 900
             });
         let interval = device.interval.max(1);
-        let mut attempt = 0u32;
-        let mut slow_down = false;
+        let mut poll = super::super::DevicePoll::new(interval);
         while std::time::Instant::now() < deadline {
             if cancel.is_cancelled() {
                 return Err(NurError::Other("login cancelled".into()));
             }
-            thread::sleep(crate::oauth::device_poll_sleep(
-                interval, slow_down, attempt,
-            ));
-            attempt = attempt.saturating_add(1);
-            slow_down = false;
+            poll.wait(cancel, deadline)?;
             let request =
                 with_device_headers(client.post(format!("{host}/api/oauth/token")).form(&[
                     ("client_id", CLIENT_ID),
@@ -3825,7 +3828,7 @@ pub mod kimi {
             }
             match parsed.error.as_deref() {
                 Some("authorization_pending") | None => {}
-                Some("slow_down") => slow_down = true,
+                Some("slow_down") => poll.slow_down(),
                 Some("expired_token") => {
                     return Err(NurError::Other(
                         "Kimi device code expired; start browser sign-in again".into(),
@@ -3971,8 +3974,13 @@ pub mod claude {
     const MANUAL_REDIRECT: &str = "https://platform.claude.com/oauth/code/callback";
     /// Full scope set from Claude Code (`Cdi` = console + claude.ai scopes).
     const SCOPES: &str = "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
+    /// Claude Code refreshes with the claude.ai scopes only (no console scope).
+    const REFRESH_SCOPES: &str =
+        "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
     /// Prefer these loopback ports (Claude Code uses ephemeral; we pin a few).
     const CALLBACK_PORTS: &[u16] = &[54545, 54546, 54547, 21865];
+    /// PKCE `state` entropy; Claude Code uses `randomBytes(32)`.
+    const STATE_BYTES: usize = 32;
 
     #[derive(Deserialize)]
     struct TokenResp {
@@ -3999,23 +4007,21 @@ pub mod claude {
         state: &str,
     ) -> Result<OAuthTokens> {
         let client = http()?;
-        let form = [
-            ("grant_type", "authorization_code"),
-            ("code", code),
-            ("redirect_uri", redirect),
-            ("client_id", CLIENT_ID),
-            ("code_verifier", verifier),
-            ("state", state),
-        ];
+        // JSON body, exactly as Claude Code's exchangeCodeForTokens sends it.
+        let body = serde_json::json!({
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": redirect,
+            "client_id": CLIENT_ID,
+            "code_verifier": verifier,
+            "state": state,
+        });
         let mut last = String::new();
         for url in [TOKEN_URL, "https://api.anthropic.com/v1/oauth/token"] {
             let res = match client
                 .post(url)
-                .header(
-                    "Content-Type",
-                    "application/x-www-form-urlencoded;charset=utf-8",
-                )
-                .form(&form)
+                .header("Content-Type", "application/json")
+                .body(body.to_string())
                 .send()
             {
                 Ok(r) => r,
@@ -4079,7 +4085,9 @@ pub mod claude {
 
         let verifier = random_urlsafe(32);
         let challenge = pkce_challenge(&verifier);
-        let state = random_urlsafe(16);
+        // 32 bytes like Claude Code; a 16-byte state is rejected after
+        // sign-in with "Authorization failed - Invalid request format".
+        let state = random_urlsafe(STATE_BYTES);
 
         // ── Prefer loopback (same as interactive Claude Code) ────────────
         let bound = CALLBACK_PORTS.iter().find_map(|port| {
@@ -4131,64 +4139,76 @@ pub mod claude {
         );
         let _ = open_browser(&auth_url);
 
-        let code = wait_manual_code_paste(cancel, Duration::from_secs(600))?;
+        let pasted = wait_manual_code_paste(cancel, Duration::from_secs(600))?;
+        let code = split_manual_code(&pasted, &state)?;
         send(
             tx,
             BrowserLoginProgress::Status("exchanging Claude authorization code…".into()),
         );
-        exchange_code(&code, MANUAL_REDIRECT, &verifier, &state)
+        exchange_code(code, MANUAL_REDIRECT, &verifier, &state)
     }
 
-    /// Read a one-line authorization code from stdin (manual Claude flow).
-    /// The TUI also stores pastes into the login key buffer when we surface
-    /// DeviceCode; for the background thread we poll a small file drop zone
-    /// under ~/.nur so the TUI can write the pasted code without sharing stdin.
+    /// The manual callback page shows `code#state`; Claude Code splits on
+    /// `#` and checks the state. A bare code (no `#`) is accepted as-is.
+    fn split_manual_code<'a>(pasted: &'a str, expected_state: &str) -> Result<&'a str> {
+        let code = match pasted.trim().split_once('#') {
+            Some((code, got)) if got == expected_state => Ok(code),
+            Some(_) => Err(NurError::Other(
+                "pasted Claude code belongs to a different sign-in (state mismatch) - start /login again".into(),
+            )),
+            None => Ok(pasted.trim()),
+        }?;
+        if code.trim().is_empty() {
+            return Err(NurError::Other("empty Claude authorization code".into()));
+        }
+        Ok(code)
+    }
+
+    /// Wait for a CLI or TUI paste scoped to this exact login attempt.
     fn wait_manual_code_paste(cancel: &CancelFlag, timeout: Duration) -> Result<String> {
-        let path = crate::config::nur_home().join("oauth_paste_code.txt");
-        let _ = std::fs::remove_file(&path);
         let start = std::time::Instant::now();
         loop {
             if cancel.is_cancelled() {
-                let _ = std::fs::remove_file(&path);
                 return Err(NurError::Other("login cancelled".into()));
             }
             if start.elapsed() > timeout {
-                let _ = std::fs::remove_file(&path);
+                cancel.cancel();
                 return Err(NurError::Other(
                     "Claude login timed out waiting for pasted code".into(),
                 ));
             }
-            if let Ok(text) = std::fs::read_to_string(&path) {
-                let code = text.trim().to_string();
-                let _ = std::fs::remove_file(&path);
-                if !code.is_empty() {
-                    return Ok(code);
-                }
+            if let Some(code) = cancel.take_manual_code() {
+                return Ok(code);
             }
-            thread::sleep(Duration::from_millis(200));
+            thread::sleep(Duration::from_millis(100));
         }
     }
 
     pub fn refresh(refresh: &str) -> Result<OAuthTokens> {
         let client = http()?;
-        let form = [
-            ("grant_type", "refresh_token"),
-            ("refresh_token", refresh),
-            ("client_id", CLIENT_ID),
-        ];
+        // JSON body with the claude.ai scope set, as Claude Code's refresh sends.
+        let body = serde_json::json!({
+            "grant_type": "refresh_token",
+            "refresh_token": refresh,
+            "client_id": CLIENT_ID,
+            "scope": REFRESH_SCOPES,
+        });
+        let mut last = String::from("no response");
         for url in [TOKEN_URL, "https://api.anthropic.com/v1/oauth/token"] {
-            let Ok(res) = client
+            let res = match client
                 .post(url)
-                .header(
-                    "Content-Type",
-                    "application/x-www-form-urlencoded;charset=utf-8",
-                )
-                .form(&form)
+                .header("Content-Type", "application/json")
+                .body(body.to_string())
                 .send()
-            else {
-                continue;
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    last = e.to_string();
+                    continue;
+                }
             };
             let body = res.text().unwrap_or_default();
+            last = oauth_error_summary(&body);
             if let Ok(parsed) = serde_json::from_str::<TokenResp>(&body) {
                 if let Some(access) = parsed.access_token {
                     return Ok(OAuthTokens {
@@ -4204,7 +4224,9 @@ pub mod claude {
                 }
             }
         }
-        Err(NurError::Other("Claude token refresh failed".into()))
+        Err(NurError::Other(format!(
+            "Claude token refresh failed: {last}"
+        )))
     }
 
     pub fn import_claude_cli() -> Result<Option<OAuthTokens>> {
@@ -4229,46 +4251,125 @@ pub mod claude {
                 Ok(v) => v,
                 Err(_) => continue,
             };
-            let oauth = v
-                .get("claudeAiOauth")
-                .or_else(|| v.get("claude_ai_oauth"))
-                .cloned();
-            let Some(oauth) = oauth else {
-                continue;
-            };
-            let access = oauth
-                .get("accessToken")
-                .or_else(|| oauth.get("access_token"))
-                .and_then(|x| x.as_str())
-                .unwrap_or("");
-            if access.is_empty() {
-                continue;
+            if let Some(tokens) = parse_claude_credentials(&v) {
+                return Ok(Some(tokens));
             }
-            let refresh = oauth
-                .get("refreshToken")
-                .or_else(|| oauth.get("refresh_token"))
-                .and_then(|x| x.as_str())
-                .map(|s| s.to_string());
-            // Claude stores expiresAt as ms epoch sometimes.
-            let expires_at = oauth
-                .get("expiresAt")
-                .or_else(|| oauth.get("expires_at"))
-                .and_then(|x| {
-                    x.as_u64()
-                        .map(|n| if n > 10_000_000_000 { n / 1000 } else { n })
-                });
-            return Ok(Some(OAuthTokens {
-                access_token: access.to_string(),
-                refresh_token: refresh,
-                expires_at,
-                meta: Some(OauthMeta {
-                    issuer: "https://claude.ai".into(),
-                    client_id: CLIENT_ID.into(),
-                    extra: serde_json::json!({"imported_from": "claude-code"}),
-                }),
-            }));
         }
         Ok(None)
+    }
+
+    /// Tokens from a parsed Claude Code credentials file, or `None` when it
+    /// holds no usable session.
+    fn parse_claude_credentials(v: &serde_json::Value) -> Option<OAuthTokens> {
+        let oauth = v
+            .get("claudeAiOauth")
+            .or_else(|| v.get("claude_ai_oauth"))?;
+        let access = oauth
+            .get("accessToken")
+            .or_else(|| oauth.get("access_token"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("");
+        if access.is_empty() {
+            return None;
+        }
+        let refresh = oauth
+            .get("refreshToken")
+            .or_else(|| oauth.get("refresh_token"))
+            .and_then(|x| x.as_str())
+            .map(|s| s.to_string());
+        // Claude stores expiresAt as ms epoch sometimes.
+        let expires_at = oauth
+            .get("expiresAt")
+            .or_else(|| oauth.get("expires_at"))
+            .and_then(|x| {
+                x.as_u64()
+                    .map(|n| if n > 10_000_000_000 { n / 1000 } else { n })
+            });
+        // A signed-out / long-idle Claude Code session keeps an expired
+        // access token next to an expired refresh token. Importing that
+        // only loops on refresh failures; treat it as no session.
+        let refresh_expired = oauth
+            .get("refreshTokenExpiresAt")
+            .and_then(|x| x.as_u64())
+            .map(|n| if n > 10_000_000_000 { n / 1000 } else { n })
+            .is_some_and(|at| at <= super::super::now_unix());
+        if refresh_expired && crate::auth::oauth_expired(expires_at) {
+            return None;
+        }
+        Some(OAuthTokens {
+            access_token: access.to_string(),
+            refresh_token: refresh,
+            expires_at,
+            meta: Some(OauthMeta {
+                issuer: "https://claude.ai".into(),
+                client_id: CLIENT_ID.into(),
+                extra: serde_json::json!({"imported_from": "claude-code"}),
+            }),
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn state_matches_claude_code_length() {
+            // base64url(32 bytes) = 43 chars; shorter states are rejected by
+            // claude.com with "Invalid request format".
+            assert_eq!(random_urlsafe(STATE_BYTES).len(), 43);
+        }
+
+        #[test]
+        fn auth_url_carries_full_state() {
+            let state = random_urlsafe(STATE_BYTES);
+            let url = build_auth_url(
+                AUTHORIZE_CLAUDE_AI,
+                "http://localhost:54545/callback",
+                &state,
+                "challenge",
+            );
+            assert!(url.starts_with("https://claude.com/cai/oauth/authorize?code=true&"));
+            assert!(url.ends_with(&format!("&state={state}")));
+        }
+
+        #[test]
+        fn claude_code_import_skips_dead_sessions() {
+            let now_ms = super::super::super::now_unix() * 1000;
+            let creds = |access: &str, exp: u64, rt_exp: u64| {
+                serde_json::json!({"claudeAiOauth": {
+                    "accessToken": access, "refreshToken": "rt",
+                    "expiresAt": exp, "refreshTokenExpiresAt": rt_exp,
+                }})
+            };
+            // Signed out: empty tokens (what Claude Code leaves behind).
+            assert!(parse_claude_credentials(&creds("", 0, now_ms + 1)).is_none());
+            // Access and refresh both expired.
+            assert!(parse_claude_credentials(&creds("at", 1, now_ms - 1)).is_none());
+            // Access expired but refresh still valid: importable, nur refreshes.
+            let t = parse_claude_credentials(&creds("at", 1, now_ms + 86_400_000)).unwrap();
+            assert_eq!(t.refresh_token.as_deref(), Some("rt"));
+            // Live access token.
+            assert!(
+                parse_claude_credentials(&creds("at", now_ms + 3_600_000, now_ms - 1)).is_some()
+            );
+        }
+
+        #[test]
+        fn refresh_scopes_are_login_scopes_minus_console() {
+            assert_eq!(
+                SCOPES.strip_prefix("org:create_api_key "),
+                Some(REFRESH_SCOPES)
+            );
+        }
+
+        #[test]
+        fn manual_paste_splits_code_and_checks_state() {
+            assert_eq!(split_manual_code(" abc#st \n", "st").unwrap(), "abc");
+            assert_eq!(split_manual_code("abc", "st").unwrap(), "abc");
+            assert!(split_manual_code("abc#other", "st").is_err());
+            assert!(split_manual_code("#st", "st").is_err());
+            assert!(split_manual_code(" ", "st").is_err());
+        }
     }
 }
 
@@ -4331,27 +4432,11 @@ pub mod google {
                     "failed to launch gcloud ({e}). Install Google Cloud SDK, or choose “Enter API key” with a Gemini key."
                 ))
             })?;
-        // Surface any https URL from gcloud stderr (device / browser flow).
-        if let Some(mut err) = child.stderr.take() {
-            let tx2 = tx.clone();
-            thread::spawn(move || {
-                let mut buf = String::new();
-                let _ = err.read_to_string(&mut buf);
-                for word in buf.split_whitespace() {
-                    if word.starts_with("https://") {
-                        send(&tx2, BrowserLoginProgress::OpenUrl(word.to_string()));
-                        let _ = open_browser(word);
-                        break;
-                    }
-                }
-                // Device-code style lines from older gcloud
-                if buf.contains("enter the code") || buf.contains("verification code") {
-                    send(
-                        &tx2,
-                        BrowserLoginProgress::Status(buf.chars().take(240).collect()),
-                    );
-                }
-            });
+        if let Some(err) = child.stderr.take() {
+            watch_login_output(err, tx.clone());
+        }
+        if let Some(out) = child.stdout.take() {
+            watch_login_output(out, tx.clone());
         }
         if let Err(e) = wait_child_with_deadline(&mut child, cancel, VENDOR_CLI_LOGIN_TIMEOUT) {
             let _ = child.kill();
@@ -4536,21 +4621,14 @@ pub mod antigravity {
     }
 
     #[derive(Deserialize)]
-    #[allow(dead_code)] // Mirrors the complete upstream error shape for diagnostics.
     struct IneligibleTier {
         #[serde(rename = "reasonMessage")]
         reason_message: Option<String>,
-        #[serde(rename = "reasonCode")]
-        reason_code: Option<String>,
-        #[serde(rename = "validationUrl")]
-        validation_url: Option<String>,
     }
 
     #[derive(Deserialize)]
-    #[allow(dead_code)] // `name` is returned by some Code Assist deployments.
     struct OnboardResponse {
         done: Option<bool>,
-        name: Option<String>,
         response: Option<OnboardInner>,
     }
 
@@ -5608,24 +5686,11 @@ pub mod github {
             use std::io::Write;
             let _ = stdin.write_all(b"\n\n");
         }
-        // Surface the one-time code + verification URL from gh's stderr.
-        if let Some(mut err) = child.stderr.take() {
-            let tx2 = tx.clone();
-            thread::spawn(move || {
-                let mut buf = String::new();
-                let _ = err.read_to_string(&mut buf);
-                for word in buf.split_whitespace() {
-                    if word.starts_with("https://") {
-                        send(&tx2, BrowserLoginProgress::OpenUrl(word.to_string()));
-                        let _ = open_browser(word);
-                        break;
-                    }
-                }
-                if let Some(idx) = buf.find("one-time code:") {
-                    let code: String = buf[idx..].chars().take(40).collect();
-                    send(&tx2, BrowserLoginProgress::Status(code));
-                }
-            });
+        if let Some(err) = child.stderr.take() {
+            watch_login_output(err, tx.clone());
+        }
+        if let Some(out) = child.stdout.take() {
+            watch_login_output(out, tx.clone());
         }
         if let Err(e) = wait_child_with_deadline(&mut child, cancel, VENDOR_CLI_LOGIN_TIMEOUT) {
             let _ = child.kill();
@@ -5699,213 +5764,8 @@ pub mod github {
 
 // ── Hugging Face (device code — same spirit as `hf auth login`) ────────────
 
-#[allow(dead_code)] // optional custom-client OAuth remains import-compatible but is not advertised
 pub mod huggingface {
     use super::*;
-
-    #[derive(Deserialize)]
-    struct DeviceCodeResp {
-        #[serde(default)]
-        device_code: String,
-        #[serde(default)]
-        user_code: String,
-        #[serde(default)]
-        verification_uri: String,
-        #[serde(default)]
-        verification_uri_complete: Option<String>,
-        #[serde(default)]
-        expires_in: u64,
-        #[serde(default = "default_interval")]
-        interval: u64,
-        // Some HF endpoints nest under different shapes.
-        #[serde(default)]
-        #[allow(dead_code)]
-        request_id: Option<String>,
-    }
-    fn default_interval() -> u64 {
-        5
-    }
-
-    #[derive(Deserialize)]
-    struct TokenResp {
-        access_token: Option<String>,
-        refresh_token: Option<String>,
-        expires_in: Option<u64>,
-        error: Option<String>,
-        #[allow(dead_code)]
-        error_description: Option<String>,
-        // HF classic: {"token":"..."}
-        token: Option<String>,
-    }
-
-    pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
-        send(
-            tx,
-            BrowserLoginProgress::Status("starting Hugging Face device login…".into()),
-        );
-        let client = http()?;
-
-        // Prefer an existing huggingface-cli / hub token (no OAuth app required).
-        if let Some(tokens) = import_hf_token() {
-            send(
-                tx,
-                BrowserLoginProgress::Status("using existing Hugging Face token from disk".into()),
-            );
-            return Ok(tokens);
-        }
-
-        // Official device endpoint is POST /oauth/device (not /oauth/device/code).
-        // Client id must be a registered OAuth app — set NUR_HF_OAUTH_CLIENT_ID, or
-        // paste a token via /login key path.
-        let client_id = std::env::var("NUR_HF_OAUTH_CLIENT_ID")
-            .or_else(|_| std::env::var("HF_OAUTH_CLIENT_ID"))
-            .unwrap_or_default();
-        let client_id = client_id.trim().to_string();
-        let mut device: Option<DeviceCodeResp> = None;
-        let mut last = String::new();
-        if !client_id.is_empty() {
-            let device_endpoints = [
-                "https://huggingface.co/oauth/device",
-                "https://huggingface.co/oauth/device/code",
-            ];
-            for url in device_endpoints {
-                let form = [
-                    ("client_id", client_id.as_str()),
-                    ("scope", "openid profile email"),
-                ];
-                match client.post(url).form(&form).send() {
-                    Ok(res) => {
-                        let status = res.status();
-                        let body = res.text().unwrap_or_default();
-                        if status.is_success() {
-                            if let Ok(d) = serde_json::from_str::<DeviceCodeResp>(&body) {
-                                if !d.user_code.is_empty() || !d.device_code.is_empty() {
-                                    device = Some(d);
-                                    break;
-                                }
-                            }
-                            last = body;
-                        } else {
-                            last = format!("{status}: {body}");
-                        }
-                    }
-                    Err(e) => last = e.to_string(),
-                }
-            }
-        } else {
-            last = "no NUR_HF_OAUTH_CLIENT_ID (register an OAuth app at huggingface.co/settings/applications)".into();
-        }
-
-        if let Some(device) = device {
-            let verify = device
-                .verification_uri_complete
-                .clone()
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| {
-                    if device.verification_uri.is_empty() {
-                        format!(
-                            "https://huggingface.co/login/device?user_code={}",
-                            device.user_code
-                        )
-                    } else {
-                        device.verification_uri.clone()
-                    }
-                });
-            send(
-                tx,
-                BrowserLoginProgress::DeviceCode {
-                    verification_url: verify.clone(),
-                    user_code: device.user_code.clone(),
-                },
-            );
-            let _ = open_browser(&verify);
-
-            let deadline = std::time::Instant::now()
-                + Duration::from_secs(if device.expires_in > 0 {
-                    device.expires_in
-                } else {
-                    900
-                });
-            let base_interval = device.interval.max(3);
-            let mut attempt = 0u32;
-            let mut slow = false;
-            while std::time::Instant::now() < deadline {
-                if cancel.is_cancelled() {
-                    return Err(NurError::Other("login cancelled".into()));
-                }
-                thread::sleep(crate::oauth::device_poll_sleep(
-                    base_interval,
-                    slow,
-                    attempt,
-                ));
-                attempt = attempt.saturating_add(1);
-                slow = false;
-                let form = [
-                    ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
-                    ("device_code", device.device_code.as_str()),
-                    ("client_id", client_id.as_str()),
-                ];
-                for turl in [
-                    "https://huggingface.co/oauth/token",
-                    "https://huggingface.co/api/oauth/token",
-                ] {
-                    let Ok(res) = client.post(turl).form(&form).send() else {
-                        continue;
-                    };
-                    let body = res.text().unwrap_or_default();
-                    let parsed: TokenResp = serde_json::from_str(&body).unwrap_or(TokenResp {
-                        access_token: None,
-                        refresh_token: None,
-                        expires_in: None,
-                        error: Some("pending".into()),
-                        error_description: None,
-                        token: None,
-                    });
-                    if let Some(err) = parsed.error.as_deref() {
-                        if err == "authorization_pending" || err == "pending" {
-                            continue;
-                        }
-                        if err == "slow_down" {
-                            slow = true;
-                            continue;
-                        }
-                        // Denial and expiry are terminal - polling to the
-                        // deadline only re-reports them as a generic timeout.
-                        if err == "access_denied" || err == "expired_token" {
-                            return Err(NurError::Other(format!(
-                                "Hugging Face device login failed: {err} {}",
-                                parsed.error_description.unwrap_or_default()
-                            )));
-                        }
-                    }
-                    if let Some(access) = parsed.access_token.or(parsed.token) {
-                        return Ok(OAuthTokens {
-                            access_token: access,
-                            refresh_token: parsed.refresh_token,
-                            expires_at: expires_in_to_at(parsed.expires_in),
-                            meta: Some(OauthMeta {
-                                issuer: "https://huggingface.co".into(),
-                                client_id: client_id.clone(),
-                                extra: serde_json::json!({}),
-                            }),
-                        });
-                    }
-                }
-                send(
-                    tx,
-                    BrowserLoginProgress::Status("waiting for Hugging Face approval…".into()),
-                );
-            }
-            return Err(NurError::Other("Hugging Face login timed out".into()));
-        }
-
-        // Fallback: open token page and instruct user to use API key path.
-        let url = "https://huggingface.co/settings/tokens";
-        send(tx, BrowserLoginProgress::OpenUrl(url.into()));
-        Err(NurError::Other(format!(
-            "HF device flow unavailable ({last}). Open {url}, create a token (or set HF_TOKEN), then choose “Enter API key” in /login. Optional: register an OAuth app and set NUR_HF_OAUTH_CLIENT_ID for browser device flow."
-        )))
-    }
 
     /// Import token written by `huggingface-cli login` / hub cache.
     pub fn import_hf_token() -> Option<OAuthTokens> {
@@ -6000,7 +5860,9 @@ pub mod azure {
             )
         })?;
         let mut child = Command::new(&az)
-            .args(["login", "--use-device-code"])
+            .args(["login", "--use-device-code", "--output", "none"])
+            .env("AZURE_CORE_LOGIN_EXPERIENCE_V2", "off")
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -6009,25 +5871,11 @@ pub mod azure {
                     "failed to launch az ({e}). Install Azure CLI or paste AZURE_OPENAI_API_KEY."
                 ))
             })?; // Best-effort parse device code from az stderr/stdout while waiting.
-        // stderr is az's documented channel for the code, but the stdout pipe
-        // is drained too: an undrained pipe can wedge az, and some
-        // versions/locales print the code there.
-        let stderr = child.stderr.take();
-        if let Some(mut err) = stderr {
-            let tx2 = tx.clone();
-            thread::spawn(move || {
-                let mut buf = String::new();
-                let _ = err.read_to_string(&mut buf);
-                send_az_device_code(&tx2, &buf);
-            });
+        if let Some(err) = child.stderr.take() {
+            watch_login_output(err, tx.clone());
         }
-        if let Some(mut out) = child.stdout.take() {
-            let tx2 = tx.clone();
-            thread::spawn(move || {
-                let mut buf = String::new();
-                let _ = out.read_to_string(&mut buf);
-                send_az_device_code(&tx2, &buf);
-            });
+        if let Some(out) = child.stdout.take() {
+            watch_login_output(out, tx.clone());
         }
         if let Err(e) = wait_child_with_deadline(&mut child, cancel, VENDOR_CLI_LOGIN_TIMEOUT) {
             let _ = child.kill();
@@ -6170,125 +6018,8 @@ fn az_expiry_unix(expires_on_unix: Option<&str>, expires_on_local: Option<&str>)
         .map(|dt| u64::try_from(dt.timestamp().max(0)).unwrap_or(0))
 }
 
-#[allow(dead_code)] // legacy sessions only; SigV4 is not supported by Nur's bearer transport
 pub mod bedrock {
     use super::*;
-
-    pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
-        send(
-            tx,
-            BrowserLoginProgress::Status("launching AWS SSO login (aws sso login)…".into()),
-        );
-        send(
-            tx,
-            BrowserLoginProgress::Status(
-                "complete browser SSO when prompted by the AWS CLI…".into(),
-            ),
-        );
-        // Prefer sso login; fall back to `aws login` if present.
-        let mut ok = false;
-        let mut last = String::new();
-        let aws = match aws_bin() {
-            Some(p) => p,
-            None => {
-                return Err(NurError::Other(
-                    "AWS CLI (`aws`) not found on PATH. Install AWS CLI v2 (https://aws.amazon.com/cli/), configure SSO, then retry — or paste a Bedrock bearer/API key."
-                        .into(),
-                ));
-            }
-        };
-        for args in [vec!["sso", "login"], vec!["login"]] {
-            let mut child = match Command::new(&aws)
-                .args(&args)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-            {
-                Ok(c) => c,
-                Err(e) => {
-                    last = format!("aws spawn failed: {e}");
-                    continue;
-                }
-            }; // AWS SSO prints a URL — try to surface it.
-            if let Some(mut err) = child.stderr.take() {
-                let tx2 = tx.clone();
-                thread::spawn(move || {
-                    let mut buf = String::new();
-                    let _ = err.read_to_string(&mut buf);
-                    for word in buf.split_whitespace() {
-                        if word.starts_with("https://") {
-                            send(&tx2, BrowserLoginProgress::OpenUrl(word.to_string()));
-                            let _ = open_browser(word);
-                            break;
-                        }
-                    }
-                    if buf.to_lowercase().contains("user code") || buf.contains("enter the code") {
-                        send(
-                            &tx2,
-                            BrowserLoginProgress::Status(buf.chars().take(200).collect()),
-                        );
-                    }
-                });
-            }
-            loop {
-                if cancel.is_cancelled() {
-                    let _ = child.kill();
-                    return Err(NurError::Other("login cancelled".into()));
-                }
-                match child.try_wait() {
-                    Ok(Some(s)) if s.success() => {
-                        ok = true;
-                        break;
-                    }
-                    Ok(Some(s)) => {
-                        last = format!("aws {} exit {s}", args.join(" "));
-                        break;
-                    }
-                    Ok(None) => thread::sleep(Duration::from_millis(200)),
-                    Err(e) => {
-                        last = e.to_string();
-                        break;
-                    }
-                }
-            }
-            if ok {
-                break;
-            }
-        }
-        if !ok {
-            return Err(NurError::Other(format!(
-                "AWS SSO login failed ({last}). Install AWS CLI v2, configure SSO, or paste a bearer/token if you use a Bedrock gateway."
-            )));
-        }
-
-        // AWS SSO credentials are SigV4 material, not Bedrock bearer tokens. Nur's
-        // OpenAI-compatible HTTP path can only use an actual Bedrock API key/token.
-        // Never persist an access-key marker as a bearer: it makes login appear
-        // successful and guarantees every subsequent request will be rejected.
-        send(
-            tx,
-            BrowserLoginProgress::Status("checking for a Bedrock bearer token…".into()),
-        );
-        if let Ok(token) = std::env::var("AWS_BEARER_TOKEN_BEDROCK") {
-            if !token.is_empty() {
-                return Ok(OAuthTokens {
-                    access_token: token,
-                    refresh_token: Some("aws-sso".into()),
-                    expires_at: Some(super::super::now_unix() + 3600),
-                    meta: Some(OauthMeta {
-                        issuer: "aws-sso".into(),
-                        client_id: "aws-cli".into(),
-                        extra: serde_json::json!({"via": "env AWS_BEARER_TOKEN_BEDROCK"}),
-                    }),
-                });
-            }
-        }
-
-        Err(NurError::Other(
-            "AWS SSO completed, but SSO credentials require SigV4 and cannot be sent as a bearer token. Generate a short-term Bedrock API key, set AWS_BEARER_TOKEN_BEDROCK, then retry /login; or paste a Bedrock API key. The AWS CLI SSO session remains active."
-                .into(),
-        ))
-    }
 
     pub fn refresh() -> Result<OAuthTokens> {
         if let Ok(token) = std::env::var("AWS_BEARER_TOKEN_BEDROCK") {
@@ -6308,7 +6039,6 @@ pub mod bedrock {
 }
 
 // silence unused import warning for mpsc in some builds
-#[allow(dead_code)]
 fn _channel_ty() -> mpsc::Sender<u8> {
     let (tx, _) = mpsc::channel();
     tx
@@ -6360,10 +6090,7 @@ mod tests {
     /// expired.
     #[test]
     fn jwt_expiry_and_expired_jwt() {
-        let live = format!(
-            "x.{}.y",
-            URL_SAFE_NO_PAD.encode(br#"{"exp":9999999999}"#)
-        );
+        let live = format!("x.{}.y", URL_SAFE_NO_PAD.encode(br#"{"exp":9999999999}"#));
         assert_eq!(jwt_expiry(&live), Some(9_999_999_999));
         assert!(!expired_jwt(&live));
 
@@ -6378,13 +6105,61 @@ mod tests {
     /// az's device code is scanned from its output; both the positive case
     /// and the silent no-code case are covered.
     #[test]
+    fn vendor_login_streams_code_before_exit_and_drains_after_url() {
+        use std::net::{TcpListener, TcpStream};
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let mut writer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (reader, _) = listener.accept().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let worker = thread::spawn(move || stream_login_output(reader, &tx, |_| {}));
+        writer
+            .write_all(b"! First copy your one-time code: ABCD-1234\n")
+            .unwrap();
+        let mut code_seen = false;
+        for _ in 0..2 {
+            if let BrowserLoginProgress::DeviceCode { user_code, .. } =
+                rx.recv_timeout(Duration::from_secs(2)).unwrap()
+            {
+                assert_eq!(user_code, "ABCD-1234");
+                code_seen = true;
+            }
+        }
+        assert!(
+            code_seen,
+            "device code must arrive while the vendor is waiting"
+        );
+        writer
+            .write_all(b"https://github.com/login/device\n")
+            .unwrap();
+        for _ in 0..2 {
+            rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        }
+        writer.write_all(b"authorization completed\n").unwrap();
+        assert!(
+            matches!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), BrowserLoginProgress::Status(s) if s == "authorization completed")
+        );
+        drop(writer);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn azure_login_stream_extracts_code_without_ansi() {
+        let (tx, rx) = mpsc::channel();
+        stream_login_output(std::io::Cursor::new(b"To sign in visit https://microsoft.com/devicelogin and enter the code \x1b[32mA1B2C3D4E\x1b[0m\n"), &tx, |_| {});
+        assert!(rx.try_iter().any(|event| matches!(event, BrowserLoginProgress::DeviceCode { user_code, .. } if user_code == "A1B2C3D4E")));
+    }
+
+    #[test]
     fn az_device_code_scan() {
         let (tx, rx) = mpsc::channel();
         send_az_device_code(
             &tx,
             "To sign in, use a web browser to open the page              https://microsoft.com/devicelogin and enter the code A1B2C3D4E",
         );
-        match rx.recv_timeout(Duration::from_secs(1)).expect("device code") {
+        match rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("device code")
+        {
             BrowserLoginProgress::DeviceCode { user_code, .. } => {
                 assert_eq!(user_code, "A1B2C3D4E")
             }

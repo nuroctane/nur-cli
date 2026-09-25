@@ -1,0 +1,10 @@
+{
+  "description": "Headless manual mode has nobody to approve a write, so the write must not happen.",
+  "prompt": "Write manual.txt.",
+  "mode": "manual",
+  "script": [
+    {"tool_calls": [{"name": "write_file", "arguments": {"path": "manual.txt", "contents": "unapproved"}}]},
+    {"text": "The write was not approved."}
+  ],
+  "expect": {"absent_files": ["manual.txt"]}
+}

@@ -45,7 +45,6 @@ fn store_path(scope: &str) -> PathBuf {
         .join("vectors.json")
 }
 
-#[allow(dead_code)] // public API (len/remove/above) used by tests/tools; kept for vector hygiene
 impl VectorStore {
     /// Open the store for a scope, loading persisted vectors.
     pub fn open(scope: &str) -> Self {
@@ -59,7 +58,8 @@ impl VectorStore {
         }
     }
 
-    pub fn len(&self) -> usize {
+    #[cfg(test)]
+    fn len(&self) -> usize {
         self.docs.len()
     }
 

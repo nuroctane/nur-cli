@@ -1,0 +1,41 @@
+{
+  "description": "A pre_tool hook runs before the tool and sees its NUR_* environment (the retired META_* aliases are gone).",
+  "prompt": "Write a file.",
+  "setup_home_files": {
+    "hook.py": "import os\nkeys = ['NUR_TOOL', 'META_TOOL', 'NUR_CWD', 'META_CWD', 'NUR_SESSION', 'META_SESSION']\nline = ''.join(k + '=' + os.environ.get(k, '') + ';' for k in keys)\nwith open(os.path.join(os.environ['NUR_CWD'], 'hook-env.txt'), 'a') as f:\n    f.write(line + chr(10))\n",
+    "hooks.toml": "pre_tool = 'python \"{home}/hook.py\"'\ntimeout_ms = 20000\n"
+  },
+  "script": [
+    {
+      "tool_calls": [
+        {
+          "name": "write_file",
+          "arguments": {
+            "path": "out.txt",
+            "contents": "ok"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Wrote it."
+    }
+  ],
+  "expect": {
+    "files": {
+      "out.txt": "ok",
+      "hook-env.txt": {
+        "contains": [
+          "NUR_TOOL=write_file;",
+          "META_TOOL=;",
+          "META_CWD=;",
+          "META_SESSION=;"
+        ],
+        "lacks": [
+          "NUR_CWD=;",
+          "NUR_SESSION=;"
+        ]
+      }
+    }
+  }
+}

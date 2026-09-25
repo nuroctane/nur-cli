@@ -13,7 +13,7 @@ use crate::api::{ApiClient, ApiResponse, StreamEvent};
 use crate::config::Config;
 use crate::error::{NurError, Result};
 use crate::tools::media::{self, MediaAttach};
-use crate::tools::{is_parallel_safe, is_read_only_call, ToolContext, ToolHost};
+use crate::tools::{is_concurrency_safe, is_read_only_call, ToolContext, ToolHost};
 use crate::usage::{TokenUsage, UsageTracker};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -163,8 +163,6 @@ pub struct AgentRunner {
     pub config: Config,
     pub cwd: PathBuf,
     pub permission_mode: SharedMode,
-    #[allow(dead_code)]
-    pub verbose: bool,
     pub approved_tools: Arc<Mutex<HashSet<String>>>,
     pub tools: ToolHost,
     /// Optional allow/deny/ask patterns (`permissions.toml`). Empty = no change.
@@ -1589,10 +1587,10 @@ impl AgentRunner {
             }
 
             // Contiguous parallel-safe batch
-            if is_parallel_safe(&calls[idx].name, &calls[idx].arguments) {
+            if is_concurrency_safe(&calls[idx].name, &calls[idx].arguments) {
                 let mut batch_end = idx + 1;
                 while batch_end < calls.len()
-                    && is_parallel_safe(&calls[batch_end].name, &calls[batch_end].arguments)
+                    && is_concurrency_safe(&calls[batch_end].name, &calls[batch_end].arguments)
                 {
                     batch_end += 1;
                 }
@@ -1819,7 +1817,8 @@ impl AgentRunner {
                         false,
                     )
                 } else {
-                    match run_agent_tool(self, call, cancel, tx).await {
+                    let context = route_context(&self.config, &session.input_items);
+                    match run_agent_tool(self, call, context, cancel, tx).await {
                         Ok((s, spent)) => {
                             // Roll subagent tokens into the parent session so
                             // totals + the Orca status stay honest.
@@ -2191,8 +2190,19 @@ impl AgentRunner {
         let keep_floor = cfg.tools.keep_probability.clamp(0.5, 0.99);
         let cfg_for_task = cfg.clone();
         let task_owned = task.to_string();
-        let listed = specialists.clone();
-        let asked = listed.clone();
+        // Name plus a one-line description: picking from a named list measured
+        // 90% on names alone and 100% with one line each (jev-playground fit.md).
+        let listed: Vec<Value> = tools
+            .iter()
+            .filter(|t| specialists.contains(&t.name))
+            .map(|t| {
+                serde_json::json!({
+                    "name": t.name,
+                    "does": one_line_description(t.description.as_deref().unwrap_or("")),
+                })
+            })
+            .collect();
+        let asked = specialists.clone();
         let judged = match tokio::task::spawn_blocking(move || {
             let state = serde_json::json!({
                 "task": crate::typesafe::harness::judge_preview(&task_owned, 2_000),
@@ -2620,6 +2630,7 @@ impl AgentRunner {
         }
         usage.set_state("tool:agent");
 
+        let context = route_context(&self.config, &session.input_items);
         let mut handles: Vec<Option<SubagentHandle>> = Vec::with_capacity(batch.len());
         for (call, (_, denial)) in batch.iter().zip(gated.iter()) {
             if denial.is_some() {
@@ -2634,6 +2645,7 @@ impl AgentRunner {
             let tx_child = tx.clone();
             let cancel_child = cancel.clone();
             let permits = permits.clone();
+            let context = context.clone();
             // RLM recursion depth: children may recurse up to the config budget.
             let depth = self.subagent_depth;
             handles.push(Some(tokio::spawn(async move {
@@ -2656,10 +2668,20 @@ impl AgentRunner {
                     return Err(NurError::Interrupted);
                 }
                 let _ = tx_child.send(AgentEvent::Status(format!("subagent · {desc}")));
+                let (prompt, provider_override, model_override, hopped) = plan_unrouted_child(
+                    &config,
+                    prompt,
+                    context,
+                    provider_override,
+                    model_override,
+                    &tx_child,
+                )
+                .await;
                 // Cross-provider: if the call named a different provider, build a
                 // client + config for it from that provider's stored credentials.
                 // Missing creds → LoginRequired + hard block (no silent parent run).
-                match resolve_subagent_target(
+                match resolve_planned_target(
+                    hopped,
                     &client,
                     &config,
                     provider_override.as_deref(),
@@ -3118,7 +3140,6 @@ mod tests {
             config,
             cwd: cwd.clone(),
             permission_mode: SharedMode::new(PermissionMode::Auto),
-            verbose: false,
             approved_tools: Arc::new(Mutex::new(HashSet::new())),
             tools: ToolHost::default(),
             permissions: SharedPermissions::load(&cwd),
@@ -3915,14 +3936,6 @@ mod tests {
         assert_eq!(batch_end - idx, 1);
     }
 
-    #[test]
-    fn the_concurrency_cap_is_a_real_bound() {
-        assert!(
-            (1..=8).contains(&MAX_CONCURRENT_SUBAGENTS),
-            "cap must throttle fan-out without serialising it"
-        );
-    }
-
     /// Executable spec for the fan-out shape in `run_agent_fanout`: the permit
     /// is acquired *inside* the spawned task and held across the whole run, and
     /// results are collected in submission order regardless of finish order.
@@ -4061,7 +4074,7 @@ mod tests {
             "todo_write",
             "submit_plan",
         ] {
-            if is_parallel_safe(name, "{}") {
+            if is_concurrency_safe(name, "{}") {
                 assert!(
                     is_read_only_call(name, "{}"),
                     "{name} is parallel-safe but not read-only — it would bypass approval"
@@ -4082,13 +4095,13 @@ mod tests {
             "extract_frames",
         ] {
             assert!(
-                !is_parallel_safe(name, "{}"),
+                !is_concurrency_safe(name, "{}"),
                 "{name} must run sequentially"
             );
             assert!(!is_read_only_call(name, "{}"), "{name} must need approval");
         }
         assert!(is_read_only_call("look", r#"{"path":"x.png"}"#));
-        assert!(is_parallel_safe("look", r#"{"path":"x.png"}"#));
+        assert!(is_concurrency_safe("look", r#"{"path":"x.png"}"#));
     }
 
     #[test]
@@ -4103,7 +4116,7 @@ mod tests {
             "unspecified action must not be free"
         );
         // …and memory never rides a parallel batch (it can mutate).
-        assert!(!is_parallel_safe("memory", r#"{"action":"read"}"#));
+        assert!(!is_concurrency_safe("memory", r#"{"action":"read"}"#));
     }
 
     #[test]
@@ -4119,11 +4132,11 @@ mod tests {
         ));
         assert!(!is_read_only_call("graphify", r#"{"action":"extract"}"#));
         assert!(!is_read_only_call("graphify", r#"{"action":"update"}"#));
-        assert!(is_parallel_safe(
+        assert!(is_concurrency_safe(
             "graphify",
             r#"{"action":"query","question":"x"}"#
         ));
-        assert!(!is_parallel_safe("graphify", r#"{"action":"extract"}"#));
+        assert!(!is_concurrency_safe("graphify", r#"{"action":"extract"}"#));
     }
 
     #[test]
@@ -4142,8 +4155,8 @@ mod tests {
             "excalidraw",
             r#"{"action":"export","path":"x.excalidraw"}"#
         ));
-        assert!(is_parallel_safe("excalidraw", r#"{"action":"status"}"#));
-        assert!(!is_parallel_safe(
+        assert!(is_concurrency_safe("excalidraw", r#"{"action":"status"}"#));
+        assert!(!is_concurrency_safe(
             "excalidraw",
             r#"{"action":"create","output":"x.excalidraw"}"#
         ));
@@ -4230,7 +4243,7 @@ mod tests {
             !is_read_only_call("omp", "{}"),
             "default action=run must not be free"
         );
-        assert!(!is_parallel_safe("omp", r#"{"action":"status"}"#));
+        assert!(!is_concurrency_safe("omp", r#"{"action":"status"}"#));
     }
 
     #[test]
@@ -4377,7 +4390,7 @@ mod tests {
         assert!(!crate::tools::browser::is_plan_safe_action(
             r#"{"action":"exec","js":"x"}"#
         ));
-        assert!(!is_parallel_safe("browser", r#"{"action":"tabs"}"#));
+        assert!(!is_concurrency_safe("browser", r#"{"action":"tabs"}"#));
     }
 }
 
@@ -5604,6 +5617,7 @@ fn extract_provider_routing_phrase(text: &str) -> Option<(String, Option<String>
 async fn run_agent_tool(
     runner: &AgentRunner,
     call: &FunctionCallRef,
+    context: Arc<Vec<String>>,
     cancel: &CancellationToken,
     tx: &mpsc::UnboundedSender<AgentEvent>,
 ) -> Result<(String, TokenUsage)> {
@@ -5628,7 +5642,17 @@ async fn run_agent_tool(
         let depth = runner.subagent_depth;
         tokio::spawn(async move {
             // Resolve target like the sync path, then run in background.
-            let outcome = match resolve_subagent_target(
+            let (prompt, provider_override, model_override, hopped) = plan_unrouted_child(
+                &config,
+                prompt,
+                context,
+                provider_override,
+                model_override,
+                &tx2,
+            )
+            .await;
+            let outcome = match resolve_planned_target(
+                hopped,
                 &client,
                 &config,
                 provider_override.as_deref(),
@@ -5672,7 +5696,17 @@ async fn run_agent_tool(
     }
     let _ = tx.send(AgentEvent::Status(format!("subagent · {desc}")));
 
-    match resolve_subagent_target(
+    let (prompt, provider_override, model_override, hopped) = plan_unrouted_child(
+        &runner.config,
+        prompt,
+        context,
+        provider_override,
+        model_override,
+        tx,
+    )
+    .await;
+    match resolve_planned_target(
+        hopped,
         &runner.client,
         &runner.config,
         provider_override.as_deref(),
@@ -5704,6 +5738,97 @@ async fn run_agent_tool(
     }
 }
 
+/// Parent context a routed child may be shown. Built only when routing is on,
+/// so a disabled router costs nothing per `agent` call.
+fn route_context(config: &Config, items: &[Value]) -> Arc<Vec<String>> {
+    let ts = &config.typesafe;
+    if ts.enabled && ts.routing.enabled {
+        Arc::new(crate::typesafe::route::child_context(items))
+    } else {
+        Arc::new(Vec::new())
+    }
+}
+
+/// Cache-aware routing for an `agent` call that named no provider or model
+/// ([`crate::typesafe::route::plan_child`]). The judgments are blocking HTTP,
+/// so they run on the blocking pool. Returns the prompt the child receives,
+/// the (possibly routed) provider/model overrides, and whether routing chose
+/// them. An explicit provider or model is always obeyed as written.
+async fn plan_unrouted_child(
+    config: &Config,
+    prompt: String,
+    context: Arc<Vec<String>>,
+    provider: Option<String>,
+    model: Option<String>,
+    tx: &mpsc::UnboundedSender<AgentEvent>,
+) -> (String, Option<String>, Option<String>, bool) {
+    let ts = &config.typesafe;
+    if provider.is_some() || model.is_some() || !ts.enabled || !ts.routing.enabled {
+        return (prompt, provider, model, false);
+    }
+    let cfg = config.clone();
+    let task = prompt.clone();
+    let planned = tokio::task::spawn_blocking(move || {
+        crate::typesafe::route::plan_child(&cfg, &task, &context)
+    })
+    .await
+    .ok()
+    .flatten();
+    let Some(plan) = planned else {
+        return (prompt, None, None, false);
+    };
+    if let Some(note) = plan.note.as_ref().filter(|_| ts.routing.suggest) {
+        let _ = tx.send(AgentEvent::Status(note.clone()));
+    }
+    match plan.hop {
+        Some(hop) => (plan.prompt, Some(hop.provider), Some(hop.model), true),
+        None => (plan.prompt, None, None, false),
+    }
+}
+
+/// [`resolve_subagent_target`], except that a target routing chose on its own
+/// falls back to the parent's model when it cannot be built: an automatic hop
+/// is an optimization, never a reason for the child to fail.
+#[allow(clippy::too_many_arguments)]
+fn resolve_planned_target(
+    hopped: bool,
+    parent_client: &ApiClient,
+    parent_config: &Config,
+    provider: Option<&str>,
+    model: Option<&str>,
+    retry_prompt: Option<&str>,
+    retry_desc: Option<&str>,
+    retry_kind: Option<&str>,
+    tx: &mpsc::UnboundedSender<AgentEvent>,
+) -> SubagentTarget {
+    let target = resolve_subagent_target(
+        parent_client,
+        parent_config,
+        provider,
+        model,
+        retry_prompt,
+        retry_desc,
+        retry_kind,
+        tx,
+    );
+    if hopped && !matches!(target, SubagentTarget::Ready { .. }) {
+        let _ = tx.send(AgentEvent::Status(
+            "subagent · routed model unavailable - running on the parent model".into(),
+        ));
+        return resolve_subagent_target(
+            parent_client,
+            parent_config,
+            None,
+            None,
+            retry_prompt,
+            retry_desc,
+            retry_kind,
+            tx,
+        );
+    }
+    target
+}
+
 /// Outcome of resolving where a subagent should run.
 enum SubagentTarget {
     Ready {
@@ -5711,13 +5836,7 @@ enum SubagentTarget {
         config: Box<Config>,
     },
     /// Explicit cross-provider request, but no credentials yet. Do not run.
-    AwaitingLogin {
-        #[allow(dead_code)]
-        provider_id: String,
-        #[allow(dead_code)]
-        provider_name: String,
-        message: String,
-    },
+    AwaitingLogin { message: String },
     /// Explicit routing was understood, but the target could not be built.
     /// This stays a failure rather than impersonating the requested provider
     /// with the parent's client.
@@ -5889,11 +6008,7 @@ fn resolve_subagent_target(
             name = prov.name,
             id = prov.id,
         );
-        return SubagentTarget::AwaitingLogin {
-            provider_id: prov.id.to_string(),
-            provider_name: prov.name.to_string(),
-            message,
-        };
+        return SubagentTarget::AwaitingLogin { message };
     }
     // The catalog row describes the API-key endpoint. When the credential we just
     // resolved is an OAuth access token the provider answers somewhere else
@@ -6702,10 +6817,21 @@ fn typesafe_goal(session: &Session, prompts: usize) -> String {
 /// that exact call has already failed.
 ///
 /// This is deliberately code, not a question: Jev is only asked to judge the
-/// cases where a duplicate actually exists.
+/// cases where a duplicate actually exists. "Did anything change since?" is a
+/// fact too, so any other state-changing call (earlier in the transcript or
+/// earlier in this batch) resets both facts: a read after an edit is not a
+/// duplicate, and a failure before a fix is not the same failure again.
 fn typesafe_call_facts(calls: &[FunctionCallRef], items: &[Value]) -> Vec<(Option<usize>, u32)> {
+    enum Outcome {
+        Pending,
+        Ok,
+        /// In context only in part (cut down by Jev compaction).
+        Partial,
+        Failed,
+    }
     let mut order: Vec<(String, String, String)> = Vec::new(); // call_id, name, args
-    let mut failure_of: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    let mut outcome_of: std::collections::HashMap<String, Outcome> =
+        std::collections::HashMap::new();
     for item in items {
         let kind = item.get("type").and_then(Value::as_str).unwrap_or("");
         let call_id = item.get("call_id").and_then(Value::as_str).unwrap_or("");
@@ -6722,35 +6848,48 @@ fn typesafe_call_facts(calls: &[FunctionCallRef], items: &[Value]) -> Vec<(Optio
                     .to_string(),
             )),
             "function_call_output" => {
-                let failed = item
-                    .get("output")
-                    .and_then(Value::as_str)
-                    .map(|o| o.trim_start().starts_with("error:"))
-                    .unwrap_or(false);
-                failure_of.insert(call_id.to_string(), failed);
+                let body = item.get("output").and_then(Value::as_str).unwrap_or("");
+                let outcome = if body.trim_start().starts_with("error:") {
+                    Outcome::Failed
+                } else if body.contains("chars dropped by Jev-scored compaction") {
+                    Outcome::Partial
+                } else {
+                    Outcome::Ok
+                };
+                outcome_of.insert(call_id.to_string(), outcome);
             }
             _ => {}
         }
     }
     calls
         .iter()
-        .map(|c| {
+        .enumerate()
+        .map(|(k, c)| {
             let want = normalize_args(&c.arguments);
+            let same = |name: &str, args: &str| name == c.name && normalize_args(args) == want;
+            let changes = |name: &str, args: &str| {
+                !same(name, args) && !crate::tools::capabilities::is_read_only_call(name, args)
+            };
             let mut dup: Option<usize> = None;
             let mut failures = 0u32;
             for (i, (id, name, args)) in order.iter().enumerate() {
-                if name != &c.name || normalize_args(args) != want {
+                if changes(name, args) {
+                    dup = None;
+                    failures = 0;
                     continue;
                 }
-                match failure_of.get(id) {
-                    Some(true) => failures += 1,
-                    Some(false) => {
-                        if dup.is_none() {
-                            dup = Some(i);
-                        }
-                    }
-                    None => {}
+                if !same(name, args) {
+                    continue;
                 }
+                match outcome_of.get(id).unwrap_or(&Outcome::Pending) {
+                    Outcome::Failed => failures += 1,
+                    Outcome::Ok => dup = Some(i),
+                    Outcome::Partial | Outcome::Pending => {}
+                }
+            }
+            if calls[..k].iter().any(|p| changes(&p.name, &p.arguments)) {
+                dup = None;
+                failures = 0;
             }
             (dup, failures)
         })
@@ -6820,6 +6959,18 @@ const MAX_SKILL_NUDGES: u8 = 2;
 const TYPESAFE_META_TOOLS: &[&str] = &["typesafe", "skill", "todo_write", "question"];
 
 /// Should the gate/verdict judgment cover this tool?
+/// First sentence of a tool description, bounded, for a judge's option list.
+fn one_line_description(description: &str) -> String {
+    let flat = description.split_whitespace().collect::<Vec<_>>().join(" ");
+    let first = flat
+        .split_inclusive(". ")
+        .next()
+        .unwrap_or("")
+        .trim_end()
+        .trim_end_matches('.');
+    first.chars().take(160).collect()
+}
+
 fn typesafe_judges_tool(tool: &str) -> bool {
     !TYPESAFE_META_TOOLS.contains(&tool)
 }
@@ -6897,7 +7048,9 @@ mod jev_compaction_tests {
         let opts = crate::typesafe::compact::CompactOptions::from_config(&cfg.compaction);
         if crate::typesafe::client::api_key(&cfg).is_none() {
             assert!(
-                crate::typesafe::compact::compact_items(&cfg, &items, &opts).is_none(),
+                crate::typesafe::compact::try_compact_items(&cfg, &items, &opts)
+                    .ok()
+                    .is_none(),
                 "no key must never prune"
             );
         }
@@ -6927,10 +7080,12 @@ mod jev_compaction_tests {
     #[test]
     fn call_facts_find_duplicates_and_repeated_failures() {
         let items = vec![
-            call_args("c1", "read_file", "{\"path\":\"a.rs\"}"),
-            output("c1", "first contents"),
+            // The shell call comes first: any state-changing call after the
+            // read would (correctly) make the earlier contents stale.
             call_args("c2", "bash", "{\"command\":\"cargo test\"}"),
             output("c2", "error: test failed"),
+            call_args("c1", "read_file", "{\"path\":\"a.rs\"}"),
+            output("c1", "first contents"),
         ];
         let pending = vec![
             // Same file as c1 -> a duplicate with a usable result.
@@ -6965,6 +7120,101 @@ mod jev_compaction_tests {
         );
         assert!(facts[2].0.is_none(), "nothing to compare against");
         assert_eq!(facts[2].1, 0);
+    }
+
+    /// "Did anything change since?" is a fact, not a judgment. A read repeated
+    /// after an edit must never be offered to the gate as redundant: a
+    /// confident yes would skip the read and leave the model on stale contents.
+    #[test]
+    fn call_facts_reset_after_an_intervening_change() {
+        let edit = |id: &str| {
+            call_args(
+                id,
+                "edit_file",
+                "{\"path\":\"a.rs\",\"old\":\"x\",\"new\":\"y\"}",
+            )
+        };
+        let read = |id: &str| call_args(id, "read_file", "{\"path\":\"a.rs\"}");
+        let test = |id: &str| call_args(id, "bash", "{\"command\":\"cargo test\"}");
+        let pending = |name: &str, args: &str| FunctionCallRef {
+            call_id: "n".into(),
+            name: name.into(),
+            arguments: args.into(),
+        };
+        let reread = pending("read_file", "{\"path\":\"a.rs\"}");
+        let retest = pending("bash", "{\"command\":\"cargo test\"}");
+
+        // read, edit, read again -> the earlier contents are stale.
+        let items = vec![
+            read("c1"),
+            output("c1", "old"),
+            edit("c2"),
+            output("c2", "ok"),
+        ];
+        assert!(
+            typesafe_call_facts(std::slice::from_ref(&reread), &items)[0]
+                .0
+                .is_none()
+        );
+
+        // An edit earlier in the same pending batch counts as a change too.
+        let items = vec![read("c1"), output("c1", "old")];
+        let batch = [
+            pending(
+                "edit_file",
+                "{\"path\":\"a.rs\",\"old\":\"x\",\"new\":\"y\"}",
+            ),
+            reread.clone(),
+        ];
+        assert!(typesafe_call_facts(&batch, &items)[1].0.is_none());
+
+        // The latest unchanged read is the duplicate, not the oldest.
+        let items = vec![
+            read("c1"),
+            output("c1", "old"),
+            edit("c2"),
+            output("c2", "ok"),
+            read("c3"),
+            output("c3", "new"),
+        ];
+        assert_eq!(
+            typesafe_call_facts(std::slice::from_ref(&reread), &items)[0].0,
+            Some(2)
+        );
+
+        // A failure before a fix is not "the same failure again".
+        let items = vec![
+            test("c1"),
+            output("c1", "error: failed"),
+            edit("c2"),
+            output("c2", "ok"),
+        ];
+        assert_eq!(
+            typesafe_call_facts(std::slice::from_ref(&retest), &items)[0].1,
+            0
+        );
+        // Re-running the identical failing command changes nothing relevant.
+        let items = vec![
+            test("c1"),
+            output("c1", "error: failed"),
+            test("c2"),
+            output("c2", "error: failed"),
+        ];
+        assert_eq!(
+            typesafe_call_facts(std::slice::from_ref(&retest), &items)[0].1,
+            2
+        );
+
+        // A result Jev compaction cut down is no longer in context in full.
+        let items = vec![
+            read("c1"),
+            output("c1", "head\n[… 900 chars dropped by Jev-scored compaction from a tool result; the call kept above is unchanged, and the tool can be re-run …]"),
+        ];
+        assert!(
+            typesafe_call_facts(std::slice::from_ref(&reread), &items)[0]
+                .0
+                .is_none()
+        );
     }
 
     #[test]

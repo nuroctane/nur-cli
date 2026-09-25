@@ -69,6 +69,8 @@ Provider requests have a shared five-minute watchdog by default, immediate Esc c
 
 Keys are kept **per provider**, so switching with `/provider` never strands the one you switched away from - it stays available for failover, fusion, and subagents running on another provider's model. **`/auth`** opens one scrollable vault for every provider, where you can add, replace, import CLI/OMP, or delete credentials without switching the current chat. Imported OMP credentials retain their real kind, so API keys use API endpoints and OAuth subscriptions use their provider-specific OAuth routes. See [docs/authentication.md](docs/authentication.md).
 
+Sign-in handling and its regression coverage are documented in the [65-provider authentication review](docs/provider-signin-review.md), including vendor CLI progress, token rotation, credential replacement, and Claude's manual fallback.
+
 ### Update
 
 ```bash
@@ -171,6 +173,8 @@ Node/uv/Bun are available.
 Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](./docs/setup.md)
 
 ---
+
+**v0.39.0**: Subagents the model does not route itself now run on a cheaper reachable model when the hop is known-price, at least 15% cheaper and no weaker in privacy, with parent context Jev judged directly useful (`[typesafe.routing]`, on by default). A black-box E2E suite drives the real binary against a scripted provider (`tests/e2e`). Fixes: a Jev-gated read after an edit could reuse stale contents; one-shot `nur run` no longer starts ecosystem installs; tool lookup no longer re-spawns npm/uv per call (headless startup ~2x faster); Windows hooks and the cmd.exe shell keep quoted paths; `META_API_KEY` is read only by the Meta provider, and install no longer deletes Meta's `muse` CLI. Sidegraph tool tracks carry their category colour. Legacy Meta/Muse aliases and dead code removed.
 
 **v0.38.3**: F6 opens a session inspector for changes, tools, agents, and context. Compact successful tool rows keep the transcript readable; viewport-only row preparation and quieter idle rendering reduce UI work. Includes compact image attachments, Jev-first manual compaction, 41 themes, and editable custom question answers. **[TUI](docs/tui.md)** · **[Vision](docs/vision.md)** · **[Theme collection](docs/themes.md)** · **[Jev evaluation](docs/jev-performance-evaluation.md)**
 

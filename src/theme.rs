@@ -18,7 +18,6 @@ use std::time::Duration;
 /// one lives behind [`ACTIVE`] and is read via the `UPPER_CASE()` accessors so
 /// existing call sites (`theme::NUR_GOLD()`) keep reading like named colors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // Presets intentionally define the complete visual vocabulary.
 pub struct Palette {
     pub nur_gold: Color,
     pub nur_gold_deep: Color,
@@ -1934,10 +1933,6 @@ palette_accessors! {
     NUR_GOLD_DEEP => nur_gold_deep,
     NUR_GOLD_SKY => nur_gold_sky,
     ON_ACCENT_FG => on_accent_fg,
-    // Legacy names kept across the TUI — all now gold (not Meta blue).
-    META_BLUE => nur_gold,
-    META_BLUE_DEEP => nur_gold_deep,
-    META_BLUE_SKY => nur_gold_sky,
     FG => fg,
     MUTED => muted,
     FAINT => faint,
@@ -2148,12 +2143,6 @@ impl Tone {
 
 /// Braille spinner — smooth, dense, Nur-gold tinted in UI.
 pub const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-/// Orbiting-dot spinner for secondary busy accents (statusline, chips).
-#[allow(dead_code)]
-pub const SPINNER_ORBIT: &[&str] = &["◜", "◝", "◞", "◟"];
-/// Growing/shrinking dot — soft "breathing" accent.
-#[allow(dead_code)]
-pub const SPINNER_DOTS: &[&str] = &["∙", "•", "●", "◉", "●", "•"];
 /// Sparkle cycle for celebratory / vision accents.
 pub const SPARKLE: &[&str] = &["✶", "✸", "✹", "✷", "✵", "✧"];
 /// Soft pulse dots for quieter states (thinking complete, idle accent).
@@ -2257,7 +2246,7 @@ pub fn style_duration_chip(live: bool) -> Style {
     // running card outranks a finished one. Violet is deliberately absent: it
     // means model thought and nothing else, and a running `bash` is not a
     // thought. See `style_thought_chip`.
-    let bg = if live { NUR_GOLD() } else { META_BLUE_SKY() };
+    let bg = if live { NUR_GOLD() } else { NUR_GOLD_SKY() };
     Style::default()
         .fg(BG())
         .bg(bg)
@@ -2308,14 +2297,6 @@ pub fn activity_bar(elapsed: Duration, width: usize) -> String {
     out
 }
 
-// ── ratatui styles ─────────────────────────────────────────────────────────
-#[allow(dead_code)]
-pub fn style_title() -> Style {
-    Style::default()
-        .fg(META_BLUE())
-        .add_modifier(Modifier::BOLD)
-}
-
 pub fn style_status() -> Style {
     Style::default().fg(MUTED())
 }
@@ -2330,12 +2311,6 @@ pub fn style_user() -> Style {
 
 pub fn style_assistant() -> Style {
     Style::default().fg(ASSISTANT_FG())
-}
-
-/// Secondary lines under an answer (e.g. meta footnotes).
-#[allow(dead_code)]
-pub fn style_assistant_dim() -> Style {
-    Style::default().fg(ASSISTANT_DIM())
 }
 
 pub fn style_tool() -> Style {
@@ -2365,11 +2340,6 @@ pub fn style_thinking_violet() -> Style {
     Style::default().fg(VIOLET()).add_modifier(Modifier::ITALIC)
 }
 
-#[allow(dead_code)]
-pub fn style_thinking() -> Style {
-    Style::default().fg(MUTED()).add_modifier(Modifier::ITALIC)
-}
-
 pub fn style_canvas() -> Style {
     Style::default().bg(BG()).fg(FG())
 }
@@ -2393,38 +2363,6 @@ fn tc(c: Color) -> (u8, u8, u8) {
         Color::Rgb(r, g, b) => (r, g, b),
         _ => (232, 185, 35),
     }
-}
-
-#[allow(dead_code)]
-pub fn banner() {
-    let rows = [
-        r#" ███╗   ██╗██╗   ██╗██████╗ "#,
-        r#" ████╗  ██║██║   ██║██╔══██╗"#,
-        r#" ██╔██╗ ██║██║   ██║██████╔╝"#,
-        r#" ██║╚██╗██║██║   ██║██╔══██╗"#,
-        r#" ██║ ╚████║╚██████╔╝██║  ██║"#,
-        r#" ╚═╝  ╚═══╝ ╚═════╝ ╚═╝  ╚═╝"#,
-    ];
-    let grad = current().gradient;
-    println!();
-    for (i, row) in rows.iter().enumerate() {
-        let (r, g, b) = grad[i.min(grad.len() - 1)];
-        println!("{}", row.truecolor(r, g, b));
-    }
-    let (ar, ag, ab) = tc(NUR_GOLD());
-    let (mr, mg, mb) = tc(MUTED());
-    println!(
-        "  {}  {}  {}   {}",
-        "NurCLI".truecolor(ar, ag, ab).bold(),
-        "·".truecolor(mr, mg, mb),
-        "multi-provider coding agent".truecolor(200, 190, 170),
-        format!("v{}", env!("CARGO_PKG_VERSION")).truecolor(96, 90, 78)
-    );
-    println!(
-        "  {}\n",
-        "fully loaded  ·  TUI · tools · Graphify/PLUR/Ruflo · 1,000+ skills"
-            .truecolor(120, 112, 96)
-    );
 }
 
 pub fn print_info(msg: &str) {

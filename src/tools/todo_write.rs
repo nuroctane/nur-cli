@@ -1,4 +1,4 @@
-use super::{arg_str, Tool, ToolContext};
+use super::{Tool, ToolContext};
 use crate::agent::todos::{TodoItem, TodoList, TodoStatus};
 use crate::error::{NurError, Result};
 use serde_json::Value;
@@ -79,8 +79,3 @@ impl Tool for TodoWrite {
     }
 }
 
-// silence unused import if any
-#[allow(dead_code)]
-fn _arg(args: &Value) -> Result<String> {
-    arg_str(args, "x")
-}

@@ -80,16 +80,13 @@ fn private_atomic_write(path: &Path, content: &[u8]) -> io::Result<()> {
     result
 }
 
-pub(crate) fn save_manual_oauth_code(code: &str) -> Result<()> {
+pub(crate) fn validate_manual_oauth_code(code: &str) -> Result<String> {
     let code = code.trim();
     if code.is_empty() || code.len() > 8 * 1024 || code.chars().any(|ch| matches!(ch, '\r' | '\n'))
     {
         return Err(NurError::Other("invalid OAuth authorization code".into()));
     }
-    ensure_dirs()?;
-    let path = crate::config::nur_home().join("oauth_paste_code.txt");
-    private_atomic_write(&path, format!("{code}\n").as_bytes())
-        .map_err(|error| NurError::Other(format!("could not save OAuth code: {error}")))
+    Ok(code.to_string())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -489,12 +486,10 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
     }
 
     // No expected provider: generic env first (scripts / headless), then auth.json.
-    for var in ["NUR_API_KEY", "META_API_KEY"] {
-        if let Ok(k) = std::env::var(var) {
-            let k = k.trim().to_string();
-            if !k.is_empty() {
-                return Ok(k);
-            }
+    if let Ok(k) = std::env::var("NUR_API_KEY") {
+        let k = k.trim().to_string();
+        if !k.is_empty() {
+            return Ok(k);
         }
     }
     if let Some(auth) = load_auth()? {
@@ -628,7 +623,12 @@ pub fn refresh_oauth_in_place(auth: &mut Auth) -> Result<bool> {
     if exp > now.saturating_add(300) {
         return Ok(false);
     }
-    let Some(refresh) = auth.refresh_token.clone().filter(|s| !s.is_empty()) else {
+    let Some(refresh) = auth.refresh_token.clone().filter(|s| !s.trim().is_empty()) else {
+        if exp <= now {
+            return Err(NurError::Other(
+                "OAuth token expired with no refresh token. Run /login again.".into(),
+            ));
+        }
         return Ok(false);
     };
     match refresh_oauth_with_token(auth, &refresh) {
@@ -650,8 +650,22 @@ fn refresh_oauth_with_token(auth: &mut Auth, refresh: &str) -> Result<bool> {
     // concurrent-subagent hangs whenever a token needed refreshing.
     let tokens =
         crate::oauth::run_blocking(|| crate::oauth::refresh_tokens(provider, auth, refresh))?;
+    apply_refreshed_tokens(auth, tokens)?;
+    Ok(true)
+}
+
+fn apply_refreshed_tokens(auth: &mut Auth, tokens: crate::oauth::OAuthTokens) -> Result<()> {
+    // Validate before mutating the existing credential. An empty token response
+    // must not erase the last usable session or its rotating refresh token.
+    oauth_auth(
+        &auth.provider,
+        &tokens.access_token,
+        None,
+        tokens.expires_at,
+        None,
+    )?;
     auth.api_key = tokens.access_token;
-    if let Some(r) = tokens.refresh_token {
+    if let Some(r) = tokens.refresh_token.filter(|r| !r.trim().is_empty()) {
         auth.refresh_token = Some(r);
     }
     auth.expires_at = tokens.expires_at;
@@ -659,7 +673,7 @@ fn refresh_oauth_with_token(auth: &mut Auth, refresh: &str) -> Result<bool> {
         auth.oauth_meta = Some(meta);
     }
     auth.source = "oauth".into();
-    Ok(true)
+    Ok(())
 }
 
 /// Refresh OAuth access token if needed and keep the active and provider stores
@@ -1121,6 +1135,7 @@ pub fn save_oauth_session(
     refresh_oauth_in_place(&mut auth)?;
     save_auth(&auth)?;
     save_provider_session(&auth)?;
+    remove_provider_keys(provider)?;
     allow_t3_fallback(provider)?;
     Ok(())
 }
@@ -1267,13 +1282,24 @@ pub fn choose_provider_oauth(
     expires_at: Option<u64>,
     meta: Option<OauthMeta>,
 ) -> Result<()> {
-    save_provider_oauth(
-        provider,
-        access_token,
-        refresh_token.clone(),
-        expires_at,
-        meta.clone(),
-    )?;
+    ensure_dirs()?;
+    let _guard = oauth_store_guard();
+    let mut auth = oauth_auth(provider, access_token, refresh_token, expires_at, meta)?;
+    refresh_oauth_in_place(&mut auth)?;
+    save_provider_session(&auth)?;
+    remove_provider_keys(provider)?;
+    let active_matches = load_auth()?.is_some_and(|active| {
+        !active.provider.trim().is_empty() && !provider_mismatch(&active, provider)
+    });
+    if active_matches {
+        // Persist the canonical refreshed token, never re-exchange the input
+        // refresh token: providers may rotate it on the first exchange.
+        save_auth(&auth)?;
+    }
+    allow_t3_fallback(provider)
+}
+
+fn remove_provider_keys(provider: &str) -> Result<()> {
     {
         let _guard = key_store_guard();
         let path = crate::config::provider_keys_path();
@@ -1288,12 +1314,6 @@ pub fn choose_provider_oauth(
                 NurError::Other(format!("failed to save provider keys: {error}"))
             })?;
         }
-    }
-    let active_matches = load_auth()?.is_some_and(|auth| {
-        !auth.provider.trim().is_empty() && !provider_mismatch(&auth, provider)
-    });
-    if active_matches {
-        save_oauth_session(provider, access_token, refresh_token, expires_at, meta)?;
     }
     Ok(())
 }
@@ -1419,7 +1439,6 @@ fn load_provider_oauth_token_at(path: &Path, provider_id: &str) -> Option<String
 
 /// Whether a stored OAuth session exists for this provider (may still need refresh).
 /// Used by failover UI / doctor when deciding if browser auth is already on file.
-#[allow(dead_code)] // public API for plugins/TUI; load path uses load_provider_oauth_token
 pub fn has_provider_oauth(provider_id: &str) -> bool {
     read_sessions_at(&crate::config::provider_sessions_path())
         .get(provider_id)
@@ -1856,6 +1875,13 @@ pub fn login_interactive(
         match persist_cli_browser(&provider, &mut cfg) {
             Ok(()) => return Ok(()),
             Err(e) => {
+                // A manual Claude paste reader may still own stdin. Exit this
+                // command instead of racing it with an API-key prompt.
+                if provider == "anthropic" {
+                    return Err(NurError::Other(format!(
+                        "{e}\nRetry sign-in, or use --key for an API key."
+                    )));
+                }
                 eprintln!("{e}");
                 eprintln!("falling back to API key prompt");
             }
@@ -1884,7 +1910,7 @@ fn persist_cli_api_key(provider: &str, key: &str, cfg: &mut crate::config::Confi
         return Err(NurError::Other("empty API key".into()));
     }
     save_api_key_for(key, Some(provider))?;
-    save_provider_key(provider, key)?;
+    choose_provider_key(provider, key)?;
     crate::oauth::omp_bridge::invalidate_omp_token_cache();
     crate::config::apply_provider_defaults(cfg, provider, false);
     crate::config::save_config(cfg)?;
@@ -1934,7 +1960,7 @@ fn persist_imported_tokens(
         )?;
     } else {
         save_api_key_for(&tokens.access_token, Some(provider))?;
-        save_provider_key(provider, &tokens.access_token)?;
+        choose_provider_key(provider, &tokens.access_token)?;
     }
     crate::oauth::omp_bridge::invalidate_omp_token_cache();
     crate::config::apply_provider_defaults(cfg, provider, oauth);
@@ -1953,6 +1979,15 @@ fn persist_imported_tokens(
 fn persist_cli_import(provider: &str, cfg: &mut crate::config::Config) -> Result<()> {
     let tokens = crate::oauth::run_blocking(|| crate::oauth::import_existing_session(provider))?
         .ok_or_else(|| {
+            if provider == "anthropic" {
+                return NurError::Other(
+                    "no live Claude session to import: Claude Code (~/.claude/.credentials.json) is \
+                     signed out or its refresh token expired, and `omp token anthropic` has no \
+                     credential. Run `claude` then /login (or sign in to Anthropic in omp), then \
+                     retry --import - or use --browser."
+                        .into(),
+                );
+            }
             NurError::Other(format!(
                 "no importable CLI / OMP session for '{provider}'. Sign in with the vendor CLI first, \
                  or pass --browser / --key."
@@ -1984,25 +2019,165 @@ fn persist_cli_browser(provider: &str, cfg: &mut crate::config::Config) -> Resul
             }) => {
                 println!("open: {verification_url}");
                 println!("code: {user_code}");
+                // Claude's manual fallback waits for a pasted `code#state`;
+                // the TUI writes it from its input box, the CLI reads stdin.
+                if provider == "anthropic" {
+                    print!("paste code: ");
+                    let _ = std::io::Write::flush(&mut std::io::stdout());
+                    let input_cancel = cancel.clone();
+                    thread::spawn(move || {
+                        while !input_cancel.is_cancelled() {
+                            let mut line = String::new();
+                            match std::io::stdin().read_line(&mut line) {
+                                Ok(0) | Err(_) => {
+                                    input_cancel.cancel();
+                                    break;
+                                }
+                                Ok(_) => match input_cancel.submit_manual_code(&line) {
+                                    Ok(()) => break,
+                                    Err(e) => eprintln!("  {e}; paste the code again:"),
+                                },
+                            }
+                        }
+                    });
+                }
             }
             Ok(BrowserLoginProgress::OpenUrl(url)) => {
                 println!("open: {url}");
             }
             Ok(BrowserLoginProgress::Done(tokens)) => break tokens,
             Ok(BrowserLoginProgress::Failed(err)) => {
+                cancel.cancel();
                 return Err(NurError::Other(err));
             }
             Err(_) => {
+                cancel.cancel();
                 return Err(NurError::Other("sign-in channel closed".into()));
             }
         }
     };
+    cancel.cancel();
     persist_imported_tokens(provider, tokens, cfg, "signed in")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refresh_response_preserves_rotation_and_rejects_empty_access() {
+        let mut auth = oauth_auth(
+            "openai",
+            "old-access",
+            Some("old-refresh".into()),
+            None,
+            None,
+        )
+        .unwrap();
+        let tokens = |access: &str, refresh: &str| crate::oauth::OAuthTokens {
+            access_token: access.into(),
+            refresh_token: Some(refresh.into()),
+            expires_at: None,
+            meta: None,
+        };
+        assert!(apply_refreshed_tokens(&mut auth, tokens(" ", "new-refresh")).is_err());
+        assert_eq!(auth.api_key, "old-access");
+        assert_eq!(auth.refresh_token.as_deref(), Some("old-refresh"));
+        apply_refreshed_tokens(&mut auth, tokens("new-access", " ")).unwrap();
+        assert_eq!(auth.refresh_token.as_deref(), Some("old-refresh"));
+        apply_refreshed_tokens(&mut auth, tokens("newest-access", "rotated-refresh")).unwrap();
+        assert_eq!(auth.refresh_token.as_deref(), Some("rotated-refresh"));
+    }
+
+    #[test]
+    fn expired_session_without_refresh_cannot_report_success() {
+        let mut auth = oauth_auth("anthropic", "expired-access", None, Some(1), None).unwrap();
+        assert!(refresh_oauth_in_place(&mut auth).is_err());
+        auth.expires_at = Some(now_unix() + 60);
+        assert!(!refresh_oauth_in_place(&mut auth).unwrap());
+    }
+
+    #[test]
+    fn isolated_login_choices_refresh_once_and_replace_previous_method() {
+        use std::process::Command;
+        const CHILD: &str = "NUR_AUTH_REVIEW_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let root =
+                std::env::temp_dir().join(format!("nur-auth-review-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&root).unwrap();
+            let log = root.join("refresh-count");
+            #[cfg(windows)]
+            std::fs::write(
+                root.join("gh.cmd"),
+                format!(
+                    "@echo off\r\necho refresh>>\"{}\"\r\necho fresh-test-token\r\n",
+                    log.display()
+                ),
+            )
+            .unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let path = root.join("gh");
+                std::fs::write(
+                    &path,
+                    format!(
+                        "#!/bin/sh\nprintf 'refresh\\n' >> '{}'\nprintf 'fresh-test-token\\n'\n",
+                        log.display()
+                    ),
+                )
+                .unwrap();
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            }
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "auth::tests::isolated_login_choices_refresh_once_and_replace_previous_method",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env("NUR_HOME", &root)
+                .env("PATH", &root)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            std::fs::remove_dir_all(root).unwrap();
+            return;
+        }
+        let root = crate::config::nur_home();
+        let log = root.join("refresh-count");
+        let provider = "github-copilot";
+        save_provider_key("typesafe", "synthetic-sidecar-key").unwrap();
+        save_provider_key(provider, "synthetic-old-api-key").unwrap();
+        save_oauth_session(provider, "old-access", Some("gh".into()), Some(1), None).unwrap();
+        assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 1);
+        assert_eq!(load_auth().unwrap().unwrap().api_key, "fresh-test-token");
+        assert!(load_provider_key(provider).is_none());
+        std::fs::write(&log, "").unwrap();
+        choose_provider_oauth(provider, "old-access", Some("gh".into()), Some(1), None).unwrap();
+        assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 1);
+        assert_eq!(load_auth().unwrap().unwrap().api_key, "fresh-test-token");
+        assert_eq!(
+            read_sessions_at(&crate::config::provider_sessions_path())[provider].api_key,
+            "fresh-test-token"
+        );
+        let mut cfg = crate::config::Config::default();
+        persist_cli_api_key(provider, "synthetic-new-api-key", &mut cfg).unwrap();
+        assert!(!read_sessions_at(&crate::config::provider_sessions_path()).contains_key(provider));
+        assert_eq!(
+            load_auth().unwrap().unwrap().api_key,
+            "synthetic-new-api-key"
+        );
+        assert_eq!(
+            load_provider_key("typesafe").as_deref(),
+            Some("synthetic-sidecar-key")
+        );
+    }
 
     #[test]
     fn legacy_auth_json_deserializes() {

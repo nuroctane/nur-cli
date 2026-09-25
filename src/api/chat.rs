@@ -640,18 +640,6 @@ fn attach_reasoning_content(shaped: &mut Value, reasoning: Option<&str>) {
     }
 }
 
-/// Build a Responses-shaped response object (deserialized by the caller).
-#[allow(dead_code)]
-pub fn build_response_value(
-    id: Option<&str>,
-    model: Option<&str>,
-    content: &str,
-    tool_calls: &[Value],
-    usage: Option<&Value>,
-) -> Value {
-    build_response_value_with_status(id, model, content, tool_calls, usage, None)
-}
-
 pub fn build_response_value_with_status(
     id: Option<&str>,
     model: Option<&str>,
@@ -1658,7 +1646,7 @@ mod tool_choice_tests {
             "total_tokens": 1050,
             "prompt_tokens_details": { "cached_tokens": 900 },
         });
-        let v = build_response_value(Some("id"), Some("m"), "hi", &[], Some(&usage));
+        let v = build_response_value_with_status(Some("id"), Some("m"), "hi", &[], Some(&usage), None);
         assert_eq!(v["usage"]["input_tokens"], 1000);
         assert_eq!(v["usage"]["input_tokens_details"]["cached_tokens"], 900);
     }

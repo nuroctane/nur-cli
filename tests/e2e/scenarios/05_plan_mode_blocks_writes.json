@@ -1,0 +1,10 @@
+{
+  "description": "Plan mode is read-only: a write the model attempts must not reach the disk.",
+  "prompt": "Write plan.txt.",
+  "mode": "plan",
+  "script": [
+    {"tool_calls": [{"name": "write_file", "arguments": {"path": "plan.txt", "contents": "should not exist"}}]},
+    {"text": "Plan mode refused the write."}
+  ],
+  "expect": {"absent_files": ["plan.txt"], "stdout_contains": ["Plan mode refused the write."]}
+}

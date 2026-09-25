@@ -44,6 +44,23 @@ tool trace, the model registry - so a judgment can only *select* a value nur
 already had. An answer that matches no candidate yields no judgment instead of an
 invented one.
 
+## Pick the problem shape before the primitive
+
+Where Jev pays off is decided by the shape of the question more than by its
+accuracy. nur follows the measurements in jev-playground's
+[fit guide](https://github.com/mizchi/jev-playground/blob/main/docs/fit.md):
+
+| Shape | Rule in nur | Where |
+|-------|-------------|-------|
+| Options can be listed from code | `choice` over code-built candidates; a non-matching answer is no judgment | browser operations and targets, skill and model picks |
+| Ordered decision | `score` over levels with concrete meanings, never `choice` (fit.md: 19/24 -> 23/24) | tool risk, tool-result verdict (failed < partial < succeeded) |
+| Picking from a named list | name **plus a one-line description** (fit.md: 90% -> 100%) | tool narrowing, skill pick |
+| A measurable fact | compute it in code; never ask | "is this call identical", "did anything change since" (a read after an edit is never offered as redundant), prior failure counts |
+| Bundle of atomic predicates | keep one general question next to them, so an unlisted class is not a hole | `needs_human` criteria sit beside the general `risk` score |
+| Needs knowledge of a specific API's behavior | types, lint and tests, not Jev | - |
+| Generating text | never; values come from code | - |
+| Right on a threshold | the confirm band informs, a person decides | every gate |
+
 ## Confidence decides, not the answer
 
 One threshold policy gates all three primitives (`[typesafe] act_confidence`,
@@ -70,7 +87,7 @@ confidence `0.5`, the escalation floor, so "act on this keep/drop answer" and
 | **Tool results** | did that call accomplish what it was for | failures are flagged in the transcript; bodies stay byte-identical |
 | **Compaction** | which tool calls and results are still worth their tokens | stale calls and results are dropped, survivors stay verbatim, and no summary is written - so the frontier summarization call is skipped entirely |
 | **Skills** | which of a triggered skill's own rules this request needs, and whether the skill was actually carried out | the applicable rules are injected as a short checklist; on a confident shortfall the skill layer steers the turn with the specific rule that was skipped |
-| **Routing** | the cheapest adequate model for a task | the `route` tool action returns a suggestion; automatic child routing is not connected to the execution loop |
+| **Routing** | the cheapest adequate model for a subagent, and which parent context it needs | an `agent` call that names no provider/model runs on a cheaper reachable model only when both prices are known, it is at least 15% cheaper, and the privacy tier is no weaker (secret-touching tasks stay on ZDR/TEE/local); confidently useful parent tool results ride along. The parent session never moves |
 | **Retrieval / ranking** | which candidates are actually relevant | the `rank` action scores every candidate in one request; the model calls it when it is juggling candidates, and context-store search reranks its hits through it |
 | **Escalation** | nothing - this is local policy | below the floor the answer is reported and never obeyed; the caller falls back to its own default, and the transcript says so |
 
@@ -295,7 +312,7 @@ check_usage = true                    # steer when a triggered skill is not foll
 max_requirements = 8                  # most rules injected from a narrowed skill
 
 [typesafe.routing]
-enabled = false                       # reserved; automatic child routing is not connected
+enabled = true                        # route un-routed subagents by cost, privacy and Jev
 suggest = true
 ```
 
@@ -380,9 +397,8 @@ Also wired, and worth knowing about:
   devices: [jev-local.md](./jev-local.md).
 - **Inbound peer-mail spam labeling** (one batched request, labels never drops).
 - **On-demand pruning and ranking** through the `typesafe` tool (`prune`, `rank`).
-- **Routing** via the `route` tool action. The cache-aware child routing helpers
-  are currently separate from subagent execution; the routing flag alone does
-  not switch a child or parent model.
+- **Routing** of subagents the model did not route itself (`[typesafe.routing]`),
+  and the `route` tool action for an explicit stay-or-hand-off answer.
 
 Two more, on request and off by default where the trade-off is real:
 

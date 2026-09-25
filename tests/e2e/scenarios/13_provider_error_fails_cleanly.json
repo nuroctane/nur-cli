@@ -1,0 +1,13 @@
+{
+  "description": "A provider that keeps failing makes the run exit non-zero with the provider's message.",
+  "prompt": "Say hello.",
+  "script": [
+    {"status": 500, "error": "scripted upstream outage"},
+    {"status": 500, "error": "scripted upstream outage"},
+    {"status": 500, "error": "scripted upstream outage"},
+    {"status": 500, "error": "scripted upstream outage"},
+    {"status": 500, "error": "scripted upstream outage"},
+    {"status": 500, "error": "scripted upstream outage"}
+  ],
+  "expect": {"exit_code": 1, "stderr_contains": ["scripted upstream outage"]}
+}

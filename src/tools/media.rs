@@ -111,18 +111,14 @@ mod provenance_tests {
         assert_eq!(left.len(), 1, "only the user paste survives");
         assert_eq!(left[0].path, "paste.png");
         assert!(left[0].user_pasted);
-        // queue_image_for_vision marks user origin.
+        // The paste path (queue_user_images) marks user origin.
         let dir = std::env::temp_dir().join(format!("nur-media-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let img = dir.join("p.png");
         std::fs::write(&img, "not really png").unwrap();
         // load_media decodes nothing here; mime by extension.
         drop(user);
-        let queued = queue_image_for_vision(&img).unwrap();
-        assert!(
-            queued.user_pasted,
-            "queue_image_for_vision marks user origin"
-        );
+        queue_user_images(std::slice::from_ref(&img)).unwrap();
         let left = take_pending_media();
         assert_eq!(left.len(), 1);
         assert!(left[0].user_pasted);
@@ -238,17 +234,6 @@ pub fn save_clipboard_image(cwd: &Path, bytes: &[u8], ext: &str) -> Result<PathB
     fs::write(&path, bytes)
         .map_err(|e| NurError::Tool(format!("write {}: {e}", path.display())))?;
     Ok(path)
-}
-
-/// Queue an existing image file for vision on the next turn (TUI paste path).
-/// Thin wrapper over [`load_media`] with push=true.
-pub fn queue_image_for_vision(path: &Path) -> Result<MediaAttach> {
-    // User-pasted (Ctrl+V / /image): must survive the turn-start stale-tool
-    // discard so it rides the user's NEXT message, as the UI promises.
-    let mut m = load_media(path, false)?;
-    m.user_pasted = true;
-    push_pending(m.clone())?;
-    Ok(m)
 }
 
 /// Commit a draft atomically; failed file loading cannot attach half a message.

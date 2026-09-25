@@ -8,7 +8,8 @@
 #   curl -fsSL https://raw.githubusercontent.com/nuroctane/nur-cli/main/install.sh | bash
 #
 # Secrets are NEVER written into the repo. Keys live only in ~/.nur/auth.json
-# or env NUR_API_KEY (META_API_KEY for the Meta provider).
+# or env NUR_API_KEY (vendor keys such as META_API_KEY are read by their own
+# provider at runtime and are not saved).
 
 set -euo pipefail
 
@@ -121,11 +122,6 @@ else
 fi
 cp -f "${BUILT}" "${DEST_DIR}/nur"
 chmod +x "${DEST_DIR}/nur"
-# Enforce the single-command install contract on upgrades too.
-rm -f "${DEST_DIR}/muse" "${DEST_DIR}/muse.exe" \
-  "${DEST_DIR}/muse-opencode.cmd" "${DEST_DIR}/muse-opencode.ps1" \
-  "${DEST_DIR}/muse.sha256" "${DEST_DIR}/meta" "${DEST_DIR}/meta.exe" \
-  "${DEST_DIR}/meta.sha256"
 if [[ -n "${BUILT_HASH}" ]]; then
   INSTALLED_HASH="$( (sha256sum "${DEST_DIR}/nur" 2>/dev/null || shasum -a 256 "${DEST_DIR}/nur") | awk '{print $1}' )"
   if [[ "${INSTALLED_HASH}" != "${BUILT_HASH}" ]]; then
@@ -161,7 +157,7 @@ if [[ "${SKIP_HOOK}" != "1" ]]; then
   "${DEST_DIR}/nur" install-hook >/dev/null 2>&1 && ok "Orca hook installed (if applicable)" || true
 fi
 
-KEY="${NUR_API_KEY:-${META_API_KEY:-}}"
+KEY="${NUR_API_KEY:-}"
 if [[ -n "${KEY}" ]]; then
   step "API key found in environment — saving to ~/.nur/auth.json (local only)…"
   "${DEST_DIR}/nur" auth login --key "${KEY}" >/dev/null

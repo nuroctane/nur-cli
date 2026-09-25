@@ -85,12 +85,12 @@ impl Tool for MessageTool {
                     let mut s = format!(
                         "{} message(s) - {}",
                         items.len(),
-                        mailbox::AUTHORITY_FRAMING
+                        mailbox::BOUNDARY
                     );
                     for m in items {
                         s.push_str(&format!("\n{}", mailbox::render(&m)));
                     }
-                    s.push_str(&format!("\n{}", mailbox::AUTHORITY_FRAMING));
+                    s.push_str(&format!("\n{}", mailbox::BOUNDARY));
                     Ok(s)
                 }
             }

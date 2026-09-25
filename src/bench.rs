@@ -317,7 +317,6 @@ pub(crate) async fn run_one(
         config: cfg_m,
         cwd: wt.clone(),
         permission_mode: agent::SharedMode::new(agent::PermissionMode::Auto),
-        verbose: false,
         approved_tools: Arc::new(Mutex::new(std::collections::HashSet::new())),
         tools: crate::tools::ToolHost::default(),
         permissions: agent::SharedPermissions::load(&wt),

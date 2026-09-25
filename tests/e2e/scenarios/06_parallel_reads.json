@@ -1,0 +1,16 @@
+{
+  "description": "Two tool calls in one reply both run and both results come back in the next request.",
+  "prompt": "Read both files.",
+  "setup_files": {"a.txt": "contents-of-a", "b.txt": "contents-of-b"},
+  "script": [
+    {"tool_calls": [
+      {"name": "read_file", "arguments": {"path": "a.txt"}},
+      {"name": "read_file", "arguments": {"path": "b.txt"}}
+    ]},
+    {"text": "Read both."}
+  ],
+  "expect": {
+    "tool_results": [{"request": 2, "contains": ["contents-of-a", "contents-of-b"]}],
+    "requests": 2
+  }
+}

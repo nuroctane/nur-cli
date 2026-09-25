@@ -1,5 +1,9 @@
 # NurCLI
 
+**v0.39.0:** [Cache-aware subagent routing](typesafe.md) on by default, a
+black-box E2E suite, faster headless startup, Windows hook and shell quoting
+fixes, and category-coloured [sidegraph](tui.md#the-sidegraph-panel) tracks.
+
 **v0.38.3:** [Session inspector and compact activity](tui.md#session-inspector-and-compact-activity),
 viewport-only transcript row preparation, and quieter idle rendering.
 [Compact image attachments](vision.md) with on-demand previews and
@@ -59,7 +63,7 @@ That's the normal upgrade. Pulls / rebuilds when you have a Laboratory checkout,
 
 | Surface | Details |
 |---------|---------|
-| **TUI** | Streaming · duration chips · expandable thought/tool cards · click-to-peek (full write/edit content) · **queued follow-ups with send now** · **green/red transcript diffs** · **prompt menu (fork · edit · revert · copy)** · drag-select · always-on scrollbar · ↓ End · sticky prompt · sessions browser · approval mini-diff · lean banner · **`/login` (65 providers)** · **`/model` (live model list)** · **`/plugins` marketplace** · **`/goal` `/bro` `/adhd` `/scan` `/btw` `/codesearch` `/mc` `/feedback` `/tips` · **`/<skill>`**** · **`/budget` `/poor` `/permissions` `/hooks` `/cd` `/doctor`** · **every path in the transcript is a link that opens** · **block-structured markdown** (headings, lists, quotes and rules as structure, not punctuation) · **LaTeX** when built with `image-peek` · **`/receipt` verifies the session hash chain** |
+| **TUI** | Streaming · duration chips · expandable thought/tool cards · click-to-peek (full write/edit content) · **queued follow-ups (steer · cut in)** · **green/red transcript diffs** · **prompt menu (fork · edit · revert · copy)** · drag-select · always-on scrollbar · ↓ End · sticky prompt · sessions browser · approval mini-diff · lean banner · **`/login` (65 providers)** · **`/model` (live model list)** · **`/plugins` marketplace** · **`/goal` `/bro` `/adhd` `/scan` `/btw` `/codesearch` `/mc` `/feedback` `/tips` · **`/<skill>`**** · **`/budget` `/poor` `/permissions` `/hooks` `/cd` `/doctor`** · **every path in the transcript is a link that opens** · **block-structured markdown** (headings, lists, quotes and rules as structure, not punctuation) · **LaTeX** when built with `image-peek` · **`/receipt` verifies the session hash chain** |
 | **Agent** | Manual / plan / auto · tool loop · subagents · todos · **Jev-scored compaction** (survivors verbatim, no summary) · **pre-exec tool gate + post-exec result judge** · **session $ / token budgets** · **tool-result spill** · Esc cancel · Shift+Tab mid-turn · prompt-cache keys · **Chat Completions adapter** for non-Responses providers |
 | **Vision** | `look` (images / short video) · `extract_frames` (ffmpeg keyframes) · prompt auto-attach of media paths |
 | **Tools** | read · edit · bash · web · **browser** (incl. **element picking**) · **terminal-browser** (`/tb`) · git · judgments (`typesafe`) · memory (`optmem` `connectome` `mem`) · diagrams (`excalidraw` `tldraw` `penecho`) · policy (`dogwood`) · background (`bg`) and async (`admission` `goal` `proposal` `message` `question`) · docs (`anydoc`) · a persistent **Python REPL** · knowledge stack · agent (all first-class) |
@@ -67,7 +71,7 @@ That's the normal upgrade. Pulls / rebuilds when you have a Laboratory checkout,
 | **Hardening** | Sandbox · bash denylist · SSRF blocks · atomic `~/.nur` IO · session **`.json.bak`** · **permissions.toml** · optional **hooks.toml** · API retries · install SHA-256 · `nur doctor` |
 | **Host panels** | Live `status.json` / `usage.jsonl` · **`NUR_*`** env exports · Orca hook (`nur-hook.cmd`) |
 
-**Current version: v0.38.3**
+**Current version: v0.39.0**
 
 ---
 

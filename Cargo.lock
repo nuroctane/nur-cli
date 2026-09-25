@@ -161,12 +161,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anyhow"
-version = "1.0.103"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
-
-[[package]]
 name = "arboard"
 version = "3.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1875,11 +1869,10 @@ dependencies = [
 
 [[package]]
 name = "nur-cli"
-version = "0.38.3"
+version = "0.39.0"
 dependencies = [
  "aes-gcm",
  "anydoc",
- "anyhow",
  "arboard",
  "base64 0.22.1",
  "chrono",

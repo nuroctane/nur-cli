@@ -1,7 +1,6 @@
 //! Session todo list — Claude Code-style task tracking the model updates via tool.
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -73,22 +72,6 @@ impl TodoList {
         s
     }
 
-    #[allow(dead_code)] // kept for future statusline use
-    pub fn summary(&self) -> String {
-        let total = self.items.len();
-        let done = self
-            .items
-            .iter()
-            .filter(|t| t.status == TodoStatus::Completed)
-            .count();
-        let active = self
-            .items
-            .iter()
-            .filter(|t| t.status == TodoStatus::InProgress)
-            .count();
-        format!("{done}/{total} done · {active} active")
-    }
-
     /// Replace or merge. If `merge` false, replace entire list.
     pub fn apply(&mut self, items: Vec<TodoItem>, merge: bool) {
         if !merge {
@@ -104,21 +87,6 @@ impl TodoList {
         }
     }
 
-    #[allow(dead_code)] // kept for future persistence
-    pub fn save(&self, path: &PathBuf) {
-        if let Ok(text) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::create_dir_all(path.parent().unwrap_or(path));
-            let _ = std::fs::write(path, text);
-        }
-    }
-
-    #[allow(dead_code)] // kept for future persistence
-    pub fn load(path: &PathBuf) -> Self {
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|t| serde_json::from_str(&t).ok())
-            .unwrap_or_default()
-    }
 }
 
 pub type SharedTodos = Arc<Mutex<TodoList>>;

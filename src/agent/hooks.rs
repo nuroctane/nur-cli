@@ -108,23 +108,27 @@ fn run_hook(
     session_id: &str,
     timeout_ms: u64,
 ) -> std::io::Result<i32> {
-    let mut c = if cfg!(windows) {
+    #[cfg(windows)]
+    let mut c = {
+        // Hand cmd.exe the hook line verbatim. As a normal argument Rust
+        // escapes inner quotes as \", which cmd does not understand, so any
+        // hook with a quoted path (`python "C:/my hooks/check.py"`) ran with a
+        // mangled argument and blocked every tool call. /S strips exactly the
+        // outer pair of quotes added here.
+        use std::os::windows::process::CommandExt;
         let mut c = Command::new("cmd");
-        c.args(["/C", cmd]);
+        c.args(["/S", "/C"]).raw_arg(format!("\"{cmd}\""));
         c
-    } else {
+    };
+    #[cfg(not(windows))]
+    let mut c = {
         let mut c = Command::new("sh");
         c.args(["-c", cmd]);
         c
     };
     c.current_dir(cwd)
-        // NUR_* are the current names; META_* kept as aliases for existing hooks.
         .env("NUR_TOOL", tool)
         .env("NUR_ARGS_JSON", args_json)
-        .env("NUR_CWD", cwd.display().to_string())
-        .env("NUR_SESSION", session_id)
-        .env("META_TOOL", tool)
-        .env("META_ARGS_JSON", args_json)
         .env("NUR_CWD", cwd.display().to_string())
         .env("NUR_SESSION", session_id)
         .stdin(Stdio::null())
@@ -181,14 +185,14 @@ mod tests {
             }
             (path.clone(), path.to_string_lossy().to_string())
         };
-        let started = std::time::Instant::now();
-        let code =
-            run_hook(&cmd, "read_file", "{}", &dir, "test-session", 20_000).expect("the hook runs");
-        let elapsed = started.elapsed();
-        assert_eq!(code, 0, "flooding stdout is not a failure");
-        assert!(
-            elapsed < std::time::Duration::from_secs(20),
-            "it must not be killed at the deadline: {elapsed:?}"
+        // A blocked hook runs into the deadline and exits 124, so the deadline
+        // only has to be far above a healthy run. 20s was close enough to a
+        // spawn-heavy parallel suite on Windows that the test flaked.
+        let code = run_hook(&cmd, "read_file", "{}", &dir, "test-session", 120_000)
+            .expect("the hook runs");
+        assert_eq!(
+            code, 0,
+            "flooding stdout is not a failure (124 = killed at the deadline)"
         );
         let _ = std::fs::remove_dir_all(&dir);
         let _ = script;

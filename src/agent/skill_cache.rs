@@ -219,7 +219,12 @@ mod tests {
     use super::*;
     use std::time::Instant;
 
+    /// A benchmark, and it acts on the real nur home: `invalidate_cache`
+    /// deletes `~/.nur/cache/skills-index.json` unless NUR_HOME points
+    /// elsewhere, and the cold pass rescans every global skill root. Opt in:
+    /// `NUR_HOME=<scratch> cargo test --bin nur bench_cached_vs_cold -- --ignored`.
     #[test]
+    #[ignore]
     fn bench_cached_vs_cold() {
         let cwd = std::env::current_dir().unwrap();
         // clear cache first to measure cold

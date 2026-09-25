@@ -1,0 +1,13 @@
+{
+  "description": "A shell command runs in the workspace and its stdout is what the model sees next.",
+  "prompt": "Run the marker command.",
+  "script": [
+    {"tool_calls": [{"name": "bash", "arguments": {"command": "echo e2e-marker-42"}}]},
+    {"text": "The marker printed."}
+  ],
+  "expect": {
+    "tool_results": [{"request": 2, "contains": ["e2e-marker-42"]}],
+    "stdout_contains": ["The marker printed."],
+    "requests": 2
+  }
+}

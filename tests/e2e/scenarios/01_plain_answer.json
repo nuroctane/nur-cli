@@ -1,0 +1,6 @@
+{
+  "description": "A text-only reply is printed and the turn ends after one request.",
+  "prompt": "Say hello.",
+  "script": [{"text": "Hello from the scripted model."}],
+  "expect": {"stdout_contains": ["Hello from the scripted model."], "requests": 1}
+}

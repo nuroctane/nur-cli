@@ -10,7 +10,7 @@
 //! | is this spam / what kind of thing is it | [`classify`] | Choice |
 //! | does this need a human | [`needs_human`] | Noul |
 //! | is this diff risky | [`risk`] | Score (ordered levels) |
-//! | did that tool call work | [`verify_result`] | Choice + Noul |
+//! | did that tool call work | [`verify_result`] | Score (ordered levels) |
 //!
 //! Two invariants hold throughout:
 //!
@@ -465,9 +465,9 @@ pub fn tool_need(
                 format!("need_{i}"),
                 Question::noul_with(
                     format!(
-                        "Does this task need the `{name}` tool? Answer yes only if carrying out \
-                         the task is likely to require it; a tool that would merely be nice to \
-                         have is a no."
+                        "Does this task need the `{name}` tool (its entry under `tools` in the \
+                         state says what it does)? Answer yes only if carrying out the task is \
+                         likely to require it; a tool that would merely be nice to have is a no."
                     ),
                     NoulCriteria {
                         yes: Some("the task cannot be done well without it".into()),
@@ -520,7 +520,7 @@ pub fn spam_flags(cfg: &TypesafeConfig, items: &[String]) -> Vec<Judgment<bool>>
                 format!("spam_{i}"),
                 Question::noul_with(
                     format!(
-                        "Is the following message spam, an advertisement, or a                          machine-generated distraction rather than something relevant to the                          user's work?
+                        "Is the following message spam, an advertisement, or a machine-generated distraction rather than something relevant to the user's work?
 
 {}",
                         judge_preview(text, 1_500)
@@ -627,34 +627,45 @@ pub fn risk(cfg: &TypesafeConfig, state: &Value, id: &str) -> Judgment<RiskBand>
 }
 
 /// Did a tool call actually do what it was called for?
+///
+/// The verdict is an ordered scale (failed < partial < succeeded), so it is
+/// asked as a `score`, not a `choice`: jev-playground's fit.md measured the
+/// same move on an ordered gate at 19/24 -> 23/24. "Not enough to tell" is not
+/// a level - it is low confidence, which the policy bands already handle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verification {
     Succeeded,
     Partial,
     Failed,
-    Unclear,
 }
 
 impl Verification {
-    pub const LABELS: &'static [&'static str] = &["succeeded", "partial", "failed", "unclear"];
+    /// Low to high, each level with a concrete meaning.
+    pub const LEVELS: &'static [&'static str] = &[
+        "failed: an error, or the intended effect clearly did not happen",
+        "partial: some of the intent happened, or the output is mixed or contradicts it",
+        "succeeded: the output shows the intended effect happened",
+    ];
 
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Succeeded => "succeeded",
             Self::Partial => "partial",
             Self::Failed => "failed",
-            Self::Unclear => "unclear",
         }
     }
 
-    pub fn from_label(label: &str) -> Option<Self> {
-        match label.trim().to_ascii_lowercase().as_str() {
-            "succeeded" => Some(Self::Succeeded),
-            "partial" => Some(Self::Partial),
-            "failed" => Some(Self::Failed),
-            "unclear" => Some(Self::Unclear),
-            _ => None,
+    /// Map a weighted score in `0..=2` onto the nearest level.
+    pub fn from_score(score: f64) -> Self {
+        match score {
+            s if s < 0.5 => Self::Failed,
+            s if s < 1.5 => Self::Partial,
+            _ => Self::Succeeded,
         }
+    }
+
+    fn levels() -> Vec<String> {
+        Self::LEVELS.iter().map(|s| s.to_string()).collect()
     }
 
     /// Worth interrupting the model about?
@@ -673,24 +684,19 @@ pub fn verify_result(
     intent: &str,
     output_excerpt: &str,
 ) -> Judgment<Verification> {
-    let labels: Vec<String> = Verification::LABELS.iter().map(|s| s.to_string()).collect();
     let state = json!({
         "tool_call": call,
         "intent": intent,
         "output": output_excerpt,
     });
-    choose(
+    score(
         cfg,
         &state,
         "verify_result",
-        "Did the tool output accomplish the stated intent? \
-         'failed' = an error or it did not do the thing; 'partial' = it did some \
-         of it, or the output contradicts the intent; 'unclear' = not enough \
-         information in the output to tell.",
-        &labels,
-        false,
+        "How fully did the tool output accomplish the stated intent?",
+        &Verification::levels(),
     )
-    .map(|label| Verification::from_label(&label).unwrap_or(Verification::Unclear))
+    .map(Verification::from_score)
 }
 
 /// Judge each part of a session goal against evidence of work done.
@@ -845,6 +851,10 @@ pub fn pick_skill(
 pub const JUDGE_PREVIEW_CHARS: usize = 1_200;
 
 /// Which questions to ask about a batch of tool calls.
+///
+/// The loop asks `Pre`, `Verify` and `Compaction`. `Post` and `Both` exist so
+/// tests can exercise every question in one request.
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JudgeScope {
     /// Before execution: does this need a human, how risky is it, is it a
@@ -858,7 +868,6 @@ pub enum JudgeScope {
     Verify,
     /// Both passes in one request - calls that already have results, judged
     /// before (risk) and after (verification, keep) together.
-    #[cfg_attr(not(test), allow(dead_code))]
     Both,
     /// Compaction only: the two questions fast-jev-compaction asks per call
     /// (`keep_call`, `keep_result`) and nothing else. The verdict question is
@@ -1129,7 +1138,7 @@ pub fn judge_calls_with_meta(
     let state = &state;
     let mut questions: Vec<(String, Question)> = Vec::new();
     let risk_levels: Vec<String> = RISK_LEVELS.iter().map(|s| s.to_string()).collect();
-    let verify_labels: Vec<String> = Verification::LABELS.iter().map(|s| s.to_string()).collect();
+    let verify_levels = Verification::levels();
 
     for (n, item) in items.iter().enumerate() {
         if scope.wants_pre() {
@@ -1205,16 +1214,12 @@ pub fn judge_calls_with_meta(
             if scope.wants_verdict() {
                 questions.push((
                     format!("verification_{n}"),
-                    Question::choice(
+                    Question::score(
                         format!(
-                            "Did tool call {0} ({1}) accomplish its intent?",
+                            "How fully did tool call {0} ({1}) accomplish its intent?",
                             n, item.tool
                         ),
-                        verify_labels
-                            .iter()
-                            .cloned()
-                            .map(|l| ChoiceOption::described(l.clone(), verification_rubric(&l)))
-                            .collect(),
+                        verify_levels.clone(),
                     ),
                 ));
             }
@@ -1306,22 +1311,12 @@ pub fn judge_calls_with_meta(
                     }
                 };
                 let verification = match batch.get(&format!("verification_{n}")) {
-                    Some(a) => {
-                        let labels: Vec<String> = batch
-                            .get(&format!("verification_{n}"))
-                            .and_then(|_| Some(verify_labels.clone()))
-                            .unwrap_or_else(|| verify_labels.clone());
-                        let value = a
-                            .resolve_verbatim(&labels)
-                            .and_then(|l| Verification::from_label(l))
-                            .or_else(|| a.choice().and_then(Verification::from_label));
-                        Judgment::from_answer(
-                            format!("verification_{n}"),
-                            value,
-                            a.confidence(),
-                            &t,
-                        )
-                    }
+                    Some(a) => Judgment::from_answer(
+                        format!("verification_{n}"),
+                        a.score().map(Verification::from_score),
+                        a.confidence(),
+                        &t,
+                    ),
                     None => Judgment::unavailable(
                         format!("verification_{n}"),
                         "no answer for this question",
@@ -1347,15 +1342,6 @@ pub fn judge_calls_with_meta(
             .collect(),
         meta,
     )
-}
-
-fn verification_rubric(label: &str) -> String {
-    match label {
-        "succeeded" => "the output shows the intended effect happened".into(),
-        "partial" => "some of the intent happened, or the output is mixed".into(),
-        "failed" => "an error, or the intended effect clearly did not happen".into(),
-        _ => "the output does not contain enough to tell".into(),
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2416,7 +2402,7 @@ mod live {
         ];
         let opts = crate::typesafe::compact::CompactOptions::from_config(&cfg.compaction)
             .with_goal("fix the failing test in src/lib.rs");
-        let outcome = crate::typesafe::compact::compact_items(&cfg, &items, &opts)
+        let outcome = crate::typesafe::compact::try_compact_items(&cfg, &items, &opts).ok()
             .expect("live compaction produces a judgment");
         println!("{}", outcome.stats.summary());
         for o in &outcome.outcomes {

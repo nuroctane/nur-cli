@@ -762,9 +762,9 @@ pub fn prompt_inventory(session_id: &str) -> String {
     lines.join("\n")
 }
 
-/// Drop an entire session store (optional cleanup).
-#[allow(dead_code)]
-pub fn clear_session(session_id: &str) {
+/// Drop an entire session store (test cleanup).
+#[cfg(test)]
+fn clear_session(session_id: &str) {
     if let Ok(mut g) = global().lock() {
         if let Some(sess) = g.remove(session_id) {
             for v in sess.vars.values() {

@@ -21,7 +21,7 @@
 //! | layer | module | what Jev decides |
 //! |-------|--------|------------------|
 //! | tool gate | [`harness::judge_calls`] (`JudgeScope::Pre`) | needs a human, risky, redundant, repeat-of-failure |
-//! | tool results | [`harness::judge_calls`] (`JudgeScope::Post`) | did it succeed, keep call, keep result verbatim |
+//! | tool results | [`harness::judge_calls`] (`JudgeScope::Verify`) | did it succeed (retention is judged later, at compaction) |
 //! | compaction | [`compact`] | which tool calls/results to drop - survivors stay verbatim, no summary |
 //! | skills | [`harness::select_requirements`], [`harness::judge_skill_use`] | which of a skill's stated rules apply, was the skill followed |
 //! | routing | [`harness::pick_model`], [`route`] | cheapest adequate model on a *fresh* context; the parent session stays |

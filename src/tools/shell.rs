@@ -303,6 +303,15 @@ pub fn run_in_shell(
             cmd.args(["-NoProfile", "-NonInteractive", "-Command", command]);
         }
         ShellKind::Cmd => {
+            // Verbatim, not a normal argument: Rust escapes inner quotes as \",
+            // which cmd.exe does not understand, so `type "my file.txt"` ran
+            // with a mangled path. /S strips exactly the outer quotes added here.
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.args(["/S", "/C"]).raw_arg(format!("\"{command}\""));
+            }
+            #[cfg(not(windows))]
             cmd.args(["/C", command]);
         }
     }
@@ -440,6 +449,32 @@ mod tests {
     /// pipes must not wedge the tool forever (session 26940d90). `start /b
     /// ping` backgrounds a writer that keeps stdout alive ~60s; the tool must
     /// return well inside the 45s wall-clock bound (one DRAIN_CAP_MS window).
+    /// cmd.exe is the last-resort shell. A quoted path used to reach it as
+    /// `\"...\"` and fail; E2E runs on Git Bash, so only this pins it.
+    #[cfg(windows)]
+    #[test]
+    fn cmd_backend_keeps_quoted_paths_intact() {
+        let dir = std::env::temp_dir().join(format!("nur shell quote {}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("has space.txt");
+        std::fs::write(&file, "quoted-path-ok").unwrap();
+        let backend = ShellBackend {
+            kind: ShellKind::Cmd,
+            program: PathBuf::from("cmd.exe"),
+            label: "cmd".into(),
+        };
+        let out = run_in_shell(
+            &backend,
+            &format!("type \"{}\"", file.display()),
+            Path::new("."),
+            10_000,
+            &tokio_util::sync::CancellationToken::new(),
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let out = out.expect("cmd ran");
+        assert!(out.contains("quoted-path-ok"), "{out}");
+    }
+
     #[cfg(windows)]
     #[test]
     fn drain_returns_despite_pipe_holding_grandchild() {

@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub mod browser_setup;
 mod packs;
@@ -1219,32 +1219,20 @@ pub fn find_bin(name: &str) -> Option<String> {
         home.join(".bun").join("bin").join(name),
     ];
 
-    // npm global prefix (use cmd-safe npm resolution to avoid recursion)
-    if let Some(npm) = resolve_where("npm") {
-        if let Ok(out) = spawn_program(&npm, &["prefix", "-g"]).output() {
-            if out.status.success() {
-                let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if !p.is_empty() {
-                    candidates.push(PathBuf::from(&p).join(format!("{name}.cmd")));
-                    candidates.push(PathBuf::from(&p).join(format!("{name}.exe")));
-                    candidates.push(PathBuf::from(&p).join(name));
-                    candidates.push(PathBuf::from(&p).join("bin").join(name));
-                }
-            }
-        }
+    // npm global prefix and uv's tool bin dir. Each probe starts a runtime
+    // (`npm prefix -g` is a Node launch, ~3s on Windows) and the answer is
+    // fixed for the process, so resolve both once: uncached, a single headless
+    // turn spent ~30s re-asking before its first model request.
+    if let Some(p) = npm_global_prefix() {
+        candidates.push(p.join(format!("{name}.cmd")));
+        candidates.push(p.join(format!("{name}.exe")));
+        candidates.push(p.join(name));
+        candidates.push(p.join("bin").join(name));
     }
-
-    if let Some(uv) = resolve_where("uv").or_else(|| find_file_only("uv")) {
-        if let Ok(out) = spawn_program(&uv, &["tool", "dir", "--bin"]).output() {
-            if out.status.success() {
-                let dir = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if !dir.is_empty() {
-                    candidates.push(PathBuf::from(&dir).join(format!("{name}.exe")));
-                    candidates.push(PathBuf::from(&dir).join(format!("{name}.cmd")));
-                    candidates.push(PathBuf::from(&dir).join(name));
-                }
-            }
-        }
+    if let Some(dir) = uv_tool_bin_dir() {
+        candidates.push(dir.join(format!("{name}.exe")));
+        candidates.push(dir.join(format!("{name}.cmd")));
+        candidates.push(dir.join(name));
     }
 
     for c in &candidates {
@@ -1255,6 +1243,31 @@ pub fn find_bin(name: &str) -> Option<String> {
 
     // `where` / `which` last - returns absolute paths on modern Windows.
     resolve_where(name)
+}
+
+fn probe_dir(program: Option<String>, args: &[&str]) -> Option<PathBuf> {
+    let out = spawn_program(&program?, args).output().ok()?;
+    let dir = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !dir.is_empty()).then(|| PathBuf::from(dir))
+}
+
+fn npm_global_prefix() -> Option<PathBuf> {
+    static PREFIX: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    // cmd-safe npm resolution (never `find_bin`, which would recurse).
+    PREFIX
+        .get_or_init(|| probe_dir(resolve_where("npm"), &["prefix", "-g"]))
+        .clone()
+}
+
+fn uv_tool_bin_dir() -> Option<PathBuf> {
+    static DIR: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        probe_dir(
+            resolve_where("uv").or_else(|| find_file_only("uv")),
+            &["tool", "dir", "--bin"],
+        )
+    })
+    .clone()
 }
 
 fn find_file_only(name: &str) -> Option<String> {
@@ -1610,12 +1623,6 @@ pub fn launch_snapshot() -> String {
     "ecosystem · provisioning in background…".into()
 }
 
-/// Sleep helper used when we want a soft bound (unused externally).
-#[allow(dead_code)]
-fn sleep_ms(ms: u64) {
-    std::thread::sleep(Duration::from_millis(ms));
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1628,26 +1635,26 @@ mod tests {
         #[cfg(windows)]
         let result = run_capture_cancelled(
             "powershell",
-            &["-NoProfile", "-Command", "Start-Sleep -Seconds 30"],
+            &["-NoProfile", "-Command", "Start-Sleep -Seconds 120"],
             None,
             60_000,
             &cancel,
         );
         #[cfg(not(windows))]
-        let result = run_capture_cancelled("sh", &["-c", "sleep 30"], None, 60_000, &cancel);
+        let result = run_capture_cancelled("sh", &["-c", "sleep 120"], None, 60_000, &cancel);
 
         assert!(result.unwrap_err().contains("cancelled"));
         // The property is "cancellation does not wait for the child to finish
-        // on its own" - the child sleeps 30s, so anything comfortably under
-        // that proves it. The old 5s bound was really measuring PowerShell's
+        // on its own" - the child sleeps 120s, so anything comfortably under
+        // that proves it (15s against a 30s child flaked at 15.5s under load). The old 5s bound was really measuring PowerShell's
         // cold-start time and failed intermittently whenever the rest of the
         // suite was spawning processes in parallel; a flaky assertion trains
         // people to ignore failures, which costs more than the tighter bound
         // ever bought.
         let elapsed = started.elapsed();
         assert!(
-            elapsed < Duration::from_secs(15),
-            "cancel took {elapsed:?} - should not wait out the child's 30s sleep"
+            elapsed < std::time::Duration::from_secs(60),
+            "cancel took {elapsed:?} - should not wait out the child's 120s sleep"
         );
     }
 

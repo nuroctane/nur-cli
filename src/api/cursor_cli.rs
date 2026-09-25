@@ -43,15 +43,6 @@ enum CursorLaunch {
     Wrapper(PathBuf),
 }
 
-/// Resolve a path useful for diagnostics (Node `index.js` or wrapper script).
-#[allow(dead_code)]
-pub fn cursor_agent_bin() -> Option<PathBuf> {
-    resolve_launch().map(|l| match l {
-        CursorLaunch::Node { index, .. } => index,
-        CursorLaunch::Wrapper(p) => p,
-    })
-}
-
 fn resolve_launch() -> Option<CursorLaunch> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {

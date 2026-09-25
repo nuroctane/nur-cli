@@ -236,34 +236,6 @@ impl Session {
         self.updated_at = Utc::now();
     }
 
-    #[allow(dead_code)]
-    pub fn summary(&self) -> SessionSummary {
-        let preview = self
-            .messages
-            .iter()
-            .find(|m| m.role == "user")
-            .map(|m| {
-                m.content
-                    .split_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" ")
-                    .chars()
-                    .take(120)
-                    .collect()
-            })
-            .unwrap_or_default();
-        SessionSummary {
-            id: self.id.clone(),
-            updated_at: self.updated_at,
-            provider: self.provider.clone(),
-            model: self.model.clone(),
-            cwd: self.cwd.clone(),
-            messages: self.messages.len(),
-            total_tokens: self.usage.total_tokens,
-            estimated_cost_usd: self.usage.estimated_cost_usd(),
-            preview,
-        }
-    }
 }
 
 /// Key for the per-directory session map. Case-folded on Windows (where paths

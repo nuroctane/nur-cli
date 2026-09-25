@@ -194,7 +194,6 @@ pub async fn run_gateway(
         config: cfg,
         cwd: cwd.clone(),
         permission_mode,
-        verbose: false,
         approved_tools: Arc::new(Mutex::new(HashSet::new())),
         tools: crate::tools::ToolHost::default(),
         permissions: agent::SharedPermissions::load(&cwd),

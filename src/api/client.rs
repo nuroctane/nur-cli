@@ -277,7 +277,6 @@ pub struct ApiClient {
 
 /// Incremental events surfaced while a response streams in.
 #[derive(Debug)]
-#[allow(dead_code)] // Completed's payload is consumed by some callers only
 #[allow(clippy::large_enum_variant)] // events stay allocation-free on the streaming hot path
 pub enum StreamEvent {
     /// Assistant output text delta.
@@ -379,18 +378,6 @@ impl ApiClient {
             return false;
         }
         self.provider_id == "antigravity" || self.oauth.is_some()
-    }
-
-    /// Switch this client to the OpenAI Chat Completions shape.
-    /// Prefer [`Self::with_style`] for new code.
-    #[allow(dead_code)]
-    pub fn with_chat_completions(mut self, on: bool) -> Self {
-        self.style = if on {
-            ApiStyle::ChatCompletions
-        } else {
-            ApiStyle::Responses
-        };
-        self
     }
 
     /// Should the Anthropic Messages body present first-party Claude Code
@@ -3415,7 +3402,7 @@ mod tests {
                     );
                 }
                 ApiStyle::AnthropicMessages => {
-                    let body = super::super::anthropic::build_body(route_request.as_ref(), false);
+                    let body = super::super::anthropic::build_body_with_oauth(route_request.as_ref(), false, false);
                     assert_eq!(body["max_tokens"], serde_json::json!(2_048));
                     assert!(body.get("max_output_tokens").is_none());
                 }

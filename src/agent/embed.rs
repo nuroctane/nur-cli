@@ -104,18 +104,6 @@ pub fn take_embedding_telemetry() -> Vec<EmbeddingTelemetry> {
         .unwrap_or_default()
 }
 
-/// Read the bounded persistent queue without consuming it, for status/receipt
-/// views or a startup importer.
-#[allow(dead_code)]
-pub fn persisted_embedding_telemetry() -> Vec<EmbeddingTelemetry> {
-    std::fs::read_to_string(telemetry_path())
-        .ok()
-        .into_iter()
-        .flat_map(|body| body.lines().map(str::to_owned).collect::<Vec<_>>())
-        .filter_map(|line| serde_json::from_str(&line).ok())
-        .collect()
-}
-
 /// A session with explicit cost or token ceilings is budget-sensitive. The env
 /// override also lets callers select local-first before config schema changes.
 pub fn budget_sensitive() -> bool {

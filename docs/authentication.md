@@ -8,6 +8,20 @@ The active provider, endpoint, and default model are stored in
 `~/.nur/config.toml`. Active and provider-scoped credentials live in
 `~/.nur/auth.json`, `provider_keys.json`, and `provider_sessions.json`.
 
+New sign-ins replace the previous credential method for that provider. OAuth
+tokens are refreshed once before being stored, and the same refreshed credential
+is used for the active session and provider store. Other providers' credentials,
+including the TypeSafe/Jev sidecar, remain intact.
+
+Vendor CLI sign-ins stream their URL and device code while waiting for consent.
+For Claude's manual fallback, paste the browser's `code#state` into the prompt.
+The code stays in memory for that login attempt and is cleared on cancellation.
+If a CLI Claude login fails, retry or use `--key`; it does not open a second
+prompt while the manual code reader may still own stdin.
+
+See the [provider sign-in review](provider-signin-review.md) for coverage,
+regression checks, and remaining vendor-specific limitations.
+
 ## Get a key (or browser session)
 
 | Provider | API key | Browser / SSO |

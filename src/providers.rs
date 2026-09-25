@@ -581,9 +581,6 @@ pub fn opencode_request_route(model: &str, current_base: &str) -> (String, &'sta
     (bare, normalized)
 }
 
-/// Floor version xAI enforces on `cli-chat-proxy` (HTTP 426 if missing → "none").
-#[allow(dead_code)] // documented floor; asserted in tests
-pub const XAI_GROK_CLI_MIN_VERSION: &str = "0.1.202";
 /// Fallback fingerprint when `~/.grok/version.json` is absent (must be ≥ min).
 pub const XAI_GROK_CLI_DEFAULT_VERSION: &str = "0.2.101";
 
@@ -1930,12 +1927,6 @@ pub fn is_placeholder_local_model(model: &str) -> bool {
     model.trim() == "local-model"
 }
 
-/// Providers that offer browser / device-code / SSO sign-in.
-#[allow(dead_code)]
-pub fn browser_auth_ids() -> impl Iterator<Item = &'static str> {
-    PROVIDERS.iter().filter(|p| p.browser_auth).map(|p| p.id)
-}
-
 /// Data-handling posture of a provider, strongest → weakest. A hardened, honest
 /// adaptation of Origin's ZDR/TEE tags for a **client** CLI: nur can't verify a
 /// third party's deployment, so it only asserts `Local` (localhost = structurally
@@ -2057,7 +2048,6 @@ pub fn effective_privacy(
 
 /// Catalog ids with `browser_auth: true`. Keep in sync with
 /// `oauth::login_browser` / `refresh_tokens` match arms (enforced by tests).
-#[allow(dead_code)] // used by tests; available for TUI/docs tooling
 pub fn oauth_browser_provider_ids() -> &'static [&'static str] {
     &[
         "openai",
@@ -2872,12 +2862,11 @@ mod tests {
             v.chars().any(|c| c.is_ascii_digit()),
             "version should look like a CLI release: {v}"
         );
-        assert_eq!(XAI_GROK_CLI_MIN_VERSION, "0.1.202");
+        // The xAI proxy rejects CLI versions below 0.1.202.
         assert!(
-            XAI_GROK_CLI_DEFAULT_VERSION >= XAI_GROK_CLI_MIN_VERSION
-                || XAI_GROK_CLI_DEFAULT_VERSION.starts_with("0.2")
+            XAI_GROK_CLI_DEFAULT_VERSION.starts_with("0.2")
                 || XAI_GROK_CLI_DEFAULT_VERSION.starts_with("0.1.2"),
-            "default {XAI_GROK_CLI_DEFAULT_VERSION} must satisfy min {XAI_GROK_CLI_MIN_VERSION}"
+            "default {XAI_GROK_CLI_DEFAULT_VERSION} is below the proxy floor 0.1.202"
         );
     }
 

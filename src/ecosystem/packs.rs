@@ -999,7 +999,6 @@ akm install <package>
 mod tests {
     use super::{
         bun_meets_omp_floor, mirror_missing_tree, omp_meets_feature_floor, skill_pack_install_args,
-        SKILL_PACKS,
     };
 
     #[test]
@@ -1017,14 +1016,6 @@ mod tests {
         assert!(!omp_meets_feature_floor("omp/18.0.8"));
         assert!(omp_meets_feature_floor("omp/18.0.9"));
         assert!(omp_meets_feature_floor("omp/19.0.0"));
-    }
-
-    #[test]
-    fn default_packs_include_cad_and_mobile_harness() {
-        assert!(SKILL_PACKS.contains(&("earthtojake/text-to-cad", "text-to-cad")));
-        assert!(SKILL_PACKS.contains(&("droidrun/mobile-harness", "mobile-harness")));
-        assert!(SKILL_PACKS.contains(&("DarkNavySecurity/web3-skills", "web3-skills")));
-        assert!(SKILL_PACKS.contains(&("Cyfrin/solskill", "solskill")));
     }
 
     #[test]

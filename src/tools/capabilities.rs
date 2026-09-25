@@ -20,13 +20,6 @@ pub struct ToolCaps {
 }
 
 impl ToolCaps {
-    /// Fail-closed defaults: not free, not parallel, not labeled destructive.
-    #[allow(dead_code)]
-    pub const FAIL_CLOSED: Self = Self {
-        read_only: false,
-        concurrency_safe: false,
-        destructive: false,
-    };
 }
 
 /// Classify a tool invocation by name + raw JSON args string.
@@ -221,16 +214,6 @@ pub fn is_read_only_call(name: &str, args_json: &str) -> bool {
 
 pub fn is_concurrency_safe(name: &str, args_json: &str) -> bool {
     classify(name, args_json).concurrency_safe
-}
-
-/// Alias kept for call-site clarity in the parallel batcher.
-pub fn is_parallel_safe(name: &str, args_json: &str) -> bool {
-    is_concurrency_safe(name, args_json)
-}
-
-#[allow(dead_code)] // completes the string-adapter trio; for upcoming permission rules
-pub fn is_destructive_call(name: &str, args_json: &str) -> bool {
-    classify(name, args_json).destructive
 }
 
 #[cfg(test)]

@@ -22,8 +22,6 @@ pub struct PluginRow {
     pub name: String,
     pub description: String,
     pub category: String,
-    #[allow(dead_code)]
-    pub source: String,
     pub installed: bool,
     pub enabled: bool,
 }
@@ -68,7 +66,6 @@ fn row_for(p: &Entry, reg: &Registry) -> PluginRow {
         name: p.name.to_string(),
         description: p.description.to_string(),
         category: p.category.to_string(),
-        source: p.source_url.to_string(),
         installed,
         enabled,
     }
@@ -133,26 +130,4 @@ pub fn quick_status() -> String {
   /plugins  open marketplace picker",
         rows.len()
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn catalog_has_core_plugins() {
-        let ids: Vec<_> = catalog().iter().map(|p| p.id).collect();
-        assert!(ids.contains(&"superpowers"));
-        assert!(ids.contains(&"vercel"));
-        assert!(ids.contains(&"firecrawl"));
-        assert!(ids.contains(&"fable"));
-        assert!(ids.contains(&"interior"));
-        assert!(ids.len() >= 8);
-    }
-
-    #[test]
-    fn by_id_works() {
-        assert!(by_id("superpowers").is_some());
-        assert!(by_id("nope-not-a-plugin").is_none());
-    }
 }

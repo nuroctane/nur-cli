@@ -486,16 +486,27 @@ pub struct TypesafeSkillsConfig {
     pub max_requirements: usize,
 }
 
-/// `[typesafe.routing]` - model routing.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// `[typesafe.routing]` - cache-aware subagent routing (`typesafe::route`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TypesafeRoutingConfig {
-    /// Reserved opt-in for automatic child routing, currently not connected to
-    /// execution. The route tool returns suggestions; the parent model stays put.
-    #[serde(default)]
+    /// Route an `agent` call that names no provider/model onto a cheaper
+    /// reachable model when the hop is known-price, at least 15% cheaper and
+    /// no weaker in privacy; also hand it parent context Jev judged directly
+    /// useful. The parent session never moves. Default **true**; needs Jev.
+    #[serde(default = "default_true")]
     pub enabled: bool,
-    /// Show the suggested model in the transcript. Default **true**.
+    /// Show routing decisions in the transcript. Default **true**.
     #[serde(default = "default_true")]
     pub suggest: bool,
+}
+
+impl Default for TypesafeRoutingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            suggest: true,
+        }
+    }
 }
 
 fn default_typesafe_timeout_ms() -> u64 {
@@ -1354,7 +1365,10 @@ min_reduction = 0.5
         );
         assert!(partial.typesafe.tool_gate.skip_redundant);
         assert!(partial.typesafe.skills.check_usage);
-        assert!(!partial.typesafe.routing.enabled, "routing stays opt-in");
+        assert!(
+            partial.typesafe.routing.enabled,
+            "child routing is on by default"
+        );
 
         // And a full save/load cycle preserves an explicit choice.
         let mut cfg = Config::default();

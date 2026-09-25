@@ -1,0 +1,13 @@
+{
+  "description": "Reading a missing file is an error result the model can recover from, not a crashed turn.",
+  "prompt": "Read missing.txt.",
+  "script": [
+    {"tool_calls": [{"name": "read_file", "arguments": {"path": "missing.txt"}}]},
+    {"text": "That file does not exist."}
+  ],
+  "expect": {
+    "tool_results": [{"request": 2, "contains": ["missing.txt"]}],
+    "stdout_contains": ["That file does not exist."],
+    "requests": 2
+  }
+}

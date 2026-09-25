@@ -342,8 +342,10 @@ async fn real_main() -> Result<()> {
     let api_key = match auth::resolve_api_key_for(Some(cfg.provider.as_str())) {
         Ok(k) => k,
         Err(error::NurError::NotAuthenticated) => {
+            // NUR_API_KEY only. A vendor variable (META_API_KEY, …) is read by
+            // its own provider; used here it was sent to whatever provider was
+            // active and saved as that provider's key.
             let env_key = std::env::var("NUR_API_KEY")
-                .or_else(|_| std::env::var("META_API_KEY"))
                 .ok()
                 .map(|k| k.trim().to_string())
                 .filter(|k| !k.is_empty());
@@ -485,8 +487,14 @@ async fn real_main() -> Result<()> {
 
     // First open already ran a full foreground install when needed. Background
     // ensure is TTL repair only (skips fast when the marker is fresh).
+    //
+    // Only for sessions that live long enough to finish it: a one-shot `nur run`
+    // exits when its turn ends, which used to cut global `npm install -g` runs
+    // off mid-write and leave an `executor` daemon behind in whatever home the
+    // run used. NUR_SKIP_BOOTSTRAP opts out here too, as it does for bootstrap.
     let eco_summary = ecosystem::launch_snapshot();
-    if cfg.ecosystem_auto_ensure {
+    let long_lived = matches!(cli.command, None | Some(Commands::Gateway { .. }));
+    if cfg.ecosystem_auto_ensure && long_lived && bootstrap::should_repair_ecosystem() {
         std::thread::spawn(|| {
             let _ = ecosystem::ensure_ecosystem(false);
         });
@@ -513,7 +521,8 @@ async fn real_main() -> Result<()> {
         // no-subcommand path; accepting it on `run` silently ignored it.
         Some(Commands::Run { .. }) if cli.continuous => {
             return Err(error::NurError::Other(
-                "--continuous does not apply to `nur run` (that is one headless turn). Use                  `nur \"<goal>\" --continuous`, or drop the flag."
+                "--continuous does not apply to `nur run` (that is one headless turn). Use \
+                 `nur \"<goal>\" --continuous`, or drop the flag."
                     .into(),
             ));
         }
@@ -741,29 +750,22 @@ fn run_browser_setup(open: bool) -> Result<()> {
     Ok(())
 }
 
-/// Headless health check for install, auth, config, and ecosystem.
 #[cfg(test)]
 mod child_env_tests {
-    /// The predicate reads the process environment, so this documents the
-    /// contract rather than mutating global state (env edits in tests race).
+    use clap::CommandFactory;
+
+    /// nur exports NUR_MODEL to its own children. If clap bound `--model` to
+    /// that variable, every child session would inherit the parent's model as
+    /// if the user had typed it. Checked on clap's own argument table, so no
+    /// process environment is mutated (env edits in tests race).
     #[test]
-    fn the_child_marker_is_documented_and_set() {
-        // main sets NUR_CHILD when exporting child context.
-        let src = include_str!("main.rs");
-        assert!(
-            src.contains("(\"NUR_CHILD\", \"1\")"),
-            "child marker exported"
-        );
-        assert!(
-            src.contains("fn launched_by_a_nur_session"),
-            "the guard exists"
-        );
-        // And clap no longer binds --model to the exported variable.
-        let cli = include_str!("cli.rs");
-        assert!(
-            !cli.contains("env = \"NUR_MODEL\""),
-            "--model must not read the inherited NUR_MODEL"
-        );
+    fn model_flag_never_reads_the_inherited_environment() {
+        let cmd = super::cli::Cli::command();
+        let model = cmd
+            .get_arguments()
+            .find(|a| a.get_id() == "model")
+            .expect("--model exists");
+        assert!(model.get_env().is_none(), "--model must not read NUR_MODEL");
     }
 }
 
@@ -1139,7 +1141,6 @@ async fn run_headless(
         config: cfg,
         cwd: cwd.clone(),
         permission_mode,
-        verbose,
         approved_tools: Arc::new(Mutex::new(HashSet::new())),
         tools: tools::ToolHost::default(),
         permissions: agent::SharedPermissions::load(&cwd),
@@ -1361,7 +1362,6 @@ async fn run_continuous(
         config: cfg,
         cwd: cwd.clone(),
         permission_mode,
-        verbose,
         approved_tools: Arc::new(Mutex::new(HashSet::new())),
         tools: tools::ToolHost::default(),
         permissions: agent::SharedPermissions::load(&cwd),

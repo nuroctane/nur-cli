@@ -11,7 +11,8 @@
 
   Steps: ensure Rust -> clone if needed -> cargo build --release ->
   install nur to %USERPROFILE%\.local\bin -> PATH -> Orca hook ->
-  optional auth if NUR_API_KEY (or META_API_KEY for the Meta provider) is set.
+  optional auth if NUR_API_KEY is set (vendor keys such as META_API_KEY are
+  read by their own provider at runtime and are not saved).
 
   Secrets are NEVER written into the repo. Keys live only in:
     %USERPROFILE%\.nur\auth.json   or   env NUR_API_KEY
@@ -182,14 +183,6 @@ $builtHash = (Get-FileHash -Algorithm SHA256 -Path $built).Hash.ToLowerInvariant
 if (-not (Install-BinarySafe $built $dest)) {
     throw "Failed to install primary binary: $dest - quit any running nur session and re-run."
 }
-# Enforce the single-command install contract on upgrades too.
-@("muse.exe", "muse-opencode.cmd", "muse-opencode.ps1", "muse.sha256", "meta.exe", "meta.sha256") |
-    ForEach-Object {
-        $retired = Join-Path $destDir $_
-        if (Test-Path -LiteralPath $retired -PathType Leaf) {
-            Remove-Item -LiteralPath $retired -Force -ErrorAction SilentlyContinue
-        }
-    }
 $installedHash = (Get-FileHash -Algorithm SHA256 -Path $dest).Hash.ToLowerInvariant()
 if ($installedHash -ne $builtHash) {
     throw "Integrity check failed: installed nur.exe hash does not match build ($builtHash vs $installedHash)"
@@ -243,24 +236,19 @@ if (-not $SkipHook) {
 
 # -- auth: never print the key ---------------------------------------------
 $key = $env:NUR_API_KEY
-if (-not $key) { $key = $env:META_API_KEY }
 if (-not $key) {
     $key = [Environment]::GetEnvironmentVariable("NUR_API_KEY", "User")
-}
-if (-not $key) {
-    $key = [Environment]::GetEnvironmentVariable("META_API_KEY", "User")
 }
 
 if ($key -and $key.Trim().Length -gt 0) {
     Write-Step "API key found in environment - saving to ~/.nur/auth.json (local only)..."
-    # Prefer NUR_API_KEY so auth login matches current nomenclature.
     $env:NUR_API_KEY = $key.Trim()
     & $dest auth login --key $env:NUR_API_KEY 2>$null | Out-Null
     Write-Ok "Auth stored under $env:USERPROFILE\.nur\ (never committed to git)"
 } else {
     Write-Warn "No API key in env yet. After install:"
     Write-Host "      nur auth login" -ForegroundColor DarkGray
-    Write-Host "    or set User env NUR_API_KEY (or META_API_KEY for Meta Model API)" -ForegroundColor DarkGray
+    Write-Host "    or set User env NUR_API_KEY (or your provider's own key variable)" -ForegroundColor DarkGray
 }
 
 Write-Host ""
