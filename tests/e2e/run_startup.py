@@ -101,6 +101,17 @@ class Terminal:
                 pass
         raise AssertionError(f'Screen never contained {text!r}: {ascii(chr(10).join(self.screen.display))}')
 
+    def type_text(self, text):
+        # A bulk PTY write is a paste burst, not individual typing. Nur's paste
+        # path also checks the OS image clipboard, which is outside our isolated
+        # home. Wait for each key to paint before sending the next so this typing
+        # test neither reads the user's clipboard nor depends on its contents.
+        typed = ''
+        for char in text:
+            self.write(char)
+            typed += char
+            self.until(typed, timeout=5)
+
     def close(self):
         if os.name == 'nt':
             self.proc.terminate(force=True)
@@ -154,7 +165,7 @@ def blocked_models(binary, skill=False, cancel=False):
         first_frame = time.monotonic() - start
         assert entered.wait(5), 'model discovery worker did not start'
         prompt = '/startup-probe STARTUP_DRAFT_7319' if skill else '/quit' if cancel else 'STARTUP_DRAFT_7319'
-        term.write(prompt)
+        term.type_text(prompt)
         term.until(prompt)
         term.write('\r')
         time.sleep(.3)
@@ -172,7 +183,7 @@ def blocked_models(binary, skill=False, cancel=False):
         if lease:
             # Keep the skill worker stalled after the provider is usable. A
             # second draft must remain editable without sending the first early.
-            term.write('STILL_EDITABLE_4832')
+            term.type_text('STILL_EDITABLE_4832')
             term.until('STILL_EDITABLE_4832', timeout=5)
             assert state.count == 0, 'request bypassed pending skill discovery'
             lease.release()
@@ -245,7 +256,7 @@ def blocked_auth(binary, fail=False):
         end = time.monotonic()+5
         while not entered.exists() and time.monotonic()<end: time.sleep(.02)
         assert entered.exists(), 'synthetic credential refresh was not entered'
-        term.write('AUTH_WAIT_DRAFT_8257')
+        term.type_text('AUTH_WAIT_DRAFT_8257')
         term.until('AUTH_WAIT_DRAFT_8257', timeout=5)
         assert not gate.exists(), 'authentication gate was released before typing worked'
         gate.write_text('release')
