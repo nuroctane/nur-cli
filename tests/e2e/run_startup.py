@@ -88,29 +88,46 @@ class Terminal:
         except (OSError, EOFError):
             pass
 
-    def until(self, text, timeout=10):
+    def feed(self, timeout):
+        try:
+            chunk = self.chunks.get(timeout=timeout)
+        except queue.Empty:
+            return False
+        self.output += chunk
+        self.stream.feed(chunk)
+        return True
+
+    def until(self, text, timeout=10, found=None):
+        found = found or (lambda: text in '\n'.join(self.screen.display))
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if text in '\n'.join(self.screen.display):
+            if found():
                 return
-            try:
-                chunk = self.chunks.get(timeout=.05)
-                self.output += chunk
-                self.stream.feed(chunk)
-            except queue.Empty:
-                pass
+            self.feed(.05)
         raise AssertionError(f'Screen never contained {text!r}: {ascii(chr(10).join(self.screen.display))}')
+
+    def draft_ends_with(self, text):
+        # Each frame leaves the terminal cursor on the draft's caret, so the
+        # draft is what precedes it. Rows between `║` borders are the palette.
+        y, x = self.screen.cursor.y, self.screen.cursor.x
+        row = self.screen.buffer[y]
+        before = ''.join(row[i].data for i in range(x))
+        return '║' not in self.screen.display[y] and before.endswith(text)
 
     def type_text(self, text):
         # A bulk PTY write is a paste burst, not individual typing. Nur's paste
         # path also checks the OS image clipboard, which is outside our isolated
-        # home. Wait for each key to paint before sending the next so this typing
-        # test neither reads the user's clipboard nor depends on its contents.
+        # home. Wait for each key to reach the draft before sending the next so
+        # this typing test neither reads the user's clipboard nor depends on its
+        # contents. Seeing the text anywhere is not enough: the command palette
+        # lists `/quit` once `/q` is typed, which let `uit` and Enter arrive as
+        # one burst (Enter then became a pasted newline). A typed space changes
+        # no visible cell under NO_COLOR; only the caret moves.
         typed = ''
         for char in text:
             self.write(char)
             typed += char
-            self.until(typed, timeout=5)
+            self.until(typed, timeout=5, found=lambda: self.draft_ends_with(typed))
 
     def close(self):
         if os.name == 'nt':
