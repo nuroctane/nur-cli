@@ -72,6 +72,32 @@ struct CacheFile {
     data: serde_json::Value,
 }
 
+#[derive(Serialize, Deserialize)]
+struct CompactCatalog {
+    version: u32,
+    source_stamp: (u64, u64),
+    fetched_at_unix: u64,
+    rates_by_key: HashMap<String, ModelRates>,
+}
+
+fn source_stamp(path: &std::path::Path) -> Option<(u64, u64)> {
+    let metadata = fs::metadata(path).ok()?;
+    Some((
+        metadata.len(),
+        metadata
+            .modified()
+            .ok()?
+            .duration_since(UNIX_EPOCH)
+            .ok()?
+            .as_nanos() as u64,
+    ))
+}
+
+fn read_compact(path: &std::path::Path, source: (u64, u64)) -> Option<CompactCatalog> {
+    let cached: CompactCatalog = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
+    (cached.version == 1 && cached.source_stamp == source).then_some(cached)
+}
+
 struct CatalogState {
     rates_by_key: HashMap<String, ModelRates>,
     fetched_at_unix: u64,
@@ -267,7 +293,7 @@ fn save_cache_file(cf: &CacheFile) {
         let _ = fs::create_dir_all(parent);
     }
     if let Ok(text) = serde_json::to_string(cf) {
-        let _ = fs::write(path, text);
+        let _ = crate::cache_io::publish(&path, text.as_bytes());
     }
 }
 
@@ -285,8 +311,31 @@ pub fn load_cached_catalog() {
     if pricing_disabled() {
         return;
     }
+    let source = source_stamp(&cache_path());
+    let compact_path = nur_home().join("cache/model-rates.json");
+    if let Some(cached) = source.and_then(|s| read_compact(&compact_path, s)) {
+        if let Ok(mut g) = state().lock() {
+            g.rates_by_key = cached.rates_by_key;
+            g.fetched_at_unix = cached.fetched_at_unix;
+            g.ready = true;
+        }
+        return;
+    }
     if let Some(cf) = load_cache_file() {
         apply_catalog(cf.data, cf.fetched_at_unix);
+        // Pair the derived index with the exact file generation read above.
+        // A concurrent source replacement simply forces a later rebuild.
+        if source.is_some() && source == source_stamp(&cache_path()) {
+            let compact = state().lock().ok().map(|g| CompactCatalog {
+                version: 1,
+                source_stamp: source.unwrap(),
+                fetched_at_unix: g.fetched_at_unix,
+                rates_by_key: g.rates_by_key.clone(),
+            });
+            if let Some(bytes) = compact.and_then(|c| serde_json::to_vec(&c).ok()) {
+                let _ = crate::cache_io::publish(&compact_path, &bytes);
+            }
+        }
     }
 }
 
@@ -335,7 +384,9 @@ pub fn refresh_catalog_if_stale() {
         data: data.clone(),
     };
     save_cache_file(&cf);
-    apply_catalog(data, now);
+    // Re-read the published generation to keep the compact index consistent
+    // even when another Nur process refreshes the same source concurrently.
+    load_cached_catalog();
 }
 
 /// Kick a background refresh (non-blocking). Call once at process start.
@@ -353,6 +404,13 @@ pub fn spawn_catalog_refresh() {
         .spawn(|| {
             refresh_catalog_if_stale();
         });
+}
+
+/// Run on the TUI preparation worker. All model rates/context limits are ready
+/// before any submitted request, including immediate model switches.
+pub fn prepare_startup(cfg: &mut crate::config::Config) {
+    spawn_catalog_refresh();
+    maybe_apply_context_window(cfg);
 }
 
 fn lookup_in_index(provider: &str, model: &str) -> Option<ModelRates> {
@@ -500,28 +558,68 @@ mod tests {
     /// `main.rs` calls `spawn_catalog_refresh()` and then immediately
     /// `maybe_apply_context_window()`. The cached catalog therefore has to be
     /// readable by the time the spawn call returns — if the disk parse moves
-    /// onto the background thread, the main thread wins the race and every
-    /// session silently keeps the 1M default window.
+    /// onto the background thread without gating request readiness, the first
+    /// turn silently keeps the wrong context window. Exercise disk generations
+    /// in a child so tests cannot write the real cache or race the shared index.
     #[test]
     fn startup_resolves_context_window_before_main_reads_it() {
-        {
-            let mut g = state().lock().unwrap();
-            g.ready = false;
+        const CHILD: &str = "NUR_CATALOG_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let root = std::env::temp_dir().join(format!("nur-catalog-{}", uuid::Uuid::new_v4()));
+            fs::create_dir_all(&root).unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "pricing::tests::startup_resolves_context_window_before_main_reads_it",
+                ])
+                .env(CHILD, "1")
+                .env("NUR_HOME", &root)
+                .env_remove("NUR_PRICING_OFF")
+                .env_remove("NUR_MODELS_DEV_OFF")
+                .output()
+                .unwrap();
+            fs::remove_dir_all(root).unwrap();
+            assert!(
+                output.status.success(),
+                "{} {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
         }
-        spawn_catalog_refresh();
-
+        let fixture = |window| CacheFile {
+            fetched_at_unix: now_unix(),
+            data: serde_json::json!({"openai":{"models":{"startup-fixture":{
+                "cost":{"input":2.0,"output":8.0}, "limit":{"context":window}
+            }}}}),
+        };
+        save_cache_file(&fixture(128000));
         let mut cfg = crate::config::Config {
-            provider: "anthropic".into(),
-            model: "claude-opus-4-5".into(),
+            provider: "openai".into(),
+            model: "startup-fixture".into(),
             context_window: 1_000_000,
             ..Default::default()
         };
-        maybe_apply_context_window(&mut cfg);
-
+        prepare_startup(&mut cfg);
+        assert_eq!(cfg.context_window, 128000);
+        let compact = nur_home().join("cache/model-rates.json");
+        assert!(compact.is_file());
+        state().lock().unwrap().rates_by_key.clear();
+        load_cached_catalog();
         assert_eq!(
-            cfg.context_window, 200_000,
-            "catalog window must be applied synchronously at startup"
+            rates_for("openai", "startup-fixture").input_per_mtok_usd,
+            2.0
         );
+        fs::write(&compact, "{corrupt").unwrap();
+        load_cached_catalog();
+        assert_eq!(
+            context_window_for("openai", "startup-fixture"),
+            Some(128000)
+        );
+        save_cache_file(&fixture(196608));
+        load_cached_catalog();
+        maybe_apply_context_window(&mut cfg);
+        assert_eq!(cfg.context_window, 196608);
     }
 
     #[test]

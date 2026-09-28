@@ -37,7 +37,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     const INPUT_VIEW_MAX: usize = 8;
     let input_body =
         vcount.clamp(1, INPUT_VIEW_MAX) as u16 + u16::from(!app.draft_image_indices().is_empty());
-    let busy_h = if app.busy { 1 } else { 0 };
+    let busy_h = if app.busy || app.startup_pending() {
+        1
+    } else {
+        0
+    };
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -115,7 +119,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         app.sidegraph_max_scroll = 0;
         draw_transcript(f, app, chunks[0]);
     }
-    if app.busy {
+    if app.startup_pending() && !app.busy {
+        draw_busy_line(f, app, chunks[1]);
+    } else if app.busy {
         // Provider logo sits left of the spinner: split the busy row into a
         // logo gutter + the text line when graphics are available.
         #[cfg(feature = "image-peek")]
@@ -2199,7 +2205,10 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
             prompt_cells.push(cell_idx);
             current = Some(prompts.len() - 1);
         }
-        let key = cell_wrap_key(cell, spin_i);
+        let mut key = cell_wrap_key(cell, spin_i);
+        if app.startup_pending() && matches!(cell, Cell::Queued { .. }) {
+            key ^= 0x1f43_dba8_096e_7201;
+        }
         let need = app.wrap_cache_keys.get(cell_idx).copied() != Some(key)
             || app
                 .wrap_cache_parts
@@ -2243,8 +2252,8 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     let top_guess = max_scroll_full.saturating_sub(app.scroll_from_bottom.min(max_scroll_full));
     let sticky_guess: bool = row_index
         .sticky_owner(
-            top_guess as usize,
-            (top_guess as usize + viewport as usize).min(row_index.len()),
+            top_guess,
+            (top_guess + viewport as usize).min(row_index.len()),
         )
         .is_some();
     let sticky_h = if sticky_guess { STICKY_H } else { 0 };
@@ -2261,7 +2270,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     let top = max_scroll.saturating_sub(app.scroll_from_bottom);
     app.transcript_top = top;
 
-    let vis_lo = top as usize;
+    let vis_lo = top;
     let vis_hi = (vis_lo + body_h as usize).min(row_index.len());
     let sticky_oi = row_index.sticky_owner(vis_lo, vis_hi);
     let sticky: Option<String> = sticky_oi.map(|oi| prompts[oi].to_string());
@@ -2298,7 +2307,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     app.hit_paths.resize_with(total_rows, Vec::new);
     app.hit_swarm_panes.resize_with(total_rows, Vec::new);
     let mut visible = Vec::with_capacity(body_h as usize);
-    for abs_i in visible_rows(top as usize, body_h as usize, total_rows) {
+    for abs_i in visible_rows(top, body_h as usize, total_rows) {
         let (cell_idx, i) = row_index.row(abs_i);
         let Some(cell_idx) = cell_idx else {
             app.hit_headers[abs_i] = None;
@@ -2535,12 +2544,7 @@ fn draw_scrollbar(f: &mut Frame, app: &App, track: Rect, top: usize, total: usiz
     if track.height == 0 || track.width == 0 {
         return;
     }
-    let m = ScrollMetrics::new(
-        total as usize,
-        viewport as usize,
-        top as usize,
-        track.height,
-    );
+    let m = ScrollMetrics::new(total, viewport as usize, top, track.height);
     let scrollable = m.max_offset() > 0;
 
     // Thumb hue steps up as you interact: idle → hover → drag.
@@ -3111,11 +3115,32 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                     Style::default().fg(hue).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    "queued follow-up  ".to_string(),
+                    if app.startup_pending() {
+                        "queued for startup  "
+                    } else {
+                        "queued follow-up  "
+                    }
+                    .to_string(),
                     Style::default().fg(hue).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(format!("{preview}{ellip}"), theme::style_status()),
             ]));
+            if app.startup_pending() {
+                out.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        "dismiss",
+                        Style::default()
+                            .fg(theme::MUTED())
+                            .add_modifier(Modifier::UNDERLINED),
+                    ),
+                    Span::styled(
+                        "  ·  runs when preparation finishes · keep typing below",
+                        theme::style_faint(),
+                    ),
+                ]));
+                return;
+            }
             out.push(Line::from(vec![
                 Span::raw("  ".to_string()),
                 Span::styled(
@@ -5946,7 +5971,11 @@ fn draw_busy_line(f: &mut Frame, app: &App, area: Rect) {
             }
         }
         spans.push(Span::styled(
-            "  ·  esc cancel".to_string(),
+            if app.startup_pending() && !app.busy {
+                "  ·  you can type".to_string()
+            } else {
+                "  ·  esc cancel".to_string()
+            },
             theme::style_faint(),
         ));
         if !app.queue.is_empty() {
@@ -6357,7 +6386,7 @@ fn draw_statusline(f: &mut Frame, app: &App, area: Rect) {
         let mode = app.permission_mode.get();
         let state = if app.cancelling {
             ("cancelling", theme::WARN())
-        } else if app.busy {
+        } else if app.busy || app.startup_pending() {
             (app.status.as_str(), theme::BLUE_300())
         } else {
             ("ready", theme::SUCCESS())

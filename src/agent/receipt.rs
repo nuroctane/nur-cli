@@ -144,12 +144,10 @@ pub fn path(session_id: &str) -> PathBuf {
 }
 
 /// Cache handle for the tail of a receipt file.
-fn tail_cache() -> &'static std::sync::Mutex<
-    std::collections::HashMap<std::path::PathBuf, ((u64, u64), String, u64)>,
-> {
-    static TAIL: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, ((u64, u64), String, u64)>>,
-    > = std::sync::OnceLock::new();
+type TailCache =
+    std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, ((u64, u64), String, u64)>>;
+fn tail_cache() -> &'static TailCache {
+    static TAIL: std::sync::OnceLock<TailCache> = std::sync::OnceLock::new();
     TAIL.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 

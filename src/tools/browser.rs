@@ -175,7 +175,7 @@ fn parse_snapshot_lines(text: &str) -> Vec<SnapshotElement> {
             continue;
         }
         let description = trimmed[at + 1 + ref_len..]
-            .trim_start_matches(|c: char| c == ':' || c == '-' || c == ' ')
+            .trim_start_matches([':', '-', ' '])
             .trim()
             .to_string();
         out.push(SnapshotElement {
@@ -543,7 +543,9 @@ no refs here
         assert_eq!(els.len(), 1);
         assert_eq!(els[0].target, "@e12");
         // ... but a bare word that merely starts with `e` is not one.
-        assert!(parse_snapshot_elements(r#"{"elements":[{"id":"email","role":"textbox"}]}"#).is_empty());
+        assert!(
+            parse_snapshot_elements(r#"{"elements":[{"id":"email","role":"textbox"}]}"#).is_empty()
+        );
     }
 
     #[test]

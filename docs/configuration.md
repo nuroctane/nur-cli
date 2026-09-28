@@ -309,6 +309,7 @@ Non-zero **pre_tool** exit blocks the tool. Missing file = no hooks. Check statu
 |----------|---------|
 | `NUR_IMAGE_PROTOCOL` | Force the terminal graphics protocol for inline images (`kitty`, `sixel`, `iterm2`, `halfblocks`); overrides `theme_setup.protocol` |
 | `NUR_IMAGE_QUERY` | Set to `1` to run the full stdio graphics-capability probe on launch (default is the instant, non-blocking path) |
+| `NUR_STARTUP_TRACE` | Set to `1` for local phase timings in `$NUR_HOME/cache/startup-<pid>.jsonl`, or set a file path. Records elapsed milliseconds and stage names, without prompts or credentials. Off by default |
 
 ### Paths
 

@@ -1171,14 +1171,13 @@ pub fn load_config() -> Result<Config> {
     // host and 429 on the monthly Go quota.
     if cfg.provider == "opencode" {
         let trimmed = cfg.model.trim().to_string();
-        if !trimmed.is_empty() {
-            if crate::providers::is_opencode_free_model(&trimmed)
-                || trimmed.to_ascii_lowercase().starts_with("opencode-go/")
-            {
-                let (bare, base) = crate::providers::normalize_opencode_selection(&trimmed);
-                cfg.model = bare;
-                cfg.base_url = base.to_string();
-            }
+        if !trimmed.is_empty()
+            && (crate::providers::is_opencode_free_model(&trimmed)
+                || trimmed.to_ascii_lowercase().starts_with("opencode-go/"))
+        {
+            let (bare, base) = crate::providers::normalize_opencode_selection(&trimmed);
+            cfg.model = bare;
+            cfg.base_url = base.to_string();
         }
     }
     // Self-hosted OpenAI-compat (Ollama, vLLM, LiteLLM, custom gateways).

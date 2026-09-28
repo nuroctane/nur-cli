@@ -174,7 +174,7 @@ pub fn probe_backends() -> Result<serde_json::Value> {
     serde_json::from_str(&text).map_err(|_| {
         NurError::Other(format!(
             "bridge probe returned no JSON: {}",
-            text.lines().next().unwrap_or("").to_string()
+            text.lines().next().unwrap_or("")
         ))
     })
 }

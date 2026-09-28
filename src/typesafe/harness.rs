@@ -489,7 +489,7 @@ pub fn tool_need(
             let p = batch.get(&id).and_then(Answer::noul);
             // Acting band only: a coin-flip "no" must not remove a tool.
             let confident = match (p, batch.get(&id).and_then(Answer::confidence)) {
-                (Some(p), Some(c)) => Some(p).filter(|_| c >= t.act),
+                (Some(p), Some(c)) => (c >= t.act).then_some(p),
                 _ => None,
             };
             (name.clone(), confident)
@@ -759,7 +759,7 @@ pub fn judge_goal_parts_with(
             )
         })
         .collect();
-    let Some(batch) = ask_batched(&client, evidence, questions) else {
+    let Some(batch) = ask_batched(client, evidence, questions) else {
         return parts
             .iter()
             .map(|_| unavailable("goal_part", "typesafe request failed"))
@@ -1266,7 +1266,7 @@ pub fn judge_calls_with_meta(
         }
     }
 
-    let batch = ask_batched(&client, state, questions);
+    let batch = ask_batched(client, state, questions);
     let batch = match batch {
         Some(b) => b,
         None => {
@@ -2402,7 +2402,8 @@ mod live {
         ];
         let opts = crate::typesafe::compact::CompactOptions::from_config(&cfg.compaction)
             .with_goal("fix the failing test in src/lib.rs");
-        let outcome = crate::typesafe::compact::try_compact_items(&cfg, &items, &opts).ok()
+        let outcome = crate::typesafe::compact::try_compact_items(&cfg, &items, &opts)
+            .ok()
             .expect("live compaction produces a judgment");
         println!("{}", outcome.stats.summary());
         for o in &outcome.outcomes {

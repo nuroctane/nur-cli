@@ -104,6 +104,7 @@ pub fn set_enabled(id: &str, enabled: bool) -> Result<(), String> {
     if let Some(p) = reg.plugins.get_mut(id) {
         p.enabled = enabled;
         reg.save()?;
+        crate::agent::skill_cache::invalidate_cache();
         return Ok(());
     }
     // Bare directory without registry row — create a record.
@@ -124,7 +125,9 @@ pub fn set_enabled(id: &str, enabled: bool) -> Result<(), String> {
             path: dir.display().to_string(),
         },
     );
-    reg.save()
+    reg.save()?;
+    crate::agent::skill_cache::invalidate_cache();
+    Ok(())
 }
 
 /// Install (or update) a catalog plugin by id. Clones into `~/.nur/plugins/<id>`.
@@ -261,6 +264,7 @@ pub fn uninstall_plugin(id: &str) -> Result<String, String> {
     let mut reg = Registry::load();
     reg.plugins.remove(id);
     reg.save()?;
+    crate::agent::skill_cache::invalidate_cache();
     Ok(format!("uninstalled plugin '{id}'"))
 }
 

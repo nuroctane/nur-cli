@@ -66,11 +66,10 @@ fn checkpoints_path(scope: &str) -> PathBuf {
 }
 
 /// Last known sequence per events file, keyed by (length, mtime).
-fn seq_cache(
-) -> &'static std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, ((u64, u64), u64)>> {
-    static SEQ: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, ((u64, u64), u64)>>,
-    > = std::sync::OnceLock::new();
+type SequenceCache =
+    std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, ((u64, u64), u64)>>;
+fn seq_cache() -> &'static SequenceCache {
+    static SEQ: std::sync::OnceLock<SequenceCache> = std::sync::OnceLock::new();
     SEQ.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 

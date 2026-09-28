@@ -504,7 +504,6 @@ fn preset(id: &str) -> Option<Palette> {
             cyan: Color::Rgb(88, 150, 140),
             gradient: ramp6(Color::Rgb(232, 208, 160), Color::Rgb(156, 116, 52)),
             aurora: ring12(Color::Rgb(236, 216, 176), Color::Rgb(150, 110, 50)),
-            ..GOLD
         },
         // Pearlescent: milky opal whites with rose / amethyst / champagne
         // iridescence and a whisper of opal-green. Cool greys stay warm-neutral.
@@ -567,7 +566,6 @@ fn preset(id: &str) -> Option<Palette> {
             cyan: Color::Rgb(94, 152, 142),
             gradient: ramp6(Color::Rgb(238, 214, 214), Color::Rgb(152, 108, 114)),
             aurora: ring12(Color::Rgb(240, 220, 220), Color::Rgb(146, 102, 108)),
-            ..GOLD
         },
         // Off White ("Bone"): warm paper + graphite ink, near-monochrome.
         // The graphite accent is itself dark, so highlight text flips to
@@ -631,7 +629,6 @@ fn preset(id: &str) -> Option<Palette> {
             cyan: Color::Rgb(95, 128, 120),
             gradient: ramp6(Color::Rgb(210, 204, 192), Color::Rgb(80, 75, 66)),
             aurora: ring12(Color::Rgb(214, 208, 196), Color::Rgb(84, 78, 68)),
-            ..GOLD
         },
         // ── dark monochrome / chrome ────────────────────────────────────
         // Noir: film-noir near-black with high-contrast silver-white.
@@ -1044,7 +1041,6 @@ fn preset(id: &str) -> Option<Palette> {
             cyan: Color::Rgb(139, 233, 253),
             gradient: ramp6(Color::Rgb(215, 185, 255), Color::Rgb(90, 65, 140)),
             aurora: ring12(Color::Rgb(220, 195, 255), Color::Rgb(95, 70, 145)),
-            ..GOLD
         },
         // Nord: arctic frost - polar night greys + frost blues.
         "nord" => Palette {
@@ -1106,7 +1102,6 @@ fn preset(id: &str) -> Option<Palette> {
             cyan: Color::Rgb(136, 192, 208),
             gradient: ramp6(Color::Rgb(163, 190, 214), Color::Rgb(52, 70, 100)),
             aurora: ring12(Color::Rgb(170, 195, 218), Color::Rgb(55, 73, 105)),
-            ..GOLD
         },
         // Gruvbox: warm retro earth tones.
         "gruvbox" => Palette {
@@ -1168,7 +1163,6 @@ fn preset(id: &str) -> Option<Palette> {
             cyan: Color::Rgb(142, 202, 228),
             gradient: ramp6(Color::Rgb(235, 195, 110), Color::Rgb(130, 85, 15)),
             aurora: ring12(Color::Rgb(238, 200, 120), Color::Rgb(135, 88, 18)),
-            ..GOLD
         },
         // Sakura: dusk plum with cherry-blossom pink and gold leaf.
         "sakura" => Palette {
@@ -1230,7 +1224,6 @@ fn preset(id: &str) -> Option<Palette> {
             cyan: Color::Rgb(130, 200, 185),
             gradient: ramp6(Color::Rgb(255, 190, 212), Color::Rgb(150, 55, 95)),
             aurora: ring12(Color::Rgb(255, 195, 216), Color::Rgb(155, 60, 100)),
-            ..GOLD
         },
         // Abyss: deep-ocean dark with bioluminescent teal.
         "abyss" => Palette {
@@ -1292,7 +1285,6 @@ fn preset(id: &str) -> Option<Palette> {
             cyan: Color::Rgb(90, 220, 210),
             gradient: ramp6(Color::Rgb(140, 240, 230), Color::Rgb(12, 80, 80)),
             aurora: ring12(Color::Rgb(150, 242, 232), Color::Rgb(14, 85, 85)),
-            ..GOLD
         },
         // Moss: forest-floor greens with lichen highlights.
         "moss" => Palette {
@@ -1354,7 +1346,6 @@ fn preset(id: &str) -> Option<Palette> {
             cyan: Color::Rgb(110, 190, 155),
             gradient: ramp6(Color::Rgb(192, 226, 152), Color::Rgb(55, 85, 40)),
             aurora: ring12(Color::Rgb(198, 230, 160), Color::Rgb(58, 90, 42)),
-            ..GOLD
         },
         // ── new-school ───────────────────────────────────────────────────
         // Superred: a full red journey — near-black ember backgrounds, deep

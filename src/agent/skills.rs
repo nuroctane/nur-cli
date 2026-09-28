@@ -1546,9 +1546,25 @@ pub(crate) const SKILL_WALK_MAX_DEPTH: usize = 5;
 /// Collect every `SKILL.md` under `root` up to `max_depth` directory levels.
 /// Skips obvious junk (`.git`, `node_modules`, `target`, …).
 pub fn find_skill_mds(root: &Path, max_depth: usize) -> Vec<PathBuf> {
+    find_skill_mds_excluding(root, max_depth, &[])
+}
+
+/// Previously scanned nested roots may be skipped, without dropping skills
+/// outside those subtrees or reducing this root's depth allowance.
+pub(crate) fn find_skill_mds_excluding(
+    root: &Path,
+    max_depth: usize,
+    excluded: &[PathBuf],
+) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    fn walk(dir: &Path, depth: usize, max_depth: usize, out: &mut Vec<PathBuf>) {
-        if depth > max_depth {
+    fn walk(
+        dir: &Path,
+        depth: usize,
+        max_depth: usize,
+        excluded: &[PathBuf],
+        out: &mut Vec<PathBuf>,
+    ) {
+        if depth > max_depth || excluded.iter().any(|p| p == dir) {
             return;
         }
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -1570,19 +1586,26 @@ pub fn find_skill_mds(root: &Path, max_depth: usize) -> Vec<PathBuf> {
             {
                 continue;
             }
-            if p.is_file() && name.eq_ignore_ascii_case("SKILL.md") {
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            // Directory listings already carry these bits on Windows. Follow
+            // links explicitly to retain installed junction/symlink packs.
+            let is_file = kind.is_file() || (kind.is_symlink() && p.is_file());
+            let is_dir = kind.is_dir() || (kind.is_symlink() && p.is_dir());
+            if is_file && name.eq_ignore_ascii_case("SKILL.md") {
                 out.push(p);
                 continue;
             }
-            if p.is_dir() {
+            if is_dir {
                 // Prefer skill dirs that contain SKILL.md at this level (still walk
                 // siblings/categories for nested pack layouts).
-                walk(&p, depth + 1, max_depth, out);
+                walk(&p, depth + 1, max_depth, excluded, out);
             }
         }
     }
     if root.is_dir() {
-        walk(root, 0, max_depth, &mut out);
+        walk(root, 0, max_depth, excluded, &mut out);
     } else if root.is_file()
         && root
             .file_name()
@@ -1596,7 +1619,7 @@ pub fn find_skill_mds(root: &Path, max_depth: usize) -> Vec<PathBuf> {
 }
 
 pub fn load_skills(cwd: &Path) -> Vec<Skill> {
-    // Fast path: cached global skills + fresh cwd scan (~15ms vs 263ms cold)
+    // Global metadata snapshot plus freshly discovered project overrides.
     crate::agent::skill_cache::load_skills_cached(cwd)
 }
 
@@ -1654,8 +1677,43 @@ pub(crate) fn parse_frontmatter_scalar(fm: &str, key: &str) -> Option<String> {
     None
 }
 
+#[cfg(test)]
 pub(crate) fn parse_skill(path: &Path) -> Option<Skill> {
-    let text = std::fs::read_to_string(path).ok()?;
+    parse_skill_impl(path, true)
+}
+
+/// Discovery needs metadata only. Activation reads the current complete body
+/// from disk, so caching never truncates or freezes skill instructions.
+pub(crate) fn parse_skill_metadata(path: &Path) -> Option<Skill> {
+    parse_skill_impl(path, false)
+}
+
+fn parse_skill_impl(path: &Path, include_body: bool) -> Option<Skill> {
+    let text = if include_body {
+        std::fs::read_to_string(path).ok()?
+    } else {
+        use std::io::BufRead;
+        let mut reader = std::io::BufReader::new(std::fs::File::open(path).ok()?);
+        let mut text = String::new();
+        loop {
+            if reader.read_line(&mut text).ok()? == 0 {
+                break;
+            }
+            if let Some(content) = text.strip_prefix("---") {
+                if let Some(end) = content.find("---") {
+                    let description = parse_frontmatter_scalar(&content[..end], "description");
+                    if description.is_some_and(|s| !matches!(s.as_str(), ">-" | "|" | ">" | ""))
+                        || !content[end + 3..].trim().is_empty()
+                    {
+                        break;
+                    }
+                }
+            } else if !text.trim().is_empty() {
+                break;
+            }
+        }
+        text
+    };
     let folder_name = path
         .parent()
         .and_then(|p| p.file_name())
@@ -1667,20 +1725,24 @@ pub(crate) fn parse_skill(path: &Path) -> Option<Skill> {
     let (name, description, body) = if let Some(content) = text.strip_prefix("---") {
         if let Some(end) = content.find("---") {
             let fm = &content[..end];
-            let body = content[end + 3..].trim().to_string();
+            let body = content[end + 3..].trim();
             let fm_name = parse_frontmatter_scalar(fm, "name").filter(|s| !s.is_empty());
             let desc = parse_frontmatter_scalar(fm, "description")
                 .filter(|s| s != ">-" && s != "|" && s != ">" && !s.is_empty())
-                .unwrap_or_else(|| first_line(&body));
+                .unwrap_or_else(|| first_line(body));
             (fm_name.unwrap_or(folder_name), desc, body)
         } else {
-            (folder_name, first_line(&text), text.clone())
+            (folder_name, first_line(&text), text.as_str())
         }
     } else {
-        (folder_name, first_line(&text), text.clone())
+        (folder_name, first_line(&text), text.as_str())
     };
 
-    let body: String = body.chars().take(12_000).collect();
+    let body = if include_body {
+        body.chars().take(12_000).collect()
+    } else {
+        String::new()
+    };
     Some(Skill {
         name,
         description,

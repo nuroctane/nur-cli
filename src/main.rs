@@ -5,6 +5,7 @@ mod auth;
 mod bench;
 mod bg_jobs;
 mod bootstrap;
+mod cache_io;
 mod cli;
 mod config;
 mod dogwood;
@@ -26,6 +27,7 @@ mod plugins;
 mod pricing;
 mod provider_logos;
 mod providers;
+mod startup;
 mod t3code;
 mod terminal_browser;
 mod theme;
@@ -50,6 +52,7 @@ use usage::{print_usage_summary, UsageTracker};
 
 #[tokio::main]
 async fn main() {
+    startup::mark("main");
     init_tracing();
 
     if let Err(e) = real_main().await {
@@ -97,13 +100,14 @@ fn init_tracing() {
 
 async fn real_main() -> Result<()> {
     let cli = Cli::parse();
+    let deferred_tui = cli.command.is_none() && !cli.continuous;
 
     // "every time nur is ran in shell, it should update automatically" — so the
     // release check fires for *every* invocation shape (bare TUI, `nur "prompt"`,
     // `nur run …`, gateway, bench…), not just the interactive one. It spawns a
     // thread and returns immediately, so a headless run pays no latency and
     // cannot fail because GitHub is unreachable.
-    if maybe_auto_update_on_launch(&cli.command) {
+    if !deferred_tui && maybe_auto_update_on_launch(&cli.command) {
         // Reserved: a future re-exec handoff would return true here.
         return Ok(());
     }
@@ -331,44 +335,50 @@ async fn real_main() -> Result<()> {
     }
 
     // models.dev list prices → status-line $ estimates (background refresh).
-    pricing::spawn_catalog_refresh();
-    pricing::maybe_apply_context_window(&mut cfg);
+    if !deferred_tui {
+        pricing::spawn_catalog_refresh();
+        pricing::maybe_apply_context_window(&mut cfg);
+    }
 
     // Interactive TUI can start without a key and prompt `/login`; headless
     // `run` still needs a key up front (no place to prompt).
     // Resolve against the *active* provider so a Grok OAuth session is not
     // silently reused against OpenAI/etc. after a config switch.
     let interactive = cli.command.is_none();
-    let api_key = match auth::resolve_api_key_for(Some(cfg.provider.as_str())) {
-        Ok(k) => k,
-        Err(error::NurError::NotAuthenticated) => {
-            // NUR_API_KEY only. A vendor variable (META_API_KEY, …) is read by
-            // its own provider; used here it was sent to whatever provider was
-            // active and saved as that provider's key.
-            let env_key = std::env::var("NUR_API_KEY")
-                .ok()
-                .map(|k| k.trim().to_string())
-                .filter(|k| !k.is_empty());
-            if let Some(k) = env_key {
-                let _ = save_api_key(&k);
-                k
-            } else if interactive {
-                // Empty key → TUI opens signed-out and auto-opens /login.
-                String::new()
-            } else {
-                return Err(error::NurError::NotAuthenticated);
+    let api_key = if deferred_tui {
+        String::new()
+    } else {
+        match auth::resolve_api_key_for(Some(cfg.provider.as_str())) {
+            Ok(k) => k,
+            Err(error::NurError::NotAuthenticated) => {
+                // NUR_API_KEY only. A vendor variable (META_API_KEY, …) is read by
+                // its own provider; used here it was sent to whatever provider was
+                // active and saved as that provider's key.
+                let env_key = std::env::var("NUR_API_KEY")
+                    .ok()
+                    .map(|k| k.trim().to_string())
+                    .filter(|k| !k.is_empty());
+                if let Some(k) = env_key {
+                    let _ = save_api_key(&k);
+                    k
+                } else if interactive {
+                    // Empty key → TUI opens signed-out and auto-opens /login.
+                    String::new()
+                } else {
+                    return Err(error::NurError::NotAuthenticated);
+                }
             }
-        }
-        Err(e) => {
-            // Provider mismatch: interactive → open TUI unauthed; headless → fail.
-            let msg = e.to_string();
-            if interactive && msg.contains("mismatch") {
-                theme::print_info(&msg);
-                String::new()
-            } else if interactive {
-                String::new()
-            } else {
-                return Err(e);
+            Err(e) => {
+                // Provider mismatch: interactive → open TUI unauthed; headless → fail.
+                let msg = e.to_string();
+                if interactive && msg.contains("mismatch") {
+                    theme::print_info(&msg);
+                    String::new()
+                } else if interactive {
+                    String::new()
+                } else {
+                    return Err(e);
+                }
             }
         }
     };
@@ -399,7 +409,7 @@ async fn real_main() -> Result<()> {
     // Lazy /models resolution for local placeholders: `local-model` provably 400s
     // on a real llama.cpp server (Group C). Try to pick a real id at startup
     // so the first turn doesn't die before the TUI can show `/model`.
-    if providers::is_placeholder_local_model(&cfg.model) {
+    if !deferred_tui && providers::is_placeholder_local_model(&cfg.model) {
         let resolved = crate::api::models::resolve_local_model_if_needed(
             &cfg.base_url,
             &cfg.provider,
@@ -418,7 +428,14 @@ async fn real_main() -> Result<()> {
     let style = providers::by_id(&cfg.provider)
         .map(|p| p.style)
         .unwrap_or(providers::ApiStyle::Responses);
-    let client = ApiClient::for_provider(&cfg.base_url, &api_key, &cfg.provider)?.with_style(style);
+    let client = if deferred_tui {
+        // Unused until the provider worker returns. No credential-store reads
+        // or OAuth routing on the first-frame path.
+        ApiClient::new(&cfg.base_url, "")?
+    } else {
+        ApiClient::for_provider(&cfg.base_url, &api_key, &cfg.provider)?
+    }
+    .with_style(style);
 
     let mut session = if let Some(id) = &cli.resume {
         theme::print_info(&format!("resuming session {id}…"));
@@ -476,14 +493,16 @@ async fn real_main() -> Result<()> {
         ecosystem::ruflo_home().display().to_string(),
     );
 
-    ade::write_ade_manifest(
-        &session.id,
-        &cfg.model,
-        &cwd_str,
-        usage.session_usage(),
-        "idle",
-    );
-    let _ = session.save();
+    if !deferred_tui {
+        ade::write_ade_manifest(
+            &session.id,
+            &cfg.model,
+            &cwd_str,
+            usage.session_usage(),
+            "idle",
+        );
+        let _ = session.save();
+    }
 
     // First open already ran a full foreground install when needed. Background
     // ensure is TTL repair only (skips fast when the marker is fresh).
@@ -492,9 +511,17 @@ async fn real_main() -> Result<()> {
     // exits when its turn ends, which used to cut global `npm install -g` runs
     // off mid-write and leave an `executor` daemon behind in whatever home the
     // run used. NUR_SKIP_BOOTSTRAP opts out here too, as it does for bootstrap.
-    let eco_summary = ecosystem::launch_snapshot();
+    let eco_summary = if deferred_tui {
+        String::new()
+    } else {
+        ecosystem::launch_snapshot()
+    };
     let long_lived = matches!(cli.command, None | Some(Commands::Gateway { .. }));
-    if cfg.ecosystem_auto_ensure && long_lived && bootstrap::should_repair_ecosystem() {
+    if !deferred_tui
+        && cfg.ecosystem_auto_ensure
+        && long_lived
+        && bootstrap::should_repair_ecosystem()
+    {
         std::thread::spawn(|| {
             let _ = ecosystem::ensure_ecosystem(false);
         });
@@ -584,7 +611,7 @@ async fn real_main() -> Result<()> {
                         .find(|m| m.role == "user")
                         .map(|m| m.content.clone())
                 });
-            ade::set_title_prompt(seed.as_deref().unwrap_or("ready"));
+            ade::set_title_prompt(seed.as_deref().unwrap_or("starting"));
             tui::run_tui(
                 client,
                 cfg,
@@ -675,6 +702,9 @@ fn run_plugins_cli(action: Option<&cli::PluginsCmd>) -> Result<()> {
             Ok(msg) => theme::print_ok(&msg),
             Err(e) => return Err(error::NurError::Other(e)),
         },
+    }
+    if !matches!(action, None | Some(PluginsCmd::List)) {
+        agent::skill_cache::warm_global();
     }
     Ok(())
 }
@@ -1110,7 +1140,6 @@ fn which_bin(name: &str) -> Option<String> {
     None
 }
 
-#[allow(clippy::too_many_arguments)]
 /// Did a nur session launch this process?
 ///
 /// nur exports `NUR_SESSION_ID` (and now `NUR_CHILD`) plus its own model and
@@ -1123,6 +1152,7 @@ fn launched_by_a_nur_session() -> bool {
         || std::env::var("NUR_SESSION_ID").is_ok_and(|v| !v.trim().is_empty())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_headless(
     client: ApiClient,
     cfg: Config,

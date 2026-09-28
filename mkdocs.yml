@@ -72,3 +72,4 @@ nav:
   - "Evaluation: Ax & GraphJin": integrations-ax-graphjin.md
   - Security: security.md
   - Troubleshooting: troubleshooting.md
+  - Startup performance: startup-performance.md

@@ -2,6 +2,12 @@
 
 The Nur-gold terminal UI for interactive sessions.
 
+The editor opens before skill indexing, account refresh, and model discovery
+finish. You can type immediately. Enter retains your submission in the queue
+until preparation and the initial session save complete. The activity line
+shows the remaining work; queued skill commands keep their normal behavior.
+`/quit` and Ctrl+C remain available while startup workers are waiting.
+
 ## Session inspector and compact activity
 
 Press **F6** to open a shared inspector with **Changes**, **Tools**, **Agents**,

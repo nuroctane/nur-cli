@@ -169,40 +169,8 @@ impl App {
                 );
             }
             "/skills" => {
+                self.startup.list_skills = true;
                 self.refresh_skill_palette_cache();
-                let skills = agent::skills::load_skills(&self.cwd);
-                if skills.is_empty() {
-                    self.push_note(
-                        Tone::Skill,
-                        "no skills found - add ~/.nur/skills/<name>/SKILL.md\n\
-                         or ~/.agents/skills/<name>/SKILL.md  (graphify install --platform agents)\n\
-                         the agent can also load them itself via the `skill` tool"
-                            .into(),
-                    );
-                } else {
-                    let mut s = String::from(
-                        "skills - invoke with /name (sticky) or /name <prompt> (one-shot)\n\
-                         natural-language phrases also activate many skills\n\
-                         agent can load via the `skill` tool\n",
-                    );
-                    for sk in skills.iter().take(80) {
-                        let desc: String = sk.description.chars().take(64).collect();
-                        s.push_str(&format!("  /{} - {}\n", sk.name, desc));
-                    }
-                    if skills.len() > 80 {
-                        s.push_str(&format!(
-                            "  ... +{} more (type /partial-name to filter in the palette)\n",
-                            skills.len() - 80
-                        ));
-                    }
-                    if !self.sticky_skills.is_empty() {
-                        s.push_str(&format!(
-                            "\nsticky this session: {}\n",
-                            self.sticky_skills.join(", ")
-                        ));
-                    }
-                    self.push_note(Tone::Skill, s);
-                }
             }
             "/usage" | "/cost" => self.cmd_usage(),
             "/budget" => self.cmd_budget(&arg),
@@ -1579,7 +1547,7 @@ impl App {
         if !self.title_from_prompt {
             self.window_base = question.to_string();
             self.title_from_prompt = true;
-            crate::ade::set_title_prompt(&question);
+            crate::ade::set_title_prompt(question);
         }
         self.scroll_to_bottom();
         self.scrollbar_drag = false;

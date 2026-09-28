@@ -321,6 +321,7 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
             });
         let mut matching_auth = None;
         let mut matching_oauth = None;
+        let mut tried_active_oauth = false;
         let mut legacy_auth = None;
         let mut mismatched = false;
         if let Some(auth) = load_auth()? {
@@ -328,6 +329,7 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
                 mismatched = true;
             } else {
                 if matches!(auth.auth_method, AuthMethod::Oauth) {
+                    tried_active_oauth = true;
                     // Refresh failure (expired + unrefreshable) must NOT hard-
                     // error here: the env / per-provider key below may still
                     // hold a working credential. The refresh error only wins
@@ -351,12 +353,18 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
         if let Some(k) = matching_oauth {
             return Ok(k);
         }
+        if let Some(k) = matching_auth.as_ref() {
+            return Ok(k.clone());
+        }
         // Prefer a live per-provider OAuth session over a stored API key. Cross-provider
         // subagents often hit a stale key in provider_keys.json (shared OpenRouter
         // scraps, revoked sk-…) while a valid browser login still sits in
         // provider_sessions.json — using the key first produced 401s that looked
         // like "grok/openai is broken" when the OAuth path would have worked.
-        let failover_oauth = load_provider_oauth_token(exp);
+        // resolve_oauth_access_token would select the same active OAuth session
+        // again. A failed refresh must not pay a second network timeout before
+        // reaching the remaining credential sources.
+        let failover_oauth = load_provider_oauth_token_after(exp, tried_active_oauth);
         let failover_key = load_provider_key(exp);
         let nur_global = std::env::var("NUR_API_KEY")
             .ok()
@@ -1392,6 +1400,15 @@ fn save_provider_session(auth: &Auth) -> Result<()> {
 /// Load a usable bearer for a failover provider from the per-provider OAuth
 /// store (refreshing if needed). `None` if no session or refresh failed hard.
 pub fn load_provider_oauth_token(provider_id: &str) -> Option<String> {
+    load_provider_oauth_token_after(provider_id, false)
+}
+
+fn load_provider_oauth_token_after(provider_id: &str, already_tried: bool) -> Option<String> {
+    // Google-family aliases also resolve the same matching active credential.
+    // After that refresh failed, probing each alias would only retry it.
+    if already_tried {
+        return None;
+    }
     if let Some(t) = resolve_oauth_access_token(provider_id).ok().flatten() {
         return Some(t);
     }

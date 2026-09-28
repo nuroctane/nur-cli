@@ -1687,7 +1687,7 @@ impl AgentRunner {
                     if !ts_skip.contains_key(&call_id) {
                         ts_results.push(TsToolResult {
                             tool: name.clone(),
-                            args: call_arguments(&calls, &call_id),
+                            args: call_arguments(calls, &call_id),
                             body: body.clone(),
                             ok,
                         });
@@ -2102,12 +2102,12 @@ impl AgentRunner {
             let already_noted = super::harness::load(&session.id)
                 .supplemental
                 .contains(&goal.text.chars().take(40).collect::<String>());
-            if !already_noted {
-                if super::harness::refine(&session.id, &lesson, &lesson_evidence).is_ok() {
-                    let _ = tx.send(AgentEvent::Status(
-                        "lesson filed from this goal (/refine management rolls it back)".into(),
-                    ));
-                }
+            if !already_noted
+                && super::harness::refine(&session.id, &lesson, &lesson_evidence).is_ok()
+            {
+                let _ = tx.send(AgentEvent::Status(
+                    "lesson filed from this goal (/refine management rolls it back)".into(),
+                ));
             }
             return;
         }
@@ -6807,7 +6807,7 @@ fn typesafe_goal(session: &Session, prompts: usize) -> String {
         if !out.is_empty() {
             out.push('\n');
         }
-        out.push_str(&crate::typesafe::harness::judge_preview(&text, 1_500));
+        out.push_str(&crate::typesafe::harness::judge_preview(text, 1_500));
     }
     out
 }

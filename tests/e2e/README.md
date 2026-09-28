@@ -14,6 +14,21 @@ Name scenarios to run a subset: `python tests/e2e/run_e2e.py 02_write_read_edit`
 Every run writes `target/e2e/report.md`, plus per-scenario `stdout.txt`,
 `stderr.txt`, `requests.jsonl` and `report.json`.
 
+The interactive startup suite drives a real pseudoterminal and reconstructs its
+screen. It holds model lookup, credential refresh, and the skill-builder lease
+behind controlled gates, then verifies typing, queued skill activation with
+project overrides, exactly-once submission, durable initialization, and quitting.
+
+```bash
+python -m pip install pyte
+# Windows additionally requires: python -m pip install pywinpty
+python tests/e2e/run_startup.py --bin target/release/nur.exe
+```
+
+Artifacts are under `target/startup-e2e/`. Optional scenario names:
+`blocked-models`, `queued-skill`, `quit-during-startup`, `blocked-auth`,
+`failed-auth-fallback`.
+
 ## Scenarios
 
 One JSON file per scenario in `scenarios/`:

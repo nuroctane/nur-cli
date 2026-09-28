@@ -219,7 +219,23 @@ pub fn remember(
     confidence: f32,
     source: &str,
 ) -> Result<MemoryEntry, String> {
-    remember_with_triggers(scope, text, tier, voice, tags, confidence, source, &[])
+    remember_with_triggers(
+        scope,
+        text,
+        tier,
+        voice,
+        MemoryCues {
+            tags,
+            triggers: &[],
+        },
+        confidence,
+        source,
+    )
+}
+
+pub struct MemoryCues<'a> {
+    pub tags: &'a [String],
+    pub triggers: &'a [String],
 }
 
 /// Store explicit future-query cues alongside grounded memory evidence.
@@ -228,11 +244,11 @@ pub fn remember_with_triggers(
     text: &str,
     tier: Tier,
     voice: Voice,
-    tags: &[String],
+    cues: MemoryCues<'_>,
     confidence: f32,
     source: &str,
-    triggers: &[String],
 ) -> Result<MemoryEntry, String> {
+    let MemoryCues { tags, triggers } = cues;
     let mut cues = Vec::new();
     for trigger in triggers.iter().take(8) {
         let cue: String = trigger.trim().chars().take(160).collect();

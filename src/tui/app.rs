@@ -36,6 +36,7 @@ use tokio_util::sync::CancellationToken;
 // Slash-command handlers (`run_command` + `cmd_*`) live in a child module so
 // this file stays focused on state, rendering hooks, and the event loop.
 mod commands;
+mod startup;
 
 /// `/bro` style rider, prepended to every turn while chill mode is on.
 /// Mirrors `skills/bro/SKILL.md`, but phrased as a standing style rather than a
@@ -313,12 +314,15 @@ pub const COMMANDS: &[(&str, &str)] = &[
 pub struct QueuedPrompt {
     pub text: String,
     pub images: Vec<(String, String)>,
+    /// Startup defers the original slash/memory dispatch as well as prompts.
+    pub raw_submission: bool,
 }
 impl From<String> for QueuedPrompt {
     fn from(text: String) -> Self {
         Self {
             text,
             images: Vec::new(),
+            raw_submission: false,
         }
     }
 }
@@ -1991,6 +1995,7 @@ pub(super) enum ModalFocus {
 }
 
 pub struct App {
+    startup: startup::StartupState,
     pub client: ApiClient,
     pub cfg: Config,
     pub cwd: PathBuf,
@@ -2560,12 +2565,7 @@ pub async fn run_tui(
         let forced = std::env::var("NUR_IMAGE_PROTOCOL")
             .ok()
             .filter(|v| !v.trim().is_empty())
-            .or_else(|| {
-                crate::config::load_config()
-                    .ok()
-                    .map(|c| c.theme_setup.protocol)
-                    .filter(|p| p != "auto")
-            });
+            .or_else(|| Some(cfg.theme_setup.protocol.clone()).filter(|p| p != "auto"));
         match forced.map(|p| p.to_ascii_lowercase()) {
             Some(ref p) if p == "kitty" => {
                 picker.set_protocol_type(ratatui_image::picker::ProtocolType::Kitty)
@@ -2607,10 +2607,11 @@ pub async fn run_tui(
     // recorded in ade's shared title state, which every writer (TUI animation,
     // agent-loop re-asserts) renders from.
     crate::ade::set_title_provider(&crate::config::active_provider_chrome(&cfg));
-    crate::ade::set_title_prompt(seed_prompt.as_deref().unwrap_or("ready"));
+    crate::ade::set_title_prompt(seed_prompt.as_deref().unwrap_or("starting"));
 
     let permissions = SharedPermissions::load(&cwd);
     let mut app = App {
+        startup: startup::StartupState::new(),
         client,
         cfg,
         cwd,
@@ -2743,7 +2744,7 @@ pub async fn run_tui(
         turn_kind: TurnMode::Chat,
         turn_started: Instant::now(),
         thought_accum: Duration::ZERO,
-        status: "idle".into(),
+        status: "starting".into(),
         spinner_epoch: Instant::now(),
         session: Some(Box::new(session)),
         usage: Some(Box::new(usage)),
@@ -2772,7 +2773,7 @@ pub async fn run_tui(
         model_picker: None,
         theme_picker: None,
         plugin_picker: None,
-        authed: true,
+        authed: false,
         auto_update_last_poll: std::time::Instant::now(),
         auto_update_last_seen_at: 0,
         auto_update_announced_version: String::new(),
@@ -2780,7 +2781,6 @@ pub async fn run_tui(
     };
 
     app.replay_session_history();
-    app.refresh_skill_palette_cache();
     // Seed auto-update seen timestamp from existing file so we only announce
     // *new* background results that happen during this TUI session (opencode-style).
     {
@@ -2817,27 +2817,6 @@ pub async fn run_tui(
     // Open screen is just the banner (splash · model · provider · cwd · session).
     // Ecosystem / mode / feature maps: /ecosystem · /mode · /help.
 
-    // Started without credentials for the selected provider → sign-in required
-    // before the first turn. Local/key-optional providers are valid without a
-    // bearer and must never be presented as signed out.
-    let active_provider = crate::providers::by_id(&app.cfg.provider)
-        .copied()
-        .unwrap_or(*crate::providers::default_provider());
-    if !active_provider.key_optional
-        && crate::auth::resolve_api_key_for(Some(active_provider.id)).is_err()
-    {
-        app.authed = false;
-        app.push_note(
-            Tone::Mode,
-            "no API key found - press any key, then /login to sign in (or set NUR_API_KEY)".into(),
-        );
-        if app.cfg.theme.is_none() {
-            app.open_theme_picker(true);
-        } else {
-            app.open_login();
-        }
-    }
-
     if let Some(p) = initial_prompt {
         if !p.trim().is_empty() {
             app.submit_text(&p);
@@ -2859,6 +2838,9 @@ pub async fn run_tui(
     // Re-assert mouse modes occasionally - OSC title spam / hosts can drop them.
     let mut last_mouse_rearm = Instant::now();
     loop {
+        if app.poll_startup() {
+            dirty = true;
+        }
         // 1) Agent events (streaming text/tools).
         app.poll_oauth_login();
         app.poll_model_picker();
@@ -2873,6 +2855,7 @@ pub async fn run_tui(
         }
 
         let frame_ms = if app.busy
+            || app.startup_pending()
             || app.picker.is_some()
             || app.approval.is_some()
             || app.question.is_some()
@@ -3223,6 +3206,7 @@ pub async fn run_tui(
         }
         if dirty {
             terminal.draw(|f| super::ui::draw(f, &mut app))?;
+            app.launch_startup();
             last_draw = Instant::now();
             dirty = false;
         }
@@ -3339,17 +3323,6 @@ impl App {
         skill_hits.truncate(SKILL_CAP);
         out.extend(skill_hits);
         out
-    }
-
-    /// Refresh the skill palette cache from disk (cheap enough on demand).
-    pub fn refresh_skill_palette_cache(&mut self) {
-        self.skill_palette_cache = agent::skills::load_skills(&self.cwd)
-            .into_iter()
-            .map(|sk| {
-                let desc: String = sk.description.chars().take(72).collect();
-                (sk.name, desc)
-            })
-            .collect();
     }
 
     fn palette_visible(&self) -> bool {
@@ -4559,28 +4532,27 @@ impl App {
         if self.modal_focus().is_none()
             && self.palette_visible()
             && rect_contains(self.palette_hit.frame, m.column, m.row)
+            && m.kind == MouseEventKind::Down(MouseButton::Left)
         {
-            if m.kind == MouseEventKind::Down(MouseButton::Left) {
-                if rect_contains(self.palette_hit.close, m.column, m.row) {
-                    self.input.clear();
-                    self.clear_paste_merge_state();
-                    return;
-                }
-                let selected = self
-                    .palette_hit
-                    .rows
-                    .iter()
-                    .find(|(_, r)| rect_contains(*r, m.column, m.row))
-                    .map(|(i, _)| *i);
-                if let Some(idx) = selected {
-                    let same = idx == self.palette_idx;
-                    self.palette_idx = idx;
-                    if same {
-                        self.on_key(event::KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-                    }
-                }
+            if rect_contains(self.palette_hit.close, m.column, m.row) {
+                self.input.clear();
+                self.clear_paste_merge_state();
                 return;
             }
+            let selected = self
+                .palette_hit
+                .rows
+                .iter()
+                .find(|(_, r)| rect_contains(*r, m.column, m.row))
+                .map(|(i, _)| *i);
+            if let Some(idx) = selected {
+                let same = idx == self.palette_idx;
+                self.palette_idx = idx;
+                if same {
+                    self.on_key(event::KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                }
+            }
+            return;
         }
 
         // Mouse click/drag moves caret → break raw merge chain (same rationale
@@ -5238,7 +5210,7 @@ impl App {
         let h = self.view_h.max(1) as usize;
         let max_scroll = total.saturating_sub(h);
         let sfb = self.scroll_from_bottom.min(max_scroll);
-        max_scroll.saturating_sub(sfb) as usize
+        max_scroll.saturating_sub(sfb)
     }
 
     /// Like `pos_at`, but clamps outside the transcript body to the nearest
@@ -5343,7 +5315,7 @@ impl App {
             return None;
         }
         let local_y = self.mouse_row.saturating_sub(body.y) as usize;
-        let line_idx = self.transcript_top as usize + local_y;
+        let line_idx = self.transcript_top + local_y;
         self.line_cell_all.get(line_idx).copied().flatten()
     }
 
@@ -5378,7 +5350,7 @@ impl App {
             return None;
         }
         let local_y = row.saturating_sub(body.y) as usize;
-        let line_idx = self.transcript_top as usize + local_y;
+        let line_idx = self.transcript_top + local_y;
         // body.x includes the 1-col left margin; pane columns are relative to it.
         let local_x = col.saturating_sub(body.x) as usize;
         let panes = self.hit_swarm_panes.get(line_idx)?;
@@ -5636,9 +5608,9 @@ impl App {
     fn scrollbar_metrics(&self) -> ScrollMetrics {
         let total = self.plain_lines.len().max(self.view_total);
         ScrollMetrics::new(
-            total as usize,
+            total,
             self.view_h as usize,
-            self.transcript_top as usize,
+            self.transcript_top,
             self.scrollbar_track.height,
         )
     }
@@ -8367,6 +8339,17 @@ impl App {
         if text.is_empty() {
             return;
         }
+        // Preserve commands, drafts, and attachments until preparation can
+        // execute them correctly. Quitting never waits for a network call.
+        if !matches!(text.as_str(), "/quit" | "/exit") {
+            if !self.startup_pending() && !agent::skill_cache::is_current() {
+                self.refresh_skill_palette_cache();
+            }
+            if self.startup_pending() {
+                self.queue_during_startup(&text);
+                return;
+            }
+        }
         // Claude-Code-style quick memory: a line starting with `#` (but not a
         // `##` markdown heading) is saved to ~/.nur/memory.md without a turn.
         if let Some(rest) = text.strip_prefix('#') {
@@ -8405,6 +8388,7 @@ impl App {
             self.queue.push_back(QueuedPrompt {
                 text: payload.clone(),
                 images,
+                raw_submission: false,
             });
             self.cells.push(Cell::Queued { text: payload });
             self.scroll_to_bottom();
@@ -8425,6 +8409,9 @@ impl App {
     /// Tools, subagents, and background jobs keep running; the message lands
     /// at the next model round. Idle → start a normal turn.
     fn queue_steer(&mut self, cell_idx: usize) {
+        if self.startup_pending() {
+            return;
+        }
         let text = match self.cells.get(cell_idx) {
             Some(Cell::Queued { text }) => text.clone(),
             _ => return,
@@ -8437,7 +8424,9 @@ impl App {
         // Drop the Queued card from the transcript.
         self.remove_cell(cell_idx);
         self.refresh_sidegraph();
-        if self.busy {
+        if queued.raw_submission && (text.starts_with('/') || text.starts_with('#')) {
+            self.submit_queued(queued);
+        } else if self.busy {
             if self.publish_images(&queued.images).is_ok() {
                 self.steer_now(&text);
                 self.echo_images(&queued.images);
@@ -8446,7 +8435,7 @@ impl App {
                 self.queue.push_back(queued);
             }
         } else {
-            self.start_attached_turn(&text, queued.images);
+            self.submit_queued(queued);
         }
     }
 
@@ -8454,6 +8443,9 @@ impl App {
     /// Prefer leave-queued (after turn) or **steer** (inject, no cancel).
     /// Use cut-in only when the running work must stop.
     fn queue_cut_in(&mut self, cell_idx: usize) {
+        if self.startup_pending() {
+            return;
+        }
         let text = match self.cells.get(cell_idx) {
             Some(Cell::Queued { text }) => text.clone(),
             _ => return,
@@ -8491,7 +8483,7 @@ impl App {
                     .into(),
             );
         } else {
-            self.start_attached_turn(&text, queued.images);
+            self.submit_queued(queued);
         }
     }
 
@@ -9999,7 +9991,7 @@ impl App {
                     {
                         self.remove_cell(index);
                     }
-                    self.start_attached_turn(&next.text, next.images);
+                    self.submit_queued(next);
                 } else {
                     self.preserve_queue_on_interrupt = false;
                 }
@@ -10088,7 +10080,7 @@ impl App {
         let local_y = row.saturating_sub(body.y) as usize;
         // body.x already includes the 1-col left margin from draw_transcript.
         let local_x = col.saturating_sub(body.x) as usize;
-        let line_idx = self.transcript_top as usize + local_y;
+        let line_idx = self.transcript_top + local_y;
 
         // Queued follow-up: steer (no cancel) / cut in (cancel) / dismiss.
         if let Some(actions) = self.hit_queue_actions.get(line_idx) {
@@ -11107,10 +11099,12 @@ mod tests {
             QueuedPrompt {
                 text: "inspect".into(),
                 images: vec![("first.png".into(), "image".into())],
+                raw_submission: false,
             },
             QueuedPrompt {
                 text: "inspect".into(),
                 images: vec![("second.png".into(), "image".into())],
+                raw_submission: false,
             },
         ]);
         let index = queued_position(&cells, &queue, 1).unwrap();

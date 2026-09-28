@@ -371,9 +371,8 @@ pub fn reset_nap_chain() {
 
 /// Apply one compression. `line` is the model's own one-line summary.
 pub fn nap_apply(range: &str, line: &str) -> Result<String, String> {
-    run_memo(&["nap", range, line], 120_000).map(|out| {
+    run_memo(&["nap", range, line], 120_000).inspect(|_| {
         invalidate_wake_cache();
-        out
     })
 }
 

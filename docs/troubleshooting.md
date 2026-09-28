@@ -1,5 +1,27 @@
 # Troubleshooting
 
+## Startup is slow
+
+The interactive editor accepts drafts while skills, credentials, model metadata,
+and session bookkeeping load in workers. Enter queues a submission until those
+dependencies are ready. Existing skill metadata stays available during refresh;
+no skill pack needs to be removed to make the editor responsive.
+
+To identify a remaining delay, launch with `NUR_STARTUP_TRACE=1`. On PowerShell:
+
+```powershell
+$env:NUR_STARTUP_TRACE = '1'
+nur
+Remove-Item Env:NUR_STARTUP_TRACE
+```
+
+Read `~/.nur/cache/startup-<pid>.jsonl` (or the corresponding `NUR_HOME`). Compare
+`first_frame`, `credentials_ready`, `skills_ready`, `session_saved`, and `ready`.
+Root-walk and metadata-index stages distinguish filesystem work from provider
+waits. These files contain timing data, not prompts or tokens. Automatic updates
+and ecosystem repair start after preparation reaches an idle point. Fresh-install
+bootstrap and resumed-history replay retain their existing behavior.
+
 ## `nur doctor`
 
 The built-in health check for install, auth, config, and ecosystem:

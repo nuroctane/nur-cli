@@ -142,9 +142,8 @@ const DIR_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(10);
 /// reference far fewer distinct paths than this).
 const DIR_CACHE_MAX: usize = 512;
 
-static DIR_CACHE: std::sync::Mutex<
-    Option<std::collections::HashMap<String, (Option<PathKind>, std::time::Instant)>>,
-> = std::sync::Mutex::new(None);
+type DirectoryCache = std::collections::HashMap<String, (Option<PathKind>, std::time::Instant)>;
+static DIR_CACHE: std::sync::Mutex<Option<DirectoryCache>> = std::sync::Mutex::new(None);
 
 /// Cached "what is this path" probe: `Some(Dir)` / `Some(File)` / `None`.
 fn kind_cached(key: &str, path: &Path) -> Option<PathKind> {

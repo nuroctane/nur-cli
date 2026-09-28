@@ -163,10 +163,12 @@ impl Tool for ConnectomeTool {
                     &text,
                     tier,
                     voice,
-                    &tags,
+                    native_memory::MemoryCues {
+                        tags: &tags,
+                        triggers: &triggers,
+                    },
                     conf,
                     "connectome_tool",
-                    &triggers,
                 )
                 .map_err(NurError::Tool)?;
                 let _ = chronicle::append(

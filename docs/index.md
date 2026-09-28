@@ -1,5 +1,9 @@
 # NurCLI
 
+**v0.39.1:** The editor accepts drafts while skills, credentials, and model metadata load.
+Early submissions queue until preparation finishes. See the
+[startup investigation and measurements](startup-performance.md).
+
 **v0.39.0:** [Cache-aware subagent routing](typesafe.md) on by default, a
 black-box E2E suite, faster headless startup, Windows hook and shell quoting
 fixes, and category-coloured [sidegraph](tui.md#the-sidegraph-panel) tracks.
@@ -71,7 +75,7 @@ That's the normal upgrade. Pulls / rebuilds when you have a Laboratory checkout,
 | **Hardening** | Sandbox · bash denylist · SSRF blocks · atomic `~/.nur` IO · session **`.json.bak`** · **permissions.toml** · optional **hooks.toml** · API retries · install SHA-256 · `nur doctor` |
 | **Host panels** | Live `status.json` / `usage.jsonl` · **`NUR_*`** env exports · Orca hook (`nur-hook.cmd`) |
 
-**Current version: v0.39.0**
+**Current version: v0.39.1**
 
 ---
 

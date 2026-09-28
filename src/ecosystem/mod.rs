@@ -447,6 +447,9 @@ pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
     }
 
     let _ = save_marker(&status);
+    // Publish a replacement index after all mirrors finish. Invalidation keeps
+    // the previous snapshot usable while this worker warms the new generation.
+    crate::agent::skill_cache::warm_global();
     status
 }
 
