@@ -6,7 +6,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 // Store locks serialize read-modify-write cycles on the credential stores.
 // Accepted tradeoff (reviewed): the guard is held across a blocking token
@@ -19,11 +19,55 @@ static OAUTH_STORE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static KEY_STORE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static POLICY_STORE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
-fn oauth_store_guard() -> MutexGuard<'static, ()> {
-    OAUTH_STORE_LOCK
+/// The OAuth guard also holds an OS lease on `oauth.lock` in the Nur home, so
+/// separate nur processes take turns as well. Providers rotate refresh tokens:
+/// two launches refreshing one expired login would spend the same token twice,
+/// and the second would fail. The lease is released on drop or crash.
+struct OauthStoreGuard {
+    // Fields drop in order: release the lease before the mutex, so the next
+    // thread in this process can take the lease at once.
+    _lease: fs::File,
+    _thread: MutexGuard<'static, ()>,
+}
+
+fn oauth_store_guard() -> Result<OauthStoreGuard> {
+    let thread = OAUTH_STORE_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    Ok(OauthStoreGuard {
+        _lease: oauth_lease()?,
+        _thread: thread,
+    })
+}
+
+/// Never spend a rotating refresh token without its lease. A failed lock is a
+/// retryable credential-store error, not permission to race another process.
+fn oauth_lease() -> io::Result<fs::File> {
+    let home = crate::config::nur_home();
+    fs::create_dir_all(&home)?;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(home.join("oauth.lock"))?;
+    let deadline = Instant::now() + Duration::from_secs(90);
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(fs::TryLockError::WouldBlock) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "another nur process is still updating credentials; retry the operation",
+                ))
+            }
+            Err(fs::TryLockError::Error(error)) => return Err(error),
+        }
+    }
 }
 
 fn key_store_guard() -> MutexGuard<'static, ()> {
@@ -697,14 +741,18 @@ fn ensure_fresh_oauth_unlocked(auth: &mut Auth) -> Result<()> {
 }
 
 pub fn ensure_fresh_oauth(auth: &mut Auth) -> Result<()> {
-    let _guard = oauth_store_guard();
+    let _guard = oauth_store_guard()?;
+    // Both callers resolve the active login. Re-read it under the guard: a
+    // concurrent refresh, replacement key, provider switch, or logout wins over
+    // the snapshot taken before waiting. Never resurrect a removed OAuth login.
+    *auth = load_auth()?.ok_or(NurError::NotAuthenticated)?;
     ensure_fresh_oauth_unlocked(auth)
 }
 
 /// Resolve the current access token for an OAuth-backed client without allowing
 /// environment API keys to change that client's routing or wire protocol.
 pub fn resolve_oauth_access_token(provider_id: &str) -> Result<Option<String>> {
-    let _guard = oauth_store_guard();
+    let _guard = oauth_store_guard()?;
     if let Some(mut auth) = load_auth()? {
         if matches!(auth.auth_method, AuthMethod::Oauth) && !provider_mismatch(&auth, provider_id) {
             ensure_fresh_oauth_unlocked(&mut auth)?;
@@ -733,7 +781,7 @@ pub fn resolve_oauth_access_token(provider_id: &str) -> Result<Option<String>> {
 /// Force one OAuth refresh after a provider rejects an otherwise unexpired
 /// access token. Returns `false` when the session has no refresh capability.
 pub fn force_refresh_oauth(provider_id: &str) -> Result<bool> {
-    let _guard = oauth_store_guard();
+    let _guard = oauth_store_guard()?;
     if let Some(mut auth) = load_auth()? {
         if matches!(auth.auth_method, AuthMethod::Oauth) && !provider_mismatch(&auth, provider_id) {
             let Some(refresh) = auth
@@ -799,6 +847,11 @@ pub fn save_api_key(key: &str) -> Result<()> {
 
 /// Save an API key, optionally tagging it with the catalog provider id.
 pub fn save_api_key_for(key: &str, provider: Option<&str>) -> Result<()> {
+    let _guard = oauth_store_guard()?;
+    save_api_key_for_unlocked(key, provider)
+}
+
+fn save_api_key_for_unlocked(key: &str, provider: Option<&str>) -> Result<()> {
     let trimmed = key.trim();
     if trimmed.len() < 8 {
         return Err(NurError::Other(
@@ -1012,9 +1065,9 @@ pub fn save_provider_key(provider_id: &str, key: &str) -> Result<()> {
 /// older saved OAuth session is removed so it cannot continue to outrank the
 /// replacement key. If this is the active provider, `auth.json` is updated too.
 pub fn choose_provider_key(provider_id: &str, key: &str) -> Result<()> {
+    let _guard = oauth_store_guard()?;
     save_provider_key(provider_id, key)?;
     {
-        let _guard = oauth_store_guard();
         let path = crate::config::provider_sessions_path();
         let mut sessions = read_sessions_at(&path);
         let mut changed = false;
@@ -1029,7 +1082,7 @@ pub fn choose_provider_key(provider_id: &str, key: &str) -> Result<()> {
         !auth.provider.trim().is_empty() && !provider_mismatch(&auth, provider_id)
     });
     if active_matches {
-        save_api_key_for(key, Some(provider_id))?;
+        save_api_key_for_unlocked(key, Some(provider_id))?;
     }
     Ok(())
 }
@@ -1090,9 +1143,8 @@ fn forget_provider_at(keys_path: &Path, sessions_path: &Path, provider_id: &str)
 /// subagents running on a different model - which is exactly why signing out of
 /// an account has to clear that account's copies too, or "cleared" would leave
 /// a working key behind. Returns whether anything was actually removed.
-pub fn forget_provider(provider_id: &str) -> bool {
-    // Always take locks in OAuth -> API-key order. No other path takes both.
-    let _oauth_guard = oauth_store_guard();
+fn forget_provider_unlocked(provider_id: &str) -> bool {
+    // Caller holds the OAuth guard; always take locks in OAuth -> API-key order.
     let _key_guard = key_store_guard();
     forget_provider_at(
         &crate::config::provider_keys_path(),
@@ -1109,6 +1161,7 @@ pub fn delete_provider_credentials(provider_id: &str) -> Result<bool> {
     if id.is_empty() {
         return Ok(false);
     }
+    let _guard = oauth_store_guard()?;
     let active = load_auth()?;
     let active_matches = active
         .as_ref()
@@ -1119,7 +1172,7 @@ pub fn delete_provider_credentials(provider_id: &str) -> Result<bool> {
             fs::remove_file(path)?;
         }
     }
-    let removed = forget_provider(id);
+    let removed = forget_provider_unlocked(id);
     block_t3_fallback(id)?;
     crate::oauth::omp_bridge::invalidate_omp_token_cache();
     Ok(removed || active_matches)
@@ -1135,7 +1188,7 @@ pub fn save_oauth_session(
     expires_at: Option<u64>,
     meta: Option<OauthMeta>,
 ) -> Result<()> {
-    let _guard = oauth_store_guard();
+    let _guard = oauth_store_guard()?;
     let mut auth = oauth_auth(provider, access_token, refresh_token, expires_at, meta)?;
     // Imported CLI sessions can already be near expiry. Canonicalize before
     // either store is written so a newly created client never receives a token
@@ -1273,7 +1326,7 @@ pub fn save_provider_oauth(
     meta: Option<OauthMeta>,
 ) -> Result<()> {
     ensure_dirs()?;
-    let _guard = oauth_store_guard();
+    let _guard = oauth_store_guard()?;
     let mut auth = oauth_auth(provider, access_token, refresh_token, expires_at, meta)?;
     refresh_oauth_in_place(&mut auth)?;
     save_provider_session(&auth)?;
@@ -1291,7 +1344,7 @@ pub fn choose_provider_oauth(
     meta: Option<OauthMeta>,
 ) -> Result<()> {
     ensure_dirs()?;
-    let _guard = oauth_store_guard();
+    let _guard = oauth_store_guard()?;
     let mut auth = oauth_auth(provider, access_token, refresh_token, expires_at, meta)?;
     refresh_oauth_in_place(&mut auth)?;
     save_provider_session(&auth)?;
@@ -1336,7 +1389,7 @@ pub fn update_oauth_project_meta(
     if project_id.trim().is_empty() {
         return Ok(false);
     }
-    let _guard = oauth_store_guard();
+    let _guard = oauth_store_guard()?;
     const GOOGLE_FAMILY: &[&str] = &["google", "antigravity", "google-oauth"];
     let is_family = GOOGLE_FAMILY.contains(&provider_id);
 
@@ -1661,6 +1714,7 @@ fn sidecar_health_lines() -> Vec<String> {
 
 /// Delete local credentials. If `revoke` is true, best-effort remote revoke first.
 pub fn logout(revoke: bool) -> Result<()> {
+    let _guard = oauth_store_guard()?;
     let active = match load_auth() {
         Ok(active) => active,
         Err(error) => {
@@ -1693,7 +1747,7 @@ pub fn logout(revoke: bool) -> Result<()> {
         .map(|auth| auth.provider.trim())
         .filter(|provider| !provider.is_empty())
     {
-        forget_provider(provider);
+        forget_provider_unlocked(provider);
     }
     crate::oauth::omp_bridge::invalidate_omp_token_cache();
     Ok(())
@@ -2193,6 +2247,192 @@ mod tests {
         assert_eq!(
             load_provider_key("typesafe").as_deref(),
             Some("synthetic-sidecar-key")
+        );
+    }
+
+    /// Two nur processes resolve one expired OAuth login at the same time. The
+    /// fake `gh` behaves like a rotating refresh token: its first call succeeds
+    /// after a pause long enough for the other process to arrive, and every
+    /// later call fails the way a spent token does.
+    fn two_processes_resolve_one_login(test: &str, resolve: fn() -> Result<String>) {
+        use std::process::{Command, Stdio};
+        const CHILD: &str = "NUR_AUTH_RACE_TEST_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            assert_eq!(resolve().unwrap(), "fresh-shared-token");
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("nur-auth-race-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let log = root.join("refresh-count");
+        let claim = root.join("claimed");
+        #[cfg(windows)]
+        std::fs::write(
+            root.join("gh.cmd"),
+            format!(
+                "@echo off\r\necho refresh>>\"{}\"\r\nmkdir \"{}\" 2>nul || exit /b 1\r\n\
+                 \"%SystemRoot%\\System32\\PING.EXE\" -n 3 127.0.0.1 >nul\r\n\
+                 echo fresh-shared-token\r\n",
+                log.display(),
+                claim.display()
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let path = root.join("gh");
+            std::fs::write(
+                &path,
+                format!(
+                    "#!/bin/sh\nprintf 'refresh\\n' >> '{}'\n/bin/mkdir '{}' 2>/dev/null || exit 1\n\
+                     /bin/sleep 2\nprintf 'fresh-shared-token\\n'\n",
+                    log.display(),
+                    claim.display()
+                ),
+            )
+            .unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        std::fs::write(
+            root.join("auth.json"),
+            r#"{"api_key":"expired-access","source":"oauth","auth_method":"oauth","provider":"github-copilot","refresh_token":"gh","expires_at":1}"#,
+        )
+        .unwrap();
+        let spawn = || {
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args(["--exact", test, "--nocapture"])
+                .env(CHILD, "1")
+                .env("NUR_HOME", &root)
+                .env("PATH", &root)
+                .env_remove("NUR_API_KEY")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            for key in crate::providers::provider_env_keys("github-copilot") {
+                command.env_remove(key);
+            }
+            command.spawn().unwrap()
+        };
+        let children = [spawn(), spawn()];
+        for child in children {
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let refreshes = std::fs::read_to_string(&log).unwrap().lines().count();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(refreshes, 1, "the refresh token was spent more than once");
+    }
+
+    #[test]
+    fn two_processes_share_one_scoped_refresh() {
+        two_processes_resolve_one_login(
+            "auth::tests::two_processes_share_one_scoped_refresh",
+            || resolve_api_key_for(Some("github-copilot")),
+        );
+    }
+
+    /// A lock-file failure must not authorize writing or refreshing a login.
+    #[test]
+    fn inaccessible_oauth_lease_preserves_credentials() {
+        const CHILD: &str = "NUR_AUTH_LEASE_ERROR_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let root =
+                std::env::temp_dir().join(format!("nur-auth-lease-error-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::create_dir(root.join("oauth.lock")).unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "auth::tests::inaccessible_oauth_lease_preserves_credentials",
+                ])
+                .env(CHILD, "1")
+                .env("NUR_HOME", &root)
+                .output()
+                .unwrap();
+            std::fs::remove_dir_all(&root).unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let mut auth = oauth_auth(
+            "anthropic",
+            "synthetic-token",
+            None,
+            Some(now_unix() + 3600),
+            None,
+        )
+        .unwrap();
+        save_auth(&auth).unwrap();
+        let before = std::fs::read(auth_path()).unwrap();
+        assert!(ensure_fresh_oauth(&mut auth).is_err());
+        assert!(logout(false).is_err());
+        assert_eq!(std::fs::read(auth_path()).unwrap(), before);
+        assert!(!crate::config::provider_sessions_path().exists());
+    }
+
+    #[test]
+    fn stale_oauth_snapshot_cannot_undo_key_replacement_or_logout() {
+        const CHILD: &str = "NUR_AUTH_STALE_LOGIN_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let root =
+                std::env::temp_dir().join(format!("nur-auth-stale-login-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&root).unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "auth::tests::stale_oauth_snapshot_cannot_undo_key_replacement_or_logout",
+                ])
+                .env(CHILD, "1")
+                .env("NUR_HOME", &root)
+                .output()
+                .unwrap();
+            std::fs::remove_dir_all(&root).unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let old = oauth_auth(
+            "anthropic",
+            "synthetic-oauth",
+            None,
+            Some(now_unix() + 3600),
+            None,
+        )
+        .unwrap();
+        save_auth(&old).unwrap();
+        choose_provider_key("anthropic", "synthetic-key").unwrap();
+        let mut snapshot = old.clone();
+        ensure_fresh_oauth(&mut snapshot).unwrap();
+        assert_eq!(snapshot.auth_method, AuthMethod::ApiKey);
+        assert_eq!(snapshot.api_key, "synthetic-key");
+        assert_eq!(
+            load_auth().unwrap().unwrap().auth_method,
+            AuthMethod::ApiKey
+        );
+        logout(false).unwrap();
+        snapshot = old;
+        assert!(ensure_fresh_oauth(&mut snapshot).is_err());
+        assert!(load_auth().unwrap().is_none());
+    }
+
+    #[test]
+    fn two_processes_share_one_generic_refresh() {
+        two_processes_resolve_one_login(
+            "auth::tests::two_processes_share_one_generic_refresh",
+            resolve_api_key,
         );
     }
 

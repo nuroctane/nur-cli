@@ -1088,9 +1088,7 @@ mod tests {
                 0.05 // c2 result re-runnable
             } else if id.starts_with("keep_call_1") {
                 0.9 // ... but the call still matters
-            } else if id.starts_with("keep_call_2") {
-                0.02
-            } else if id.starts_with("keep_result_2") {
+            } else if id.starts_with("keep_call_2") || id.starts_with("keep_result_2") {
                 0.02
             } else {
                 0.9

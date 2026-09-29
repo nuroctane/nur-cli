@@ -416,161 +416,6 @@ pub fn is_read_only_action(args: &str) -> bool {
     )
 }
 
-#[cfg(test)]
-mod snapshot_tests {
-    use super::*;
-
-    #[test]
-    fn parses_the_documented_ref_lines() {
-        let text = "@e1 button \"Sign in\"
-@e2 textbox placeholder=Email
-@e3 link \"Need help?\"
-";
-        let els = parse_snapshot_elements(text);
-        assert_eq!(els.len(), 3);
-        assert_eq!(els[0].target, "@e1");
-        assert!(els[0].description.contains("Sign in"), "{:?}", els[0]);
-        assert_eq!(els[1].target, "@e2");
-    }
-
-    #[test]
-    fn parses_bulleted_and_indented_lines() {
-        let text = "- @e7 button Continue
-  * @e8 combobox Where to?
-    > @e9 textbox
-";
-        let els = parse_snapshot_elements(text);
-        assert_eq!(
-            els.iter().map(|e| e.target.as_str()).collect::<Vec<_>>(),
-            vec!["@e7", "@e8", "@e9"]
-        );
-    }
-
-    #[test]
-    fn parses_a_json_envelope_with_objects() {
-        let json = r#"{"ok":true,"result":{"elements":[
-            {"ref":"@e4","role":"button","name":"Continue"},
-            {"ref":"@e5","tag":"input","placeholder":"Email","value":""}
-        ]}}"#;
-        let els = parse_snapshot_elements(&json);
-        assert_eq!(els.len(), 2);
-        assert!(els[0].description.contains("role=button"), "{:?}", els[0]);
-        assert!(
-            els[1].description.contains("placeholder=Email"),
-            "{:?}",
-            els[1]
-        );
-    }
-
-    #[test]
-    fn parses_a_json_envelope_wrapping_a_text_snapshot() {
-        // A JSON string whose content is a real newline-separated snapshot (the
-        // escapes here are JSON escapes, which is what a CLI envelope carries).
-        // The JSON escape is assembled at runtime: source-level escaping fooled
-        // this test twice, and what matters is the JSON the bridge actually sees.
-        let nl_escape = "\\n";
-        let json = format!("{{\"ok\":true,\"result\":\"@e1 button{nl_escape}@e2 textbox\"}}");
-        let els = parse_snapshot_elements(&json);
-        assert_eq!(
-            els.iter().map(|e| e.target.as_str()).collect::<Vec<_>>(),
-            vec!["@e1", "@e2"],
-            "raw: {json} parsed: {els:?}"
-        );
-    }
-
-    #[test]
-    fn ignores_prose_and_missing_refs() {
-        // A ref mentioned mid-sentence is not an element line.
-        let text = "Click the @e3 button to continue.
-no refs here
-";
-        assert!(
-            parse_snapshot_elements(text).is_empty(),
-            "{:?}",
-            parse_snapshot_elements(text)
-        );
-        assert!(parse_snapshot_elements("").is_empty());
-        assert!(parse_snapshot_elements("{\"ok\":true}").is_empty());
-    }
-
-    #[test]
-    fn dedupes_and_caps_descriptions() {
-        let text = "@e1 button
-@e1 button again
-@e1
-";
-        let els = parse_snapshot_elements(text);
-        assert_eq!(els.len(), 1);
-        // A ref with no description is still a usable candidate.
-        assert_eq!(
-            parse_snapshot_elements(
-                "@e2
-"
-            )[0]
-            .description,
-            "(no description)"
-        );
-    }
-
-    #[test]
-    fn ref_shape_is_enforced_in_json() {
-        // A "ref" that is a CSS selector is not an @e ref and must not be offered.
-        let json = r##"{"elements":[{"ref":"#submit","role":"button"}]}"##;
-        assert!(parse_snapshot_elements(json).is_empty());
-    }
-
-    #[test]
-    fn a_plain_id_is_not_an_element_ref() {
-        // Element objects also carry `id`/`selector` fields. Those hold names and
-        // selectors, and offering one as a target produced a click the CLI
-        // rejects (`target=submit`), so only `@eN` - or a bare `eN` - is a ref.
-        for json in [
-            r#"{"elements":[{"id":"submit","role":"button"}]}"#,
-            r#"{"elements":[{"ref":"header","tag":"div"}]}"#,
-            r#"{"elements":[{"selector":"login-form","role":"form"}]}"#,
-        ] {
-            assert!(
-                parse_snapshot_elements(json).is_empty(),
-                "not a ref: {json}"
-            );
-        }
-        // The ref without its `@` prefix is still recognised, and an `@`-prefixed
-        // ref keeps working whatever the field is called.
-        let els = parse_snapshot_elements(r#"{"elements":[{"ref":"e7","role":"button"}]}"#);
-        assert_eq!(els.len(), 1);
-        assert_eq!(els[0].target, "e7");
-        let els = parse_snapshot_elements(r#"{"elements":[{"id":"@e12","role":"link"}]}"#);
-        assert_eq!(els.len(), 1);
-        assert_eq!(els[0].target, "@e12");
-        // ... but a bare word that merely starts with `e` is not one.
-        assert!(
-            parse_snapshot_elements(r#"{"elements":[{"id":"email","role":"textbox"}]}"#).is_empty()
-        );
-    }
-
-    #[test]
-    fn every_pick_operation_has_a_description() {
-        // The operation question offers these labels verbatim; an empty list or a
-        // duplicate would make the answer unresolvable.
-        assert!(PICK_OPERATIONS.len() >= 5);
-        let mut sorted = PICK_OPERATIONS.to_vec();
-        sorted.sort_unstable();
-        sorted.dedup();
-        assert_eq!(sorted.len(), PICK_OPERATIONS.len());
-        assert!(PICK_OPERATIONS.contains(&"click"));
-        assert!(PICK_OPERATIONS.contains(&"done"));
-    }
-
-    #[test]
-    fn pick_is_perception_not_control() {
-        assert!(is_read_only_action(r#"{"action":"pick","goal":"sign in"}"#));
-        assert!(!is_read_only_action(r#"{"action":"click","target":"@e1"}"#));
-        assert!(!is_read_only_action(
-            r#"{"action":"fill","target":"@e1","text":"x"}"#
-        ));
-    }
-}
-
 /// Plan mode additionally allows `screenshot` — pure perception that happens
 /// to write an image file, exactly like `extract_frames`.
 pub fn is_plan_safe_action(args: &str) -> bool {
@@ -694,5 +539,160 @@ impl Tool for BrowserTool {
 
         let refs: Vec<&str> = argv.iter().map(|s| s.as_str()).collect();
         ecosystem::run_capture(&bin, &refs, Some(&ctx.cwd), 120_000).map_err(NurError::Tool)
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn parses_the_documented_ref_lines() {
+        let text = "@e1 button \"Sign in\"
+@e2 textbox placeholder=Email
+@e3 link \"Need help?\"
+";
+        let els = parse_snapshot_elements(text);
+        assert_eq!(els.len(), 3);
+        assert_eq!(els[0].target, "@e1");
+        assert!(els[0].description.contains("Sign in"), "{:?}", els[0]);
+        assert_eq!(els[1].target, "@e2");
+    }
+
+    #[test]
+    fn parses_bulleted_and_indented_lines() {
+        let text = "- @e7 button Continue
+  * @e8 combobox Where to?
+    > @e9 textbox
+";
+        let els = parse_snapshot_elements(text);
+        assert_eq!(
+            els.iter().map(|e| e.target.as_str()).collect::<Vec<_>>(),
+            vec!["@e7", "@e8", "@e9"]
+        );
+    }
+
+    #[test]
+    fn parses_a_json_envelope_with_objects() {
+        let json = r#"{"ok":true,"result":{"elements":[
+            {"ref":"@e4","role":"button","name":"Continue"},
+            {"ref":"@e5","tag":"input","placeholder":"Email","value":""}
+        ]}}"#;
+        let els = parse_snapshot_elements(json);
+        assert_eq!(els.len(), 2);
+        assert!(els[0].description.contains("role=button"), "{:?}", els[0]);
+        assert!(
+            els[1].description.contains("placeholder=Email"),
+            "{:?}",
+            els[1]
+        );
+    }
+
+    #[test]
+    fn parses_a_json_envelope_wrapping_a_text_snapshot() {
+        // A JSON string whose content is a real newline-separated snapshot (the
+        // escapes here are JSON escapes, which is what a CLI envelope carries).
+        // The JSON escape is assembled at runtime: source-level escaping fooled
+        // this test twice, and what matters is the JSON the bridge actually sees.
+        let nl_escape = "\\n";
+        let json = format!("{{\"ok\":true,\"result\":\"@e1 button{nl_escape}@e2 textbox\"}}");
+        let els = parse_snapshot_elements(&json);
+        assert_eq!(
+            els.iter().map(|e| e.target.as_str()).collect::<Vec<_>>(),
+            vec!["@e1", "@e2"],
+            "raw: {json} parsed: {els:?}"
+        );
+    }
+
+    #[test]
+    fn ignores_prose_and_missing_refs() {
+        // A ref mentioned mid-sentence is not an element line.
+        let text = "Click the @e3 button to continue.
+no refs here
+";
+        assert!(
+            parse_snapshot_elements(text).is_empty(),
+            "{:?}",
+            parse_snapshot_elements(text)
+        );
+        assert!(parse_snapshot_elements("").is_empty());
+        assert!(parse_snapshot_elements("{\"ok\":true}").is_empty());
+    }
+
+    #[test]
+    fn dedupes_and_caps_descriptions() {
+        let text = "@e1 button
+@e1 button again
+@e1
+";
+        let els = parse_snapshot_elements(text);
+        assert_eq!(els.len(), 1);
+        // A ref with no description is still a usable candidate.
+        assert_eq!(
+            parse_snapshot_elements(
+                "@e2
+"
+            )[0]
+            .description,
+            "(no description)"
+        );
+    }
+
+    #[test]
+    fn ref_shape_is_enforced_in_json() {
+        // A "ref" that is a CSS selector is not an @e ref and must not be offered.
+        let json = r##"{"elements":[{"ref":"#submit","role":"button"}]}"##;
+        assert!(parse_snapshot_elements(json).is_empty());
+    }
+
+    #[test]
+    fn a_plain_id_is_not_an_element_ref() {
+        // Element objects also carry `id`/`selector` fields. Those hold names and
+        // selectors, and offering one as a target produced a click the CLI
+        // rejects (`target=submit`), so only `@eN` - or a bare `eN` - is a ref.
+        for json in [
+            r#"{"elements":[{"id":"submit","role":"button"}]}"#,
+            r#"{"elements":[{"ref":"header","tag":"div"}]}"#,
+            r#"{"elements":[{"selector":"login-form","role":"form"}]}"#,
+        ] {
+            assert!(
+                parse_snapshot_elements(json).is_empty(),
+                "not a ref: {json}"
+            );
+        }
+        // The ref without its `@` prefix is still recognised, and an `@`-prefixed
+        // ref keeps working whatever the field is called.
+        let els = parse_snapshot_elements(r#"{"elements":[{"ref":"e7","role":"button"}]}"#);
+        assert_eq!(els.len(), 1);
+        assert_eq!(els[0].target, "e7");
+        let els = parse_snapshot_elements(r#"{"elements":[{"id":"@e12","role":"link"}]}"#);
+        assert_eq!(els.len(), 1);
+        assert_eq!(els[0].target, "@e12");
+        // ... but a bare word that merely starts with `e` is not one.
+        assert!(
+            parse_snapshot_elements(r#"{"elements":[{"id":"email","role":"textbox"}]}"#).is_empty()
+        );
+    }
+
+    #[test]
+    fn every_pick_operation_has_a_description() {
+        // The operation question offers these labels verbatim; an empty list or a
+        // duplicate would make the answer unresolvable.
+        assert!(PICK_OPERATIONS.len() >= 5);
+        let mut sorted = PICK_OPERATIONS.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), PICK_OPERATIONS.len());
+        assert!(PICK_OPERATIONS.contains(&"click"));
+        assert!(PICK_OPERATIONS.contains(&"done"));
+    }
+
+    #[test]
+    fn pick_is_perception_not_control() {
+        assert!(is_read_only_action(r#"{"action":"pick","goal":"sign in"}"#));
+        assert!(!is_read_only_action(r#"{"action":"click","target":"@e1"}"#));
+        assert!(!is_read_only_action(
+            r#"{"action":"fill","target":"@e1","text":"x"}"#
+        ));
     }
 }

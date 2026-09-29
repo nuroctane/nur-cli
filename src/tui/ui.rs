@@ -2307,6 +2307,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     app.hit_paths.resize_with(total_rows, Vec::new);
     app.hit_swarm_panes.resize_with(total_rows, Vec::new);
     let mut visible = Vec::with_capacity(body_h as usize);
+    let elapsed = app.spinner_epoch.elapsed();
     for abs_i in visible_rows(top, body_h as usize, total_rows) {
         let (cell_idx, i) = row_index.row(abs_i);
         let Some(cell_idx) = cell_idx else {
@@ -2319,7 +2320,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
             app.hit_urls[abs_i].clear();
             app.hit_paths[abs_i].clear();
             app.hit_swarm_panes[abs_i].clear();
-            visible.push(turn_separator(inner_w as usize, Duration::ZERO));
+            visible.push(turn_separator(inner_w as usize, elapsed));
             continue;
         };
         let cell = &app.cells[cell_idx];
@@ -6011,10 +6012,12 @@ fn draft_attachment_line(count: usize, width: u16) -> Line<'static> {
 }
 
 fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
-    // Stable focus chrome; motion belongs to active operations.
+    let tick = app.spinner_epoch.elapsed();
+    // Border is calm-but-alive when ready for input (slow whole-border aurora
+    // shimmer), and quietly dim while a turn runs or a modal owns focus.
     let active_border = !app.busy && app.approval.is_none() && app.question.is_none();
     let border_color = if active_border {
-        theme::NUR_GOLD()
+        theme::aurora_cell(tick, 0, 1, 3200)
     } else {
         theme::BORDER()
     };
@@ -6032,7 +6035,7 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
         Span::styled(
             format!(" {provider} · F6 inspect "),
             Style::default()
-                .fg(theme::NUR_GOLD())
+                .fg(theme::aurora_cell(tick, 3, 6, 3200))
                 .add_modifier(Modifier::BOLD),
         )
     };
@@ -6053,6 +6056,21 @@ fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
         );
         inner.y += 1;
         inner.height -= 1;
+    }
+
+    // A single bright node scans along the top edge when ready — subtle life.
+    if active_border && area.width > 4 {
+        let inner_w = area.width.saturating_sub(2) as usize;
+        let cycle = 2000u128;
+        let t = theme::ease_out((tick.as_millis() % cycle) as f64 / cycle as f64);
+        let hx = ((t * inner_w as f64) as usize).min(inner_w.saturating_sub(1)) as u16;
+        let buf = f.buffer_mut();
+        buf[(area.x + 1 + hx, area.y)].set_char('━').set_style(
+            Style::default()
+                .fg(theme::BLUE_050())
+                .bg(theme::SURFACE())
+                .add_modifier(Modifier::BOLD),
+        );
     }
 
     let focused = app.approval.is_none()
@@ -6310,11 +6328,7 @@ fn draw_statusline(f: &mut Frame, app: &App, area: Rect) {
     // Each metric gets its own hue from the standard ramp so the statusline is
     // scannable at a glance instead of one grey run-on.
     // Separators slowly cycle the aurora ring so the whole strip feels alive.
-    let statick = if app.busy {
-        app.spinner_epoch.elapsed()
-    } else {
-        Duration::ZERO
-    };
+    let statick = app.spinner_epoch.elapsed();
     let sep = || {
         Span::styled(
             "  ·  ".to_string(),
@@ -7072,7 +7086,9 @@ fn cell_wrap_key(cell: &Cell, spin_i: u64) -> u64 {
     match cell {
         Cell::Banner => {
             1u8.hash(&mut h);
-            // Finished chrome is stable; animate only active work.
+            // Banner gradient shimmers — re-wrap each spinner frame. Locked
+            // design: never cache the banner still (that froze it in v0.38.3).
+            spin_i.hash(&mut h);
         }
         Cell::User(t) => {
             2u8.hash(&mut h);

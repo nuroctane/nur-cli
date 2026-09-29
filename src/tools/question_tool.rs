@@ -436,7 +436,7 @@ mod tests {
         assert_eq!(q.options.len(), 3);
         assert_eq!(q.options[2], ("Deno".to_string(), String::new()));
         assert!(!q.multi_select);
-        assert_eq!(parse_question(&sample(true)).unwrap().multi_select, true);
+        assert!(parse_question(&sample(true)).unwrap().multi_select);
     }
 
     #[test]

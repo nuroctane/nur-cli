@@ -19,13 +19,11 @@ impl Selection {
 }
 struct ProviderReady {
     selection: Selection,
-    session_id: String,
     client: ApiClient,
     model: String,
     context_window: u64,
     authed: bool,
     auth_error: Option<String>,
-    save_error: Option<String>,
 }
 enum ProviderEvent {
     Phase(&'static str),
@@ -86,9 +84,6 @@ impl App {
     }
 
     fn start_provider_preparation(&mut self) {
-        let Some(mut session) = self.session.as_deref().cloned() else {
-            return;
-        };
         let mut cfg = self.cfg.clone();
         let selection = Selection::from_config(&cfg);
         let (tx, rx) = mpsc::unbounded_channel();
@@ -125,27 +120,13 @@ impl App {
                     let client = ApiClient::for_provider(&cfg.base_url, &key, &cfg.provider)
                         .map_err(|e| e.to_string())?
                         .with_style(provider.style);
-                    let _ = tx.send(ProviderEvent::Phase("saving session"));
-                    session.model = cfg.model.clone();
-                    session.provider = cfg.provider.clone();
-                    let save_error = session.save().err().map(|e| e.to_string());
-                    crate::ade::write_ade_manifest(
-                        &session.id,
-                        &cfg.model,
-                        &session.cwd,
-                        &session.usage,
-                        "idle",
-                    );
-                    crate::startup::mark("session_saved");
                     Ok(Box::new(ProviderReady {
                         selection,
-                        session_id: session.id,
                         client,
                         model: cfg.model,
                         context_window: cfg.context_window,
                         authed,
                         auth_error,
-                        save_error,
                     }))
                 }))
                 .unwrap_or_else(|_| {
@@ -206,9 +187,7 @@ impl App {
                     self.startup.provider_ready = true;
                     match result {
                         Ok(ready) => {
-                            if ready.selection != Selection::from_config(&self.cfg)
-                                || ready.session_id != self.session_id
-                            {
+                            if ready.selection != Selection::from_config(&self.cfg) {
                                 // A user-selected model/provider always wins over
                                 // an older in-flight startup result.
                                 self.start_provider_preparation();
@@ -227,9 +206,7 @@ impl App {
                                 u.set_provider(self.cfg.provider.clone());
                             }
                             std::env::set_var("NUR_MODEL", &self.cfg.model);
-                            if let Some(error) = ready.save_error {
-                                self.push_error(format!("session save: {error}"));
-                            }
+                            self.save_prepared_session();
                             if let Some(error) = ready.auth_error {
                                 self.push_error(error);
                             }
@@ -239,7 +216,7 @@ impl App {
                             self.push_error(error);
                         }
                     }
-                    if !self.authed {
+                    if !self.authed && self.login.is_none() && self.theme_picker.is_none() {
                         if self.cfg.theme.is_none() {
                             self.open_theme_picker(true);
                         } else {
@@ -316,19 +293,6 @@ impl App {
                 }
                 dirty = true;
             }
-            if !self.busy && self.authed && self.login.is_none() && self.theme_picker.is_none() {
-                if let Some(next) = self.queue.pop_front() {
-                    if let Some(index) = self
-                        .cells
-                        .iter()
-                        .position(|c| matches!(c, Cell::Queued { text } if text == &next.text))
-                    {
-                        self.remove_cell(index);
-                    }
-                    self.submit_queued(next);
-                    dirty = true;
-                }
-            }
             if !self.startup.maintenance_started
                 && !self.busy
                 && self.startup.started.elapsed() >= Duration::from_secs(2)
@@ -344,20 +308,75 @@ impl App {
                 });
             }
         }
+        if !self.busy && self.login.is_none() && self.theme_picker.is_none() {
+            let runnable = self.queue.iter().position(|next| {
+                self.startup.provider_ready
+                    && (!next.wait_for_skills || self.startup.skills_ready)
+                    && (self.authed || next.raw_submission && next.text.starts_with('/'))
+            });
+            if let Some(index) = runnable {
+                let next = self.queue.remove(index).unwrap();
+                if let Some(index) = self
+                    .cells
+                    .iter()
+                    .position(|c| matches!(c, Cell::Queued { text } if text == &next.text))
+                {
+                    self.remove_cell(index);
+                }
+                self.submit_queued(next);
+                dirty = true;
+            }
+        }
         dirty
     }
 
-    pub(super) fn queue_during_startup(&mut self, text: &str) {
+    /// Local controls never call this. Model turns need both dependencies;
+    /// compaction only needs the provider, and does not discover skills.
+    pub(super) fn defer_until_prepared(&mut self, text: &str, skills: bool) -> bool {
+        if skills && !agent::skill_cache::is_current() {
+            self.refresh_skill_palette_cache();
+        }
+        if self.startup.provider_ready && (!skills || self.startup.skills_ready) {
+            return false;
+        }
         let images = self.take_draft_images();
         self.queue.push_back(QueuedPrompt {
             text: text.to_string(),
             images,
             raw_submission: true,
+            wait_for_skills: skills,
         });
         self.cells.push(Cell::Queued {
             text: text.to_string(),
         });
         self.scroll_to_bottom();
+        true
+    }
+
+    /// Login/model selection is authoritative even when the same provider is
+    /// selected again. Dropping the receiver prevents stale credentials from
+    /// replacing the newly selected client. Workers never write session state.
+    pub(super) fn provider_selected(&mut self) {
+        self.startup.provider_rx = None;
+        self.startup.provider_ready = true;
+        self.save_prepared_session();
+    }
+
+    fn save_prepared_session(&mut self) {
+        if let Some(session) = self.session.as_ref() {
+            let error = session.save().err();
+            crate::ade::write_ade_manifest(
+                &session.id,
+                &session.model,
+                &session.cwd,
+                &session.usage,
+                "idle",
+            );
+            if let Some(error) = error {
+                self.push_error(format!("session save: {error}"));
+            }
+        }
+        crate::startup::mark("session_saved");
     }
 
     fn show_skill_listing(&mut self) {
@@ -387,7 +406,7 @@ impl App {
     }
 
     pub(super) fn submit_queued(&mut self, next: QueuedPrompt) {
-        if self.startup_pending() {
+        if !self.startup.provider_ready || next.wait_for_skills && !self.startup.skills_ready {
             self.cells.push(Cell::Queued {
                 text: next.text.clone(),
             });

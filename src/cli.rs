@@ -42,7 +42,7 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "MODE")]
     pub mode: Option<String>,
 
-    /// Reasoning effort: minimal|low|medium|high|xhigh
+    /// Reasoning effort: low|medium|high|xhigh|max|ultracode (also minimal; med, extra, ultra)
     #[arg(long)]
     pub effort: Option<String>,
 

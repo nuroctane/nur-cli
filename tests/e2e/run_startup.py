@@ -3,11 +3,12 @@
 The model-list response is held behind a gate. Typing and submitting a draft
 must work before that gate opens; the first request must use the resolved model
 afterward. This reproduces the pre-TUI network stall without timing the network.
-Requires pyte to reconstruct terminal repaint sequences. Windows additionally
-requires pywinpty; Unix uses the standard-library pty module.
+Requires pyte to reconstruct terminal repaint sequences. Windows uses ConPTY
+directly; Unix uses the standard-library pty module.
 All writable state is isolated. Run: python tests/e2e/run_startup.py --bin PATH
 """
 import argparse
+import codecs
 import json
 import os
 from pathlib import Path
@@ -60,9 +61,9 @@ class Terminal:
         self.stream = pyte.Stream(self.screen)
         self.chunks = queue.Queue()
         if os.name == 'nt':
-            from winpty import PtyProcess
-            self.proc = PtyProcess.spawn([str(binary)], cwd=str(cwd), env=env, dimensions=(32, 120))
-            self.read = lambda: self.proc.read(65536)
+            from conpty import ConPtyProcess
+            self.proc = ConPtyProcess(binary, cwd, env)
+            self.read = self.proc.read
             self.write = self.proc.write
         else:
             import pty
@@ -74,7 +75,14 @@ class Terminal:
             self.fd = master
             self.proc = subprocess.Popen([str(binary)], cwd=cwd, env=env, stdin=slave, stdout=slave, stderr=slave)
             os.close(slave)
-            self.read = lambda: os.read(master, 65536).decode('utf-8', errors='replace')
+            decoder = codecs.getincrementaldecoder('utf-8')()
+            def read_utf8():
+                while True:
+                    chunk = os.read(master, 65536)
+                    text = decoder.decode(chunk, final=not chunk)
+                    if text or not chunk:
+                        return text
+            self.read = read_utf8
             self.write = lambda s: os.write(master, s.encode())
         threading.Thread(target=self._read, daemon=True).start()
 
@@ -130,6 +138,9 @@ class Terminal:
             self.until(typed, timeout=5, found=lambda: self.draft_ends_with(typed))
 
     def close(self):
+        if getattr(self, 'closed', False):
+            return
+        self.closed = True
         if os.name == 'nt':
             self.proc.terminate(force=True)
             self.proc.close(force=True)
@@ -139,15 +150,16 @@ class Terminal:
             os.close(self.fd)
 
 
-def blocked_models(binary, skill=False, cancel=False):
-    scenario = 'queued-skill' if skill else 'quit-during-startup' if cancel else 'blocked-models'
+def blocked_models(binary, skill=False, cancel=False, controls=False, compact=False):
+    scenario = 'compact-during-indexing' if compact else 'controls-during-models' if controls else 'queued-skill' if skill else 'quit-during-startup' if cancel else 'blocked-models'
     work = OUT / f'{scenario}-{time.time_ns()}'
     work.mkdir(parents=True)
     home, workspace = work/'home', work/'workspace'
     workspace.mkdir()
     log = work/'requests.jsonl'
     gate, entered = threading.Event(), threading.Event()
-    state = State([{'text': 'STARTUP_REQUEST_COMPLETED'}], log)
+    replies = ([{'text': 'COMPACTED_BEFORE_SKILLS'}] if compact else []) + [{'text': 'STARTUP_REQUEST_COMPLETED'}]
+    state = State(replies, log)
     base = make_handler(state)
 
     class Handler(base):
@@ -172,21 +184,38 @@ def blocked_models(binary, skill=False, cancel=False):
             (folder/'SKILL.md').write_text('---\nname: startup-probe\ndescription: Startup fixture\n---\n'+body, encoding='utf-8')
     (home/'.nur/config.toml').write_text(
         f'provider = "vllm"\nmodel = "local-model"\nbase_url = "http://127.0.0.1:{server.server_port}/v1"\n'
-        'theme = "gold"\necosystem_auto_ensure = false\nauto_update = false\n', encoding='utf-8')
+        'theme = "gold"\necosystem_auto_ensure = false\nauto_update = false\nnative_memory = false\n[typesafe]\nenabled = false\n', encoding='utf-8')
     term = None
-    lease = BuilderLease(home/'.nur/cache/skills-index.lock') if skill else None
+    lease = BuilderLease(home/'.nur/cache/skills-index.lock') if skill or compact else None
     start = time.monotonic()
     try:
         term = Terminal(binary, workspace, env)
         term.until('F6 inspect', timeout=5)
         first_frame = time.monotonic() - start
         assert entered.wait(5), 'model discovery worker did not start'
+        if controls:
+            (workspace/'other').mkdir()
+            term.type_text('/login')
+            term.write('\r')
+            term.until('choose a provider', timeout=5)
+            term.write('\x1b')
+            term.until('F6 inspect', found=lambda: 'choose a provider' not in '\n'.join(term.screen.display))
+            for command, response in [('/new', 'new session'),
+                                      ('/cd other', 'tools sandboxed here'),
+                                      ('/model chosen-model', 'model → chosen-model')]:
+                term.type_text(command)
+                term.write('\r')
+                term.until(response, timeout=5)
+            # The old model lookup can finish after the user's new selection.
+            # Its result must not change the new client or rewrite the session.
+            gate.set()
         prompt = '/startup-probe STARTUP_DRAFT_7319' if skill else '/quit' if cancel else 'STARTUP_DRAFT_7319'
         term.type_text(prompt)
         term.until(prompt)
         term.write('\r')
         time.sleep(.3)
-        assert state.count == 0, 'request sent before model discovery completed'
+        if not controls:
+            assert state.count == 0, 'request sent before model discovery completed'
         if cancel:
             deadline = time.monotonic()+5
             while time.monotonic() < deadline:
@@ -196,19 +225,27 @@ def blocked_models(binary, skill=False, cancel=False):
                     return {'scenario':scenario, 'passed':True, 'first_frame_seconds':first_frame}
                 time.sleep(.05)
             raise AssertionError('quit waited for the blocked startup worker')
+        if compact:
+            term.type_text('/compact')
+            term.write('\r')
         gate.set()
+        if compact:
+            term.until('COMPACTED_BEFORE_SKILLS', timeout=15)
+            assert state.count == 1, 'ordinary prompt bypassed indexing'
+            assert 'skills_ready' not in (work/'startup.jsonl').read_text()
         if lease:
             # Keep the skill worker stalled after the provider is usable. A
             # second draft must remain editable without sending the first early.
             term.type_text('STILL_EDITABLE_4832')
             term.until('STILL_EDITABLE_4832', timeout=5)
-            assert state.count == 0, 'request bypassed pending skill discovery'
+            assert state.count == (1 if compact else 0), 'request bypassed pending skill discovery'
             lease.release()
         term.until('STARTUP_REQUEST_COMPLETED', timeout=45)
         requests = [json.loads(s) for s in log.read_text(encoding='utf-8').splitlines()]
-        assert len(requests) == 1, f'draft submitted {len(requests)} times'
-        assert requests[0]['model'] == 'e2e-model', requests[0]['model']
-        assert any('STARTUP_DRAFT_7319' in str(m.get('content','')) for m in requests[0]['messages'])
+        assert len(requests) == (2 if compact else 1), f'unexpected requests: {len(requests)}'
+        expected_model = 'chosen-model' if controls else 'e2e-model'
+        assert requests[-1]['model'] == expected_model, requests[-1]['model']
+        assert any('STARTUP_DRAFT_7319' in str(m.get('content','')) for m in requests[-1]['messages'])
         if skill:
             sent = json.dumps(requests[0]['messages'])
             assert 'LOCAL_SKILL_BODY_7261' in sent, 'queued slash did not activate the project override'
@@ -298,6 +335,143 @@ def blocked_auth(binary, fail=False):
             term.close()
 
 
+def commands_during_indexing(binary):
+    """A held index-builder lease must not block built-in session controls."""
+    scenario = 'commands-during-indexing'
+    work = OUT / f'{scenario}-{time.time_ns()}'
+    work.mkdir(parents=True)
+    home, workspace = work/'home', work/'workspace'
+    workspace.mkdir()
+    (workspace/'other').mkdir()
+    env = isolated_env(home, 1)
+    env['TERM'] = 'xterm-256color'
+    trace = work/'startup.jsonl'
+    env['NUR_STARTUP_TRACE'] = str(trace)
+    config = home/'.nur/config.toml'
+    config.write_text(
+        'provider = "vllm"\nmodel = "e2e-model"\nbase_url = "http://127.0.0.1:1/v1"\n'
+        'theme = "gold"\necosystem_auto_ensure = false\nauto_update = false\n', encoding='utf-8')
+    lease = BuilderLease(home/'.nur/cache/skills-index.lock')
+    term = None
+    try:
+        term = Terminal(binary, workspace, env)
+        term.until('F6 inspect', timeout=5)
+        deadline = time.monotonic()+10
+        while not (trace.exists() and 'session_saved' in trace.read_text()):
+            assert time.monotonic() < deadline, 'provider preparation did not finish'
+            time.sleep(.02)
+        term.type_text('/login')
+        term.write('\r')
+        term.until('choose a provider', timeout=5)
+        term.write('\x1b')
+        # Wait for the modal to actually close before typing another command.
+        term.until('F6 inspect', found=lambda: 'choose a provider' not in '\n'.join(term.screen.display))
+        for command, response in [
+            ('/help', 'quick-save to memory'),
+            ('/effort extra', 'reasoning effort → xhigh'),
+            ('/context', 'context window'),
+            ('/new', 'new session'),
+            ('/cd other', 'tools sandboxed here'),
+        ]:
+            term.type_text(command)
+            term.write('\r')
+            term.until(response, timeout=5)
+        assert 'reasoning_effort = "xhigh"' in config.read_text(encoding='utf-8')
+        assert 'skills_ready' not in trace.read_text(), 'test accidentally released the index gate'
+        term.type_text('/quit')
+        term.write('\r')
+        deadline = time.monotonic()+5
+        while (term.proc.isalive() if os.name == 'nt' else term.proc.poll() is None):
+            assert time.monotonic() < deadline, 'quit waited for indexing'
+            time.sleep(.02)
+        print(f'PASS {scenario}: login, help, effort, context, new session, cwd and quit worked with indexing blocked', flush=True)
+        return {'scenario':scenario,'passed':True}
+    finally:
+        lease.release()
+        if term:
+            (work/'terminal.txt').write_text(term.output, encoding='utf-8')
+            term.close()
+
+
+def effort_persists(binary):
+    """`/effort` takes an alias, saves the rung, reports the route's rung for
+    `ultracode`, and the saved level is what the next launch starts on."""
+    scenario = 'effort-persists'
+    work = OUT / f'{scenario}-{time.time_ns()}'
+    work.mkdir(parents=True)
+    home, workspace = work/'home', work/'workspace'
+    workspace.mkdir()
+    env = isolated_env(home, 1)
+    env['TERM'] = 'xterm-256color'
+    config = home/'.nur/config.toml'
+    config.write_text(
+        'provider = "vllm"\nmodel = "e2e-model"\nbase_url = "http://127.0.0.1:1/v1"\n'
+        'theme = "gold"\necosystem_auto_ensure = false\nauto_update = false\n', encoding='utf-8')
+    terms = []
+    try:
+        term = Terminal(binary, workspace, env)
+        terms.append(term)
+        term.until('F6 inspect', timeout=5)
+        term.type_text('/effort extra')
+        term.write('\r')
+        term.until('reasoning effort → xhigh', timeout=15)
+        assert 'reasoning_effort = "xhigh"' in config.read_text(encoding='utf-8'), 'effort was not saved'
+        term.type_text('/effort ultra')
+        term.write('\r')
+        term.until('receives xhigh, its strongest rung', timeout=10)
+        term.close()
+        relaunch = Terminal(binary, workspace, env)
+        terms.append(relaunch)
+        relaunch.until('※ultracode', timeout=5)
+        print(f'PASS {scenario}: alias saved, ultracode mapped, level survives restart', flush=True)
+        return {'scenario':scenario,'passed':True}
+    finally:
+        for index, term in enumerate(terms):
+            (work/f'terminal-{index}.txt').write_text(term.output, encoding='utf-8')
+            term.close()
+
+
+def banner_animates(binary):
+    """The NUR logo's gradient shimmer keeps moving while nur sits idle. It is
+    colour, so this run keeps colour on. A 1 s idle repaint froze it in v0.38.3."""
+    scenario = 'banner-animates'
+    work = OUT / f'{scenario}-{time.time_ns()}'
+    work.mkdir(parents=True)
+    home, workspace = work/'home', work/'workspace'
+    workspace.mkdir()
+    env = isolated_env(home, 1)
+    env.pop('NO_COLOR', None)
+    env['TERM'] = 'xterm-256color'
+    env['COLORTERM'] = 'truecolor'
+    (home/'.nur/config.toml').write_text(
+        'provider = "vllm"\nmodel = "e2e-model"\nbase_url = "http://127.0.0.1:1/v1"\n'
+        'theme = "gold"\necosystem_auto_ensure = false\nauto_update = false\n', encoding='utf-8')
+    term = None
+    try:
+        term = Terminal(binary, workspace, env)
+        term.until('F6 inspect', timeout=5)
+        # Startup preparation repaints at the busy rate; measure the idle loop.
+        settle = time.monotonic() + 3
+        while time.monotonic() < settle:
+            term.feed(.05)
+        # A terminal changes a cell's colour only by rewriting its glyph, so a
+        # shimmering logo keeps resending its blocks; a frozen one sends none.
+        # Counted on the byte stream: other idle chrome animates too, and its
+        # redraws can scroll pyte's model of the screen.
+        start = len(term.output)
+        end = time.monotonic() + 3
+        while time.monotonic() < end:
+            term.feed(.02)
+        blocks = term.output[start:].count('█')
+        assert blocks >= 200, f'the logo resent {blocks} block glyphs in 3 s of idle; its shimmer froze'
+        print(f'PASS {scenario}: the logo resent {blocks} block glyphs in 3 s of idle', flush=True)
+        return {'scenario':scenario,'passed':True,'idle_blocks':blocks}
+    finally:
+        if term:
+            (work/'terminal.txt').write_text(term.output, encoding='utf-8')
+            term.close()
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--bin')
@@ -309,6 +483,11 @@ if __name__ == '__main__':
              'queued-skill':lambda:blocked_models(binary, skill=True),
              'quit-during-startup':lambda:blocked_models(binary, cancel=True),
              'blocked-auth':lambda:blocked_auth(binary),
-             'failed-auth-fallback':lambda:blocked_auth(binary, fail=True)}
+             'failed-auth-fallback':lambda:blocked_auth(binary, fail=True),
+             'effort-persists':lambda:effort_persists(binary),
+             'controls-during-models':lambda:blocked_models(binary, controls=True),
+             'compact-during-indexing':lambda:blocked_models(binary, compact=True),
+             'commands-during-indexing':lambda:commands_during_indexing(binary),
+             'banner-animates':lambda:banner_animates(binary)}
     result = [cases[name]() for name in (args.scenarios or cases)]
     (OUT/'report.json').write_text(json.dumps(result,indent=2),encoding='utf-8')

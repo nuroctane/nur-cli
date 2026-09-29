@@ -534,8 +534,11 @@ impl AgentRunner {
             let mut req2 = req.clone();
             req2.model = t.model.clone();
             if let Some(reasoning) = req2.reasoning.as_mut() {
-                reasoning.effort =
-                    crate::providers::nearest_effort(&t.provider_id, &self.config.reasoning_effort);
+                reasoning.effort = crate::providers::nearest_effort(
+                    &t.provider_id,
+                    &t.model,
+                    &self.config.reasoning_effort,
+                );
             }
             let target_caps = crate::api::failover::route_capabilities(&t.provider_id, t.style);
             if !target_caps.parallel_tools {
@@ -684,6 +687,7 @@ impl AgentRunner {
             &provider_label,
             self.config.poor_mode || limited_ctx,
             Some(user_text.as_str()),
+            &self.config.reasoning_effort,
         )
         .await
         .map_err(|e| NurError::Other(format!("prompt context worker failed: {e}")))?;
@@ -994,6 +998,14 @@ impl AgentRunner {
                 )));
             }
 
+            // Effort rungs differ per provider (and, for Claude, per model) and
+            // keep being added. Send what this route actually accepts: clamped
+            // to its nearest rung, or omitted where there is no effort control.
+            let effort = crate::providers::nearest_effort(
+                &self.config.provider,
+                &effective_model,
+                &self.config.reasoning_effort,
+            );
             let req = ResponseRequest {
                 model: effective_model,
                 input: Value::Array(session.input_items.clone()),
@@ -1002,15 +1014,8 @@ impl AgentRunner {
                 tool_choice: Some(tool_choice.into()),
                 store: Some(false),
                 include: Some(vec!["reasoning.encrypted_content".into()]),
-                // Effort rungs differ per provider and keep being added. Send
-                // what this one actually accepts — clamped to its nearest rung,
-                // or omitted entirely for thinking-budget providers, which
-                // reject an unexpected `effort` string outright.
                 reasoning: Some(ReasoningConfig {
-                    effort: crate::providers::nearest_effort(
-                        &self.config.provider,
-                        &self.config.reasoning_effort,
-                    ),
+                    effort,
                     summary: Some("auto".into()),
                 }),
                 // Native subagents must inherit streaming. ChatGPT/Codex OAuth
@@ -3086,8 +3091,10 @@ mod tests {
 
     #[tokio::test]
     async fn manual_compact_does_not_summarize_when_jev_cannot_prune() {
-        let mut config = Config::default();
-        config.native_memory = false;
+        let mut config = Config {
+            native_memory: false,
+            ..Config::default()
+        };
         config.typesafe.enabled = true;
         config.typesafe.api_key = "test-only".into();
         config.typesafe.base_url = "invalid://jev-test".into();

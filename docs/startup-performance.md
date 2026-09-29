@@ -7,12 +7,15 @@ Background ecosystem maintenance deleted the index without replacing it,
 allowing the slow path to recur.
 
 Startup now paints an editable shell first. Skills, credentials, model metadata,
-local model discovery, and initial durable session writes run on workers.
-Submissions wait visibly for their dependencies; typing and quitting stay live.
+and local model discovery load on workers. The current session is saved after
+accepting the provider result, so an old worker cannot overwrite a new session.
+Built-in controls, including login, help, effort, and workspace changes, work
+during indexing. Model requests and skill commands wait visibly for their
+dependencies; typing and quitting stay live.
 
 ## Measurements
 
-Windows, the existing release profile and default features, real skill/plugin
+Measured for v0.39.1 on Windows, the existing release profile and default features, real skill/plugin
 roots exposed to an isolated writable Nur home. No live credentials were copied
 and no model request was submitted in the timing runs. Maintenance was disabled
 in both fixtures to avoid modifying real installations. These are missing-index

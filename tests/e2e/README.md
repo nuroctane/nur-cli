@@ -18,16 +18,20 @@ The interactive startup suite drives a real pseudoterminal and reconstructs its
 screen. It holds model lookup, credential refresh, and the skill-builder lease
 behind controlled gates, then verifies typing, queued skill activation with
 project overrides, exactly-once submission, durable initialization, and quitting.
+It also checks that `/effort` saves its level and that a relaunch starts on it.
+Built-in controls are exercised while indexing is blocked, and a model change
+during discovery must win over the older worker result.
 
 ```bash
 python -m pip install pyte
-# Windows additionally requires: python -m pip install pywinpty
+# Windows uses the native ConPTY API (Windows 10 1809 or later).
 python tests/e2e/run_startup.py --bin target/release/nur.exe
 ```
 
 Artifacts are under `target/startup-e2e/`. Optional scenario names:
 `blocked-models`, `queued-skill`, `quit-during-startup`, `blocked-auth`,
-`failed-auth-fallback`.
+`failed-auth-fallback`, `effort-persists`, `commands-during-indexing`,
+`controls-during-models`, `compact-during-indexing`, `banner-animates`.
 
 ## Scenarios
 

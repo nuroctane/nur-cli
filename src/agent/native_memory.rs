@@ -926,7 +926,12 @@ mod tests {
         let prompt = prompt_block(&s, "restaurant dinner", 1000);
         assert!(prompt.contains("I cannot eat peanuts."));
         assert!(!prompt.contains("choosing restaurant dinner"));
-        let folded = fold_into_era(vec![entry.clone()], Tier::L2, &[entry.clone()], now_unix());
+        let folded = fold_into_era(
+            vec![entry.clone()],
+            Tier::L2,
+            std::slice::from_ref(&entry),
+            now_unix(),
+        );
         assert_eq!(folded.last().unwrap().triggers, entry.triggers);
         let mut legacy = serde_json::to_value(&entry).unwrap();
         legacy.as_object_mut().unwrap().remove("triggers");

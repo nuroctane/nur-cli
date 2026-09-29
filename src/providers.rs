@@ -587,62 +587,140 @@ pub const XAI_GROK_CLI_DEFAULT_VERSION: &str = "0.2.101";
 // ── Reasoning effort ───────────────────────────────────────────────────────
 //
 // Effort is not one ladder. OpenAI-shaped APIs take a `reasoning.effort`
-// string, xAI historically takes only the two ends of it, Anthropic and Gemini
-// take a *token budget* instead of a name, and every vendor keeps adding rungs
-// (`minimal` and `xhigh` did not exist when this knob shipped). So the set is
-// derived per provider, and an unrecognised level is a *warning*, never a hard
-// error — a rung a vendor added this morning has to work this morning.
+// string, xAI takes only the two ends of it, Claude takes `output_config.effort`
+// with rungs that depend on the model, Gemini budgets thinking in tokens, and
+// every vendor keeps adding rungs (`minimal`, `xhigh` and `max` did not exist
+// when this knob shipped). So the set is derived per route, and an unrecognised
+// level is a *warning*, never a hard error — a rung a vendor added this morning
+// has to work this morning.
 
-/// The rung names nur itself understands, weakest → strongest. New vendor names
-/// outside this list are still accepted and forwarded verbatim.
-pub const EFFORT_LADDER: &[&str] = &["minimal", "low", "medium", "high", "xhigh"];
+/// Nur's effort ladder, weakest → strongest. Each route receives the nearest
+/// rung it accepts. `ultracode` is nur's own top: the strongest rung the route
+/// has, plus parallel subagent orchestration in the agent prompt; it is never
+/// sent as a value. Names outside the ladder are forwarded verbatim.
+pub const EFFORT_LADDER: &[&str] = &[
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+    "ultracode",
+];
+/// What `/effort` offers. `minimal` stays accepted for OpenAI-shaped routes.
+pub const EFFORT_MENU: &[&str] = &["low", "medium", "high", "xhigh", "max", "ultracode"];
+/// OpenAI-shaped `reasoning.effort` rungs, also assumed for unknown routes.
+const EFFORT_OPENAI: &[&str] = &["minimal", "low", "medium", "high", "xhigh"];
+const EFFORT_OPENAI_MAX: &[&str] = &["none", "low", "medium", "high", "xhigh", "max"];
 /// Nous Portal's own effort ladder (Portal catalog `supported_efforts`):
 /// `stealth/ox-alpha` and most reasoning routes take `max`/`high`/`low`.
 pub const EFFORT_NOUS: &[&str] = &["low", "high", "max"];
 
-/// The ladder xAI's API accepts — it takes only the two ends.
+/// Legacy Grok 3 mini exposes only the two ends.
 const EFFORT_LOW_HIGH: &[&str] = &["low", "high"];
+const EFFORT_GROK: &[&str] = &["low", "medium", "high", "xhigh"];
 
-/// Rungs `provider_id` is known to accept, weakest → strongest.
+/// Claude `output_config.effort` rungs by model generation. `xhigh` arrived with
+/// Opus 4.7; Opus 4.5 predates `max`.
+const EFFORT_CLAUDE: &[&str] = &["low", "medium", "high", "xhigh", "max"];
+const EFFORT_CLAUDE_NO_XHIGH: &[&str] = &["low", "medium", "high", "max"];
+const EFFORT_CLAUDE_OPUS_4_5: &[&str] = &["low", "medium", "high"];
+
+/// Rungs this route is known to accept, weakest → strongest.
 ///
-/// Empty means the provider has no effort knob at all (it budgets thinking in
+/// Empty means there is no effort control at all (it budgets thinking in
 /// tokens, or does not expose reasoning controls) — callers must then omit the
 /// field rather than send a value the endpoint will reject.
-pub fn effort_levels(provider_id: &str) -> &'static [&'static str] {
+pub fn effort_levels(provider_id: &str, model: &str) -> &'static [&'static str] {
     match provider_id {
-        // Thinking-budget providers: no `effort` string on the wire.
-        "anthropic" | "google" | "antigravity" | "google-oauth" => &[],
-        "xai" => EFFORT_LOW_HIGH,
+        // Gemini budgets thinking in tokens, and MiniMax's Anthropic-compatible
+        // route has no effort control: nothing goes on the wire.
+        "google" | "antigravity" | "google-oauth" | "minimax" => &[],
+        "anthropic" => claude_effort_levels(model),
+        "xai" => {
+            let model = model.to_ascii_lowercase();
+            if model.starts_with("grok-3-mini") {
+                EFFORT_LOW_HIGH
+            } else if model.starts_with("grok-4.5") {
+                EFFORT_CLAUDE_OPUS_4_5
+            } else {
+                EFFORT_GROK
+            }
+        }
+        "openai" | "openai-cc" if model == "gpt-5.6" || model.starts_with("gpt-5.6-") => {
+            EFFORT_OPENAI_MAX
+        }
         "nous" => EFFORT_NOUS,
-        _ => EFFORT_LADDER,
+        _ => EFFORT_OPENAI,
     }
 }
 
-/// Does this provider take a reasoning-effort name on the wire?
-pub fn supports_effort(provider_id: &str) -> bool {
-    !effort_levels(provider_id).is_empty()
+/// Claude's effort rungs for `model`, after the Messages adapter's alias
+/// resolution (`sonnet` → `claude-sonnet-5`). Empty where the model has no
+/// effort control (Haiku, Sonnet 4.5 and older): sending one is a 400.
+pub fn claude_effort_levels(model: &str) -> &'static [&'static str] {
+    let id = crate::api::anthropic::normalize_model_id(model).to_ascii_lowercase();
+    let mut parts = id.split(['-', '.']);
+    if !parts.any(|part| part == "claude") {
+        return &[];
+    }
+    let family = parts.next().unwrap_or("");
+    // Dated snapshots (`-20251101`) are not a minor version.
+    let mut version = parts
+        .map_while(|part| part.parse::<u32>().ok())
+        .filter(|n| *n < 100);
+    let major = version.next().unwrap_or(0);
+    let minor = version.next().unwrap_or(0);
+    match family {
+        "mythos" if id == "claude-mythos-preview" => EFFORT_CLAUDE_NO_XHIGH,
+        "fable" | "mythos" => EFFORT_CLAUDE,
+        "opus" | "sonnet" if major >= 5 || (major == 4 && minor >= 7) => EFFORT_CLAUDE,
+        "opus" | "sonnet" if major == 4 && minor == 6 => EFFORT_CLAUDE_NO_XHIGH,
+        "opus" if major == 4 && minor == 5 => EFFORT_CLAUDE_OPUS_4_5,
+        _ => &[],
+    }
 }
 
-/// The rung this provider will actually accept for a requested `want`.
+/// Does this route take a reasoning-effort name on the wire?
+pub fn supports_effort(provider_id: &str, model: &str) -> bool {
+    !effort_levels(provider_id, model).is_empty()
+}
+
+/// A typed effort name as a ladder rung: case, padding, and the aliases people
+/// use (`med`, `extra`, `ultra`). Unknown names pass through unchanged.
+pub fn canonical_effort(input: &str) -> String {
+    let name = input.trim().to_ascii_lowercase();
+    match name.as_str() {
+        "med" => "medium".to_string(),
+        "extra" | "x-high" | "extra-high" | "extrahigh" => "xhigh".to_string(),
+        "maximum" => "max".to_string(),
+        "ultra" | "ultra-code" => "ultracode".to_string(),
+        _ => name,
+    }
+}
+
+/// The rung this route will actually accept for a requested `want`.
 ///
-/// - `None` when the provider has no effort knob (omit the field entirely).
-/// - The request unchanged when the provider lists it, **or** when the level is
+/// - `None` when the route has no effort control (omit the field entirely).
+/// - The request unchanged when the route lists it, **or** when the level is
 ///   one nur does not know: an unknown name is far more likely to be a rung the
 ///   vendor just added than a typo, and refusing it would make nur the reason a
 ///   new capability is unreachable.
 /// - Otherwise the closest rung it does support, by position on [`EFFORT_LADDER`]
-///   (so `xhigh` on a low/high provider lands on `high`, not `low`). Ties round
-///   **up**: nur's own default is `medium`, which is equidistant from `low` and
-///   `high` on a two-rung provider, and quietly downgrading every session there
-///   is a worse failure than spending a little more.
-pub fn nearest_effort(provider_id: &str, want: &str) -> Option<String> {
-    let want = want.trim().to_ascii_lowercase();
-    let levels = effort_levels(provider_id);
+///   (so `xhigh` on a low/high provider lands on `high`, and `max` or
+///   `ultracode` land on the route's strongest rung). Ties round **up**:
+///   `medium` is equidistant from `low` and `high` on a two-rung provider, and
+///   quietly downgrading every session there is a worse failure than spending a
+///   little more.
+pub fn nearest_effort(provider_id: &str, model: &str, want: &str) -> Option<String> {
+    let mut want = canonical_effort(want);
+    let levels = effort_levels(provider_id, model);
     if levels.is_empty() {
         return None;
     }
     if want.is_empty() {
-        return Some("medium".to_string());
+        want = "medium".to_string();
     }
     if levels.contains(&want.as_str()) {
         return Some(want);
@@ -2255,44 +2333,187 @@ mod tests {
     /// add rungs faster than nur ships releases.
     #[test]
     fn effort_is_derived_per_provider_and_stays_open_ended() {
-        // OpenAI-shaped: the full ladder, passed through untouched.
-        assert_eq!(effort_levels("openai"), EFFORT_LADDER);
-        assert_eq!(nearest_effort("openai", "xhigh").as_deref(), Some("xhigh"));
+        let openai = ["minimal", "low", "medium", "high", "xhigh"];
+        // OpenAI-shaped: its own rungs, passed through untouched.
+        assert_eq!(effort_levels("openai", "gpt-5.5"), openai);
+        assert_eq!(
+            nearest_effort("openai", "gpt-5.5", "xhigh").as_deref(),
+            Some("xhigh")
+        );
 
-        // xAI takes only the two ends — clamp toward the nearer one.
-        assert_eq!(effort_levels("xai"), EFFORT_LOW_HIGH);
-        assert_eq!(nearest_effort("xai", "xhigh").as_deref(), Some("high"));
+        // Current Grok routes preserve medium and xhigh; older mini has two ends.
+        assert_eq!(
+            effort_levels("xai", "grok-4.7"),
+            ["low", "medium", "high", "xhigh"]
+        );
+        assert_eq!(
+            nearest_effort("xai", "grok-4.7", "xhigh").as_deref(),
+            Some("xhigh")
+        );
         // Equidistant: round up rather than silently downgrade the default.
-        assert_eq!(nearest_effort("xai", "medium").as_deref(), Some("high"));
-        assert_eq!(nearest_effort("xai", "minimal").as_deref(), Some("low"));
-        assert_eq!(nearest_effort("xai", "low").as_deref(), Some("low"));
+        assert_eq!(
+            nearest_effort("xai", "grok-4.7", "medium").as_deref(),
+            Some("medium")
+        );
+        assert_eq!(
+            nearest_effort("xai", "grok-4.7", "minimal").as_deref(),
+            Some("low")
+        );
+        assert_eq!(
+            nearest_effort("xai", "grok-4.7", "low").as_deref(),
+            Some("low")
+        );
 
-        // Thinking-budget providers take no effort name at all: omit the field
-        // rather than send one they will reject.
-        for id in ["anthropic", "google", "antigravity", "google-oauth"] {
-            assert!(effort_levels(id).is_empty(), "{id} should have no rungs");
-            assert!(!supports_effort(id), "{id}");
-            assert_eq!(nearest_effort(id, "high"), None, "{id}");
+        // No effort control at all: omit the field rather than send one the
+        // endpoint will reject.
+        for (id, model) in [
+            ("google", "gemini-3.1-pro-preview"),
+            ("antigravity", "gemini-3.1-pro"),
+            ("google-oauth", "gemini-3.1-pro"),
+            ("minimax", "MiniMax-M2.7"),
+        ] {
+            assert!(
+                effort_levels(id, model).is_empty(),
+                "{id} should have no rungs"
+            );
+            assert!(!supports_effort(id, model), "{id}");
+            assert_eq!(nearest_effort(id, model, "high"), None, "{id}");
         }
 
         // A rung a vendor shipped after this build must still reach them.
         assert_eq!(
-            nearest_effort("openai", "ludicrous").as_deref(),
+            nearest_effort("openai", "gpt-5.5", "ludicrous").as_deref(),
             Some("ludicrous"),
             "unknown rungs are forwarded, not rejected"
         );
         assert_eq!(
-            nearest_effort("xai", "ludicrous").as_deref(),
+            nearest_effort("xai", "grok-4.7", "ludicrous").as_deref(),
             Some("ludicrous")
         );
 
         // Case and padding are normalised; empty falls back to a sane default.
-        assert_eq!(nearest_effort("openai", "  HIGH ").as_deref(), Some("high"));
-        assert_eq!(nearest_effort("openai", "").as_deref(), Some("medium"));
+        assert_eq!(
+            nearest_effort("openai", "gpt-5.5", "  HIGH ").as_deref(),
+            Some("high")
+        );
+        assert_eq!(
+            nearest_effort("openai", "gpt-5.5", "").as_deref(),
+            Some("medium")
+        );
 
-        // Unknown provider ids get the full ladder rather than nothing, so a
+        // Unknown provider ids get the OpenAI rungs rather than nothing, so a
         // custom/self-hosted endpoint is not silently stripped of the knob.
-        assert_eq!(effort_levels("some-new-vendor"), EFFORT_LADDER);
+        assert_eq!(effort_levels("some-new-vendor", "any-model"), openai);
+    }
+
+    /// `max` and `ultracode` sit above every wire rung, so each provider gets its
+    /// strongest one. `ultracode` is a nur mode and must never reach the wire.
+    #[test]
+    fn top_rungs_absorb_max_and_ultracode() {
+        for (provider, model, top) in [
+            ("openai", "gpt-5.5", "xhigh"),
+            ("xai", "grok-4.7", "xhigh"),
+            ("openai", "gpt-5.6", "max"),
+            ("openai", "gpt-5.6-sol", "max"),
+            ("xai", "grok-3-mini", "high"),
+            ("nous", "ox-alpha", "max"),
+            ("anthropic", "claude-opus-5", "max"),
+            ("anthropic", "claude-opus-4-5", "high"),
+        ] {
+            for want in ["max", "ultracode"] {
+                assert_eq!(
+                    nearest_effort(provider, model, want).as_deref(),
+                    Some(top),
+                    "{provider} {model} {want}"
+                );
+            }
+        }
+        for provider in PROVIDERS {
+            assert_ne!(
+                nearest_effort(provider.id, provider.default_model, "ultracode").as_deref(),
+                Some("ultracode"),
+                "{} would receive the literal ultracode",
+                provider.id
+            );
+        }
+    }
+
+    /// The names people actually type map onto ladder rungs everywhere effort
+    /// is read: `/effort`, `--effort`, and `config.toml`.
+    #[test]
+    fn effort_aliases_name_ladder_rungs() {
+        for (typed, rung) in [
+            ("med", "medium"),
+            ("Extra", "xhigh"),
+            ("x-high", "xhigh"),
+            ("extra-high", "xhigh"),
+            ("MAXIMUM", "max"),
+            ("ultra", "ultracode"),
+            (" high ", "high"),
+            ("ludicrous", "ludicrous"),
+        ] {
+            assert_eq!(canonical_effort(typed), rung, "{typed}");
+        }
+        assert_eq!(
+            nearest_effort("openai", "gpt-5.5", "extra").as_deref(),
+            Some("xhigh")
+        );
+        assert_eq!(
+            nearest_effort("xai", "grok-4.7", "med").as_deref(),
+            Some("medium")
+        );
+    }
+
+    /// Claude's `output_config.effort` rungs depend on the model, and sending one
+    /// a model lacks is a 400. Aliases resolve the way the Messages adapter does.
+    #[test]
+    fn claude_effort_follows_the_model() {
+        let all = ["low", "medium", "high", "xhigh", "max"];
+        let no_xhigh = ["low", "medium", "high", "max"];
+        let basic = ["low", "medium", "high"];
+        for model in [
+            "claude-fable-5-1",
+            "claude-fable-5",
+            "claude-mythos-5-1",
+            "claude-opus-5-5",
+            "claude-opus-5",
+            "claude-sonnet-5",
+            "claude-opus-4-8",
+            "claude-opus-4-7",
+            "sonnet",
+            "opus",
+        ] {
+            assert_eq!(effort_levels("anthropic", model), all, "{model}");
+        }
+        for model in [
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
+            "claude-mythos-preview",
+        ] {
+            assert_eq!(effort_levels("anthropic", model), no_xhigh, "{model}");
+        }
+        for model in ["claude-opus-4-5", "claude-opus-4-5-20251101"] {
+            assert_eq!(effort_levels("anthropic", model), basic, "{model}");
+        }
+        for model in [
+            "claude-haiku-4-5",
+            "haiku",
+            "claude-sonnet-4-5",
+            "claude-opus-4-1",
+            "claude-3-7-sonnet-latest",
+        ] {
+            assert!(effort_levels("anthropic", model).is_empty(), "{model}");
+            assert_eq!(nearest_effort("anthropic", model, "high"), None, "{model}");
+        }
+        // Missing rungs clamp by ladder position, ties rounding up.
+        assert_eq!(
+            nearest_effort("anthropic", "claude-opus-4-6", "xhigh").as_deref(),
+            Some("max")
+        );
+        assert_eq!(
+            nearest_effort("anthropic", "claude-opus-4-5", "minimal").as_deref(),
+            Some("low")
+        );
     }
 
     #[test]

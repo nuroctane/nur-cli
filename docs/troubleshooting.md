@@ -2,9 +2,10 @@
 
 ## Startup is slow
 
-The interactive editor accepts drafts while skills, credentials, model metadata,
-and session bookkeeping load in workers. Enter queues a submission until those
-dependencies are ready. Existing skill metadata stays available during refresh;
+The interactive editor accepts drafts while skills, credentials, and model metadata
+load in workers. `/login` and other built-in controls work during indexing.
+Model requests and skill commands queue until their dependencies are ready.
+Existing skill metadata stays available during refresh;
 no skill pack needs to be removed to make the editor responsive.
 
 To identify a remaining delay, launch with `NUR_STARTUP_TRACE=1`. On PowerShell:
@@ -292,10 +293,12 @@ nur -c                     # continue most recent for this cwd
 ### `config` validation errors
 
 ```text
-config  invalid reasoning_effort 'super' — use minimal|low|medium|high|xhigh
+config  reasoning_effort is empty — use one of minimal|low|medium|high|xhigh|max|ultracode (or any level your provider accepts)
 ```
 
-**Fix:** Edit `~/.nur/config.toml` and set a valid effort level.
+**Fix:** Edit `~/.nur/config.toml` and set an effort level, or run `/effort high`.
+Only an empty value is an error: an unrecognised name is forwarded to the
+provider as-is, and bare `/effort` shows what the active route receives.
 
 ---
 

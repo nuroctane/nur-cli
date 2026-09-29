@@ -127,7 +127,7 @@ mod provenance_tests {
             take_pending_media().is_empty(),
             "failed batch must not queue its first image"
         );
-        queue_user_images(&[img.clone()]).unwrap();
+        queue_user_images(std::slice::from_ref(&img)).unwrap();
         let sent = take_pending_media();
         assert_eq!(sent.len(), 1);
         assert!(sent[0].user_pasted);

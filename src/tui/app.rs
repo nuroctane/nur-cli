@@ -277,7 +277,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/plugin", "browse · install · enable marketplace plugins  (alias of /plugins)"),
     // Rendered through `App::command_hint` - the rungs shown are the active
     // provider's, not this placeholder.
-    ("/effort", "reasoning effort for the active provider"),
+    ("/effort", "reasoning effort: low … max, or ultracode"),
     ("/sessions", "browse & open past sessions  ·  c → takeover  (same as /resume)"),
     ("/resume", "browse & open past sessions  (same as /sessions)"),
     (
@@ -316,6 +316,7 @@ pub struct QueuedPrompt {
     pub images: Vec<(String, String)>,
     /// Startup defers the original slash/memory dispatch as well as prompts.
     pub raw_submission: bool,
+    pub wait_for_skills: bool,
 }
 impl From<String> for QueuedPrompt {
     fn from(text: String) -> Self {
@@ -323,6 +324,7 @@ impl From<String> for QueuedPrompt {
             text,
             images: Vec::new(),
             raw_submission: false,
+            wait_for_skills: true,
         }
     }
 }
@@ -2827,7 +2829,7 @@ pub async fn run_tui(
     // scrollbar-drag and text-select never lag behind the ambient repaint
     // (especially while a turn is streaming at ~30fps).
     const FRAME_BUSY_MS: u64 = 33; // ~30fps under load
-    const FRAME_IDLE_MS: u64 = 90; // poll background work without repainting idle chrome
+    const FRAME_IDLE_MS: u64 = 90; // ~11fps ambient shimmer
     let mut dirty = true;
     let mut last_draw = Instant::now();
     let mut last_title = Instant::now();
@@ -3161,12 +3163,11 @@ pub async fn run_tui(
         }
 
         // 3) Ambient / animation dirty flags.
-        let repaint_ms = if frame_ms == FRAME_IDLE_MS {
-            1000
-        } else {
-            frame_ms
-        };
-        if last_draw.elapsed().as_millis() as u64 >= repaint_ms {
+        //
+        // Locked design: the NUR banner's gradient shimmer (and the other
+        // ambient animation) repaints every frame, idle included. Never
+        // throttle idle repaints to save work; that froze the banner in v0.38.3.
+        if last_draw.elapsed().as_millis() as u64 >= frame_ms {
             dirty = true;
         }
         if let Some((_, t)) = app.expand_flash {
@@ -3240,22 +3241,24 @@ impl App {
     /// One-line hint for a built-in command, resolved against live session
     /// state where a static string would be wrong or misleading.
     ///
-    /// `/effort` is the case that forced this: the rungs are provider-specific
-    /// (xAI takes `low|high`; Anthropic and Gemini take none at all and budget
-    /// thinking in tokens), and vendors keep adding new ones - so printing a
-    /// frozen `minimal|low|medium|high|xhigh` was wrong for most providers.
+    /// `/effort` is the case that forced this: every level is accepted and
+    /// mapped per route, but some routes (Gemini, Claude Haiku) have no effort
+    /// control at all, and the hint should say so rather than offer a ladder.
     pub fn command_hint(&self, name: &str, base: &str) -> String {
         if name != "/effort" {
             return base.to_string();
         }
-        let levels = crate::providers::effort_levels(&self.cfg.provider);
-        if !crate::providers::supports_effort(&self.cfg.provider) {
+        let current = crate::providers::canonical_effort(&self.cfg.reasoning_effort);
+        if !crate::providers::supports_effort(&self.cfg.provider, &self.cfg.model) {
             let who = crate::providers::by_id(&self.cfg.provider)
                 .map(|p| p.name)
                 .unwrap_or(self.cfg.provider.as_str());
-            return format!("reasoning effort - {who} budgets thinking in tokens, no rungs");
+            return format!("reasoning effort ({current}) - {who} has no effort control here");
         }
-        format!("reasoning effort: {}", levels.join("|"))
+        format!(
+            "reasoning effort ({current}): {}",
+            crate::providers::EFFORT_MENU.join("|")
+        )
     }
 
     // ── palette ────────────────────────────────────────────────────────
@@ -6737,6 +6740,7 @@ impl App {
             u.set_provider(self.cfg.provider.clone());
         }
         self.push_info(format!("model → {id}"));
+        self.provider_selected();
     }
 
     /// Drain the background model-list fetch while the picker is open.
@@ -7836,6 +7840,7 @@ impl App {
                 if provider.id == self.cfg.provider {
                     self.authed = provider.key_optional
                         || crate::auth::resolve_api_key_for(Some(provider.id)).is_ok();
+                    self.provider_selected();
                 }
                 self.push_note(
                     Tone::Mode,
@@ -8177,6 +8182,7 @@ impl App {
             Ok(client) => {
                 self.client = client;
                 self.authed = !bearer.is_empty() || provider.key_optional;
+                self.provider_selected();
                 self.login = None;
                 let keynote = if bearer.is_empty() {
                     "no key (local)".to_string()
@@ -8339,17 +8345,6 @@ impl App {
         if text.is_empty() {
             return;
         }
-        // Preserve commands, drafts, and attachments until preparation can
-        // execute them correctly. Quitting never waits for a network call.
-        if !matches!(text.as_str(), "/quit" | "/exit") {
-            if !self.startup_pending() && !agent::skill_cache::is_current() {
-                self.refresh_skill_palette_cache();
-            }
-            if self.startup_pending() {
-                self.queue_during_startup(&text);
-                return;
-            }
-        }
         // Claude-Code-style quick memory: a line starting with `#` (but not a
         // `##` markdown heading) is saved to ~/.nur/memory.md without a turn.
         if let Some(rest) = text.strip_prefix('#') {
@@ -8367,6 +8362,9 @@ impl App {
         }
         if text.starts_with('/') {
             self.run_command(&text);
+            return;
+        }
+        if self.defer_until_prepared(&text, true) {
             return;
         }
         if self.busy {
@@ -8389,6 +8387,7 @@ impl App {
                 text: payload.clone(),
                 images,
                 raw_submission: false,
+                wait_for_skills: true,
             });
             self.cells.push(Cell::Queued { text: payload });
             self.scroll_to_bottom();
@@ -9050,6 +9049,9 @@ impl App {
 
         // Default: launch skill-driven turn so agent can interpret directive (name, path, caps, completion reqs)
         let display = format!("/fractal {arg_trim}");
+        if self.defer_until_prepared(&display, true) {
+            return;
+        }
         let model_prompt = format!(
             "Fractal directive: {arg_trim}\n\n\
              Use the `fractal` skill (skills/fractal/SKILL.md) and `fractal` tool to handle this.\n\
@@ -11100,11 +11102,13 @@ mod tests {
                 text: "inspect".into(),
                 images: vec![("first.png".into(), "image".into())],
                 raw_submission: false,
+                wait_for_skills: true,
             },
             QueuedPrompt {
                 text: "inspect".into(),
                 images: vec![("second.png".into(), "image".into())],
                 raw_submission: false,
+                wait_for_skills: true,
             },
         ]);
         let index = queued_position(&cells, &queue, 1).unwrap();

@@ -317,15 +317,17 @@ mod tests {
 
     #[test]
     fn a_delta_reports_only_what_happened_since_the_last_read() {
-        let mut counters = Counters::default();
-        counters.total = TypesafeTelemetry {
-            route: "https://api.typesafe.ai/v1/systemone".into(),
-            model: "jev-1.13.0".into(),
-            requests: 1,
-            input_tokens: 1_000,
-            output_tokens: 10,
-            questions: 2,
-            ..TypesafeTelemetry::default()
+        let mut counters = Counters {
+            total: TypesafeTelemetry {
+                route: "https://api.typesafe.ai/v1/systemone".into(),
+                model: "jev-1.13.0".into(),
+                requests: 1,
+                input_tokens: 1_000,
+                output_tokens: 10,
+                questions: 2,
+                ..TypesafeTelemetry::default()
+            },
+            ..Counters::default()
         };
         let delta = counters.take_delta();
         assert_eq!(delta.requests, 1);

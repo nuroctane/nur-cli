@@ -17,7 +17,7 @@ nur <COMMAND> [ARGS]
 | `--cwd <DIR>` | | Working directory |
 | `--yes` | `-y` | Auto-approve tools (sets permission mode to auto) |
 | `--mode <MODE>` | | Permission mode: `manual`, `plan`, or `auto` |
-| `--effort <LEVEL>` | | Reasoning effort: `minimal`, `low`, `medium`, `high`, `xhigh` |
+| `--effort <LEVEL>` | | Reasoning effort: `low`, `medium`, `high`, `xhigh`, `max`, `ultracode` (also `minimal`; aliases `med`, `extra`, `ultra`). See [effort levels](configuration.md#reasoning-effort-levels) |
 | `--max-turns <N>` | | Max agent turns per prompt |
 | `--continuous` | | Sovereign mode: loop headless turns toward the prompt (as a goal) until the model replies `DONE`, Ctrl+C, or `--max-iters`. Auto-approves tools (sandboxed). |
 | `--max-iters <N>` | | Continuous mode: stop after N iterations (`0` = unlimited) |
@@ -37,7 +37,8 @@ nur "design from ref.mp4"              # vision: auto-attach media
 nur -c                                  # continue last session
 nur -r abc123                           # resume session abc123
 nur --mode plan "explain this"         # plan: explore + shell, no edits/commits
-nur --effort xhigh "deep analysis"     # maximum reasoning
+nur --effort max "deep analysis"       # strongest reasoning the route takes
+nur --effort ultracode "port the CLI"  # max effort + parallel subagents
 nur --model gpt-5.5 "hello"            # explicit model
 nur run "add tests" -y                 # headless + auto-approve
 ```
@@ -443,7 +444,7 @@ Type these inside the `nur` TUI. Aliases are shown in the same row.
 | `/akarso` | Akarso social posting: `/akarso` (auth), `accounts`, `posts`; publishing/scheduling runs through the `akarso` tool with approval |
 | `/openseo` | Open OpenSEO (open-source Semrush/Ahrefs alt) dashboard + MCP setup; SEO via MCP |
 | `/dialkit` | Activate the dialkit skill — live-tune interface parameters (React/Svelte/Vue/Solid) |
-| `/effort` | Reasoning effort: `minimal` → `xhigh` |
+| `/effort` | Reasoning effort: `low`, `medium`, `high`, `xhigh`, `max`, `ultracode`. Saved to config; shows what the active route receives |
 | `/mode` | Permission mode: `manual` \| `plan` \| `auto` (or Shift+Tab) |
 | `/manual` | Switch to manual mode (approve writes/shell) |
 | `/plan` | Switch to plan mode (read-only explore) |

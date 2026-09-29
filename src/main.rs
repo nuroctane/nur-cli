@@ -328,7 +328,7 @@ async fn real_main() -> Result<()> {
         }
     }
     if let Some(e) = &cli.effort {
-        cfg.reasoning_effort = e.clone();
+        cfg.reasoning_effort = crate::providers::canonical_effort(e);
     }
     if let Some(t) = cli.max_turns {
         cfg.max_turns = t;
@@ -778,25 +778,6 @@ fn run_browser_setup(open: bool) -> Result<()> {
     println!();
     theme::print_ok("after loading once, the `browser` tool works in every session");
     Ok(())
-}
-
-#[cfg(test)]
-mod child_env_tests {
-    use clap::CommandFactory;
-
-    /// nur exports NUR_MODEL to its own children. If clap bound `--model` to
-    /// that variable, every child session would inherit the parent's model as
-    /// if the user had typed it. Checked on clap's own argument table, so no
-    /// process environment is mutated (env edits in tests race).
-    #[test]
-    fn model_flag_never_reads_the_inherited_environment() {
-        let cmd = super::cli::Cli::command();
-        let model = cmd
-            .get_arguments()
-            .find(|a| a.get_id() == "model")
-            .expect("--model exists");
-        assert!(model.get_env().is_none(), "--model must not read NUR_MODEL");
-    }
 }
 
 /// `nur jev …` - the local-engine control surface.
@@ -1665,5 +1646,24 @@ fn truncate_line(s: &str, max: usize) -> String {
     } else {
         let t: String = s.chars().take(max).collect();
         format!("{t}…")
+    }
+}
+
+#[cfg(test)]
+mod child_env_tests {
+    use clap::CommandFactory;
+
+    /// nur exports NUR_MODEL to its own children. If clap bound `--model` to
+    /// that variable, every child session would inherit the parent's model as
+    /// if the user had typed it. Checked on clap's own argument table, so no
+    /// process environment is mutated (env edits in tests race).
+    #[test]
+    fn model_flag_never_reads_the_inherited_environment() {
+        let cmd = super::cli::Cli::command();
+        let model = cmd
+            .get_arguments()
+            .find(|a| a.get_id() == "model")
+            .expect("--model exists");
+        assert!(model.get_env().is_none(), "--model must not read NUR_MODEL");
     }
 }

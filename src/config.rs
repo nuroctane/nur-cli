@@ -1190,6 +1190,8 @@ pub fn load_config() -> Result<Config> {
     } else {
         apply_base_url_env(&mut cfg);
     }
+    // A hand-edited alias (`extra`, `med`) reads as its rung everywhere.
+    cfg.reasoning_effort = crate::providers::canonical_effort(&cfg.reasoning_effort);
     cfg.validate()?;
     Ok(cfg)
 }

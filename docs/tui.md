@@ -3,10 +3,13 @@
 The Nur-gold terminal UI for interactive sessions.
 
 The editor opens before skill indexing, account refresh, and model discovery
-finish. You can type immediately. Enter retains your submission in the queue
-until preparation and the initial session save complete. The activity line
-shows the remaining work; queued skill commands keep their normal behavior.
-`/quit` and Ctrl+C remain available while startup workers are waiting.
+finish. You can type immediately. Built-in controls such as `/login`, `/help`,
+`/effort`, `/theme`, `/context`, `/new`, and `/cd` work while skills index.
+Model requests and skill commands retain their text and attachments in the queue
+until their dependencies are ready. `/compact` waits only for account preparation.
+The activity line shows the remaining work. `/quit` and Ctrl+C remain available.
+The NUR banner keeps its gradient shimmer while idle, along with the input
+border, separators, and status-line animations.
 
 ## Session inspector and compact activity
 
@@ -329,7 +332,7 @@ The note is appended to your persistent memory file and recalled automatically i
 |---------|---------|
 | `/model` | Show and switch models. Run bare to open a picker that fetches your provider's live model list (`/models`) - filter, arrow, and Enter to switch, or type any id. `/model <id>` switches directly (e.g. `/model gpt-5.5`) |
 | `/plugins` | Marketplace picker (same UX as provider/`/login` picker): filter, ↑↓/wheel, ↵ to install or enable/disable. Skills land in `~/.nur/plugins/<id>` and mirror **in full** (incl. `references/`) to `~/.nur/skills`. CLI: `nur plugins list\|install\|enable\|disable\|uninstall`. Natural-language phrases (e.g. *think like fable*) **or** `/skill-name` auto-activate skills — status chip confirms activation |
-| `/effort` | Change reasoning effort |
+| `/effort` | Reasoning effort: `low` … `max`, or `ultracode` (max effort + parallel subagents). Bare `/effort` shows the ladder and what the active route receives; `/effort <level>` saves it |
 | `/provider` | Choose the active provider and sign-in route (`/login` is an alias) |
 | `/auth` | Manage saved OAuth, API-key, CLI and OMP credentials for every provider |
 | `/headroom` | Context-compression status / doctor (inline tool-result compression is on by default) |

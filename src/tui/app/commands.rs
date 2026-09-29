@@ -307,6 +307,9 @@ impl App {
     /// - `/skillname` / `/skillname on|off` — sticky session mode (toggle)
     /// - `/skillname <prompt>` — one-shot turn with that skill activated
     fn cmd_skill_or_unknown(&mut self, cmd: &str, arg: &str) {
+        if self.defer_until_prepared(&format!("{cmd} {arg}"), true) {
+            return;
+        }
         let name = cmd.trim().trim_start_matches('/').trim();
         if name.is_empty() {
             self.push_error(format!("unknown command: {cmd} - try /help"));
@@ -1084,6 +1087,7 @@ impl App {
         match crate::auth::logout(false) {
             Ok(()) => {
                 self.authed = false;
+                self.provider_selected();
                 let label = crate::providers::by_id(&provider)
                     .map(|p| p.name)
                     .unwrap_or(provider.as_str());
@@ -1205,6 +1209,9 @@ impl App {
     }
 
     fn cmd_compact(&mut self) {
+        if self.defer_until_prepared("/compact", false) {
+            return;
+        }
         if self.busy {
             self.push_error("wait for the current turn to finish".into());
             return;
@@ -1481,6 +1488,9 @@ impl App {
 
     /// Fan the question out to [active model + panel], then synthesize one answer.
     fn start_fusion(&mut self, raw: &str) {
+        if self.defer_until_prepared(&format!("/fusion {raw}"), true) {
+            return;
+        }
         let (question, named_providers) = parse_fusion_request(raw);
         let question = question.trim();
         if question.is_empty() {
@@ -2015,6 +2025,7 @@ impl App {
         let target = PathBuf::from(&clean);
         let from = self.cwd.display().to_string();
         self.cwd = target.clone();
+        self.refresh_skill_palette_cache();
         if let Some(s) = &mut self.session {
             s.cwd = clean.clone();
         }
@@ -2271,59 +2282,68 @@ impl App {
         }
     }
 
-    /// `/effort` — reasoning effort for the **active provider**.
+    /// `/effort` — reasoning effort from `low` to `ultracode`, saved to config.
     ///
-    /// The rungs are not universal: xAI takes only `low|high`, Anthropic and
-    /// Gemini budget thinking in tokens and take no effort name at all, and
-    /// every vendor keeps adding rungs. So the offered set comes from the
-    /// catalog, and a name nur does not recognise is accepted with a note
-    /// instead of rejected — a rung a provider shipped this morning must work
-    /// this morning, without waiting for a nur release.
+    /// Routes do not share one ladder: xAI takes only `low|high`, Claude's rungs
+    /// depend on the model, Gemini takes none, and vendors keep adding rungs. So
+    /// nur keeps the chosen level and sends each route the nearest rung it
+    /// accepts, and says which one. A name nur does not recognise is forwarded
+    /// with a note instead of rejected: a rung a provider shipped this morning
+    /// must work this morning, without waiting for a nur release.
     fn cmd_effort(&mut self, arg: &str) {
+        let changed = !arg.trim().is_empty();
+        if changed {
+            self.cfg.reasoning_effort = crate::providers::canonical_effort(arg);
+            if let Err(error) = crate::config::save_config(&self.cfg) {
+                self.push_error(format!(
+                    "effort applies to this session, but saving config failed: {error}"
+                ));
+            }
+        }
+        let current = crate::providers::canonical_effort(&self.cfg.reasoning_effort);
         let provider = self.cfg.provider.clone();
-        let levels = crate::providers::effort_levels(&provider);
+        let model = self.cfg.model.clone();
         let name = crate::providers::by_id(&provider)
             .map(|p| p.name)
             .unwrap_or(provider.as_str());
-
-        if levels.is_empty() {
-            self.push_info(format!(
-                "effort: {} · {name} has no effort setting — it budgets thinking in tokens, \
-                 so nur omits the field. The value is kept and applies again on a provider \
-                 that takes one.",
-                self.cfg.reasoning_effort
-            ));
-            return;
-        }
-        if arg.is_empty() {
-            self.push_info(format!(
-                "effort: {} · /effort <{}>  ({name})",
-                self.cfg.reasoning_effort,
-                levels.join("|")
-            ));
-            return;
-        }
-
-        let want = arg.trim().to_ascii_lowercase();
-        self.cfg.reasoning_effort = want.clone();
-        match crate::providers::nearest_effort(&provider, &want) {
-            Some(sent) if sent == want => {
-                self.push_info(format!("reasoning effort → {want}"));
+        let levels = crate::providers::effort_levels(&provider, &model);
+        let wire = match crate::providers::nearest_effort(&provider, &model, &current) {
+            None => format!(
+                "{name} has no effort control for {model}, so nothing is sent; \
+                 the level applies again on a route that takes one"
+            ),
+            Some(sent) if current == "ultracode" => format!(
+                "{name} receives {sent}, its strongest rung, and work that splits \
+                 fans out to parallel subagents"
+            ),
+            Some(sent) if sent == current => format!("{name} receives {sent}"),
+            Some(sent) if crate::providers::EFFORT_LADDER.contains(&current.as_str()) => {
+                format!(
+                    "{name} accepts {} for {model}, so it receives {sent}",
+                    levels.join("|")
+                )
             }
-            // Known rung this provider does not have: say what goes on the wire.
-            Some(sent) => self.push_info(format!(
-                "reasoning effort → {want} · {name} accepts {} — sending {sent}",
-                levels.join("|")
-            )),
-            None => self.push_info(format!("reasoning effort → {want}")),
-        }
-        if !crate::providers::EFFORT_LADDER.contains(&want.as_str())
-            && !levels.contains(&want.as_str())
-        {
-            self.push_info(format!(
-                "'{want}' is not a rung nur knows — forwarding it to {name} as-is"
-            ));
-        }
+            Some(_) => {
+                format!("'{current}' is not a rung nur knows; forwarding it to {name} as-is")
+            }
+        };
+        let menu = crate::providers::EFFORT_MENU
+            .iter()
+            .map(|level| {
+                if *level == current {
+                    format!("[{level}]")
+                } else {
+                    (*level).to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let lead = if changed {
+            "reasoning effort →"
+        } else {
+            "reasoning effort:"
+        };
+        self.push_info(format!("{lead} {current} · {wire}\n/effort {menu}"));
     }
 
     pub(super) fn cmd_resume(&mut self, arg: &str) {
@@ -2547,6 +2567,9 @@ impl App {
     fn cmd_goal(&mut self, arg: &str) {
         let arg = arg.trim();
         let objective = goal_set_objective(arg);
+        if objective.is_some() && self.defer_until_prepared(&format!("/goal {arg}"), true) {
+            return;
+        }
         // Persistent goal store (Prime /goal pattern) when a session id exists.
         if self.gen_session_scope().is_some() {
             match arg {
@@ -3056,6 +3079,9 @@ impl App {
     /// picker + interactivity/animation mandate).
     fn cmd_diagram(&mut self, arg: &str) {
         let arg = arg.trim();
+        if !arg.is_empty() && self.defer_until_prepared(&format!("/diagram {arg}"), true) {
+            return;
+        }
         if arg.is_empty() {
             self.push_note(
                 Tone::Neutral,
@@ -3152,6 +3178,9 @@ impl App {
             return;
         }
         if arg.eq_ignore_ascii_case("install") || arg.eq_ignore_ascii_case("setup") {
+            if self.defer_until_prepared("/draw install", true) {
+                return;
+            }
             if !self.authed {
                 self.push_error("signed out — /login first".into());
                 return;
@@ -3169,6 +3198,9 @@ impl App {
         }
         if arg.ends_with(".tldraw") || arg.ends_with(".tldr") {
             self.draw_open_file(arg);
+            return;
+        }
+        if self.defer_until_prepared(&format!("/draw {arg}"), true) {
             return;
         }
         if !self.authed {
@@ -3243,6 +3275,12 @@ impl App {
     /// Inject a message into the **running** turn without cancelling it
     /// (steering). Idle → nothing to steer, so it sends normally.
     fn cmd_steer(&mut self, arg: &str) {
+        if !arg.is_empty()
+            && !self.busy
+            && self.defer_until_prepared(&format!("/steer {arg}"), true)
+        {
+            return;
+        }
         let arg = arg.trim();
         if arg.is_empty() {
             self.push_info(
@@ -3274,6 +3312,9 @@ impl App {
     /// centers the map on one area. The transcript shows a short label while the
     /// model receives the full instruction template.
     fn cmd_scan(&mut self, arg: &str) {
+        if self.defer_until_prepared(&format!("/scan {arg}"), true) {
+            return;
+        }
         if !self.authed {
             self.push_error("signed out — run /login before /scan".into());
             return;

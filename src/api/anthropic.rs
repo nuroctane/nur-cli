@@ -156,9 +156,18 @@ pub fn build_body_with_oauth(req: &ResponseRequest, stream: bool, oauth: bool) -
     if stream {
         body["stream"] = json!(true);
     }
-    // Do not auto-attach Anthropic `thinking` — not all models accept it and a
-    // 400 here looks like "Anthropic is broken" for users on haiku/sonnet tiers.
-    let _ = &req.reasoning;
+    // Effort rides `output_config.effort` on models that have the control,
+    // clamped to the rungs that model accepts (a missing rung is a 400). Do not
+    // auto-attach `thinking`: current models think adaptively on their own, and
+    // a forced setting 400s on haiku/sonnet tiers that read as "Anthropic is broken".
+    if let Some(effort) = req
+        .reasoning
+        .as_ref()
+        .and_then(|reasoning| reasoning.effort.as_deref())
+        .and_then(|effort| crate::providers::nearest_effort("anthropic", &model, effort))
+    {
+        body["output_config"] = json!({ "effort": effort });
+    }
     apply_prompt_caching(&mut body);
     body
 }
@@ -875,7 +884,47 @@ mod tests {
     fn output_reserve_is_serialized_as_anthropic_max_tokens() {
         let mut request = req();
         request.max_output_tokens = Some(4096);
-        assert_eq!(build_body_with_oauth(&request, false, false)["max_tokens"], 4096);
+        assert_eq!(
+            build_body_with_oauth(&request, false, false)["max_tokens"],
+            4096
+        );
+    }
+
+    /// Claude takes effort as `output_config.effort`. Only models with that
+    /// control get it, clamped to the rungs the model accepts; `thinking` stays
+    /// untouched because forcing it on older tiers returned 400s.
+    #[test]
+    fn effort_rides_output_config_only_where_the_model_takes_it() {
+        let with_effort = |model: &str, effort: Option<&str>| {
+            let mut request = req();
+            request.model = model.into();
+            request.reasoning = Some(crate::api::types::ReasoningConfig {
+                effort: effort.map(str::to_string),
+                summary: Some("auto".into()),
+            });
+            build_body_with_oauth(&request, false, false)
+        };
+        let body = with_effort("claude-sonnet-5", Some("max"));
+        assert_eq!(body["output_config"]["effort"], "max");
+        assert!(body.get("thinking").is_none());
+        assert_eq!(
+            with_effort("claude-opus-4-5", Some("xhigh"))["output_config"]["effort"],
+            "high"
+        );
+        assert_eq!(
+            with_effort("sonnet", Some("xhigh"))["output_config"]["effort"],
+            "xhigh"
+        );
+        for (model, effort) in [
+            ("claude-haiku-4-5", Some("high")),
+            ("MiniMax-M2.7", Some("high")),
+            ("claude-sonnet-5", None),
+        ] {
+            assert!(
+                with_effort(model, effort).get("output_config").is_none(),
+                "{model} {effort:?}"
+            );
+        }
     }
 
     fn messages_of(input: Value) -> Vec<Value> {

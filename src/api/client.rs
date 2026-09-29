@@ -392,6 +392,24 @@ impl ApiClient {
         self.oauth.is_some() || super::anthropic::is_oauth_token(&self.api_key)
     }
 
+    /// Messages body for this route. `output_config.effort` goes to Anthropic
+    /// itself only: the gateways that also serve Claude over this protocol
+    /// (OpenCode Zen, Command Code) are not documented to accept it.
+    fn anthropic_body(
+        &self,
+        req: &ResponseRequest,
+        stream: bool,
+        oauth: bool,
+    ) -> serde_json::Value {
+        let mut body = super::anthropic::build_body_with_oauth(req, stream, oauth);
+        if self.provider_id != "anthropic" {
+            if let Some(fields) = body.as_object_mut() {
+                fields.remove("output_config");
+            }
+        }
+        body
+    }
+
     fn is_retryable_status(status: u16) -> bool {
         matches!(status, 429 | 500 | 502 | 503 | 504)
     }
@@ -1859,7 +1877,7 @@ impl ApiClient {
     async fn create_anthropic(&self, req: &ResponseRequest) -> Result<ApiResponse> {
         let url = format!("{}/messages", self.base_url);
         let oauth = self.anthropic_body_is_claude_oauth();
-        let body = super::anthropic::build_body_with_oauth(req, false, oauth);
+        let body = self.anthropic_body(req, false, oauth);
         let mut attempt = 0u32;
         let mut oauth_refreshed = false;
         loop {
@@ -1950,7 +1968,7 @@ impl ApiClient {
     ) -> Result<ApiResponse> {
         let url = format!("{}/messages", self.base_url);
         let oauth = self.anthropic_body_is_claude_oauth();
-        let body = super::anthropic::build_body_with_oauth(req, true, oauth);
+        let body = self.anthropic_body(req, true, oauth);
 
         // This path had no retry whatsoever while every sibling path has 3-4
         // attempts with backoff. It matters more here than anywhere else: the
@@ -3131,13 +3149,10 @@ mod tests {
     fn commandcode_routing_keeps_one_host_and_flips_only_the_style() {
         // Callers set the catalog style via `with_style` after for_provider
         // (the bare client defaults to Responses).
-        let cc = ApiClient::for_provider(
-            crate::providers::COMMANDCODE_BASE_URL,
-            "k",
-            "commandcode",
-        )
-        .unwrap()
-        .with_style(ApiStyle::ChatCompletions);
+        let cc =
+            ApiClient::for_provider(crate::providers::COMMANDCODE_BASE_URL, "k", "commandcode")
+                .unwrap()
+                .with_style(ApiStyle::ChatCompletions);
         assert_eq!(cc.style, ApiStyle::ChatCompletions, "catalog style is CC");
         let claude = cc.routed_for_model("claude-sonnet-4-6");
         assert_eq!(claude.style, ApiStyle::AnthropicMessages);
@@ -3172,7 +3187,10 @@ mod tests {
             ..client
         };
         let routed = client.with_style(ApiStyle::ChatCompletions);
-        assert_eq!(routed.base_url, "https://open.bigmodel.cn/api/coding/paas/v4");
+        assert_eq!(
+            routed.base_url,
+            "https://open.bigmodel.cn/api/coding/paas/v4"
+        );
 
         // A zai-routed (or context-less) session keeps the catalog host.
         let plain = ApiClient::for_provider(
@@ -3402,7 +3420,11 @@ mod tests {
                     );
                 }
                 ApiStyle::AnthropicMessages => {
-                    let body = super::super::anthropic::build_body_with_oauth(route_request.as_ref(), false, false);
+                    let body = super::super::anthropic::build_body_with_oauth(
+                        route_request.as_ref(),
+                        false,
+                        false,
+                    );
                     assert_eq!(body["max_tokens"], serde_json::json!(2_048));
                     assert!(body.get("max_output_tokens").is_none());
                 }
@@ -3643,6 +3665,47 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
             effective_base_url("https://example.test/v1", "kimi", true),
             crate::providers::KIMI_CODE_BASE_URL
         );
+    }
+
+    /// Effort reaches Anthropic's own API only; Claude-serving gateways on the
+    /// same wire protocol get the body without `output_config`.
+    #[test]
+    fn anthropic_effort_is_first_party_only() {
+        let request = crate::api::types::ResponseRequest {
+            model: "claude-sonnet-5".into(),
+            input: serde_json::json!([
+                {"role":"user","content":[{"type":"input_text","text":"hi"}]}
+            ]),
+            instructions: None,
+            tools: None,
+            tool_choice: None,
+            store: None,
+            include: None,
+            reasoning: Some(crate::api::types::ReasoningConfig {
+                effort: Some("high".into()),
+                summary: None,
+            }),
+            stream: None,
+            parallel_tool_calls: None,
+            prompt_cache_key: None,
+            max_output_tokens: None,
+        };
+        let mut client = ApiClient::new("https://example.test", "key").unwrap();
+        client.provider_id = "anthropic".into();
+        assert_eq!(
+            client.anthropic_body(&request, false, false)["output_config"]["effort"],
+            "high"
+        );
+        for gateway in ["opencode", "commandcode"] {
+            client.provider_id = gateway.into();
+            assert!(
+                client
+                    .anthropic_body(&request, false, false)
+                    .get("output_config")
+                    .is_none(),
+                "{gateway}"
+            );
+        }
     }
 
     #[test]

@@ -78,7 +78,7 @@ auto_update = true
 | `fallback_providers` | array | empty | Opt-in cross-provider failover chain: catalog ids retried in order on 5xx/429/transport. Each fallback uses its own env-var key; empty = no failover |
 | `failover_allow_downgrade` | bool | `false` | Allow failover to a provider whose privacy tier is weaker than the active one. `false` means an outage never silently weakens data privacy |
 | `fusion_panel` | array | empty | Opt-in `/fusion` panel: catalog ids polled alongside the active model. `/fusion <question>` asks each and the active model synthesizes one answer. Empty = off |
-| `reasoning_effort` | string | `high` | Reasoning depth: `minimal`, `low`, `medium`, `high`, `xhigh` |
+| `reasoning_effort` | string | `high` | Reasoning depth: `low`, `medium`, `high`, `xhigh`, `max`, `ultracode` (also `minimal`). See [below](#reasoning-effort-levels) |
 | `max_turns` | integer | `0` | Max agent tool/model rounds per user prompt. **`0` = unlimited** (default). Set via config or `/budget turns` / `/turns` |
 | `max_session_cost_usd` | float? | unset (∞) | Optional session $ hard-stop. `/budget cost <usd>` · `/budget clear` |
 | `max_session_tokens` | integer? | unset (∞) | Optional session token hard-stop. `/budget tokens <n>` · `/budget clear` |
@@ -175,11 +175,32 @@ midnight with a pink spine. `/theme` switching keeps the override.
 
 | Level | Behaviour |
 |-------|-----------|
-| `minimal` | Fastest, shallowest reasoning |
 | `low` | Light reasoning |
-| `medium` | Balanced |
+| `medium` | Balanced (alias `med`) |
 | `high` | Deep reasoning (default) |
-| `xhigh` | Maximum reasoning depth |
+| `xhigh` | Deeper still (alias `extra`) |
+| `max` | The strongest reasoning the route takes |
+| `ultracode` | `max`, plus the agent splits work that splits across parallel subagents and verifies the result (alias `ultra`) |
+
+`minimal` is still accepted for OpenAI-shaped routes. Set a level with
+`/effort <level>` (saved to this file) or `--effort` for one run.
+
+Providers do not share one ladder, so nur keeps the level you chose and sends
+each route the nearest rung it accepts. Bare `/effort` shows what that is:
+
+| Route | Receives |
+|-------|----------|
+| OpenAI GPT-5.6 | `none`, `low`, `medium`, `high`, `xhigh`, `max`; `ultracode` sends `max` |
+| Other OpenAI-shaped routes (`reasoning.effort`) | `minimal` … `xhigh`; `max` and `ultracode` send `xhigh` |
+| xAI | Grok 4.6/4.7: `low`, `medium`, `high`, `xhigh`; Grok 4.5: through `high`; legacy Grok 3 mini: `low` or `high` |
+| Nous Portal | `low`, `high` or `max` |
+| Anthropic (`output_config.effort`) | By model: Fable, Opus 4.7+ and Sonnet 5 take `low` … `max`; Opus/Sonnet 4.6 and Mythos Preview take all but `xhigh`; Opus 4.5 takes `low` … `high`; Haiku and older models get none |
+| Gemini, MiniMax | No effort control, so nothing is sent |
+
+Provider references: [OpenAI](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-5.6), [xAI](https://docs.x.ai/developers/model-capabilities/text/reasoning), [Anthropic](https://platform.claude.com/docs/en/build-with-claude/effort).
+
+A missing rung rounds to the nearest one, and ties round up. A name nur does
+not know is forwarded as-is, so a rung a vendor ships today works today.
 
 ### Session budgets (interactive)
 

@@ -131,10 +131,24 @@ pub struct PromptContext {
     activation_path: Option<String>,
     /// Provider aliases the user named in this turn's message (for agent.provider nudge).
     named_providers: Vec<String>,
+    /// Effort `ultracode`: orchestrate work that splits across parallel subagents.
+    ultracode: bool,
 }
 
-impl PromptContext {
+/// Effort `ultracode` for the root agent. The strongest effort rung already
+/// rides the request; this adds the orchestration half.
+const ULTRACODE_BLOCK: &str = r#"
+# Effort: ULTRACODE
+The user chose maximum effort with multi-agent orchestration. When the work splits:
+- Plan it with todo_write first: independent pieces versus steps that must stay in order.
+- Fan out: issue several `agent` calls in one turn (they run concurrently): explore for
+  reading and research, general for scoped changes, each with a complete, self-contained prompt.
+- Integrate: read every report, reconcile conflicts, and verify the combined result yourself
+  (build, tests) before calling it done.
+Small or single-step requests still get a direct answer; do not fan out work that does not split.
+"#;
 
+impl PromptContext {
     /// Build the complete prompt on Tokio's blocking pool, for every provider.
     /// Skill activation can perform blocking Jev HTTP calls, and the other
     /// prompt sources can read disk or run subprocesses. None belongs on an
@@ -149,11 +163,13 @@ impl PromptContext {
         provider: &str,
         poor_mode: bool,
         user_text: Option<&str>,
+        effort: &str,
     ) -> Result<Self, tokio::task::JoinError> {
         let cwd = cwd.to_path_buf();
         let model = model.to_owned();
         let provider = provider.to_owned();
         let user_text = user_text.map(str::to_owned);
+        let effort = effort.to_owned();
         Self::build_off_thread(move || {
             Self::build_with_opts(
                 &cwd,
@@ -162,6 +178,7 @@ impl PromptContext {
                 &provider,
                 poor_mode,
                 user_text.as_deref(),
+                &effort,
             )
         })
         .await
@@ -188,6 +205,7 @@ impl PromptContext {
         provider: &str,
         poor_mode: bool,
         user_text: Option<&str>,
+        effort: &str,
     ) -> Self {
         let plur = if is_subagent || poor_mode {
             String::new()
@@ -260,6 +278,8 @@ impl PromptContext {
             activation_requirements,
             activation_path,
             named_providers,
+            // Subagents cannot delegate, so orchestration is the root's job.
+            ultracode: !is_subagent && crate::providers::canonical_effort(effort) == "ultracode",
         }
     }
 
@@ -380,13 +400,19 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
             return prompt;
         }
 
+        // Plan mode blocks `agent`, so there is nothing to fan out.
+        let ultracode_block = if self.ultracode && !matches!(mode, PermissionMode::Plan) {
+            ULTRACODE_BLOCK
+        } else {
+            ""
+        };
         let mut s = format!(
             r#"{role}
 
 Workspace: {}
 OS: {} · shell: {}
 
-{mode_block}
+{mode_block}{ultracode_block}
 # Tools
 read_file, list_dir, write_file, edit_file, multi_edit, apply_patch, bash, grep, glob,
 web_fetch, web_search, look, extract_frames, git_status, git_diff,
@@ -617,8 +643,16 @@ mod tests {
 
     #[test]
     fn child_prompt_matches_the_focused_non_recursive_tool_surface() {
-        let prompt = PromptContext::build_with_opts(Path::new("."), true, "test-model", "test-provider", false, None)
-            .render(PermissionMode::Auto, "(no todos)");
+        let prompt = PromptContext::build_with_opts(
+            Path::new("."),
+            true,
+            "test-model",
+            "test-provider",
+            false,
+            None,
+            "high",
+        )
+        .render(PermissionMode::Auto, "(no todos)");
         assert!(prompt.contains("read_file"));
         assert!(prompt.contains("write_file"));
         assert!(prompt.contains("Delegation tools and OMP are intentionally unavailable"));

@@ -1,5 +1,12 @@
 # NurCLI
 
+**v0.40.0:** [Reasoning effort](configuration.md#reasoning-effort-levels) runs from
+`low` through `max` to `ultracode` (the strongest rung plus parallel subagents), mapped
+per route. Claude models now receive effort, `/effort` saves the level, and concurrent
+nur processes share one OAuth refresh. `/login` and other built-in controls now
+work while skills index; only dependent requests wait.
+The NUR banner's gradient shimmer and the TUI's ambient animations are restored.
+
 **v0.39.1:** The editor accepts drafts while skills, credentials, and model metadata load.
 Early submissions queue until preparation finishes. See the
 [startup investigation and measurements](startup-performance.md).
@@ -75,7 +82,7 @@ That's the normal upgrade. Pulls / rebuilds when you have a Laboratory checkout,
 | **Hardening** | Sandbox · bash denylist · SSRF blocks · atomic `~/.nur` IO · session **`.json.bak`** · **permissions.toml** · optional **hooks.toml** · API retries · install SHA-256 · `nur doctor` |
 | **Host panels** | Live `status.json` / `usage.jsonl` · **`NUR_*`** env exports · Orca hook (`nur-hook.cmd`) |
 
-**Current version: v0.39.1**
+**Current version: v0.40.0**
 
 ---
 

@@ -1725,7 +1725,7 @@ mod tests {
                 let id = format!("need_{i}");
                 let p = batch.get(&id).and_then(Answer::noul);
                 let confident = match (p, batch.get(&id).and_then(Answer::confidence)) {
-                    (Some(p), Some(c)) => Some(p).filter(|_| c >= t.act),
+                    (Some(p), Some(c)) => (c >= t.act).then_some(p),
                     _ => None,
                 };
                 (name.clone(), confident)
@@ -2403,7 +2403,6 @@ mod live {
         let opts = crate::typesafe::compact::CompactOptions::from_config(&cfg.compaction)
             .with_goal("fix the failing test in src/lib.rs");
         let outcome = crate::typesafe::compact::try_compact_items(&cfg, &items, &opts)
-            .ok()
             .expect("live compaction produces a judgment");
         println!("{}", outcome.stats.summary());
         for o in &outcome.outcomes {
