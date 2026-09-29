@@ -7,7 +7,7 @@
 **Use fewer paid tokens by default.**
 The harness supersedes stale duplicate reads, spills large tool results, preserves provider prompt caches, and compacts repeatedly using an OMP-style response reserve instead of a premature fixed percentage. It also supports local context estimates when providers omit usage, prompt caching, local models, and focused Oh My Pi delegation through a verified authenticated economy model.
 
-**v0.40.0:** Reasoning effort runs from `low` through `max` to `ultracode`, which pairs the strongest rung with parallel subagents for work that splits. Each route receives the nearest rung it accepts, Claude models now get effort through `output_config.effort`, and `/effort` saves the level. Concurrent nur processes share one OAuth refresh instead of spending a rotating refresh token twice. See [effort levels](docs/configuration.md#reasoning-effort-levels). Built-in controls, including `/login`, now work during skill indexing. The NUR banner's gradient shimmer and the TUI's idle animations run again; v0.38.3 had frozen them.
+**v0.40.1:** `/effort` now says when a route takes no effort field. Chat Completions routes (OpenRouter, Groq, Nous Portal, xAI API keys, local servers) send none, so nur reports that instead of naming a level they never receive; the level stays saved for routes that take one. See [effort levels](docs/configuration.md#reasoning-effort-levels).
 
 [TypeSafe · Jev](https://docs.typesafe.ai) judgments run inside the harness rather than beside it: one batched request decides which tool calls are still worth their tokens, whether a result actually worked, and what a fresh context can drop - so compaction writes no summary, survivors stay verbatim, and the frontier model is never paid to answer an if-statement. Provider-agnostic (one key lifts every model), and keyless on this machine through three supported local engines - openJev-verdict-2.0, Bespoke-Nimble-9B, and Laya Core ML ([docs/jev-local.md](./docs/jev-local.md)). Native failover, cross-provider subagents, and delegated OMP work all report their actual token and cost impact in Nur's session budgets and `/usage` totals.
 
@@ -175,6 +175,8 @@ Node/uv/Bun are available.
 Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](./docs/setup.md)
 
 ---
+
+**v0.40.0**: Reasoning effort runs from `low` through `max` to `ultracode`, which pairs the strongest rung with parallel subagents for work that splits. Each route receives the nearest rung it accepts, Claude models now get effort through `output_config.effort`, and `/effort` saves the level. Concurrent nur processes share one OAuth refresh instead of spending a rotating refresh token twice. See [effort levels](docs/configuration.md#reasoning-effort-levels). Built-in controls, including `/login`, now work during skill indexing. The NUR banner's gradient shimmer and the TUI's idle animations run again; v0.38.3 had frozen them.
 
 **v0.39.1**: The interactive editor opens while skills, account credentials, and model metadata load in the background. Early submissions queue until preparation completes. Skill indexes refresh atomically without discarding the previous inventory. See the [startup investigation and measurements](docs/startup-performance.md).
 

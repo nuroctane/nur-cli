@@ -410,6 +410,18 @@ impl ApiClient {
         body
     }
 
+    /// Does a request for `model` on this route carry a reasoning-effort field?
+    /// Responses sends `reasoning.effort` and Anthropic's own API sends
+    /// `output_config.effort` (see `anthropic_body`); Chat Completions and
+    /// Cloud Code requests carry none.
+    pub fn sends_effort(&self, model: &str) -> bool {
+        match self.routed_for_model(model).style {
+            ApiStyle::Responses => true,
+            ApiStyle::AnthropicMessages => self.provider_id == "anthropic",
+            ApiStyle::ChatCompletions | ApiStyle::GeminiCloudCode => false,
+        }
+    }
+
     fn is_retryable_status(status: u16) -> bool {
         matches!(status, 429 | 500 | 502 | 503 | 504)
     }
@@ -3665,6 +3677,64 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
             effective_base_url("https://example.test/v1", "kimi", true),
             crate::providers::KIMI_CODE_BASE_URL
         );
+    }
+
+    /// Only two wire formats carry effort: Responses (`reasoning.effort`) and
+    /// Anthropic's own Messages API (`output_config.effort`). Per-model routing
+    /// decides which format a model uses.
+    #[test]
+    fn effort_is_sent_only_on_routes_that_carry_it() {
+        let client = |provider: &str, style: ApiStyle| {
+            let mut client = ApiClient::new("https://example.test", "key").unwrap();
+            client.provider_id = provider.into();
+            client.style = style;
+            client
+        };
+        for (provider, style, model, sends) in [
+            ("openai", ApiStyle::Responses, "gpt-5.5", true),
+            (
+                "anthropic",
+                ApiStyle::AnthropicMessages,
+                "claude-sonnet-5",
+                true,
+            ),
+            (
+                "minimax",
+                ApiStyle::AnthropicMessages,
+                "MiniMax-M2.7",
+                false,
+            ),
+            (
+                "openrouter",
+                ApiStyle::ChatCompletions,
+                "openai/gpt-5.5",
+                false,
+            ),
+            ("vllm", ApiStyle::ChatCompletions, "local-model", false),
+            // xAI: an API key speaks Chat Completions, a browser login Responses.
+            ("xai", ApiStyle::ChatCompletions, "grok-4.7", false),
+            ("xai", ApiStyle::Responses, "grok-4.7", true),
+            (
+                "antigravity",
+                ApiStyle::GeminiCloudCode,
+                "gemini-3.1-pro",
+                false,
+            ),
+            ("opencode", ApiStyle::ChatCompletions, "gpt-5.5", true),
+            (
+                "opencode",
+                ApiStyle::ChatCompletions,
+                "claude-sonnet-5",
+                false,
+            ),
+            ("opencode", ApiStyle::ChatCompletions, "kimi-k2", false),
+        ] {
+            assert_eq!(
+                client(provider, style).sends_effort(model),
+                sends,
+                "{provider} {model}"
+            );
+        }
     }
 
     /// Effort reaches Anthropic's own API only; Claude-serving gateways on the

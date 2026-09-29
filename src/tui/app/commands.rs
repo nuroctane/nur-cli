@@ -2307,24 +2307,35 @@ impl App {
             .map(|p| p.name)
             .unwrap_or(provider.as_str());
         let levels = crate::providers::effort_levels(&provider, &model);
-        let wire = match crate::providers::nearest_effort(&provider, &model, &current) {
-            None => format!(
-                "{name} has no effort control for {model}, so nothing is sent; \
-                 the level applies again on a route that takes one"
-            ),
-            Some(sent) if current == "ultracode" => format!(
-                "{name} receives {sent}, its strongest rung, and work that splits \
-                 fans out to parallel subagents"
-            ),
-            Some(sent) if sent == current => format!("{name} receives {sent}"),
-            Some(sent) if crate::providers::EFFORT_LADDER.contains(&current.as_str()) => {
-                format!(
-                    "{name} accepts {} for {model}, so it receives {sent}",
-                    levels.join("|")
-                )
-            }
-            Some(_) => {
-                format!("'{current}' is not a rung nur knows; forwarding it to {name} as-is")
+        // Chat Completions and Cloud Code requests carry no effort field, so
+        // naming a rung there would claim something that never goes out.
+        let wire = if !self.client.sends_effort(&model) {
+            let saved = if current == "ultracode" {
+                "ultracode still fans out work that splits to parallel subagents"
+            } else {
+                "the level is saved for routes that take one"
+            };
+            format!("{name} takes no effort field on this route, so nothing is sent; {saved}")
+        } else {
+            match crate::providers::nearest_effort(&provider, &model, &current) {
+                None => format!(
+                    "{name} has no effort control for {model}, so nothing is sent; \
+                     the level applies again on a route that takes one"
+                ),
+                Some(sent) if current == "ultracode" => format!(
+                    "{name} receives {sent}, its strongest rung, and work that splits \
+                     fans out to parallel subagents"
+                ),
+                Some(sent) if sent == current => format!("{name} receives {sent}"),
+                Some(sent) if crate::providers::EFFORT_LADDER.contains(&current.as_str()) => {
+                    format!(
+                        "{name} accepts {} for {model}, so it receives {sent}",
+                        levels.join("|")
+                    )
+                }
+                Some(_) => {
+                    format!("'{current}' is not a rung nur knows; forwarding it to {name} as-is")
+                }
             }
         };
         let menu = crate::providers::EFFORT_MENU

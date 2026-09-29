@@ -186,16 +186,22 @@ midnight with a pink spine. `/theme` switching keeps the override.
 `/effort <level>` (saved to this file) or `--effort` for one run.
 
 Providers do not share one ladder, so nur keeps the level you chose and sends
-each route the nearest rung it accepts. Bare `/effort` shows what that is:
+each route the nearest rung it accepts. Only two wire formats carry an effort
+field: the Responses API (`reasoning.effort`) and Anthropic's own Messages API
+(`output_config.effort`). Bare `/effort` shows what the active route receives:
 
 | Route | Receives |
 |-------|----------|
 | OpenAI GPT-5.6 | `none`, `low`, `medium`, `high`, `xhigh`, `max`; `ultracode` sends `max` |
-| Other OpenAI-shaped routes (`reasoning.effort`) | `minimal` … `xhigh`; `max` and `ultracode` send `xhigh` |
-| xAI | Grok 4.6/4.7: `low`, `medium`, `high`, `xhigh`; Grok 4.5: through `high`; legacy Grok 3 mini: `low` or `high` |
-| Nous Portal | `low`, `high` or `max` |
+| Other Responses-API routes (`reasoning.effort`) | `minimal` … `xhigh`; `max` and `ultracode` send `xhigh` |
+| xAI browser login (Responses) | Grok 4.6/4.7: `low`, `medium`, `high`, `xhigh`; Grok 4.5: through `high`; legacy Grok 3 mini: `low` or `high` |
 | Anthropic (`output_config.effort`) | By model: Fable, Opus 4.7+ and Sonnet 5 take `low` … `max`; Opus/Sonnet 4.6 and Mythos Preview take all but `xhigh`; Opus 4.5 takes `low` … `high`; Haiku and older models get none |
+| Chat Completions routes (OpenRouter, Groq, Nous Portal, xAI API keys, local servers, …) | No effort field, so nothing is sent |
 | Gemini, MiniMax | No effort control, so nothing is sent |
+
+The level is saved either way and applies again on a route that takes one.
+`ultracode` also turns on parallel subagent orchestration, which works on every
+route because it is an instruction to the agent rather than a request field.
 
 Provider references: [OpenAI](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-5.6), [xAI](https://docs.x.ai/developers/model-capabilities/text/reasoning), [Anthropic](https://platform.claude.com/docs/en/build-with-claude/effort).
 

@@ -3242,17 +3242,23 @@ impl App {
     /// state where a static string would be wrong or misleading.
     ///
     /// `/effort` is the case that forced this: every level is accepted and
-    /// mapped per route, but some routes (Gemini, Claude Haiku) have no effort
-    /// control at all, and the hint should say so rather than offer a ladder.
+    /// mapped per route, but Chat Completions routes send no effort field and
+    /// some models (Gemini, Claude Haiku) have no effort control at all, and
+    /// the hint should say so rather than offer a ladder.
     pub fn command_hint(&self, name: &str, base: &str) -> String {
         if name != "/effort" {
             return base.to_string();
         }
         let current = crate::providers::canonical_effort(&self.cfg.reasoning_effort);
+        let who = crate::providers::by_id(&self.cfg.provider)
+            .map(|p| p.name)
+            .unwrap_or(self.cfg.provider.as_str());
+        if !self.client.sends_effort(&self.cfg.model) {
+            return format!(
+                "reasoning effort ({current}) - {who} takes no effort field on this route"
+            );
+        }
         if !crate::providers::supports_effort(&self.cfg.provider, &self.cfg.model) {
-            let who = crate::providers::by_id(&self.cfg.provider)
-                .map(|p| p.name)
-                .unwrap_or(self.cfg.provider.as_str());
             return format!("reasoning effort ({current}) - {who} has no effort control here");
         }
         format!(
