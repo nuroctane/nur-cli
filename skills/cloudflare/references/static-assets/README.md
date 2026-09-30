@@ -19,15 +19,3 @@ Do not choose a platform solely from the framework name. For an existing Pages p
 2. [api.md](api.md) — fetch assets and handle responses.
 3. [patterns.md](patterns.md) — choose a routing design.
 4. [gotchas.md](gotchas.md) — diagnose routing, caching, and deployment issues.
-
----
-
-## License
-
-**GNU General Public License v3.0 (or later)** — see [LICENSE](./LICENSE).
-
-Meta CLI is free software: you may redistribute it and/or modify it under the
-terms of the GPL as published by the Free Software Foundation, either version 3
-of the License, or (at your option) any later version. It is distributed in the
-hope that it will be useful, but **without any warranty**; without even the
-implied warranty of merchantability or fitness for a particular purpose.

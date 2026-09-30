@@ -311,7 +311,9 @@ def generate(roots):
   for src in roots:
     if not src.exists():
         continue
-    for md in sorted(src.rglob("SKILL.md")):
+    # Path ordering differs between Windows and Unix. Keep duplicate-name
+    # precedence identical on every platform, including mixed-case folders.
+    for md in sorted(src.rglob("SKILL.md"), key=lambda path: (tuple(part.casefold() for part in path.parts), path.as_posix())):
         if "references" in md.parts:
             continue
         try:

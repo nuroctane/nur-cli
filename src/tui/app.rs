@@ -2499,31 +2499,53 @@ fn disable_mouse() {
 }
 
 #[cfg(feature = "image-peek")]
+fn inferred_image_protocol(
+    tmux: bool,
+    program: &str,
+    lc_terminal: &str,
+    kitty_hint: bool,
+    iterm_hint: bool,
+) -> ratatui_image::picker::ProtocolType {
+    use ratatui_image::picker::ProtocolType;
+    // Preserve v8's outer-terminal precedence while v11 starts with halfblocks.
+    if tmux && kitty_hint {
+        return ProtocolType::Kitty;
+    }
+    if [
+        "iTerm",
+        "WezTerm",
+        "mintty",
+        "vscode",
+        "Tabby",
+        "Hyper",
+        "rio",
+        "Bobcat",
+        "WarpTerminal",
+    ]
+    .iter()
+    .any(|hint| program.contains(hint))
+        || lc_terminal.contains("iTerm")
+        || (tmux && iterm_hint)
+    {
+        ProtocolType::Iterm2
+    } else {
+        ProtocolType::Halfblocks
+    }
+}
+
+#[cfg(feature = "image-peek")]
 pub(super) fn prepare_image_picker(cfg: &Config) -> ratatui_image::picker::Picker {
     let instant_picker = || {
         let mut picker = ratatui_image::picker::Picker::halfblocks();
-        let program = std::env::var("TERM_PROGRAM").unwrap_or_default();
-        let iterm = [
-            "iTerm",
-            "WezTerm",
-            "mintty",
-            "vscode",
-            "Tabby",
-            "Hyper",
-            "rio",
-            "Bobcat",
-            "WarpTerminal",
-        ]
-        .iter()
-        .any(|hint| program.contains(hint))
-            || std::env::var("LC_TERMINAL").is_ok_and(|s| s.contains("iTerm"))
-            || (picker.tmux_detected()
-                && ["ITERM_SESSION_ID", "WEZTERM_EXECUTABLE"]
-                    .iter()
-                    .any(|name| std::env::var(name).is_ok_and(|s| !s.is_empty())));
-        if iterm {
-            picker.set_protocol_type(ratatui_image::picker::ProtocolType::Iterm2);
-        }
+        picker.set_protocol_type(inferred_image_protocol(
+            picker.tmux_detected(),
+            &std::env::var("TERM_PROGRAM").unwrap_or_default(),
+            &std::env::var("LC_TERMINAL").unwrap_or_default(),
+            std::env::var("KITTY_WINDOW_ID").is_ok_and(|s| !s.is_empty()),
+            ["ITERM_SESSION_ID", "WEZTERM_EXECUTABLE"]
+                .iter()
+                .any(|name| std::env::var(name).is_ok_and(|s| !s.is_empty())),
+        ));
         picker
     };
     let mut picker = if std::env::var("NUR_IMAGE_QUERY")
@@ -2554,6 +2576,24 @@ pub(super) fn prepare_image_picker(cfg: &Config) -> ratatui_image::picker::Picke
         _ => {}
     }
     picker
+}
+
+#[cfg(all(test, feature = "image-peek"))]
+#[test]
+fn image_protocol_preserves_tmux_outer_terminal_precedence() {
+    use ratatui_image::picker::ProtocolType;
+    assert_eq!(
+        inferred_image_protocol(true, "WezTerm", "", true, true),
+        ProtocolType::Kitty
+    );
+    assert_eq!(
+        inferred_image_protocol(true, "tmux", "", false, true),
+        ProtocolType::Iterm2
+    );
+    assert_eq!(
+        inferred_image_protocol(false, "xterm", "", true, false),
+        ProtocolType::Halfblocks
+    );
 }
 
 /// Construct the same state for the terminal and isolated draw benchmarks.

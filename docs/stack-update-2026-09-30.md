@@ -13,7 +13,7 @@ records exact resolved versions. These upgrades required compatibility changes:
 |---|---|---|
 | HTTP | [reqwest 0.13.5](https://docs.rs/reqwest/0.13.5/reqwest/) | Explicit form, query, HTTP/2, system proxy, streaming and Rustls features retain OAuth and provider behavior. |
 | Terminal | [ratatui 0.30.2](https://github.com/ratatui/ratatui/blob/main/BREAKING-CHANGES.md), crossterm 0.29, tui-markdown 0.3.10, tui-scrollview 0.6.8 | Shared terminal types upgrade together. Finished Markdown rendering survives width changes; animations remain enabled. |
-| Images | [ratatui-image 11.1.0](https://github.com/ratatui/ratatui-image/blob/master/CHANGELOG.md) | Updated picker/font API; terminal and tmux detection runs after first paint on a worker. Forced protocols remain supported. |
+| Images | [ratatui-image 11.1.0](https://github.com/ratatui/ratatui-image/blob/master/CHANGELOG.md) | Updated picker/font API; terminal and tmux detection runs after first paint on a worker. Kitty outer-terminal precedence and forced protocols remain supported. |
 | Documents | anydoc 0.2.4 | Default document conversion remains enabled. |
 | Configuration | toml 1.1.6, dirs 7, thiserror 2 | Existing configuration stays compatible. Durable writes atomically replace the old file on Windows. |
 | Credentials | aes-gcm 0.11.1, base64 0.23.1, sha2 0.11 | Updated nonce/digest APIs retain the stored credential formats. |
@@ -46,6 +46,8 @@ scripts, examples and reference material. First-party SCA remains separate.
 Portable text hashes tolerate checkout line endings; the snapshot records
 upstream executable modes. CI verifies hashes, tracked resource completeness
 and those modes so Git ignore rules cannot silently omit a reference or script.
+The check also hashes staged Git objects to catch clean filters that alter
+vendored resources. Duplicate-name precedence is identical on Windows and Unix.
 
 The deterministic index contains 1,710 unique skill names. Folder aliases retain
 commands such as `/craft` and `/neon` when upstream changes canonical names. Four
@@ -108,10 +110,10 @@ copy was updated as well. Node 24.14.1 and Bun 1.3.14 satisfy the checked engine
 ## Local validation
 
 Both default and no-default-feature builds pass Clippy with warnings denied.
-The final Rust suite passes 1,067 tests with 18 intentionally ignored previews
-and benchmarks. Seven maintenance-tool tests cover ownership, backups, complete
+The final Rust suite passes 1,068 tests with 18 intentionally ignored previews
+and benchmarks. Nine maintenance-tool tests cover ownership, backups, complete
 resources, destination escapes, portable hashes, executable modes, deterministic
-indexing and folder aliases. Two
+indexing, duplicate precedence, staged artifact integrity and folder aliases. Two
 helper API tests verify inline compression, returned message selection and
 explicit file-read protection.
 

@@ -18,15 +18,3 @@ Use this reference when maintaining an existing Pages project. For new applicati
 - [gotchas.md](./gotchas.md) — build, routing, and deployment investigation
 
 See [Pages Functions](../pages-functions/README.md) for handler-focused navigation. Identify the existing deployment method and framework before proposing changes.
-
----
-
-## License
-
-**GNU General Public License v3.0 (or later)** — see [LICENSE](./LICENSE).
-
-Meta CLI is free software: you may redistribute it and/or modify it under the
-terms of the GPL as published by the Free Software Foundation, either version 3
-of the License, or (at your option) any later version. It is distributed in the
-hope that it will be useful, but **without any warranty**; without even the
-implied warranty of merchantability or fitness for a particular purpose.

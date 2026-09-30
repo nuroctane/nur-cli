@@ -14,15 +14,3 @@ Read the relevant current documentation before implementing. These references ro
 - [gotchas.md](./gotchas.md): missing bindings, stale clients, development differences, and limits.
 
 Treat each binding as a capability granted to code. Select only the resources the Worker needs, and confirm which environment and resource each binding targets before using it.
-
----
-
-## License
-
-**GNU General Public License v3.0 (or later)** — see [LICENSE](./LICENSE).
-
-Meta CLI is free software: you may redistribute it and/or modify it under the
-terms of the GPL as published by the Free Software Foundation, either version 3
-of the License, or (at your option) any later version. It is distributed in the
-hope that it will be useful, but **without any warranty**; without even the
-implied warranty of merchantability or fitness for a particular purpose.

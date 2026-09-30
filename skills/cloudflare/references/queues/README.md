@@ -22,15 +22,3 @@ See [How Queues works](https://developers.cloudflare.com/queues/reference/how-qu
 | Diagnose delivery failures, duplicates, or capacity issues | [gotchas.md](./gotchas.md) |
 
 For a first application, fetch [Getting started](https://developers.cloudflare.com/queues/get-started/). Retrieve [limits](https://developers.cloudflare.com/queues/platform/limits/) and [pricing](https://developers.cloudflare.com/queues/platform/pricing/) before sizing throughput, retention, or cost; plan-specific values are not maintained here.
-
----
-
-## License
-
-**GNU General Public License v3.0 (or later)** — see [LICENSE](./LICENSE).
-
-Meta CLI is free software: you may redistribute it and/or modify it under the
-terms of the GPL as published by the Free Software Foundation, either version 3
-of the License, or (at your option) any later version. It is distributed in the
-hope that it will be useful, but **without any warranty**; without even the
-implied warranty of merchantability or fitness for a particular purpose.

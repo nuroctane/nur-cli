@@ -6,6 +6,8 @@ from pathlib import Path
 import tempfile
 import unittest
 import subprocess
+import json
+import sys
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -24,6 +26,39 @@ generate = load("generate_skill_intents")
 
 
 class MaintenanceTests(unittest.TestCase):
+    def test_duplicate_name_precedence_is_portable_across_folder_case(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for folder, description in [("a", "First guide"), ("B", "Second guide")]:
+                path = root / folder
+                path.mkdir()
+                (path / "SKILL.md").write_text(f"---\nname: shared\ndescription: {description}\n---\nBody")
+            entries = generate.generate([root])["skills"]
+            self.assertEqual(len(entries), 1)
+            self.assertEqual(entries[0]["description"], "First guide")
+            self.assertEqual(entries[0]["aliases"], ["a"])
+
+    def test_staged_artifact_detects_clean_filter_changes(self):
+        with patch.dict(sys.modules, {"sync_upstream_skills":sync}):
+            check = load("check_skill_snapshot")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            source = root / "skills/demo/README.md"
+            source.parent.mkdir(parents=True)
+            source.write_text("upstream guide\n")
+            manifest = {"skills":{"demo":{"files":{"README.md":sync.digest(source)},"executables":[]}}}
+            (root / "skills/upstream-lock.json").write_text(json.dumps(manifest))
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True, capture_output=True)
+            with patch.object(check, "ROOT", root):
+                self.assertEqual(check.main(), 0)
+                altered = subprocess.run(["git", "-C", str(root), "hash-object", "-w", "--stdin"],
+                                         input=b"altered by a clean filter\n", capture_output=True, check=True).stdout.decode().strip()
+                subprocess.run(["git", "-C", str(root), "update-index", "--cacheinfo", "100644", altered,
+                                "skills/demo/README.md"], check=True)
+                self.assertEqual(check.main(), 1)
+            self.assertEqual(source.read_text(), "upstream guide\n")
+
     def test_resource_hashes_survive_windows_checkout_line_endings(self):
         self.assertEqual(sync.content_digest(b"first\r\nsecond\r\n"),
                          sync.content_digest(b"first\nsecond\n"))

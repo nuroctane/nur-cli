@@ -51,15 +51,3 @@ Each playbook is a Markdown file with a fixed shape so the recommender can parse
 3. Add detection signals to the table above (the heuristics live in the recommender code; document them here).
 4. Update the playbook selection matrix in `references/scoring.md`.
 5. Run `node --test packages/vercel-optimize-tests/test/support-topics.test.mjs packages/vercel-optimize-tests/test/investigation-brief.test.mjs`. No tests directly cover playbooks (they're content), but the schema validator runs in CI.
-
----
-
-## License
-
-**GNU General Public License v3.0 (or later)** — see [LICENSE](./LICENSE).
-
-Meta CLI is free software: you may redistribute it and/or modify it under the
-terms of the GPL as published by the Free Software Foundation, either version 3
-of the License, or (at your option) any later version. It is distributed in the
-hope that it will be useful, but **without any warranty**; without even the
-implied warranty of merchantability or fitness for a particular purpose.

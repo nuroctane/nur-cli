@@ -16,11 +16,31 @@ def main():
     manifest = json.loads((ROOT / "skills/upstream-lock.json").read_text(encoding="utf-8"))
     index = subprocess.run(["git", "ls-files", "--stage", "-z"], cwd=ROOT,
                            capture_output=True, check=True).stdout
-    tracked = {}
+    tracked, objects = {}, {}
     for row in index.split(b"\0"):
         if row:
             metadata, name = row.split(b"\t", 1)
-            tracked[name.decode("utf-8")] = metadata.split()[0].decode()
+            mode, oid, _ = metadata.split()
+            name = name.decode("utf-8")
+            tracked[name] = mode.decode()
+            if name.startswith("skills/"):
+                objects[name] = oid.decode()
+    # Validate the actual staged artifact, including clean-filter changes.
+    # Worktree-only checks miss filters that silently alter files on commit.
+    object_ids = sorted(set(objects.values()))
+    response = subprocess.run(["git", "cat-file", "--batch"], cwd=ROOT,
+                              input=("\n".join(object_ids) + "\n").encode(),
+                              capture_output=True, check=True).stdout
+    hashes, offset = {}, 0
+    for oid in object_ids:
+        end = response.index(b"\n", offset)
+        returned, kind, size = response[offset:end].split()
+        if returned.decode() != oid or kind != b"blob":
+            raise ValueError(f"invalid staged resource object: {oid}")
+        offset = end + 1
+        size = int(size)
+        hashes[oid] = content_digest(response[offset:offset + size])
+        offset += size + 1
     failures, checked = [], 0
     for folder, entry in manifest["skills"].items():
         executables = set(entry.get("executables", []))
@@ -31,6 +51,8 @@ def main():
                 failures.append(f"untracked resource: {relative}")
             elif tracked[relative] != ("100755" if resource in executables else "100644"):
                 failures.append(f"executable mode differs: {relative}")
+            if relative in objects and hashes[objects[relative]] != expected:
+                failures.append(f"staged resource hash differs: {relative}")
             if path.is_symlink() or not path.is_file() or content_digest(path.read_bytes()) != expected:
                 failures.append(f"resource hash differs: {relative}")
             checked += 1

@@ -81,15 +81,3 @@ The model is already a strong reasoner. The skill doesn't try to think for it â€
 ## References
 
 Knowledge base informed by community research including [smart-contract-auditing-heuristics](https://github.com/OpenCoreCH/smart-contract-auditing-heuristics) and [smart-contract-vulnerabilities](https://github.com/kadenzipfel/smart-contract-vulnerabilities). Legacy taxonomy IDs are intentionally not used; the skill distills concrete exploit patterns into operational checks.
-
----
-
-## License
-
-**GNU General Public License v3.0 (or later)** â€” see [LICENSE](./LICENSE).
-
-Meta CLI is free software: you may redistribute it and/or modify it under the
-terms of the GPL as published by the Free Software Foundation, either version 3
-of the License, or (at your option) any later version. It is distributed in the
-hope that it will be useful, but **without any warranty**; without even the
-implied warranty of merchantability or fitness for a particular purpose.

@@ -20,15 +20,3 @@ Fetch the relevant documentation before implementing. Current Cloudflare docs ar
 | Diagnose access, deployment, or quota failures | [gotchas.md](./gotchas.md) |
 
 Fetch the [product overview](https://developers.cloudflare.com/secrets-store/) for current availability and supported integrations. For AI Gateway provider credentials, use [Bring your own keys](https://developers.cloudflare.com/ai-gateway/configuration/bring-your-own-keys/).
-
----
-
-## License
-
-**GNU General Public License v3.0 (or later)** — see [LICENSE](./LICENSE).
-
-Meta CLI is free software: you may redistribute it and/or modify it under the
-terms of the GPL as published by the Free Software Foundation, either version 3
-of the License, or (at your option) any later version. It is distributed in the
-hope that it will be useful, but **without any warranty**; without even the
-implied warranty of merchantability or fitness for a particular purpose.

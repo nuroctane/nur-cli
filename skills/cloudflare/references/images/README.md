@@ -10,15 +10,3 @@ Choose the image source and operation before selecting an API. Hosted-image mana
 | Diagnose failures, check limits, or investigate caching | [Troubleshooting](gotchas.md) |
 
 For new work, inspect the project's installed Wrangler version, compatibility settings, existing image storage, and public/private access requirements. Read only the relevant linked pages and adapt them to the project; preserve existing conventions and verify behavior with representative images.
-
----
-
-## License
-
-**GNU General Public License v3.0 (or later)** — see [LICENSE](./LICENSE).
-
-Meta CLI is free software: you may redistribute it and/or modify it under the
-terms of the GPL as published by the Free Software Foundation, either version 3
-of the License, or (at your option) any later version. It is distributed in the
-hope that it will be useful, but **without any warranty**; without even the
-implied warranty of merchantability or fitness for a particular purpose.
