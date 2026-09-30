@@ -13,7 +13,7 @@ jobs:
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     env:
-      NUR_HOME: ${{ runner.temp }}/nur-validation
+      NUR_HOME: ${{ github.workspace }}/target/nur-validation
       NUR_DISABLE_NATIVE_MEMORY: '1'
       NUR_NO_UPDATE: '1'
     steps:
