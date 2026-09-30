@@ -6,6 +6,12 @@ responsive while workers prepare credentials and skills.
 
 ## Rust stack
 
+Builds use Rust 1.97.0 consistently in `rust-toolchain.toml`, validation and
+release jobs. Rust 1.98.1 was tested locally and on hosted Windows/Linux:
+Clippy's vtable/trait evaluation recursively allocates until compilation fails
+or the runner is terminated. The complete suite passes with 1.97.0. This pins
+the verified compiler without changing the release profile or disabling checks.
+
 All direct dependencies were checked against their primary registry. Cargo.lock
 records exact resolved versions. These upgrades required compatibility changes:
 
@@ -120,10 +126,10 @@ copy was updated as well. Node 24.14.1 and Bun 1.3.14 satisfy the checked engine
 
 Both default and no-default-feature builds pass Clippy with warnings denied.
 The final Rust suite passes 1,068 tests with 18 intentionally ignored previews
-and benchmarks. Ten maintenance-tool tests cover ownership, backups, complete
+and benchmarks. Twelve maintenance-tool tests cover ownership, backups, complete
 resources, destination escapes, portable hashes, executable modes, deterministic
 indexing, duplicate precedence, staged artifact integrity, reviewed overrides
-and folder aliases. Two
+folder aliases, offline bundle regeneration and redacted credential detection. Two
 helper API tests verify inline compression, returned message selection and
 explicit file-read protection.
 
@@ -132,7 +138,7 @@ explicitly skipped, all ten startup cases and all ten terminal regression cases.
 Coverage includes Chat Completions, Responses and Anthropic Messages, streamed
 tool calls, context-rejection recovery, blocked credentials, queued resets,
 external skill additions, bridge ownership and cancelled judgments.
-In the local release terminal checks, first paint took 0.297-0.312 seconds with
+In the local release terminal checks, first paint took 0.281-0.312 seconds with
 preparation workers blocked. Login, help, effort, context, a new session,
 workspace changes and quit all worked while indexing was held.
 
@@ -174,3 +180,27 @@ floor in every theme at both tested widths.
   writes the actual requested directory to PATH with literal shell quoting.
 
 See [startup measurements](startup-performance.md) for the original baseline.
+
+## Secret-scanning alerts
+
+GitHub alert #2 identified a Google API key in gstack's prebuilt offline
+diagram renderer, introduced by the complete-resource refresh. The exact value
+matches [Excalidraw's public Firebase configuration](https://github.com/excalidraw/excalidraw/blob/master/.env.production),
+for project `excalidraw-room-persistence`; it did not come from Nur's credential
+store. [Firebase documents client API keys as public identifiers](https://firebase.google.com/docs/projects/api-keys),
+with access enforced through security rules and restrictions. We cannot inspect
+Excalidraw's private key restrictions and did not attempt to use its key.
+
+The offline renderer does not use Firebase collaboration. Its complete Firebase
+configuration is now removed by the build script and the repeatable upstream
+refresh. Bundle hashes, byte counts and source fingerprints regenerate together;
+Mermaid, editable Excalidraw export and rasterization remain available. No skill
+was removed. An older Tailscale alert (#1) concerned an `xxx` placeholder in a
+CI/CD example; the guide now reads a key from the CI secret store instead.
+
+`python scripts/check_vendored_credentials.py` rejects both credential formats
+in tracked resources without printing values. Validation runs it alongside the
+resource-integrity check. Both adaptations are recorded in the upstream manifest
+so future refreshes retain them. The historical commits still contain the
+upstream public identifier and placeholder; no credential owned by Nur was
+identified, and no Git history was rewritten.

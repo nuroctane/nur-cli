@@ -321,15 +321,16 @@ def similarity(body, path):
     return difflib.SequenceMatcher(None, body.splitlines(), upstream.splitlines(), autojunk=False).ratio()
 
 
-def refresh_tree(source, destination, previous, frontmatter=None, overrides=None):
-    """Update managed files, retaining local edits and removed upstream resources."""
-    if not destination.resolve().is_relative_to(SKILLS.resolve()) or destination.is_symlink():
-        raise ValueError(f"unsafe skill destination: {destination}")
-    files, preserved = {}, []
+def offline_diagram_bundle(contents):
+    """Drop Excalidraw's unused public Firebase configuration from offline exports."""
+    text = contents.decode("utf-8")
+    pattern = r"(\bVITE_APP_FIREBASE_CONFIG\s*:\s*)(?:'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\")"
+    return re.sub(pattern, lambda match: match[1] + '"{}"', text).encode("utf-8")
+
+
+def prepared_resources(source, destination, overrides=None):
+    resources = {}
     for name, path in tree_files(source).items():
-        target = destination / name
-        if target.is_symlink() or not target.resolve().is_relative_to(SKILLS.resolve()):
-            raise ValueError(f"unsafe resource destination: {target}")
         contents = canonical_references(path.read_bytes())
         if name in (overrides or {}):
             override_root = (REPO / "scripts/skill-overrides").resolve()
@@ -338,6 +339,34 @@ def refresh_tree(source, destination, previous, frontmatter=None, overrides=None
                     or not override.resolve().is_relative_to(override_root)):
                 raise ValueError(f"unsafe reviewed override: {override}")
             contents = canonical_references(override.read_bytes())
+        resources[name] = contents
+    # A committed prebuild is needed for installations without Bun. Apply the
+    # same deterministic post-build transform as the reviewed build script,
+    # regenerating both artifact and source fingerprints together.
+    prefix = "lib/diagram-render/"
+    bundle = prefix + "dist/diagram-render.html"
+    info_path = prefix + "dist/BUILD_INFO.json"
+    if destination.name == "gstack" and bundle in resources:
+        html = offline_diagram_bundle(resources[bundle])
+        resources[bundle] = html
+        info = json.loads(resources[info_path])
+        info["sha256"] = hashlib.sha256(html).hexdigest()
+        info["bytes"] = len(html)
+        info["srcSha256"] = hashlib.sha256(resources[prefix + "src/entry.ts"] +
+                                            resources[prefix + "scripts/build.ts"]).hexdigest()
+        resources[info_path] = (json.dumps(info, indent=2) + "\n").encode()
+    return resources
+
+
+def refresh_tree(source, destination, previous, frontmatter=None, overrides=None):
+    """Update managed files, retaining local edits and removed upstream resources."""
+    if not destination.resolve().is_relative_to(SKILLS.resolve()) or destination.is_symlink():
+        raise ValueError(f"unsafe skill destination: {destination}")
+    files, preserved = {}, []
+    for name, contents in prepared_resources(source, destination, overrides).items():
+        target = destination / name
+        if target.is_symlink() or not target.resolve().is_relative_to(SKILLS.resolve()):
+            raise ValueError(f"unsafe resource destination: {target}")
         if name == "SKILL.md" and frontmatter:
             text = contents.decode("utf-8")
             text = re.sub(r"\A---\r?\n.*?\r?\n---", lambda _: frontmatter, text, count=1, flags=re.S)

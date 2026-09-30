@@ -46,7 +46,7 @@ function slugFrom(output: string): string {
 }
 
 const publicWorkspaces = [
-  { name: 'react-local-history', origin: 'https://github.com/facebook/react.git' },
+  { name: 'react-local-history', origin: 'https://github.com/react/react.git' },
   { name: 'next-local-history', origin: 'https://github.com/vercel/next.js.git' },
   { name: 'kubernetes-local-history', origin: 'https://github.com/kubernetes/kubernetes.git' },
 ];
@@ -130,7 +130,7 @@ describe('gstack-repo-mode cached slug consistency (#2212)', () => {
         git(['add', '.'], project, home);
         git(['commit', '-m', `commit ${commit}`], project, home);
       }
-      git(['remote', 'add', 'origin', 'https://github.com/facebook/react.git'], project, home);
+      git(['remote', 'add', 'origin', 'https://github.com/react/react.git'], project, home);
 
       const mode = run(REPO_MODE_BIN, [], nested, home);
       expect(mode.status, mode.stderr).toBe(0);

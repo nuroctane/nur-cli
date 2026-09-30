@@ -22,6 +22,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
+          toolchain: '1.97.0'
           components: clippy
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -31,6 +32,7 @@ jobs:
       - run: python tests/test_headroom_helper.py
       - run: python scripts/generate_skill_intents.py --check
       - run: python scripts/check_skill_snapshot.py
+      - run: python scripts/check_vendored_credentials.py
       - run: cargo clippy --all-targets --no-default-features --locked -- -D warnings
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --bin nur --locked

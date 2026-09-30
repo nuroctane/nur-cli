@@ -7941,10 +7941,10 @@
         "lib/diagram-render/README.md": "ec03107c2e1118900844bd569f2ce8e1f42304feedb43ba180c66c79392c185d",
         "lib/diagram-render/THIRD-PARTY-LICENSES.md": "67698b2ac0cdc441accf48597ae71334270acbb986842ffd3715de2fe10ec4b5",
         "lib/diagram-render/bun.lock": "c90c2c0167a3a94af778ee80e685eabd3a4ba20bf4d976051912f542628988e5",
-        "lib/diagram-render/dist/BUILD_INFO.json": "7dd616f389db8640b3c06c327bbeff3923e1474b14155741c6d7f481328315e3",
-        "lib/diagram-render/dist/diagram-render.html": "46ed274ca8b6bc763308c87fea05fa9ad940d7f6bcfbd1bc0abbf56c6c0c705d",
+        "lib/diagram-render/dist/BUILD_INFO.json": "3eec11fb53c85dd5d5d9d4c5aecf5f57631cd3bc49cf0ac412b77884894aed46",
+        "lib/diagram-render/dist/diagram-render.html": "8948e7fe6693a16945c39dcdd23b9ac312e306c376713772777b1bee7347f9a3",
         "lib/diagram-render/package.json": "7326c6d46d2e34635a30fd08744825fb10b6f0688c8c94f1abb9c908412fe26d",
-        "lib/diagram-render/scripts/build.ts": "5d46a706c989700b2310c2b094f666c465c6072572ad21551c0d3386064742c1",
+        "lib/diagram-render/scripts/build.ts": "d21b36703dc3f3c59412c58068872f7c367df81fbb7d1d503e3a2682d5e12c9e",
         "lib/diagram-render/src/entry.ts": "719f708b82b6efeb26301b50cfffaed391d4ccb58b62f2ce39471f708f86c886",
         "lib/dom-dump-script.ts": "a24e6e2a1b7555d75b66bf2c50dd0e551e52ffd0ecdb317daf91481369bae1df",
         "lib/dom-dump.js": "3355aa7128de9901131981ca12fbb7f1a2560f3da410c11eef5521961ffc4fe2",
@@ -8990,7 +8990,7 @@
         "test/gstack-question-preference.test.ts": "cbd6110e73c879e12d4b80688827c496d206e3837805ea8c8d82cec2773b8b3b",
         "test/gstack-redact-cli.test.ts": "949bb8cee71b199c1eb86b0d74efdc4d43774df2f364236e06a6b932cc2699e7",
         "test/gstack-render-cli.test.ts": "6d3cfeff29f1cddec50c83a89a7fb3694e9c6d691b3c7ba018abec52e0810a2c",
-        "test/gstack-repo-mode.test.ts": "340bd116bfce61fb52c580aace6bbe29ce5f479792d44357426a25f6a32ac989",
+        "test/gstack-repo-mode.test.ts": "82ad44419a2556b4e6dd9f6471647d9140875d140535b2adb7e92544ea3b5aa8",
         "test/gstack-retro-metrics.test.ts": "2c1040986a3178118a3fa368f54ff6009d31d624341f278c72a185b47734be4f",
         "test/gstack-schema-pack.test.ts": "0d1d2279f21e8b98d3b0bb1ecfe170bfed9fbb06bb4cea5d61b74f9894dbdd42",
         "test/gstack-session-kind.test.ts": "0c510c1f43ba54439c0b531a5b40e2e98c750f8dec7b3db2e7ffc15c9a8ef58f",
@@ -9631,6 +9631,9 @@
         "test/writing-style-resolver.test.ts": "972ff826da02fa35795d4fad40211fdc2c65119250d05a67d362a599582c973d",
         "unfreeze/SKILL.md": "60435b4e060a9bdca9583ad4c4f7320e3f459a1cfc452012a6a8ddca95fdf36f",
         "unfreeze/SKILL.md.tmpl": "d8e759048de25f51a91a449c4b06ec48381b7440f9f570525d96ca2b5debc42e"
+      },
+      "overrides": {
+        "lib/diagram-render/scripts/build.ts": "scripts/skill-overrides/gstack-diagram-build.ts"
       },
       "repository": "https://github.com/garrytan/gstack.git",
       "source_path": "."
@@ -14946,13 +14949,16 @@
       "executables": [],
       "files": {
         "LICENSE": "a941b58ef0ba43a31e24ae7ece1b743a585efed9e37792b9ca063e0798be1cbe",
-        "SKILL.md": "425f34d310b04d775551121d917edb99e521a0de4b48113ee7b2f2893660a6fb",
+        "SKILL.md": "d4f9765816a3f02ca534ff1f4f889c0092ea81ed05d583b2ab62328dc0317200",
         "assets/template.md": "323951763e5184d0197b8198196703e79951b8cabb97d9bfb8159e691e546342",
         "references/api-reference.md": "08632e8bbb9261cf73d024eae98f9eae38239a380d002f54f0b7061d8136f74c",
         "references/standards.md": "89fb02c69271495ce0c3676a663dd15a87a2b345b923ee377a41924dedafecfc",
         "references/workflows.md": "eed2b760d4cf5f5f1d9583cfae66cb9e0550423807ac70bd554ed347902bdddb",
         "scripts/agent.py": "e0a004e06a3b0ce1cbbb2c5255a7c769dcc21396a43bba2af4fc0126c191be37",
         "scripts/process.py": "a8ffff5cf223f78eb0ff3662fb55cf37e9ecc4ea6d8db94dd0c42305ec766017"
+      },
+      "overrides": {
+        "SKILL.md": "scripts/skill-overrides/deploying-tailscale-for-zero-trust-vpn.md"
       },
       "repository": "https://github.com/mukul975/Anthropic-Cybersecurity-Skills.git",
       "source_path": "skills/deploying-tailscale-for-zero-trust-vpn"

@@ -23,9 +23,43 @@ def load(name):
 sync = load("sync_upstream_skills")
 install = load("install_skill_snapshot")
 generate = load("generate_skill_intents")
+credentials = load("check_vendored_credentials")
 
 
 class MaintenanceTests(unittest.TestCase):
+    def test_embedded_credentials_are_detected_without_disclosing_values(self):
+        # Match inside a minified artifact and an example command, without
+        # including any actual credentials in the repository test fixture.
+        google = b"AIza" + b"A" * 35
+        tailscale = b"tskey-" + b"auth-" + b"a" * 12
+        self.assertEqual(list(credentials.findings(b'var env={apiKey:"' + google + b'"};\nexport KEY=' + tailscale)),
+                         [("Google API key", 1), ("Tailscale key", 2)])
+        self.assertEqual(list(credentials.findings(b'apiKey:process.env.KEY; TS_AUTHKEY=$CI_SECRET')), [])
+
+    def test_offline_renderer_strips_cloud_config_and_recomputes_artifacts(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "upstream"
+            renderer = source / "lib/diagram-render"
+            (renderer / "dist").mkdir(parents=True)
+            (renderer / "src").mkdir()
+            (renderer / "scripts").mkdir()
+            (renderer / "src/entry.ts").write_text("window.render = exportToSvg;")
+            (renderer / "scripts/build.ts").write_text("build offline renderer")
+            (renderer / "dist/diagram-render.html").write_text(
+                "VITE_APP_FIREBASE_CONFIG:'{\"apiKey\":\"sample-cloud-key\",\"projectId\":\"upstream\"}',render:exportToSvg")
+            (renderer / "dist/BUILD_INFO.json").write_text(json.dumps({"deps":{"renderer":"1"}}))
+            resources = sync.prepared_resources(source, root / "skills/gstack")
+            bundle = resources["lib/diagram-render/dist/diagram-render.html"]
+            info = json.loads(resources["lib/diagram-render/dist/BUILD_INFO.json"])
+            self.assertEqual(bundle, b'VITE_APP_FIREBASE_CONFIG:"{}",render:exportToSvg')
+            self.assertEqual(sync.offline_diagram_bundle(bundle), bundle)
+            self.assertEqual(info["sha256"], hashlib.sha256(bundle).hexdigest())
+            self.assertEqual(info["bytes"], len(bundle))
+            self.assertEqual(info["srcSha256"], hashlib.sha256(b"window.render = exportToSvg;build offline renderer").hexdigest())
+            self.assertEqual(info["deps"], {"renderer":"1"})
+
     def test_reviewed_resource_override_survives_upstream_refresh(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -1,0 +1,7 @@
+[toolchain]
+# 1.98.1 recursively allocates vtable entries until OOM on this crate, including
+# Clippy metadata-only builds. Keep local, validation and release builds aligned
+# with the compiler that passes the full suite, pending an upstream fix.
+channel = "1.97.0"
+profile = "minimal"
+components = ["clippy", "rustfmt"]
