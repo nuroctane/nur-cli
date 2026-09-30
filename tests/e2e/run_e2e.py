@@ -115,9 +115,11 @@ def tool_messages(request):
     return out
 
 
-def check(scenario, result, workspace, requests):
+def check(scenario, result, workspace, requests, elapsed=None):
     expect = scenario.get("expect", {})
     failures = []
+    if "max_seconds" in expect and elapsed is not None and elapsed > expect["max_seconds"]:
+        failures.append(f"scenario took {elapsed:.2f}s, expected at most {expect['max_seconds']}s")
     if result.returncode != expect.get("exit_code", 0):
         failures.append(f"exit code {result.returncode}, expected {expect.get('exit_code', 0)}")
     for needle in expect.get("stdout_contains", []):
@@ -259,7 +261,7 @@ def run_scenario(binary, scenario_path):
         if index.exists() and not WARM_CACHE.exists():
             WARM_CACHE.mkdir(parents=True)
             shutil.copy(index, WARM_CACHE / index.name)
-        failures = check(scenario, result, workspace, requests)
+        failures = check(scenario, result, workspace, requests, elapsed)
         files = sorted(str(p.relative_to(workspace)) for p in workspace.rglob("*") if p.is_file())
         shutil.copy(log, out / "requests.jsonl")
     finally:

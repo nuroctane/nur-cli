@@ -1,0 +1,14 @@
+{
+  "description": "A real shell timeout returns control to the model promptly instead of stalling inside process cleanup.",
+  "prompt": "Run the bounded shell check and report its timeout.",
+  "script": [
+    {"tool_calls": [{"name": "bash", "arguments": {"command": "python -c \"import time; time.sleep(120)\"", "timeout_ms": 1000}}]},
+    {"text": "The command timed out and control returned."}
+  ],
+  "expect": {
+    "stdout_contains": ["The command timed out and control returned."],
+    "requests": 2,
+    "max_seconds": 15,
+    "tool_results": [{"request": 2, "contains": ["timed out after 1000ms"]}]
+  }
+}
