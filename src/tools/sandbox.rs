@@ -24,7 +24,6 @@ pub fn is_dangerous_workspace(path: &Path) -> bool {
 }
 
 fn is_filesystem_root(path: &Path) -> bool {
-    let s = path.to_string_lossy();
     // Unix /
     if path.parent().is_none() {
         return true;
@@ -32,6 +31,7 @@ fn is_filesystem_root(path: &Path) -> bool {
     // Windows drive roots: C:\ C:/
     #[cfg(windows)]
     {
+        let s = path.to_string_lossy();
         let t = s.trim_end_matches(['\\', '/']);
         if t.len() == 2 && t.as_bytes()[1] == b':' {
             return true;

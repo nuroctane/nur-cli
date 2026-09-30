@@ -1021,7 +1021,10 @@ fn gcloud_bin() -> Option<PathBuf> {
 }
 
 fn az_bin() -> Option<PathBuf> {
+    #[cfg(windows)]
     let mut dirs = Vec::new();
+    #[cfg(not(windows))]
+    let dirs = Vec::new();
     #[cfg(windows)]
     {
         if let Ok(pf) = std::env::var("ProgramFiles") {
@@ -1039,7 +1042,10 @@ fn az_bin() -> Option<PathBuf> {
 }
 
 fn gh_bin() -> Option<PathBuf> {
+    #[cfg(windows)]
     let mut dirs = Vec::new();
+    #[cfg(not(windows))]
+    let dirs = Vec::new();
     #[cfg(windows)]
     {
         if let Ok(pf) = std::env::var("ProgramFiles") {

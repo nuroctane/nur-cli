@@ -12,6 +12,7 @@
 
 use crate::ecosystem::{find_bin, run_capture, run_capture_cancelled};
 use std::path::Path;
+#[cfg(windows)]
 use std::process::Command;
 
 pub const BIN: &str = "terminal-browser";
@@ -83,21 +84,15 @@ fn find_native_bin() -> Option<String> {
     None
 }
 
+#[cfg(windows)]
 fn wsl_available() -> bool {
-    #[cfg(windows)]
-    {
-        Command::new("wsl.exe")
-            .args(["-e", "true"])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    }
-    #[cfg(not(windows))]
-    {
-        false
-    }
+    Command::new("wsl.exe")
+        .args(["-e", "true"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 fn wsl_has_terminal_browser() -> bool {

@@ -419,6 +419,7 @@ fn upgrade_omp(c: &mut ComponentStatus) {
 /// Prefer the newest omp among Bun global, official Local install, and PATH.
 pub(crate) fn best_omp() -> Option<(String, String)> {
     use std::collections::HashSet;
+    #[cfg(windows)]
     use std::process::Command;
 
     let mut seen = HashSet::new();

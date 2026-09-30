@@ -26,6 +26,24 @@ generate = load("generate_skill_intents")
 
 
 class MaintenanceTests(unittest.TestCase):
+    def test_reviewed_resource_override_survives_upstream_refresh(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "upstream"
+            source.mkdir()
+            (source / "SKILL.md").write_text("upstream examples")
+            overlay = root / "scripts/skill-overrides/demo.md"
+            overlay.parent.mkdir(parents=True)
+            overlay.write_text("reviewed detection examples")
+            destination = root / "skills/demo"
+            with patch.object(sync, "REPO", root), patch.object(sync, "SKILLS", root / "skills"):
+                previous, _ = sync.refresh_tree(source, destination, {}, overrides={"SKILL.md":"scripts/skill-overrides/demo.md"})
+                (source / "SKILL.md").write_text("new upstream examples")
+                sync.refresh_tree(source, destination, previous, overrides={"SKILL.md":"scripts/skill-overrides/demo.md"})
+                self.assertEqual((destination / "SKILL.md").read_text(), "reviewed detection examples")
+                with self.assertRaises(ValueError):
+                    sync.refresh_tree(source, destination, previous, overrides={"SKILL.md":"upstream/SKILL.md"})
+
     def test_duplicate_name_precedence_is_portable_across_folder_case(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -15520,10 +15520,13 @@
       "executables": [],
       "files": {
         "LICENSE": "a941b58ef0ba43a31e24ae7ece1b743a585efed9e37792b9ca063e0798be1cbe",
-        "SKILL.md": "eb069039f9f19fdad27d0d427ded461006e1a01ab5055d62b6ed97bd8b20ed0e",
+        "SKILL.md": "12e02b68632219e4f4c38554a6056b8ed445b60e042cfc8ac3fb08618e13e44e",
         "references/api-reference.md": "947c8072a5464a5cd09b9381946924d5d2c2999f9606c8a1f624cef08dabdc13",
         "references/yara-fileless-powershell.yar": "4e321bf1ad6ce26969cb1484e43f2ebc279c76a0b5eedd7622e67263c721d2dc",
         "scripts/agent.py": "a53819feb37a0e24b28000c5fd087133a6fdf7f48ec3134e8c17213205d65ec1"
+      },
+      "overrides": {
+        "SKILL.md": "scripts/skill-overrides/detecting-fileless-malware-techniques.md"
       },
       "repository": "https://github.com/mukul975/Anthropic-Cybersecurity-Skills.git",
       "source_path": "skills/detecting-fileless-malware-techniques"

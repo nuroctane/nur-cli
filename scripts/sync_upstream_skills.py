@@ -321,7 +321,7 @@ def similarity(body, path):
     return difflib.SequenceMatcher(None, body.splitlines(), upstream.splitlines(), autojunk=False).ratio()
 
 
-def refresh_tree(source, destination, previous, frontmatter=None):
+def refresh_tree(source, destination, previous, frontmatter=None, overrides=None):
     """Update managed files, retaining local edits and removed upstream resources."""
     if not destination.resolve().is_relative_to(SKILLS.resolve()) or destination.is_symlink():
         raise ValueError(f"unsafe skill destination: {destination}")
@@ -331,6 +331,13 @@ def refresh_tree(source, destination, previous, frontmatter=None):
         if target.is_symlink() or not target.resolve().is_relative_to(SKILLS.resolve()):
             raise ValueError(f"unsafe resource destination: {target}")
         contents = canonical_references(path.read_bytes())
+        if name in (overrides or {}):
+            override_root = (REPO / "scripts/skill-overrides").resolve()
+            override = REPO / overrides[name]
+            if (not override_root.is_relative_to(REPO.resolve()) or override.is_symlink()
+                    or not override.resolve().is_relative_to(override_root)):
+                raise ValueError(f"unsafe reviewed override: {override}")
+            contents = canonical_references(override.read_bytes())
         if name == "SKILL.md" and frontmatter:
             text = contents.decode("utf-8")
             text = re.sub(r"\A---\r?\n.*?\r?\n---", lambda _: frontmatter, text, count=1, flags=re.S)
@@ -462,7 +469,8 @@ def main() -> int:
             frontmatter = previous.get("frontmatter") if previous else None
             if name == "claude-api" and existing and not frontmatter:
                 frontmatter = re.match(r"\A---\r?\n.*?\r?\n---", (existing / "SKILL.md").read_text(encoding="utf-8"), re.S).group(0)
-            files, retained = refresh_tree(source, target, previous.get("files", {}) if previous else None, frontmatter)
+            overrides = previous.get("overrides", {}) if previous else {}
+            files, retained = refresh_tree(source, target, previous.get("files", {}) if previous else None, frontmatter, overrides)
             entry["preserved_files"] = retained
             upstream_modes = executable_resources(checkout)
             executables = sorted(resource for resource in files
@@ -476,6 +484,8 @@ def main() -> int:
             manifest["skills"][entry["destination"]] = {**{k: entry[k] for k in ("repository", "commit", "source_path")}, "files": files, "executables": executables}
             if frontmatter:
                 manifest["skills"][entry["destination"]]["frontmatter"] = frontmatter
+            if overrides:
+                manifest["skills"][entry["destination"]]["overrides"] = overrides
         plan.append(entry)
     report = {"sources": [{"repository": u, "ok": ok, "commit": sha} for u, ok, sha, _ in results], "plan": plan}
     (work.parent / "skills-plan.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

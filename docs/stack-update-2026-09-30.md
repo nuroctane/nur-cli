@@ -54,10 +54,19 @@ commands such as `/craft` and `/neon` when upstream changes canonical names. Fou
 startup skills previously represented only by metadata now have complete bundled
 trees. No skill was removed.
 
-Six trees received individual review: banner-design, codex, craft, design,
-design-system and frontend-design. Five retain Nur adaptations. The Codex guide
+Seven trees received individual review: banner-design, codex, craft, design,
+design-system, frontend-design and detecting-fileless-malware-techniques.
+Six retain Nur adaptations. The Codex guide
 now follows installed CLI help; unsupported model claims, fabricated prices and
 benchmarks, and stderr suppression were removed.
+
+The fileless-detection guide is a recorded resource override. Defender quarantined
+upstream's assembled attack examples, so this version expresses them as captured
+argument indicators and investigation steps. It preserves all detection steps,
+Sigma rules, the separate YARA rule and read-only collection commands, and uses
+CIM for PowerShell 7. A focused Defender scan retains the restored guide. No
+endpoint-protection exclusions were added. The override survives later upstream
+refreshes and both installed skill roots have been repaired.
 
 The audit covers repository links in Rust, docs and vendored Markdown, including
 raw download URLs. Moved repositories resolve to their current owners. Broken
@@ -99,7 +108,7 @@ rejects destination escapes. Runtime mirrors also record ownership for refreshes
 For this update, `--refresh-vendored` reapplies the reviewed upstream-owned trees
 as complete units, with backups of differing installed files. The separately
 reviewed Codex guide is also refreshed. Unmanaged Nur adaptations and local
-additions are retained. Installed copies received 16,338 file additions and
+additions are retained. The initial installed refresh received 16,338 file additions and
 1,037 file updates across the Nur and universal agent roots.
 
 The installed companions now include OMP 18.4.5, Graphify 0.9.73, Headroom 0.39.1,
@@ -111,9 +120,10 @@ copy was updated as well. Node 24.14.1 and Bun 1.3.14 satisfy the checked engine
 
 Both default and no-default-feature builds pass Clippy with warnings denied.
 The final Rust suite passes 1,068 tests with 18 intentionally ignored previews
-and benchmarks. Nine maintenance-tool tests cover ownership, backups, complete
+and benchmarks. Ten maintenance-tool tests cover ownership, backups, complete
 resources, destination escapes, portable hashes, executable modes, deterministic
-indexing, duplicate precedence, staged artifact integrity and folder aliases. Two
+indexing, duplicate precedence, staged artifact integrity, reviewed overrides
+and folder aliases. Two
 helper API tests verify inline compression, returned message selection and
 explicit file-read protection.
 
@@ -158,5 +168,9 @@ floor in every theme at both tested widths.
 - Release publication is gated by isolated Rust checks and real-binary headless
   and terminal tests on Windows/Linux. Actions use immutable commit pins. E2E
   separates passes/failures/skips and rejects unknown cases.
+- Cargo targets run serially in CI to avoid competing compiler allocations on
+  hosted runners. The release profile stays unchanged. Platform-specific imports
+  and helpers retain their correct configuration boundaries. Unix installation
+  writes the actual requested directory to PATH with literal shell quoting.
 
 See [startup measurements](startup-performance.md) for the original baseline.

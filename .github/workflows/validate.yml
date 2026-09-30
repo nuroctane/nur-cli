@@ -13,6 +13,8 @@ jobs:
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     env:
+      # Check the binary and test targets serially on hosted runner memory.
+      CARGO_BUILD_JOBS: '1'
       NUR_HOME: ${{ github.workspace }}/target/nur-validation
       NUR_DISABLE_NATIVE_MEMORY: '1'
       NUR_NO_UPDATE: '1'

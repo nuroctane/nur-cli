@@ -467,8 +467,7 @@ fn auto_update_opt_out_var() -> Option<&'static str> {
 
 /// Effective floor, overridable per-shell for testing/CI. `0` = check every run.
 fn auto_update_min_interval_secs() -> u64 {
-    let raw = env::var("NUR_AUTO_UPDATE_TTL_SECS")
-        .ok();
+    let raw = env::var("NUR_AUTO_UPDATE_TTL_SECS").ok();
     parse_min_interval(raw.as_deref())
 }
 
@@ -1291,6 +1290,29 @@ fn file_sha256(path: &Path) -> Option<String> {
     }
 }
 
+#[cfg(not(windows))]
+fn posix_user_path_export(dir: &Path) -> String {
+    let escaped = dir.to_string_lossy().replace('\'', "'\\''");
+    format!("export PATH='{escaped}':\"$PATH\"")
+}
+
+#[cfg(all(test, not(windows)))]
+#[test]
+fn custom_path_export_preserves_literal_shell_characters() {
+    let dir = Path::new("/tmp/Nur files/quote'$(printf wrong);世界");
+    let command = format!("{}; printf '%s' \"$PATH\"", posix_user_path_export(dir));
+    let output = Command::new("sh")
+        .args(["-c", &command])
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("{}:/usr/bin:/bin", dir.display())
+    );
+}
+
 fn ensure_user_path(dir: &Path) -> std::result::Result<bool, String> {
     #[cfg(windows)]
     {
@@ -1313,7 +1335,7 @@ fn ensure_user_path(dir: &Path) -> std::result::Result<bool, String> {
     #[cfg(not(windows))]
     {
         let home = dirs::home_dir().ok_or_else(|| "no home dir".to_string())?;
-        let line = r#"export PATH="$HOME/.local/bin:$PATH""#;
+        let line = posix_user_path_export(dir);
         for name in [
             ".zprofile",
             ".zshrc",
@@ -1326,7 +1348,9 @@ fn ensure_user_path(dir: &Path) -> std::result::Result<bool, String> {
                 continue;
             }
             let text = fs::read_to_string(&rc).unwrap_or_default();
-            if text.contains(".local/bin") {
+            if text.contains(&line)
+                || (dir == home.join(".local/bin") && text.contains(".local/bin"))
+            {
                 return Ok(false);
             }
             use std::io::Write;
@@ -1632,7 +1656,10 @@ mod auto_update_tests {
 
         assert!(nur.is_file());
         assert!(muse.is_file(), "a different binary named muse is not ours");
-        assert!(!copy.exists(), "an identical copy of nur under a foreign name goes");
+        assert!(
+            !copy.exists(),
+            "an identical copy of nur under a foreign name goes"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
