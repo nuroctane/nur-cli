@@ -1,0 +1,28 @@
+# Browser setup
+
+Read this section only for an explicitly selected browser surface. Functional-only
+targets do not probe Aside, discover web servers or install a browser.
+
+The scope section's ownership rules apply even to LOCAL browser targets.
+
+## Browser access decision
+
+Use the invoking workflow, not this file's /qa location, to select authority:
+
+- **Report-only (/qa-only, /review and /ship discovery):** do not run the fallback's setup/install or cookie-import workflow.
+  Never bootstrap or invoke another skill. With missing tools/sessions,
+  block only the affected browser probes; continue independent functional/static checks.
+- **Standalone /qa:** for `NEEDS_SETUP` or cookie import, ask for explicit approval; STOP and wait.
+  Only after approval, run `cd <SKILL_DIR> && ./setup` (includes missing Bun) or
+  /setup-browser-cookies, respectively. Approval/access declined, unavailable or unsuccessful:
+  mark affected probes blocked; continue independent safe checks.
+
+Unknown caller: use report-only authority. Blocked coverage stays incomplete;
+the caller owns completion and /ship's named-risk gate.
+
+{{ASIDE_SETUP}}
+
+{{BROWSE_FALLBACK}}
+
+Create screenshots directories only for browser evidence. Auth uses existing sessions
+(Aside or `$B handoff`/`$B resume`); never request credentials in chat. Invocation does not authorize external mutations.

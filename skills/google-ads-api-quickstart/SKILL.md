@@ -11,7 +11,7 @@ description: |
 compatibility: "Outbound HTTPS connectivity required to access the Google Ads API and documentation. Note: If network access is restricted, the agent will fall back to using the last-known stable versions cached within the skill resources."
 metadata:
   author: google-ads-api-team
-  version: "1.0"
+  version: "1.0.0"
   category: GoogleAds
 ---
 # Google Ads API Quickstart

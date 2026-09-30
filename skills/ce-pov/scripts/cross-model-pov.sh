@@ -80,12 +80,12 @@ log()  { printf '[cross-model-pov] %s\n' "$*" >&2; }
 skip() { log "$*"; exit 0; }   # non-blocking: announce reason, exit clean, no output
 
 # --- model + reasoning per provider ----------------------------------------
-# ONE model at HIGH reasoning per provider. Concrete IDs are the CURRENT instance of the tier principle
+# ONE model per provider at its editorial tier (native Grok is xhigh; Codex and Claude stay high). Concrete IDs are the CURRENT instance of the tier principle
 # and the single maintenance point when model families change.
-M_CODEX="gpt-5.6-sol"          # codex CLI            (-c model_reasoning_effort="high")
-M_CLAUDE="claude-opus-5"       # claude CLI, Opus 5   (--effort high)
-M_GROK="grok-4.6"              # grok CLI             (--effort high)
-M_GROK_CURSOR="cursor-grok-4.6-high" # cursor-agent grok route (reasoning baked into id)
+M_CODEX="gpt-6-sol"          # codex CLI            (-c model_reasoning_effort="high")
+M_CLAUDE="claude-opus-5-5"     # claude CLI, Opus 5.5 (--effort high)
+M_GROK="grok-4.7"              # grok CLI             (--effort xhigh)
+M_GROK_CURSOR="grok-4.7-xhigh" # cursor-agent --list-models; 4.7 has no cursor- prefix, effort is in the id
 M_COMPOSER="composer-2.5-fast" # cursor-agent composer (no high tier; -fast is the ceiling)
 
 # --- model-identity receipt (R7/R8) -----------------------------------------
@@ -124,6 +124,7 @@ route_model() {   # <route> -> the M_* constant that route requests
     grok-cursor) printf '%s' "$M_GROK_CURSOR" ;;
     cursor)      printf 'auto' ;;
     composer)    printf '%s' "$M_COMPOSER" ;;
+    opencode)    printf 'auto' ;;
   esac
 }
 
@@ -131,6 +132,7 @@ route_target() {
   case "$1" in
     codex|claude|cursor|composer) printf '%s' "$1" ;;
     grok-cli|grok-cursor) printf 'grok' ;;
+    opencode) printf 'opencode' ;;
   esac
 }
 
@@ -140,6 +142,7 @@ route_harness() {
     claude) printf 'claude' ;;
     grok-cli) printf 'grok' ;;
     grok-cursor|cursor|composer) printf 'cursor-agent' ;;
+    opencode) printf 'opencode' ;;
   esac
 }
 
@@ -147,6 +150,7 @@ target_serving_family() {
   case "$1" in
     codex|claude|grok|composer) printf '%s' "$1" ;;
     cursor) printf 'unknown' ;;
+    opencode) printf 'unknown' ;;
   esac
 }
 
@@ -225,7 +229,7 @@ adapter_argv() {
       # Schema forces buffered json — hard-only, no PEERLOG idle (#1270).
       # --verbatim: without it grok offloads a large prompt to a session file and
       # sends only a preview, spending scarce turns to re-read what it was given.
-      printf '%s\0' grok --prompt-file "$PROMPT_FILE" --verbatim --model "$(route_model grok-cli)" --effort high \
+      printf '%s\0' grok --prompt-file "$PROMPT_FILE" --verbatim --model "$(route_model grok-cli)" --effort xhigh \
         --cwd "$READ_ROOT" --permission-mode dontAsk \
         --deny Edit --deny Write --deny Bash --deny Task --deny 'mcp__*' \
         --no-subagents --max-turns 15 \
@@ -242,6 +246,14 @@ adapter_argv() {
     composer)
       printf '%s\0' cursor-agent -p --model "$(route_model composer)" --mode ask --trust \
         --sandbox enabled --workspace "$READ_ROOT" --output-format stream-json
+      ;;
+    opencode)
+      printf '%s\0' env 'OPENCODE_DISABLE_PROJECT_CONFIG=1' \
+        'OPENCODE_CONFIG_CONTENT={"permission":{"edit":"deny","bash":"deny","webfetch":"deny","task":"deny"}}' \
+        opencode run --dir "$READ_ROOT" --format json \
+        "Follow the attached brief. Return only schema-shaped JSON." --file "$PROMPT_FILE"
+      _oc_model="$(route_model opencode)"
+      [ "$_oc_model" = "auto" ] || [ -z "$_oc_model" ] || printf '%s\0' --model "$_oc_model"
       ;;
     *) return 1 ;;
   esac
@@ -261,8 +273,9 @@ apply_model_override() {
     codex:gpt-*|codex:o[0-9]*|codex:*[./]gpt-*|codex:*[./]o[0-9]* ) ;;
     claude:fable|claude:opus|claude:sonnet|claude:haiku|claude:claude-* ) ;;
     grok-cli:grok-* ) ;;
-    grok-cursor:cursor-grok-* ) ;;
+    grok-cursor:cursor-grok-*|grok-cursor:grok-4.7-* ) ;;
     composer:composer-* ) ;;
+    opencode:*/* ) ;;
     *) return 1 ;;
   esac
 }
@@ -277,7 +290,7 @@ if [ "${1:-}" = "--emit-adapter" ]; then
   apply_model_override "$route" 2>/dev/null || { echo "model override '${CROSS_MODEL_MODEL_OVERRIDE:-}' not compatible with route '$route'" >&2; exit 2; }
   # adapter_argv emits NUL-delimited argv (can't be captured in a shell var), so
   # validate the route first, then render for humans with NUL -> space.
-  adapter_argv "$route" >/dev/null 2>&1 || { echo "unknown route '$route' (want codex|claude|grok-cli|grok-cursor|cursor|composer)" >&2; exit 2; }
+  adapter_argv "$route" >/dev/null 2>&1 || { echo "unknown route '$route' (want codex|claude|grok-cli|grok-cursor|cursor|composer|opencode)" >&2; exit 2; }
   adapter_argv "$route" | tr '\0' ' '; echo
   exit 0
 fi
@@ -327,12 +340,12 @@ case "$HOST_PROVIDER" in
   *) skip "host serving family '$HOST_PROVIDER' invalid (want codex|claude|grok|composer|unknown)" ;;
 esac
 case "$HOST_HARNESS" in
-  codex|claude|grok|cursor|unknown) ;;
-  *) skip "host harness '$HOST_HARNESS' invalid (want codex|claude|grok|cursor|unknown)" ;;
+  codex|claude|grok|cursor|opencode|unknown) ;;
+  *) skip "host harness '$HOST_HARNESS' invalid (want codex|claude|grok|cursor|opencode|unknown)" ;;
 esac
 
 case "$FIXED_ROUTE" in
-  codex|claude|grok-cli|grok-cursor|cursor|composer) ;;
+  codex|claude|grok-cli|grok-cursor|cursor|composer|opencode) ;;
   *) skip "unknown fixed route '${FIXED_ROUTE:-<empty>}'; host must resolve one route before egress" ;;
 esac
 TARGET="$(route_target "$FIXED_ROUTE")" || skip "unknown fixed route '${FIXED_ROUTE:-<empty>}'; host must resolve one route before egress"
@@ -382,6 +395,7 @@ route_allowlisted() {
     grok-cursor)
       in_csv grok "$ALLOW" && { in_csv cursor "$ALLOW" || in_csv composer "$ALLOW"; }
       ;;
+    opencode) in_csv opencode "$ALLOW" ;;
     *) return 1 ;;
   esac
 }
@@ -413,6 +427,7 @@ route_available() {
     claude) command -v claude >/dev/null 2>&1 ;;
     grok-cli) command -v grok >/dev/null 2>&1 ;;
     grok-cursor|cursor|composer) command -v cursor-agent >/dev/null 2>&1 ;;
+    opencode) command -v opencode >/dev/null 2>&1 ;;
     *) return 1 ;;
   esac
 }
@@ -766,6 +781,19 @@ parse_structured() {   # <logfile> <outfile>
   [ "$picked" = true ]
 }
 
+parse_opencode_events() {  # <logfile> <outfile>
+  local text tmp
+  text="$(jq -rs '[.[] | select(.type=="text") | (.part.text // empty)] | join("")' "$1" 2>/dev/null)" || text=""
+  [ -n "$text" ] || return 1
+  printf '%s' "$text" | jq -e '.' > "$2" 2>/dev/null && return 0
+  tmp="$(mktemp "${TMPDIR:-/tmp}/ce-opencode-text-XXXXXX")" || return 1
+  printf '%s' "$text" > "$tmp"
+  recover_pov_json "$tmp" "$2"
+  local st=$?
+  rm -f "$tmp"
+  return "$st"
+}
+
 bounded_failure_evidence() {   # <logfile>; prefer structured diagnostics, then bounded head+tail
   local path="$1" human ancillary evidence
   human="$(jq -r '
@@ -784,7 +812,11 @@ bounded_failure_evidence() {   # <logfile>; prefer structured diagnostics, then 
   # Ancillary fields describe the exit but are not the diagnostic itself. If
   # no recognized human-readable field exists, retain bounded raw output so a
   # CLI's newer or provider-specific error field is still visible.
-  [ -n "$human" ] && evidence="$human" || evidence="$(cat "$path")"
+  # Bound the raw fallback: bash 3.2 rewrites newlines in a large string
+  # superlinearly, so a full stream log would stall the worker for minutes.
+  if [ -n "$human" ]; then evidence="$human"
+  elif [ "$(wc -c <"$path")" -le 600 ]; then evidence="$(cat "$path")"
+  else IFS= read -r -d '' -n 300 evidence <"$path"; evidence="$evidence ... $(tail -c 300 "$path")"; fi
   [ -n "$ancillary" ] && evidence="${evidence:+$evidence | }$ancillary"
   evidence="${evidence//$'\n'/ }"
   if [ "${#evidence}" -gt 300 ]; then
@@ -801,10 +833,11 @@ attempt_route() {   # <provider> <route>
   case "$route" in
     codex)       note="$(route_model codex) (effort high)" ;;
     claude)      note="$(route_model claude) (effort high)" ;;
-    grok-cli)    note="$(route_model grok-cli) (effort high)" ;;
+    grok-cli)    note="$(route_model grok-cli) (effort xhigh)" ;;
     grok-cursor) note="$(route_model grok-cursor)" ;;
     cursor)      note="auto (serving model unverified)" ;;
     composer)    note="$(route_model composer)" ;;
+    opencode)    note="auto (serving model unverified)" ;;
   esac
   log "peer run: provider=$provider route=$route model=$note POV read-only least-privilege (idle ${IDLE_SECS}s / hard ${HARD_SECS}s; grok-cli hard-only ${UNGUARDED_HARD_SECS}s)"
   case "$route" in
@@ -825,6 +858,8 @@ attempt_route() {   # <provider> <route>
       # the exec with E2BIG on low-limit hosts, whereas stdin has no size limit.
       run_timeout_cmd "$PROMPT_FILE" "$HARD_SECS" idle
       [ "$RUN_SUCCEEDED" = true ] && parse_structured "$PEERLOG" "$RAW_OUT" ;;
+    opencode)    run_timeout_cmd "" "$HARD_SECS" idle
+                 [ "$RUN_SUCCEEDED" = true ] && parse_opencode_events "$PEERLOG" "$RAW_OUT" ;;
   esac
   if [ "$RUN_SUCCEEDED" != true ]; then
     rm -f "$RAW_OUT"

@@ -72,7 +72,7 @@ lifecycle, ensuring strict security boundary segregation:]
     (`Memorystore Redis` via `Private Services Access`).
 *   **Shared security and lifecycle tiers**: Container image management
     (`Artifact Registry`), secret credentials (`Secret Manager`), private internal DNS resolution (`Cloud DNS Managed Private Zone` for `run.app.`), and zero-trust
-    egress firewalls (`VPC Egress Firewalls`).
+    Cloud NGFW network firewall policies (`google_compute_network_firewall_policy`, `google_compute_network_firewall_policy_association`, and `google_compute_network_firewall_policy_rule`).
 
 ## 4. Proposed solution architecture
 
@@ -111,101 +111,42 @@ flowchart TD
 
 ## 5. Design and configuration recommendations
 
-[Populate the following subsections to match your generated recommendations.
-The current text is for example only.]
+[Populate the following subsections with clear, parameter-dense recommendations adhering to Google Cloud Architecture Framework pillars. The included text is a sample and must be updated to reflect actual recommendation if necessary.]
 
 ### 5.1. Security, privacy, and compliance
 
-[Populate the following subsections to match your generated recommendations.
-The current text is for example only.]
-
-*   **Edge WAF Protection (Cloud Armor / `google_compute_security_policy`)**: This design implements and attaches a **Cloud Armor Web Application Firewall (`WAF`) security policy** (`google_compute_security_policy`) with preconfigured SQL injection (`sqli-v33-stable`) and XSS protection rules to your global or regional external Application Load Balancer backend service to screen and block malicious internet ingress before it reaches serverless compute tiers. When deploying a regional external Application Load Balancer, an explicit proxy-only subnet (`purpose = "REGIONAL_MANAGED_PROXY"`) is provisioned in the VPC and `network` must be specified on the regional forwarding rule.
-*   **Reverse Proxy & CORS Elimination**: Routing all requests through
-    the single Presentation domain (`Tier 1 Frontend`) hides internal
-    microservices (`Tiers 2..N`) from the internet and avoids browser CORS
-    preflight complexity.
-*   **Ingress Bypass Gotcha & Edge Protection (`internal-and-cloud-load-balancing`)**:
-    > [!WARNING]
-    > **Critical Ingress Bypass Gotcha**: If a public Cloud Run service is not explicitly restricted at the ingress level, external attackers can completely bypass your Application Load Balancer and Cloud Armor WAF security policies (`sqli-v33-stable`) by sending HTTP requests directly to the default `*.run.app` URL. To eliminate this critical security bypass risk, this design configures the Tier 1 frontend ingress to **`internal-and-cloud-load-balancing`** (`INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER`), and all intermediate/internal microservice tiers (`Tiers 2..N`) strictly to **`internal`** (`INGRESS_TRAFFIC_INTERNAL_ONLY`).
-*   **Zero Public Exposure, VPC-Internal Ingress (`INGRESS_TRAFFIC_INTERNAL_ONLY`), & Cloud DNS (`google_dns_managed_zone`)**: While many designs casually refer to intermediate microservices or the backend application as "private", to make them genuinely private across serverless architectures, this design configures the backend application service ingress strictly to **`VPC-internal` (`INGRESS_TRAFFIC_INTERNAL_ONLY`)**. Furthermore, because `BACKEND_URL` (`*.a.run.app`) resolves via public Google DNS to public IPv4 VIPs (`216.58.x.x`) by default — causing packets via `ALL_TRAFFIC` egress to hit the `deny_all_egress` firewall or fail `VPC-internal` ingress requirements — this design configures a **Cloud DNS Managed Private Zone (`google_dns_managed_zone`) for `run.app.` bound to `vpc_network` with `google_dns_record_set` mapping `*.run.app` directly to Private Google Access VIPs (`199.36.153.4/30 / 199.36.153.8/30`)**. This guarantees that all downstream internal microservice tiers (T2..TN) resolve securely to internal PGA endpoints, maintaining zero public internet exposure.
-*   **Least-Privilege Cloud NGFW Egress Firewall Policies & Sidecar IAM Cert Exchange (`443`)**: This design enforces **least-privilege Cloud NGFW Global/Regional Firewall Policies (`google_compute_network_firewall_policy_rule`) to restrict traffic precisely between tiers**. It enforces a default-deny VPC Egress policy (`0.0.0.0/0`) on the Cloud Run subnet (`priority = 65534`), and adds explicit allow rules so Tier 1 (`frontend`) can only egress to Tier 2 (`backend application`) (`port 443/8080` along with Private Google Access VIPs `199.36.153.4/30` and `199.36.153.8/30`), and backend application can only egress (`allow_backend_db_egress`) to the Data Tier (`Cloud SQL port 5432` / `Redis port 6379`) AND Private Google Access VIPs (`port 443` on `199.36.153.4/30 / 199.36.153.8/30`). Permitting outbound TCP port `443` to PGA VIPs alongside port `5432` is critical: when Cloud Run initializes `cloud_sql_instance` volumes (`IAM Auth`), the sidecar queries `sqladmin.googleapis.com` (`port 443`) and OAuth endpoints to exchange tokens for ephemeral client certificates on startup; blocking this traffic causes the sidecar cert exchange to crash.
-*   **Cloud SQL Auth Proxy & IAM-Based Database Authentication (`DB_SOCKET_PATH`)**: This design includes the **Cloud SQL Auth Proxy** (run via Unix socket volume sidecar `/cloudsql/project:region:instance`) and **IAM-based database authentication** (`cloudsql.iam_authentication = on`) using short-lived IAM OAuth tokens (`roles/cloudsql.client` via `google_sql_user`) rather than hardcoded database passwords. Note that because the Auth Proxy sidecar queries `sqladmin.googleapis.com` (`443`) over PGA VIPs during container startup for IAM certificate exchange, `allow_backend_db_egress` explicitly permits TCP port `443` to `199.36.153.4/30, 199.36.153.8/30`. When configuring database connection strings in application drivers, **`DB_SOCKET_PATH` (`/cloudsql/...` Unix socket) is recommended over direct TCP (`DB_PSC_ENDPOINT`) as the primary/default path**, since the Auth Proxy sidecar automatically handles transparent IAM authentication, short-lived OAuth token refresh, and mutual TLS without requiring password rotation or custom token acquisition code.
-*   **Optional VPC Service Controls (`enable_vpc_sc`)**: Wraps
-    `run.googleapis.com`, `sqladmin.googleapis.com`, and
-    `secretmanager.googleapis.com` in an Org-level VPC Service Controls service
-    perimeter when `enable_vpc_sc = true` to eliminate API data exfiltration risks.
+*   **Edge WAF & Ingress Filtering**: Attach Cloud Armor security policy (`google_compute_security_policy` with `sqli-v33-stable` preconfigured rule) to Application Load Balancer backend service. Tier 1 Frontend ingress is restricted to `INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER` to prevent direct `*.run.app` URL bypass.
+*   **VPC-Internal Compute Ingress & Cloud DNS**: Intermediate/backend microservices (T2..TN) are restricted strictly to `INGRESS_TRAFFIC_INTERNAL_ONLY`. Deploy a Cloud DNS Managed Private Zone (`google_dns_managed_zone`) for `run.app.` bound to `vpc_network` with `google_dns_record_set` mapping `*.run.app` to Private Google Access VIPs (`199.36.153.4/30 / 199.36.153.8/30`) so `egress = "ALL_TRAFFIC"` requests resolve internally without hitting default-deny firewalls or public IP routing.
+*   **Cloud NGFW Egress Firewalls & Sidecar Cert Exchange (`443`)**: Enforce zero-trust Cloud NGFW network firewall policies (`google_compute_network_firewall_policy_rule`) with default-deny outbound (`0.0.0.0/0`, priority 65534). Allow frontend egress to backend / PGA VIPs (`80, 443`), and backend egress (`allow_backend_db_egress`) to Cloud SQL PSC IP (TCP 5432) and PGA VIPs (TCP 443 on `199.36.153.4/30, 199.36.153.8/30`) so the Cloud SQL Auth Proxy sidecar can query `sqladmin.googleapis.com` on startup for IAM certificate exchange.
+*   **Cloud SQL Auth Proxy & IAM Database Auth (`DB_SOCKET_PATH`)**: Mount Cloud SQL Auth Proxy sidecar via `cloud_sql_instance` volume (`/cloudsql/project:region:instance` Unix socket). Configure IAM DB authentication (`cloudsql.iam_authentication = on`, `roles/cloudsql.client` via `google_sql_user`). Recommend `DB_SOCKET_PATH` (`/cloudsql/...` Unix socket) as the primary/default path over direct TCP (`DB_PSC_ENDPOINT`).
+*   **VPC Service Controls Perimeter**: Document/support wrapping `run.googleapis.com`, `sqladmin.googleapis.com`, and `secretmanager.googleapis.com` in an Org-level VPC-SC perimeter when `enable_vpc_sc = true`.
+*   **Regional Sovereignty (if applicable)**: For EU/regional data residency compliance, deploy Regional External ALB (`google_compute_region_backend_service`), omit Cloud CDN, provision a regional proxy-only subnet (`purpose = "REGIONAL_MANAGED_PROXY"`), and specify `network` on the regional forwarding rule (`google_compute_forwarding_rule`).
 
 ### 5.2. Reliability
 
-[Populate the following section to match your generated recommendations.
-The current text is for example only.]
-
-*   **Cloud SQL PostgreSQL Regional HA (`availability_type = "REGIONAL"`) & Private Service Connect (`psc_enabled = true, ipv4_enabled = false`)**: This design provisions **Cloud SQL for PostgreSQL Enterprise Edition** (`85`) with **Regional High Availability** (`availability_type = "REGIONAL"`, ~60s failover across zones). Furthermore, it enforces an exact Private Service Connect and zero public IP configuration (`psc_enabled = true, ipv4_enabled = false`, `google_compute_forwarding_rule`) (`100% private, zero public IP exposure`).
-*   **Redundant Serverless Deployment**: Cloud Run v2 automatically distributes
-    container ingress across multiple physical zones within the target region
-    (`var.region`).
-*   **Auto-Scaling Boundaries**: Configure appropriate minimum and maximum
-    container instance counts (`scaling.min_instance_count` /
-    `max_instance_count`) to guarantee RTO/RPO targets and eliminate cold-start
-    latency spikes on critical business logic tiers.
+*   **Cloud SQL PostgreSQL Regional HA & PSC**: Provision Cloud SQL for PostgreSQL (`POSTGRES_18`) Enterprise Edition with Regional High Availability (`availability_type = "REGIONAL"`, point-in-time recovery enabled), and connect via Private Service Connect (`psc_enabled = true, ipv4_enabled = false`, `google_compute_forwarding_rule`).
+*   **Redundant Serverless Deployment**: Cloud Run v2 automatically distributes instances across physical zones in `var.region`. Configure `scaling.min_instance_count` and `max_instance_count` to eliminate cold-start latency and protect downstream tiers.
 
 ### 5.3. Operational excellence
 
-[Populate the following section to match your generated recommendations.
-The current text is for example only.]
-
-*   **Structured JSON Logging & Error Reporting**: Emit structured JSON logs
-    from all container runtimes to populate native `jsonPayload` fields in `Logs
-    Explorer` and automatically trigger unhandled exception groupings in `Cloud
-    Error Reporting`.
-*   **VPC Flow Logs & Cost-Optimized Sampling (`log_config`)**: This design configures VPC Flow Logs on the shared Cloud Run subnet with a cost-optimized baseline capture rate of **`10%` (`flow_sampling = 0.1`)** and an aggregation window of **`1 minute` (`aggregation_interval = "INTERVAL_1_MIN"`)**. If your security or operations team requires higher network visibility and forensic granularity, you can increase `flow_sampling` up to `1.0` (100% of traffic) and shorten `aggregation_interval` across your Terraform variables. Conversely, if you are in a cost-sensitive development environment and do not need network flow auditing, you can disable flow logs and all optional observability tools entirely by setting `enable_monitoring = false`.
-*   **Database Deep Observability**: Enable **Cloud SQL Query Insights**
-    (`query_insights_enabled = true`) to continuously audit query execution
-    plans, measure lock contention, and detect N+1 query anomalies across app
-    workloads.
-*   **Proactive Uptime Checks**: Provision global **Cloud Monitoring Uptime
-    Checks** (`/healthz`) targeting the Application Load Balancer custom domain every 60 seconds to
-    detect presentation anomalies before users experience failures.
-*   **Infrastructure as Code (IaC)**: Manage all infrastructure using modular,
-    version-controlled `Terraform` (`assets/main.tf`) with stateful deletion
-    protection enabled on critical storage blocks (`deletion_protection =
-    true`).
+*   **Structured Logging & Error Reporting**: Emit structured JSON logs (`severity`, `message`, `trace`) for automated ingestion in Logs Explorer and unhandled exception grouping in Cloud Error Reporting.
+*   **VPC Flow Logs & Firewall Policy Logging**: Enable VPC Flow Logs (`flow_sampling = 0.1`, `aggregation_interval = "INTERVAL_1_MIN"`) on Cloud Run subnet and firewall logging (`enable_logging = var.enable_monitoring`) for network access auditing.
+*   **Database Insights & Synthetic Probes**: Enable Cloud SQL Query Insights (`query_insights_enabled = true`) for query execution and contention auditing. Configure Cloud Monitoring Uptime Checks (`/healthz`) and threshold alerts for Frontend HTTP 5xx error rates.
+*   **Infrastructure as Code (IaC)**: Manage all infrastructure using modular Terraform (`assets/main.tf`) with stateful deletion protection (`deletion_protection = true`).
 
 ### 5.4. Cost optimization
 
-[Populate the following section to match your generated recommendations.
-The current text is for example only.]
-
-*   **Serverless Idle Efficiency ($0 Baseline)**: By defaulting internal compute
-    routing to `egress = "ALL_TRAFFIC"` + Private Google Access
-    (`private_ip_google_access = true`) alongside a Cloud DNS Managed Private Zone (`google_dns_managed_zone`) for `run.app.`, the architecture operates with $0 fixed
-    internal proxy overhead when idle, avoiding costly intermediate internal
-    Application Load Balancers unless multi-region failover or custom internal SSL
-    certificates are required.
-*   **Right-Sizing & Spot/Allocations**: Optimize Cloud Run `limits` (`memory`
-    and `cpu`) per tier, and use `enable_cdn = true` on the Application Load Balancer to offload
-    static asset delivery to Google's edge caching tier.
+*   **Serverless Idle Efficiency ($0 Baseline)**: Internal routing via Direct VPC Egress (`ALL_TRAFFIC`) + Private Google Access + Cloud DNS private zone operates at $0 idle cost without intermediate internal load balancers.
+*   **Edge Caching**: Enable Cloud CDN (`enable_cdn = true`) on Global ALB to cache static assets and reduce Cloud Run container activations and egress fees.
 
 ### 5.5. Performance efficiency
 
-[Populate the following section to match your generated recommendations.
-The current text is for example only.]
-
-*   **Connection Pooling**: Implement database connection pooling inside Tiers
-    2..N microservices to prevent PostgreSQL connection exhaustion under rapid
-    serverless auto-scaling events.
-*   **Sub-Millisecond Caching**: Use Memorystore for Redis (`connect_mode =
-    "PRIVATE_SERVICE_ACCESS"`) to offload user session validation, JWT
-    verification, or frequent read queries.
+*   **In-Memory Caching**: Deploy Memorystore for Redis via Private Services Access (`connect_mode = "PRIVATE_SERVICE_ACCESS"`) to cache session state and frequent database read queries.
+*   **Connection Pooling**: Implement database connection pooling inside application containers to prevent PostgreSQL connection saturation during traffic spikes.
 
 ### 5.6. Sustainability
 
-[Populate the following section to match your generated recommendations.
-The current text is for example only.]
-
-*   Adopting 100% serverless runtimes (`Cloud Run`) ensures compute resources
-    scale precisely to zero (`0 instances`) during idle periods, maximizing
-    datacenter hardware utilization and reducing overall carbon footprint.
+*   **Scale-to-Zero Compute**: Fully serverless Cloud Run architecture scales compute instances to zero during idle periods, optimizing datacenter utilization and carbon efficiency.
 
 ## 6. Deployment guidance
 
@@ -230,9 +171,13 @@ Terraform code, and your generated cross-platform verification scripts below.]
 2.  **Initialize and Apply Modular Terraform Configuration**:
     ```bash
     terraform init
-    terraform apply
+    # For production with a custom domain:
+    terraform apply -var="domain_name=app.mycompany.com"
+    # For sandbox/dev testing over IP with a self-signed certificate:
+    terraform apply -var="use_self_signed_cert=true"
     ```
-3.  **Optional VPC Service Controls (`enable_vpc_sc`) Configuration**: If
+3.  **DNS Cutover & SSL Validation**: If using a Google-managed certificate (`use_self_signed_cert = false`), create a DNS `A` record at your registrar pointing `var.domain_name` to the outputted `load_balancer_ip`. If using self-signed mode (`use_self_signed_cert = true`), you can test immediately over HTTPS via `curl -k https://[LOAD_BALANCER_IP]/`.
+4.  **Optional VPC Service Controls (`enable_vpc_sc`) Configuration**: If
     deploying with `enable_vpc_sc = true`, ensure your active identity is an
     Organization Access Context Manager Admin and update your service perimeter
     to include the newly deployed project and required APIs before starting

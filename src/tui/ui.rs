@@ -966,7 +966,7 @@ fn draw_theme_picker(f: &mut Frame, app: &mut App, area: Rect) {
                     // Cap the offer so the list always keeps >= 8 visible rows.
                     height: inner.height.saturating_sub(9).max(2),
                 };
-                let actual = proto.size_for(ratatui_image::Resize::Scale(None), offer);
+                let actual = proto.size_for(ratatui_image::Resize::Scale(None), offer.into());
                 // Cap at 3: the ramp is a garnish, the list is the point.
                 preview_rows = actual.height.min(offer.height).min(3);
             }
@@ -2172,6 +2172,9 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
         app.wrap_cache_palette = Some(palette);
         app.wrap_cache_keys.clear();
         app.wrap_cache_parts.clear();
+        app.wrap_cache_links.clear();
+        app.prose_cache_keys.clear();
+        app.prose_cache_parts.clear();
     }
     fit_wrap_cache(
         &mut app.wrap_cache_width,
@@ -2181,6 +2184,9 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
         app.cells.len(),
     );
 
+    app.wrap_cache_links.resize_with(app.cells.len(), Vec::new);
+    app.prose_cache_keys.resize(app.cells.len(), 0);
+    app.prose_cache_parts.resize_with(app.cells.len(), Vec::new);
     // Cache finished cell layout, then index rows without cloning styled text.
     // Only visible rows need link discovery, filesystem checks and hit testing.
     let mut row_index = super::row_index::RowIndex::default();
@@ -2188,6 +2194,18 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     let mut prompt_cells = Vec::new();
     let mut current = None;
     let mut plain_dirty = app.plain_lines.is_empty();
+    let content_changed = app.wrap_cache_revision != app.transcript_revision;
+    #[cfg(feature = "image-peek")]
+    let latex_changed = {
+        let generation = super::latex::cache_revision();
+        let changed = app.wrap_cache_latex != generation;
+        app.wrap_cache_latex = generation;
+        changed
+    };
+    #[cfg(not(feature = "image-peek"))]
+    let latex_changed = false;
+    let content_changed = content_changed || latex_changed;
+    app.wrap_cache_revision = app.transcript_revision;
     for (cell_idx, cell) in app.cells.iter().enumerate() {
         if matches!(cell, Cell::Image { queued: true, .. }) {
             continue;
@@ -2205,21 +2223,79 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
             prompt_cells.push(cell_idx);
             current = Some(prompts.len() - 1);
         }
-        let mut key = cell_wrap_key(cell, spin_i);
+        let first_row = row_index.len();
+        let animated = matches!(
+            cell,
+            Cell::Banner
+                | Cell::Assistant {
+                    streaming: true,
+                    ..
+                }
+                | Cell::Thinking { active: true, .. }
+                | Cell::Tool { ok: None, .. }
+                | Cell::Graph { live: true, .. }
+                | Cell::Swarm { .. }
+                | Cell::Queued { .. }
+        );
+        let mut key = if content_changed
+            || animated
+            || app.wrap_cache_keys.get(cell_idx).copied().unwrap_or(0) == 0
+        {
+            cell_wrap_key(cell, spin_i)
+        } else {
+            app.wrap_cache_keys[cell_idx]
+        };
         if app.startup_pending() && matches!(cell, Cell::Queued { .. }) {
             key ^= 0x1f43_dba8_096e_7201;
         }
-        let need = app.wrap_cache_keys.get(cell_idx).copied() != Some(key)
+        let latex_refresh = latex_changed
+            && matches!(cell, Cell::Assistant { text, .. }
+            if text.contains("$$") || text.contains("\\["));
+        let need = latex_refresh
+            || app.wrap_cache_keys.get(cell_idx).copied() != Some(key)
             || app
                 .wrap_cache_parts
                 .get(cell_idx)
                 .map(|p| p.is_empty() && key != 0)
                 .unwrap_or(true);
         if need {
-            plain_dirty = true;
-            let mut cell_out: Vec<Line<'static>> = Vec::new();
-            cell_lines(app, cell, cell_idx, inner_w as usize, &mut cell_out);
-            let w = wrap::wrap_lines(&cell_out, inner_w);
+            let old_rows = app.wrap_cache_parts[cell_idx].len();
+            let (w, links) = if matches!(
+                cell,
+                Cell::Assistant {
+                    streaming: false,
+                    ..
+                }
+            ) {
+                if latex_refresh || app.prose_cache_keys[cell_idx] != key {
+                    let mut source = Vec::new();
+                    cell_lines(app, cell, cell_idx, inner_w as usize, &mut source);
+                    app.prose_cache_keys[cell_idx] = key;
+                    app.prose_cache_parts[cell_idx] = source;
+                }
+                wrap::wrap_lines_with_links(&app.prose_cache_parts[cell_idx], inner_w)
+            } else {
+                let mut cell_out = Vec::new();
+                cell_lines(app, cell, cell_idx, inner_w as usize, &mut cell_out);
+                app.prose_cache_keys[cell_idx] = 0;
+                app.prose_cache_parts[cell_idx].clear();
+                wrap::wrap_lines_with_links(&cell_out, inner_w)
+            };
+            app.wrap_cache_links[cell_idx] = links;
+            if old_rows != w.len() || first_row + w.len() > app.plain_lines.len() {
+                plain_dirty = true;
+            } else if !plain_dirty {
+                // A color/spinner change must not invalidate every finished row.
+                for (plain, styled) in app.plain_lines[first_row..first_row + w.len()]
+                    .iter_mut()
+                    .zip(&w)
+                {
+                    let next = line_to_plain(styled);
+                    if *plain != next {
+                        *plain = next;
+                    }
+                }
+            }
             if let Some(slot) = app.wrap_cache_parts.get_mut(cell_idx) {
                 *slot = w;
             }
@@ -2227,7 +2303,6 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
                 *k = key;
             }
         }
-        let first_row = row_index.len();
         let lines = &app.wrap_cache_parts[cell_idx];
         row_index.push(
             Some(cell_idx),
@@ -2389,7 +2464,28 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
             }
         }
         // Only visible rows discover links; unchanged rows reuse bounded metadata.
-        let (urls, paths) = app.link_cache.get(&app.cwd, &plain);
+        let (mut urls, mut paths) = app.link_cache.get(&app.cwd, &plain);
+        if let Some(links) = app
+            .wrap_cache_links
+            .get(cell_idx)
+            .and_then(|rows| rows.get(i))
+        {
+            for (lo, hi, target) in links {
+                urls.retain(|(start, end, _)| end <= lo || start >= hi);
+                paths.retain(|(start, end, _, _)| end <= lo || start >= hi);
+                if target.starts_with("http://") || target.starts_with("https://") {
+                    urls.push((*lo, *hi, target.to_string()));
+                } else if let Some((_, _, path, kind)) = app
+                    .link_cache
+                    .destination(&app.cwd, target)
+                    .1
+                    .into_iter()
+                    .next()
+                {
+                    paths.push((*lo, *hi, path, kind));
+                }
+            }
+        }
         if !paths.is_empty() {
             let hue = theme::DIR();
             for (lo, hi, _p, kind) in &paths {
@@ -3104,7 +3200,7 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                 ]));
             }
         }
-        Cell::Queued { text } => {
+        Cell::Queued { text, .. } => {
             out.push(Line::default());
             let hue = theme::WARN();
             // Preview (one line) so the card stays compact.
@@ -7164,7 +7260,7 @@ fn cell_wrap_key(cell: &Cell, spin_i: u64) -> u64 {
             // tone as discriminant
             format!("{tone:?}").hash(&mut h);
         }
-        Cell::Queued { text } => {
+        Cell::Queued { text, .. } => {
             9u8.hash(&mut h);
             text.hash(&mut h);
         }
@@ -7455,6 +7551,112 @@ mod tests {
     }
 
     /// Isolated row-materialization benchmark, not an end-to-end TUI latency claim.
+    /// Actual production draw, with long history and every animation enabled.
+    /// Run alone in an explicit temporary NUR_HOME; records timing + allocations.
+    #[test]
+    #[ignore]
+    fn transcript_draw_benchmark() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let home = std::env::var_os("NUR_HOME").expect("benchmark requires an isolated NUR_HOME");
+        let cwd = std::path::PathBuf::from(home).join("draw-workspace");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let cfg = crate::config::Config {
+            native_memory: false,
+            theme: Some("gold".into()),
+            ..Default::default()
+        };
+        let session = crate::agent::Session::new_for_provider(
+            "e2e-model",
+            "vllm",
+            &cwd.display().to_string(),
+        );
+        let usage =
+            crate::usage::UsageTracker::new(session.id.clone(), "e2e-model".into(), cwd.clone());
+        let client =
+            crate::api::ApiClient::for_provider("http://127.0.0.1:1/v1", "", "vllm").unwrap();
+        let mode = crate::agent::SharedMode::new(crate::agent::PermissionMode::Manual);
+        let mut app = super::super::app::new_app(client, cfg, cwd, mode, session, usage, None);
+        for i in 0..300 {
+            app.cells.push(Cell::User(format!("Prompt {i}")));
+            app.cells.push(Cell::Assistant { text: "Finished explanation with a list and a code example.\n\n- First step\n- Second step\n\n```rust\nlet value = 42;\n```\n".repeat(24), streaming: false });
+        }
+        app.transcript_revision += 1;
+        let mut terminal = Terminal::new(TestBackend::new(120, 32)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let stable_string = app
+            .plain_lines
+            .iter()
+            .find(|line| line.contains("Finished explanation"))
+            .unwrap()
+            .as_ptr();
+        let mut report = Vec::new();
+        for scenario in [
+            "idle",
+            "typing",
+            "scrolling",
+            "streaming",
+            "theme",
+            "resize",
+        ] {
+            let mut times = Vec::new();
+            let mut allocations = 0;
+            let mut bytes = 0;
+            if scenario == "streaming" {
+                app.cells.push(Cell::Assistant {
+                    text: "Streaming".into(),
+                    streaming: true,
+                });
+                app.transcript_revision += 1;
+            }
+            for i in 0..40 {
+                app.spinner_epoch = std::time::Instant::now() - Duration::from_millis(i * 90);
+                match scenario {
+                    "typing" => app.input.set_text(&format!("Draft {i}")),
+                    "scrolling" => app.scroll_from_bottom = i as usize * 4,
+                    "streaming" => {
+                        if let Some(Cell::Assistant { text, .. }) = app.cells.last_mut() {
+                            text.push_str(" next");
+                        }
+                        app.transcript_revision += 1;
+                    }
+                    "theme" if i == 0 => {
+                        assert!(theme::set_theme("moss"));
+                    }
+                    "resize" if i == 0 => {
+                        terminal.backend_mut().resize(90, 32);
+                    }
+                    _ => {}
+                }
+                let started = std::time::Instant::now();
+                let counts = crate::test_alloc::measure(|| {
+                    terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+                });
+                times.push(started.elapsed().as_secs_f64() * 1000.0);
+                allocations += counts.allocations;
+                bytes += counts.bytes;
+            }
+            let cold_transition_ms = times[0];
+            times.sort_by(f64::total_cmp);
+            if scenario == "idle" {
+                assert_eq!(
+                    app.plain_lines
+                        .iter()
+                        .find(|line| line.contains("Finished explanation"))
+                        .unwrap()
+                        .as_ptr(),
+                    stable_string,
+                    "animated banner rebuilt finished plain text"
+                );
+            }
+            report.push(serde_json::json!({"scenario":scenario,"median_ms":times[20],"p95_ms":times[38],"mean_allocations":allocations/40,"mean_allocated_bytes":bytes/40,"cold_transition_ms":cold_transition_ms}));
+        }
+        let path = std::env::var_os("NUR_DRAW_REPORT")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| app.cwd.join("draw-report.json"));
+        std::fs::write(&path, serde_json::to_string_pretty(&report).unwrap()).unwrap();
+        eprintln!("{}", serde_json::to_string_pretty(&report).unwrap());
+    }
+
     #[test]
     #[ignore]
     fn viewport_row_benchmark() {

@@ -7,6 +7,7 @@ description: >-
   cluster-level autoscaling (Cluster Autoscaler), static cluster sizing,
   or configuring node-level machine styles directly.
 metadata:
+  version: "1.0.0"
   category: Containers
 ---
 

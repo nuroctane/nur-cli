@@ -27,7 +27,7 @@
 - Adversarial Robustness Toolbox: https://github.com/Trusted-AI/adversarial-robustness-toolbox
 - ART poisoning defenses docs: https://adversarial-robustness-toolbox.readthedocs.io/en/latest/modules/defences/detector_poisoning.html
 - Cleanlab: https://github.com/cleanlab/cleanlab
-- safetensors: https://github.com/huggingface/safetensors
+- safetensors: https://github.com/safetensors/safetensors
 - OWASP LLM04:2025: https://genai.owasp.org/llmrisk/llm042025-data-and-model-poisoning/
 - MITRE ATLAS: https://atlas.mitre.org/
 - NIST AI RMF: https://www.nist.gov/itl/ai-risk-management-framework

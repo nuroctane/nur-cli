@@ -400,7 +400,7 @@ editing or spending after cancellation. OMP JSON error events remain failures
 even when the OMP process exits with code 0. `status` reports version,
 authenticated providers, model roles, the resolved economy route, and warnings;
 `version` is the lightweight version-only check. Both remain free.
-Provisioning requires **omp >= 18.0.9** (feature floor; `nur ecosystem ensure`
+Provisioning requires **omp >= 18.4.4** (feature floor; `nur ecosystem ensure`
 auto-upgrades). Bun installs require version 1.3.14 or newer.
 
 ### `skill`

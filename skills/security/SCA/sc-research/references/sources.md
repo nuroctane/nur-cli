@@ -9,8 +9,8 @@ Catalog assembled for Nur's `sc-research` pack. Treat as **sources**, not people
 | [DarkNavySecurity/web3-skills](https://github.com/DarkNavySecurity/web3-skills) | `contract-auditor` (DFS mapping + hunt agents), `client-auditor` (node/P2P/consensus), `exploit-investigator` (public tx reconstruction) | [@DarkNavyOrg](https://x.com/DarkNavyOrg) [@Defi_Nerd_sec](https://x.com/Defi_Nerd_sec) - posted the open-source preview on X |
 | [dudesahn/dark-navy-web3-skills](https://github.com/dudesahn/dark-navy-web3-skills) | Community mirror of the above | - |
 | [Cyfrin/solskill](https://github.com/Cyfrin/solskill) | Production Solidity + BattleChain whitehat deploy / Safe Harbor | [@PatrickAlphaC](https://x.com/PatrickAlphaC) [@CyfrinAudits](https://x.com/CyfrinAudits) |
-| [0xinit/cryptoskills](https://github.com/0xinit/cryptoskills) | Slither, Echidna, Foundry, ~95 protocol primers | cryptoskills.dev |
-| [shuvonsec/claude-bug-bounty](https://github.com/shuvonsec/claude-bug-bounty) `skills/web3-audit` | 10 DeFi bug classes + Immunefi-shaped reports | - |
+| [andresdefi/cryptoskills](https://github.com/andresdefi/cryptoskills) | Slither, Echidna, Foundry, ~95 protocol primers | cryptoskills.dev |
+| [shuvonsec/claude-bug-bounty](https://github.com/awarexone/Agentic-Bug-Hunter) `skills/web3-audit` | 10 DeFi bug classes + Immunefi-shaped reports | - |
 | [mariano-aguero/solidity-security-audit-skill](https://github.com/mariano-aguero/solidity-security-audit-skill) | Firm-style audit methodology | - |
 | [zpano/solidity-audit](https://github.com/zpano/solidity-audit) | Orchestrator + specialized audit agents | - |
 | [yolodolo42/solidity-audit-skill](https://github.com/yolodolo42/solidity-audit-skill) | Claude skill + MCP build/test/audit tools | - |

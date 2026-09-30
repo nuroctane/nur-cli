@@ -1,0 +1,99 @@
+{
+  "source": "integrated-main-r20, slice 5, shared-libs-review-index-flags, revision 68c7dad206d5c2cc2708552baad540579a4f543d; exact public AskUserQuestion inputs only. Both original captures remain failed.",
+  "cases": [
+    {
+      "scenario": "skip-worktree",
+      "attempt": 1,
+      "original_passed": false,
+      "original_exit_reason": "actor_contract",
+      "tool_use_id": "toolu_01FhRkpUfMH1n8uZLjj3qZxY",
+      "input": {
+        "questions": [
+          {
+            "question": "[ADVISORY] src/retry-worker.ts:2-15 inlines a byte-identical copy of lib/retry-after.ts:retrySeconds (tested at test/retry-after.test.ts). src/retry-route.ts:2-15 holds the same copy. Restore reuse of the shared helper? (Prior skip is not reusable: src/retry-route.ts changed and is excluded from snapshot coverage by its skip-worktree bit.)",
+            "header": "Shared helper",
+            "options": [
+              {
+                "label": "Fix both callers (Recommended)",
+                "description": "Replace the inline body in src/retry-worker.ts AND src/retry-route.ts with `export { retrySeconds } from '../lib/retry-after';`. ~-28 lines; covered by existing contract test. Note: retry-route.ts is skip-worktree, so its edit is invisible to git until the flag is cleared."
+              },
+              {
+                "label": "Fix worker only",
+                "description": "Restore the 1-line re-export in src/retry-worker.ts (the changed anchor) only; leave src/retry-route.ts as is. ~-14 lines."
+              },
+              {
+                "label": "Skip",
+                "description": "Keep the inline duplicate. Recorded as an explicit Skip for this advisory with fresh snapshot coverage."
+              }
+            ],
+            "multiSelect": false
+          },
+          {
+            "question": "src/retry-route.ts has the skip-worktree index bit set, so git status/diff hide its working-tree changes (it already differs from HEAD by a trailing comment). If you chose to edit it, should I clear that bit (`git update-index --no-skip-worktree src/retry-route.ts`) so the change becomes visible and committable?",
+            "header": "skip-worktree",
+            "options": [
+              {
+                "label": "Yes, clear the bit",
+                "description": "Run git update-index --no-skip-worktree on src/retry-route.ts. Reversible; only affects the local index flag."
+              },
+              {
+                "label": "No, leave it set",
+                "description": "Any edit to src/retry-route.ts stays hidden from git; you manage the flag yourself."
+              }
+            ],
+            "multiSelect": false
+          }
+        ]
+      },
+      "expected_labels": [
+        "Skip",
+        "No, leave it set"
+      ]
+    },
+    {
+      "scenario": "assume-unchanged",
+      "attempt": 2,
+      "original_passed": false,
+      "original_exit_reason": "actor_contract",
+      "tool_use_id": "toolu_01H9u4DJMDstraBWuCcoQQdk",
+      "input": {
+        "questions": [
+          {
+            "question": "[ADVISORY] (core + maintainability, confidence 9) src/retry-worker.ts:2 — the diff inlines a byte-identical copy of lib/retry-after.ts#retrySeconds; src/retry-route.ts:2-15 holds a third identical copy. Proposed fix: restore `export { retrySeconds } from '../lib/retry-after';` in retry-worker.ts and replace the body in retry-route.ts with the same re-export. Est. implementation: -30 lines removed, +2 added, ~28 saved (total change identical; existing test/retry-after.test.ts already covers the contract, no new tests needed). Shared-failure blast radius: scheduler, worker and route would all depend on one parser — which they already require to behave identically. RECOMMENDATION: Fix. Apply?",
+            "header": "Shared helper",
+            "multiSelect": false,
+            "options": [
+              {
+                "label": "Fix as recommended (Recommended)",
+                "description": "Re-export lib/retry-after#retrySeconds from both src/retry-worker.ts and src/retry-route.ts, removing the two duplicate bodies. Then re-review (new start token)."
+              },
+              {
+                "label": "Skip",
+                "description": "Keep the duplicated parser bodies. Records an explicit Skip for this advisory; the logger will recompute snapshot coverage."
+              }
+            ]
+          },
+          {
+            "question": "src/retry-route.ts has the Git assume-unchanged flag (`h` in `git ls-files -v`), so its uncommitted edit (a comment at line 17) is hidden from `git diff`/`git status` and excluded from shared-libs snapshot coverage. Any fix I apply there would also be hidden until the flag is cleared. Should I clear it with `git update-index --no-assume-unchanged src/retry-route.ts`?",
+            "header": "Git flag",
+            "multiSelect": false,
+            "options": [
+              {
+                "label": "Clear the flag (Recommended)",
+                "description": "Run git update-index --no-assume-unchanged so the route change appears in status/diff and can be committed and covered."
+              },
+              {
+                "label": "Leave it set",
+                "description": "Don't touch the index flag; the route edit stays invisible to git status/diff and outside snapshot coverage."
+              }
+            ]
+          }
+        ]
+      },
+      "expected_labels": [
+        "Skip",
+        "Leave it set"
+      ]
+    }
+  ]
+}

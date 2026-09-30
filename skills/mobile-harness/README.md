@@ -4,6 +4,10 @@
 
 <p align="center">
   <a href="https://skills.sh/droidrun/mobile-harness"><img src="https://skills.sh/b/droidrun/mobile-harness" alt="skills.sh" /></a>
+  <a href="https://mobilerun.ai"><img src="https://img.shields.io/badge/mobilerun.ai-white" alt="Mobilerun website" /></a>
+  <a href="https://x.com/mobilerun_ai"><img src="https://img.shields.io/twitter/follow/mobilerun_ai?style=social" alt="Follow Mobilerun on X" /></a>
+  <a href="https://discord.gg/ZZbKEZZkwK"><img src="https://img.shields.io/discord/1360219330318696488?color=white&amp;label=Discord&amp;logo=discord&amp;logoColor=white" alt="Mobilerun Discord community" /></a>
+  <a href="https://t.me/+_r43WkbbyiA1OGUy"><img src="https://img.shields.io/badge/Telegram-Support-26A5E4?logo=telegram&amp;logoColor=white" alt="Mobilerun Telegram support" /></a>
 </p>
 
 > Portable operating instructions for AI agents controlling Android and iOS devices—locally or in the cloud.
@@ -11,6 +15,24 @@
 Mobile Harness is a compact Markdown harness, not an agent runtime. Its primary
 control path is Python's `mobilerun_core`, with optional client apps where
 needed.
+
+## Benchmarks
+
+We evaluated mobile-harness on AndroidWorld and iOSWorld using a standard coding
+agent with **GPT-6 Astra low**, app cards, and persistent memory.
+
+<p align="center">
+  <a href="https://mobilerun.ai/benchmark/"><img src="assets/benchmark-results.png" width="900" alt="AndroidWorld: 116 tasks, 100% mean score, 100% binary pass rate, 116/116 full-score tasks. iOSWorld: 133 tasks, 98.24% mean score, 93.23% binary pass rate, 124/133 full-score tasks." /></a>
+</p>
+
+[AndroidWorld tasks](https://mobilerun.ai/benchmark/?platform=android#tasks) · [iOSWorld tasks](https://mobilerun.ai/benchmark/?platform=ios#tasks)
+
+**Mean score** averages the task scores. **Binary pass rate** counts only tasks
+that received a full score of **1.0**.
+
+Explore the [results and task replays](https://mobilerun.ai/benchmark/) for
+screenshots and recorded interactions, or read the
+[methodology](https://mobilerun.ai/benchmark/method/) for evaluation details.
 
 ## Agent Setup Prompt
 
@@ -148,6 +170,7 @@ Skill-based runtimes can load `SKILL.md`; all runtimes should start with
 - the credentials guide under `core/credentials` only when a credential or human-gated screen appears.
 - `core/memory/GUIDE.md` only when reading or writing local agent-owned memory.
 - `apps/android/<package>/CARD.md` or `apps/ios/<bundle-id>/CARD.md` only for the foreground app.
+- the same path under `local/apps/` after the shipped card, and prefer it where the two disagree.
 - `UPDATE.md` only when the session-start update (`git pull --ff-only` or `npx skills update`) fails.
 
 
@@ -187,7 +210,7 @@ two apart.
 
 ## Local State
 
-`memory/` and `credentials/` are local, ignored folders. The repository tracks only their rules/templates. Agents may write operational memory after reading `core/memory/GUIDE.md`.
+Everything the user or the agent owns lives under one git-ignored root, `local/`: `local/memory/` for agent-written memory, `local/credentials/` for optional credential notes, and `local/apps/` for your own app cards or overrides of shipped ones. The repository tracks only their rules and templates, so the session-start `git pull --ff-only` never conflicts with your own content. See `local/README.md`. Agents may write operational memory after reading `core/memory/GUIDE.md`.
 
 ---
 

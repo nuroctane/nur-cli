@@ -1,15 +1,18 @@
 ---
 name: google-cloud-solution-architecture
 metadata:
+  version: "1.0.2"
   category: MultiProductSolutions
 description: >-
-  Interactively discovers requirements for a specific cloud workload and
-  generates design recommendations and architectural guidance to build a
-  multi-product solution in Google Cloud. Use this skill to generate holistic,
-  end-to-end design recommendations and architectural guidance for complex,
-  multi-product workloads on Google Cloud for specific use cases. Don't use this
-  skill when other specialized skills (e.g., product-specific or
-  google-cloud-recipe-*) directly address the user's workload or use case.
+  Interactively discovers requirements and designs holistic, multi-product
+  system architectures, solution blueprints, and deployment recommendations for
+  complex workloads on Google Cloud. Use when designing end-to-end cloud
+  solutions, selecting and integrating Google Cloud services, generating
+  architecture diagrams, or conducting requirements discovery for new cloud
+  workloads or migrations. Don't use for single-product tasks (use
+  product-specific skills), initial onboarding or authentication (use
+  google-cloud-recipe-*), Well-Architected Framework reviews or audits (use
+  google-cloud-waf-*), or workloads covered by specialized solution skills.
 ---
 
 # Google Cloud solution-architecture workflow
@@ -197,23 +200,23 @@ relevant official Google Cloud documentation pages.
 
 1.  Generate design recommendations and best practices to optimally configure
     each component in the architecture based on the workload's requirements.
+
     **Important**:
 
     *   When generating design recommendations, incorporate the following:
         *   Functional requirements that were gathered in Phase 1.
         *   Non-functional requirements that were gathered in Phase 1.
     *   To generate guidance for non-functional requirements, use the following
-        skills, as appropriate:
-        -   `google-cloud-waf-security`
-        -   `google-cloud-waf-reliability`
-        -   `google-cloud-waf-cost-optimization`
-        -   `google-cloud-waf-operational-excellence`
-        -   `google-cloud-waf-performance-optimization`
-        -   `google-cloud-waf-sustainability`
-
-    If any of the specialized `google-cloud-waf-*` skills are not available in
-    your current workspace, derive design guidance directly from the
-    documentation references in `references/best-practices-guides.md`.
+        resources:
+        1.  Best-practices guides for the products and topics that are relevant
+            to the workload: `references/best-practices-guides.md`
+        2.  Well-Architected Framework pillar skills:
+            *   For security requirements: `google-cloud-waf-security`
+            *   For reliability requirements: `google-cloud-waf-reliability`
+            *   For cost optimization requirements: `google-cloud-waf-cost-optimization`
+            *   For operational excellence requirements: `google-cloud-waf-operational-excellence`
+            *   For performance optimization requirements: `google-cloud-waf-performance-optimization`
+            *   For sustainability requirements: `google-cloud-waf-sustainability`
 
 2.  Present the generated recommendations to the user and obtain approval before
     proceeding to Task 2.5.

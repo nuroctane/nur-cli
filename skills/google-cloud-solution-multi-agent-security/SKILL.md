@@ -1,6 +1,7 @@
 ---
 name: google-cloud-solution-multi-agent-security
 metadata:
+  version: "1.0.0"
   category: MultiProductSolutions
 description: >-
   Designs, deploys, and secures Google Cloud Agent Gateway solutions.

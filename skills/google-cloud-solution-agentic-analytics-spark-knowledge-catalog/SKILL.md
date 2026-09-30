@@ -1,17 +1,18 @@
 ---
 name: google-cloud-solution-agentic-analytics-spark-knowledge-catalog
 metadata:
+  version: "1.0.0"
   category: MultiProductSolutions
 description: >-
-  Discovers requirements and generates guidance to design and deploy a governed,
-  secure agentic-analytics solution for data that's distributed across Google
-  Cloud, other cloud providers, or on-premises. Data that's outside Google Cloud
-  (such as data from Databricks, Snowflake, Salesforce, SAP, or Oracle systems)
-  is accessed through federation mechanisms such as Apache Iceberg, other
-  "zero-copy ETL" methods, or remote query push-down. Use this skill when
-  designing an architecture for efficient analytics across large volumes of
-  structured and unstructured data that's located in multiple systems and
-  environments, including other cloud providers and on-premises.
+  Discovers requirements and designs an end-to-end governed agentic analytics
+  solution using Knowledge Catalog and Managed Service for Apache Spark
+  (Lightning Engine). Use when designing data science and analytics workflows
+  across structured and unstructured distributed data (including in S3, Azure
+  Blob, AlloyDB, and Iceberg), establishing metadata governance with Knowledge
+  Catalog aspect types, or grounding agentic IDEs (VS Code, Antigravity) by
+  using the Google Cloud Data Agent Kit. Don't use for provisioning borderless
+  data lakehouse infrastructure (use
+  google-cloud-solution-agentic-ai-borderless-data-lakehouse instead).
 ---
 
 # Agentic analytics across cloud providers and data types
@@ -249,7 +250,7 @@ using the following resources:
         required APIs, and setting up the required roles and permissions.
     *   Use the following resources as the technical foundation for the
         deployment guidance that you generate:
-        -   https://github.com/gemini-cli-extensions/data-agent-kit-starter-pack/tree/main/skills:
+        -   https://github.com/GoogleCloudPlatform/data-agent-kit-plugin/tree/main/skills:
             A plugin that provides a specialized suite of skills and MCP tools
             to let you use your preferred coding agent to architect complex data
             pipelines, transform data with dbt, write Spark and BigQuery SQL
@@ -311,7 +312,7 @@ using the following resources:
     transformation and analysis.
 *   https://docs.cloud.google.com/dataplex/docs/use-cases.md.txt: Use cases for
     Knowledge Catalog.
-*   https://docs.cloud.google.com/managed-spark/docs/guides/lightning-engine.md.txt:
+*   https://docs.cloud.google.com/managed-spark/docs/guides/lightning-engine-serverless.md.txt:
     Guide to accelerating Apache Spark workloads by using Lightning Engine.
 *   https://docs.cloud.google.com/bigquery/docs/use-knowledge-catalog.md.txt:
     Guide to use Knowledge Catalog as a governance and agentic layer for

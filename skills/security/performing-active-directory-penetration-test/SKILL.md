@@ -282,7 +282,7 @@ mimikatz# misc::skeleton
 
 ## References
 
-- BloodHound: https://github.com/BloodHoundAD/BloodHound
+- BloodHound: https://github.com/SpecterOps/BloodHound-Legacy
 - Impacket: https://github.com/fortra/impacket
 - Certipy: https://github.com/ly4k/Certipy
 - HackTricks AD: https://book.hacktricks.wiki/en/windows-hardening/active-directory-methodology/index.html

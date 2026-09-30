@@ -1,6 +1,7 @@
 ---
 name: google-cloud-recipe-onboarding
 metadata:
+  version: "1.0.0"
   category: GettingStarted
 description: >-
   Guides a developer's first steps on Google Cloud, covering account creation,
@@ -57,7 +58,7 @@ Before soliciting input or proposing mutations, silently audit the host system's
    gcloud auth list --format="json"
    ```
 3. If the pre-execution audit for `which gcloud` returns a valid path, proceed directly to Section 2: Authenticate and Route Session.
-4. If the binary is missing, halt execution and direct the agent/developer to the [gcloud skill](https://github.com/google/skills/tree/main/skills/cloud/gcloud) or official [Google Cloud CLI Installation Guide](https://docs.cloud.google.com/sdk/docs/install-sdk.md.txt) for setup and authentication instructions before retrying.
+4. If the binary is missing, halt execution and direct the agent to install gcloud using the [gcloud skill](https://github.com/google/skills/tree/main/skills/cloud/gcloud). Provide the official [Google Cloud CLI Installation Guide](https://docs.cloud.google.com/sdk/docs/install-sdk) to the developer for steps to set up authentication.
 
 ---
 
@@ -92,7 +93,7 @@ Authorize the gcloud CLI to access Google Cloud using the developer's Google Acc
    - Note that new Free Trial accounts automatically receive a Self-Owned Organization (SOO). To distinguish between a personal Free Trial account and an enterprise organization, inspect the JSON output:
      - **Enterprise Organization (Halt Execution)**: If the output list contains an organization node where `owner.directoryCustomerId` is present (confirming a domain-verified Google Workspace or Cloud Identity organization), or if the user's prompt explicitly mentions corporate landing zones or multi-tenant project structures:
        - **Halt execution** of this skill immediately.
-       - Route the developer to the official [Google Cloud Setup guided flow](https://docs.cloud.google.com/docs/enterprise/cloud-setup.md.txt).
+       - Route the developer to the official [Google Cloud Setup guided flow](https://docs.cloud.google.com/docs/enterprise/cloud-setup).
      - **Personal Account / Free Trial SOO (Proceed)**: If the output list is empty `[]`, or if it contains a Self-Owned Organization (where `owner.directoryCustomerId` is absent and `displayName` is not a verified domain name), proceed to Section 3: Select or Instantiate Your Google Cloud Project.
 
 ---
@@ -179,13 +180,13 @@ Onboarding setup is now complete. To safeguard your environment and deploy workl
 
 1. **Billing Spend Controls:**
    To avoid accidental cost overruns, consider setting up a programmatic control to automatically disable billing. When billing is disabled, all Google Cloud services and usage in the project are terminated to stop further costs:
-- Direct the developer to the official [Disable Billing Usage with Notifications Guide](https://docs.cloud.google.com/billing/docs/how-to/disable-billing-with-notifications.md.txt), which provides detailed instructions on how to automatically shut down billing when costs exceed the project budget.
+- Direct the developer to the official [Disable Billing Usage with Notifications Guide](https://docs.cloud.google.com/billing/docs/how-to/disable-billing-with-notifications), which provides detailed instructions on how to automatically shut down billing when costs exceed the project budget.
 2.  **Deploy Workloads**: To deploy your first resource, trigger the downstream
     specialized skill matching your target application (e.g.,
     [cloud-run-basics](https://github.com/google/skills/blob/main/skills/cloud/cloud-run-basics)
     or `bigquery-basics`). If the specialized skill is not locally available,
     direct the developer to the corresponding official quickstart, such as the
-    [Cloud Run Container Deployment Quickstart](https://docs.cloud.google.com/run/docs/quickstarts/deploy-container.md.txt).
+    [Cloud Run Container Deployment Quickstart](https://docs.cloud.google.com/run/docs/quickstarts/deploy-container).
     *Note: Those downstream specialized skills are individually responsible for
     dynamically enabling their own required service APIs (e.g.,
     run.googleapis.com) inline during execution.*
@@ -224,5 +225,5 @@ After completing the onboarding steps, programmatically verify the completed env
 - [Google Cloud Getting Started landing page](https://docs.cloud.google.com/docs/get-started.md.txt)
 - [Google Cloud overview](https://docs.cloud.google.com/docs/overview.md.txt)
 - [Google Cloud Free Program](https://docs.cloud.google.com/free/docs/free-cloud-features)
-- [Google Cloud Cloud Setup guided flow](https://docs.cloud.google.com/docs/enterprise/cloud-setup.md.txt)
-
+- [Google Cloud Setup overview](https://docs.cloud.google.com/docs/enterprise/cloud-setup.md.txt)
+- [Google Cloud Setup Advanced production foundation](https://docs.cloud.google.com/docs/enterprise/advanced-production.md.txt)

@@ -1,11 +1,11 @@
 ---
 name: clone-website
-description: "Reverse-engineer and clone one or more websites as pixel-perfect replicas"
+description: Reverse-engineer and clone one or more websites in one shot — extracts assets, CSS, and content section-by-section and proactively dispatches parallel builder agents in worktrees as it goes. Use this whenever the user wants to clone, replicate, rebuild, reverse-engineer, or copy any website. Also triggers on phrases like "make a copy of this site", "rebuild this page", or "pixel-perfect clone". The request must include one or more target URLs.
 ---
 
 # Clone Website
 
-You are about to reverse-engineer and rebuild **the target URL or URLs provided by the user** as pixel-perfect clones.
+You are about to reverse-engineer and rebuild **the target URL or URLs in the user's request** as pixel-perfect clones.
 
 When multiple URLs are provided, preserve every pathname as a distinct route and isolate each target's research, screenshots, components, and assets. URLs that differ only by query string or fragment share a pathname, so resolve their route and state behavior explicitly in the output plan. Parallelize page work only after the shared foundation and output plan are fixed so concurrent builders cannot overwrite one another.
 
@@ -13,7 +13,7 @@ This is not a two-phase process (inspect then build). You are a **foreman walkin
 
 ## Scope Defaults
 
-The target is whatever page `the target URL or URLs provided by the user` resolves to. Clone exactly what's visible at that URL. Unless the user specifies otherwise, use these defaults:
+The target is whatever page the requested URL resolves to. Clone exactly what's visible at that URL. Unless the user specifies otherwise, use these defaults:
 
 - **Fidelity level:** Pixel-perfect — exact match in colors, spacing, typography, animations
 - **In scope:** Visual layout and styling, component structure and interactions, responsive design, mock data for demo purposes
@@ -51,12 +51,14 @@ Routing defaults:
 ## Pre-Flight
 
 1. **Browser automation is required.** Check for available browser MCP tools (Chrome MCP, Playwright MCP, Browserbase MCP, Puppeteer MCP, etc.). Use whichever is available — if multiple exist, prefer Chrome MCP. If none are detected, ask the user which browser tool they have and how to connect it. This skill cannot work without browser automation.
-2. Parse `the target URL or URLs provided by the user` as one or more URLs. Normalize and validate each URL; if any are invalid, ask the user to correct them before proceeding. For each valid URL, verify it is accessible via your browser MCP tool.
+2. Parse the target URL or URLs from the user's request. Normalize and validate each URL; if any are invalid, ask the user to correct them before proceeding. For each valid URL, verify it is accessible via your browser MCP tool.
 3. Verify the base project builds: `npm run build`. The Next.js + shadcn/ui + Tailwind v4 scaffold should already be in place. If not, tell the user to set it up first.
 4. Inventory existing routes (`src/app/**/page.tsx`), site component namespaces, research artifacts, screenshots, and public assets. Distinguish the untouched template scaffold from existing cloned or user-authored work.
 5. Write an output plan listing every target URL, `<app-root>`, `<site-key>`, `<page-key>`, destination route, artifact roots, and whether any shared foundation file must change. Resolve collisions across every planned output, same-path query/fragment behavior, and multi-origin layout decisions with the user before editing.
 6. Create only the planned per-page/per-site directories plus `scripts/` if needed. Use unique asset-download script names such as `scripts/download-assets-<site-key>-<page-key>.mjs`; do not overwrite another page's downloader.
 7. For multiple pages from one origin, build the shared foundation once, sequentially, before parallel page work. Optionally confirm whether to run page builders in parallel (recommended if resources allow) or sequentially to avoid overload.
+
+Before the inspection pass, read [references/inspection-guide.md](references/inspection-guide.md) for the reusable visual, component, layout, and technical audit checklist.
 
 ## Guiding Principles
 
@@ -76,7 +78,7 @@ Look at each section and judge its complexity. A simple banner with a heading an
 
 ### 3. Real Content, Real Assets
 
-Extract the actual text, images, videos, and SVGs from the live site. This is a clone, not a mockup. Use `element.textContent`, download every `<img>` and `<video>`, extract inline `<svg>` elements as React components. Generate content only when it is clearly server-generated and unique per session, or when the optional Atlas Cloud fallback below is explicitly approved after the original asset proves unrecoverable.
+Extract the actual text, images, videos, and SVGs from the live site. This is a clone, not a mockup. Use `element.textContent`, download every `<img>` and `<video>`, extract inline `<svg>` elements as React components. The only time you generate content is when something is clearly server-generated and unique per session.
 
 **Layered assets matter.** A section that looks like one image is often multiple layers — a background watercolor/gradient, a foreground UI mockup PNG, an overlay icon. Inspect each container's full DOM tree and enumerate ALL `<img>` elements and background images within it, including absolutely-positioned overlays. Missing an overlay image makes the clone look empty even if the background is correct.
 
@@ -251,27 +253,6 @@ JSON.stringify({
 ```
 
 Then use the uniquely named page download script to fetch everything into its planned asset root. Use batched parallel downloads (4 at a time) with proper error handling.
-
-### Optional Atlas Cloud Fallback for Unrecoverable Visual Assets
-
-This is an exception path, not part of the default clone workflow. Use it only when **all** of the following are true:
-
-- The original asset still cannot be recovered after bounded download attempts and inspection of the rendered page, HTML, CSS, source maps, network responses, and same-site asset paths.
-- No lawful local or same-site equivalent is available.
-- The asset is not a logo, trademark, product screenshot, legal or certification mark, or other distinctive brand artwork. Those must remain exact originals or be reported as missing.
-- The user explicitly approves a generated substitute and understands that it is not pixel-identical source material.
-- `ATLASCLOUD_API_KEY` is available from the environment. Never print it, place it in a URL, save it in an artifact, or send it to an output CDN.
-
-When approved, follow this contract:
-
-1. Fetch the live model catalog from `GET https://api.atlascloud.ai/api/v1/models` and choose a currently available `Image` model that supports the required aspect ratio and style. Do not rely on a stale hard-coded model list.
-2. Fetch that model's `schema` URL and validate the payload against its current required fields before submitting. `qwen-image-3.0/text-to-image` is an example, not a permanent default.
-3. Submit exactly one authenticated `POST https://api.atlascloud.ai/api/v1/model/generateImage` request. Do not automatically retry the generation POST; surface an ambiguous or failed submission to the user.
-4. Persist the returned prediction ID in the page's research artifacts, then poll `GET https://api.atlascloud.ai/api/v1/model/prediction/<id>` with bounded backoff (for example, every 3 seconds for at most 40 attempts). Stop immediately on `completed` or `failed`.
-5. Accept only HTTPS output URLs from the completed prediction. Download them without the Atlas authorization header, validate the media type and dimensions, and save them under the planned namespaced asset root.
-6. Record the model ID, prompt, prediction ID, output path, and the user's approval in `<artifact-root>/ARTIFACT_MANIFEST.md`. Label the file as generated fallback material so builders never treat it as an exact original.
-
-If any condition is not met, keep the missing-asset finding in the artifact manifest and continue without fabricating the source site's identity.
 
 ## Phase 3: Component Specification & Dispatch
 

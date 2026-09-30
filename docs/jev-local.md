@@ -4,6 +4,11 @@ title: Local engines (Jev contract, no key)
 
 # Local typed decisions
 
+Bridge lifecycle operations are serialized. Starting the existing owned bridge
+on the same port is idempotent. Shutdown checks process creation identity and an
+instance nonce, so an old PID record cannot terminate another process. Legacy
+records without verifiable ownership are cleared without killing a process.
+
 nur's TypeSafe layer speaks one contract: a `state` plus typed **Choice / Noul /
 Score** questions in, probabilities and `confidence` out. Three open, local
 decision engines implement exactly that shape, so the whole harness boost (tool

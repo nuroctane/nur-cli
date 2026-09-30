@@ -4,9 +4,9 @@ description: Turbopack expert guidance. Use when configuring the Next.js bundler
 metadata:
   priority: 4
   docs:
-    - "https://turbo.build/pack/docs"
-    - "https://nextjs.org/docs/architecture/turbopack"
-  sitemap: "https://turbo.build/sitemap.xml"
+    - "https://nextjs.org/docs/app/api-reference/turbopack"
+    - "https://nextjs.org/docs/app/api-reference/config/next-config-js/turbopack"
+  sitemap: "https://nextjs.org/sitemap.xml"
   pathPatterns: 
     - 'next.config.*'
   bashPatterns: 
@@ -34,9 +34,9 @@ chainTo:
     targetSkill: nextjs
     message: 'Webpack config detected — loading Next.js guidance for migrating webpack customizations to Turbopack top-level config in Next.js 16.'
   -
-    pattern: 'turbopack\s*:\s*\{|experimental\.turbopack'
+    pattern: 'turbopack\s*:\s*\{|experimental\.turbo\b'
     targetSkill: nextjs
-    message: 'Turbopack configuration detected — loading Next.js guidance for top-level turbopack config syntax in Next.js 16 (moved from experimental.turbopack).'
+    message: 'Turbopack configuration detected — loading Next.js guidance for top-level turbopack config syntax in Next.js 16 (moved from experimental.turbo).'
 
 ---
 
@@ -47,7 +47,7 @@ You are an expert in Turbopack — the Rust-powered JavaScript/TypeScript bundle
 ## Key Features
 
 - **Instant HMR**: Hot Module Replacement that doesn't degrade with app size
-- **File System Caching (Stable)**: Dev server artifacts cached on disk between restarts — up to 14x faster startup on large projects. Enabled by default in Next.js 16.1+, no config needed. Build caching planned next.
+- **File System Caching**: Compiler artifacts cached on disk between runs — up to 14x faster startup on large projects. `turbopackFileSystemCacheForDev` defaults to `true` since Next.js 16.1, and `turbopackFileSystemCacheForBuild` defaults to `true` since Next.js 16.3 — no config needed for either.
 - **Multi-environment builds**: Browser, Server, Edge, SSR, React Server Components
 - **Native RSC support**: Built for React Server Components from the ground up
 - **TypeScript, JSX, CSS, CSS Modules, WebAssembly**: Out of the box
@@ -55,7 +55,7 @@ You are an expert in Turbopack — the Rust-powered JavaScript/TypeScript bundle
 
 ## Configuration (Next.js 16)
 
-In Next.js 16, Turbopack config is top-level (moved from `experimental.turbopack`):
+In Next.js 16, Turbopack config is top-level (moved from `experimental.turbo`):
 
 ```js
 // next.config.ts
@@ -152,16 +152,13 @@ Turbopack performs tree shaking at the module level in production builds. Key be
 
 ### Diagnosing large bundles
 
-**Built-in analyzer (Next.js 16.1+, experimental)**: Works natively with Turbopack. Offers route-specific filtering, import tracing, and RSC boundary analysis:
+**Next.js Bundle Analyzer (Next.js 16.1+, experimental)**: Integrated with Turbopack's module graph — inspect server and client modules with precise import tracing:
 
-```ts
-// next.config.ts
-const nextConfig: NextConfig = {
-  experimental: {
-    bundleAnalyzer: true,
-  },
-}
+```bash
+npx next experimental-analyze
 ```
+
+Add `--output` to write the analysis to `.next/diagnostics/analyze` for sharing or diffing.
 
 **Legacy `@next/bundle-analyzer`**: Still works as a fallback:
 
@@ -182,7 +179,7 @@ const nextConfig = withBundleAnalyzer({
 
 ## Custom Loader Migration from Webpack
 
-Turbopack does not support webpack loaders directly. Here is how to migrate common patterns:
+Turbopack runs many webpack loaders through `turbopack.rules` (only a core subset of the loader API is implemented, and only loaders that return JavaScript are supported; webpack plugins are not supported). Here is how to migrate common patterns:
 
 | Webpack Loader | Turbopack Equivalent |
 |----------------|---------------------|
@@ -191,8 +188,8 @@ Turbopack does not support webpack loaders directly. Here is how to migrate comm
 | `postcss-loader` | Built-in — reads `postcss.config.js` |
 | `file-loader` / `url-loader` | Built-in static asset handling |
 | `svgr` / `@svgr/webpack` | Use `@svgr/webpack` via `turbopack.rules` |
-| `raw-loader` | Use `import x from './file?raw'` |
-| `graphql-tag/loader` | Use a build-time codegen step instead |
+| `raw-loader` | Use `raw-loader` via `turbopack.rules` (or per import: `with { turbopackLoader: 'raw-loader', turbopackAs: '*.js' }`, Next.js 16.2+) |
+| `graphql-tag/loader` | Use `graphql-tag/loader` via `turbopack.rules` (tested with Turbopack) |
 | `worker-loader` | Use native `new Worker(new URL(...))` syntax |
 
 ### Configuring custom rules (loader replacement)
@@ -215,12 +212,11 @@ const nextConfig: NextConfig = {
 
 ### When migration isn't possible
 
-If a webpack loader has no Turbopack equivalent and no workaround, fall back to webpack:
+If a webpack loader has no Turbopack equivalent and no workaround, fall back to webpack with the CLI flag:
 
-```js
-const nextConfig: NextConfig = {
-  bundler: 'webpack',
-}
+```bash
+next dev --webpack
+next build --webpack
 ```
 
 File an issue at [github.com/vercel/next.js](https://github.com/vercel/next.js) — the Turbopack team tracks loader parity requests.
@@ -258,30 +254,22 @@ Run both bundlers and compare:
 next build
 
 # Webpack build
-BUNDLER=webpack next build
+next build --webpack
 ```
 
 Compare `.next/` output sizes and page-level chunks.
 
 ## Performance Profiling
 
-### HMR profiling
+### Turbopack tracing
 
-Enable verbose HMR timing in development:
-
-```bash
-NEXT_TURBOPACK_TRACING=1 next dev
-```
-
-This writes a `trace.json` to the project root — open it in `chrome://tracing` or [Perfetto](https://ui.perfetto.dev/) to see module-level timing.
-
-### Build profiling
-
-Profile production builds:
+Generate a trace file for dev or build performance issues:
 
 ```bash
-NEXT_TURBOPACK_TRACING=1 next build
+next dev --internal-trace
 ```
+
+Reproduce the issue, then stop the server — a `trace-turbopack.bin` file is written to the `.next-profiles` directory. Interpret it with `npx next internal trace .next-profiles/trace-turbopack.bin` and view it at [trace.nextjs.org](https://trace.nextjs.org/). The same flag works with `next build --internal-trace`.
 
 Look for:
 - **Long-running transforms**: Indicates a slow SWC plugin or heavy PostCSS config
@@ -313,13 +301,12 @@ Turbopack's Rust core manages its own memory. If builds OOM:
 - Custom webpack loaders with no Turbopack equivalent
 - Complex webpack plugin configurations (e.g., `ModuleFederationPlugin`)
 - Specific webpack features not yet in Turbopack (e.g., custom `externals` functions)
+- Turbopack does not support webpack plugins at all (only a subset of loaders)
 
-To use webpack instead:
-```js
-// next.config.ts
-const nextConfig: NextConfig = {
-  bundler: 'webpack', // Opt out of Turbopack
-}
+To use webpack instead, pass the `--webpack` flag (there is no `next.config.js` option to opt out):
+```bash
+next dev --webpack
+next build --webpack
 ```
 
 ## Development vs Production
@@ -330,14 +317,13 @@ const nextConfig: NextConfig = {
 ## Common Issues
 
 1. **Missing loader equivalent**: Some webpack loaders don't have Turbopack equivalents yet. Check Turbopack docs for supported transformations.
-2. **Config migration**: Move `experimental.turbopack` to top-level `turbopack` in next.config.
+2. **Config migration**: Move `experimental.turbo` to top-level `turbopack` in next.config.
 3. **Custom aliases**: Use `turbopack.resolveAlias` instead of `webpack.resolve.alias`.
 4. **CSS ordering changes**: Test visual regressions when migrating — CSS chunk order may differ.
 5. **Environment boundary errors**: Server-only modules imported in client components fail at build time — use `server-only` package.
 
 ## Official Documentation
 
-- [Turbopack](https://turborepo.dev/pack)
-- [Turbopack Documentation](https://turborepo.dev/pack/docs)
+- [Turbopack](https://nextjs.org/docs/app/api-reference/turbopack)
 - [Next.js Turbopack Config](https://nextjs.org/docs/app/api-reference/config/next-config-js/turbopack)
-- [GitHub: Turbopack](https://github.com/vercel/turborepo)
+- [GitHub: Turbopack](https://github.com/vercel/next.js)

@@ -53,21 +53,37 @@ def main() -> int:
     # role=tool is required: Headroom coding defaults skip compressing user msgs.
     messages = [
         {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{
+                "id": "nur_headroom",
+                "type": "function",
+                "function": {"name": args.label, "arguments": "{}"},
+            }],
+        },
+        {
             "role": "tool",
             "tool_call_id": "nur_headroom",
-            "content": f"[{args.label}]\n{text}",
+            "name": args.label,
+            "content": text,
         }
     ]
     try:
-        result = compress(messages, model=args.model)
+        # This is a single inline result, not recent conversation history.
+        # Preserve its raw structure for detection and include the tool name so
+        # HEADROOM_PROTECT_READS can identify file reads accurately.
+        result = compress(messages, model=args.model, protect_recent=0)
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"compress failed: {e}\n")
         return 1
 
     out_msgs = getattr(result, "messages", None) or messages
     content = ""
-    if out_msgs:
-        raw = out_msgs[0].get("content", "")
+    result_message = next((message for message in out_msgs
+                           if message.get("role") == "tool"
+                           and message.get("tool_call_id") == "nur_headroom"), messages[-1])
+    if result_message:
+        raw = result_message.get("content", "")
         if isinstance(raw, list):
             parts = []
             for block in raw:
@@ -78,10 +94,6 @@ def main() -> int:
             content = "\n".join(parts)
         else:
             content = str(raw)
-
-    prefix = f"[{args.label}]\n"
-    if content.startswith(prefix):
-        content = content[len(prefix) :]
 
     if args.json_out:
         usage_raw = getattr(result, "usage", None)

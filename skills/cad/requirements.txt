@@ -1,2 +1,1 @@
-cadgen==0.4.28
-playwright
+cadgen[snapshot]==0.7.4

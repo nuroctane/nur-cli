@@ -98,6 +98,6 @@ pip install mythril
 ### References
 
 - Slither: https://github.com/crytic/slither
-- Mythril: https://github.com/Consensys/mythril
+- Mythril: https://github.com/ConsenSysDiligence/mythril
 - SWC Registry: https://swcregistry.io/
 - Solidity Security: https://docs.soliditylang.org/en/latest/security-considerations.html

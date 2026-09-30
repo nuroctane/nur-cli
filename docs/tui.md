@@ -11,6 +11,15 @@ The activity line shows the remaining work. `/quit` and Ctrl+C remain available.
 The NUR banner keeps its gradient shimmer while idle, along with the input
 border, separators, and status-line animations.
 
+Queued requests belong to their original session and workspace. `/new`, `/cd`,
+resume, fork and undo discard obsolete queued requests, including attachments.
+Escape cancels pending judgments and clears questions and approvals, so delayed
+responses cannot reopen a cancelled turn.
+
+`/skills refresh` rebuilds global metadata on a worker while retaining the
+previous complete snapshot. Finished Markdown retains its parsed content across
+width changes. See the [v0.41.0 refresh](stack-update-2026-09-30.md).
+
 ## Session inspector and compact activity
 
 Press **F6** to open a shared inspector with **Changes**, **Tools**, **Agents**,

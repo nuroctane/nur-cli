@@ -1,0 +1,54 @@
+{
+  "provider": "anthropic",
+  "model": "claude-sonnet-5",
+  "prompt": "Write protocol.txt with PROTOCOL_OK, read it back, then report WIRE_OK.",
+  "script": [
+    {
+      "tool_calls": [
+        {
+          "name": "write_file",
+          "arguments": {
+            "path": "protocol.txt",
+            "contents": "PROTOCOL_OK"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "name": "read_file",
+          "arguments": {
+            "path": "protocol.txt"
+          }
+        }
+      ]
+    },
+    {
+      "text": "WIRE_OK"
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "stdout_contains": [
+      "WIRE_OK"
+    ],
+    "protocol": "messages",
+    "files": {
+      "protocol.txt": {
+        "contains": [
+          "PROTOCOL_OK"
+        ]
+      }
+    },
+    "requests": 3,
+    "tool_results": [
+      {
+        "request": 3,
+        "contains": [
+          "PROTOCOL_OK"
+        ]
+      }
+    ]
+  }
+}

@@ -1,16 +1,17 @@
 ---
 name: agent-platform-eval-flywheel
 metadata:
+  version: "1.0.2"
   category: AiAndMachineLearning
 description: >-
   Measures and improves the quality of AI models and agents on Google Cloud
-  using the Eval Quality Flywheel methodology. Use when evaluating an agent or
-  model, building an eval dataset, picking or writing evaluation metrics,
-  analyzing failures, comparing results before and after a fix, or when
-  guidance is needed on Agent Platform eval methodology — including
-  dataset schema, LLM-as-judge scoring, and common failure causes. For
-  fine-tuning, use agent-platform-tuning. For general production deployment,
-  use agent-platform-deploy.
+  using the Eval Quality Flywheel methodology. Use when generating synthetic
+  user scenarios, evaluating an agent or model, building an eval dataset,
+  picking or writing evaluation metrics, analyzing failures, comparing results
+  before and after a fix, or when guidance is needed on Agent Platform eval
+  methodology — including dataset schema, LLM-as-judge scoring, and common
+  failure causes. For fine-tuning, use agent-platform-tuning. For general
+  production deployment, use agent-platform-deploy.
 ---
 
 # Agent Platform Eval Flywheel Skill
@@ -48,13 +49,31 @@ to the following safety tiers based on the action requested:
     `client.evals.generate_loss_clusters`)**
     *   **Rule**: These operations invoke LLMs or remote evaluation services
         that consume compute resources and incur costs. This requires
-        **interactive confirmation** with 'Yes'/'No' options. Once granted once,
-        you do not have to prompt for future evaluation.
+        **interactive confirmation** with 'Yes'/'No' options.
+    *   **Confirmation for EVERY evaluation run**: Every evaluation,
+        re-evaluation, metric update, parameter change, or synthetic scenario
+        generation requires its own dry-run preview and interactive
+        confirmation. Never execute a second evaluation, comparison pass, or
+        modified evaluation without presenting a new confirmation preview and
+        obtaining user approval.
     *   **Same-turn restriction**: Do not run the evaluation in the same turn as
         presenting the confirmation prompt. End your turn after asking and wait
         for the user's reply; only execute after explicit 'Yes' / approval.
         Printing a preview and then calling the tool before the user can answer
         does not count as obtaining confirmation.
+    *   **No Pre-Execution of Remote Evaluation**: NEVER execute
+        `client.evals.evaluate()`, `client.evals.run_inference()`,
+        `client.evals.generate_conversation_scenarios()`, or run any script
+        invoking these remote operations before user confirmation. In the
+        initial turn, you may prepare local data structures and compose the
+        script, but you MUST present the dry-run preview card and obtain
+        explicit user confirmation before running any remote evaluation or
+        scenario generation call.
+    *   **Immediate Execution Upon Approval**: Once the user explicitly approves
+        (e.g., 'Yes', 'Approved', 'Go ahead', 'Proceed'), proceed directly to
+        executing the previewed evaluation script via `run_command` and report
+        the results. Do not conclude the turn without executing the approved
+        action.
 
 ## Setup
 
@@ -71,8 +90,15 @@ python3 -c "import vertexai, google.genai, pandas, requests" \
 The version specifiers must stay quoted: unquoted, bash reads `>=1.154.0` as a
 redirect and silently writes an empty file instead of constraining the install.
 
-Need `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`. Check env vars first;
-if missing, ask the user. Newer Gemini models often need `location="global"`.
+Need `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`.
+
+-   **Preserve User Project and Location**: Always prioritize the user's
+    explicitly provided project and location (e.g. `project='<PROJECT_NUMBER>'`,
+    `location='us-central1'`). Never change or override the user's requested
+    location to 'global' unless the user explicitly requested 'global'.
+-   **Missing Parameters**: If the user's request omits the project or location,
+    you MUST pause in your response and ask the user for the missing
+    location/project before preparing or running the evaluation.
 
 ### Correct SDK entrypoints
 
@@ -173,6 +199,20 @@ matches the data the user already has:
     (1-100): it defaults to None, the client accepts that, and the server
     rejects the call with `400 INVALID_ARGUMENT`. `count` is a separate field
     and does not substitute for it. Stage 2 plays the scenarios out.
+    *   **CRITICAL - Underspecified Requests**: When asked to synthesize
+        scenarios, if the request omits required parameters (such as `location`,
+        `environment_data`, `simulation_instruction`, or `model_name`), do NOT
+        assume defaults or guess values. You MUST pause in your first turn and
+        explicitly ask the user for the missing information (e.g., "Please
+        provide the missing simulation instructions, environment data, model
+        name, and location"). Only proceed with the dry-run preview after the
+        user provides them.
+    *   **Friction & Parameter Changes**: When asked to generate synthetic user
+        scenarios, if the user modifies requested parameters (such as scenario
+        count, model, or instructions) or pushes back, you MUST present a
+        revised dry-run confirmation card with the updated parameters and wait
+        for explicit user approval before executing generation code via
+        `run_command`. Do NOT generate scenarios directly in plain text.
 
 -   **Managed Agents (Gemini Agents API):** evaluate agents created with the
     [Managed Agents API](https://docs.cloud.google.com/gemini-enterprise-agent-platform/build/managed-agents).
@@ -228,6 +268,15 @@ result.show()  # Interactive HTML report with scores, rubrics, and traces.
 **Pick metrics by what you want to measure.** Full catalog in
 [references/metric_registry.md](references/metric_registry.md).
 
+**If the user names a metric, use it directly.** Every identifier in the tables
+below (`general_quality`, `text_quality`, `instruction_following`,
+`hallucination`, `grounding`, `safety`, `multi_turn_*`, `final_response_*`,
+`tool_use_quality`) is a `types.RubricMetric.<UPPERCASE_NAME>` accessor — pass
+it straight into `metrics=[types.RubricMetric.GENERAL_QUALITY, ...]`. Do not
+scaffold a custom `LLMMetric` for a name that appears here, and do not reach for
+`vertexai.evaluation.EvalTask` / `PointwiseMetric` /
+`MetricPromptTemplateExamples` — that SDK is superseded (see Setup).
+
 **Agent metrics (multi-turn, adaptive rubrics)** — start here for agent eval.
 
 Goal                                          | Metric
@@ -264,6 +313,12 @@ Safety policy compliance                          | `safety`
     `types.MetricPromptBuilder` for structured rubrics. Always set
     `judge_model`; it defaults to `None` and every case then fails with `400
     INVALID_ARGUMENT: Error parsing JSON`.
+    *   **Judge Model Selection**: If the user specifies a judge model (e.g.
+        `gemini-2.5-pro`), use it. If the user omits the judge model or states
+        they do not have information / preference for one, default to
+        `gemini-2.5-flash` as the judge model in the dry-run preview card and
+        ask for confirmation to run the evaluation. Do NOT halt or refuse to
+        evaluate when the user does not specify a judge model.
 -   **Custom code:** `types.CodeExecutionMetric` with a `custom_function` string
     containing `def evaluate(instance: dict)` for remote sandboxed execution; or
     `types.Metric` with `custom_function=<callable>` for local execution.
@@ -400,12 +455,18 @@ unsupported), say so explicitly. Don't paper over gaps.
 
 1.  **Always Plan First:** Before writing a script, output a `<plan>` block
     detailing the steps you are about to take.
-2.  **Step-by-Step Execution:** Write the script, execute it, wait for output,
-    then analyze. Don't do everything in one response.
+2.  **Step-by-Step Execution:** Prepare the data and evaluation script, present
+    the dry-run confirmation card with full parameters, wait for user approval,
+    execute only after explicit confirmation, then inspect and analyze results.
+    Do NOT run evaluation calls before user confirmation.
 3.  **Standard Python:** Use standard Python imports (`import agentplatform`,
     `from google.genai import types`). Don't use internal import paths.
 4.  **Verify Before Guessing:** When unsure about SDK types or metrics, check
     the SDK source code rather than guessing or hallucinating.
+5.  **Never End a Turn Silently:** Every turn must end with a non-empty,
+    informative text reply to the user summarizing the actions taken or
+    presenting the next steps. Returning nothing reads as a failure no matter
+    what the tools did.
 
 ## SDK Quick Reference
 

@@ -187,7 +187,7 @@ Document each finding with server, tool, evidence (the poisoned description / SS
 
 | Tool | Purpose | Source |
 |------|---------|--------|
-| mcp-scan | Static + runtime MCP security scanner | https://github.com/invariantlabs-ai/mcp-scan |
+| mcp-scan | Static + runtime MCP security scanner | https://github.com/snyk/agent-scan |
 | MCP Python SDK | Programmatic tool enumeration / calls | https://github.com/modelcontextprotocol/python-sdk |
 | OWASP MCP Top 10 | MCP risk reference (MCP03 Tool Poisoning) | https://owasp.org/www-project-mcp-top-10/ |
 | Invariant Labs blog | Tool poisoning disclosure | https://invariantlabs.ai/blog/introducing-mcp-scan |

@@ -17,7 +17,7 @@ starts print jobs.
 ## Geometry Inspection
 
 Use `scripts/dfam_tool.py` in the active project Python environment for all
-geometry facts (requires `trimesh`, `numpy`, `rtree`). The tool is fact-only:
+geometry facts (install `requirements.txt` first — every run needs it). The tool is fact-only:
 it reports measurements and never emits pass/fail or readiness statuses.
 Comparisons and verdicts belong to this workflow. Do not estimate wall
 thickness, overhang angles, or support volume by eye or from renders when the
@@ -34,7 +34,19 @@ process changes: the aggregate support-area facts are binned against it.
 
 STEP/STP input is boundary-representation CAD, not a mesh. When the `$cad`
 skill is installed, export an STL sidecar with it first, then measure the STL
-here. Report that remediation instead of attempting raw STEP parsing.
+here. Report that remediation instead of attempting raw STEP parsing. `measure`
+on a STEP exits 1 with `{"error": "failed to load mesh: ..."}`; that is the
+wrong-input signal, not a missing dependency — do not install extra mesh
+loaders to work around it.
+
+A fact family that cannot compute returns `{"error": ...}` in its place rather
+than costing the report its other measurements — `wall_thickness` does this when
+the dependency set is incomplete, `support_volume` on geometry with no convex
+hull. That report is PARTIAL: it carries `"partial": true`, names the families
+in `partial_sections`, and the command exits **2** (0 is a complete report, 1 a
+mesh that would not load at all). Treat every such object as an unmeasured fact
+(`❓ need more info`), never as a measurement of zero, and reinstall
+`requirements.txt` before comparing wall limits.
 
 ## Workflow
 
@@ -91,5 +103,4 @@ with target numbers (for example "thicken the wall at [12.4, 3.0, 8.1] from
 0.6 mm to ≥1.2 mm" or "chamfer the overhang at [23.3, 10.0, 52.0] to ≥45°").
 When the `$cad` skill is installed, offer to apply the redesign instructions
 with it and re-measure the regenerated geometry here, repeating until no
-`❌ fail` findings remain. When `$cad-viewer` is installed, hand the measured
-file path(s) to it so the user can inspect the findings visually.
+`❌ fail` findings remain.

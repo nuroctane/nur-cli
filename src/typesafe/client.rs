@@ -89,7 +89,7 @@ pub type TransportFn = dyn Fn(&Value) -> Result<Value, String> + Send + Sync;
 #[derive(Clone)]
 pub enum Transport {
     /// Real HTTP via `reqwest::blocking`.
-    Http(reqwest::blocking::Client),
+    Http(reqwest::Client),
     /// In-process endpoint for tests: batching, retries and merging are
     /// exercised without a key or the network.
     #[cfg(test)]
@@ -125,9 +125,10 @@ fn off_runtime<T: Send>(f: impl FnOnce() -> T + Send) -> T {
     if tokio::runtime::Handle::try_current().is_err() {
         return f();
     }
+    let context = super::context::current();
     std::thread::scope(|scope| {
         scope
-            .spawn(f)
+            .spawn(move || super::context::with_sync(context, f))
             .join()
             .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
     })
@@ -139,6 +140,7 @@ pub struct TypesafeClient {
     base_url: String,
     model: String,
     retries: u32,
+    timeout: Duration,
     max_questions: usize,
     max_parallel: usize,
     /// Estimated ceiling for one request (state + questions). `None` keeps the
@@ -386,10 +388,9 @@ pub fn client(cfg: &TypesafeConfig) -> Availability {
             ),
         };
     let timeout = Duration::from_millis(cfg.timeout_ms.clamp(1_000, 180_000));
-    // Off-runtime: constructing this client on a tokio worker panics (see
-    // `off_runtime`).
+    // Keep synchronous callers independent of their surrounding async runtime.
     let http = match off_runtime(|| {
-        reqwest::blocking::Client::builder()
+        reqwest::Client::builder()
             .timeout(timeout)
             .user_agent(format!("nur-cli/{}", env!("CARGO_PKG_VERSION")))
             .build()
@@ -406,6 +407,7 @@ pub fn client(cfg: &TypesafeConfig) -> Availability {
             cfg.model.trim().to_string()
         },
         retries: cfg.retries.min(5),
+        timeout: Duration::from_millis(cfg.timeout_ms.clamp(1_000, 180_000)),
         max_questions: cfg
             .max_questions_per_request
             .clamp(1, super::questions::MAX_CHOICE_OPTIONS),
@@ -417,7 +419,7 @@ pub fn client(cfg: &TypesafeConfig) -> Availability {
 
 /// Process-wide client cache keyed by a config fingerprint.
 ///
-/// Building a `reqwest::blocking::Client` per call would throw away the
+/// Building a `reqwest::Client` per call would throw away the
 /// connection pool and add a TLS handshake to every judgment. The fingerprint
 /// covers everything that changes routing, and uses a key *fingerprint* (never
 /// the raw key) so no secret lands in a map key.
@@ -483,6 +485,7 @@ impl TypesafeClient {
                 cfg.model.trim().to_string()
             },
             retries: cfg.retries.min(5),
+            timeout: Duration::from_millis(cfg.timeout_ms.clamp(1_000, 180_000)),
             max_questions: cfg
                 .max_questions_per_request
                 .clamp(1, super::questions::MAX_CHOICE_OPTIONS),
@@ -519,6 +522,18 @@ impl TypesafeClient {
         questions: &[(String, Question)],
         per_request: usize,
     ) -> Result<Batch, String> {
+        super::context::request(self.timeout, || {
+            self.ask_batched_inner(state, questions, per_request)
+        })
+    }
+
+    fn ask_batched_inner(
+        &self,
+        state: &Value,
+        questions: &[(String, Question)],
+        per_request: usize,
+    ) -> Result<Batch, String> {
+        super::context::check()?;
         if questions.is_empty() {
             return Ok(Batch::default());
         }
@@ -551,24 +566,33 @@ impl TypesafeClient {
         // A bounded worker pool starts the next chunk as soon as a slot opens.
         // A slow request/retry must not stall every later chunk at a group barrier.
         let next = std::sync::atomic::AtomicUsize::new(0);
+        let request_scope = super::context::current();
         let mut indexed = std::thread::scope(|scope| {
             let handles: Vec<_> = (0..self.max_parallel.max(1).min(chunks.len()))
                 .map(|_| {
-                    scope.spawn(|| {
-                        let mut results = Vec::new();
-                        loop {
-                            let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            let Some(chunk) = chunks.get(i) else { break };
-                            let result =
-                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                    self.ask_chunk(state, questions, chunk)
-                                }))
-                                .unwrap_or_else(|_| {
-                                    Err("typesafe batch thread panicked".to_string())
-                                });
-                            results.push((i, result));
-                        }
-                        results
+                    let request_scope = request_scope.clone();
+                    let next = &next;
+                    let chunks = &chunks;
+                    scope.spawn(move || {
+                        super::context::with_sync(request_scope, || {
+                            let mut results = Vec::new();
+                            loop {
+                                if super::context::check().is_err() {
+                                    break;
+                                }
+                                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                let Some(chunk) = chunks.get(i) else { break };
+                                let result =
+                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                        self.ask_chunk(state, questions, chunk)
+                                    }))
+                                    .unwrap_or_else(|_| {
+                                        Err("typesafe batch thread panicked".to_string())
+                                    });
+                                results.push((i, result));
+                            }
+                            results
+                        })
                     })
                 })
                 .collect();
@@ -577,6 +601,7 @@ impl TypesafeClient {
                 .flat_map(|h| h.join().expect("batch worker panicked"))
                 .collect::<Vec<_>>()
         });
+        super::context::check()?;
         indexed.sort_by_key(|(i, _)| *i);
 
         let mut failed_chunks = 0usize;
@@ -632,6 +657,7 @@ impl TypesafeClient {
     fn post_with_retry(&self, body: &Value) -> Result<Value, String> {
         let mut attempt = 0u32;
         loop {
+            super::context::check()?;
             match self.post_once(body) {
                 Ok(v) => return Ok(v),
                 Err(PostError::Permanent(msg)) => return Err(msg),
@@ -642,7 +668,11 @@ impl TypesafeClient {
                     // Exponential backoff for 429/529/5xx - the documented
                     // handling path for rate limits and overload.
                     let wait = 200u64.saturating_mul(3u64.pow(attempt));
-                    std::thread::sleep(Duration::from_millis(wait.min(5_000)));
+                    let until = std::time::Instant::now() + Duration::from_millis(wait.min(5_000));
+                    while std::time::Instant::now() < until {
+                        super::context::check()?;
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
                     attempt += 1;
                 }
             }
@@ -654,19 +684,30 @@ impl TypesafeClient {
             #[cfg(test)]
             Transport::Fake(f) => f(body).map_err(PostError::Retryable),
             Transport::Http(http) => {
-                // The whole send/read happens off-runtime: a blocking client
-                // used from an async worker hits the same runtime-drop panic.
+                // Drive cancellable send/body reads on the judgment worker
+                // without nesting a Tokio runtime inside an async caller.
+                let scope = super::context::current();
+                let cancel = scope.as_ref().map(|s| s.cancel.clone()).unwrap_or_default();
+                let remaining = scope
+                    .and_then(|s| s.deadline)
+                    .map(|d| d.saturating_duration_since(std::time::Instant::now()))
+                    .unwrap_or(self.timeout);
                 let (status, text) = off_runtime(|| {
-                    let resp = http
-                        .post(&self.base_url)
-                        .bearer_auth(&self.key)
-                        .header("content-type", "application/json")
-                        .json(body)
-                        .send()
-                        .map_err(|e| format!("request failed: {e}"))?;
-                    let status = resp.status();
-                    let text = resp.text().map_err(|e| format!("body read failed: {e}"))?;
-                    Ok::<_, String>((status, text))
+                    static RUNTIME: std::sync::OnceLock<Result<tokio::runtime::Runtime, String>> = std::sync::OnceLock::new();
+                    let runtime = RUNTIME.get_or_init(|| tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().map_err(|e| e.to_string())).as_ref().map_err(Clone::clone)?;
+                    runtime.block_on(async {
+                        let request = async {
+                            let response = http.post(&self.base_url).bearer_auth(&self.key).header("content-type", "application/json").json(body).send().await.map_err(|e| e.to_string())?;
+                            let status = response.status();
+                            let text = response.text().await.map_err(|e| e.to_string())?;
+                            Ok::<_, String>((status, text))
+                        };
+                        tokio::select! {
+                            biased;
+                            _ = cancel.cancelled() => Err("judgment cancelled".into()),
+                            result = tokio::time::timeout(remaining, request) => result.map_err(|_| "judgment deadline exceeded".to_string())?,
+                        }
+                    })
                 })
                 .map_err(PostError::Retryable)?;
                 if status.is_success() {
@@ -846,6 +887,63 @@ fn short(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::typesafe::questions::Question;
+
+    #[test]
+    fn cancellation_stops_retries_and_unscheduled_batches() {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let trigger = cancel.clone();
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = attempts.clone();
+        let mut config = cfg();
+        config.max_parallel = 1;
+        config.retries = 5;
+        let client = TypesafeClient::with_transport(
+            &config,
+            Transport::Fake(Arc::new(move |_| {
+                count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                trigger.cancel();
+                Err("retryable failure".into())
+            })),
+        );
+        let scope = super::super::context::Scope {
+            cancel,
+            session_id: uuid::Uuid::new_v4().to_string(),
+            turn_id: uuid::Uuid::new_v4().to_string(),
+            deadline: None,
+        };
+        let questions = vec![
+            ("first".into(), Question::noul("First?")),
+            ("second".into(), Question::noul("Second?")),
+        ];
+        let result = super::super::context::with_sync(Some(scope), || {
+            client.ask_batched(&json!("state"), &questions, 1)
+        });
+        assert!(result.unwrap_err().contains("cancelled"));
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn overall_deadline_covers_the_retry_backoff() {
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = attempts.clone();
+        let mut client = TypesafeClient::with_transport(
+            &cfg(),
+            Transport::Fake(Arc::new(move |_| {
+                count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Err("transient failure".into())
+            })),
+        );
+        client.timeout = Duration::from_millis(50);
+        client.retries = 5;
+        let start = std::time::Instant::now();
+        let result = client.ask(
+            &json!("state"),
+            &[("q".into(), Question::noul("Question?"))],
+        );
+        assert!(result.unwrap_err().contains("deadline"));
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
 
     fn cfg() -> TypesafeConfig {
         TypesafeConfig {

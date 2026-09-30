@@ -311,4 +311,4 @@ Attack Path 1: Domain Compromise via LLMNR Poisoning
 - MITRE ATT&CK Enterprise: https://attack.mitre.org/matrices/enterprise/
 - PTES: http://www.pentest-standard.org/
 - Impacket: https://github.com/fortra/impacket
-- BloodHound: https://github.com/BloodHoundAD/BloodHound
+- BloodHound: https://github.com/SpecterOps/BloodHound-Legacy

@@ -3,7 +3,7 @@
 Generate src/agent/skill_intents.json — comprehensive 700+ skill intent index.
 Must be run when adding new skills per AGENTS.md.
 
-Scans ~/.nur/skills + ~/.agents/skills + repo skills/ and generates triggers:
+Scans repository skills deterministically and generates triggers:
 - name, /name, spaced, /spaced
 - bigrams/trigrams from name
 - aliases for known shorthands
@@ -13,12 +13,13 @@ Usage:
   python scripts/generate_skill_intents.py
   # or from repo root: python -m scripts.generate_skill_intents
 """
-import pathlib, json, re
+import argparse, pathlib, json, re
 
 skills_root = pathlib.Path.home() / ".nur" / "skills"
 agents_skills_root = pathlib.Path.home() / ".agents" / "skills"
 repo_root = pathlib.Path(__file__).parent.parent
 output = repo_root / "src" / "agent" / "skill_intents.json"
+EXTRA_ALIASES = json.loads((repo_root / "scripts/skill-trigger-aliases.json").read_text(encoding="utf-8"))
 
 STOP = set(["a","an","the","and","or","to","of","for","in","on","at","by","with","from","this","that","these","those","is","are","was","were","be","been","being","have","has","had","do","does","did","will","would","can","could","should","may","might","must","use","using","used","when","where","what","which","who","how","why","into","over","under","about","after","before","your","you","their","them","its","it","as","if","then","than","also","just","only","not","no","yes","any","all","each","other","more","most","some","such","via","per","between","through","during","without","within","skill","skills","agent","agents","help","please","like","make","need","needs","want","wants","get","set","run","work","works","working"])
 
@@ -269,6 +270,7 @@ def gen_triggers(name, desc):
         ],
     }
     alias_kept = []
+    ALIASES.update(EXTRA_ALIASES)
     if name in ALIASES:
         for a in ALIASES[name]:
             triggers.add(a)
@@ -304,11 +306,12 @@ def gen_triggers(name, desc):
             filtered.insert(0, c)
     return filtered
 
-skills = []
-for src in [skills_root, agents_skills_root, repo_root / "skills"]:
+def generate(roots):
+  skills = []
+  for src in roots:
     if not src.exists():
         continue
-    for md in src.rglob("SKILL.md"):
+    for md in sorted(src.rglob("SKILL.md")):
         if "references" in md.parts:
             continue
         try:
@@ -340,23 +343,43 @@ for src in [skills_root, agents_skills_root, repo_root / "skills"]:
         if any(s["name"] == name for s in skills):
             continue
         triggers = gen_triggers(name, desc)
+        if folder != name:
+            for alias in (folder, f"/{folder}", folder.replace("-", " "), f"/{folder.replace('-', ' ')}"):
+                if alias not in triggers:
+                    triggers.append(alias)
         tokens = [w.lower() for w in re.findall(r"[A-Za-z0-9]+", (name + " " + desc).lower()) if len(w)>=4 and w not in STOP]
         keywords = list(dict.fromkeys(tokens))[:10]
         skills.append({
             "name": name,
             "description": desc[:300],
-            "path": str(md),
+            "path": md.relative_to(repo_root).as_posix() if md.is_relative_to(repo_root) else str(md),
             "triggers": triggers,
-            "keywords": keywords
+            "keywords": keywords,
+            "aliases": [folder] if folder != name else [],
         })
 
-skills_sorted = sorted(skills, key=lambda x: x["name"])
-out_data = {
-    "generated_at": __import__("datetime").datetime.utcnow().isoformat(),
+  skills_sorted = sorted(skills, key=lambda x: x["name"])
+  return {
     "total_skills": len(skills_sorted),
     "note": "Comprehensive skill intent index - 700+ skills, expanded NL triggers. Must be updated when adding skills per AGENTS.md. Run: python scripts/generate_skill_intents.py",
     "skills": skills_sorted
-}
-with open(output, "w", encoding="utf-8") as f:
-    json.dump(out_data, f, indent=2)
-print(f"Generated {len(skills_sorted)} skills -> {output} ({output.stat().st_size} bytes)")
+  }
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--include-installed", action="store_true", help="Include machine-local skills after repository skills")
+    parser.add_argument("--check", action="store_true", help="Fail if the committed index differs")
+    args = parser.parse_args()
+    roots = [repo_root / "skills"]
+    if args.include_installed:
+        roots += [skills_root, agents_skills_root]
+    data = generate(roots)
+    rendered = json.dumps(data, indent=2) + "\n"
+    if args.check:
+        return 0 if output.read_text(encoding="utf-8") == rendered else 1
+    output.write_text(rendered, encoding="utf-8")
+    print(f"Generated {data['total_skills']} skills -> {output} ({output.stat().st_size} bytes)")
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

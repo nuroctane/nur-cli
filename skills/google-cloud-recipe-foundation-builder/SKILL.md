@@ -1,6 +1,7 @@
 ---
 name: google-cloud-recipe-foundation-builder
 metadata:
+  version: "1.0.0"
   category: GettingStarted
 description: >-
   Deploys a baseline landing zone foundation for a Google Cloud Organization, establishing security guardrails using Organization Policies, resource hierarchy folders and projects, billing association, and centralized logging and monitoring. Deploys Google Cloud's recommended security controls and architecture.

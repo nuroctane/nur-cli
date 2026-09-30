@@ -319,6 +319,15 @@ nur ecosystem ensure [--force]
 |------|-------------|
 | `--force`, `-f` | Force re-install even if marker is fresh |
 
+#### `nur ecosystem refresh-skills`
+
+Rebuild and persist global skill metadata without installing packages or resolving
+credentials. Existing complete metadata remains readable during replacement.
+
+```bash
+nur ecosystem refresh-skills
+```
+
 #### `nur ecosystem status`
 
 Show the last recorded ecosystem readiness. This is a read-only snapshot and

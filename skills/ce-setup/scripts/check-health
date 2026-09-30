@@ -286,8 +286,86 @@ read_work_engine_preferences() {
   ' "$config_file"
 }
 
+# Emits KEY<TAB>harness per map entry, or ERROR when the value is not a map.
+# An entry is exactly `harness: token`, optionally quoted, because an effort must
+# be a plain token; this is the data contract, not a YAML parser. Effort levels
+# are not checked: they belong to the ce-work adapter, which this skill cannot call.
+read_work_engine_effort_keys() {
+  local config_file="$1"
+  awk '
+    function emit_entry(entry) {
+      sub(/[[:space:]]+#.*$/, "", entry)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", entry)
+      # A key or value is a bare token or one wrapped in a matching quote pair.
+      token = "[A-Za-z0-9][A-Za-z0-9_-]*"
+      quoted = "(" token "|\"" token "\"|\047" token "\047)"
+      if (entry !~ ("^" quoted "[[:space:]]*:[[:space:]]*" quoted "$")) not_a_map()
+      sub(/[[:space:]]*:.*$/, "", entry)
+      gsub(/["\047]/, "", entry)
+      print "KEY\t" entry
+      entries++
+    }
+    function not_a_map() {
+      print "ERROR"
+      reported = 1
+      exit
+    }
+    # A block that ends with no entries is a null value, not the explicit empty map {}.
+    function close_block() {
+      if (active && !entries) not_a_map()
+      active = 0
+    }
+    /^[^[:space:]#-][^:]*[[:space:]]*:/ { close_block() }
+    /^work_engine_effort[[:space:]]*:/ {
+      active = 1
+      entries = 0
+      line = $0
+      sub(/^work_engine_effort[[:space:]]*:/, "", line)
+      sub(/[[:space:]]+#.*$/, "", line)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+      if (line == "") next
+      if (line !~ /^\{.*\}$/) not_a_map()
+      line = substr(line, 2, length(line) - 2)
+      count = split(line, pairs, ",")
+      for (i = 1; i <= count; i++) {
+        if (pairs[i] ~ /^[[:space:]]*$/) {
+          if (i < count) not_a_map()
+          continue
+        }
+        emit_entry(pairs[i])
+      }
+      active = 0
+      next
+    }
+    active {
+      line = $0
+      if (line ~ /^[[:space:]]*($|#)/) next
+      if (line !~ /^[[:space:]]/) not_a_map()
+      emit_entry(line)
+    }
+    END { if (!reported) close_block() }
+  ' "$config_file"
+}
+
 has_brew=$(command -v brew >/dev/null 2>&1 && echo "yes" || echo "no")
 in_repo=$(git rev-parse --is-inside-work-tree >/dev/null 2>&1 && echo "yes" || echo "no")
+
+# Retired Bun-era Codex tool map (#1099). The block is present only when a
+# standalone BEGIN line is followed by a standalone END line.
+has_codex_tool_map() {
+  awk '
+    { sub(/\r$/, "") }
+    $0 == "<!-- BEGIN COMPOUND CODEX TOOL MAP -->" { seen = 1 }
+    seen && $0 == "<!-- END COMPOUND CODEX TOOL MAP -->" { found = 1; exit }
+    END { exit found ? 0 : 1 }
+  ' "$1"
+}
+
+codex_agents_file="${CODEX_HOME:-$HOME/.codex}/AGENTS.md"
+legacy_codex_map="no"
+if [ -f "$codex_agents_file" ] && has_codex_tool_map "$codex_agents_file"; then
+  legacy_codex_map="yes"
+fi
 
 # =====================================================
 #  Check optional capabilities
@@ -402,7 +480,7 @@ if [ "$in_repo" = "yes" ]; then
         ITEM)
           work_engine_preferences_count=$((work_engine_preferences_count + 1))
           case "$preference_harness" in
-            codex|claude|grok|cursor) ;;
+            codex|claude|grok|cursor|opencode) ;;
             *)
               [ -z "$work_engine_preferences_error" ] && work_engine_preferences_error="invalid harness '$preference_harness' in work_engine_preferences"
               ;;
@@ -433,6 +511,21 @@ if [ "$in_repo" = "yes" ]; then
           ;;
       esac
     done < <(read_work_engine_preferences "$structured_file")
+  fi
+
+  work_engine_effort_notes=()
+  resolve_structured_layer "$local_config_path" "$tracked_config_path" "work_engine_effort"
+  if [ -n "$structured_file" ]; then
+    while IFS=$'\t' read -r effort_kind effort_harness; do
+      case "$effort_kind:$effort_harness" in
+        ERROR:*) effort_problem="is not a map of harness to effort; ce-work ignores the value and keeps each harness default" ;;
+        KEY:cursor) effort_problem="names 'cursor', which takes no effort; ce-work treats Cursor entries as unavailable while it is set" ;;
+        KEY:codex|KEY:claude|KEY:grok|KEY:opencode) continue ;;
+        KEY:*) effort_problem="names unknown harness '${effort_harness}'; ce-work ignores that entry" ;;
+        *) continue ;;
+      esac
+      work_engine_effort_notes+=("work_engine_effort in $(basename "$structured_file") ${effort_problem}")
+    done < <(read_work_engine_effort_keys "$structured_file")
   fi
 
   case "$work_engine_mode" in
@@ -528,6 +621,13 @@ for result in "${results[@]}"; do
   fi
 done
 
+if [ "$legacy_codex_map" = "yes" ]; then
+  section "Codex instructions"
+  warn "Legacy Compound Codex tool map in ${codex_agents_file}"
+  detail "Retired block from a pre-native Bun install; one line tells Codex to collapse subagent dispatch."
+  detail "Remove it -- see this skill's references/legacy-codex-tool-map.md"
+fi
+
 if [ "$in_repo" = "yes" ]; then
   section "Project config"
 
@@ -592,6 +692,10 @@ if [ "$in_repo" = "yes" ]; then
     warn "CE Work implementation engine: ${work_engine_detail}"
   fi
   [ -n "$work_engine_migration_note" ] && warn "$work_engine_migration_note"
+  for effort_note in ${work_engine_effort_notes[@]+"${work_engine_effort_notes[@]}"}; do
+    warn "$effort_note"
+    project_issues=$((project_issues + 1))
+  done
 
   if [ "$example_cfg" = "ok" ]; then
     ok "Example config is current"
@@ -611,6 +715,80 @@ if [ "$in_repo" = "yes" ]; then
     esac
     project_issues=$((project_issues + 1))
   done
+  # --- Compound Packs (packs: config key) -------------------------------------
+  section "Compound Packs"
+  packs_python="$(for c in python3 python py; do command -v "$c" >/dev/null 2>&1 && "$c" -c '' >/dev/null 2>&1 && { echo "$c"; break; }; done)"
+  packs_resolver="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/packs-resolve.py"
+  if [ -z "$packs_python" ]; then
+    skip "No Python interpreter found; pack health not checked"
+  elif [ ! -f "$packs_resolver" ]; then
+    skip "packs-resolve.py not found beside check-health; pack health not checked"
+  else
+    packs_json="$("$packs_python" "$packs_resolver" 2>/dev/null)"
+    if [ -z "$packs_json" ]; then
+      warn "packs-resolve.py failed to run"
+      project_issues=$((project_issues + 1))
+    else
+      packs_report="$(printf '%s' "$packs_json" | "$packs_python" -c '
+import json, os, re, subprocess, sys
+data = json.load(sys.stdin)
+roots, errors, warns = data.get("roots", []), data.get("errors", []), data.get("warnings", [])
+if not roots and not errors and not warns:
+    print("SKIP\tNo packs configured")
+for r in roots:
+    line = "OK\tpack " + r["id"]
+    url, ref = r.get("url"), r.get("ref")
+    if url and ref:
+        line += " (" + ref + ")"
+        # Only a full commit id is immutable. A branch tip advances and a tag can
+        # be force-moved upstream, so for either compare the cached HEAD with the
+        # remote target of that name -- the peeled commit for an annotated tag,
+        # which is why the ls-remote asks for `<tag>^{}` too.
+        if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", ref):
+            try:
+                genv = dict(os.environ)
+                genv["GIT_TERMINAL_PROMPT"] = "0"
+                genv.setdefault("GIT_ASKPASS", "true")
+                _ssh = genv.get("GIT_SSH_COMMAND") or "ssh"
+                if "BatchMode" not in _ssh:
+                    genv["GIT_SSH_COMMAND"] = _ssh + " -o BatchMode=yes"
+                names = ["refs/tags/" + ref + "^{}", "refs/tags/" + ref, "refs/heads/" + ref]
+                remote = subprocess.run(["git", "ls-remote", "--end-of-options", url, *names],
+                                        capture_output=True, text=True, timeout=10, env=genv)
+                targets = {}
+                for row in remote.stdout.splitlines() if remote.returncode == 0 else []:
+                    sha, _, name = row.partition("\t")
+                    if name:
+                        targets[name] = sha
+                rsha = next((targets[n] for n in names if n in targets), "")
+                local = subprocess.run(["git", "-C", r["dir"], "rev-parse", "HEAD"], capture_output=True, text=True, timeout=10)
+                lsha = local.stdout.strip() if local.returncode == 0 else ""
+                if rsha and lsha and rsha != lsha:
+                    line += " -- cached resolution is behind upstream"
+            except Exception:
+                pass  # offline or slow remote: silently skip the drift note
+    # Subdirectories are storage, so rule-shaped files there are a note on the
+    # OK line, never a warning: the author may keep drafts and evidence with frontmatter.
+    nested = r.get("nested_rule_shaped", 0)
+    if nested:
+        line += " -- " + str(nested) + " rule-shaped file(s) in subfolders kept as storage"
+    print(line)
+for w in warns:
+    print("WARN\t" + w)
+for e in errors:
+    print("ERROR\t" + e)
+')"
+      while IFS=$'\t' read -r kind msg; do
+        [ -z "$kind" ] && continue
+        case "$kind" in
+          OK)    ok "$msg" ;;
+          SKIP)  skip "$msg" ;;
+          WARN)  warn "$msg" ;;
+          ERROR) warn "Pack config error: $msg"; project_issues=$((project_issues + 1)) ;;
+        esac
+      done < <(printf '%s\n' "$packs_report")
+    fi
+  fi
 else
   section "Project config"
   skip "Not inside a git repository"
@@ -621,6 +799,10 @@ if [ "$project_issues" -eq 0 ]; then
   echo " ✅  Project config healthy. Optional capabilities available: ${capability_ok}/${capability_total}"
 else
   echo " ⚠️   ${project_issues} project issue(s) found. Optional capabilities available: ${capability_ok}/${capability_total}"
+fi
+
+if [ "$legacy_codex_map" = "yes" ]; then
+  echo "     Environment: the legacy Codex tool map above still needs attention."
 fi
 
 if [ "$capability_missing" -gt 0 ]; then

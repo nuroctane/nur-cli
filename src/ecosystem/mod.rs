@@ -54,7 +54,8 @@ const ECOSYSTEM_MARKER: &str = "ecosystem.json";
 ///     ruflo refresh below 3.38.19 (corrupted npm publishes), penecho 1.1.4
 ///     provider model docs, terminal-browser macOS/Linux status.
 /// 28: startup validation, competitors, positioning and pitch skill pack.
-pub(crate) const ECOSYSTEM_SCHEMA: u32 = 28;
+/// 29: cohesive terminal/HTTP/document stack update and owned skill snapshots.
+pub(crate) const ECOSYSTEM_SCHEMA: u32 = 29;
 /// Re-run ensure at most once per this many seconds unless forced.
 const ENSURE_TTL_SECS: u64 = 86_400;
 
@@ -501,21 +502,23 @@ fn ensure_penecho(node_ok: bool) -> ComponentStatus {
         ..Default::default()
     };
     if let Some(bin) = find_bin("penecho") {
-        c.available = true;
-        c.path = Some(bin.clone());
-        c.version = cmd_version(&bin, &["--version"]);
-        // Best-effort config so launch never drops into interactive configure.
-        match crate::penecho::auto_configure_from_nur(false, crate::penecho::Effort::Medium) {
-            Ok((_, msg)) => {
-                c.detail = format!("CLI ready · {msg} · penecho tool opens browser canvas");
+        if !ecosystem_force() {
+            c.available = true;
+            c.path = Some(bin.clone());
+            c.version = cmd_version(&bin, &["--version"]);
+            // Best-effort config so launch never drops into interactive configure.
+            match crate::penecho::auto_configure_from_nur(false, crate::penecho::Effort::Medium) {
+                Ok((_, msg)) => {
+                    c.detail = format!("CLI ready · {msg} · penecho tool opens browser canvas");
+                }
+                Err(e) => {
+                    c.detail = format!(
+                        "CLI ready · config deferred ({e}) · launch will retry /login or CLI mode"
+                    );
+                }
             }
-            Err(e) => {
-                c.detail = format!(
-                    "CLI ready · config deferred ({e}) · launch will retry /login or CLI mode"
-                );
-            }
+            return c;
         }
-        return c;
     }
     if !node_ok {
         c.detail = "needs Node.js 20.3+ - npm i -g penecho".into();
@@ -584,17 +587,20 @@ fn ensure_excalidraw(node_ok: bool) -> ComponentStatus {
         ..Default::default()
     };
     if let Some(bin) = find_bin("excalidraw").or_else(|| find_bin("excalidraw-cli")) {
-        c.available = true;
-        c.path = Some(bin.clone());
-        c.version = cmd_version(&bin, &["--version"]);
-        c.detail = "CLI ready · diagrams via excalidraw tool".into();
-        return c;
+        if !ecosystem_force() {
+            c.available = true;
+            c.path = Some(bin.clone());
+            c.version = cmd_version(&bin, &["--version"]);
+            c.detail = "CLI ready · diagrams via excalidraw tool".into();
+            return c;
+        }
     }
     if !node_ok {
         c.detail = "needs Node.js 18+ - npm i -g excalidraw-cli".into();
         return c;
     }
     let npm = find_bin("npm").unwrap_or_else(|| "npm".into());
+    let _npm_guard = npm_lock();
     match run_capture(&npm, &["install", "-g", "excalidraw-cli"], None, 300_000) {
         Ok(_) => {}
         Err(e) => {
@@ -883,12 +889,14 @@ fn ensure_akarso(node_ok: bool) -> ComponentStatus {
         ..Default::default()
     };
     if let Some(bin) = find_bin("akarso") {
-        c.available = true;
-        c.path = Some(bin.clone());
-        c.version = cmd_version(&bin, &["--version"]);
-        c.detail =
-            "CLI ready · social posting via the akarso tool (run `akarso auth login`)".into();
-        return c;
+        if !ecosystem_force() {
+            c.available = true;
+            c.path = Some(bin.clone());
+            c.version = cmd_version(&bin, &["--version"]);
+            c.detail =
+                "CLI ready · social posting via the akarso tool (run `akarso auth login`)".into();
+            return c;
+        }
     }
     if !node_ok {
         c.detail = "needs Node.js 18+ - npm i -g akarso".into();
@@ -1125,8 +1133,9 @@ fn ensure_ruflo(node_ok: bool) -> ComponentStatus {
         return c;
     }
     // npm publishes 3.38.17/3.38.18 shipped corrupted dependency graphs and were
-    // deprecated upstream; keep refreshing installs below 3.38.19.
-    const RUFLO_VERSION_FLOOR: (u64, u64, u64) = (3, 38, 19);
+    // deprecated upstream. The audited floor also includes subsequent Windows,
+    // memory-path, dependency, and index fixes.
+    const RUFLO_VERSION_FLOOR: (u64, u64, u64) = (3, 48, 0);
     // Fast path: installed and current - skip the npm round-trip unless --force.
     if let Some(bin) = find_bin("ruflo") {
         if !ecosystem_force() {

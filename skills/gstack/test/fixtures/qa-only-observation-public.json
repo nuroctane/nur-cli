@@ -1,0 +1,220 @@
+{
+  "sourceArchiveSha256": "bc287c22b2a8cac331b4d056b72402810ab08a0c06916773b2e5040c8a3e31f7",
+  "sourceEventIndices": [
+    832,
+    836,
+    1072,
+    1076,
+    1128,
+    1132
+  ],
+  "events": [
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-fable-5-1",
+        "id": "msg_011CfUm6L7grJoXSi3EKwgch",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "toolu_01HhF9FACmxwRwcY4iFtfw4k",
+            "name": "Bash",
+            "input": {
+              "command": "bun '__QA_GUARD__' run '__QA_FIXTURE__/qa-reports/deadline.json' -- bash -c 'B=\"__QA_BROWSE__\"; \"$B\" goto http://127.0.0.1:33505/qa-eval.html; echo \"URL=$(\"$B\" js \"location.href\")\"; \"$B\" snapshot -i; echo \"CONSOLE_ERRORS_START\"; \"$B\" console --errors; echo \"CONSOLE_ERRORS_END\"; \"$B\" screenshot __QA_FIXTURE__/qa-reports/screenshots/initial.png'",
+              "description": "Baseline: load homepage, snapshot, console, screenshot"
+            },
+            "caller": {
+              "type": "direct"
+            }
+          }
+        ],
+        "container": null,
+        "stop_reason": null,
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 2,
+          "cache_creation_input_tokens": 342,
+          "cache_read_input_tokens": 45161,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 342,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 50,
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "diagnostics": null,
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "a9d7eec5-f796-494c-a083-1f06ee3d868d",
+      "uuid": "96c1bdeb-8f96-46ea-ab71-3290e2419b61",
+      "timestamp": "2026-09-27T22:49:45.213Z",
+      "request_id": "req_011CfUm6Kq5RkdtTzTgcYDYM"
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "toolu_01HhF9FACmxwRwcY4iFtfw4k",
+            "type": "tool_result",
+            "content": "QA_DEADLINE {\"guard\":\"qa-deadline\",\"event\":\"started\",\"version\":1,\"startedAt\":\"2026-09-27T22:49:40.218Z\",\"deadlineAt\":\"2026-09-27T22:50:10.218Z\",\"budgetMs\":30000,\"observedAt\":\"2026-09-27T22:49:45.283Z\",\"remainingMs\":24935,\"expired\":false}\n[browse] Starting server...\nNavigated to http://127.0.0.1:33505/qa-eval.html (200)\nURL=http://127.0.0.1:33505/qa-eval.html\n--- BEGIN UNTRUSTED EXTERNAL CONTENT (source: http://127.0.0.1:33505/qa-eval.html) ---\n--- BEGIN UNTRUSTED EXTERNAL C\u200bONTENT (source: http://127.0.0.1:33505/qa-eval.html) ---\n  @e1 [link] \"Home\"\n  @e2 [link] \"About\"\n  @e3 [link] \"Resources\"\n@e4 [textbox] \"Name\"\n@e5 [textbox] \"Email\"\n@e6 [button] \"Submit\" [disabled]\n--- END UNTRUSTED EXTERNAL C\u200bONTENT ---\n--- END UNTRUSTED EXTERNAL CONTENT ---\nCONSOLE_ERRORS_START\n--- BEGIN UNTRUSTED EXTERNAL CONTENT (source: http://127.0.0.1:33505/qa-eval.html) ---\n[2026-09-27T22:49:45.906Z] [error] Failed to load resource: the server responded with a status of 404 (Not Found)\n[2026-09-27T22:49:45.910Z] [error] TypeError: Cannot read properties of undefined (reading 'map')\n--- END UNTRUSTED EXTERNAL CONTENT ---\nCONSOLE_ERRORS_END\nScreenshot saved: __QA_FIXTURE__/qa-reports/screenshots/initial.png\n\nQA_DEADLINE {\"guard\":\"qa-deadline\",\"event\":\"finished\",\"observedAt\":\"2026-09-27T22:49:46.274Z\",\"deadlineAt\":\"2026-09-27T22:50:10.218Z\",\"timedOut\":false,\"exitCode\":0}",
+            "is_error": false
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "session_id": "a9d7eec5-f796-494c-a083-1f06ee3d868d",
+      "uuid": "b2ed6375-4da2-4e5f-8457-360716f8e605",
+      "timestamp": "2026-09-27T22:49:46.281Z",
+      "tool_use_result": {
+        "stdout": "QA_DEADLINE {\"guard\":\"qa-deadline\",\"event\":\"started\",\"version\":1,\"startedAt\":\"2026-09-27T22:49:40.218Z\",\"deadlineAt\":\"2026-09-27T22:50:10.218Z\",\"budgetMs\":30000,\"observedAt\":\"2026-09-27T22:49:45.283Z\",\"remainingMs\":24935,\"expired\":false}\n[browse] Starting server...\nNavigated to http://127.0.0.1:33505/qa-eval.html (200)\nURL=http://127.0.0.1:33505/qa-eval.html\n--- BEGIN UNTRUSTED EXTERNAL CONTENT (source: http://127.0.0.1:33505/qa-eval.html) ---\n--- BEGIN UNTRUSTED EXTERNAL C\u200bONTENT (source: http://127.0.0.1:33505/qa-eval.html) ---\n  @e1 [link] \"Home\"\n  @e2 [link] \"About\"\n  @e3 [link] \"Resources\"\n@e4 [textbox] \"Name\"\n@e5 [textbox] \"Email\"\n@e6 [button] \"Submit\" [disabled]\n--- END UNTRUSTED EXTERNAL C\u200bONTENT ---\n--- END UNTRUSTED EXTERNAL CONTENT ---\nCONSOLE_ERRORS_START\n--- BEGIN UNTRUSTED EXTERNAL CONTENT (source: http://127.0.0.1:33505/qa-eval.html) ---\n[2026-09-27T22:49:45.906Z] [error] Failed to load resource: the server responded with a status of 404 (Not Found)\n[2026-09-27T22:49:45.910Z] [error] TypeError: Cannot read properties of undefined (reading 'map')\n--- END UNTRUSTED EXTERNAL CONTENT ---\nCONSOLE_ERRORS_END\nScreenshot saved: __QA_FIXTURE__/qa-reports/screenshots/initial.png\n\nQA_DEADLINE {\"guard\":\"qa-deadline\",\"event\":\"finished\",\"observedAt\":\"2026-09-27T22:49:46.274Z\",\"deadlineAt\":\"2026-09-27T22:50:10.218Z\",\"timedOut\":false,\"exitCode\":0}",
+        "stderr": "",
+        "interrupted": false,
+        "isImage": false,
+        "noOutputExpected": false
+      }
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-fable-5-1",
+        "id": "msg_011CfUm7B41QvqEGH1MeUWwE",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "toolu_01JeSTiffwGjsYd6oJ6jrLrU",
+            "name": "Write",
+            "input": {
+              "file_path": "__QA_FIXTURE__/qa-reports/exploration-001.json",
+              "content": "{\n  \"observationCommand\": \"bun '__QA_GUARD__' run '__QA_FIXTURE__/qa-reports/deadline.json' -- bash -c 'B=\\\"__QA_BROWSE__\\\"; \\\"$B\\\" goto http://127.0.0.1:33505/qa-eval.html; echo \\\"URL=$(\\\"$B\\\" js \\\"location.href\\\")\\\"; \\\"$B\\\" snapshot -i; echo \\\"CONSOLE_ERRORS_START\\\"; \\\"$B\\\" console --errors; echo \\\"CONSOLE_ERRORS_END\\\"; \\\"$B\\\" screenshot __QA_FIXTURE__/qa-reports/screenshots/initial.png'\",\n  \"observed\": \"Navigated to http://127.0.0.1:33505/qa-eval.html (200)\\nURL=http://127.0.0.1:33505/qa-eval.html\\nsnapshot -i:\\n  @e1 [link] \\\"Home\\\"\\n  @e2 [link] \\\"About\\\"\\n  @e3 [link] \\\"Resources\\\"\\n@e4 [textbox] \\\"Name\\\"\\n@e5 [textbox] \\\"Email\\\"\\n@e6 [button] \\\"Submit\\\" [disabled]\\nCONSOLE_ERRORS_START\\n[2026-09-27T22:49:45.906Z] [error] Failed to load resource: the server responded with a status of 404 (Not Found)\\n[2026-09-27T22:49:45.910Z] [error] TypeError: Cannot read properties of undefined (reading 'map')\\nCONSOLE_ERRORS_END\\nScreenshot saved: __QA_FIXTURE__/qa-reports/screenshots/initial.png\\nQA_DEADLINE finished timedOut=false exitCode=0\",\n  \"hypothesis\": \"Homepage loads (200) but emits two console errors on load: a 404'd resource and an uncaught TypeError on .map of undefined, likely the script that consumed the missing resource. Charter C2 next: enumerate same-origin links (Home/About/Resources) and HEAD each to find broken navigation targets and identify which URL 404s; the Resources link is the top candidate for a dead destination.\",\n  \"nextCommand\": \"bun '__QA_GUARD__' run '__QA_FIXTURE__/qa-reports/deadline.json' -- bash -c 'B=\\\"__QA_BROWSE__\\\"; \\\"$B\\\" js \\\"(async()=>{const ls=[...new Set([...document.querySelectorAll(\\\\\\\"a[href]\\\\\\\")].map(a=>a.href))].filter(h=>new URL(h).origin===location.origin&&!/logout|signout|delete|remove|cancel|unsubscribe/i.test(h));const out=[];for(const l of ls){try{const r=await fetch(l,{method:\\\\\\\"HEAD\\\\\\\"});out.push(\\\\\\\"LINK \\\\\\\"+r.status+\\\\\\\" \\\\\\\"+l)}catch(e){out.push(\\\\\\\"LINK ERR \\\\\\\"+l+\\\\\\\" \\\\\\\"+e.message)}}return out.join(\\\\\\\"\\\\\\\\n\\\\\\\")})()\\\"'\"\n}\n"
+            },
+            "caller": {
+              "type": "direct"
+            }
+          }
+        ],
+        "container": null,
+        "stop_reason": null,
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 2,
+          "cache_creation_input_tokens": 508,
+          "cache_read_input_tokens": 46734,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 508,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 17,
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "diagnostics": null,
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "a9d7eec5-f796-494c-a083-1f06ee3d868d",
+      "uuid": "76b7d474-4390-4c47-bb78-915463bd4601",
+      "timestamp": "2026-09-27T22:50:05.549Z",
+      "request_id": "req_011CfUm7Am92mkt3BFmr7UoD"
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "toolu_01JeSTiffwGjsYd6oJ6jrLrU",
+            "type": "tool_result",
+            "content": "File created successfully at: __QA_FIXTURE__/qa-reports/exploration-001.json (file state is current in your context \u2014 no need to Read it back)"
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "session_id": "a9d7eec5-f796-494c-a083-1f06ee3d868d",
+      "uuid": "71bbc3ae-b51c-467e-a29f-4acc2d4d532a",
+      "timestamp": "2026-09-27T22:50:05.562Z",
+      "tool_use_result": {
+        "type": "create",
+        "filePath": "__QA_FIXTURE__/qa-reports/exploration-001.json",
+        "content": "{\n  \"observationCommand\": \"bun '__QA_GUARD__' run '__QA_FIXTURE__/qa-reports/deadline.json' -- bash -c 'B=\\\"__QA_BROWSE__\\\"; \\\"$B\\\" goto http://127.0.0.1:33505/qa-eval.html; echo \\\"URL=$(\\\"$B\\\" js \\\"location.href\\\")\\\"; \\\"$B\\\" snapshot -i; echo \\\"CONSOLE_ERRORS_START\\\"; \\\"$B\\\" console --errors; echo \\\"CONSOLE_ERRORS_END\\\"; \\\"$B\\\" screenshot __QA_FIXTURE__/qa-reports/screenshots/initial.png'\",\n  \"observed\": \"Navigated to http://127.0.0.1:33505/qa-eval.html (200)\\nURL=http://127.0.0.1:33505/qa-eval.html\\nsnapshot -i:\\n  @e1 [link] \\\"Home\\\"\\n  @e2 [link] \\\"About\\\"\\n  @e3 [link] \\\"Resources\\\"\\n@e4 [textbox] \\\"Name\\\"\\n@e5 [textbox] \\\"Email\\\"\\n@e6 [button] \\\"Submit\\\" [disabled]\\nCONSOLE_ERRORS_START\\n[2026-09-27T22:49:45.906Z] [error] Failed to load resource: the server responded with a status of 404 (Not Found)\\n[2026-09-27T22:49:45.910Z] [error] TypeError: Cannot read properties of undefined (reading 'map')\\nCONSOLE_ERRORS_END\\nScreenshot saved: __QA_FIXTURE__/qa-reports/screenshots/initial.png\\nQA_DEADLINE finished timedOut=false exitCode=0\",\n  \"hypothesis\": \"Homepage loads (200) but emits two console errors on load: a 404'd resource and an uncaught TypeError on .map of undefined, likely the script that consumed the missing resource. Charter C2 next: enumerate same-origin links (Home/About/Resources) and HEAD each to find broken navigation targets and identify which URL 404s; the Resources link is the top candidate for a dead destination.\",\n  \"nextCommand\": \"bun '__QA_GUARD__' run '__QA_FIXTURE__/qa-reports/deadline.json' -- bash -c 'B=\\\"__QA_BROWSE__\\\"; \\\"$B\\\" js \\\"(async()=>{const ls=[...new Set([...document.querySelectorAll(\\\\\\\"a[href]\\\\\\\")].map(a=>a.href))].filter(h=>new URL(h).origin===location.origin&&!/logout|signout|delete|remove|cancel|unsubscribe/i.test(h));const out=[];for(const l of ls){try{const r=await fetch(l,{method:\\\\\\\"HEAD\\\\\\\"});out.push(\\\\\\\"LINK \\\\\\\"+r.status+\\\\\\\" \\\\\\\"+l)}catch(e){out.push(\\\\\\\"LINK ERR \\\\\\\"+l+\\\\\\\" \\\\\\\"+e.message)}}return out.join(\\\\\\\"\\\\\\\\n\\\\\\\")})()\\\"'\"\n}\n",
+        "structuredPatch": [],
+        "originalFile": null,
+        "userModified": false
+      }
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-fable-5-1",
+        "id": "msg_011CfUm8CW6r4RGE1wCm8Mw1",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "toolu_01736rsBDcqapJjufRKYbvhY",
+            "name": "Bash",
+            "input": {
+              "command": "bun '__QA_GUARD__' run '__QA_FIXTURE__/qa-reports/deadline.json' -- bash -c 'B=\"__QA_BROWSE__\"; \"$B\" js \"(async()=>{const ls=[...new Set([...document.querySelectorAll(\\\"a[href]\\\")].map(a=>a.href))].filter(h=>new URL(h).origin===location.origin&&!/logout|signout|delete|remove|cancel|unsubscribe/i.test(h));const out=[];for(const l of ls){try{const r=await fetch(l,{method:\\\"HEAD\\\"});out.push(\\\"LINK \\\"+r.status+\\\" \\\"+l)}catch(e){out.push(\\\"LINK ERR \\\"+l+\\\" \\\"+e.message)}}return out.join(\\\"\\\\n\\\")})()\"'",
+              "description": "C2: HEAD-check same-origin links"
+            },
+            "caller": {
+              "type": "direct"
+            }
+          }
+        ],
+        "container": null,
+        "stop_reason": null,
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 2,
+          "cache_creation_input_tokens": 1458,
+          "cache_read_input_tokens": 47242,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 1458,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 17,
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "diagnostics": null,
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "a9d7eec5-f796-494c-a083-1f06ee3d868d",
+      "uuid": "429a7a71-5b8e-4a89-93e7-cf7a7e71cc6a",
+      "timestamp": "2026-09-27T22:50:10.153Z",
+      "request_id": "req_011CfUm8C9kyLZHWpaTPS9tv"
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "content": "Exit code 124\n\nQA_DEADLINE {\"guard\":\"qa-deadline\",\"event\":\"expired\",\"version\":1,\"startedAt\":\"2026-09-27T22:49:40.218Z\",\"deadlineAt\":\"2026-09-27T22:50:10.218Z\",\"budgetMs\":30000,\"observedAt\":\"2026-09-27T22:50:10.219Z\",\"remainingMs\":0,\"expired\":true}",
+            "is_error": true,
+            "tool_use_id": "toolu_01736rsBDcqapJjufRKYbvhY"
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "session_id": "a9d7eec5-f796-494c-a083-1f06ee3d868d",
+      "uuid": "71f2459a-6c53-4fcb-a6c9-3fc980875d5a",
+      "timestamp": "2026-09-27T22:50:10.226Z",
+      "tool_use_result": "Error: Exit code 124\n\nQA_DEADLINE {\"guard\":\"qa-deadline\",\"event\":\"expired\",\"version\":1,\"startedAt\":\"2026-09-27T22:49:40.218Z\",\"deadlineAt\":\"2026-09-27T22:50:10.218Z\",\"budgetMs\":30000,\"observedAt\":\"2026-09-27T22:50:10.219Z\",\"remainingMs\":0,\"expired\":true}"
+    }
+  ]
+}

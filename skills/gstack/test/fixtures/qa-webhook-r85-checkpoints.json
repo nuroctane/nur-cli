@@ -1,0 +1,284 @@
+[
+  {
+    "attempt": "qa-functional-webhook-report-91ddc7b3-6bbe-4aa4-9230-e4f59cc27e07",
+    "bad": "exploration-003.json",
+    "good": "exploration-004.json",
+    "transcript": [
+      {
+        "type": "assistant",
+        "parent_tool_use_id": null,
+        "message": {
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_013Bvyc6dSZayNwAYYGMaALB",
+              "name": "Bash",
+              "input": {
+                "command": "bun run probe -- partial",
+                "description": "Replay partial probe from fresh store"
+              },
+              "caller": {
+                "type": "direct"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "user",
+        "parent_tool_use_id": null,
+        "message": {
+          "content": [
+            {
+              "tool_use_id": "toolu_013Bvyc6dSZayNwAYYGMaALB",
+              "type": "tool_result",
+              "content": "$ bun probe.ts partial\n{\"scenario\":\"partial\",\"requests\":[{\"method\":\"POST\",\"path\":\"/events\",\"auth\":\"$QA_SYNTHETIC_AUTH\",\"body\":{\"id\":\"delivery\",\"cents\":7},\"status\":202,\"response\":\"{\\\"accepted\\\":\\\"delivery\\\"}\"},{\"method\":\"POST\",\"path\":\"/events\",\"auth\":\"$QA_SYNTHETIC_AUTH\",\"body\":{\"id\":\"delivery\",\"cents\":7},\"status\":202,\"response\":\"{\\\"accepted\\\":\\\"delivery\\\"}\"}],\"order\":[],\"interrupted\":\"injected worker interruption after effect\",\"stateAfterInterruption\":{\"jobs\":{\"delivery\":{\"cents\":7,\"status\":\"pending\",\"attempts\":1}},\"effects\":[{\"id\":\"delivery\",\"cents\":7}]},\"state\":{\"jobs\":{\"delivery\":{\"cents\":7,\"status\":\"complete\",\"attempts\":2}},\"effects\":[{\"id\":\"delivery\",\"cents\":7},{\"id\":\"delivery\",\"cents\":7}]},\"stateRoot\":\"/home/runner/.cache/gstack-paid-shard-cPkBXU/tmp/qaf-HC6lKW/.qa-state/partial-nEtSvt\"}",
+              "is_error": false
+            }
+          ]
+        }
+      },
+      {
+        "type": "assistant",
+        "parent_tool_use_id": null,
+        "message": {
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_016aHuFd92ccuX1pqz7Ndvp7",
+              "name": "Write",
+              "input": {
+                "file_path": "/home/runner/.cache/gstack-paid-shard-cPkBXU/tmp/qaf-HC6lKW/qa-reports/exploration-003.json",
+                "content": "{\n  \"observationCommand\": \"bun run probe -- partial\",\n  \"observed\": {\"scenario\":\"partial\",\"requests\":[{\"method\":\"POST\",\"path\":\"/events\",\"auth\":\"$QA_SYNTHETIC_AUTH\",\"body\":{\"id\":\"delivery\",\"cents\":7},\"status\":202,\"response\":\"{\\\"accepted\\\":\\\"delivery\\\"}\"},{\"method\":\"POST\",\"path\":\"/events\",\"auth\":\"$QA_SYNTHETIC_AUTH\",\"body\":{\"id\":\"delivery\",\"cents\":7},\"status\":202,\"response\":\"{\\\"accepted\\\":\\\"delivery\\\"}\"}],\"order\":[],\"interrupted\":\"injected worker interruption after effect\",\"stateAfterInterruption\":{\"jobs\":{\"delivery\":{\"cents\":7,\"status\":\"pending\",\"attempts\":1}},\"effects\":[{\"id\":\"delivery\",\"cents\":7}]},\"state\":{\"jobs\":{\"delivery\":{\"cents\":7,\"status\":\"complete\",\"attempts\":2}},\"effects\":[{\"id\":\"delivery\",\"cents\":7},{\"id\":\"delivery\",\"cents\":7}]},\"stateRoot\":\"/home/runner/.cache/bstack-placeholder\"},\n  \"hypothesis\": \"PLACEHOLDER\",\n  \"nextCommand\": \"PLACEHOLDER\"\n}\n"
+              },
+              "caller": {
+                "type": "direct"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "user",
+        "parent_tool_use_id": null,
+        "message": {
+          "content": [
+            {
+              "tool_use_id": "toolu_016aHuFd92ccuX1pqz7Ndvp7",
+              "type": "tool_result",
+              "content": "File created successfully at: /home/runner/.cache/gstack-paid-shard-cPkBXU/tmp/qaf-HC6lKW/qa-reports/exploration-003.json (file state is current in your context \u2014 no need to Read it back)"
+            }
+          ]
+        }
+      },
+      {
+        "type": "assistant",
+        "parent_tool_use_id": null,
+        "message": {
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_01Bh6mB2yygzrcVcv43ruFx5",
+              "name": "Write",
+              "input": {
+                "file_path": "/home/runner/.cache/gstack-paid-shard-cPkBXU/tmp/qaf-HC6lKW/qa-reports/exploration-004.json",
+                "content": "{\n  \"observationCommand\": \"bun run probe -- partial\",\n  \"observed\": {\"scenario\":\"partial\",\"requests\":[{\"method\":\"POST\",\"path\":\"/events\",\"auth\":\"$QA_SYNTHETIC_AUTH\",\"body\":{\"id\":\"delivery\",\"cents\":7},\"status\":202,\"response\":\"{\\\"accepted\\\":\\\"delivery\\\"}\"},{\"method\":\"POST\",\"path\":\"/events\",\"auth\":\"$QA_SYNTHETIC_AUTH\",\"body\":{\"id\":\"delivery\",\"cents\":7},\"status\":202,\"response\":\"{\\\"accepted\\\":\\\"delivery\\\"}\"}],\"order\":[],\"interrupted\":\"injected worker interruption after effect\",\"stateAfterInterruption\":{\"jobs\":{\"delivery\":{\"cents\":7,\"status\":\"pending\",\"attempts\":1}},\"effects\":[{\"id\":\"delivery\",\"cents\":7}]},\"state\":{\"jobs\":{\"delivery\":{\"cents\":7,\"status\":\"complete\",\"attempts\":2}},\"effects\":[{\"id\":\"delivery\",\"cents\":7},{\"id\":\"delivery\",\"cents\":7}]},\"stateRoot\":\"/home/runner/.cache/gstack-paid-shard-cPkBXU/tmp/qaf-HC6lKW/.qa-state/partial-nEtSvt\"},\n  \"hypothesis\": \"Replay from a fresh store reproduced the double effect identically (deterministic product defect). Minimize: the same read-pending-then-effect gap should show without the injected fault when two workers both read the pending job; concurrent-ab is the smallest documented input isolating that claim step.\",\n  \"nextCommand\": \"bun run probe -- concurrent-ab\"\n}\n"
+              },
+              "caller": {
+                "type": "direct"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "user",
+        "parent_tool_use_id": null,
+        "message": {
+          "content": [
+            {
+              "tool_use_id": "toolu_01Bh6mB2yygzrcVcv43ruFx5",
+              "type": "tool_result",
+              "content": "File created successfully at: /home/runner/.cache/gstack-paid-shard-cPkBXU/tmp/qaf-HC6lKW/qa-reports/exploration-004.json (file state is current in your context \u2014 no need to Read it back)"
+            }
+          ]
+        }
+      },
+      {
+        "type": "assistant",
+        "parent_tool_use_id": null,
+        "message": {
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_01Mnh9XZDSjomukmhLDueg4o",
+              "name": "Bash",
+              "input": {
+                "command": "bun run probe -- concurrent-ab",
+                "description": "Run concurrent workers probe, release a then b"
+              },
+              "caller": {
+                "type": "direct"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "user",
+        "parent_tool_use_id": null,
+        "message": {
+          "content": [
+            {
+              "tool_use_id": "toolu_01Mnh9XZDSjomukmhLDueg4o",
+              "type": "tool_result",
+              "content": "$ bun probe.ts concurrent-ab\n{\"scenario\":\"concurrent-ab\",\"requests\":[{\"method\":\"POST\",\"path\":\"/events\",\"auth\":\"$QA_SYNTHETIC_AUTH\",\"body\":{\"id\":\"delivery\",\"cents\":7},\"status\":202,\"response\":\"{\\\"accepted\\\":\\\"delivery\\\"}\"}],\"order\":[\"a\",\"b\"],\"interrupted\":\"\",\"state\":{\"jobs\":{\"delivery\":{\"cents\":7,\"status\":\"complete\",\"attempts\":2}},\"effects\":[{\"id\":\"delivery\",\"cents\":7},{\"id\":\"delivery\",\"cents\":7}]},\"stateRoot\":\"/home/runner/.cache/gstack-paid-shard-cPkBXU/tmp/qaf-HC6lKW/.qa-state/concurrent-ab-gBQ5yQ\"}",
+              "is_error": false
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "attempt": "qa-functional-webhook-report-9d037e09-46d5-4c40-af51-a38fe728094b",
+    "bad": "exploration-008.json",
+    "good": "exploration-009.json",
+    "transcript": [
+      {
+        "type": "assistant",
+        "parent_tool_use_id": null,
+        "message": {
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_018mS1D5Dv8ZbxRmXCL1e3R8",
+              "name": "Bash",
+              "input": {
+                "command": "bun run probe -- duplicate",
+                "description": "Run duplicate delivery probe"
+              },
+              "caller": {
+                "type": "direct"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "user",
+        "parent_tool_use_id": null,
+        "message": {
+          "content": [
+            {
+              "tool_use_id": "toolu_018mS1D5Dv8ZbxRmXCL1e3R8",
+              "type": "tool_result",
+              "content": "$ bun probe.ts duplicate\n{\"scenario\":\"duplicate\",\"requests\":[{\"method\":\"POST\",\"path\":\"/events\",\"auth\":\"$QA_SYNTHETIC_AUTH\",\"body\":{\"id\":\"delivery\",\"cents\":7},\"status\":202,\"response\":\"{\\\"accepted\\\":\\\"delivery\\\"}\"},{\"method\":\"POST\",\"path\":\"/events\",\"auth\":\"$QA_SYNTHETIC_AUTH\",\"body\":{\"id\":\"delivery\",\"cents\":7},\"status\":202,\"response\":\"{\\\"accepted\\\":\\\"delivery\\\"}\"}],\"order\":[],\"interrupted\":\"\",\"state\":{\"jobs\":{\"delivery\":{\"cents\":7,\"status\":\"complete\",\"attempts\":1}},\"effects\":[{\"id\":\"delivery\",\"cents\":7}]},\"stateRoot\":\"/home/runner/.cache/gstack-paid-shard-cPkBXU/tmp/qaf-1JqMV7/.qa-state/duplicate-BADK26\"}",
+              "is_error": false
+            }
+          ]
+        }
+      },
+      {
+        "type": "assistant",
+        "parent_tool_use_id": null,
+        "message": {
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_01PtfMhkjdsiUc38XxQ9AqK5",
+              "name": "Write",
+              "input": {
+                "file_path": "/home/runner/.cache/gstack-paid-shard-cPkBXU/tmp/qaf-1JqMV7/qa-reports/exploration-008.json",
+                "content": "{\n  \"observationCommand\": \"bun run probe -- duplicate\",\n  \"observed\": {\"scenario\":\"duplicate\",\"requests\":[{\"method\":\"POST\",\"path\":\"/events\",\"auth\":\"$QA_SYNTHETIC_AUTH\",\"body\":{\"id\":\"delivery\",\"cents\":7},\"status\":202,\"response\":\"{\\\"accepted\\\":\\\"delivery\\\"}\"},{\"method\":\"POST\",\"path\":\"/events\",\"auth\":\"$QA_SYNTHETIC_AUTH\",\"body\":{\"id\":\"delivery\",\"cents\":7},\"status\":202,\"response\":\"{\\\"accepted\\\":\\\"delivery\\\"}\"}],\"order\":[],\"interrupted\":\"\",\"state\":{\"jobs\":{\"delivery\":{\"cents\":7,\"status\":\"complete\",\"attempts\":1}},\"effects\":[{\"id\":\"delivery\",\"cents\":7}]},\"stateRoot\":\"/home/runner/.cache/qaf-redacted-see-report/.qa-state/duplicate-BADK26\"},\n  \"hypothesis\": \"Sequential duplicate holds (one effect, attempts 1), so idempotency is only broken when the worker's pre-claim read saw pending. Remaining contracts are the write-free boundaries: check auth/validation rejection writes no state.\",\n  \"nextCommand\": \"bun run probe -- reject\"\n}\n"
+              },
+              "caller": {
+                "type": "direct"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "user",
+        "parent_tool_use_id": null,
+        "message": {
+          "content": [
+            {
+              "tool_use_id": "toolu_01PtfMhkjdsiUc38XxQ9AqK5",
+              "type": "tool_result",
+              "content": "File created successfully at: /home/runner/.cache/gstack-paid-shard-cPkBXU/tmp/qaf-1JqMV7/qa-reports/exploration-008.json (file state is current in your context \u2014 no need to Read it back)"
+            }
+          ]
+        }
+      },
+      {
+        "type": "assistant",
+        "parent_tool_use_id": null,
+        "message": {
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_019tAVaPjay6fYwG6nKaKbz3",
+              "name": "Write",
+              "input": {
+                "file_path": "/home/runner/.cache/gstack-paid-shard-cPkBXU/tmp/qaf-1JqMV7/qa-reports/exploration-009.json",
+                "content": "{\n  \"observationCommand\": \"bun run probe -- duplicate\",\n  \"observed\": {\"scenario\":\"duplicate\",\"requests\":[{\"method\":\"POST\",\"path\":\"/events\",\"auth\":\"$QA_SYNTHETIC_AUTH\",\"body\":{\"id\":\"delivery\",\"cents\":7},\"status\":202,\"response\":\"{\\\"accepted\\\":\\\"delivery\\\"}\"},{\"method\":\"POST\",\"path\":\"/events\",\"auth\":\"$QA_SYNTHETIC_AUTH\",\"body\":{\"id\":\"delivery\",\"cents\":7},\"status\":202,\"response\":\"{\\\"accepted\\\":\\\"delivery\\\"}\"}],\"order\":[],\"interrupted\":\"\",\"state\":{\"jobs\":{\"delivery\":{\"cents\":7,\"status\":\"complete\",\"attempts\":1}},\"effects\":[{\"id\":\"delivery\",\"cents\":7}]},\"stateRoot\":\"/home/runner/.cache/gstack-paid-shard-cPkBXU/tmp/qaf-1JqMV7/.qa-state/duplicate-BADK26\"},\n  \"hypothesis\": \"Corrected checkpoint (exploration-008.json mis-transcribed stateRoot; this note carries the verbatim value). Sequential duplicate holds (one effect, attempts 1), so idempotency is only broken when the worker's pre-claim read saw pending. Next: auth/validation rejection must write no state.\",\n  \"nextCommand\": \"bun run probe -- reject\"\n}\n"
+              },
+              "caller": {
+                "type": "direct"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "user",
+        "parent_tool_use_id": null,
+        "message": {
+          "content": [
+            {
+              "tool_use_id": "toolu_019tAVaPjay6fYwG6nKaKbz3",
+              "type": "tool_result",
+              "content": "File created successfully at: /home/runner/.cache/gstack-paid-shard-cPkBXU/tmp/qaf-1JqMV7/qa-reports/exploration-009.json (file state is current in your context \u2014 no need to Read it back)"
+            }
+          ]
+        }
+      },
+      {
+        "type": "assistant",
+        "parent_tool_use_id": null,
+        "message": {
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_011YQW3q2DebK2Q1NbBAKDJK",
+              "name": "Bash",
+              "input": {
+                "command": "bun run probe -- reject",
+                "description": "Run auth/validation rejection probe"
+              },
+              "caller": {
+                "type": "direct"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "user",
+        "parent_tool_use_id": null,
+        "message": {
+          "content": [
+            {
+              "tool_use_id": "toolu_011YQW3q2DebK2Q1NbBAKDJK",
+              "type": "tool_result",
+              "content": "$ bun probe.ts reject\n{\"scenario\":\"reject\",\"requests\":[{\"method\":\"POST\",\"path\":\"/events\",\"auth\":\"<invalid>\",\"body\":{\"id\":\"reject-auth\",\"cents\":7},\"status\":401,\"response\":\"unauthorized\"},{\"method\":\"POST\",\"path\":\"/events\",\"auth\":\"$QA_SYNTHETIC_AUTH\",\"body\":{\"id\":\"reject-input\",\"cents\":0},\"status\":422,\"response\":\"invalid event\"}],\"order\":[],\"interrupted\":\"\",\"state\":{\"jobs\":{},\"effects\":[]},\"stateRoot\":\"/home/runner/.cache/gstack-paid-shard-cPkBXU/tmp/qaf-1JqMV7/.qa-state/reject-OjZXUH\"}",
+              "is_error": false
+            }
+          ]
+        }
+      }
+    ]
+  }
+]

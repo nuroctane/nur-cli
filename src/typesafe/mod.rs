@@ -41,6 +41,7 @@
 
 pub mod client;
 pub mod compact;
+pub mod context;
 pub mod harness;
 pub mod policy;
 pub mod questions;

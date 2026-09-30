@@ -1,6 +1,7 @@
 ---
 name: cloud-monitoring-chart-generation
 metadata:
+  version: "1.0.0"
   category: CloudObservabilityAndMonitoring
 description: >-
   Generates Google Cloud Monitoring Server-Driven UI (SDUI) Widget and

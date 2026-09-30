@@ -1,6 +1,6 @@
 ### Purpose
 
-Resolve one stable target, run two independent assessments, synthesize a design critique, persist a snapshot, and ask the user what to improve next. The chat response is the primary deliverable; the snapshot is an archive/backlog for future commands.
+Resolve one stable target, run two independent assessments, synthesize a design critique, persist a snapshot, and ask the user what to improve next. The chat response is the primary deliverable; the snapshot is an archive of that run.
 
 ### Hard Invariants
 
@@ -8,7 +8,7 @@ Resolve one stable target, run two independent assessments, synthesize a design 
 - Assessment A and B MUST run as two isolated sub-agents whenever a sub-agent/Task tool is exposed. Running them inline in this context is "possible" but is NOT permitted; it is a degraded run. Inline is allowed ONLY when no sub-agent tool exists (or the user declined, on harnesses that ask).
 - If you degrade for any reason, the report's first line MUST be a banner: `⚠️ DEGRADED: single-context (<reason>)`. A silent degraded critique is a failed critique.
 - Assessment A must finish before detector findings enter the parent synthesis context. Detector output is deterministic, but it still anchors judgment.
-- A skipped detector is a failed critique run unless `detect.mjs` is missing or crashes after a real attempt.
+- A skipped detector is a failed critique run unless `impeccable detect` is missing or crashes after a real attempt.
 - Viewable targets require browser inspection when available.
 - Any local server started only for critique visualization must run in the background, have a recorded stop method, and be stopped before final reporting unless the user asks to keep it.
 - Do not claim a user-visible overlay exists unless script injection succeeded and the detector ran in the page.
@@ -23,7 +23,7 @@ Resolve one stable target, run two independent assessments, synthesize a design 
    - "this page" -> the current URL or source file
 2. **Confirm the target slugs cleanly**:
    ```bash
-   node .claude/skills/impeccable/scripts/critique-storage.mjs slug "<resolved-path-or-url>"
+   .vibe/skills/impeccable/scripts/impeccable critique-storage slug "<resolved-path-or-url>"
    ```
    Every later command also accepts the resolved target directly and derives the same slug internally; never hand-write a slug. If this exits non-zero, skip persistence and trend for this run, but continue the critique.
 3. **Read `.impeccable/critique/ignore.md`** if it exists. Drop matching findings silently; it is the only prior-run input critique consumes.
@@ -59,7 +59,7 @@ Run the bundled detector and browser visualization evidence. Assessment B is man
 
 CLI scan:
 ```bash
-node .claude/skills/impeccable/scripts/detect.mjs --json [target]
+.vibe/skills/impeccable/scripts/impeccable detect --json [target]
 ```
 
 - Pass markup files/directories as `[target]`; do not pass CSS-only files.
@@ -73,18 +73,18 @@ Browser visualization is required for a viewable target when browser automation 
 1. Create a fresh tab and navigate. Prefer the harness's native/browser-canvas screenshot path before hand-rolling a Playwright/Puppeteer script; only fall back to a custom script when no native browser tool is exposed.
 2. Preflight mutable injection by setting `document.title` and appending a `<script>` tag. Read-only evaluate APIs do not count.
 3. If mutation is unavailable, skip live server, browser presentation, and injection; report fallback signal.
-4. If mutation is available, start `node .claude/skills/impeccable/scripts/live-server.mjs --background`, present the browser if supported, label `[Human]`, scroll top, inject `http://localhost:PORT/detect.js`, wait 2-3 seconds, read `impeccable` console messages, then stop the live server.
+4. If mutation is available, start `.vibe/skills/impeccable/scripts/impeccable live-server --background`, present the browser if supported, label `[Human]`, scroll top, inject `http://localhost:PORT/detect.js`, wait 2-3 seconds, read `impeccable` console messages, then stop the live server.
 5. For multi-view targets, inject on 3-5 representative pages.
 
 Return: CLI findings JSON/counts, browser console findings if applicable, false positives, and skipped/failed browser steps with concrete reasons.
 
-After Assessment B returns usable CLI findings, reuse them. Do not rerun `detect.mjs` in the parent unless Assessment B failed, was truncated, or omitted count, rule names, or file locations.
+After Assessment B returns usable CLI findings, reuse them. Do not rerun `impeccable detect` in the parent unless Assessment B failed, was truncated, or omitted count, rule names, or file locations.
 
 ### Generate Combined Critique Report
 
 Synthesize both assessments into a single report. Do NOT simply concatenate. Weave the findings together, noting where the LLM review and detector agree, where the detector caught issues the LLM missed, and where detector findings are false positives.
 
-The chat response is the primary user-facing deliverable. Present the full structured critique below in chat; do not replace it with a summary and a link. The persisted snapshot is only an archive/backlog for later commands.
+The chat response is the primary user-facing deliverable. Present the full structured critique below in chat; do not replace it with a summary and a link. The persisted snapshot is an archive of that run.
 
 Structure your feedback as a design director would:
 
@@ -147,7 +147,7 @@ For each issue, tag with **P0-P3 severity** (see [Issue Severity below](#issue-s
 #### Persona Red Flags
 > *Consult the [Personas reference](#persona-based-design-testing) below.*
 
-Auto-select 2-3 personas most relevant to this interface type (use the selection table in the reference). If `CLAUDE.md` contains a `## Design Context` section from `impeccable init`, also generate 1-2 project-specific personas from the audience/brand info.
+Auto-select 2-3 personas most relevant to this interface type (use the selection table in the reference). If `AGENTS.md` contains a `## Design Context` section from `impeccable init`, also generate 1-2 project-specific personas from the audience/brand info.
 
 For each selected persona, walk through the primary user action and list specific red flags found:
 
@@ -195,15 +195,15 @@ Skip this step if the Setup slug was null (vague or root-level target).
 2. **Pass the structured metadata** through `IMPECCABLE_CRITIQUE_META` (JSON), then run the write command:
    ```bash
    IMPECCABLE_CRITIQUE_META='{"target":"<user phrasing>","total_score":<n>,"max_score":<n>,"na_heuristics":"<comma-separated numbers, or empty>","p0_count":<n>,"p1_count":<n>}' \
-     node .claude/skills/impeccable/scripts/critique-storage.mjs write "<resolved target>" <body-file>
+     .vibe/skills/impeccable/scripts/impeccable critique-storage write "<resolved target>" <body-file>
    ```
-   `max_score` is the applicable maximum from the heuristic table (40 when every heuristic applied), so a later run can tell a renormalized total from a full one. The helper prints the absolute path it wrote.
+   `max_score` is the applicable maximum from the heuristic table (40 when every heuristic applied), so a later run can tell a renormalized total from a full one. For a local file target, the helper also records an exact content fingerprint so polish can distinguish the assessed bytes from later edits without relying on Git state or timestamps. The helper prints the absolute path it wrote. Leave that file on disk. Polish closes it; this run does not.
 
 3. **Delete the temp body file** after the write attempt completes, whether the write succeeded or failed. If deletion fails, mention `temp-file cleanup failed: <reason>` briefly in the final output, but do not block the critique.
 
 4. **Read the trend** for context:
    ```bash
-   node .claude/skills/impeccable/scripts/critique-storage.mjs trend "<resolved target>" 5
+   .vibe/skills/impeccable/scripts/impeccable critique-storage trend "<resolved target>" 5
    ```
    This returns a JSON array of the last 5 frontmatter entries (including the one you just wrote).
 
@@ -222,7 +222,7 @@ This is fire-and-forget. Do not show the user the helper's JSON output; only the
 
 ### Ask the User
 
-**After presenting findings**, use targeted questions based on what was actually found. STOP and call the AskUserQuestion tool to clarify. These answers will shape the action plan.
+**After presenting findings**, use targeted questions based on what was actually found. Ask the user directly to clarify what you cannot infer. These answers will shape the action plan.
 
 Ask in the same message that carries the report, with the report written out first and the question last. Do not split the two across turns: a turn that ends on the report is a turn that ends, and the questions never arrive. Order within the message is what matters, because prose emitted after a structured question is withheld until the user answers.
 
@@ -787,7 +787,7 @@ Choose personas based on the interface type:
 
 #### Project-Specific Personas
 
-If `CLAUDE.md` contains a `## Design Context` section (generated by `impeccable init`), derive 1–2 additional personas from the audience and brand information:
+If `AGENTS.md` contains a `## Design Context` section (generated by `impeccable init`), derive 1–2 additional personas from the audience and brand information:
 
 1. Read the target audience description
 2. Identify the primary user archetype not covered by the 5 predefined personas

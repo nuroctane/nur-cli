@@ -1,5 +1,9 @@
 # NurCLI
 
+**v0.41.0:** [CLI and skills refresh](stack-update-2026-09-30.md) updates the Rust
+and companion stacks, complete pinned skill trees, responsive account controls,
+safe bridge ownership, cancellation and long-transcript rendering.
+
 **v0.40.1:** `/effort` says when a route takes no effort field: Chat Completions routes
 (OpenRouter, Groq, Nous Portal, xAI API keys, local servers) send none, and the
 [effort table](configuration.md#reasoning-effort-levels) now says so too.
@@ -86,7 +90,7 @@ That's the normal upgrade. Pulls / rebuilds when you have a Laboratory checkout,
 | **Hardening** | Sandbox · bash denylist · SSRF blocks · atomic `~/.nur` IO · session **`.json.bak`** · **permissions.toml** · optional **hooks.toml** · API retries · install SHA-256 · `nur doctor` |
 | **Host panels** | Live `status.json` / `usage.jsonl` · **`NUR_*`** env exports · Orca hook (`nur-hook.cmd`) |
 
-**Current version: v0.40.1**
+**Current version: v0.41.0**
 
 ---
 

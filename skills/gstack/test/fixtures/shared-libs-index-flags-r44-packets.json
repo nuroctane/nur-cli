@@ -1,0 +1,148 @@
+{
+  "source": "R44 slice 5 skill-e2e-shared-libs-paths 2026-09-26-0317",
+  "revision": "1a64d8d1",
+  "packets": [
+    {
+      "test": "shared-libs-review-index-flags",
+      "attempt": 1,
+      "scenario": "assume-unchanged",
+      "tool_use_id": "toolu_01KJMQEPxfXTwLoq5JKQTXoj",
+      "input": {
+        "questions": [
+          {
+            "question": "[ADVISORY] shared-libs (confidence 9, maintainability; core-verified) \u2014 src/retry-worker.ts:2 and src/retry-route.ts:2 each inline a byte-identical copy of retrySeconds that already exists, tested, in lib/retry-after.ts (used by src/scheduler.ts). Proposed fix: restore `export { retrySeconds } from '../lib/retry-after';` in both files (~30 lines removed, 2 added, ~28 saved; existing test/retry-after.test.ts covers the contract). Apply this?",
+            "header": "Advisory",
+            "options": [
+              {
+                "label": "Fix as recommended (Recommended)",
+                "description": "Replace both inline copies with a re-export from lib/retry-after.ts. Keeps each module's export surface; scheduler and tests unaffected."
+              },
+              {
+                "label": "Skip",
+                "description": "Keep the duplicated copies. Recorded as an explicit Skip for this finding's identity; note the route path is snapshot-ineligible while assume-unchanged is set."
+              }
+            ],
+            "multiSelect": false
+          },
+          {
+            "question": "src/retry-route.ts has the Git assume-unchanged bit set and carries an uncommitted trailing comment that `git status`/`git diff` do not show. Should I clear the flag (`git update-index --no-assume-unchanged src/retry-route.ts`) so the modification becomes visible to Git and future review snapshots?",
+            "header": "Git flag",
+            "options": [
+              {
+                "label": "Clear the flag (Recommended)",
+                "description": "Runs git update-index --no-assume-unchanged on the file. Does not change file contents; the hidden edit will then appear in git status."
+              },
+              {
+                "label": "Leave it",
+                "description": "Keep the bit set. I'll report the hidden modification in the summary; the path stays excluded from reuse coverage."
+              }
+            ],
+            "multiSelect": false
+          }
+        ]
+      },
+      "original_error": "Error: No unambiguous no-change option in real review question: {\"question\":\"src/retry-route.ts has the Git assume-unchanged bit set and carries an uncommitted trailing comment that `git status`/`git diff` do not show. Should I clear the flag (`git update-index --no-assume-unchanged src/retry-route.ts`) so the modification becomes visible to Git and future review snapshots?\",\"header\":\"Git flag\",\"options\":[{\"label\":\"Clear the flag (Recommended)\",\"description\":\"Runs git update-index --no-assume-unchanged on the file. Does not change file contents; the hidden edit will then appear in git status.\"},{\"label\":\"Leave it\",\"description\":\"Keep the bit set. I'll report the hidden modification in the summary; the path stays excluded from reuse coverage.\"}],\"multiSelect\":false}\nError: expect(received).toEqual(expected)\n\n- []\n+ [\n+   \"assume-unchanged: Error: No unambiguous no-change option in real review question: {\"question\":\"src/retry-route.ts has the Git assume-unchanged bit set and carries an uncommitted trailing comment that `git status`/`git diff` do not show. Should I clear the flag (`git update-index --no-assume-unchanged src/retry-route.ts`) so the modification becomes visible to Git and future review snapshots?\",\"header\":\"Git flag\",\"options\":[{\"label\":\"Clear the flag (Recommended)\",\"description\":\"Runs git update-index --no-assume-unchanged on the file. Does not change file contents; the hidden edit will then appear in git status.\"},{\"label\":\"Leave it\",\"description\":\"Keep the bit set. I'll report the hidden modification in the summary; the path stays excluded from reuse coverage.\"}],\"multiSelect\":false}\",\n+ ]\n\n- Expected  - 1\n+ Received  + 3\n"
+    },
+    {
+      "test": "shared-libs-review-index-flags",
+      "attempt": 2,
+      "scenario": "skip-worktree",
+      "tool_use_id": "toolu_01Hh4FeZk35HPvKRKiz4Gy8H",
+      "input": {
+        "questions": [
+          {
+            "question": "[ADVISORY] shared-libs (core, confidence 9; maintainability specialist confirms, confidence 9) \u2014 src/retry-worker.ts:2 and src/retry-route.ts:2 each inline a byte-identical copy of retrySeconds that already exists, tested, in lib/retry-after.ts. Proposed fix: replace both bodies with `export { retrySeconds } from '../lib/retry-after';` (\u2248 \u221230/+2 lines, existing test/retry-after.test.ts covers the contract). Prior Skip is NOT reusable (checker: reusable:false; route excluded as skip-worktree). Apply?",
+            "header": "Shared helper",
+            "multiSelect": false,
+            "options": [
+              {
+                "label": "Fix as recommended (Recommended)",
+                "description": "Restore the re-export in src/retry-worker.ts and migrate src/retry-route.ts to the same re-export of lib/retry-after.ts."
+              },
+              {
+                "label": "Fix worker only",
+                "description": "Restore the re-export in src/retry-worker.ts; leave src/retry-route.ts untouched (materially narrower \u2014 recorded as a separate proposal, the supplied finding still needs its own decision)."
+              },
+              {
+                "label": "Skip",
+                "description": "Keep both inline copies. Recorded as an explicit Skip for this identity; logger recomputes coverage (route stays uncovered while skip-worktree)."
+              }
+            ]
+          },
+          {
+            "question": "src/retry-route.ts has the Git skip-worktree bit set, and its on-disk content differs from HEAD (extra comment at line 17). That hides the file's changes from git status/diff and from review snapshots. Should I clear the bit (`git update-index --no-skip-worktree src/retry-route.ts`) so its changes become visible and reviewable?",
+            "header": "skip-worktree",
+            "multiSelect": false,
+            "options": [
+              {
+                "label": "Clear the bit (Recommended)",
+                "description": "Run git update-index --no-skip-worktree on src/retry-route.ts. Its working-tree diff becomes visible; the re-review pass will include it."
+              },
+              {
+                "label": "Leave it set",
+                "description": "Do not touch Git index flags. The route file stays outside git diff and outside snapshot coverage; I will report this as a coverage gap."
+              }
+            ]
+          },
+          {
+            "question": "For the persisted record's `completed` flag: this replay runs only core/checklist + the supplied maintainability result. Step 4.7 QA probes, Step 4.8 adversarial and other specialists were not run. How should `completed` be recorded?",
+            "header": "completed",
+            "multiSelect": false,
+            "options": [
+              {
+                "label": "completed:false (Recommended)",
+                "description": "Follow the workflow's literal definition (requires 4.7/4.8). Status becomes issues_found with zero defects; the summary explains the scoped gap."
+              },
+              {
+                "label": "completed:true (scoped)",
+                "description": "Treat the scoped required coverage as the completion criterion. Summary still states plainly which stages were not run."
+              }
+            ]
+          }
+        ]
+      },
+      "original_error": "Error: No unambiguous no-change option in real review question: {\"question\":\"For the persisted record's `completed` flag: this replay runs only core/checklist + the supplied maintainability result. Step 4.7 QA probes, Step 4.8 adversarial and other specialists were not run. How should `completed` be recorded?\",\"header\":\"completed\",\"options\":[{\"label\":\"completed:false (Recommended)\",\"description\":\"Follow the workflow's literal definition (requires 4.7/4.8). Status becomes issues_found with zero defects; the summary explains the scoped gap.\"},{\"label\":\"completed:true (scoped)\",\"description\":\"Treat the scoped required coverage as the completion criterion. Summary still states plainly which stages were not run.\"}],\"multiSelect\":false}\nError: expect(received).toEqual(expected)\n\n- []\n+ [\n+   \"skip-worktree: Error: No unambiguous no-change option in real review question: {\"question\":\"For the persisted record's `completed` flag: this replay runs only core/checklist + the supplied maintainability result. Step 4.7 QA probes, Step 4.8 adversarial and other specialists were not run. How should `completed` be recorded?\",\"header\":\"completed\",\"options\":[{\"label\":\"completed:false (Recommended)\",\"description\":\"Follow the workflow's literal definition (requires 4.7/4.8). Status becomes issues_found with zero defects; the summary explains the scoped gap.\"},{\"label\":\"completed:true (scoped)\",\"description\":\"Treat the scoped required coverage as the completion criterion. Summary still states plainly which stages were not run.\"}],\"multiSelect\":false}\",\n+ ]\n\n- Expected  - 1\n+ Received  + 3\n"
+    },
+    {
+      "test": "shared-libs-review-prior-coverage",
+      "attempt": 1,
+      "scenario": "legacy",
+      "tool_use_id": "toolu_01F5ME3wFvRb91sczmDjPG61",
+      "input": {
+        "questions": [
+          {
+            "question": "[ADVISORY] src/retry-worker.ts:2 (core + maintainability, confidence 9/10) \u2014 the worker and src/retry-route.ts each carry a verbatim copy of lib/retry-after.ts:retrySeconds (already used by src/scheduler.ts, tested in test/retry-after.test.ts). Proposed fix: replace both bodies with `export { retrySeconds } from '../lib/retry-after';` (\u221230/+2, ~28 lines saved; shared-failure blast radius = scheduler + worker + route, all same TS runtime). RECOMMENDATION: Fix. What would you like to do?",
+            "header": "Shared-libs",
+            "multiSelect": false,
+            "options": [
+              {
+                "label": "Fix as recommended (Recommended)",
+                "description": "Re-export retrySeconds from lib/retry-after.ts in src/retry-worker.ts and src/retry-route.ts; run the existing test."
+              },
+              {
+                "label": "Skip",
+                "description": "Keep both duplicated copies; record an explicit Skip for this advisory under its evidence_paths/helper_target identity."
+              }
+            ]
+          },
+          {
+            "question": "This scoped replay ran core checklist + merge + Fix-First + persistence only; Step 4.7 exploratory QA and Step 4.8 adversarial were not executed. The workflow's COMPLETED rule requires those. How should the persisted record report completion?",
+            "header": "Record",
+            "multiSelect": false,
+            "options": [
+              {
+                "label": "completed:false (Recommended)",
+                "description": "Honest per workflow: stages omitted \u2192 completed:false, status issues_found with 0 defects; gap explained in the summary. Note: a Skip decision would not be reusable later."
+              },
+              {
+                "label": "completed:true (scoped)",
+                "description": "Treat this replay's required coverage (core + supplied maintainability) as complete; 4.7/4.8 are out of scope and are stated as not run in the summary."
+              }
+            ]
+          }
+        ]
+      },
+      "original_error": "Error: No unambiguous no-change option in real review question: {\"question\":\"This scoped replay ran core checklist + merge + Fix-First + persistence only; Step 4.7 exploratory QA and Step 4.8 adversarial were not executed. The workflow's COMPLETED rule requires those. How should the persisted record report completion?\",\"header\":\"Record\",\"options\":[{\"label\":\"completed:false (Recommended)\",\"description\":\"Honest per workflow: stages omitted \u2192 completed:false, status issues_found with 0 defects; gap explained in the summary. Note: a Skip decision would not be reusable later.\"},{\"label\":\"completed:true (scoped)\",\"description\":\"Treat this replay's required coverage (core + supplied maintainability) as complete; 4.7/4.8 are out of scope and are stated as not run in the summary.\"}],\"multiSelect\":false}\nError: expect(received).toEqual(expected)\n\n- []\n+ [\n+   \"legacy: Error: No unambiguous no-change option in real review question: {\"question\":\"This scoped replay ran core checklist + merge + Fix-First + persistence only; Step 4.7 exploratory QA and Step 4.8 adversarial were not executed. The workflow's COMPLETED rule requires those. How should the persisted record report completion?\",\"header\":\"Record\",\"options\":[{\"label\":\"completed:false (Recommended)\",\"description\":\"Honest per workflow: stages omitted \u2192 completed:false, status issues_found with 0 defects; gap explained in the summary. Note: a Skip decision would not be reusable later.\"},{\"label\":\"completed:true (scoped)\",\"description\":\"Treat this replay's required coverage (core + supplied maintainability) as complete; 4.7/4.8 are out of scope and are stated as not run in the summary.\"}],\"multiSelect\":false}\",\n+ ]\n\n- Expected  - 1\n+ Received  + 3\n"
+    }
+  ]
+}

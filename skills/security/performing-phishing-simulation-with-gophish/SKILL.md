@@ -139,7 +139,7 @@ Use the automation script to pull campaign data via GoPhish API and generate det
 - **GoPhish API Docs**: https://docs.getgophish.com/api-documentation/
 - **GoPhish GitHub**: https://github.com/gophish/gophish
 - **Evilginx2** (for advanced AiTM testing): https://github.com/kgretzky/evilginx2
-- **King Phisher**: https://github.com/rsmusllp/king-phisher
+- **King Phisher**: https://github.com/CrimsonForge-io/king-phisher
 
 ## Validation
 - Successfully deploy GoPhish and access admin panel

@@ -1,6 +1,7 @@
 ---
 name: google-cloud-solution-agentic-ai-data-science-workflow
 metadata:
+  version: "1.0.0"
   category: MultiProductSolutions
 description: >-
   Designs a tailored multi-product agentic data science
@@ -131,7 +132,7 @@ identifiers.
 ### Phase 3: Implementation plan
 
 - [ ] **Step 1: Retrieve relevant implementation resources**:
-   - [ADK Data Science Sample Code](https://github.com/google/adk-samples/tree/main/python/agents/data-science)
+   - [ADK Data Science Sample Code](https://github.com/google/adk-recipes/tree/main/python/agents/data-science)
    - [Stateful Data Science Agent on Agent Engine](https://codelabs.developers.google.com/next26/adk-deploy-scale)
    - [Build and deploy an AI agent to Cloud Run using ADK](https://docs.cloud.google.com/run/docs/ai/build-and-deploy-ai-agents/deploy-adk-agent.md.txt)
    - [Use AlloyDB with agents](https://docs.cloud.google.com/alloydb/docs/connect-ide-using-mcp-toolbox.md.txt)

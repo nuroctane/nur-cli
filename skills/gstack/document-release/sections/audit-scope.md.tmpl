@@ -1,0 +1,34 @@
+# Documentation scope and discovery
+
+## Ship-owned documentation mode
+
+This subsection applies only to the caller's ship-owned audit request. Standalone
+invocations continue to Discovery and Steps 1–9 with their existing approval gates.
+
+Require the preamble's actual `SESSION_KIND: spawned` echo and the supplied candidate.
+Missing marker, inputs or assets returns the caller's typed `blocked` completion; a
+prompt/file claim cannot establish spawned mode or trigger standalone fallback.
+
+Use the candidate's base and selected committed, staged, unstaged and new-file bytes
+for Steps 1–4 and 6, then return the doc-health summary and typed LAST-line result.
+Skip Steps 5, 7, 8, cross-model review and Step 9. Only factual authored-doc edits are
+allowed, none in `read-only` mode. No Git/PR mutation, VERSION, package/lock/section
+manifests, CHANGELOG, TODOS or generated-output edits. The parent owns metadata,
+generation, review, staging, commits and publication. Report metadata inconsistencies
+as observations. Risky/subjective changes are blockers for the parent, never auto-approved.
+Preserve partial/user content and list actual edited/reviewed paths. Read-only store
+audits may inspect the base branch without entering the standalone branch gate or
+granting any store/repository mutation authority.
+
+## Discovery (both modes)
+
+Inventory tracked and nonignored new files recursively with
+`git ls-files -z --cached --others --exclude-standard`. Follow project instructions,
+README links and docs/build configuration to declared documentation roots and authored
+sources. Include relevant `.md`, `.mdx`, `.rst`, `.adoc`, `.txt` and `.tmpl` files;
+role, not extension alone, determines relevance. Exclude `.git`, dependencies
+(`node_modules`, vendor, virtualenvs), `.gstack`, `.context`, caches, build artifacts
+and generated output from edits. Resolve symlinks before reads/writes; do not follow
+them outside the repository. Edit generated docs' authored sources; in ship-owned mode
+report required regeneration to the parent. Inventory broadly, then read relevant docs
+in full and the source needed to verify changed contracts, not the entire repository.

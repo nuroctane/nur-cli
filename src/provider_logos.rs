@@ -14,28 +14,45 @@
 
 /// One provider logo (embedded PNG). The text-only fallback is [`title_emoji`].
 #[derive(Clone, Copy)]
+#[cfg(any(feature = "image-peek", test))]
 pub struct Logo {
     pub png: &'static [u8],
 }
 
+#[cfg(any(feature = "image-peek", test))]
 const ANTHROPIC_PNG: &[u8] = include_bytes!("../assets/provider-logos/anthropic.png");
+#[cfg(any(feature = "image-peek", test))]
 const CLINE_PNG: &[u8] = include_bytes!("../assets/provider-logos/cline.png");
+#[cfg(any(feature = "image-peek", test))]
 const COPILOT_PNG: &[u8] = include_bytes!("../assets/provider-logos/copilot.png");
+#[cfg(any(feature = "image-peek", test))]
 const DEEPSEEK_PNG: &[u8] = include_bytes!("../assets/provider-logos/deepseek.png");
+#[cfg(any(feature = "image-peek", test))]
 const GEMINI_PNG: &[u8] = include_bytes!("../assets/provider-logos/gemini.png");
+#[cfg(any(feature = "image-peek", test))]
 const GOOGLECLOUD_PNG: &[u8] = include_bytes!("../assets/provider-logos/googlecloud.png");
+#[cfg(any(feature = "image-peek", test))]
 const KIMI_PNG: &[u8] = include_bytes!("../assets/provider-logos/kimi.png");
+#[cfg(any(feature = "image-peek", test))]
 const META_PNG: &[u8] = include_bytes!("../assets/provider-logos/meta.png");
+#[cfg(any(feature = "image-peek", test))]
 const NOUS_PNG: &[u8] = include_bytes!("../assets/provider-logos/nous.png");
+#[cfg(any(feature = "image-peek", test))]
 const OLLAMA_PNG: &[u8] = include_bytes!("../assets/provider-logos/ollama.png");
+#[cfg(any(feature = "image-peek", test))]
 const OPENAI_PNG: &[u8] = include_bytes!("../assets/provider-logos/openai.png");
+#[cfg(any(feature = "image-peek", test))]
 const OPENCODE_PNG: &[u8] = include_bytes!("../assets/provider-logos/opencode.png");
+#[cfg(any(feature = "image-peek", test))]
 const OPENROUTER_PNG: &[u8] = include_bytes!("../assets/provider-logos/openrouter.png");
+#[cfg(any(feature = "image-peek", test))]
 const PERPLEXITY_PNG: &[u8] = include_bytes!("../assets/provider-logos/perplexity.png");
+#[cfg(any(feature = "image-peek", test))]
 const XAI_PNG: &[u8] = include_bytes!("../assets/provider-logos/xai.png");
 
 /// Map a catalog provider id to its logo. Unlisted ids (local servers,
 /// niche gateways) fall back to a generic orbit glyph.
+#[cfg(any(feature = "image-peek", test))]
 pub fn for_provider(provider_id: &str) -> Option<Logo> {
     let png: &'static [u8] = match provider_id {
         "openai" | "openai-cc" => OPENAI_PNG,
@@ -65,21 +82,21 @@ pub fn for_provider(provider_id: &str) -> Option<Logo> {
 /// unknown providers (the title then shows only the moon marker).
 pub fn title_emoji(label: &str) -> &'static str {
     match label {
-        "openai" | "openai-cc" => "\u{1F7E2}",             // 🟢
-        "anthropic" | "claude" => "\u{1F170}\u{FE0F}",     // 🅰️
+        "openai" | "openai-cc" => "\u{1F7E2}",         // 🟢
+        "anthropic" | "claude" => "\u{1F170}\u{FE0F}", // 🅰️
         "google" | "google-oauth" | "antigravity" | "gemini" => "\u{2728}", // ✨
-        "antigravity-cloud" => "\u{2728}",                 // ✨
-        "xai" | "grok" => "\u{274C}",                      // ❌
-        "meta" => "\u{267E}\u{FE0F}",                      // ♾️
-        "deepseek" => "\u{1F40B}",                         // 🐋
-        "kimi" => "\u{1F319}",                             // 🌙
-        "ollama" => "\u{1F999}",                           // 🦙
-        "opencode" => "\u{1F7E7}",                         // 🟧
-        "openrouter" => "\u{1F6F0}\u{FE0F}",               // 🛰️
-        "commandcode" => "\u{1F5A5}\u{FE0F}",              // 🖥️
-        "perplexity" => "\u{1F50E}",                       // 🔎
-        "github-copilot" | "copilot" => "\u{1F97D}",       // 🥽
-        "nous" => "\u{1F318}",                             // 🌘
+        "antigravity-cloud" => "\u{2728}",             // ✨
+        "xai" | "grok" => "\u{274C}",                  // ❌
+        "meta" => "\u{267E}\u{FE0F}",                  // ♾️
+        "deepseek" => "\u{1F40B}",                     // 🐋
+        "kimi" => "\u{1F319}",                         // 🌙
+        "ollama" => "\u{1F999}",                       // 🦙
+        "opencode" => "\u{1F7E7}",                     // 🟧
+        "openrouter" => "\u{1F6F0}\u{FE0F}",           // 🛰️
+        "commandcode" => "\u{1F5A5}\u{FE0F}",          // 🖥️
+        "perplexity" => "\u{1F50E}",                   // 🔎
+        "github-copilot" | "copilot" => "\u{1F97D}",   // 🥽
+        "nous" => "\u{1F318}",                         // 🌘
         // Cline's mark is a little agent head; the robot face reads the same
         // at tab-title size.
         "cline" => "\u{1F916}", // 🤖
@@ -131,7 +148,11 @@ mod tests {
 
     #[test]
     fn listed_providers_have_a_logo_and_others_fall_back() {
-        assert!(for_provider("deepseek").is_some());
+        let logo = for_provider("deepseek").unwrap();
+        assert!(
+            logo.png.starts_with(b"\x89PNG\r\n\x1a\n"),
+            "provider mapping must return a PNG"
+        );
         assert!(for_provider("unknown-gateway").is_none());
     }
 

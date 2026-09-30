@@ -5,6 +5,7 @@ description: >-
   Apache Airflow (MSAA; formerly Cloud Composer). Use when figuring out reasons for DAG run or task instance failures. Don't
   use when looking for overall recommendations for Managed Airflow environment performance.
 metadata:
+  version: "1.0.0"
   category: BigDataAndAnalytics
 ---
 

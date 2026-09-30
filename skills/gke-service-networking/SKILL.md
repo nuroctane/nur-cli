@@ -5,9 +5,12 @@ description: >-
   service endpoints. Use when configuring Gateway API manifests, standard
   Ingress, Cloud Armor WAF security policies, Container-Native Load Balancing
   (NEGs), Private Service Connect (PSC), or Google-managed SSL certificates on
-  GKE. Don't use for core cluster IP planning, Dataplane V2 network policies, or
+  GKE, and to troubleshoot Ingress and load-balancer 502/5xx errors, backend
+  health-check failures, connection draining, and TLS/SSL policy enforcement.
+  Don't use for core cluster IP planning, Dataplane V2 network policies, or
   node NAT egress (use gke-networking instead).
 metadata:
+  version: "1.1.0"
   category: Networking
 ---
 
@@ -205,6 +208,81 @@ the same zone as the originating client:
 service.kubernetes.io/topology-mode: auto
 ```
 
+## Troubleshooting
+
+Diagnose Ingress / load-balancer data-plane failures. These map to both Ingress
+(`BackendConfig` / `FrontendConfig`) and Gateway (`GCPBackendPolicy` /
+`HealthCheckPolicy` / `GCPGatewayPolicy`). Stay at the read-only → propose-manifest
+boundary; never apply live mutations directly.
+
+### 502 / 5xx with UNHEALTHY backends (health checks)
+
+The Google Cloud load-balancer health check is **separate** from Kubernetes
+liveness/readiness probes — it runs from outside the cluster, so a Pod can be
+`Ready` while the backend service still shows `UNHEALTHY`.
+
+1.  **Allow the Google health-check source ranges** to the node/Pod serving port.
+    GKE usually creates this rule automatically, but on Shared VPC or with
+    hand-managed firewalls it can be missing:
+
+    ```bash
+    gcloud compute firewall-rules create allow-lb-health-checks \
+      --allow tcp:SERVING_PORT \
+      --source-ranges 130.211.0.0/22,35.191.0.0/16 \
+      --target-tags NODE_TAG
+    ```
+
+2.  **Point the health check at a healthy endpoint.** If the default `/` returns a
+    non-200, set a custom health check with a `BackendConfig` (Ingress) or a
+    `HealthCheckPolicy` (Gateway):
+
+    ```yaml
+    # BackendConfig (Ingress)
+    spec:
+      healthCheck:
+        requestPath: /healthz
+        port: 8080
+        checkIntervalSec: 15
+        timeoutSec: 5
+    ```
+
+3.  Confirm the Service is container-native (NEG) so the check targets Pod IPs
+    rather than nodes (see workflow 5).
+
+### 502 / dropped requests during rollouts or on long requests
+
+-   **Enable connection draining** so in-flight requests finish before a backend
+    Pod is removed during a rolling update or scale-down:
+
+    ```yaml
+    # BackendConfig (Ingress)
+    spec:
+      connectionDraining:
+        drainingTimeoutSec: 60
+    ```
+
+-   **Raise the backend timeout** for slow or streaming responses — a 502/408 on a
+    request that runs longer than the backend response timeout is the classic
+    symptom. Set `timeoutSec` in the `BackendConfig` (Ingress) or `GCPBackendPolicy`
+    (Gateway).
+
+### TLS / SSL handshake failures or weak-cipher enforcement
+
+-   **Ingress:** attach an SSL policy (minimum TLS version / cipher profile) with a
+    `FrontendConfig` `sslPolicy`, and optionally force HTTP→HTTPS with
+    `redirectToHttps`:
+
+    ```yaml
+    # FrontendConfig (external Ingress only)
+    spec:
+      sslPolicy: gke-ingress-ssl-policy
+      redirectToHttps:
+        enabled: true
+    ```
+
+-   **Gateway:** attach the SSL policy name in a `GCPGatewayPolicy`. For a regional
+    Gateway, create and reference a **regional** SSL policy.
+
 ## Gotchas
 
 1.  **Certificate Manager API must be enabled** for the
@@ -218,3 +296,10 @@ service.kubernetes.io/topology-mode: auto
 3.  **ManagedCertificate provisioning depends on DNS**: the certificate stays in
     `Provisioning` until the domain's A/AAAA records point at the load balancer
     IP, and can take 15-60 minutes after DNS is correct.
+
+## References
+
+-   [Ingress features (BackendConfig / FrontendConfig)](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/ingress-configuration.md.txt)
+-   [Container-native load balancing (NEGs)](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/load-balance-ingress.md.txt)
+-   [Configure Gateway resources (GCPGatewayPolicy / HealthCheckPolicy / GCPBackendPolicy)](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/configure-gateway-resources.md.txt)
+-   [Health check concepts](https://docs.cloud.google.com/load-balancing/docs/health-check-concepts.md.txt)

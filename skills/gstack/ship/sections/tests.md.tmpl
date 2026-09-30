@@ -1,0 +1,112 @@
+## Step 4: Test Framework Bootstrap
+
+{{TEST_BOOTSTRAP}}
+
+---
+
+## Step 5: Run tests (on merged code)
+
+Use the project's test commands discovered in Step 4 or documented in CLAUDE.md/AGENTS.md. Run every applicable suite; do not assume Rails or Vitest. The commands below are examples only for repositories that actually provide them. Use the same lane labels and exact commands again in Step 16.
+
+**If no applicable test suite exists:** Name the untested scope. AskUserQuestion:
+A) Add tests (recommended), B) Ship with this named testing
+gap, or C) Stop. Reuse an actual prior B answer only for the same scope and
+content; declining bootstrap alone is not that approval. B continues with the
+gap recorded, not passing tests. Independent build, eval, review and QA gates
+still apply. A declared but unavailable suite is a blocker, not an absent suite.
+A runs Step 4 with this new bootstrap choice, then returns here to run the tests.
+C stops this attempt.
+
+**For Rails projects using `bin/test-lane`, do NOT run `RAILS_ENV=test bin/rails db:migrate`** — `bin/test-lane` already calls
+`db:test:prepare` internally, which loads the schema into the correct lane database.
+Running bare test migrations without INSTANCE hits an orphan DB and corrupts structure.sql.
+
+Run independent test suites in parallel, each wrapped in the evidence ledger. The
+wrapper is transparent (streams output live, exit code passes through) and
+records `{command, exit, working-tree fingerprint, log path}` to
+`~/.gstack/projects/<slug>/<branch>-evidence.jsonl` — Step 16 cites this
+record instead of re-running when the content hasn't changed:
+
+```bash
+~/.claude/skills/gstack/bin/gstack-evidence run --label tests -- 'bin/test-lane 2>&1' &
+~/.claude/skills/gstack/bin/gstack-evidence run --label vitest -- 'npm run test 2>&1' &
+wait
+```
+
+After all suites complete, check the `gstack-evidence: recorded label=... exit=...
+log=...` summary lines — each carries the lane's exit code and a per-run log
+file (no shared /tmp collisions between concurrent ships). Read the log files
+for failure detail.
+
+**If any test fails:** Do NOT immediately stop. Apply the Test Failure Ownership Triage:
+
+{{TEST_FAILURE_TRIAGE}}
+
+**After triage:** If any in-branch failures remain unfixed, **STOP**. Do not proceed. If all failures were pre-existing and handled (fixed, TODOed, assigned, or skipped), continue to Step 6.
+
+**If all pass:** Continue silently — just note the counts briefly.
+
+---
+
+## Step 6: Eval Suites (conditional)
+
+Evals are mandatory when prompt-related files change. Select from the full diff,
+including uncommitted changes, before deciding whether to skip.
+
+**1. Select affected suites using the project's contract.**
+
+**Project-native path:** Read CLAUDE.md/AGENTS.md, package scripts and the eval
+dependency map. Include changed prompts, skill templates, judges and harness
+code. Use the documented selector and pre-merge command. If it reports no
+affected suites, record that result and continue to Step 7. If prompt-related
+files changed but selection or the command is unknown, report the validation
+gap and ask before shipping. A missing Rails-pattern match is not a skip signal
+for another stack.
+
+**Rails example only — when this repository provides `bin/test-lane` and
+`test/evals/*_eval_runner.rb`:**
+
+- Match the diff against the project's documented prompt paths, such as
+  `app/services/*_prompt_builder.rb`, generation/writer/designer services,
+  evaluator/scorer/classifier/analyzer services, voice/writing/prompt/token
+  concerns, chat tools, `config/system_prompts/*.txt` and `test/evals/**/*`.
+- Match changed files to each runner's `PROMPT_SOURCE_FILES`; follow shared
+  judge/support/fixture imports to all affected suites. A runner such as
+  `post_generation_eval_runner.rb` maps to `post_generation_eval_test.rb`.
+- Use the project's full pre-merge tier (`EVAL_JUDGE_TIER=full` for this runner).
+  Do not substitute a cheaper development tier. If selection remains uncertain,
+  include every plausibly affected suite.
+
+**2. Run the selected command and preserve its exit status.**
+
+For the Rails example:
+
+```bash
+set -o pipefail
+EVAL_JUDGE_TIER=full EVAL_VERBOSE=1 bin/test-lane --eval test/evals/<suite>_eval_test.rb 2>&1 | tee /tmp/ship_evals.txt
+```
+
+Use the native command for other stacks. Respect the project's concurrency and
+retry policy. Rails suites sharing a test lane run sequentially; stop on the
+first failure before starting another paid suite.
+
+**Long eval suites (30+ min): launch detached so a turn boundary can't kill them.**
+Use the detached runner and eval lock; set its outer timeout to cover the
+project's declared suite duration and retries. Do not change individual eval
+limits. For a suite whose full bound fits 5400 seconds:
+
+```bash
+~/.claude/skills/gstack/bin/gstack-detach --label ship-evals --lock gstack-evals --timeout 5400 -- <project eval command>
+```
+
+Poll the printed log for `### gstack-detach EXIT=<code> ###`. Silence is not
+success. Retain every configured attempt; skipped or unstarted cases do not
+satisfy coverage.
+
+**3. Check results and save evidence for Step 19.**
+
+- **If any eval fails:** Show failures and available costs, then **STOP**.
+- **If all selected evals pass:** Record actual counts, any reused evidence and
+  its source, and available costs. Continue to Step 7.
+
+---

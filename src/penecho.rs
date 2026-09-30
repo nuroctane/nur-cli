@@ -71,7 +71,6 @@ impl Effort {
             Effort::XHigh => "xhigh",
         }
     }
-
 }
 
 /// Resolve API config like penecho's `resolveApiConfig()` — auto-detect openai vs anthropic
@@ -343,7 +342,7 @@ pub fn ensure_installed() -> Result<String> {
     let node_ok = find_on_path("node").is_some() || find_on_path("node.exe").is_some();
     if !node_ok {
         return Err(NurError::Other(
-            "penecho needs Node.js 20.3+ — install Node, then re-run (nur auto-installs penecho)"
+            "penecho needs Node.js 22.19+ - install Node, then re-run (nur auto-installs penecho)"
                 .into(),
         ));
     }
@@ -422,10 +421,7 @@ pub fn config_is_usable() -> bool {
 /// Secrets are written only to disk — never returned.
 #[derive(Debug, Clone)]
 pub enum AutoConfigMode {
-    Api {
-        model: String,
-        format: String,
-    },
+    Api { model: String, format: String },
     CodexCli,
     ClaudeCli,
     KimiCli,

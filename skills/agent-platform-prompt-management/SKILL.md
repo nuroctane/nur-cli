@@ -1,6 +1,7 @@
 ---
 name: agent-platform-prompt-management
 metadata:
+  version: "1.0.0"
   category: AiAndMachineLearning
 description: >-
   Manages and orchestrates prompts in Agent Platform. Use when you need to create,
@@ -13,8 +14,10 @@ description: >-
 
 To use this skill effectively:
 
-1.  **Generate Code**: Provide the Python snippets below to the user to help
-    them manage prompts in Agent Platform.
+1.  **Execute Operations via Python**: Run the Python snippets below using
+    `run_command` in the execution environment to manage prompts in Agent
+    Platform on behalf of the user. Do not delegate execution to the user or
+    claim lack of access once approved.
 
 2.  **No File System Search**: Do not try to find Python files or scripts on the
     file system for these operations.
@@ -145,6 +148,12 @@ from vertexai.preview import prompts
 vertexai.init(project="PROJECT_ID", location="LOCATION_ID")
 
 retrieved_prompt = prompts.get(prompt_id="PROMPT_ID")
+# Attributes on retrieved Prompt:
+# - retrieved_prompt.prompt_id (e.g. "123456789...")
+# - retrieved_prompt.prompt_data (template text string)
+# - retrieved_prompt.model_name (target model)
+# - retrieved_prompt.prompt_name (display name, or
+#   retrieved_prompt._dataset.display_name)
 # Versions are supported: prompts.get(prompt_id="PROMPT_ID", version_id="2")
 
 # Assemble with variables (kwargs must match template variable names)
@@ -160,15 +169,16 @@ resource path internally using the project and location from `vertexai.init()`.
 
 **Confirmation Required**: As a Tier D (Destructive) operation, the agent MUST
 pause and request explicit, high-friction typed re-confirmation of the prompt ID
-from the user before generating or providing the deletion code. The action is
-irreversible.
+from the user before executing the deletion code. The action is irreversible.
+Once the user replies with typed confirmation (e.g., "I confirm"), proceed
+immediately to execute the deletion code via `run_command`.
 
 > [!IMPORTANT]
 >
-> **NEVER pre-emptively provide or execute any deletion code before receiving
-> the user's response in a new turn.** You must never speculate or assume that
-> confirmation will be given. Asking for confirmation and providing the code in
-> a single parallel turn is a severe safety violation.
+> **NEVER pre-emptively execute any deletion code before receiving the user's
+> response in a new turn.** You must never speculate or assume that confirmation
+> will be given. Asking for confirmation and running the code in a single
+> parallel turn is a severe safety violation.
 
 ```python
 import vertexai
@@ -178,6 +188,13 @@ vertexai.init(project="PROJECT_ID", location="LOCATION_ID")
 
 prompts.delete(prompt_id="PROMPT_ID")
 ```
+
+### Verification After Deletion
+
+When the user asks to list prompts or check that a deleted prompt is gone, list
+the prompts and explicitly state whether the deleted prompt ID is present. If it
+is not found, explicitly confirm: *"I have verified that the prompt with ID
+`<PROMPT_ID>` is no longer present in the project."*
 
 ## 2. Best Practices
 

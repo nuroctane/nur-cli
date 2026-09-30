@@ -4,7 +4,7 @@ description: Vercel Workflow SDK expert guidance. Use when building durable work
 metadata:
   priority: 9
   docs:
-    - "https://vercel.com/docs/workflow"
+    - "https://vercel.com/docs/workflows"
     - "https://workflow-sdk.dev"
   sitemap: "https://vercel.com/sitemap.xml"
   pathPatterns:
@@ -15,15 +15,10 @@ metadata:
     - 'workflow.*'
     - '*workflow*'
   importPatterns:
-    - '@vercel/workflow'
     - 'workflow'
     - '@workflow/*'
     - '*workflow*'
   bashPatterns:
-    - '\bnpm\s+(install|i|add)\s+[^\n]*@vercel/workflow\b'
-    - '\bpnpm\s+(install|i|add)\s+[^\n]*@vercel/workflow\b'
-    - '\bbun\s+(install|i|add)\s+[^\n]*@vercel/workflow\b'
-    - '\byarn\s+add\s+[^\n]*@vercel/workflow\b'
     - '\bnpm\s+(install|i|add)\s+[^\n]*\bworkflow\b'
     - '\bpnpm\s+(install|i|add)\s+[^\n]*\bworkflow\b'
     - '\bbun\s+(install|i|add)\s+[^\n]*\bworkflow\b'
@@ -333,16 +328,6 @@ metadata:
     minScore: 4
 validate:
   -
-    pattern: experimental_createWorkflow
-    message: 'experimental_createWorkflow is now stable — use createWorkflow from @vercel/workflow. Run npx @ai-sdk/codemod v6 for automated migration.'
-    severity: error
-    upgradeToSkill: workflow
-    upgradeWhy: 'Guides migration from experimental_createWorkflow to the stable createWorkflow API and then to the "use workflow" directive.'
-  -
-    pattern: from\s+['"]@vercel/workflow['"]
-    message: 'Workflow SDK requires AI Gateway OIDC setup — ensure vercel link + vercel env pull for VERCEL_OIDC_TOKEN'
-    severity: recommended
-  -
     pattern: setTimeout|setInterval
     message: 'setTimeout/setInterval are not available in workflow sandbox scope — use sleep() from "workflow" for delays'
     severity: error
@@ -363,13 +348,6 @@ validate:
     message: 'getWritable() must only be called inside "use step" functions — workflow sandbox scope does not support it'
     severity: recommended
     skipIfFileContains: "use step"
-  -
-    pattern: createWorkflow\s*\(
-    message: 'createWorkflow() is the legacy API — use the "use workflow" directive on an async function instead'
-    severity: error
-    upgradeToSkill: workflow
-    upgradeWhy: 'Guides migration from createWorkflow() function API to the "use workflow" directive pattern.'
-    skipIfFileContains: experimental_createWorkflow
   -
     pattern: streamObject\s*\(
     message: 'streamObject() was removed in AI SDK v6 — use streamText() with output: Output.object() instead'
@@ -400,7 +378,7 @@ chainTo:
   -
     pattern: 'DurableAgent|@workflow/ai'
     targetSkill: ai-sdk
-    message: 'DurableAgent detected without AI SDK context — loading AI SDK guidance for tool calling, Agent class, and model configuration.'
+    message: 'Workflow 5 (workflow@beta) deprecates DurableAgent (@workflow/ai) in favor of WorkflowAgent from @ai-sdk/workflow 2.x, which requires Workflow 5; the Workflow 4 docs (workflow@latest) use DurableAgent. Loading AI SDK guidance for tool calling, the Agent class, and model configuration.'
     skipIfFileContains: 'from\s+[''"]ai[''"]|@ai-sdk/|streamText|generateText'
   -
     pattern: 'process\.env\.(OPENAI_API_KEY|ANTHROPIC_API_KEY)|from\s+[''"]@ai-sdk/(anthropic|openai)[''""]'
@@ -433,7 +411,7 @@ retrieval:
     - durable
 ---
 
-## *CRITICAL*: Always Use Correct `workflow` Documentation
+## *Critical*: Always use correct `workflow` documentation
 
 Your knowledge of `workflow` is outdated.
 
@@ -453,23 +431,24 @@ Documentation structure in `node_modules/workflow/docs/`:
 - `api-reference/workflow-api/` - Client API (start.mdx, get-run.mdx, resume-hook.mdx, etc.)
 - `api-reference/workflow-runtime/` - Runtime API (get-world.mdx) and `world/` World SDK (storage.mdx, streams.mdx, queue.mdx)
 - `api-reference/workflow-observability/` - Hydration and name parsing utilities (hydrate-resource-io.mdx, parse-workflow-name.mdx, etc.)
-- `ai/` - AI SDK integration docs
+- `ai/`: AI SDK integration docs
 - `errors/` - Error code documentation
 
 Related packages also include bundled docs:
 
-- `@workflow/ai`: `node_modules/@workflow/ai/docs/` - DurableAgent and AI integration
+- `@ai-sdk/workflow`: `node_modules/ai/docs/` - WorkflowAgent and AI SDK integration
+- `@workflow/ai`: `node_modules/@workflow/ai/docs/` - deprecated DurableAgent APIs for existing applications
 - `@workflow/core`: `node_modules/@workflow/core/docs/` - Core runtime (foundations, how-it-works)
 - `@workflow/next`: `node_modules/@workflow/next/docs/` - Next.js integration
 
 **When in doubt, update to the latest version of the Workflow SDK.**
 
-### Official Resources
+### Official resources
 
 - **Website**: https://workflow-sdk.dev
 - **GitHub**: https://github.com/vercel/workflow
 
-### Quick Reference
+### Quick reference
 
 **Directives:**
 
@@ -489,9 +468,6 @@ import { getWorkflowMetadata, getStepMetadata } from "workflow";
 // API operations
 import { start, getRun, resumeHook, resumeWebhook } from "workflow/api";
 
-// Analytics API
-import { getWorld } from "workflow/runtime";
-
 // Observability & data hydration
 import { hydrateResourceIO, observabilityRevivers, parseStepName, parseWorkflowName } from "workflow/observability";
 
@@ -501,11 +477,11 @@ import { workflow } from "workflow/vite";
 import { workflow } from "workflow/astro";
 // Or use modules: ["workflow/nitro"] for Nitro/Nuxt
 
-// AI agent
-import { DurableAgent } from "@workflow/ai/agent";
+// AI agent (Workflow 5)
+import { WorkflowAgent, type ModelCallStreamPart } from "@ai-sdk/workflow";
 ```
 
-## Prefer Step Functions to Avoid Sandbox Errors
+## Prefer step functions to avoid sandbox errors
 
 `"use workflow"` functions run in a sandboxed VM. `"use step"` functions have **full Node.js access**. Put your logic in steps and use the workflow function purely for orchestration.
 
@@ -521,7 +497,7 @@ async function processWithAI(data: any) {
   "use step";
   // AI SDK works in steps without workarounds
   return await generateText({
-    model: openai("gpt-4"),
+    model: "spacexai/grok-4.6",
     prompt: `Process: ${JSON.stringify(data)}`,
   });
 }
@@ -537,7 +513,7 @@ export async function dataProcessingWorkflow(userId: string) {
 
 **Benefits:** Steps have automatic retry, results are persisted for replay, and no sandbox restrictions.
 
-## Workflow Sandbox Limitations
+## Workflow sandbox limitations
 
 When you need logic directly in a workflow function (not in a step), these restrictions apply:
 
@@ -559,17 +535,17 @@ export async function myWorkflow() {
 }
 ```
 
-**Note:** `DurableAgent` from `@workflow/ai` handles the fetch assignment automatically.
+**Note:** Plain `"provider/model"` strings use Vercel AI Gateway. Do not construct a direct provider instance unless the user explicitly needs a provider-only feature.
 
-## DurableAgent — AI Agents in Workflows
+## WorkflowAgent: AI agents in Workflow 5
 
-Use `DurableAgent` to build AI agents that maintain state and survive interruptions. It handles the workflow sandbox automatically (no manual `globalThis.fetch` needed).
+Use AI SDK's `WorkflowAgent` for durable agents on Workflow 5. It replaces the deprecated `DurableAgent` API from `@workflow/ai` and checkpoints model calls and step-backed tools.
 
 ```typescript
-import { DurableAgent } from "@workflow/ai/agent";
+import { WorkflowAgent, type ModelCallStreamPart } from "@ai-sdk/workflow";
+import { isStepCount, tool } from "ai";
 import { getWritable } from "workflow";
 import { z } from "zod";
-import type { UIMessageChunk } from "ai";
 
 async function lookupData({ query }: { query: string }) {
   "use step";
@@ -580,22 +556,22 @@ async function lookupData({ query }: { query: string }) {
 export async function myAgentWorkflow(userMessage: string) {
   "use workflow";
 
-  const agent = new DurableAgent({
-    model: "anthropic/claude-sonnet-4-5",
-    system: "You are a helpful assistant.",
+  const agent = new WorkflowAgent({
+    model: "spacexai/grok-4.6",
+    instructions: "You are a helpful assistant.",
     tools: {
-      lookupData: {
+      lookupData: tool({
         description: "Search for information",
         inputSchema: z.object({ query: z.string() }),
         execute: lookupData,
-      },
+      }),
     },
   });
 
   const result = await agent.stream({
     messages: [{ role: "user", content: userMessage }],
-    writable: getWritable<UIMessageChunk>(),
-    maxSteps: 10,
+    writable: getWritable<ModelCallStreamPart>(),
+    stopWhen: isStepCount(10),
   });
 
   return result.messages;
@@ -603,22 +579,23 @@ export async function myAgentWorkflow(userMessage: string) {
 ```
 
 **Key points:**
-- `getWritable<UIMessageChunk>()` streams output to the workflow run's default stream
+- A plain `"provider/model"` string routes through Vercel AI Gateway; `spacexai/grok-4.6` is the default model in Workflow examples
+- `getWritable<ModelCallStreamPart>()` streams durable model-call output; convert it with `createModelCallToUIChunkTransform()` in an HTTP route
 - Tool `execute` functions that need Node.js/npm access should use `"use step"`
-- Tool `execute` functions that use workflow primitives (`sleep()`, `createHook()`) should **NOT** use `"use step"` — they run at the workflow level
-- `maxSteps` limits the number of LLM calls (default is unlimited)
+- Tool `execute` functions that use workflow primitives (`sleep()`, `createHook()`) should **NOT** use `"use step"` because they run at the workflow level
+- `stopWhen` limits the number of model calls; the default is to stop when the model stops calling tools
 - Multi-turn: pass `result.messages` plus new user messages to subsequent `agent.stream()` calls
 
-**For more details on `DurableAgent`, check the AI docs in `node_modules/@workflow/ai/docs/`.**
+**For more details, check the WorkflowAgent docs in the installed AI SDK package or at https://ai-sdk.dev/v7/docs/agents/workflow-agent.**
 
-## Starting Workflows & Child Workflows
+## Starting workflows & child workflows
 
-Use `start()` to launch workflows from API routes. **`start()` cannot be called directly in workflow context** — wrap it in a step function.
+Use `start()` to launch workflows from API routes. In Workflow 5, `start()` can also be called directly from a workflow function to spawn a child run; it is step-backed and records a deterministic boundary in the parent's event log.
 
 ```typescript
 import { start } from "workflow/api";
 
-// From an API route — works directly
+// From an API route; works directly
 export async function POST() {
   const run = await start(myWorkflow, [arg1, arg2]);
   return Response.json({ runId: run.runId });
@@ -628,30 +605,24 @@ export async function POST() {
 const run = await start(noArgWorkflow);
 ```
 
-**Starting child workflows from inside a workflow — must use a step:**
+**Starting child workflows from inside a Workflow 5 workflow:**
 
 ```typescript
 import { start } from "workflow/api";
 
-// Wrap start() in a step function
-async function triggerChild(data: string) {
-  "use step";
-  const run = await start(childWorkflow, [data]);
-  return run.runId;
-}
-
 export async function parentWorkflow() {
   "use workflow";
-  const childRunId = await triggerChild("some data");  // Fire-and-forget via step
+  const childRun = await start(childWorkflow, ["some data"]);
   await sleep("1h");
+  return { childRunId: childRun.runId };
 }
 ```
 
-`start()` returns immediately — it doesn't wait for the workflow to complete. Use `run.returnValue` to await completion.
+`start()` returns after creating the child run and doesn't wait for it to complete. Use `childRun.returnValue` only when the parent should wait for the child; each `Run` property access or method call inside a workflow is a step.
 
-## Hooks — Pause & Resume with External Events
+## Hooks: pause & resume with external events
 
-Hooks let workflows wait for external data. Use `createHook()` inside a workflow and `resumeHook()` from API routes. Deterministic tokens are for `createHook()` + `resumeHook()` (server-side) only. `createWebhook()` always generates random tokens — do not pass a `token` option to `createWebhook()`.
+Hooks let workflows wait for external data. Use `createHook()` inside a workflow and `resumeHook()` from API routes. Deterministic tokens are for `createHook()` + `resumeHook()` (server-side) only. `createWebhook()` always generates random tokens, so do not pass a `token` option to `createWebhook()`.
 
 ### Single event
 
@@ -672,7 +643,7 @@ export async function approvalWorkflow() {
 
 ### Multiple events (iterable hooks)
 
-Hooks implement `AsyncIterable` — use `for await...of` to receive multiple events:
+Hooks implement `AsyncIterable`. Use `for await...of` to receive multiple events:
 
 ```typescript
 import { createHook } from "workflow";
@@ -705,18 +676,18 @@ export async function POST(req: Request) {
 }
 ```
 
-## Error Handling
+## Error handling
 
 Use `FatalError` for permanent failures (no retry), `RetryableError` for transient failures:
 
 ```typescript
 import { FatalError, RetryableError } from "workflow";
 
-if (res.status >= 400 && res.status < 500) {
-  throw new FatalError(`Client error: ${res.status}`);
-}
 if (res.status === 429) {
   throw new RetryableError("Rate limited", { retryAfter: "5m" });
+}
+if (res.status >= 400 && res.status < 500) {
+  throw new FatalError(`Client error: ${res.status}`);
 }
 ```
 
@@ -728,7 +699,7 @@ All data passed to/from workflows and steps must be serializable.
 
 **Not supported:** Functions, Symbols, WeakMap/WeakSet. Pass data, not callbacks.
 
-### Custom Class Serialization
+### Custom class serialization
 
 Class instances **can** be serialized across workflow/step boundaries by implementing the `@workflow/serde` protocol. This is essential when a class has instance methods with `"use step"` or when you want to pass class instances between steps.
 
@@ -776,7 +747,7 @@ export class Point {
 
 **When to avoid serde:** If a class is fundamentally inseparable from Node.js APIs (every method needs `fs`, `net`, etc.) and cannot meaningfully exist as a shell in the workflow sandbox, keep it entirely in step functions and pass plain data objects across boundaries instead.
 
-### Validating Serde Compliance
+### Validating serde compliance
 
 Use these tools to verify classes are correctly set up:
 
@@ -825,7 +796,7 @@ async function streamData(chunk: string) {
 }
 ```
 
-### Namespaced Streams
+### Namespaced streams
 
 Use `getWritable({ namespace: 'name' })` to create multiple independent streams for different types of data. This is useful for separating logs from primary output, different log levels, agent outputs, metrics, or any distinct data channels. Long-running workflows benefit from namespaced streams because you can replay only the important events (e.g., final results) while keeping verbose logs in a separate stream.
 
@@ -868,7 +839,7 @@ async function emitAgentThought(thought: string) {
 
 async function emitAgentResult(result: string) {
   "use step";
-  // Important results go to the default stream for easy replay
+  // Important results go to the default stream for replay
   const writer = getWritable<AgentOutput>().getWriter();
   try {
     await writer.write({ type: "result", content: result });
@@ -923,7 +894,7 @@ export async function GET(request: Request) {
 }
 ```
 
-**Pro tip:** For very long-running sessions (50+ minutes), namespaced streams help manage replay performance. Put verbose/debug output in separate namespaces so you can replay just the important events quickly.
+For long-running sessions (50+ minutes), namespaced streams help manage replay performance. Put verbose/debug output in separate namespaces so you can replay only the important events.
 
 ## Debugging
 
@@ -956,17 +927,17 @@ npx workflow cancel <run_id> --backend vercel --project <project-name> --team <t
 
 ### Deep-linking to a run (share a URL, no browser)
 
-Use `--url` to **print** the dashboard deep link and exit — no browser opens and
+Use `--url` to **print** the dashboard deep link and exit. No browser opens, and
 no local server starts. This is the right tool when you need to hand a user a
 clickable link (PR comment, Slack message, debugging summary) rather than open a
 UI. (`--web` opens the dashboard; `--url` only prints the link.)
 
 ```bash
-# Vercel run — prints the Vercel dashboard URL for the run
+# Vercel run: prints the Vercel dashboard URL for the run
 npx workflow inspect run <run_id> --backend vercel --project <project> --team <team> --url
 npx workflow web <run_id> --backend vercel --project <project> --team <team> --env preview --url
 
-# Local run — prints the local web UI deep link
+# Local run: prints the local web UI deep link
 npx workflow inspect run <run_id> --url
 
 # Machine-readable: --url --json prints { "url": "..." } to stdout
@@ -981,20 +952,20 @@ URL formats produced:
 - **Local:** `http://localhost:<port>?resource=run&id=<run_id>` (port defaults
   to `3456`; the link works while the `npx workflow web` server is running).
 
-stdout contains **only** the URL (or the JSON object) — all other output goes to
-stderr — so you can capture it directly, e.g. `URL=$(npx workflow web <run_id> --backend vercel --url)`.
+stdout contains **only** the URL (or the JSON object). All other output goes to
+stderr, so you can capture it directly, for example, `URL=$(npx workflow web <run_id> --backend vercel --url)`.
 
 **Debugging tips:**
 - Use `--json` (`-j`) on any command for machine-readable output
-- Use `--web` to open the Vercel Observability dashboard in your browser, or `--url` to just print the deep link
+- Use `--web` to open the Vercel Observability dashboard in your browser or `--url` to print the deep link
 - Use `--help` on any command for full usage details
 - Only import workflow APIs you actually use. Unused imports can cause 500 errors.
 
-## Testing Workflows
+## Testing workflows
 
-Workflow SDK provides a Vitest plugin for testing workflows in-process — no running server required.
+Workflow SDK provides a Vitest plugin for testing workflows in-process without a running server.
 
-**Unit testing steps:** Steps are just functions; without the compiler, `"use step"` is a no-op. Test them directly:
+**Unit testing steps:** Steps are functions; without the compiler, `"use step"` is a no-op. Test them directly:
 
 ```typescript
 import { describe, it, expect } from "vitest";
@@ -1008,7 +979,7 @@ describe("createUser step", () => {
 });
 ```
 
-**Integration testing:** Use `@workflow/vitest` for workflows using `sleep()`, hooks, webhooks, or retries:
+**Integration testing:** Use `@workflow/vitest` for workflows using `sleep()`, hooks, webhooks, or retries. Install it on the same npm dist-tag as `workflow`: `npm i -D @workflow/vitest@beta` for Workflow 5, because `@workflow/vitest@latest` is still the 4.x line. The plugin fails the run when its `@workflow/core` major differs from the app's.
 
 ```typescript
 // vitest.integration.config.ts
@@ -1049,7 +1020,7 @@ describe("approvalWorkflow", () => {
 });
 ```
 
-**Testing webhooks:** Use `resumeWebhook()` with a `Request` object — no HTTP server needed:
+**Testing webhooks:** Use `resumeWebhook()` with a `Request` object. No HTTP server is needed:
 
 ```typescript
 import { start, resumeWebhook } from "workflow/api";
@@ -1064,17 +1035,19 @@ await resumeWebhook(hook.token, new Request("https://example.com/webhook", {
 ```
 
 **Key APIs:**
-- `start()` — trigger a workflow
-- `run.returnValue` — await workflow completion
-- `waitForHook(run, { token? })` / `waitForSleep(run)` — wait for workflow to reach a pause point
-- `resumeHook(token, data)` / `resumeWebhook(token, request)` — resume paused workflows
-- `getRun(runId).wakeUp({ correlationIds })` — skip `sleep()` calls
+- `start()`: Trigger a workflow
+- `run.returnValue`: Await workflow completion
+- `waitForHook(run, { token? })` / `waitForSleep(run)`: Wait for workflow to reach a pause point
+- `resumeHook(token, data)` / `resumeWebhook(token, request)`: Resume paused workflows
+- `getRun(runId).wakeUp({ correlationIds })`: Skip `sleep()` calls
+- `getWorkflowRef(name)` / `listWorkflowRefs()`: Look a workflow up in the test build's manifest when the test cannot import the function (never hand-write `workflow//...` ids)
 
 **Best practices:**
 - Keep unit tests (no plugin) and integration tests (`workflow()` plugin) in separate configs
+- Install `@workflow/vitest` on the same dist-tag as `workflow` and upgrade them together
 - Use deterministic hook tokens based on test data for easier resumption
-- Set generous `testTimeout` — workflows may run longer than typical unit tests
-- `vi.mock()` does **not** work in integration tests — step dependencies are bundled by esbuild
+- Set generous `testTimeout` values because workflows may run longer than typical unit tests
+- `vi.mock()` never reaches workflow bodies (they run in a VM), and reaches step code only when the generated bundles load through Vitest's module runner; project-local modules are bundled into the step bundle, so mock the npm leaf, inject the dependency, or unit test the step
 
 ## Observability & World SDK
 
@@ -1087,12 +1060,12 @@ import { hydrateResourceIO, observabilityRevivers, parseStepName, parseWorkflowN
 ```
 
 **Key docs** (grep `node_modules/workflow/docs/` for full details):
-- `api-reference/workflow-runtime/world/storage.mdx` — events, runs, steps, hooks (events are source of truth; others are materialized views)
-- `api-reference/workflow-observability/` — hydration and name parsing
+- `api-reference/workflow-runtime/world/storage.mdx`: Events, runs, steps, and hooks (events are the source of truth; others are materialized views)
+- `api-reference/workflow-observability/`: Hydration and name parsing
 
-### World SDK Method Signatures
+### World SDK method signatures
 
-⚠️ Pagination is nested: `{ pagination: { cursor } }` — NOT `{ cursor }` directly.
+⚠️ Pagination is nested: `{ pagination: { cursor } }`, NOT `{ cursor }` directly.
 
 ```typescript
 const world = await getWorld();
@@ -1103,7 +1076,7 @@ const run = await world.runs.get(runId, { resolveData: 'all' | 'none' });
 // Cancel via event creation (no cancel() method on runs)
 await world.events.create(runId, { eventType: 'run_cancelled' });
 
-// Steps — runId is top-level, NOT inside pagination
+// Steps: runId is top-level, NOT inside pagination
 const { data, cursor } = await world.steps.list({ runId, pagination: { cursor }, resolveData: 'all' | 'none' });
 const step = await world.steps.get(runId, stepId, { resolveData: 'all' | 'none' });
 
@@ -1124,37 +1097,37 @@ const streamNames = await world.streams.list(runId);
 const chunks = await world.streams.getChunks(runId, name, { limit, cursor });
 const info = await world.streams.getInfo(runId, name);
 
-// Queue (methods live directly on world — internal SDK infrastructure)
+// Queue (methods live directly on world as internal SDK infrastructure)
 await world.queue(queueName, payload, opts);
 const deploymentId = await world.getDeploymentId();
 ```
 
-### `resolveData` Parameter
+### `resolveData` parameter
 
 Controls whether input/output data is **included** in the response. Accepts `'all'` (default) or `'none'`.
 
 **IMPORTANT**: Even with `'all'`, data is still devalue-serialized. You MUST call `hydrateResourceIO()` to get usable JS values.
 
 - **Use `'none'`** for status polling, progress dashboards, run listings
-- **Use `'all'`** (or omit) when you need to inspect actual step I/O data — then **always hydrate**
+- **Use `'all'`** (or omit) when you need to inspect actual step I/O data, then **always hydrate**
 
 ```typescript
-// Lightweight status check — no I/O loaded
+// Lightweight status check with no I/O loaded
 const run = await world.runs.get(runId, { resolveData: 'none' });
 console.log(run.status); // 'running' | 'completed' | 'failed' | 'cancelled'
 
-// Full inspection — resolveData includes data, hydrateResourceIO deserializes it
+// Full inspection: resolveData includes data, hydrateResourceIO deserializes it
 const step = await world.steps.get(runId, stepId); // defaults to 'all'
 const hydrated = hydrateResourceIO(step, observabilityRevivers);
 ```
 
 > **Common mistake**: Checking `step.input !== undefined` after `resolveData: 'all'` and assuming
-> the data is ready to use. The data exists but is serialized — always hydrate first.
+> the data is ready to use. The data exists but is serialized, so always hydrate first.
 
-### Data Hydration (Devalue Format)
+### Data hydration (devalue format)
 
-Step I/O is serialized via [devalue](https://github.com/Rich-Harris/devalue) with a 4-byte format prefix (`devl`). Without hydration, `input`/`output` are Uint8Array-like objects with numeric keys:
-`{"0":100,"1":101,"2":118,"3":108,...}` — these are NOT usable values.
+Step I/O is serialized via [devalue](https://github.com/sveltejs/devalue) with a 4-byte format prefix (`devl`). Without hydration, `input`/`output` are Uint8Array-like objects with numeric keys:
+`{"0":100,"1":101,"2":118,"3":108,...}` contains values that are NOT usable without hydration.
 
 **Always hydrate before using I/O data:**
 
@@ -1169,7 +1142,7 @@ const hydrated = steps.map(s => hydrateResourceIO(s, observabilityRevivers));
 
 `hydrateResourceIO` works on both `Step` and `WorkflowRun` objects. For encrypted workflows, use `getEncryptionKeyForRun()` + `hydrateResourceIOWithKey()`.
 
-### Name Parsing
+### Name parsing
 
 `parseWorkflowName()`, `parseStepName()`, and `parseClassName()` return `{ shortName: string, moduleSpecifier: string } | null`. Always use optional chaining:
 
@@ -1180,7 +1153,7 @@ const parsed = parseWorkflowName("workflow//./src/workflows/order//processOrder"
 // ⚠️ Returns null if format doesn't match
 ```
 
-### Event Types
+### Event types
 
 Events are the append-only source of truth. Runs/Steps/Hooks are materialized views.
 
@@ -1191,7 +1164,7 @@ Events are the append-only source of truth. Runs/Steps/Hooks are materialized vi
 | Hook | `hook_created`, `hook_received`, `hook_disposed`, `hook_conflict` |
 | Wait | `wait_created`, `wait_completed` |
 
-## Error Handling Patterns
+## Error handling patterns
 
 Three error strategies for different failure modes:
 
@@ -1204,10 +1177,10 @@ Three error strategies for different failure modes:
 ```typescript
 import { FatalError, RetryableError } from "workflow";
 
-// Permanent failure — workflow terminates
+// Permanent failure, so the workflow terminates
 throw new FatalError("Invalid input: missing required field");
 
-// Transient failure — will retry
+// Transient failure, so it will retry
 throw new RetryableError("API rate limited", { retryAfter: "5m" });
 
 // Mixed criticality parallel execution

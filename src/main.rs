@@ -30,6 +30,8 @@ mod providers;
 mod startup;
 mod t3code;
 mod terminal_browser;
+#[cfg(test)]
+mod test_alloc;
 mod theme;
 mod tools;
 mod tui;
@@ -196,6 +198,11 @@ async fn real_main() -> Result<()> {
                 }
                 cli::EcosystemCmd::Status => {
                     print!("{}", ecosystem::quick_status());
+                }
+                cli::EcosystemCmd::RefreshSkills => {
+                    let count = agent::skill_cache::refresh_global()
+                        .map_err(|error| error::NurError::Other(format!("skill metadata refresh failed: {error}")))?;
+                    theme::print_ok(&format!("refreshed {count} global skills"));
                 }
             }
             return Ok(());
@@ -1249,6 +1256,7 @@ async fn run_headless(
                 options,
                 multi_select,
                 respond,
+                ..
             } => {
                 let answer = tokio::task::spawn_blocking(move || {
                     eprintln!();

@@ -1,6 +1,7 @@
 ---
 name: google-cloud-scc-query
 metadata:
+  version: "1.0.0"
   category: Security
 description: >-
   Queries and retrieves active security findings, external exposures, toxic

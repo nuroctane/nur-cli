@@ -68,12 +68,12 @@ chainsaw lint -r ./rules --kind sigma
 ## Install
 
 ```bash
-git clone https://github.com/WithSecureLabs/chainsaw.git
+git clone https://github.com/WithSecureOpenSource/chainsaw.git
 cd chainsaw && cargo build --release
 # or: nix profile install github:WithSecureLabs/chainsaw
 ```
 
 ## External References
 
-- Chainsaw: https://github.com/WithSecureLabs/chainsaw
+- Chainsaw: https://github.com/WithSecureOpenSource/chainsaw
 - Sigma: https://github.com/SigmaHQ/sigma

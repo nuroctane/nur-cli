@@ -1,6 +1,7 @@
 ---
 name: google-cloud-slo-alert-configuration
 metadata:
+  version: "1.0.0"
   category: CloudObservabilityAndMonitoring
 description: >-
   Configures PromQL-based Service Level Objective (SLO) alerting policies for Google Cloud

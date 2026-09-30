@@ -15,10 +15,10 @@
 ## Official Resources
 
 - BloodHound CE: https://github.com/SpecterOps/BloodHound
-- SharpHound: https://github.com/BloodHoundAD/SharpHound
+- SharpHound: https://github.com/SpecterOps/SharpHound
 - BloodHound.py: https://github.com/dirkjanm/BloodHound.py
 - BloodHound Query Library: https://queries.specterops.io/
-- AzureHound: https://github.com/BloodHoundAD/AzureHound
+- AzureHound: https://github.com/SpecterOps/AzureHound
 
 ## Key Research
 

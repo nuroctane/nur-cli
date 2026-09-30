@@ -15,6 +15,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 
+static CACHE_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub fn cache_revision() -> u64 {
+    CACHE_REVISION.load(std::sync::atomic::Ordering::Relaxed)
+}
 static WARM_QUEUE: OnceLock<Mutex<VecDeque<String>>> = OnceLock::new();
 static WARM_WORKER: OnceLock<()> = OnceLock::new();
 
@@ -55,6 +59,7 @@ pub fn warm_render_async(md: String) {
             match next {
                 Some(md) => {
                     let _ = annotate_inner(&md, true);
+                    CACHE_REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
                 None => std::thread::sleep(std::time::Duration::from_millis(50)),
             }

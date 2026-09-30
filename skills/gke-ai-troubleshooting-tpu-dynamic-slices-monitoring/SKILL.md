@@ -3,6 +3,7 @@ name: gke-ai-troubleshooting-tpu-dynamic-slices-monitoring
 description: >-
   Monitors, troubleshoots, and manages GKE TPU Dynamic Slices custom resources. Use when checking TPU slice lifecycle states, troubleshooting slice provisioning failures, validating single-slice or multi-slice (JobSet) workload manifests, or safely patching stuck finalizers and disabling the slice controller. Don't use for generic GKE cluster node pool creation or standard non-TPU workload management (use gke-basics or gke-cluster-creation instead).
 metadata:
+  version: "1.0.0"
   category: Containers
 ---
 

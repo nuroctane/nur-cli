@@ -6,6 +6,7 @@ description: >-
   up GKE job queues. Don't use for standard web application deployments (use
   gke-app-onboarding instead).
 metadata:
+  version: "1.0.0"
   category: Containers
 ---
 

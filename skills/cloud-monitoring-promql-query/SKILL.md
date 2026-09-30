@@ -1,6 +1,7 @@
 ---
 name: cloud-monitoring-promql-query
 metadata:
+  version: "1.0.0"
   category: CloudObservabilityAndMonitoring
 description: >-
   Generates valid PromQL queries from Cloud Monitoring metric descriptors and

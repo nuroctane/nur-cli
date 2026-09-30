@@ -1,13 +1,13 @@
 ---
 name: alloydb-basics
 metadata:
+  version: "1.0.0"
   category: Databases
 description: >-
   Manages clusters, instances, and backups for AlloyDB for PostgreSQL, and
   integrates with AlloyDB Model Context Protocol (MCP) tools for automated database operations.
   Use when creating, configuring, or administering AlloyDB databases.
   Do NOT use for general PostgreSQL instances (e.g. Cloud SQL) or other GCP databases.
-
 ---
 
 # AlloyDB Basics

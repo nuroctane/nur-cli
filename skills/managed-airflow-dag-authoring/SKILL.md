@@ -7,6 +7,7 @@ description: >-
   validation processes. Use when creating or extending an Airflow DAG. Don't
   use when authoring Python code unrelated to Airflow DAGs.
 metadata:
+  version: "1.0.0"
   category: BigDataAndAnalytics
 ---
 

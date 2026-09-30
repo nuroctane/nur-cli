@@ -312,15 +312,21 @@ pub const COMMANDS: &[(&str, &str)] = &[
 
 #[derive(Clone)]
 pub struct QueuedPrompt {
+    pub id: uuid::Uuid,
+    pub session_id: String,
+    pub cwd: PathBuf,
     pub text: String,
     pub images: Vec<(String, String)>,
     /// Startup defers the original slash/memory dispatch as well as prompts.
     pub raw_submission: bool,
     pub wait_for_skills: bool,
 }
-impl From<String> for QueuedPrompt {
-    fn from(text: String) -> Self {
+impl QueuedPrompt {
+    fn new(text: String, session_id: &str, cwd: &std::path::Path) -> Self {
         Self {
+            id: uuid::Uuid::new_v4(),
+            session_id: session_id.into(),
+            cwd: cwd.into(),
             text,
             images: Vec::new(),
             raw_submission: false,
@@ -334,19 +340,10 @@ fn queued_position(
     queue: &VecDeque<QueuedPrompt>,
     cell_idx: usize,
 ) -> Option<usize> {
-    let Cell::Queued { text } = cells.get(cell_idx)? else {
+    let Cell::Queued { id, .. } = cells.get(cell_idx)? else {
         return None;
     };
-    let occurrence = cells[..cell_idx]
-        .iter()
-        .filter(|cell| matches!(cell, Cell::Queued { text: other } if other == text))
-        .count();
-    queue
-        .iter()
-        .enumerate()
-        .filter(|(_, prompt)| &prompt.text == text)
-        .nth(occurrence)
-        .map(|(index, _)| index)
+    queue.iter().position(|prompt| prompt.id == *id)
 }
 
 pub enum Cell {
@@ -400,6 +397,7 @@ pub enum Cell {
     /// **steer** (inject mid-turn, no cancel) / **cut in** (cancel turn) /
     /// **dismiss**. Leaving the card alone runs the message after the turn ends.
     Queued {
+        id: uuid::Uuid,
         text: String,
     },
     /// Inline execution-graph card (`/graph`). A live tree of the current turn's
@@ -2128,10 +2126,17 @@ pub struct App {
     /// Plain text of every wrapped transcript line (for copy). Rebuilt each draw.
     pub plain_lines: Vec<String>,
     /// Per-cell wrap cache - avoids re-wrapping the whole transcript every frame.
+    pub transcript_revision: u64,
+    pub wrap_cache_revision: u64,
     pub wrap_cache_width: u16,
     pub wrap_cache_palette: Option<(crate::theme::Palette, bool)>,
     pub wrap_cache_keys: Vec<u64>,
     pub wrap_cache_parts: Vec<Vec<ratatui::text::Line<'static>>>,
+    pub wrap_cache_links: Vec<Vec<Vec<super::wrap::LinkSpan>>>,
+    pub prose_cache_keys: Vec<u64>,
+    pub prose_cache_parts: Vec<Vec<ratatui::text::Line<'static>>>,
+    #[cfg(feature = "image-peek")]
+    pub wrap_cache_latex: u64,
     pub link_cache: super::links::LinkCache,
     /// Per wrapped transcript line: `Some(cell_idx)` when that line is a
     /// collapsible card header (click to expand/collapse).
@@ -2493,126 +2498,83 @@ fn disable_mouse() {
     let _ = stdout().execute(DisableMouseCapture);
 }
 
-#[allow(clippy::too_many_arguments)] // Top-level runtime boundary assembled once by main.
-pub async fn run_tui(
+#[cfg(feature = "image-peek")]
+pub(super) fn prepare_image_picker(cfg: &Config) -> ratatui_image::picker::Picker {
+    let instant_picker = || {
+        let mut picker = ratatui_image::picker::Picker::halfblocks();
+        let program = std::env::var("TERM_PROGRAM").unwrap_or_default();
+        let iterm = [
+            "iTerm",
+            "WezTerm",
+            "mintty",
+            "vscode",
+            "Tabby",
+            "Hyper",
+            "rio",
+            "Bobcat",
+            "WarpTerminal",
+        ]
+        .iter()
+        .any(|hint| program.contains(hint))
+            || std::env::var("LC_TERMINAL").is_ok_and(|s| s.contains("iTerm"))
+            || (picker.tmux_detected()
+                && ["ITERM_SESSION_ID", "WEZTERM_EXECUTABLE"]
+                    .iter()
+                    .any(|name| std::env::var(name).is_ok_and(|s| !s.is_empty())));
+        if iterm {
+            picker.set_protocol_type(ratatui_image::picker::ProtocolType::Iterm2);
+        }
+        picker
+    };
+    let mut picker = if std::env::var("NUR_IMAGE_QUERY")
+        .map(|v| !v.is_empty() && v != "0")
+        .unwrap_or(false)
+    {
+        ratatui_image::picker::Picker::from_query_stdio().unwrap_or_else(|_| instant_picker())
+    } else {
+        instant_picker()
+    };
+    let forced = std::env::var("NUR_IMAGE_PROTOCOL")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| Some(cfg.theme_setup.protocol.clone()).filter(|p| p != "auto"));
+    match forced.map(|p| p.to_ascii_lowercase()) {
+        Some(ref p) if p == "kitty" => {
+            picker.set_protocol_type(ratatui_image::picker::ProtocolType::Kitty)
+        }
+        Some(ref p) if p == "sixel" => {
+            picker.set_protocol_type(ratatui_image::picker::ProtocolType::Sixel)
+        }
+        Some(ref p) if p == "iterm2" => {
+            picker.set_protocol_type(ratatui_image::picker::ProtocolType::Iterm2)
+        }
+        Some(ref p) if p == "halfblocks" => {
+            picker.set_protocol_type(ratatui_image::picker::ProtocolType::Halfblocks)
+        }
+        _ => {}
+    }
+    picker
+}
+
+/// Construct the same state for the terminal and isolated draw benchmarks.
+pub(super) fn new_app(
     client: ApiClient,
     cfg: Config,
     cwd: PathBuf,
     permission_mode: SharedMode,
     session: Session,
     usage: UsageTracker,
-    initial_prompt: Option<String>,
-    _ecosystem_summary: String,
-    workspace_note: Option<String>,
-) -> Result<()> {
-    if !theme::set_theme(cfg.theme.as_deref().unwrap_or("gold")) {
-        let _ = theme::set_theme("gold");
-    }
-    // Fail clearly if stdin isn't a real console (redirects / dead pipes).
-    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-        return Err(crate::error::NurError::Other(
-            "nur needs an interactive terminal (stdin is not a TTY).\n\
-             Run `nur` from a normal shell window, not a redirected pipe."
-                .into(),
-        ));
-    }
-    enable_raw_mode().map_err(|e| {
-        crate::error::NurError::Other(format!(
-            "cannot enter raw mode (TUI): {e}\n\
-             Try a different terminal, or close other full-screen console apps."
-        ))
-    })?;
-    stdout()
-        .execute(EnterAlternateScreen)
-        .map_err(|e| crate::error::NurError::Other(format!("alternate screen: {e}")))?;
-    stdout().execute(EnableBracketedPaste)?;
-    // Focus events: when the user releases the mouse *outside* the terminal,
-    // we never see MouseUp - FocusLost clears stuck drag/select state.
-    let _ = stdout().execute(EnableFocusChange);
-    enable_mouse();
-    // Hardware cursor hidden - we paint a Nur-gold block caret ourselves.
-    stdout().execute(Hide)?;
-    let _guard = TermGuard;
-    // Suppress panic-hook stderr while the alternate screen is up. A panicking
-    // blocking tool task (already caught as a JoinError in the agent loop) still
-    // triggers the default hook, which writes the panic + backtrace to stderr -
-    // bleeding raw text over the input box and transcript. Route those messages
-    // to a log file instead so the TUI is never corrupted; real crashes still
-    // unwind and TermGuard restores the terminal.
-    install_tui_panic_hook();
-    let backend = CrosstermBackend::new(stdout());
-    let mut terminal = Terminal::new(backend)
-        .map_err(|e| crate::error::NurError::Other(format!("terminal init: {e}")))?;
-
-    // Fast image picker: from_query_stdio blocks 1s on Windows cmd/conhost
-    // and many Unix terms (bench 1000ms vs 0.008ms for from_fontsize).
-    // Use instant path by default; opt-in probing via NUR_IMAGE_QUERY=1.
-    //
-    // v0.28: the instant fallback used to hardcode halfblocks (text glyphs),
-    // which meant kitty/wezterm/iterm users never got real pixels without
-    // opting into the 1s probe. Now env-based detection runs always (free),
-    // and NUR_IMAGE_QUERY additionally enables the full stdio capability probe.
-    // `[theme] protocol` in config.toml forces a specific protocol.
+    seed_prompt: Option<String>,
+) -> App {
     #[cfg(feature = "image-peek")]
-    let img_picker = Some({
-        let mut picker = if std::env::var("NUR_IMAGE_QUERY")
-            .map(|v| !v.is_empty() && v != "0")
-            .unwrap_or(false)
-        {
-            ratatui_image::picker::Picker::from_query_stdio()
-                .unwrap_or_else(|_| ratatui_image::picker::Picker::from_fontsize((9, 18)))
-        } else {
-            ratatui_image::picker::Picker::from_fontsize((9, 18))
-        };
-        let forced = std::env::var("NUR_IMAGE_PROTOCOL")
-            .ok()
-            .filter(|v| !v.trim().is_empty())
-            .or_else(|| Some(cfg.theme_setup.protocol.clone()).filter(|p| p != "auto"));
-        match forced.map(|p| p.to_ascii_lowercase()) {
-            Some(ref p) if p == "kitty" => {
-                picker.set_protocol_type(ratatui_image::picker::ProtocolType::Kitty)
-            }
-            Some(ref p) if p == "sixel" => {
-                picker.set_protocol_type(ratatui_image::picker::ProtocolType::Sixel)
-            }
-            Some(ref p) if p == "iterm2" => {
-                picker.set_protocol_type(ratatui_image::picker::ProtocolType::Iterm2)
-            }
-            Some(ref p) if p == "halfblocks" => {
-                picker.set_protocol_type(ratatui_image::picker::ProtocolType::Halfblocks)
-            }
-            _ => {}
-        }
-        picker
-    });
+    let img_picker = None;
 
     let (tx, rx) = mpsc::unbounded_channel();
     let u_session = usage.session_usage().clone();
     let session_id = session.id.clone();
-
-    // Host tab title from first prompt (prefer CLI seed, else resume history).
-    let seed_prompt = initial_prompt
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .or_else(|| {
-            session
-                .messages
-                .iter()
-                .find(|m| m.role == "user")
-                .map(|m| m.content.clone())
-        });
     let title_from_prompt = seed_prompt.is_some();
-    // Provider-branded title: set the provider label FIRST so the very first
-    // title write already carries it (moon + provider + prompt). The prompt is
-    // recorded in ade's shared title state, which every writer (TUI animation,
-    // agent-loop re-asserts) renders from.
-    crate::ade::set_title_provider(&crate::config::active_provider_chrome(&cfg));
-    crate::ade::set_title_prompt(seed_prompt.as_deref().unwrap_or("starting"));
-
     let permissions = SharedPermissions::load(&cwd);
-    let mut app = App {
+    App {
         startup: startup::StartupState::new(),
         client,
         cfg,
@@ -2677,10 +2639,17 @@ pub async fn run_tui(
         selection: None,
         select_autoscroll_at: None,
         plain_lines: Vec::new(),
+        transcript_revision: 1,
+        wrap_cache_revision: 0,
         wrap_cache_width: 0,
         wrap_cache_palette: None,
         wrap_cache_keys: Vec::new(),
         wrap_cache_parts: Vec::new(),
+        wrap_cache_links: Vec::new(),
+        prose_cache_keys: Vec::new(),
+        prose_cache_parts: Vec::new(),
+        #[cfg(feature = "image-peek")]
+        wrap_cache_latex: 0,
         link_cache: Default::default(),
         hit_headers: Vec::new(),
         line_cells: Vec::new(),
@@ -2780,7 +2749,89 @@ pub async fn run_tui(
         auto_update_last_seen_at: 0,
         auto_update_announced_version: String::new(),
         update_modal: None,
-    };
+    }
+}
+
+#[allow(clippy::too_many_arguments)] // Top-level runtime boundary assembled once by main.
+pub async fn run_tui(
+    client: ApiClient,
+    cfg: Config,
+    cwd: PathBuf,
+    permission_mode: SharedMode,
+    session: Session,
+    usage: UsageTracker,
+    initial_prompt: Option<String>,
+    _ecosystem_summary: String,
+    workspace_note: Option<String>,
+) -> Result<()> {
+    if !theme::set_theme(cfg.theme.as_deref().unwrap_or("gold")) {
+        let _ = theme::set_theme("gold");
+    }
+    // Fail clearly if stdin isn't a real console (redirects / dead pipes).
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        return Err(crate::error::NurError::Other(
+            "nur needs an interactive terminal (stdin is not a TTY).\n\
+             Run `nur` from a normal shell window, not a redirected pipe."
+                .into(),
+        ));
+    }
+    enable_raw_mode().map_err(|e| {
+        crate::error::NurError::Other(format!(
+            "cannot enter raw mode (TUI): {e}\n\
+             Try a different terminal, or close other full-screen console apps."
+        ))
+    })?;
+    stdout()
+        .execute(EnterAlternateScreen)
+        .map_err(|e| crate::error::NurError::Other(format!("alternate screen: {e}")))?;
+    stdout().execute(EnableBracketedPaste)?;
+    // Focus events: when the user releases the mouse *outside* the terminal,
+    // we never see MouseUp - FocusLost clears stuck drag/select state.
+    let _ = stdout().execute(EnableFocusChange);
+    enable_mouse();
+    // Hardware cursor hidden - we paint a Nur-gold block caret ourselves.
+    stdout().execute(Hide)?;
+    let _guard = TermGuard;
+    // Suppress panic-hook stderr while the alternate screen is up. A panicking
+    // blocking tool task (already caught as a JoinError in the agent loop) still
+    // triggers the default hook, which writes the panic + backtrace to stderr -
+    // bleeding raw text over the input box and transcript. Route those messages
+    // to a log file instead so the TUI is never corrupted; real crashes still
+    // unwind and TermGuard restores the terminal.
+    install_tui_panic_hook();
+    let backend = CrosstermBackend::new(stdout());
+    let mut terminal = Terminal::new(backend)
+        .map_err(|e| crate::error::NurError::Other(format!("terminal init: {e}")))?;
+
+    // Host tab title from first prompt (prefer CLI seed, else resume history).
+    let seed_prompt = initial_prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            session
+                .messages
+                .iter()
+                .find(|m| m.role == "user")
+                .map(|m| m.content.clone())
+        });
+    // Provider-branded title: set the provider label FIRST so the very first
+    // title write already carries it (moon + provider + prompt). The prompt is
+    // recorded in ade's shared title state, which every writer (TUI animation,
+    // agent-loop re-asserts) renders from.
+    crate::ade::set_title_provider(&crate::config::active_provider_chrome(&cfg));
+    crate::ade::set_title_prompt(seed_prompt.as_deref().unwrap_or("starting"));
+
+    let mut app = new_app(
+        client,
+        cfg,
+        cwd,
+        permission_mode,
+        session,
+        usage,
+        seed_prompt,
+    );
 
     app.replay_session_history();
     // Seed auto-update seen timestamp from existing file so we only announce
@@ -3599,6 +3650,7 @@ impl App {
     /// the prompt back into the input box (edit and resend at will). Everything
     /// from that prompt onward is dropped from the transcript and session.
     fn ctx_revert(&mut self) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         if self.busy {
             self.push_error("wait for the current turn to finish, then revert".into());
             return;
@@ -3609,6 +3661,7 @@ impl App {
         let idx = self.ctx_menu.as_ref().map(|m| m.cell_idx).unwrap_or(0);
 
         self.cells.truncate(idx);
+        self.discard_pending_requests();
         self.tool_cells.retain(|_, i| *i < idx);
         // Dropping history is the point here, so the replay log shrinks with it.
         self.replace_ui_log();
@@ -3629,6 +3682,7 @@ impl App {
     /// not including) the selected prompt. The original session is left intact
     /// on disk; the prompt is placed in the input, ready to send down the fork.
     fn ctx_fork(&mut self) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         if self.busy {
             self.push_error("wait for the current turn to finish, then fork".into());
             return;
@@ -3668,7 +3722,8 @@ impl App {
 
         // Transcript shows the shared history up to the fork point.
         self.cells.truncate(idx);
-        self.tool_cells.retain(|_, i| *i < idx);
+        self.discard_pending_requests();
+        self.tool_cells.retain(|_, i| *i < self.cells.len());
         // The fork starts from a shorter transcript; its replay log follows.
         self.replace_ui_log();
         self.reset_transcript_interaction();
@@ -3878,6 +3933,7 @@ impl App {
     /// by one - `ToolEnd` then wrote its result into the neighbouring card and
     /// left the real one spinning.
     fn remove_cell(&mut self, cell_idx: usize) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         if cell_idx >= self.cells.len() {
             return;
         }
@@ -4388,6 +4444,7 @@ impl App {
             KeyCode::Char('l') if ctrl => {
                 // Everything but the banner goes, so every `tool_cells` index is
                 // stale; leaving them would misroute the running turn's results.
+                self.transcript_revision = self.transcript_revision.wrapping_add(1);
                 self.cells.retain(|c| matches!(c, Cell::Banner));
                 self.tool_cells.clear();
                 self.scroll_from_bottom = 0;
@@ -6207,9 +6264,10 @@ impl App {
             oauth_cancel: None,
             manage_failover: false,
             manage_auth: false,
-            auth_summaries: crate::auth::provider_credential_summaries(),
+            auth_summaries: Default::default(),
             fallback_key: false,
         });
+        self.refresh_auth_summaries();
     }
 
     /// Open the unified provider credential vault. This never changes the
@@ -6242,15 +6300,24 @@ impl App {
             oauth_cancel: None,
             manage_failover: false,
             manage_auth: true,
-            auth_summaries: crate::auth::provider_credential_summaries(),
+            auth_summaries: Default::default(),
             fallback_key: false,
         });
+        self.refresh_auth_summaries();
     }
 
     fn refresh_auth_summaries(&mut self) {
-        if let Some(login) = &mut self.login {
-            login.auth_summaries = crate::auth::provider_credential_summaries();
-        }
+        let epoch = self.startup.login_epoch;
+        self.background_ui(
+            crate::auth::provider_credential_summaries,
+            move |app, summaries| {
+                if epoch == app.startup.login_epoch {
+                    if let Some(login) = &mut app.login {
+                        login.auth_summaries = summaries;
+                    }
+                }
+            },
+        );
     }
 
     /// Open the `/login` modal pre-selected to a specific provider. Used both by
@@ -6299,6 +6366,7 @@ impl App {
     /// does **not** log the active provider out - it only edits the failover
     /// chain (`fallback_providers`) and per-provider keys.
     fn open_failover(&mut self) {
+        self.cancel_oauth();
         self.login = Some(LoginModal {
             form_scroll: 0,
             form_rows: 0,
@@ -6323,9 +6391,10 @@ impl App {
             oauth_cancel: None,
             manage_failover: true,
             manage_auth: false,
-            auth_summaries: crate::auth::provider_credential_summaries(),
+            auth_summaries: Default::default(),
             fallback_key: false,
         });
+        self.refresh_auth_summaries();
     }
 
     /// Cycle the asserted privacy tier of the selected provider and persist it
@@ -6397,17 +6466,25 @@ impl App {
             m.error = None;
         }
         // Newly added and no credentials yet → capture key and/or OAuth now.
-        if !present && crate::api::failover::resolve_target_key(&provider).is_none() {
-            if let Some(m) = &mut self.login {
-                m.provider_id = id;
-                m.buf.clear();
-                m.fallback_key = true;
-                m.error = None;
-                m.can_import = true;
-                m.method_sel = 0;
-                m.form_scroll = 0;
-                m.stage = LoginStage::Method;
-            }
+        if !present {
+            self.account_work(
+                false,
+                move || crate::api::failover::resolve_target_key(&provider).is_some(),
+                move |app, ready| {
+                    if !ready && app.cfg.fallback_providers.contains(&id) {
+                        if let Some(m) = &mut app.login {
+                            m.provider_id = id;
+                            m.buf.clear();
+                            m.fallback_key = true;
+                            m.error = None;
+                            m.can_import = true;
+                            m.method_sel = 0;
+                            m.form_scroll = 0;
+                            m.stage = LoginStage::Method;
+                        }
+                    }
+                },
+            );
         }
     }
 
@@ -6475,12 +6552,12 @@ impl App {
         // Resolve against the *active* provider so OAuth tokens refresh and
         // catalog env keys (TINKER_API_KEY, XAI_API_KEY, …) are picked up -
         // not a stale generic NUR_API_KEY or empty string.
-        let key = crate::auth::resolve_api_key_for(Some(provider.id)).unwrap_or_default();
         let pid = provider.id.to_string();
         let pid2 = pid.clone();
 
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
+            let key = crate::auth::resolve_api_key_for(Some(&pid)).unwrap_or_default();
             let _ = tx.send(crate::api::fetch_model_ids(&base_url, &key, Some(&pid)));
         });
 
@@ -6728,16 +6805,6 @@ impl App {
         // `/model` can move within a provider to a different inference route
         // (OpenCode Zen -> Go). Rebuild the live client as well as persisting
         // config; otherwise the next turn still posts to the previous base URL.
-        let provider = crate::providers::by_id(&self.cfg.provider)
-            .copied()
-            .unwrap_or(*crate::providers::default_provider());
-        let bearer = crate::auth::resolve_api_key_for(Some(provider.id)).unwrap_or_default();
-        if let Ok(client) =
-            crate::api::ApiClient::for_provider(&self.cfg.base_url, &bearer, provider.id)
-        {
-            self.client = client.with_style(provider.style);
-            self.authed = !bearer.is_empty() || provider.key_optional;
-        }
         if let Some(s) = &mut self.session {
             s.model = id.clone();
         }
@@ -6746,7 +6813,7 @@ impl App {
             u.set_provider(self.cfg.provider.clone());
         }
         self.push_info(format!("model → {id}"));
-        self.provider_selected();
+        self.restart_provider_preparation();
     }
 
     /// Drain the background model-list fetch while the picker is open.
@@ -7126,6 +7193,7 @@ impl App {
     }
 
     fn cancel_oauth(&mut self) {
+        self.startup.login_epoch = self.startup.login_epoch.wrapping_add(1);
         if let Some(m) = &self.login {
             if let Some(c) = &m.oauth_cancel {
                 c.cancel();
@@ -7497,68 +7565,62 @@ impl App {
                         m.oauth_rx = None;
                         m.oauth_cancel = None;
                     }
-                    if is_fallback {
-                        // Preserve OMP's credential kind. API keys must not be
-                        // routed as first-party subscription OAuth sessions.
-                        let saved = if imported_as_oauth {
-                            crate::auth::choose_provider_oauth(
-                                &provider_id,
-                                &tokens.access_token,
-                                tokens.refresh_token,
-                                tokens.expires_at,
-                                tokens.meta,
-                            )
-                        } else {
-                            crate::auth::choose_provider_key(&provider_id, &tokens.access_token)
-                        };
-                        if let Err(e) = saved {
-                            if let Some(m) = &mut self.login {
-                                m.error = Some(e.to_string());
-                                m.form_scroll = 0;
-                                m.stage = LoginStage::Method;
-                            }
-                            continue;
-                        }
-                        let name = crate::providers::by_id(&provider_id)
-                            .map(|p| p.name)
-                            .unwrap_or(provider_id.as_str());
-                        self.finish_scoped_credential(
-                            &provider_id,
-                            format!("auth · {name} · imported credential saved"),
-                        );
-                    } else {
-                        let saved = if imported_as_oauth {
-                            crate::auth::save_oauth_session(
-                                &provider_id,
-                                &tokens.access_token,
-                                tokens.refresh_token.clone(),
-                                tokens.expires_at,
-                                tokens.meta.clone(),
-                            )
-                        } else {
-                            crate::auth::save_api_key_for(&tokens.access_token, Some(&provider_id))
-                                .and_then(|()| {
+                    let selected = provider_id.clone();
+                    let access = tokens.access_token.clone();
+                    self.account_work(
+                        !is_fallback,
+                        move || {
+                            if is_fallback {
+                                if imported_as_oauth {
+                                    crate::auth::choose_provider_oauth(
+                                        &selected,
+                                        &tokens.access_token,
+                                        tokens.refresh_token,
+                                        tokens.expires_at,
+                                        tokens.meta,
+                                    )
+                                } else {
                                     crate::auth::choose_provider_key(
-                                        &provider_id,
+                                        &selected,
                                         &tokens.access_token,
                                     )
-                                })
-                        };
-                        if let Err(e) = saved {
-                            if let Some(m) = &mut self.login {
-                                m.error = Some(e.to_string());
-                                m.form_scroll = 0;
-                                m.stage = LoginStage::Method;
+                                }
+                            } else if imported_as_oauth {
+                                crate::auth::save_oauth_session(
+                                    &selected,
+                                    &tokens.access_token,
+                                    tokens.refresh_token,
+                                    tokens.expires_at,
+                                    tokens.meta,
+                                )
+                            } else {
+                                crate::auth::save_api_key_for(&tokens.access_token, Some(&selected))
+                                    .and_then(|()| {
+                                        crate::auth::choose_provider_key(
+                                            &selected,
+                                            &tokens.access_token,
+                                        )
+                                    })
                             }
-                            continue;
-                        }
-                        self.apply_provider_login(
-                            &provider_id,
-                            &tokens.access_token,
-                            imported_as_oauth,
-                        );
-                    }
+                        },
+                        move |app, result| match result {
+                            Ok(()) if is_fallback => app.finish_scoped_credential(
+                                &provider_id,
+                                format!("auth - {provider_id} - imported credential saved"),
+                            ),
+                            Ok(()) => {
+                                app.apply_provider_login(&provider_id, &access, imported_as_oauth)
+                            }
+                            Err(error) => {
+                                if !is_fallback {
+                                    app.provider_selected();
+                                }
+                                app.push_error(format!("credential save failed: {error}"));
+                            }
+                        },
+                    );
                 }
+
                 crate::oauth::BrowserLoginProgress::Failed(err) => {
                     if let Some(m) = &mut self.login {
                         m.error = Some(err);
@@ -7840,35 +7902,17 @@ impl App {
                 None => return,
             }
         };
-        match crate::auth::delete_provider_credentials(provider.id) {
-            Ok(removed) => {
-                self.refresh_auth_summaries();
-                if provider.id == self.cfg.provider {
-                    self.authed = provider.key_optional
-                        || crate::auth::resolve_api_key_for(Some(provider.id)).is_ok();
-                    self.provider_selected();
+        let active = provider.id == self.cfg.provider;
+        self.account_work(active, move || crate::auth::delete_provider_credentials(provider.id), move |app, result| {
+            match result {
+                Ok(removed) => {
+                    app.refresh_auth_summaries();
+                    if active { app.restart_provider_preparation(); }
+                    app.push_note(Tone::Mode, format!("auth - {} {} - automatic CLI/OMP re-import blocked until you choose it again", provider.name, if removed { "removed" } else { "had no Nur-managed credential" }));
                 }
-                self.push_note(
-                    Tone::Mode,
-                    if removed {
-                        format!(
-                            "auth · {} removed · automatic CLI/OMP re-import blocked until you choose it again",
-                            provider.name
-                        )
-                    } else {
-                        format!(
-                            "auth · {} had no Nur-managed credential · automatic CLI/OMP import blocked",
-                            provider.name
-                        )
-                    },
-                );
+                Err(error) => { if active { app.provider_selected(); } app.push_error(format!("could not remove {}: {error}", provider.name)); }
             }
-            Err(error) => {
-                if let Some(modal) = &mut self.login {
-                    modal.error = Some(format!("could not remove {}: {error}", provider.name));
-                }
-            }
-        }
+        });
     }
 
     fn on_login_key_entry(&mut self, key: event::KeyEvent, ctrl: bool) {
@@ -7876,6 +7920,7 @@ impl App {
         match key.code {
             // Esc backs up: key → method (if browser) → provider (failover keeps manage mode).
             KeyCode::Esc => {
+                self.startup.login_epoch = self.startup.login_epoch.wrapping_add(1);
                 let browser = crate::providers::by_id(&m.provider_id)
                     .map(|p| p.browser_auth)
                     .unwrap_or(false);
@@ -7929,58 +7974,55 @@ impl App {
             return;
         }
 
-        // Failover key: save to the per-provider store and return to the picker
-        // - do NOT switch the active provider.
-        if is_fallback {
-            if !key.is_empty() {
-                if let Err(e) = crate::auth::choose_provider_key(&provider_id, &key) {
-                    if let Some(m) = &mut self.login {
-                        m.error = Some(e.to_string());
-                    }
-                    return;
+        let selected = provider_id.clone();
+        let saved_key = key.clone();
+        self.account_work(
+            !is_fallback,
+            move || {
+                if !is_fallback && !saved_key.is_empty() {
+                    crate::auth::save_api_key_for(&saved_key, Some(&selected))?;
                 }
-            }
-            let name = provider.name.to_string();
-            let message = if crate::providers::is_sidecar_provider(&provider_id) {
+                if !saved_key.is_empty() {
+                    crate::auth::choose_provider_key(&selected, &saved_key)?;
+                }
+                Ok::<_, crate::error::NurError>(())
+            },
+            move |app, result| match result {
+                Ok(()) => app.finish_key_login(&provider_id, &key, is_fallback),
+                Err(error) => {
+                    if !is_fallback {
+                        app.provider_selected();
+                    }
+                    app.push_error(format!("credential save failed: {error}"));
+                }
+            },
+        );
+    }
+
+    fn finish_key_login(&mut self, provider_id: &str, key: &str, is_fallback: bool) {
+        let provider = crate::providers::by_id(provider_id)
+            .copied()
+            .unwrap_or(*crate::providers::default_provider());
+        if is_fallback {
+            let message = if crate::providers::is_sidecar_provider(provider_id) {
                 format!(
-                    "typesafe · Jev key saved - System One judgments now boost every provider \
-                     ({name})"
+                    "typesafe - Jev key saved - System One judgments now boost every provider ({})",
+                    provider.name
                 )
             } else {
-                format!("auth · {name} · API key saved as the selected credential")
+                format!(
+                    "auth - {} - API key saved as the selected credential",
+                    provider.name
+                )
             };
-            self.finish_scoped_credential(&provider_id, message);
+            self.finish_scoped_credential(provider_id, message);
             return;
         }
-
-        // Persist the key tagged to this provider (prevents cross-provider reuse).
-        // This is the commit point: writing `auth.json` replaces whatever
-        // credential was active before, which is the only place a sign-out
-        // should happen.
-        if !key.is_empty() {
-            if let Err(e) = crate::auth::save_api_key_for(&key, Some(&provider_id)) {
-                if let Some(m) = &mut self.login {
-                    m.error = Some(e.to_string());
-                }
-                return;
-            }
-            // Also keep it in the per-provider store. The active slot holds one
-            // credential at a time, so without this, switching provider stranded
-            // the previous one - breaking failover and any subagent pointed at
-            // that provider. `/logout` is what removes it.
-            if let Err(e) = crate::auth::choose_provider_key(&provider_id, &key) {
-                if let Some(m) = &mut self.login {
-                    m.error = Some(e.to_string());
-                }
-                return;
-            }
-        }
-
         // OpenAI-compatible providers get an optional base-URL step so you can
         // point OpenAI (or any compatible key login) at a custom endpoint. The
         // field is prefilled with the current/default host - ↵ accepts it.
         if provider_takes_custom_base(&provider) {
-            let prefill = crate::config::provider_base_url_override(&self.cfg, &provider_id)
+            let prefill = crate::config::provider_base_url_override(&self.cfg, provider_id)
                 .unwrap_or_else(|| provider.base_url.to_string());
             if let Some(m) = &mut self.login {
                 m.form_scroll = 0;
@@ -7991,13 +8033,14 @@ impl App {
             return;
         }
 
-        self.apply_provider_login(&provider_id, &key, false);
+        self.apply_provider_login(provider_id, key, false);
     }
 
     fn on_login_baseurl_key(&mut self, key: event::KeyEvent, ctrl: bool) {
         let Some(m) = &mut self.login else { return };
         match key.code {
             KeyCode::Esc => {
+                self.startup.login_epoch = self.startup.login_epoch.wrapping_add(1);
                 // Back to key entry (the key is still buffered/saved).
                 m.form_scroll = 0;
                 m.stage = LoginStage::Key;
@@ -8149,6 +8192,31 @@ impl App {
     }
 
     fn apply_provider_login(&mut self, provider_id: &str, key: &str, via_oauth: bool) {
+        let provider_id = provider_id.to_string();
+        let selected = provider_id.clone();
+        let key = key.to_string();
+        crate::config::apply_provider_defaults(&mut self.cfg, &provider_id, via_oauth);
+        self.account_work(
+            true,
+            move || {
+                if via_oauth || key.is_empty() {
+                    crate::auth::resolve_api_key_for(Some(&selected))
+                } else {
+                    Ok(key.clone())
+                }
+            },
+            move |app, result| match result {
+                Ok(bearer) => app.finish_provider_login(&provider_id, &bearer, via_oauth),
+                Err(error) => {
+                    app.authed = false;
+                    app.provider_selected();
+                    app.push_error(format!("account connection failed: {error}"));
+                }
+            },
+        );
+    }
+
+    fn finish_provider_login(&mut self, provider_id: &str, bearer: &str, via_oauth: bool) {
         let provider = crate::providers::by_id(provider_id)
             .copied()
             .unwrap_or(*crate::providers::default_provider());
@@ -8158,11 +8226,6 @@ impl App {
         // OAuth tokens may be refreshed while the login result is persisted.
         // Always use the canonical stored token for model detection and the
         // hot-swapped client instead of the raw pre-refresh login result.
-        let bearer = if via_oauth || key.is_empty() {
-            crate::auth::resolve_api_key_for(Some(provider_id)).unwrap_or_default()
-        } else {
-            key.to_string()
-        };
         // Do not probe `/models` on the TUI event thread. Some OAuth catalogs
         // take multiple 15-second endpoint fallbacks, freezing the just-finished
         // login modal. `/model` already performs the same live lookup on a
@@ -8182,7 +8245,7 @@ impl App {
         // subagents never touch it so the parent provider persists).
         crate::ade::set_title_provider(&crate::config::active_provider_chrome(&self.cfg));
 
-        match crate::api::ApiClient::for_provider(&self.cfg.base_url, &bearer, provider.id)
+        match crate::api::ApiClient::for_provider(&self.cfg.base_url, bearer, provider.id)
             .map(|c| c.with_style(style))
         {
             Ok(client) => {
@@ -8193,9 +8256,9 @@ impl App {
                 let keynote = if bearer.is_empty() {
                     "no key (local)".to_string()
                 } else if via_oauth {
-                    format!("browser · {}", crate::auth::key_fingerprint(&bearer))
+                    format!("browser · {}", crate::auth::key_fingerprint(bearer))
                 } else {
-                    format!("key {}", crate::auth::key_fingerprint(&bearer))
+                    format!("key {}", crate::auth::key_fingerprint(bearer))
                 };
                 self.push_note(
                     Tone::Mode,
@@ -8343,6 +8406,7 @@ impl App {
 
     // ── submission ─────────────────────────────────────────────────────
     fn submit_text(&mut self, text: &str) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         let text = if text.trim().is_empty() && !self.draft_image_indices().is_empty() {
             "Please inspect the attached image(s).".to_string()
         } else {
@@ -8389,13 +8453,13 @@ impl App {
                 return;
             }
             let images = self.take_draft_images();
-            self.queue.push_back(QueuedPrompt {
-                text: payload.clone(),
-                images,
-                raw_submission: false,
-                wait_for_skills: true,
+            let mut queued = QueuedPrompt::new(payload.clone(), &self.session_id, &self.cwd);
+            queued.images = images;
+            self.cells.push(Cell::Queued {
+                id: queued.id,
+                text: payload,
             });
-            self.cells.push(Cell::Queued { text: payload });
+            self.queue.push_back(queued);
             self.scroll_to_bottom();
             self.refresh_sidegraph();
             self.push_note(
@@ -8414,11 +8478,12 @@ impl App {
     /// Tools, subagents, and background jobs keep running; the message lands
     /// at the next model round. Idle → start a normal turn.
     fn queue_steer(&mut self, cell_idx: usize) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         if self.startup_pending() {
             return;
         }
         let text = match self.cells.get(cell_idx) {
-            Some(Cell::Queued { text }) => text.clone(),
+            Some(Cell::Queued { text, .. }) => text.clone(),
             _ => return,
         };
         // Repeated text can carry different images; select the clicked occurrence.
@@ -8436,7 +8501,10 @@ impl App {
                 self.steer_now(&text);
                 self.echo_images(&queued.images);
             } else {
-                self.cells.push(Cell::Queued { text: text.clone() });
+                self.cells.push(Cell::Queued {
+                    id: queued.id,
+                    text: text.clone(),
+                });
                 self.queue.push_back(queued);
             }
         } else {
@@ -8448,11 +8516,12 @@ impl App {
     /// Prefer leave-queued (after turn) or **steer** (inject, no cancel).
     /// Use cut-in only when the running work must stop.
     fn queue_cut_in(&mut self, cell_idx: usize) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         if self.startup_pending() {
             return;
         }
         let text = match self.cells.get(cell_idx) {
-            Some(Cell::Queued { text }) => text.clone(),
+            Some(Cell::Queued { text, .. }) => text.clone(),
             _ => return,
         };
         let Some(i) = queued_position(&self.cells, &self.queue, cell_idx) else {
@@ -8462,14 +8531,20 @@ impl App {
         self.remove_cell(cell_idx);
         self.refresh_sidegraph();
         if self.busy {
+            let id = queued.id;
             self.queue.push_front(queued);
             let first = self
                 .cells
                 .iter()
                 .position(|cell| matches!(cell, Cell::Queued { .. }))
                 .unwrap_or(self.cells.len());
-            self.cells
-                .insert(first, Cell::Queued { text: text.clone() });
+            self.cells.insert(
+                first,
+                Cell::Queued {
+                    id,
+                    text: text.clone(),
+                },
+            );
             for index in self.tool_cells.values_mut() {
                 if *index >= first {
                     *index += 1;
@@ -8532,6 +8607,7 @@ impl App {
     }
 
     fn echo_images(&mut self, images: &[(String, String)]) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         for (path, label) in images {
             self.cells.push(Cell::Image {
                 path: path.clone(),
@@ -8542,6 +8618,7 @@ impl App {
     }
 
     fn attach_image_cell(&mut self, path: &str, meta: &crate::tools::media::MediaAttach) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         if self.draft_image_indices().len() >= 10 {
             self.push_error("attachment limit reached (10 images per message)".into());
             return;
@@ -8557,6 +8634,7 @@ impl App {
     /// append a short `[STEER · cross-provider deploy]` block mandating
     /// `agent.provider` so mid-turn redirects do not silently stay on the parent.
     fn steer_now(&mut self, text: &str) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         let text = enrich_cross_provider_steer(text);
         if let Ok(mut q) = self.tool_host.steer.lock() {
             q.push_back(text.clone());
@@ -8676,6 +8754,7 @@ impl App {
 
     /// Refresh any live `/graph` card in place (called on tool transitions).
     fn refresh_graph(&mut self) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         if !self
             .cells
             .iter()
@@ -8750,6 +8829,7 @@ impl App {
     /// detail flag of any card already there. Returns true when one was already
     /// on screen (the caller was a refresh, not a first open).
     fn surface_swarm_card(&mut self, detail: bool) -> bool {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         let mut want_detail = detail;
         let mut found = false;
         for c in &self.cells {
@@ -8770,6 +8850,7 @@ impl App {
     }
 
     fn set_swarm_live(&mut self, on: bool) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         if on {
             // Re-arm: bring the card to the bottom so new turn's subagents are visible without scrolling up.
             let mut merged_detail = false;
@@ -9073,6 +9154,7 @@ impl App {
 
     /// `/graph` - drop (or refresh) an inline live execution-graph card at the bottom.
     pub(crate) fn cmd_graph(&mut self) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         let fresh = self.build_graph_lines();
         // Resurface at bottom (UX fix) instead of in-place refresh.
         if self.cells.iter().any(|c| matches!(c, Cell::Graph { .. })) {
@@ -9209,7 +9291,7 @@ impl App {
                         in_turn = true;
                     }
                 }
-                Cell::Queued { text } => nodes.push(SgNode::Queued {
+                Cell::Queued { text, .. } => nodes.push(SgNode::Queued {
                     text: first_line(text, 120),
                 }),
                 Cell::TurnDone {
@@ -9452,6 +9534,7 @@ impl App {
     }
 
     fn start_attached_turn(&mut self, prompt: &str, images: Vec<(String, String)>) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         if !self.authed || self.session.is_none() || self.usage.is_none() {
             self.input.insert_str(prompt);
             for (path, label) in images {
@@ -9483,6 +9566,7 @@ impl App {
     /// `model_prompt`. Used by commands like `/scan` whose real instructions are
     /// a long template the user shouldn't have to read back in their transcript.
     fn start_turn_labeled(&mut self, display: &str, model_prompt: &str) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         if !self.authed {
             self.push_error(
                 "signed out - run /login to enter an API key before sending a message".into(),
@@ -9630,6 +9714,7 @@ impl App {
                 let _ = respond.send(ApprovalDecision::Deny);
             }
         }
+        self.question = None;
         self.cancelling = true;
         self.status = "cancelling…".into();
         // Stop "live" animations that look like work is progressing.
@@ -9639,6 +9724,7 @@ impl App {
 
     /// Mark streaming/thinking/running-tool cells so the UI stops looking "active".
     fn freeze_live_cells_as_cancelled(&mut self) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         for c in self.cells.iter_mut().rev() {
             match c {
                 Cell::Assistant { streaming, .. } => {
@@ -9679,6 +9765,7 @@ impl App {
 
     // ── agent events ───────────────────────────────────────────────────
     fn on_agent_event(&mut self, ev: AgentEvent) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         match ev {
             AgentEvent::Status(s) => {
                 if self.cancelling {
@@ -9793,6 +9880,10 @@ impl App {
                 args,
                 respond,
             } => {
+                if self.cancelling || !self.busy || respond.is_closed() {
+                    let _ = respond.send(ApprovalDecision::Deny);
+                    return;
+                }
                 self.approval = Some(ApprovalState {
                     name,
                     args,
@@ -9800,12 +9891,21 @@ impl App {
                 });
             }
             AgentEvent::QuestionRequest {
+                turn_cancel,
                 question,
                 header,
                 options,
                 multi_select,
                 respond,
             } => {
+                if self.cancelling
+                    || !self.busy
+                    || turn_cancel.is_cancelled()
+                    || respond.is_closed()
+                {
+                    let _ = respond.send(QuestionAnswer::dismissed());
+                    return;
+                }
                 let picker =
                     crate::tools::question_tool::QuestionPicker::new(options.len(), multi_select);
                 self.question = Some(QuestionState {
@@ -9907,6 +10007,8 @@ impl App {
                 self.busy = false;
                 self.cancelling = false;
                 self.cancel = None;
+                self.question = None;
+                self.approval = None;
                 self.status = "idle".into();
                 // Final graph snapshot for this turn, then stop it animating.
                 self.refresh_graph();
@@ -9995,7 +10097,7 @@ impl App {
                     if let Some(index) = self
                         .cells
                         .iter()
-                        .position(|c| matches!(c, Cell::Queued { text } if text == &next.text))
+                        .position(|c| matches!(c, Cell::Queued { id, .. } if *id == next.id))
                     {
                         self.remove_cell(index);
                     }
@@ -10008,6 +10110,7 @@ impl App {
     }
 
     fn finish_streaming(&mut self) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         if let Some(Cell::Assistant { streaming, text }) = self.cells.last_mut() {
             *streaming = false;
             #[cfg(feature = "image-peek")]
@@ -10020,6 +10123,7 @@ impl App {
     }
 
     fn finish_thinking(&mut self) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         for c in self.cells.iter_mut().rev() {
             if let Cell::Thinking {
                 active,
@@ -10043,6 +10147,7 @@ impl App {
     }
 
     fn push_turn_done(&mut self, duration: Duration, interrupted: bool) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         // Ensure any still-open thought is closed and counted.
         self.finish_thinking();
         self.cells.push(Cell::TurnDone {
@@ -10058,6 +10163,7 @@ impl App {
 
     /// Toggle expand on a collapsible cell (thinking / tool / bash).
     pub fn toggle_cell_expand(&mut self, cell_idx: usize) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         if let Some(c) = self.cells.get_mut(cell_idx) {
             if c.is_collapsible() {
                 c.toggle_expanded();
@@ -10115,16 +10221,24 @@ impl App {
                         crate::open_uri::PathKind::Dir => "folder",
                         crate::open_uri::PathKind::File => "file",
                     };
-                    match kind.open(path) {
-                        Ok(()) => self.push_note(
-                            Tone::Neutral,
-                            format!("opened {what} · {}", path.display()),
-                        ),
-                        Err(e) => self.push_note(
-                            Tone::Session,
-                            format!("could not open {what}: {e}\n  {}", path.display()),
-                        ),
-                    }
+                    let path = path.clone();
+                    let kind = *kind;
+                    self.background_ui(
+                        move || {
+                            let result = kind.open(&path);
+                            (path, result)
+                        },
+                        move |app, (path, result)| match result {
+                            Ok(()) => app.push_note(
+                                Tone::Neutral,
+                                format!("opened {what} · {}", path.display()),
+                            ),
+                            Err(e) => app.push_note(
+                                Tone::Session,
+                                format!("could not open {what}: {e}\n  {}", path.display()),
+                            ),
+                        },
+                    );
                     return;
                 }
             }
@@ -10134,20 +10248,23 @@ impl App {
         if let Some(spans) = self.hit_urls.get(line_idx) {
             for (lo, hi, url) in spans {
                 if local_x >= *lo && local_x < *hi {
-                    match crate::open_uri::open(url) {
-                        Ok(()) => {
-                            self.push_note(
+                    let url = url.clone();
+                    self.background_ui(
+                        move || {
+                            let result = crate::open_uri::open(&url);
+                            (url, result)
+                        },
+                        |app, (url, result)| match result {
+                            Ok(()) => app.push_note(
                                 Tone::Neutral,
-                                format!("opened link · {}", truncate_url_note(url)),
-                            );
-                        }
-                        Err(e) => {
-                            self.push_note(
+                                format!("opened link · {}", truncate_url_note(&url)),
+                            ),
+                            Err(e) => app.push_note(
                                 Tone::Session,
                                 format!("could not open link: {e}\n  {url}"),
-                            );
-                        }
-                    }
+                            ),
+                        },
+                    );
                     return;
                 }
             }
@@ -10212,6 +10329,7 @@ fn truncate_url_note(url: &str) -> String {
 
 impl App {
     fn replay_session_history(&mut self) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         let Some(session) = &self.session else { return };
         if !session.ui_log.is_empty() {
             let n = session.ui_log.len();
@@ -10265,6 +10383,7 @@ impl App {
     }
 
     fn push_info(&mut self, s: String) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.cells.push(Cell::Info {
             text: s,
             tone: Tone::Neutral,
@@ -10273,10 +10392,12 @@ impl App {
 
     /// Notice with a semantic colour/glyph (mode, plan, todos, usage, …).
     pub(crate) fn push_note(&mut self, tone: Tone, s: String) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.cells.push(Cell::Info { text: s, tone });
     }
 
     fn push_error(&mut self, s: String) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.cells.push(Cell::Error(s));
     }
 }
@@ -11095,29 +11216,22 @@ mod tests {
 
     #[test]
     fn repeated_queued_text_keeps_the_clicked_attachment_owner() {
+        let mut first = QueuedPrompt::new("inspect".into(), "session", std::path::Path::new("."));
+        first.images.push(("first.png".into(), "image".into()));
+        let mut second = QueuedPrompt::new("inspect".into(), "session", std::path::Path::new("."));
+        second.images.push(("second.png".into(), "image".into()));
         let cells = vec![
             Cell::Queued {
-                text: "inspect".into(),
+                id: second.id,
+                text: second.text.clone(),
             },
             Cell::Queued {
-                text: "inspect".into(),
+                id: first.id,
+                text: first.text.clone(),
             },
         ];
-        let queue = VecDeque::from([
-            QueuedPrompt {
-                text: "inspect".into(),
-                images: vec![("first.png".into(), "image".into())],
-                raw_submission: false,
-                wait_for_skills: true,
-            },
-            QueuedPrompt {
-                text: "inspect".into(),
-                images: vec![("second.png".into(), "image".into())],
-                raw_submission: false,
-                wait_for_skills: true,
-            },
-        ]);
-        let index = queued_position(&cells, &queue, 1).unwrap();
+        let queue = VecDeque::from([first, second]);
+        let index = queued_position(&cells, &queue, 0).unwrap();
         assert_eq!(queue[index].images[0].0, "second.png");
     }
 

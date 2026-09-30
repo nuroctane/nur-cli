@@ -53,6 +53,10 @@ pub struct BridgeState {
     pub backend: String,
     pub endpoint: String,
     pub started_at: String,
+    #[serde(default)]
+    pub process_identity: String,
+    #[serde(default)]
+    pub instance: String,
 }
 
 /// Write the embedded bridge script next to the user's other nur helpers.
@@ -223,7 +227,7 @@ fn write_state(state: &BridgeState) -> Result<()> {
         .map_err(|e| NurError::Other(format!("cannot create {}: {e}", dir.display())))?;
     let text = serde_json::to_string_pretty(state)
         .map_err(|e| NurError::Other(format!("cannot serialize bridge state: {e}")))?;
-    std::fs::write(state_path(), text)
+    crate::config::atomic_write(&state_path(), text.as_bytes())
         .map_err(|e| NurError::Other(format!("cannot write {}: {e}", state_path().display())))
 }
 
@@ -233,6 +237,23 @@ fn write_state(state: &BridgeState) -> Result<()> {
 /// `--laya-model`, `--device`): the script owns those defaults, and a bad value
 /// then fails in the foreground with the bridge's own message.
 pub fn start(backend: &str, port: u16, extra: &[String]) -> Result<String> {
+    let lease = lifecycle_lease()?;
+    if let Some(recorded) = state() {
+        if !recorded.process_identity.is_empty()
+            && process_identity(recorded.pid).as_deref() == Some(&recorded.process_identity)
+        {
+            if recorded.port == port {
+                return Ok(format!(
+                    "owned bridge pid {} already started on port {port}; check `nur jev status`",
+                    recorded.pid
+                ));
+            }
+            return Err(NurError::Other(format!(
+                "the owned bridge is running on port {}; stop it before starting another instance",
+                recorded.port
+            )));
+        }
+    }
     if let Some(existing) = probe_port(port) {
         return Ok(format!(
             "a bridge is already answering on port {port}: {}",
@@ -251,19 +272,28 @@ pub fn start(backend: &str, port: u16, extra: &[String]) -> Result<String> {
             suggest_port().unwrap_or(8788)
         )));
     }
-    let pid = spawn_detached(backend, port, extra)?;
+    let instance = uuid::Uuid::new_v4().to_string();
+    let pid = spawn_bridge(backend, port, extra, &instance)?;
+    let process_identity = process_identity(pid).unwrap_or_default();
     let endpoint = format!("http://127.0.0.1:{port}/v1/systemone");
     // Recorded before waiting on purpose: a bridge that is still loading a model
     // (or that fails to start) must still be stoppable, and `nur jev status` has
     // to name it. The record is refreshed below when health answers.
-    write_state(&BridgeState {
+    let recorded = BridgeState {
         pid,
         port,
         backend: backend.to_string(),
         endpoint: endpoint.clone(),
         started_at: chrono::Utc::now().to_rfc3339(),
-    })?;
+        process_identity,
+        instance,
+    };
+    if let Err(error) = write_state(&recorded) {
+        terminate_owned(&recorded);
+        return Err(error);
+    }
 
+    drop(lease);
     // Wait for /health: a cold start loads a model (verdict/nimble can take
     // seconds to tens of seconds).
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -332,7 +362,12 @@ fn resolve_interpreter(py: &str) -> Option<String> {
 ///
 /// Separate from [`start`] so a caller (or a test) can run a throwaway bridge
 /// without touching the recorded state in `~/.nur/jev/bridge.json`.
+#[cfg(test)]
 pub fn spawn_detached(backend: &str, port: u16, extra: &[String]) -> Result<u32> {
+    spawn_bridge(backend, port, extra, &uuid::Uuid::new_v4().to_string())
+}
+
+fn spawn_bridge(backend: &str, port: u16, extra: &[String], instance: &str) -> Result<u32> {
     let script = ensure_bridge_script()?;
     let py = python().ok_or_else(|| {
         NurError::Other(
@@ -351,6 +386,7 @@ pub fn spawn_detached(backend: &str, port: u16, extra: &[String]) -> Result<u32>
     };
     let mut cmd = std::process::Command::new(&py);
     crate::headroom::with_py_launcher(&py, &mut cmd);
+    cmd.env("NUR_JEV_INSTANCE", instance);
     cmd.args(&launcher_args)
         .arg(&script)
         .args(["--backend", backend, "--port", &port.to_string()])
@@ -365,13 +401,167 @@ pub fn spawn_detached(backend: &str, port: u16, extra: &[String]) -> Result<u32>
         // bridge must outlive this command without holding a console.
         cmd.creation_flags(0x0000_0008 | 0x0000_0200 | 0x0800_0000);
     }
-    let child = cmd
-        .spawn()
-        .map_err(|e| NurError::Other(format!("cannot start the bridge: {e}")))?;
-    Ok(child.id())
+    #[cfg(windows)]
+    {
+        spawn_windows_bridge(&cmd)
+            .map_err(|e| NurError::Other(format!("cannot start the bridge: {e}")))
+    }
+    #[cfg(not(windows))]
+    {
+        cmd.spawn()
+            .map(|child| child.id())
+            .map_err(|e| NurError::Other(format!("cannot start the bridge: {e}")))
+    }
+}
+
+/// Restrict Windows inheritance to NUL. A detached child must not retain the
+/// caller's captured stdout/stderr pipes and keep automation waiting for EOF.
+#[cfg(windows)]
+fn spawn_windows_bridge(cmd: &std::process::Command) -> std::io::Result<u32> {
+    use std::os::windows::{ffi::OsStrExt, io::AsRawHandle};
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE},
+        System::Threading::*,
+    };
+    struct Handle(HANDLE);
+    impl Drop for Handle {
+        fn drop(&mut self) {
+            unsafe {
+                CloseHandle(self.0);
+            }
+        }
+    }
+    fn quoted(value: &std::ffi::OsStr) -> Vec<u16> {
+        let mut out = vec![b'"' as u16];
+        let mut slashes = 0;
+        for unit in value.encode_wide() {
+            if unit == b'\\' as u16 {
+                slashes += 1;
+                continue;
+            }
+            out.extend(std::iter::repeat_n(
+                b'\\' as u16,
+                slashes * if unit == b'"' as u16 { 2 } else { 1 },
+            ));
+            slashes = 0;
+            if unit == b'"' as u16 {
+                out.push(b'\\' as u16);
+            }
+            out.push(unit);
+        }
+        out.extend(std::iter::repeat_n(b'\\' as u16, slashes * 2));
+        out.push(b'"' as u16);
+        out
+    }
+    let program: Vec<u16> = cmd.get_program().encode_wide().chain(Some(0)).collect();
+    let mut command = quoted(cmd.get_program());
+    for arg in cmd.get_args() {
+        command.push(b' ' as u16);
+        command.extend(quoted(arg));
+    }
+    command.push(0);
+    let mut environment: std::collections::BTreeMap<_, _> = std::env::vars_os().collect();
+    for (key, value) in cmd.get_envs() {
+        if let Some(value) = value {
+            environment.insert(key.into(), value.into());
+        } else {
+            environment.remove(key);
+        }
+    }
+    let mut environment: Vec<u16> = environment
+        .into_iter()
+        .flat_map(|(key, value)| {
+            key.encode_wide()
+                .chain(Some(b'=' as u16))
+                .chain(value.encode_wide())
+                .chain(Some(0))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    environment.push(0);
+    let nul = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("NUL")?;
+    unsafe {
+        let mut inherited = std::ptr::null_mut();
+        let this = GetCurrentProcess();
+        if DuplicateHandle(
+            this,
+            nul.as_raw_handle(),
+            this,
+            &mut inherited,
+            0,
+            1,
+            DUPLICATE_SAME_ACCESS,
+        ) == 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        let inherited = Handle(inherited);
+        let mut size = 0;
+        InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut size);
+        let mut storage = vec![0usize; size.div_ceil(std::mem::size_of::<usize>())];
+        let attributes = storage.as_mut_ptr().cast();
+        if InitializeProcThreadAttributeList(attributes, 1, 0, &mut size) == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        struct Attributes(LPPROC_THREAD_ATTRIBUTE_LIST);
+        impl Drop for Attributes {
+            fn drop(&mut self) {
+                unsafe {
+                    DeleteProcThreadAttributeList(self.0);
+                }
+            }
+        }
+        let attributes = Attributes(attributes);
+        if UpdateProcThreadAttribute(
+            attributes.0,
+            0,
+            PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+            (&inherited.0 as *const HANDLE).cast(),
+            std::mem::size_of::<HANDLE>(),
+            std::ptr::null_mut(),
+            std::ptr::null(),
+        ) == 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        let mut info: STARTUPINFOEXW = std::mem::zeroed();
+        info.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
+        info.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        info.StartupInfo.hStdInput = inherited.0;
+        info.StartupInfo.hStdOutput = inherited.0;
+        info.StartupInfo.hStdError = inherited.0;
+        info.lpAttributeList = attributes.0;
+        let mut process: PROCESS_INFORMATION = std::mem::zeroed();
+        if CreateProcessW(
+            program.as_ptr(),
+            command.as_mut_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            1,
+            DETACHED_PROCESS
+                | CREATE_NEW_PROCESS_GROUP
+                | CREATE_NO_WINDOW
+                | EXTENDED_STARTUPINFO_PRESENT
+                | CREATE_UNICODE_ENVIRONMENT,
+            environment.as_ptr().cast(),
+            std::ptr::null(),
+            &info.StartupInfo,
+            &mut process,
+        ) == 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+        Ok(process.dwProcessId)
+    }
 }
 
 /// Kill a bridge process by pid (used by `nur jev stop` and by tests).
+#[cfg(test)]
 pub fn kill_pid(pid: u32) {
     #[cfg(windows)]
     {
@@ -391,88 +581,167 @@ pub fn kill_pid(pid: u32) {
     }
 }
 
-/// Stop a bridge started by `nur jev start`.
+/// OS creation identity, independent of a PID's current occupant.
+#[cfg(windows)]
+fn process_identity(pid: u32) -> Option<String> {
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, FILETIME},
+        System::Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
+    };
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return None;
+        }
+        let mut times: [FILETIME; 4] = std::mem::zeroed();
+        let ok = GetProcessTimes(
+            handle,
+            &mut times[0],
+            &mut times[1],
+            &mut times[2],
+            &mut times[3],
+        );
+        CloseHandle(handle);
+        (ok != 0).then(|| format!("{}:{}", times[0].dwHighDateTime, times[0].dwLowDateTime))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn process_identity(pid: u32) -> Option<String> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let (_, fields) = stat.rsplit_once(") ")?;
+    Some(fields.split_whitespace().nth(19)?.to_string())
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn process_identity(pid: u32) -> Option<String> {
+    let out = std::process::Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "lstart="])
+        .output()
+        .ok()?;
+    let value = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    (!value.is_empty()).then_some(value)
+}
+
+fn shutdown_instance(state: &BridgeState) -> bool {
+    if state.instance.is_empty() {
+        return false;
+    }
+    let Some(health) = probe_port(state.port) else {
+        return false;
+    };
+    if health.get("instance").and_then(|v| v.as_str()) != Some(&state.instance)
+        || health.get("pid").and_then(|v| v.as_u64()) != Some(state.pid as u64)
+    {
+        return false;
+    }
+    let Ok(addr) = format!("127.0.0.1:{}", state.port).parse::<SocketAddr>() else {
+        return false;
+    };
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(800)) else {
+        return false;
+    };
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(800)));
+    stream.write_all(format!("POST /shutdown HTTP/1.1\r\nHost: localhost\r\nX-Nur-Bridge-Instance: {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", state.instance).as_bytes()).is_ok()
+}
+
+// On Windows the same open handle is checked and terminated, closing the PID
+// reuse race. The Python engines run inside the bridge; never kill a foreign
+// listener or an unverified process tree.
+#[cfg(windows)]
+fn terminate_owned(state: &BridgeState) -> bool {
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, FILETIME},
+        System::Threading::{
+            GetProcessTimes, OpenProcess, TerminateProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+            PROCESS_TERMINATE,
+        },
+    };
+    unsafe {
+        let handle = OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
+            0,
+            state.pid,
+        );
+        if handle.is_null() {
+            return false;
+        }
+        let mut times: [FILETIME; 4] = std::mem::zeroed();
+        let ok = GetProcessTimes(
+            handle,
+            &mut times[0],
+            &mut times[1],
+            &mut times[2],
+            &mut times[3],
+        );
+        let identity = format!("{}:{}", times[0].dwHighDateTime, times[0].dwLowDateTime);
+        let killed = ok != 0
+            && !state.process_identity.is_empty()
+            && identity == state.process_identity
+            && TerminateProcess(handle, 0) != 0;
+        CloseHandle(handle);
+        killed
+    }
+}
+
+#[cfg(not(windows))]
+fn terminate_owned(state: &BridgeState) -> bool {
+    if state.process_identity.is_empty()
+        || process_identity(state.pid).as_deref() != Some(&state.process_identity)
+    {
+        return false;
+    }
+    std::process::Command::new("kill")
+        .arg(state.pid.to_string())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// Stop only the recorded instance, never whichever process occupies its port.
 pub fn stop() -> Result<String> {
+    let _lease = lifecycle_lease()?;
     let Some(state) = state() else {
         return Ok("no bridge recorded (nothing to stop)".into());
     };
-    let alive = probe_port(state.port).is_some();
-    kill_pid(state.pid);
-    // Killing the recorded pid is not enough on its own: if that process was a
-    // launcher (or a parent of the engine), the engine survives holding the port,
-    // and reporting "stopped" would be a lie the user only notices later.
-    let mut killed_extra: Vec<u32> = Vec::new();
-    if alive {
-        for pid in pids_on_port(state.port) {
-            if pid != 0 && pid != state.pid {
-                kill_pid(pid);
-                killed_extra.push(pid);
-            }
+    let owned = !state.process_identity.is_empty()
+        && process_identity(state.pid).as_deref() == Some(&state.process_identity);
+    if !owned {
+        let _ = std::fs::remove_file(state_path());
+        return Ok("cleared stale bridge record; no owned process remains".into());
+    }
+    let graceful = shutdown_instance(&state);
+    if graceful {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while process_identity(state.pid).as_deref() == Some(&state.process_identity)
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(50));
         }
     }
-    // Give the OS a moment to release the socket before declaring failure.
-    let deadline = Instant::now() + Duration::from_millis(1_500);
-    while probe_port(state.port).is_some() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    if probe_port(state.port).is_some() {
-        // Keep the record: a stale pid is more useful to the user than no record.
-        return Ok(format!(
-            "bridge pid {} killed on port {}, but something still answers there and no process could be identified. Check `nur jev status` and stop it by hand (Windows: Task Manager; Unix: `lsof -ti tcp:{}`).",
-            state.pid, state.port, state.port
+    if process_identity(state.pid).as_deref() == Some(&state.process_identity)
+        && !terminate_owned(&state)
+    {
+        return Err(NurError::Other(
+            "could not stop the owned bridge; its record was retained".into(),
         ));
     }
     let _ = std::fs::remove_file(state_path());
     Ok(format!(
-        "bridge pid {} on port {} stopped{}{}",
-        state.pid,
-        state.port,
-        if alive { "" } else { " (it was already gone)" },
-        if killed_extra.is_empty() {
-            String::new()
-        } else {
-            format!(
-                " - also killed {} engine process(es) it had left behind: {}",
-                killed_extra.len(),
-                killed_extra
-                    .iter()
-                    .map(|p| p.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        }
+        "bridge pid {} on port {} stopped",
+        state.pid, state.port
     ))
 }
 
-/// Pids listening on a loopback port, best effort (empty when the platform tool
-/// is missing - the caller then only reports what it can prove).
-fn pids_on_port(port: u16) -> Vec<u32> {
-    #[cfg(windows)]
-    let (program, args): (&str, Vec<String>) = (
-        "powershell",
-        vec![
-            "-NoProfile".into(),
-            "-Command".into(),
-            format!(
-                "(Get-NetTCPConnection -LocalPort {port} -State Listen                  -ErrorAction SilentlyContinue).OwningProcess"
-            ),
-        ],
-    );
-    #[cfg(not(windows))]
-    let (program, args): (&str, Vec<String>) = ("lsof", {
-        let mut a = vec!["-ti".to_string()];
-        a.push(format!("tcp:{port}"));
-        a.push("-sTCP:LISTEN".to_string());
-        a
-    });
-    let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let Ok(out) = crate::ecosystem::run_capture(program, &refs, None, 10_000) else {
-        return Vec::new();
-    };
-    out.split_whitespace()
-        .filter_map(|t| t.trim().parse::<u32>().ok())
-        .filter(|p| *p != 0)
-        .collect()
+fn lifecycle_lease() -> Result<std::fs::File> {
+    std::fs::create_dir_all(home())?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(home().join("bridge-lifecycle.lock"))?;
+    file.lock()?;
+    Ok(file)
 }
 
 /// Point nur's TypeSafe layer at the local bridge.

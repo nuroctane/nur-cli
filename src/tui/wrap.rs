@@ -7,7 +7,9 @@
 //! same width. Without this, every wrapped prose row, list item, quote, and
 //! tool-output line snapped back to the left edge and the body read as a wall.
 
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
+use std::sync::Arc;
+pub type LinkSpan = (usize, usize, Arc<str>);
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
@@ -19,13 +21,23 @@ const GUTTER_ITEM_MARKERS: &[char] = &['•', '◦', '▪', '✓', '☐'];
 
 /// Wrap styled lines to `width` columns, preserving span styles.
 /// Prefers breaking at spaces; falls back to hard breaks for long tokens.
+#[cfg(test)]
 pub fn wrap_lines(lines: &[Line<'static>], width: u16) -> Vec<Line<'static>> {
+    wrap_lines_with_links(lines, width).0
+}
+
+/// Keep actual destinations attached to their characters across line wrapping.
+pub fn wrap_lines_with_links(
+    lines: &[Line<'static>],
+    width: u16,
+) -> (Vec<Line<'static>>, Vec<Vec<LinkSpan>>) {
     let width = width.max(4) as usize;
     let mut out = Vec::new();
+    let mut links = Vec::new();
     for line in lines {
-        wrap_one(line, width, &mut out);
+        wrap_one(line, width, &mut out, &mut links);
     }
-    out
+    (out, links)
 }
 
 /// The spans a wrapped row repeats so text stays aligned under its block: the
@@ -46,9 +58,7 @@ fn continuation_gutter(line: &Line<'_>) -> Vec<Span<'static>> {
             .chars()
             .filter(|c| !c.is_whitespace() && *c != '`')
             .collect();
-        let is_item_marker = marker_chars
-            .iter()
-            .all(|c| GUTTER_ITEM_MARKERS.contains(c))
+        let is_item_marker = marker_chars.iter().all(|c| GUTTER_ITEM_MARKERS.contains(c))
             || is_ordered_marker(&marker_chars);
         let is_bar = marker_chars.iter().any(|c| GUTTER_BARS.contains(c))
             && marker_chars.iter().all(|c| GUTTER_BARS.contains(c));
@@ -71,21 +81,37 @@ fn is_ordered_marker(chars: &[char]) -> bool {
     if chars.len() < 2 || *chars.last().unwrap() != '.' {
         return false;
     }
-    chars[..chars.len() - 1]
-        .iter()
-        .all(|c| c.is_ascii_digit())
+    chars[..chars.len() - 1].iter().all(|c| c.is_ascii_digit())
 }
 
-fn wrap_one(line: &Line<'static>, width: usize, out: &mut Vec<Line<'static>>) {
+fn wrap_one(
+    line: &Line<'static>,
+    width: usize,
+    out: &mut Vec<Line<'static>>,
+    links: &mut Vec<Vec<LinkSpan>>,
+) {
     // Flatten to (char, style) stream.
-    let mut chars: Vec<(char, Style)> = Vec::new();
+    let mut chars: Vec<(char, Style, Option<Arc<str>>)> = Vec::new();
     for span in &line.spans {
+        let destination = if span.style.add_modifier.contains(Modifier::UNDERLINED)
+            && [
+                crate::theme::MD_LINK(),
+                crate::theme::dim(crate::theme::MD_LINK(), 0.15),
+                crate::theme::dim(crate::theme::MD_LINK(), 0.22),
+            ]
+            .contains(&span.style.fg.unwrap_or_default())
+        {
+            Some(Arc::<str>::from(span.content.trim()))
+        } else {
+            None
+        };
         for ch in span.content.chars() {
-            chars.push((ch, span.style));
+            chars.push((ch, span.style, destination.clone()));
         }
     }
     if chars.is_empty() {
         out.push(Line::default());
+        links.push(Vec::new());
         return;
     }
 
@@ -97,50 +123,75 @@ fn wrap_one(line: &Line<'static>, width: usize, out: &mut Vec<Line<'static>>) {
     // Continuation rows pay for the gutter, so they wrap earlier than the first.
     let cont_width = width.saturating_sub(gutter_w).max(4);
 
-    let mut row: Vec<(char, Style)> = Vec::new();
+    let mut row: Vec<(char, Style, Option<Arc<str>>)> = Vec::new();
     let mut row_w = 0usize;
     let mut first_row = true;
 
     let mut i = 0usize;
     while i < chars.len() {
-        let (ch, st) = chars[i];
+        let (ch, st, destination) = chars[i].clone();
         let w = ch.width().unwrap_or(0);
         let budget = if first_row { width } else { cont_width };
         if row_w + w > budget && !row.is_empty() {
             // Find last space in the row to break at.
-            let brk = row.iter().rposition(|(c, _)| *c == ' ');
+            let brk = row.iter().rposition(|(c, _, _)| *c == ' ');
             match brk {
                 Some(p) if p > 0 => {
-                    let rest: Vec<(char, Style)> = row.split_off(p + 1);
+                    let rest: Vec<(char, Style, Option<Arc<str>>)> = row.split_off(p + 1);
                     // Drop the trailing space from the emitted row.
                     row.pop();
-                    emit_row(std::mem::take(&mut row), first_row, &gutter, out);
+                    emit_row(std::mem::take(&mut row), first_row, &gutter, out, links);
                     first_row = false;
                     row = rest;
-                    row_w = row.iter().map(|(c, _)| c.width().unwrap_or(0)).sum();
+                    row_w = row.iter().map(|(c, _, _)| c.width().unwrap_or(0)).sum();
                     continue; // re-attempt current char with the shorter row
                 }
                 _ => {
-                    emit_row(std::mem::take(&mut row), first_row, &gutter, out);
+                    emit_row(std::mem::take(&mut row), first_row, &gutter, out, links);
                     first_row = false;
                     row_w = 0;
                     continue;
                 }
             }
         }
-        row.push((ch, st));
+        row.push((ch, st, destination));
         row_w += w;
         i += 1;
     }
-    emit_row(row, first_row, &gutter, out);
+    emit_row(row, first_row, &gutter, out, links);
 }
 
 fn emit_row(
-    row: Vec<(char, Style)>,
+    row: Vec<(char, Style, Option<Arc<str>>)>,
     first_row: bool,
     gutter: &[Span<'static>],
     out: &mut Vec<Line<'static>>,
+    links: &mut Vec<Vec<LinkSpan>>,
 ) {
+    let mut hits: Vec<LinkSpan> = Vec::new();
+    let mut col = if first_row {
+        0
+    } else {
+        gutter
+            .iter()
+            .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+            .sum()
+    };
+    for (ch, _, target) in &row {
+        let end = col + ch.width().unwrap_or(0);
+        if let Some(target) = target {
+            if let Some(last) = hits
+                .last_mut()
+                .filter(|last| last.1 == col && last.2 == *target)
+            {
+                last.1 = end;
+            } else {
+                hits.push((col, end, target.clone()));
+            }
+        }
+        col = end;
+    }
+    links.push(hits);
     let mut line = row_to_line(row);
     if !first_row && !gutter.is_empty() {
         line.spans.splice(0..0, gutter.iter().cloned());
@@ -148,11 +199,11 @@ fn emit_row(
     out.push(line);
 }
 
-fn row_to_line(row: Vec<(char, Style)>) -> Line<'static> {
+fn row_to_line(row: Vec<(char, Style, Option<Arc<str>>)>) -> Line<'static> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut cur = String::new();
     let mut cur_style: Option<Style> = None;
-    for (ch, st) in row {
+    for (ch, st, _) in row {
         match cur_style {
             Some(s) if s == st => cur.push(ch),
             Some(s) => {
@@ -177,6 +228,21 @@ fn row_to_line(row: Vec<(char, Style)>) -> Line<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn markdown_destinations_survive_hard_wraps_and_duplicate_labels() {
+        let a = "https://example.com/long/destination?a=one&b=two";
+        let b = "https://other.test/different";
+        let lines = crate::tui::markdown::render_markdown(&format!("[same]({a}) and [same]({b})"), Style::default());
+        let (rows, hits) = wrap_lines_with_links(&lines, 16);
+        let targets: Vec<_> = hits.iter().flatten().map(|hit| hit.2.as_ref()).collect();
+        assert!(targets.iter().filter(|target| **target == a).count() > 1, "long link did not preserve its destination: {targets:?}");
+        assert!(targets.contains(&b));
+        for (row, hits) in rows.iter().zip(&hits) {
+            let width: usize = row.spans.iter().map(|span| UnicodeWidthStr::width(span.content.as_ref())).sum();
+            assert!(hits.iter().all(|(lo, hi, _)| lo < hi && *hi <= width));
+        }
+    }
 
     fn text(lines: &[Line<'static>]) -> Vec<String> {
         lines

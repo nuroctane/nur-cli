@@ -36,6 +36,8 @@ import hashlib
 from collections import OrderedDict
 import json
 import math
+import os
+import secrets
 import platform
 import sys
 import threading
@@ -937,6 +939,7 @@ class Handler(BaseHTTPRequestHandler):
     # Requests are served on threads; the counters are reporting-only but should
     # still be accurate.
     stats_lock = threading.Lock()
+    instance = os.environ.get("NUR_JEV_INSTANCE", "")
 
     @classmethod
     def bump(cls, key: str, by: int = 1) -> None:
@@ -961,6 +964,8 @@ class Handler(BaseHTTPRequestHandler):
                 200,
                 {
                     "status": "ok",
+                    "instance": self.instance,
+                    "pid": os.getpid(),
                     "backend": self.backend.name,
                     "note": self.backend.note,
                     "max_state_tokens": self.backend.max_state_tokens,
@@ -980,6 +985,14 @@ class Handler(BaseHTTPRequestHandler):
         self._json(404, {"detail": {"error_type": "not_found", "message": self.path}})
 
     def do_POST(self):
+        if self.path == "/shutdown":
+            supplied = self.headers.get("X-Nur-Bridge-Instance", "")
+            if not self.instance or not secrets.compare_digest(supplied, self.instance):
+                self._json(403, {"error": "bridge instance mismatch"})
+                return
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
+            self._json(200, {"stopping": True})
+            return
         if not self.path.startswith("/v1/systemone"):
             self._json(404, {"detail": {"error_type": "not_found", "message": self.path}})
             return

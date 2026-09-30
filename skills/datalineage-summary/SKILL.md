@@ -1,6 +1,7 @@
 ---
 name: datalineage-summary
 metadata:
+  version: "1.0.0"
   category: BigDataAndAnalytics
 description: >-
   Summarizes Google Cloud Data Lineage graphs to help users debug data quality issues and understand data provenance for BQ/GCS.

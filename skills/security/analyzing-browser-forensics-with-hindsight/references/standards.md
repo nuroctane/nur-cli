@@ -1,6 +1,6 @@
 # Standards - Browser Forensics with Hindsight
 ## Tools
-- Hindsight: https://github.com/obsidianforensics/hindsight
+- Hindsight: https://github.com/RyanDFIR/hindsight
 - DB Browser for SQLite: Chrome database inspection
 - ChromeCacheView (NirSoft): Cache analysis
 ## Browser Databases

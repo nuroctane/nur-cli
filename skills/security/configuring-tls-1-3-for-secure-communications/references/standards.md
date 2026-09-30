@@ -44,7 +44,7 @@
 
 ### testssl.sh
 - **URL**: https://testssl.sh/
-- **GitHub**: https://github.com/drwetter/testssl.sh
+- **GitHub**: https://github.com/testssl/testssl.sh
 - **Description**: Command-line tool for checking TLS/SSL configurations
 
 ### SSL Labs Server Test

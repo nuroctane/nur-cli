@@ -1,0 +1,19 @@
+{
+  "$schema": "https://gstack.dev/schemas/section-manifest.json",
+  "skill": "qa-only",
+  "version": 1,
+  "sections": [
+    {
+      "id": "exploratory",
+      "file": "exploratory.md",
+      "title": "Report-only exploratory QA",
+      "trigger": "running selected report-only baseline and exploratory probes without product or test writes"
+    },
+    {
+      "id": "reporting",
+      "file": "reporting.md",
+      "title": "Evidence-grounded report finalization",
+      "trigger": "finalizing the report after probing stops"
+    }
+  ]
+}

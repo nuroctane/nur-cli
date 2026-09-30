@@ -1051,7 +1051,7 @@ npm install bootstrap
 
 ### Shopify Polaris
 - https://shopify.dev/docs/api/app-home/web-components
-- https://github.com/Shopify/polaris-react
+- https://github.com/Shopify/polaris-react-archive
 - https://polaris-react.shopify.com/components
 
 ### Atlassian

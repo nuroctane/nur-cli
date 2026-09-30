@@ -314,6 +314,8 @@ pub enum EcosystemCmd {
     },
     /// Show ecosystem readiness
     Status,
+    /// Rebuild global skill metadata without installing packages or resolving credentials
+    RefreshSkills,
 }
 
 #[derive(Subcommand, Debug)]

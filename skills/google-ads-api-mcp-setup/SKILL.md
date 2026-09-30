@@ -4,7 +4,7 @@ description: Guides developers through downloading, configuring, and installing 
 compatibility: Python 3.12+, pipx
 metadata:
   author: google-ads-api-team
-  version: "1.0"
+  version: "1.0.0"
   category: GoogleAds
 ---
 # Google Ads API MCP Server Installation

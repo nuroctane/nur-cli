@@ -1511,9 +1511,19 @@ fn read_skill_body(sk: &Skill) -> String {
 /// Powers slash invocation of any skill: `/adhd`, `/scan`, etc.
 pub fn skill_by_name(cwd: &Path, name: &str) -> Option<Skill> {
     let want = name.trim().trim_start_matches('/').to_ascii_lowercase();
-    load_skills(cwd)
-        .into_iter()
+    let skills = load_skills(cwd);
+    skills
+        .iter()
         .find(|s| s.name.eq_ignore_ascii_case(&want))
+        .or_else(|| {
+            skills.iter().find(|s| {
+                s.path
+                    .parent()
+                    .and_then(|p| p.file_name())
+                    .is_some_and(|folder| folder.to_string_lossy().eq_ignore_ascii_case(&want))
+            })
+        })
+        .cloned()
 }
 
 /// Build the mandatory activation section for a skill invoked explicitly

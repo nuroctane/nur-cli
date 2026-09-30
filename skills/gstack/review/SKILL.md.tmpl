@@ -1,0 +1,432 @@
+---
+name: review
+preamble-tier: 4
+version: 1.0.0
+description: |
+  Pre-landing PR review. Analyzes diff against the base branch for SQL safety, LLM trust
+  boundary violations, conditional side effects, and other structural issues. Use when
+  asked to "review this PR", "code review", "pre-landing review", or "check my diff".
+  Proactively suggest when the user is about to merge or land code changes. (gstack)
+allowed-tools:
+  - Bash
+  - Read
+  - Edit
+  - Write
+  - Grep
+  - Glob
+  - Agent
+  - AskUserQuestion
+  - WebSearch
+triggers:
+  - review this pr
+  - code review
+  - check my diff
+  - pre-landing review
+---
+
+{{PREAMBLE}}
+
+{{BASE_BRANCH_DETECT}}
+
+# Pre-Landing PR Review
+
+Review the branch diff against the base for structural issues tests miss.
+
+---
+
+{{SECTION_INDEX:review}}
+
+---
+
+## Step 1: Check branch
+
+1. Run `git branch --show-current` to get the current branch.
+2. If on the base branch, output: **"Nothing to review — you're on the base branch or have no changes against it."** and stop.
+3. Run `git fetch origin <base> --quiet && DIFF_BASE=$(git merge-base origin/<base> HEAD) && git diff "$DIFF_BASE" --stat` to check if there's a diff. If no diff, output the same message and stop.
+
+---
+
+{{SCOPE_DRIFT}}
+
+{{SECTION:plan-completion}}
+
+## Step 2: Read the checklist
+
+Read `~/.claude/skills/gstack/review/checklist.md`.
+
+**If the file cannot be read, STOP and report the error.** Do not proceed without the checklist.
+
+---
+
+## Step 2.5: Check for Greptile review comments
+
+Read `~/.claude/skills/gstack/review/greptile-triage.md` and follow the fetch, filter, classify, and **escalation detection** steps.
+
+**If no PR exists, `gh` fails, API returns an error, or there are zero Greptile comments:** Skip this step silently. Greptile integration is additive — the review works without it.
+
+**If Greptile comments are found:** Store the classifications (VALID & ACTIONABLE, VALID BUT ALREADY FIXED, FALSE POSITIVE, SUPPRESSED) — you will need them in Step 5.
+
+---
+
+## Step 3: Get the diff
+
+An invocation is this /review run; a pass reviews one candidate before any fixes.
+On first entry, initialize one invocation action list and CYCLES=0. Keep both through re-reviews.
+
+Each pass has one direction: collect findings in Steps 3–4.8, approve and apply
+fixes in Step 5, then choose repeat or final persistence in Step 5.8.
+Do not edit reviewed source until Step 5. All readers examine the same candidate.
+
+Fetch the base branch to avoid false positives from stale local state:
+
+```bash
+git fetch origin <base> --quiet
+```
+
+Compute the merge base, then diff the working tree against that point:
+
+```bash
+DIFF_BASE=$(git merge-base origin/<base> HEAD)
+~/.claude/skills/gstack/bin/gstack-review-log --start review
+git diff "$DIFF_BASE"
+```
+
+1. Save the printed REVIEW_START for this core candidate before reading its diff.
+2. Each re-review captures a new token before reading, never at log time. Earlier
+   core tokens remain unused; Step 5.8 finishes only the final core token.
+3. Native/outside reviewer attempts own separate PASS_START tokens, not REVIEW_START.
+4. Read non-ignored untracked source too (`git ls-files --others --exclude-standard`);
+   the captured candidate includes it.
+
+Keep the review-record terms separate:
+
+| Value | Purpose and owner |
+|---|---|
+| REVIEW_START / PASS_START | Opaque start receipts from the logger: one for the core pass, one for each other reviewer attempt. |
+| Finding fingerprint | Groups duplicate findings. The installed helper computes shared-code fingerprints; a matching key alone never proves a prior Skip is reusable. |
+| `review_binding` | The logger's proof tying a finished review to its captured candidate, not a finding identifier. |
+| `snapshot_covered_paths` | Supporting advice files the logger proved byte-identical to that candidate. Used by the prior-Skip checker, never supplied by the reviewer. |
+
+## Step 3.4: Workspace-aware queue status (advisory)
+
+Check the claimed VERSION's queue slot. This landing-order advice never blocks review.
+
+```bash
+BRANCH_VERSION=$(git show HEAD:VERSION 2>/dev/null | tr -d '\r\n[:space:]' || echo "")
+BASE_BRANCH="<base>"
+BASE_VERSION=$(git show origin/$BASE_BRANCH:VERSION 2>/dev/null | tr -d '\r\n[:space:]' || echo "")
+QUEUE_JSON=$(bun run ~/.claude/skills/gstack/bin/gstack-next-version \
+  --base "$BASE_BRANCH" \
+  --bump patch \
+  --current-version "$BASE_VERSION" 2>/dev/null || echo '{"offline":true}')
+NEXT_SLOT=$(echo "$QUEUE_JSON" | jq -r '.version // empty')
+CLAIMED_COUNT=$(echo "$QUEUE_JSON" | jq -r '.claimed | length // 0')
+OFFLINE=$(echo "$QUEUE_JSON" | jq -r '.offline // false')
+```
+
+- If `OFFLINE=true`: skip this section (no signal to report).
+- Otherwise, include ONE line in the review output: `Version claimed: v<BRANCH_VERSION>. Queue: <CLAIMED_COUNT> PR(s) ahead. <VERDICT>` where VERDICT is either `Slot free` (if `BRANCH_VERSION >= NEXT_SLOT`) or `⚠ queue moved — rerun /ship to reconcile v<BRANCH_VERSION> → v<NEXT_SLOT>`.
+
+Compare dotted version components as integers from left to right; missing trailing components count as zero.
+
+---
+
+## Step 3.5: Slop scan (advisory)
+
+Scan changed files for empty catches, redundant `return await` and needless abstractions:
+
+```bash
+bun run slop:diff origin/<base> 2>/dev/null || true
+```
+
+Include findings as non-blocking informational diagnostics. If slop:diff is
+unavailable, skip silently.
+
+---
+
+## Step 3.6: Gather review context
+
+Run Prior Learnings, then Web research readiness after Step 3.5, before Step 4.
+Use their results in the core review.
+
+{{LEARNINGS_SEARCH}}
+
+{{ASIDE_RESEARCH}}
+
+## Step 4: Critical pass (core review)
+
+{{QA_REVIEW_PREFLIGHT}}
+
+Apply both checklist passes in order: CRITICAL, then INFORMATIONAL. Respect its suppressions.
+
+**Enum & Value Completeness requires reading code OUTSIDE the diff.** When the diff introduces a new enum value, status, tier, or type constant, use Grep to find all files that reference sibling values, then Read those files to check if the new value is handled. Shared-code analysis also requires reading related callers outside the diff; keep findings anchored to changed code.
+
+**Search-before-recommending:** Research proposed fixes through Aside, especially
+concurrency, caching, auth and framework behavior:
+- Check current best practice for the installed framework version.
+- Look for a newer built-in before proposing a workaround.
+- Verify API signatures against current docs.
+
+```bash
+{{ASIDE_EXEC_PRELUDE}}
+_aside_exec "Search the web for {framework} {version} {pattern} current best practice and whether a built-in replaces it. Read-only: do not sign in, submit, or change anything. Reply with up to 5 bullets, each with its source URL, then stop."
+```
+
+Without Aside `READY`, use WebSearch if available; with neither, disclose the gap
+and use existing knowledge.
+
+### Shared-code opportunities (core pass)
+
+Run this check on every diff, including fewer than 50 changed lines and hosts without Review Army:
+1. Read the changed code and related unchanged callers using the rubric below. Do not run the standalone history/PR sweep or impose candidate quotas.
+2. Require at least one verified authored location changed in this diff and at least two actual authored source locations needing the shared behavior. Added or uncommitted source qualifies; invented future callers do not.
+3. Trace generated copies to authored templates/resolvers. Exclude generated and third-party copies from evidence and savings.
+
+{{SHARED_LIBS_RUBRIC}}
+
+The core pass owns optional extraction advice. Zero proposals is valid; prefer a compatible existing helper.
+- Show the changed anchor, verified callers, smallest helper/destination, preserved differences, compatibility tests and shared-failure risk.
+- Estimate implementation and total removed/added/saved lines from named blocks; deduplicate equivalent proposals and overlapping savings.
+- Use `"category":"shared-libs","severity":"INFORMATIONAL","advisory":true`, `evidence_paths` (all authored supporting paths) and `helper_target:{"path":"...","symbol":"..."}`.
+- Include an existing helper's authored path in `evidence_paths` so its contract and raw bytes participate in revalidation. A not-yet-created helper belongs only in `helper_target`.
+
+**Identity before merge or suppression:** Use installed `sharedLibsFingerprint`, never model-generated hashes. Send literal JSON on stdin (actual paths/symbol; keep the quoted delimiter), not interpolated shell code:
+
+```bash
+GSTACK_SHARED_LIB=~/.claude/skills/gstack/lib/review-evidence.ts
+bun -e 'const { sharedLibsFingerprint } = await import(process.argv[1]); const value = sharedLibsFingerprint(JSON.parse(await Bun.stdin.text())); if (!value) process.exit(1); console.log(value);' "$GSTACK_SHARED_LIB" <<'GSTACK_SHARED_LIBS_JSON'
+{"evidence_paths":["src/caller-a.ts","src/caller-b.ts"],"helper_target":{"path":"src/shared.ts","symbol":"sharedHelper"}}
+GSTACK_SHARED_LIBS_JSON
+```
+
+Use the returned fingerprint; malformed/missing metadata requires revalidation. Real defects follow Fix-First independently: advice or a prior Skip cannot suppress, downgrade or replace them, even with a shared supplied fingerprint.
+
+Core findings use the confidence gates below; Step 4.6 applies its specialist gates.
+Use CRITICAL/INFORMATIONAL labels in the finding format.
+Step 5.8 combines these finding lines with the checklist's action groups.
+
+{{CONFIDENCE_CALIBRATION}}
+
+### TODOS cross-reference
+
+If root `TODOS.md` exists, report closed items as "This PR addresses TODO: <title>".
+Flag new TODOs as informational and cite related items. Otherwise skip silently.
+
+### Documentation staleness check
+
+Read root `.md` files. When changed code affects a documented feature or workflow
+but its doc was not updated, flag an INFORMATIONAL finding naming the file and
+affected behavior. Propose `/document-release` for the parent's decision, never a
+critical finding or another writer during collection. Skip silently if no docs exist.
+
+---
+
+{{SECTION:review-army}}
+
+---
+
+{{QA_REVIEW}}
+
+---
+
+{{SECTION:adversarial}}
+
+## Step 5: Fix-First Review
+
+Before edits, confirm every dispatched reader has returned or is confirmed stopped.
+For an active or unknown reader/writer, wait or confirm it is stopped. If settlement
+cannot be confirmed, persist incomplete at Step 5.8 and STOP without edits.
+Terminal failure does not block fixes from independent evidence. Missing required
+output still makes the pass incomplete, even after the reader is stopped.
+
+Combine core, specialist, Step 4.7 QA, Step 4.8 adversarial and VALID & ACTIONABLE Greptile findings.
+For QA findings, assign confidence (1–10) from replay/code evidence using Confidence
+Calibration; retain Step 4.7's severity, not a severity inferred from confidence.
+Run Step 5.0 severity/prior-skip dedup on all
+findings before Step 5a classification. Then action every remaining finding.
+Structured approval does not waive advisory/test_stub ASK gates.
+
+{{CROSS_REVIEW_DEDUP}}
+
+**Keep decisions through fix cycles:**
+1. Immediately save completed AUTO-FIX/fix and explicit Skip actions in the Step 3
+   action list, keeping defects separate from advice. For advice retain the helper's
+   fingerprint, `advisory`, `evidence_paths` and `helper_target`.
+2. Before reusing a decision, re-read every supporting caller and helper destination,
+   including secondary callers and transformed/indirect paths. Compare their raw
+   source with the decision evidence.
+3. Unrelated auto-fixes do not reopen unchanged identity, contract and tradeoffs.
+   Material proposal, behavior, migration or risk changes require a new question.
+   Carrying this invocation's decisions cannot suppress new/recurring defects or
+   replace Step 5.0's prior-review checker.
+
+### Step 5a: Classify each finding
+
+For each finding, classify as AUTO-FIX or ASK per the Fix-First Heuristic in
+checklist.md. Critical findings lean toward ASK; informational findings lean
+toward AUTO-FIX.
+
+**Advisory override:** After severity validation, `advisory:true` is ASK-only. Never auto-apply an optional extraction, even when mechanical. Show `[ADVISORY]`, helper, caller migration, tests and estimated total savings for approval or Skip. Handle real defects independently.
+
+**Test stub override:** Any finding that has a `test_stub` field, from a specialist or exploratory QA,
+is reclassified as ASK regardless of its original classification. When presenting the ASK
+item, show the proposed test file path and the test code. The user approves or skips the
+test creation. If approved, follow Step 5d's regression-before-repair order. Derive the test file path from
+the finding's `path` using project conventions (`spec/` for RSpec, `__tests__/` for
+Jest/Vitest, `test_` prefix for pytest, `_test.go` suffix for Go). If the test file
+already exists, append the new test.
+
+### Step 5b: Auto-fix all AUTO-FIX items
+
+Apply each fix directly. For each one, output a one-line summary:
+`[AUTO-FIXED] [file:line] Problem → what you did`
+Retain the completed action in the invocation action list before starting any re-review.
+
+### Step 5c: Batch-ask about ASK items
+
+If there are ASK items remaining, present them in ONE AskUserQuestion:
+
+- List each item with a number, the severity label (or `[ADVISORY]` for optional advice), the problem, and a recommended fix
+- For each item, provide options: A) Fix as recommended, B) Skip
+- Include an overall RECOMMENDATION
+
+If 3 or fewer ASK items, you may use individual AskUserQuestion calls instead of batching.
+Retain each explicit Skip choice and its finding metadata in the invocation action list. Do not record an unanswered question as skipped or ask again about a decision already revalidated in this invocation.
+
+### Step 5d: Apply user-approved fixes
+
+Apply fixes where the user chose "Fix," including Step 1.5's approved TODO changes.
+Output what was fixed.
+For an approved defect regression, write the test and prove it fails for the original
+defect before changing product code. Then require the regression, original probe and
+adjacent happy path to pass. If that proof cannot run, report the coverage gap and do
+not claim a verified repair. Healthy uncovered contracts need no invented failing bug.
+After applying the approved fix, retain its `fixed` action and the original finding metadata in the invocation action list, even if the changed blocks or helper callers are subsequently removed. Approval alone is not a completed fix.
+After verifying an approved regression and repair, output:
+`[FIXED + TEST] [file:line] Problem -> fix + test at [test_path]`
+
+If no ASK items exist (everything was AUTO-FIX), skip the question entirely.
+
+### Verification of claims
+
+Before final output, cite the line proving a safety claim, read and cite any
+handling code you rely on, and name the test file and method for coverage claims.
+Verify claims or flag them as unknown; "this looks fine" is not evidence.
+
+### Greptile comment resolution
+
+After outputting your own findings, if Greptile comments were classified in Step 2.5:
+
+**Include a Greptile summary in your output header:** `+ N Greptile comments (X valid, Y fixed, Z FP)`
+
+Before replying to any comment, run the **Escalation Detection** algorithm from greptile-triage.md to determine whether to use Tier 1 (friendly) or Tier 2 (firm) reply templates.
+
+1. **VALID & ACTIONABLE comments:** Use their Step 5a–5d disposition; do not ask a second fix question. Step 5c alone supplies A) Fix / B) Skip for ASK items. After a completed fix, use the **Fix reply template** with diff and explanation; cite the current diff if uncommitted, never invent a commit SHA. A Skip leaves the defect unresolved and grants no new fix permission. If evidence disproves the finding, reclassify it below.
+
+2. **FALSE POSITIVE comments:** These are reply decisions, not code approval. Show file:line (or [top-level]), summary, permalink and evidence, then ask:
+   - A) Reply explaining why this is incorrect (recommended if clearly wrong)
+   - B) Propose a code change
+   - C) Ignore — don't reply, don't fix
+
+   For A, use the **False Positive reply template** with evidence + suggested re-rank; save to both histories. For B, return to Steps 5c–5d with an ASK proposal. Show the exact change and any `test_stub`; wait for approval before editing. Retain the comment decision so re-entry does not repeat its question.
+
+3. **VALID BUT ALREADY FIXED comments:** Reply using the **Already Fixed reply template** from greptile-triage.md — no AskUserQuestion needed:
+   - Include what was done and the fixing commit SHA
+   - Save to both per-project and global greptile-history
+
+4. **SUPPRESSED comments:** Skip silently — these are known false positives from previous triage.
+
+---
+
+## Step 5.8: Persist Eng Review result
+
+### 1. Re-review after edits
+
+1. A pass covers Steps 3–5, including all reviewers before fixes. Allow at most 3 fix cycles:
+   - Edited: increment CYCLES once. Below 3, repeat Steps 3–5 with a new
+     REVIEW_START. At 3, persist `converged:false` and remaining findings by filling
+     and saving the record below. Report nonconvergence and coverage gaps, then STOP
+     this invocation, without a clean summary or a fourth pass.
+   - No edits: fill the record below.
+2. On a repeat, execute Steps 3–5 in order. At Step 4.7, reuse only this invocation's
+   unchanged-input QA evidence; rerun affected probes after source, test, contract,
+   command or fixture changes. Reusing a probe never skips a review step.
+   A probe is affected when its entrypoint, dependencies, contract or replay inputs
+   change. If impact is uncertain, rerun it.
+3. **Verify completed actions.** On the final zero-edit pass, reconcile this
+   invocation's actions with current findings. Deduplicate by structural identity
+   and advisory/defect kind. For a completed extraction, retain `fixed` and the
+   original `evidence_paths`/`helper_target`; use `sharedLibsFingerprint` on that
+   metadata. Verify the replacement helper, remaining callers and tests without
+   requiring deleted pre-extraction blocks. Current findings determine recurring
+   defects and unresolved counts; earlier fixes do not suppress them.
+4. **Recheck skipped advice.** Re-read its final-snapshot supporting source and
+   reconfirm the decision; otherwise report its history without a reusable skip.
+   The logger computes `snapshot_covered_paths` from eligible paths whose raw bytes
+   equal the bound snapshot blobs (`[]` if none). Never carry prior-cycle, supplied
+   or prior-record coverage forward or build this proof yourself. Fixed advice
+   needs no skip coverage.
+
+### 2. Fill the record
+
+- `COMPLETED`: true only when the checklist, dispatched specialists and native
+  Step 4.8 adversarial pass finish, and every required Step 4.7 probe passes.
+  Any failed, blocked, inconclusive or not-run required probe means false, as does
+  a failed native review. `/ship` named-risk acceptance cannot complete `/review`.
+- `CONVERGED`: true only for a completed zero-edit pass; `CYCLES` counts editing
+  passes, not findings or reviewer attempts.
+- `STATUS`: `clean` only when completed with zero unresolved non-advisory
+  defects; otherwise `issues_found`. An incomplete review with no defects has
+  zero counts and `completed:false`; explain the gap. Advice never blocks clean
+  status or relaxes completion, convergence, start-token or missing-reviewer rules.
+
+The required in-host adversarial result controls native completion. Optional outside
+attempts keep their own incomplete records when unavailable and cannot substitute
+for the native result, or vice versa. Step 4.8's structured-review gate still applies.
+
+- Use Step 4.6's `specialists` object unchanged, including its empty small-diff map.
+  If this host omits Review Army, use `specialists: {}` without claiming specialist coverage.
+- Build `findings` from final-pass core, specialist, verified exploratory QA
+  findings and invocation actions. Retain `fingerprint`, `severity`
+  (`CRITICAL|INFORMATIONAL`), `action`, and any `advisory`, `evidence_paths`,
+  `helper_target`. Recheck source after fixes. The logger uses `sharedLibsFingerprint`,
+  never supplied/model hashes.
+  Actions: `auto-fixed` (Step 5b), `fixed` (approved **and completed** in Step 5d),
+  `skipped` (explicit Skip in Step 5c). Advice is never `auto-fixed`; pending
+  advice stays in the response, not the record. Exclude prior Step 5.0
+  suppressions; include this invocation's revalidated decisions.
+
+```bash
+~/.claude/skills/gstack/bin/gstack-review-log '{"skill":"review","timestamp":"TIMESTAMP","status":"STATUS","issues_found":N,"critical":N,"informational":N,"quality_score":SCORE,"specialists":SPECIALISTS_JSON,"findings":FINDINGS_JSON,"commit":"COMMIT","completed":COMPLETED,"converged":CONVERGED,"cycles":CYCLES}' --finish REVIEW_START
+```
+
+Use ISO 8601 `TIMESTAMP` and `git rev-parse --short HEAD` for `COMMIT`.
+`quality_score` is Step 4.6's specialist score (`10.0` when small-diff specialists
+were skipped or this host omits Review Army). This default is not completion evidence;
+unresolved non-advisory core defects still count in `issues_found`,
+`critical`, `informational`. The logger builds trusted `review_binding` from the
+validated captured branch digest, discarding caller bindings. Never invent a binding
+or replace REVIEW_START at log time; finish only the final core token.
+
+### Report the final review
+
+Emit one final report, merging all reviewers rather than concatenating their reports:
+1. `Pre-Landing Review: N issues (X critical, Y informational)` counts final unresolved
+   non-advisory defects. State INCOMPLETE if `COMPLETED` is false, even when N=0.
+2. Use the checklist's action groups with confidence-tagged finding lines. Keep fixed,
+   skipped and advisory items separate from unresolved defects; retain their dispositions.
+3. Append Step 4.7's single `## Exploratory QA and Verification Results` section with
+   current evidence and coverage gaps. Neither coverage gaps nor advice are defects.
+
+{{LEARNINGS_LOG}}
+
+If the review exits early before a real review completes (for example, no diff against the base branch), do **not** write this entry.
+
+## Important Rules
+
+- **Read the FULL diff before commenting.** Do not flag issues already addressed in the diff.
+- **Fix-first, not read-only.** AUTO-FIX items are applied directly. ASK items are only applied after user approval. Never commit, push, or create PRs — that's /ship's job.
+- **Be terse.** One line problem, one line fix. No preamble.
+- **Only flag real problems.** Skip anything that's fine.
+- **Optional extractions stay advisory.** Shared-code opportunities need verified callers and useful reliability or total savings; similarity alone is not a defect. Keep actual defects independently actionable.
+- **Use Greptile reply templates from greptile-triage.md.** Every reply includes evidence. Never post vague replies.

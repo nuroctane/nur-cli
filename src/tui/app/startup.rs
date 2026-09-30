@@ -34,7 +34,17 @@ enum SkillEvent {
     Ready(PathBuf, std::result::Result<Vec<(String, String)>, String>),
 }
 
+type AccountApply = Box<dyn FnOnce(&mut App) + Send>;
+type AccountJob = Box<dyn FnOnce() -> (u64, AccountApply) + Send>;
+
 pub(super) struct StartupState {
+    ui_tx: mpsc::UnboundedSender<AccountApply>,
+    ui_rx: mpsc::UnboundedReceiver<AccountApply>,
+    pub(super) login_epoch: u64,
+    account_tx: Option<std::sync::mpsc::Sender<AccountJob>>,
+    account_rx: Option<mpsc::UnboundedReceiver<(u64, AccountApply)>>,
+    account_epoch: u64,
+    account_pending: usize,
     launched: bool,
     provider_ready: bool,
     skills_ready: bool,
@@ -49,7 +59,15 @@ pub(super) struct StartupState {
 }
 impl StartupState {
     pub(super) fn new() -> Self {
+        let (ui_tx, ui_rx) = mpsc::unbounded_channel();
         Self {
+            ui_tx,
+            ui_rx,
+            login_epoch: 0,
+            account_tx: None,
+            account_rx: None,
+            account_epoch: 0,
+            account_pending: 0,
             launched: false,
             provider_ready: false,
             skills_ready: false,
@@ -79,8 +97,23 @@ impl App {
         }
         self.startup.launched = true;
         crate::startup::mark("first_frame");
+        #[cfg(feature = "image-peek")]
+        {
+            let cfg = self.cfg.clone();
+            self.background_ui(
+                move || super::prepare_image_picker(&cfg),
+                |app, picker| {
+                    app.img_picker = Some(picker);
+                },
+            );
+        }
         self.start_provider_preparation();
         self.refresh_skill_palette_cache();
+    }
+
+    pub(super) fn restart_provider_preparation(&mut self) {
+        self.startup.account_epoch += 1;
+        self.start_provider_preparation();
     }
 
     fn start_provider_preparation(&mut self) {
@@ -170,9 +203,111 @@ impl App {
         }
     }
 
+    /// One-off blocking OS work returns a UI completion without holding up input.
+    pub(super) fn background_ui<R: Send + 'static>(
+        &mut self,
+        operation: impl FnOnce() -> R + Send + 'static,
+        apply: impl FnOnce(&mut App, R) + Send + 'static,
+    ) {
+        let tx = self.startup.ui_tx.clone();
+        if let Err(error) = std::thread::Builder::new()
+            .name("nur-ui-work".into())
+            .spawn(move || {
+                let result = operation();
+                let _ = tx.send(Box::new(move |app| apply(app, result)));
+            })
+        {
+            self.push_error(format!("background operation: {error}"));
+        }
+    }
+
+    /// Credential writes/resolution are serialized off the terminal thread.
+    /// Only the latest UI intent can install a client or finish a login modal.
+    pub(super) fn account_work<R: Send + 'static>(
+        &mut self,
+        affects_provider: bool,
+        operation: impl FnOnce() -> R + Send + 'static,
+        apply: impl FnOnce(&mut App, R) + Send + 'static,
+    ) {
+        if self.startup.account_tx.is_none() {
+            let (tx, jobs) = std::sync::mpsc::channel::<AccountJob>();
+            let (done, rx) = mpsc::unbounded_channel();
+            match std::thread::Builder::new()
+                .name("nur-accounts".into())
+                .spawn(move || {
+                    while let Ok(job) = jobs.recv() {
+                        let completion = job();
+                        let _ = done.send(completion);
+                    }
+                }) {
+                Ok(_) => {
+                    self.startup.account_tx = Some(tx);
+                    self.startup.account_rx = Some(rx);
+                }
+                Err(error) => {
+                    self.push_error(format!("account worker: {error}"));
+                    return;
+                }
+            }
+        }
+        self.startup.account_epoch += 1;
+        let epoch = self.startup.account_epoch;
+        let modal_epoch = self.login.as_ref().map(|_| self.startup.login_epoch);
+        let job = Box::new(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation));
+            let apply: AccountApply = match result {
+                Ok(result) => Box::new(move |app| {
+                    if modal_epoch.is_none_or(|epoch| epoch == app.startup.login_epoch) {
+                        apply(app, result);
+                    }
+                }),
+                Err(_) => Box::new(|app| {
+                    app.authed = false;
+                    app.startup.provider_ready = true;
+                    app.push_error("account operation interrupted".into());
+                }),
+            };
+            (epoch, apply)
+        });
+        if self.startup.account_tx.as_ref().unwrap().send(job).is_err() {
+            self.startup.account_tx = None;
+            self.push_error("account worker stopped".into());
+            return;
+        }
+        self.startup.account_pending += 1;
+        if affects_provider {
+            self.startup.provider_rx = None;
+            self.startup.provider_ready = false;
+            self.startup.provider_phase = "updating account";
+        }
+    }
+
     pub(super) fn poll_startup(&mut self) -> bool {
         let was_pending = self.startup_pending();
         let mut dirty = false;
+        while let Ok(apply) = self.startup.ui_rx.try_recv() {
+            apply(self);
+            dirty = true;
+        }
+        while let Some((epoch, apply)) = self
+            .startup
+            .account_rx
+            .as_mut()
+            .and_then(|rx| rx.try_recv().ok())
+        {
+            self.startup.account_pending = self.startup.account_pending.saturating_sub(1);
+            if epoch == self.startup.account_epoch {
+                apply(self);
+            }
+            dirty = true;
+        }
+        if self.startup.account_pending == 0
+            && !self.startup.provider_ready
+            && self.startup.provider_rx.is_none()
+            && self.startup.launched
+        {
+            self.start_provider_preparation();
+        }
         while let Some(event) = self
             .startup
             .provider_rx
@@ -308,7 +443,11 @@ impl App {
                 });
             }
         }
-        if !self.busy && self.login.is_none() && self.theme_picker.is_none() {
+        if !self.busy
+            && self.startup.account_pending == 0
+            && self.login.is_none()
+            && self.theme_picker.is_none()
+        {
             let runnable = self.queue.iter().position(|next| {
                 self.startup.provider_ready
                     && (!next.wait_for_skills || self.startup.skills_ready)
@@ -319,7 +458,7 @@ impl App {
                 if let Some(index) = self
                     .cells
                     .iter()
-                    .position(|c| matches!(c, Cell::Queued { text } if text == &next.text))
+                    .position(|c| matches!(c, Cell::Queued { id, .. } if *id == next.id))
                 {
                     self.remove_cell(index);
                 }
@@ -333,6 +472,7 @@ impl App {
     /// Local controls never call this. Model turns need both dependencies;
     /// compaction only needs the provider, and does not discover skills.
     pub(super) fn defer_until_prepared(&mut self, text: &str, skills: bool) -> bool {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         if skills && !agent::skill_cache::is_current() {
             self.refresh_skill_palette_cache();
         }
@@ -340,15 +480,15 @@ impl App {
             return false;
         }
         let images = self.take_draft_images();
-        self.queue.push_back(QueuedPrompt {
-            text: text.to_string(),
-            images,
-            raw_submission: true,
-            wait_for_skills: skills,
-        });
+        let mut queued = QueuedPrompt::new(text.to_string(), &self.session_id, &self.cwd);
+        queued.images = images;
+        queued.raw_submission = true;
+        queued.wait_for_skills = skills;
         self.cells.push(Cell::Queued {
+            id: queued.id,
             text: text.to_string(),
         });
+        self.queue.push_back(queued);
         self.scroll_to_bottom();
         true
     }
@@ -405,9 +545,20 @@ impl App {
         self.push_note(Tone::Skill, text);
     }
 
+    pub(super) fn discard_pending_requests(&mut self) {
+        self.queue.clear();
+        self.remove_cells_matching(|cell| matches!(cell, Cell::Queued { .. }));
+        self.preserve_queue_on_interrupt = false;
+    }
+
     pub(super) fn submit_queued(&mut self, next: QueuedPrompt) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
+        if next.session_id != self.session_id || next.cwd != self.cwd {
+            return;
+        }
         if !self.startup.provider_ready || next.wait_for_skills && !self.startup.skills_ready {
             self.cells.push(Cell::Queued {
+                id: next.id,
                 text: next.text.clone(),
             });
             self.queue.push_front(next);

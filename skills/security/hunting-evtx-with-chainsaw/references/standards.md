@@ -20,11 +20,11 @@
 ## Detection Standards
 
 - Sigma generic signature format: https://github.com/SigmaHQ/sigma
-- Chainsaw mappings (Sigma->EVTX): https://github.com/WithSecureLabs/chainsaw/tree/master/mappings
+- Chainsaw mappings (Sigma->EVTX): https://github.com/WithSecureOpenSource/chainsaw/tree/master/mappings
 
 ## Official Resources
 
-- Chainsaw GitHub: https://github.com/WithSecureLabs/chainsaw
+- Chainsaw GitHub: https://github.com/WithSecureOpenSource/chainsaw
 - WithSecure Labs research: https://labs.withsecure.com/
 - MITRE ATT&CK T1059.001: https://attack.mitre.org/techniques/T1059/001/
 

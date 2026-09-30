@@ -8,6 +8,7 @@ description: >-
   native cluster modes. Don't use for application ingress, load balancing, or
   service networking (use gke-service-networking instead).
 metadata:
+  version: "1.0.0"
   category: Networking
 ---
 

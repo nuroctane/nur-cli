@@ -7,8 +7,6 @@ import os
 import sys
 from typing import Any
 
-import datasets
-
 # The tuning service rejects a job whose validation file exceeds this fraction
 # of the training file, measured in bytes rather than rows. 0.2 is the largest
 # split that satisfies it and lands exactly on the line, so the default keeps a
@@ -128,6 +126,15 @@ def convert_to_jsonl(
   """
   if not os.path.exists(input_file):
     logging.error("Input file not found: %s", input_file)
+    sys.exit(1)
+
+  try:
+    import datasets  # pylint: disable=g-import-not-at-top
+  except ImportError:
+    logging.error(
+        "The 'datasets' package is required for format conversion. Please"
+        " install it using: pip install datasets"
+    )
     sys.exit(1)
 
   try:

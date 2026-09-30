@@ -19,7 +19,7 @@
 
 ### SoftHSM2 (Development/Testing)
 - **URL**: https://www.opendnssec.org/softhsm/
-- **GitHub**: https://github.com/opendnssec/SoftHSMv2
+- **GitHub**: https://github.com/softhsm/SoftHSMv2
 - **Description**: Software-only PKCS#11 implementation for testing
 
 ### AWS CloudHSM

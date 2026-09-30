@@ -3,22 +3,27 @@
 Pull latest SKILL.md trees from known GitHub sources into repo skills/.
 
 Does not touch skills/security/SCA (first-party whitehat pack) or the Nur
-cybersecurity router. Matches by skill folder name; adds new skills from
+cybersecurity router. Records reviewed source ownership and commit pins; adds new skills from
 allow-add sources (cyber, emil, mattpocock, addy, builderio, superpowers,
 fable, vercel-labs, anthropic, cloudflare, DarkNavy, Cyfrin, CAD, mobile).
 
 Usage (from repo root):
-  python scripts/sync_upstream_skills.py
+  python scripts/sync_upstream_skills.py              # plan only
+  python scripts/sync_upstream_skills.py --apply      # apply with provenance
+  python scripts/sync_upstream_skills.py --offline    # verify cached checkouts
 """
 from __future__ import annotations
 
+import argparse
 import concurrent.futures
+import difflib
+from functools import lru_cache
+import hashlib
+import json
 import os
 import re
-import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -62,6 +67,7 @@ SKIP_URL_SUBSTR = (
 
 # Always clone + add new skill dirs (not only overlay existing names).
 ALLOW_ADD_URL_SUBSTR = (
+    "ferdinandobons/startup-skill",
     "mukul975/Anthropic-Cybersecurity-Skills",
     "emilkowalski/skills",
     "mattpocock/skills",
@@ -91,7 +97,7 @@ ALLOW_ADD_URL_SUBSTR = (
     "mongodb/agent-skills",
     "axiomhq/skills",
     "EveryInc/compound-engineering",
-    "snarktank/gstack",
+    "garrytan/gstack",
     "JCodesMore/ai-website-cloner-template",
 )
 
@@ -100,6 +106,41 @@ NAME_ALIASES = {
     "design-eng": "emil-design-eng",
     "design-engineering": "emil-design-eng",
 }
+
+OFFICIAL_OWNERS = {
+    **dict.fromkeys(("pdf", "docx", "pptx", "xlsx", "claude-api", "algorithmic-art",
+                     "canvas-design", "brand-guidelines", "skill-creator", "slack-gif-creator",
+                     "theme-factory", "webapp-testing"), "anthropics/skills"),
+    "writing-plans": "obra/superpowers",
+    "audit": "educlopez/ui-craft",
+}
+OFFICIAL_OWNERS.update(json.loads((REPO / "scripts/skill-owners.json").read_text(encoding="utf-8"))["owners"])
+GITHUB_RENAMES = json.loads((REPO / "scripts/github-renames.json").read_text(encoding="utf-8"))
+
+
+def canonical_references(contents):
+    try:
+        text = contents.decode("utf-8")
+    except UnicodeDecodeError:
+        return contents
+    for old, new in GITHUB_RENAMES.items():
+        pattern = re.escape("https://github.com/" + old) + r"(?=\.git(?:[/\s\"')]|$)|[/\s#?\"')`>]|$)"
+        text = re.sub(pattern, lambda _: "https://github.com/" + new, text)
+    # Loaded once by the helper below; a refresh cannot reintroduce reviewed
+    # dead source links from otherwise unchanged upstream instructions.
+    for old, new in url_repairs().items():
+        text = text.replace(old, new)
+    return text.encode("utf-8")
+
+
+@lru_cache(maxsize=1)
+def url_repairs():
+    path = REPO / "scripts/github-url-repairs.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+
+def source_identity(url):
+    return canonical_references(url.encode()).decode().removesuffix(".git").rstrip("/").lower()
 
 SKIP_DIR_NAMES = {
     ".git",
@@ -126,17 +167,6 @@ def run(cmd, cwd=None, timeout=180):
     )
 
 
-def rmtree_force(path):
-    """rmtree that survives read-only .git objects on Windows."""
-    import stat
-    def onerror(func, p, _exc):
-        try:
-            os.chmod(p, stat.S_IWRITE)
-            func(p)
-        except OSError:
-            pass
-    shutil.rmtree(path, onerror=onerror)
-
 
 def parse_catalog_urls() -> list[str]:
     text = CATALOG.read_text(encoding="utf-8")
@@ -146,7 +176,7 @@ def parse_catalog_urls() -> list[str]:
 def parse_pack_sources() -> list[str]:
     text = PACKS.read_text(encoding="utf-8")
     # ("owner/repo", "label"),
-    found = re.findall(r'\("([^"]+/[^"]+)",\s*"[^"]+"\)', text)
+    found = re.findall(r'\(\s*"([^"]+/[^"]+)",\s*"[^"]+"', text)
     urls = []
     for src in found:
         if src.startswith("http"):
@@ -171,18 +201,20 @@ def is_cyber(url: str) -> bool:
 
 
 def clone_one(url: str, dest: Path) -> tuple[str, bool, str]:
-    if dest.exists():
-        rmtree_force(dest)
-    dest.mkdir(parents=True, exist_ok=True)
-    r = run(
-        ["git", "clone", "--depth", "1", "--single-branch", url, str(dest)],
-        timeout=300,
-    )
+    if (dest / ".git").is_dir():
+        r = run(["git", "fetch", "--depth", "1", "origin"], cwd=dest, timeout=300)
+        if r.returncode == 0:
+            r = run(["git", "checkout", "--detach", "FETCH_HEAD"], cwd=dest)
+    else:
+        dest.mkdir(parents=True, exist_ok=True)
+        r = run(
+            ["git", "clone", "--depth", "1", "--single-branch", url, str(dest)],
+            timeout=300,
+        )
     if r.returncode != 0:
-        rmtree_force(dest)
         err = (r.stderr or r.stdout or "clone failed").strip().splitlines()[-1:]
         return url, False, err[0] if err else "clone failed"
-    sha = run(["git", "rev-parse", "--short", "HEAD"], cwd=dest).stdout.strip()
+    sha = run(["git", "rev-parse", "HEAD"], cwd=dest).stdout.strip()
     return url, True, sha or "ok"
 
 
@@ -190,7 +222,11 @@ def find_skill_dirs(root: Path) -> list[Path]:
     out = []
     if not root.is_dir():
         return out
-    for md in root.rglob("SKILL.md"):
+    for folder, dirs, files in os.walk(root, followlinks=False):
+        dirs[:] = [name for name in dirs if name not in SKIP_DIR_NAMES and not (Path(folder) / name).is_symlink()]
+        if "SKILL.md" not in files or (Path(folder) / "SKILL.md").is_symlink():
+            continue
+        md = Path(folder) / "SKILL.md"
         if any(p in SKIP_DIR_NAMES or p == "references" for p in md.parts):
             continue
         if "node_modules" in md.parts or ".git" in md.parts:
@@ -199,8 +235,6 @@ def find_skill_dirs(root: Path) -> list[Path]:
         if parent.name in SKIP_DIR_NAMES:
             continue
         # Temp clone folders look like 61-owner-repo.git — never vendor those names.
-        if parent.name.endswith(".git") or re.match(r"^\d{2}-", parent.name):
-            continue
         # Skip pack roots that are just catalogs named SKILL.md at repo root
         # unless the folder name looks like a skill (kebab).
         out.append(parent)
@@ -240,21 +274,92 @@ def protected(dest: Path) -> bool:
     return any(rel == p or rel.startswith(p + "/") for p in PROTECT_PREFIXES)
 
 
-def copy_skill(src: Path, dest: Path) -> None:
-    dest.mkdir(parents=True, exist_ok=True)
-    for item in src.iterdir():
-        if item.name in SKIP_DIR_NAMES or item.name == ".git":
+
+def content_digest(contents):
+    try:
+        contents.decode("utf-8")
+        contents = contents.replace(b"\r\n", b"\n")
+    except UnicodeDecodeError:
+        pass
+    return hashlib.sha256(contents).hexdigest()
+
+
+def digest(path):
+    return content_digest(path.read_bytes())
+
+
+@lru_cache(maxsize=None)
+def executable_resources(checkout):
+    result = subprocess.run(["git", "ls-files", "--stage", "-z"], cwd=checkout,
+                            capture_output=True, check=True)
+    return frozenset(row.split(b"\t", 1)[1].decode("utf-8")
+                     for row in result.stdout.split(b"\0") if row.startswith(b"100755 "))
+
+
+def skill_name(directory):
+    text = (directory / "SKILL.md").read_text(encoding="utf-8", errors="replace")
+    match = re.search(r'^name:\s*[\"\']?([a-zA-Z0-9_-]+)', text, re.MULTILINE)
+    return match.group(1) if match else directory.name
+
+
+def tree_files(directory):
+    result = {}
+    ignored = SKIP_DIR_NAMES - {"references", "build", "dist"}
+    for folder, dirs, files in os.walk(directory, followlinks=False):
+        dirs[:] = [name for name in dirs if name not in ignored and not (Path(folder) / name).is_symlink()]
+        for name in files:
+            path = Path(folder) / name
+            if not path.is_symlink():
+                result[path.relative_to(directory).as_posix()] = path
+    return result
+
+
+def similarity(body, path):
+    upstream = path.read_text(encoding="utf-8", errors="replace")
+    if body == upstream:
+        return 1.0
+    return difflib.SequenceMatcher(None, body.splitlines(), upstream.splitlines(), autojunk=False).ratio()
+
+
+def refresh_tree(source, destination, previous, frontmatter=None):
+    """Update managed files, retaining local edits and removed upstream resources."""
+    if not destination.resolve().is_relative_to(SKILLS.resolve()) or destination.is_symlink():
+        raise ValueError(f"unsafe skill destination: {destination}")
+    files, preserved = {}, []
+    for name, path in tree_files(source).items():
+        target = destination / name
+        if target.is_symlink() or not target.resolve().is_relative_to(SKILLS.resolve()):
+            raise ValueError(f"unsafe resource destination: {target}")
+        contents = canonical_references(path.read_bytes())
+        if name == "SKILL.md" and frontmatter:
+            text = contents.decode("utf-8")
+            text = re.sub(r"\A---\r?\n.*?\r?\n---", lambda _: frontmatter, text, count=1, flags=re.S)
+            contents = text.encode("utf-8")
+        incoming = content_digest(contents)
+        current = target.read_bytes() if target.exists() else None
+        current_hash = content_digest(current) if current is not None else None
+        # Older manifests hashed raw text, before portable newline handling.
+        previous_matches = current is not None and previous is not None and previous.get(name) in {
+            current_hash, hashlib.sha256(current).hexdigest()
+        }
+        if current is not None and current_hash != incoming and previous is not None and not previous_matches:
+            preserved.append(name)
+            if name in previous:
+                files[name] = previous[name]
             continue
-        target = dest / item.name
-        if item.is_dir():
-            if target.exists():
-                shutil.rmtree(target)
-            shutil.copytree(item, target, ignore=shutil.ignore_patterns(".git", "__pycache__"))
-        else:
-            shutil.copy2(item, target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if current is None or current_hash != incoming:
+            target.write_bytes(contents)
+        files[name] = incoming
+    return files, preserved
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--apply", action="store_true", help="Apply the recorded refresh plan")
+    parser.add_argument("--fetch-only", action="store_true")
+    parser.add_argument("--offline", action="store_true", help="Use already fetched, pinned checkouts")
+    args = parser.parse_args()
     urls = []
     for u in parse_catalog_urls() + parse_pack_sources():
         if not u.endswith(".git"):
@@ -265,7 +370,7 @@ def main() -> int:
     uniq = []
     for u in urls:
         key = u.lower().rstrip("/").replace(".git", "")
-        if key in seen or should_skip_url(u):
+        if key in seen:
             continue
         # Skip catalog ids via URL heuristics already; also skip MCP-ish repos
         if any(x in u.lower() for x in ("mcp",)):
@@ -274,17 +379,31 @@ def main() -> int:
         seen.add(key)
         uniq.append(u)
 
-    work = Path(tempfile.gettempdir()) / "nur-skill-sync"
+    work = REPO / ".nur" / "stack-update" / "upstreams"
     work.mkdir(parents=True, exist_ok=True)
     print(f"cloning {len(uniq)} remotes into {work}")
 
     results = []
+    cached = {}
+    if args.offline:
+        for checkout in work.iterdir():
+            if (checkout / ".git").exists():
+                origin = run(["git", "remote", "get-url", "origin"], cwd=checkout).stdout.strip()
+                if origin:
+                    cached[source_identity(origin)] = checkout
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
         futs = {}
         for i, url in enumerate(uniq):
             slug = re.sub(r"[^A-Za-z0-9._-]+", "-", url.split("github.com/")[-1]).strip("-")
             dest = work / f"{i:02d}-{slug[:80]}"
-            futs[ex.submit(clone_one, url, dest)] = (url, dest)
+            if args.offline:
+                dest = cached.get(source_identity(url), dest)
+                sha = run(["git", "rev-parse", "HEAD"], cwd=dest).stdout.strip() if dest.exists() else ""
+                clean = run(["git", "status", "--porcelain"], cwd=dest) if sha else None
+                ok = bool(sha) and clean.returncode == 0 and not clean.stdout.strip()
+                results.append((url, ok, sha if ok else "checkout missing or modified", dest))
+            else:
+                futs[ex.submit(clone_one, url, dest)] = (url, dest)
         for fut in concurrent.futures.as_completed(futs):
             url, dest = futs[fut]
             try:
@@ -295,58 +414,76 @@ def main() -> int:
             flag = "ok" if ok else "FAIL"
             print(f"  [{flag}] {u}  {msg}")
 
+    if args.fetch_only:
+        return int(any(not r[1] for r in results))
     idx = local_index()
-    updated = 0
-    added = 0
-    skipped = 0
-    protected_n = 0
-    report = []
-
-    for url, ok, msg, dest in sorted(results, key=lambda r: r[0].lower()):
-        if not ok:
-            report.append(f"FAIL {url} {msg}")
+    manifest_path = SKILLS / "upstream-lock.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {"version": 1, "skills": {}}
+    candidates = {}
+    for url, ok, sha, checkout in results:
+        if ok:
+            for source in find_skill_dirs(checkout):
+                name = source.name if source != checkout else skill_name(source)
+                name = NAME_ALIASES.get(name, name)
+                if re.fullmatch(r"[a-zA-Z0-9_-]+", name):
+                    candidates.setdefault(name, []).append((url, sha, checkout, source))
+    plan = []
+    for name, entries in sorted(candidates.items()):
+        existing = idx.get(name)
+        if name in PROTECT_NAMES or (existing and protected(existing)):
             continue
-        cyber = is_cyber(url)
-        can_add = allow_add(url)
-        for skill_dir in find_skill_dirs(dest):
-            name = skill_dir.name
-            local_name = NAME_ALIASES.get(name, name)
-            if local_name in PROTECT_NAMES:
-                protected_n += 1
-                continue
-            existing = idx.get(local_name)
-            if existing is not None:
-                if protected(existing):
-                    protected_n += 1
-                    continue
-                copy_skill(skill_dir, existing)
-                updated += 1
-                continue
-            if not can_add:
-                skipped += 1
-                continue
-            if cyber:
-                target = SKILLS / "security" / local_name
-            else:
-                target = SKILLS / local_name
-            if protected(target):
-                protected_n += 1
-                continue
-            copy_skill(skill_dir, target)
-            idx[local_name] = target
-            added += 1
-
-        report.append(f"SYNC {url} @{msg}")
-
-    summary = (
-        f"updated={updated} added={added} skipped_new={skipped} "
-        f"protected={protected_n} remotes_ok="
-        f"{sum(1 for r in results if r[1])}/{len(results)}"
-    )
-    print(summary)
-    (work / "sync-report.txt").write_text("\n".join(report) + "\n" + summary + "\n", encoding="utf-8")
-    print(f"wrote {work / 'sync-report.txt'}")
-    return 0 if any(r[1] for r in results) else 1
+        previous = manifest["skills"].get(existing.relative_to(SKILLS).as_posix()) if existing else None
+        if previous:
+            matches = [e for e in entries if source_identity(e[0]) == source_identity(previous["repository"]) and e[3].relative_to(e[2]).as_posix() == previous["source_path"]]
+        elif existing:
+            body = (existing / "SKILL.md").read_text(encoding="utf-8", errors="replace")
+            official = OFFICIAL_OWNERS.get(name)
+            mentioned = [e for e in entries if e[0].removesuffix(".git") in body]
+            preferred = [e for e in entries if official and official.lower() in e[0].lower()] or mentioned
+            if not preferred:
+                preferred = [e for e in entries if allow_add(e[0])] or entries
+            entries = preferred
+            scores = sorted([(similarity(body, e[3] / "SKILL.md"), e) for e in entries], key=lambda e: e[0], reverse=True)
+            threshold = 0.60 if "security" in existing.parts else 0.85
+            same_owner = len(set(e[0] for e in entries)) == 1
+            matches = [scores[0][1]] if (scores[0][0] >= threshold or official or mentioned) and (same_owner or scores[0][0] > scores[1][0] + 0.05) else []
+        else:
+            matches = [e for e in entries if allow_add(e[0])]
+            if len(matches) > 1:
+                matches = []
+        if len(matches) != 1:
+            if existing:
+                plan.append({"skill": name, "status": "preserved", "reason": "ownership or local adaptation requires review", "repositories": sorted(set(e[0] for e in entries))})
+            continue
+        url, sha, checkout, source = matches[0]
+        target = existing or SKILLS / ("security" if is_cyber(url) else "") / name
+        entry = {"skill": name, "status": "refresh" if existing else "add", "destination": target.relative_to(SKILLS).as_posix(), "repository": url, "commit": sha, "source_path": source.relative_to(checkout).as_posix()}
+        if args.apply:
+            frontmatter = previous.get("frontmatter") if previous else None
+            if name == "claude-api" and existing and not frontmatter:
+                frontmatter = re.match(r"\A---\r?\n.*?\r?\n---", (existing / "SKILL.md").read_text(encoding="utf-8"), re.S).group(0)
+            files, retained = refresh_tree(source, target, previous.get("files", {}) if previous else None, frontmatter)
+            entry["preserved_files"] = retained
+            upstream_modes = executable_resources(checkout)
+            executables = sorted(resource for resource in files
+                                 if (source.relative_to(checkout) / resource).as_posix() in upstream_modes)
+            if os.name != "nt":
+                for resource in files:
+                    if resource not in retained:
+                        path = target / resource
+                        mode = path.stat().st_mode
+                        path.chmod(mode | 0o111 if resource in executables else mode & ~0o111)
+            manifest["skills"][entry["destination"]] = {**{k: entry[k] for k in ("repository", "commit", "source_path")}, "files": files, "executables": executables}
+            if frontmatter:
+                manifest["skills"][entry["destination"]]["frontmatter"] = frontmatter
+        plan.append(entry)
+    report = {"sources": [{"repository": u, "ok": ok, "commit": sha} for u, ok, sha, _ in results], "plan": plan}
+    (work.parent / "skills-plan.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    if args.apply:
+        manifest["version"] = 2
+        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(f"planned/applied {sum(e['status'] != 'preserved' for e in plan)} skills; preserved {sum(e['status'] == 'preserved' for e in plan)} ambiguous/adapted trees")
+    return int(any(not ok for _, ok, _, _ in results))
 
 
 if __name__ == "__main__":

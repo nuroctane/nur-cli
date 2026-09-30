@@ -8,6 +8,7 @@ description: >-
   for single-tenant cluster configuration or general deployment instructions
   (use gke-basics or gke-app-onboarding instead).
 metadata:
+  version: "1.0.0"
   category: Containers
 ---
 

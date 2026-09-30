@@ -1,0 +1,119 @@
+{
+  "source": "R70 qa-only-no-fix public collector",
+  "sourceSha256": "65a1ae6341e7fb8adca775e42a70f56019ef94bc0f4e5e391dea50a51e3c6a3f",
+  "sourceEventIndices": [461, 465, 546, 550, 1041, 1045, 1965, 1969],
+  "sanitization": [
+    "Omitted unrelated events and message metadata; retained original tool IDs, parent scopes and ordering.",
+    "Replaced fixture and trusted guard paths with placeholders.",
+    "Retained the report heading only, baseline deadline receipts only, and the original image result shape with image bytes omitted."
+  ],
+  "events": [
+    {
+      "type": "assistant",
+      "parent_tool_use_id": null,
+      "message": {
+        "content": [{
+          "type": "tool_use",
+          "id": "toolu_017EfMv9HXaRkGcbs27CpH9t",
+          "name": "Bash",
+          "input": {
+            "command": "bun '__QA_GUARD__' start '__QA_FIXTURE__/qa-reports/deadline.json' 30",
+            "description": "Start 30-second QA deadline guard"
+          },
+          "caller": { "type": "direct" }
+        }]
+      }
+    },
+    {
+      "type": "user",
+      "parent_tool_use_id": null,
+      "message": {
+        "content": [{
+          "tool_use_id": "toolu_017EfMv9HXaRkGcbs27CpH9t",
+          "type": "tool_result",
+          "content": "QA_DEADLINE {\"guard\":\"qa-deadline\",\"event\":\"start\",\"version\":1,\"startedAt\":\"2026-09-27T17:16:18.282Z\",\"deadlineAt\":\"2026-09-27T17:16:48.282Z\",\"budgetMs\":30000,\"observedAt\":\"2026-09-27T17:16:18.284Z\",\"remainingMs\":29998,\"expired\":false}",
+          "is_error": false
+        }]
+      }
+    },
+    {
+      "type": "assistant",
+      "parent_tool_use_id": null,
+      "message": {
+        "content": [{
+          "type": "tool_use",
+          "id": "toolu_01DfXCfuJQVM11KqRY7AgaqV",
+          "name": "Bash",
+          "input": {
+            "command": "bun '__QA_GUARD__' run '__QA_FIXTURE__/qa-reports/deadline.json' -- bash -c 'B=\"/workspace/gstack/browse/dist/browse\"; \"$B\" goto http://127.0.0.1:38155/qa-eval.html; echo \"URL=$(\"$B\" js \"location.href\")\"; \"$B\" snapshot -i; \"$B\" screenshot __QA_FIXTURE__/qa-reports/screenshots/initial.jpg; echo \"CONSOLE_ERRORS_START\"; \"$B\" console --errors; echo \"CONSOLE_ERRORS_END\"; echo \"TEXT_START\"; \"$B\" text; echo \"TEXT_END\"; echo \"LINKS_START\"; \"$B\" links; echo \"LINKS_END\"'",
+            "description": "Guarded baseline: load page, snapshot, screenshot, console, text, links"
+          },
+          "caller": { "type": "direct" }
+        }]
+      }
+    },
+    {
+      "type": "user",
+      "parent_tool_use_id": null,
+      "message": {
+        "content": [{
+          "tool_use_id": "toolu_01DfXCfuJQVM11KqRY7AgaqV",
+          "type": "tool_result",
+          "content": "QA_DEADLINE {\"guard\":\"qa-deadline\",\"event\":\"started\",\"version\":1,\"startedAt\":\"2026-09-27T17:16:18.282Z\",\"deadlineAt\":\"2026-09-27T17:16:48.282Z\",\"budgetMs\":30000,\"observedAt\":\"2026-09-27T17:16:25.503Z\",\"remainingMs\":22779,\"expired\":false}\nQA_DEADLINE {\"guard\":\"qa-deadline\",\"event\":\"finished\",\"observedAt\":\"2026-09-27T17:16:26.943Z\",\"deadlineAt\":\"2026-09-27T17:16:48.282Z\",\"timedOut\":false,\"exitCode\":0}",
+          "is_error": false
+        }]
+      }
+    },
+    {
+      "type": "assistant",
+      "parent_tool_use_id": null,
+      "message": {
+        "content": [{
+          "type": "tool_use",
+          "id": "toolu_019dQfjroHvjD4WpY6ZnrYT9",
+          "name": "Read",
+          "input": { "file_path": "__QA_FIXTURE__/qa-reports/screenshots/initial.jpg" },
+          "caller": { "type": "direct" }
+        }]
+      }
+    },
+    {
+      "type": "user",
+      "parent_tool_use_id": null,
+      "message": {
+        "content": [{
+          "tool_use_id": "toolu_019dQfjroHvjD4WpY6ZnrYT9",
+          "type": "tool_result",
+          "content": [{ "type": "image", "source": { "type": "base64", "data": "[image bytes omitted]", "media_type": "image/jpeg" } }]
+        }]
+      }
+    },
+    {
+      "type": "assistant",
+      "parent_tool_use_id": null,
+      "message": {
+        "content": [{
+          "type": "tool_use",
+          "id": "toolu_012Hh13Uv8AxNNEduMHyjq6h",
+          "name": "Write",
+          "input": {
+            "file_path": "__QA_FIXTURE__/qa-reports/qa-only-report.md",
+            "content": "# QA Report: Widget Dashboard (qa-eval.html)\n"
+          },
+          "caller": { "type": "direct" }
+        }]
+      }
+    },
+    {
+      "type": "user",
+      "parent_tool_use_id": null,
+      "message": {
+        "content": [{
+          "tool_use_id": "toolu_012Hh13Uv8AxNNEduMHyjq6h",
+          "type": "tool_result",
+          "content": "File created successfully at: __QA_FIXTURE__/qa-reports/qa-only-report.md (file state is current in your context — no need to Read it back)"
+        }]
+      }
+    }
+  ]
+}

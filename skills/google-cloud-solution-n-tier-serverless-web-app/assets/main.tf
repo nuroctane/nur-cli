@@ -12,6 +12,10 @@ terraform {
       source  = "hashicorp/google-beta"
       version = ">= 4.50.0"
     }
+    tls = {
+      source  = "hashicorp/tls"
+      version = ">= 4.0.0"
+    }
   }
 }
 
@@ -43,6 +47,13 @@ variable "region" {
 variable "domain_name" {
   type        = string
   description = "The custom domain name for the application (e.g., app.example.com)."
+  default     = "app.example.com"
+}
+
+variable "use_self_signed_cert" {
+  type        = bool
+  description = "Set to true to generate a self-signed certificate for immediate sandbox/dev testing without requiring a registered public domain. Set to false to provision a production Google-managed SSL certificate (requires pointing your domain's DNS A record to the load balancer IP)."
+  default     = false
 }
 
 variable "frontend_image" {
@@ -176,6 +187,9 @@ resource "google_dns_record_set" "run_app_record" {
 # ==========================================
 # 1.5 Cloud NGFW Network Firewall Policy (Least-Privilege Network Isolation)
 # ==========================================
+# MANDATORY PATTERN: Always configure explicit Cloud NGFW global or regional network firewall policies
+# (google_compute_network_firewall_policy and google_compute_network_firewall_policy_rule with enable_logging = var.enable_monitoring).
+# Do NOT use legacy/standard VPC firewall rules (google_compute_firewall).
 
 resource "google_compute_network_firewall_policy" "egress_policy" {
   name        = "cloud-run-egress-policy"
@@ -332,7 +346,7 @@ resource "google_sql_database_instance" "private_db" {
         query_insights_enabled  = true
         query_string_length     = 1024
         record_application_tags = true
-        record_client_address   = true
+        # Note: record_client_address is omitted because it is not supported for Cloud SQL instances with PSC connectivity enabled.
       }
     }
   }
@@ -657,9 +671,46 @@ resource "google_compute_backend_service" "frontend_lb_backend" {
   }
 }
 
-# 6.4 Google-managed SSL Certificate
+# 6.4a Self-Signed SSL Certificate (For immediate sandbox/dev testing without a registered domain)
+resource "tls_private_key" "dev_key" {
+  count     = var.use_self_signed_cert ? 1 : 0
+  algorithm = "RSA"
+  rsa_bits  = 2048
+}
+
+resource "tls_self_signed_cert" "dev_cert" {
+  count           = var.use_self_signed_cert ? 1 : 0
+  private_key_pem = tls_private_key.dev_key[0].private_key_pem
+
+  subject {
+    common_name  = var.domain_name
+    organization = "Sandbox Dev"
+  }
+
+  validity_period_hours = 8760
+
+  allowed_uses = [
+    "key_encipherment",
+    "digital_signature",
+    "server_auth",
+  ]
+}
+
+resource "google_compute_ssl_certificate" "self_signed" {
+  count       = var.use_self_signed_cert ? 1 : 0
+  name_prefix = "self-signed-cert-"
+  private_key = tls_private_key.dev_key[0].private_key_pem
+  certificate = tls_self_signed_cert.dev_cert[0].cert_pem
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# 6.4b Google-managed SSL Certificate (For production with registered domain)
 resource "google_compute_managed_ssl_certificate" "default" {
-  name = "secure-3tier-ssl-cert"
+  count = var.use_self_signed_cert ? 0 : 1
+  name  = "secure-3tier-ssl-cert"
   managed {
     domains = [var.domain_name]
   }
@@ -671,11 +722,14 @@ resource "google_compute_url_map" "default" {
   default_service = google_compute_backend_service.frontend_lb_backend.id
 }
 
-# 6.6 Target HTTPS Proxy
+# 6.6 Target HTTPS Proxy (Dynamically binds self-signed or Google-managed cert)
 resource "google_compute_target_https_proxy" "default" {
   name             = "secure-3tier-https-proxy"
   url_map          = google_compute_url_map.default.id
-  ssl_certificates = [google_compute_managed_ssl_certificate.default.id]
+  ssl_certificates = concat(
+    google_compute_ssl_certificate.self_signed[*].id,
+    google_compute_managed_ssl_certificate.default[*].id
+  )
 }
 
 # 6.7 Global Forwarding Rule
@@ -735,6 +789,15 @@ output "frontend_cloud_run_url" {
 output "backend_cloud_run_url" {
   value       = google_cloud_run_v2_service.backend_application.uri
   description = "The internal private URL of the Backend Application Cloud Run service (completely unreachable from public internet)."
+}
+
+output "ssl_verification_instructions" {
+  value = var.use_self_signed_cert ? (
+    "Self-signed certificate deployed. Test immediately via: curl -k https://${google_compute_global_address.lb_ip.address}/"
+  ) : (
+    "Google-managed certificate deployed for ${var.domain_name}. Create a DNS A record pointing ${var.domain_name} -> ${google_compute_global_address.lb_ip.address}, then monitor status: gcloud compute ssl-certificates describe secure-3tier-ssl-cert --global"
+  )
+  description = "Immediate verification instructions for the configured SSL mode."
 }
 
 output "vpc_sc_enabled" {

@@ -1,7 +1,8 @@
 ---
 name: google-cloud-solution-hybrid-search-alloydb
 metadata:
-  category: Databases
+  version: "1.0.0"
+  category: MultiProductSolutions
 description: >-
   Discovers requirements and generates architectural, design, and deployment
   guidance for dynamic hybrid search systems by combining semantic search and

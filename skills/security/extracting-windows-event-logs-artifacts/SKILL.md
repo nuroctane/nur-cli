@@ -78,7 +78,7 @@ sha256sum /cases/case-2024-001/evtx/*.evtx > /cases/case-2024-001/evtx/evtx_hash
 
 ```bash
 # Install Chainsaw
-wget https://github.com/WithSecureLabs/chainsaw/releases/latest/download/chainsaw_all_platforms+rules.zip
+wget https://github.com/WithSecureOpenSource/chainsaw/releases/latest/download/chainsaw_all_platforms+rules.zip
 unzip chainsaw_all_platforms+rules.zip -d /opt/chainsaw
 
 # Run Chainsaw with bundled Sigma rules

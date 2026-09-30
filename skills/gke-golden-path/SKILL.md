@@ -7,6 +7,7 @@ description: >-
   GKE defaults. Don't use for setting up workload autoscaling specifically (use
   gke-workload-scaling instead).
 metadata:
+  version: "1.0.0"
   category: Containers
 ---
 

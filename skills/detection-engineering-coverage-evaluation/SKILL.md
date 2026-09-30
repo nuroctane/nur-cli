@@ -1,16 +1,19 @@
 ---
 name: detection-engineering-coverage-evaluation
 metadata:
+  version: "1.0.1"
   category: Security
 description: >-
   Automates the end-to-end detection engineering workflow in Google SecOps using MCP tools.
   Use when fetching threat intelligence from blogs, generating Threat Detection Opportunities (TDOs),
   simulating attacker behavior with synthetic UDM events, evaluating rule coverage,
-  generating new YARA-L 2.0 rules to close coverage gaps, and with user approval, deploy them to SecOps.
-  Don't use when asked to perform threat hunting actions, and SOC investigative actions.
+  and deploying gap-closing rules. Don't use for standalone YARA-L 2.0 rule
+  authoring/tuning (use secops-detection-engineering), threat hunting, or SOC investigation.
 ---
 
 # SecOps Detection Coverage Skill
+
+> **Routing Note:** To author, test (Retrohunt), or tune YARA-L 2.0 detection rules directly, open `secops-detection-engineering/SKILL.md`.
 
 This skill guides the agent through an end-to-end detection engineering
 lifecycle using Google SecOps MCP tools. It handles multiple Threat Detection

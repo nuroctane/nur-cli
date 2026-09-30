@@ -8,6 +8,7 @@ description: >-
   - Troubleshooting cross-project routing.
   Don't use for single-project basic configurations.
 metadata:
+  version: "1.0.0"
   category: CloudObservabilityAndMonitoring
 ---
 

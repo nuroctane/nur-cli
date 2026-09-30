@@ -1,14 +1,17 @@
 ---
 name: google-cloud-solution-agentic-ai-borderless-data-lakehouse
 metadata:
+  version: "1.0.0"
   category: MultiProductSolutions
 description: >-
-  Guides agents to discover requirements and design a governed,
-  secure borderless open data lakehouse with agentic AI integration. Use when
-  designing a multi-product architecture that connects data silos to AI agents,
-  joining data across clouds, or running federated queries across Google Cloud
-  and external data sources, including on-premises or other cloud providers.
-  Don't use for simple single-cloud data warehouses or non-AI workloads.
+  Discovers requirements and designs a borderless open data lakehouse using
+  Lakehouse for Apache Iceberg and BigQuery data agents. Use when architecting
+  multi-cloud storage infrastructure (Cloud Storage, AWS S3, Azure Blob),
+  establishing ingestion and AI serving subsystems, configuring Cross-Cloud
+  Interconnect, or deploying Gemini Enterprise Agent Platform and BigQuery data
+  agents. Don't use for single-cloud data warehouses, or when the focus is on
+  Knowledge Catalog metadata governance and Spark-driven IDE analytics workflows
+  (use google-cloud-solution-agentic-analytics-spark-knowledge-catalog instead).
 ---
 
 # Borderless open data lakehouse agentic AI system
@@ -97,7 +100,8 @@ phases:
    - The diagram must show a clear distinction between the products in the
      data ingestion subsystem and the serving subsystem.
    - The diagram must show Managed Service for Apache Spark as a shared
-     component, bridging the data ingestion and serving subsystems.
+     component for ETL/ingestion processing, bridging the data ingestion and
+     serving subsystems (distinct from interactive IDE analytics workflows).
 
 - [ ] **Step 4: Generate design recommendations**: Generate design guidance
   based on the guidelines in

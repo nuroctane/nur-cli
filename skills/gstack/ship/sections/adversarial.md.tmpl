@@ -1,0 +1,21 @@
+{{ADVERSARIAL_STEP}}
+
+{{LEARNINGS_LOG}}
+
+{{GBRAIN_SAVE_RESULTS}}
+
+### Refresh learnings for the headline feature on this branch
+
+Step 8 used broad release terms. Before VERSION/CHANGELOG, search for versioning
+or changelog pitfalls tied to this branch's headline feature.
+
+Use ONE noun naming the skill, module, feature or changed binary. The keyword must
+be alphanumeric or hyphen only; simplify other characters. For example, use
+`token-or-search`, not `feat: token-or search`.
+
+```bash
+~/.claude/skills/gstack/bin/gstack-learnings-search --query "<your-keyword>" --limit 5 2>/dev/null || true
+```
+
+Name an applicable learning and its effect on the version bump or CHANGELOG in
+one sentence. If none applies, continue without a reference.

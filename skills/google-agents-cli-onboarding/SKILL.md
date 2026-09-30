@@ -1,6 +1,7 @@
 ---
 name: google-agents-cli-onboarding
 metadata:
+  version: "1.0.0"
   category: DevOps
 description: >-
   Onboarding entrypoint for agents-cli in Agent Platform. It should be used

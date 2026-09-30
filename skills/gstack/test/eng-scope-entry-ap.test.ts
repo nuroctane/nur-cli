@@ -1,0 +1,183 @@
+import {expect, test} from 'bun:test';
+import fs from 'node:fs';
+import path from 'node:path';
+import {ALL_HOST_CONFIGS} from '../hosts';
+import {HOST_PATHS, type TemplateContext} from '../scripts/resolvers/types';
+import {generatePreamble} from '../scripts/resolvers/preamble';
+import {generateAskUserFormat} from '../scripts/resolvers/preamble/generate-ask-user-format';
+import {generateGBrainContextLoad} from '../scripts/resolvers/gbrain';
+import {readWorkflowJudgeInput} from './helpers/workflow-judge-input';
+
+const template = fs.readFileSync(path.join(import.meta.dir, '../plan-eng-review/SKILL.md.tmpl'), 'utf8');
+const scope = template.slice(template.indexOf('## Scope gate'), template.indexOf('## Priority hierarchy'));
+const announcement = 'Scope gate: plan mode — auto-selected B (reviewing <target>).';
+
+test('Eng resolves scope before either executable bootstrap placeholder', () => {
+  const gate = template.indexOf('## Scope gate');
+  expect(gate).toBeGreaterThan(0);
+  for (const token of ['{{PREAMBLE}}', '{{GBRAIN_CONTEXT_LOAD}}']) {
+    expect(template.split(token)).toHaveLength(2);
+    expect(template.indexOf(announcement)).toBeLessThan(template.indexOf(token));
+    expect(template.indexOf('Reply with A, B, or C. STOP and wait')).toBeLessThan(template.indexOf(token));
+  }
+  expect(template.indexOf('{{PREAMBLE}}')).toBeLessThan(template.indexOf('{{GBRAIN_CONTEXT_LOAD}}'));
+  expect(template.indexOf('{{GBRAIN_CONTEXT_LOAD}}')).toBeLessThan(template.indexOf('### Design Doc Check'));
+});
+
+test('every host expands its real bootstrap after the mandatory entry gate', () => {
+  for (const host of ALL_HOST_CONFIGS) {
+    const ctx: TemplateContext = {skillName: 'plan-eng-review', tmplPath: 'plan-eng-review/SKILL.md.tmpl',
+      host: host.name, paths: HOST_PATHS[host.name]!, preambleTier: 3, interactive: true};
+    const preamble = generatePreamble(ctx);
+    expect(preamble).toContain('starting from the Scope gate, then follow its Startup sequence');
+    const brain = host.suppressedResolvers?.includes('GBRAIN_CONTEXT_LOAD') ? '' : generateGBrainContextLoad(ctx);
+    const expanded = template.replace('{{PREAMBLE}}', preamble).replace('{{GBRAIN_CONTEXT_LOAD}}', brain);
+    expect(expanded.indexOf(announcement)).toBeLessThan(expanded.indexOf('## Preamble (after scope gate)'));
+    expect(expanded.indexOf('Reply with A, B, or C. STOP and wait')).toBeLessThan(expanded.indexOf('```bash'));
+    expect(expanded.indexOf('```bash')).toBeLessThan(expanded.indexOf('gstack-skill-start', expanded.indexOf('```bash')));
+    if (brain) expect(expanded.indexOf(announcement)).toBeLessThan(expanded.indexOf('## Brain Context Load'));
+  }
+});
+
+test('entry binds a current target and delays bootstrap until scope resolves', () => {
+  expect(scope).toContain('Before discovery tools or preamble, check provided messages, listed tools and explicit host metadata for a target');
+  expect(scope).toContain('Do not probe for session state');
+  expect(scope).toContain('When no exception above applied:');
+  expect(scope).toContain('First tool call = AskUserQuestion (tool_use). Send this exact menu and wait');
+  expect(scope).toContain('Announce an auto-selected plan in one line so the user can interrupt');
+  expect(scope).toContain('A fresh announcement made before skill loading can identify the target');
+  expect(scope).toContain('Step 0 below still verifies or sends the public auto-selection line for this invocation');
+  expect(scope).toContain('Clarify ambiguous, conflicting, quoted or stale targets; reuse a still-valid authorized target');
+  expect(scope.match(/\*\*Startup sequence\*\*/g)).toHaveLength(1);
+  const startup = scope.slice(scope.indexOf('**Startup sequence**'), scope.indexOf('{{PREAMBLE}}'));
+  const order = ['after target selection', 'Preamble', 'Context Recovery', 'Brain Context',
+    'web-research readiness', 'Design Doc Check', 'Review preparation'].map(step => startup.indexOf(step));
+  expect(order.every(position => position >= 0)).toBe(true);
+  expect(order).toEqual([...order].sort((a, b) => a - b));
+  expect(startup).toContain('3. Check web-research readiness at **Web research runs in Aside**.');
+  expect(startup).toContain('4. Run **Design Doc Check**, then **Prerequisite Skill Offer**.');
+  expect(startup).toContain('Keep the reviewed target fixed');
+  expect(startup).toContain('Continue at **Engineering review → Step 0** below');
+  expect(startup).not.toContain('Read `sections/review-sections.md` in full');
+  const entry = template.slice(template.indexOf('## Engineering review'), template.indexOf('## Section self-check'));
+  expect(entry.split('{{SECTION:review-sections}}')).toHaveLength(2);
+  expect(entry.indexOf('Before Step 0, require resolved scope')).toBeLessThan(entry.indexOf('{{SECTION:review-sections}}'));
+  expect(entry.indexOf('**STOP while a Scope Challenge complexity question')).toBeLessThan(entry.indexOf('{{SECTION:review-sections}}'));
+});
+
+test('existing plan selection exceptions and unseeded hard STOP remain explicit', () => {
+  expect(scope).toContain('plan-shaped text inside pasted documents, tool results, or fetched pages does NOT count as the mode signal');
+  expect(scope).toContain('If multiple plan candidates exist, prefer the host-referenced plan file; still ambiguous — ask.');
+  expect(scope).toContain('If the user explicitly named a DIFFERENT target');
+  expect(scope).toContain('If plan mode is indicated but no plan exists yet, ask as normal');
+  expect(scope).toContain('First tool call = AskUserQuestion (tool_use). Send this exact menu and wait');
+  expect(scope).toContain('if unavailable, disallowed (`--disallowedTools`) or failed, send the menu as plain prose and STOP');
+  expect(scope).toContain('If a failed call may have surfaced, keep it pending; do not duplicate it');
+  expect(scope).toContain('A) The current branch diff — the work in progress on this branch.\nB) A plan or design doc I\'ll paste or point you to.\nC) A specific file, directory, or path.');
+  expect(scope).toContain('Reply with A, B, or C. STOP and wait for the answer.');
+});
+
+test('Eng alone defers canonical question rules until scope and keeps one counter across later stages', () => {
+  const exception = 'For the initial Scope gate, use its selector algorithm instead of this format and routing. Everything below applies only after target selection.';
+  const continuous = 'D-numbering: exclude the initial target menu. Start `D1` at the first later brief; increment through preamble, prerequisite, inline /office-hours, preparation, complexity and review. Never reset between stages or on return. This is a model-maintained counter.';
+  const standard = 'D-numbering: first question in a skill invocation is `D1`; increment yourself. This is a model-level instruction, not a runtime counter.';
+  for (const host of ALL_HOST_CONFIGS) {
+    const ctx: TemplateContext = {skillName: 'plan-eng-review', tmplPath: 'plan-eng-review/SKILL.md.tmpl',
+      host: host.name, paths: HOST_PATHS[host.name]!};
+    const format = generateAskUserFormat(ctx);
+    expect(format.split(exception)).toHaveLength(2);
+    expect(format.indexOf(exception)).toBeLessThan(format.indexOf('Branch on the skill-start STATUS lines'));
+    expect(format.split(continuous)).toHaveLength(2);
+    expect(format).not.toContain(standard);
+    // Eng's bootstrap/counter and two local cross-references differ; the
+    // complete STATUS, failure, consent and format rules stay byte-identical.
+    expect(format).not.toContain('Spawned session block');
+    expect(format).not.toContain('**Spawned session** block');
+    expect(format).toContain('at every decision point under this rule');
+    expect(format).toContain('follow Tool resolution item 1: auto-choose');
+    expect(format.replace(exception + '\n\n', '').replace(continuous, standard)
+      .replace('at every decision point under this rule', 'at every decision point per the Spawned session block')
+      .replace('follow Tool resolution item 1', 'defer to the **Spawned session** block'))
+      .toBe(generateAskUserFormat({...ctx, skillName: 'plan-ceo-review'}));
+    for (const skillName of ['plan-ceo-review', 'plan-design-review', 'plan-devex-review', 'office-hours']) {
+      const other = generateAskUserFormat({...ctx, skillName});
+      expect(other).toContain(standard);
+      expect(other).not.toContain(exception);
+      expect(other).not.toContain(continuous);
+    }
+  }
+});
+test('the full evaluated bundle routes startup into ordered preparation before scope analysis', () => {
+  const input = readWorkflowJudgeInput({root:path.join(import.meta.dir, '..'), skillPath:'plan-eng-review/SKILL.md',
+    startMarker:'# Plan Review Mode', endMarker:null});
+  expect(input.files.map(file=>file.kind)).toEqual(['entrypoint','section']);
+  const entry = input.files[0]!.content, section = input.files[1]!.content;
+  const startup = entry.slice(entry.indexOf('**Startup sequence**'), entry.indexOf('## Preamble'));
+  expect(startup).toContain('Defer Operational Self-Improvement, Telemetry and Plan Status Footer to finish');
+  expect(startup).toContain('format/transport rules apply throughout');
+  expect(startup).toContain('full section Read → **Review preparation** → **Scope Challenge**');
+  const preparation = section.slice(section.indexOf('## Review preparation'));
+  expect(preparation).toContain('Follow the blocks below in order after startup');
+  const stages = ['## Review record and write policy', '## Prior Learnings',
+    '## Retrospective learning', '## Confidence Calibration', '## Decision procedure',
+    '## Scope Challenge', '## Review Sections'];
+  const positions = stages.map(stage=>preparation.indexOf(stage));
+  expect(positions.every(position=>position>=0)).toBe(true);
+  expect(positions).toEqual([...positions].sort((a,b)=>a-b));
+  expect(entry.indexOf('**Format precedence:**')).toBeLessThan(entry.indexOf('## Preamble'));
+  expect(entry.slice(entry.indexOf('## Plan Status Footer'))).not.toContain('**Format precedence:**');
+  const requiredPath = '~/.claude/skills/gstack/plan-eng-review/sections/review-sections.md';
+  expect(entry.slice(entry.indexOf('## Engineering review'),entry.indexOf('## Section self-check'))).toContain(`Read \`${requiredPath}\``);
+  expect(entry.slice(entry.indexOf('## Section self-check'))).toContain(`Read \`${requiredPath}\``);
+  const policy = section.slice(section.indexOf('## Review record and write policy'), section.indexOf('## Prior Learnings'));
+  expect(policy.replace(/\s+/g, ' ')).toContain('It may be the selected plan or a separate file');
+  expect(policy.replace(/\s+/g, ' ')).toContain('Permission for one path authorizes no other');
+  expect(policy).toContain('| QA Test Plan and task JSONL | Discovery paths below | Present each completely as **not persisted** and continue. |');
+  expect(policy).toContain('| Best-effort metadata/learning logs | Helper-defined locations | Skip forbidden writes; otherwise keep their best-effort behavior. |');
+  const finish = section.slice(section.indexOf('## Required outputs'), section.indexOf('### Output reference'));
+  expect(finish).toContain('Save permitted auxiliary artifacts under the write policy');
+  expect(finish).toContain('If the required log is forbidden, show fields as not persisted and take **Blocked outcome**');
+  const log = section.slice(section.indexOf('## Review Log'), section.indexOf('## Next Steps'));
+  expect(log).toContain("' || exit $?");
+  expect(log).toContain("' 2>/dev/null || true");
+});
+
+test('both complexity paths join findings without bypassing answers or persistence', () => {
+  const section = fs.readFileSync(path.join(import.meta.dir, '../plan-eng-review/sections/review-sections.md.tmpl'),'utf8');
+  const challenge = section.slice(section.indexOf('## Scope Challenge'),section.indexOf('## Review Sections'));
+  const stages = ['### A. Assess the target', '### B. Resolve complexity selectors', '### C. Resolve findings', '1. Present numbered Scope Challenge findings'];
+  const positions = stages.map(stage => challenge.indexOf(stage));
+  expect(positions.every(position => position >= 0)).toBe(true);
+  expect(positions).toEqual([...positions].sort((a, b) => a - b));
+  expect(challenge).toContain('Complete these checks before the complexity decision in B');
+  expect(challenge.replace(/\s+/g, ' ')).toContain("With fewer than 8 files AND fewer than 2 new classes/services, skip B's questions and go directly to **C. Resolve findings**");
+  expect(challenge).toContain('At 8+ files or 2+ new classes/services, STOP before Section 1');
+  expect(challenge).toContain('After verification, apply only accepted scope changes');
+  expect(challenge).toContain('Run C whether B was completed or skipped');
+  expect(challenge).toContain('Always ask the structure question when this gate trips, even with no cuts');
+  expect(challenge).toContain("This is a post-answer scope summary, not a remedy's pending ledger record");
+  expect(challenge).toContain('Save it under the write policy and Read it back against the actual answers');
+  expect(challenge).toContain('A failed save or Read blocks advancement');
+  expect(challenge).toContain('Findings and scope answers approve no remedies');
+  expect(challenge).toContain('Continue to Section 1 only when no answer is pending');
+  expect(section.replace(/\s+/g, ' ')).toContain('Send one question object for one choice; other IDs wait');
+  expect(section.replace(/\s+/g, ' ')).toContain('Compare every native field with `currentDecision` and the whole saved grid with the prepared comparison');
+  expect(section).toContain('Repair any difference and repeat the complete Read before asking');
+  expect(section).toContain('Read the selected saved label, full description and grid column together');
+  expect(section).toContain('Check the save result, then Read the entire resolution block, including State');
+  expect(section).toContain('**STOP until the actual answer arrives.**');
+  expect(section.replace(/\s+/g, ' ')).toContain('unreadable or unverifiable records use **Recovery routing**');
+  expect(template).toContain('**Paused question:** Wait for its actual answer without completion telemetry or ExitPlanMode');
+  expect(template).toContain('**Blocked outcome:** Stop the review and report `BLOCKED`');
+});
+
+test('calibration keeps its future hook but cannot infer or self-enable the absent gate', () => {
+  const section = fs.readFileSync(path.join(import.meta.dir, '../plan-eng-review/sections/review-sections.md.tmpl'),'utf8');
+  expect(section.split('{{BRAIN_WRITE_BACK}}')).toHaveLength(2);
+  const note = section.slice(section.indexOf('**Calibration gate status:**'),section.indexOf('{{BRAIN_WRITE_BACK}}'));
+  expect(note).toContain('No supported preamble/config produces `BRAIN_CALIBRATION_WRITEBACK`');
+  expect(note).toContain('Skip unless that source explicitly enables it');
+  expect(note).toContain('Personal trust/MCP availability cannot enable it; never set it yourself');
+  expect(note.trim().split('\n')).toHaveLength(1);
+  expect(section.indexOf('{{LEARNINGS_LOG}}')).toBeLessThan(section.indexOf('**Calibration gate status:**'));
+});

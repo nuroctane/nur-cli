@@ -1,6 +1,7 @@
 ---
 name: gke-cost-analysis
 metadata:
+  version: "1.0.0"
   category: CloudObservabilityAndMonitoring
 description: >-
   Answer natural language questions and perform analysis on GKE cluster and

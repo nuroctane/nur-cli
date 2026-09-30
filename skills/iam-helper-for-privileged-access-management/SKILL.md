@@ -1,6 +1,7 @@
 ---
 name: iam-helper-for-privileged-access-management
 metadata:
+  version: "1.0.0"
   category: Security
 description: >-
   Manages the end-to-end lifecycle of on-demand, temporary access using

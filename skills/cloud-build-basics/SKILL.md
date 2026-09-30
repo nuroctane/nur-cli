@@ -1,6 +1,7 @@
 ---
 name: cloud-build-basics
 metadata:
+  version: "1.0.0"
   category: DevOps
 description: >-
   Teaches the fundamentals of Google Cloud Build (GCB). Covers core concepts,

@@ -186,7 +186,7 @@ commands to validate the deployed environment.]
 ## 8. References
 
 * [Data science workflow with AI agents](https://docs.cloud.google.com/architecture/agentic-ai-data-science.md.txt)
-* [ADK Data Science Sample Code](https://github.com/google/adk-samples/tree/main/python/agents/data-science)
+* [ADK Data Science Sample Code](https://github.com/google/adk-recipes/tree/main/python/agents/data-science)
 * [Multi-agent AI system in Google Cloud](https://docs.cloud.google.com/architecture/multiagent-ai-system.md.txt)
 * [Choose your agentic AI architecture components](https://docs.cloud.google.com/architecture/choose-agentic-ai-architecture-components.md.txt)
 * [Choose a design pattern for your agentic AI system](https://docs.cloud.google.com/architecture/choose-design-pattern-agentic-ai-system.md.txt)

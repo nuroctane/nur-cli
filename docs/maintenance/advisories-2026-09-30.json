@@ -1,0 +1,35 @@
+{
+  "checked": 529,
+  "findings": [
+    {
+      "package": "bincode",
+      "version": "1.3.3",
+      "advisories": [
+        {
+          "id": "RUSTSEC-2025-0141",
+          "modified": "2026-01-16T11:07:28.867553Z"
+        }
+      ]
+    },
+    {
+      "package": "ttf-parser",
+      "version": "0.25.1",
+      "advisories": [
+        {
+          "id": "RUSTSEC-2026-0192",
+          "modified": "2026-06-29T21:15:04.384453Z"
+        }
+      ]
+    },
+    {
+      "package": "yaml-rust",
+      "version": "0.4.5",
+      "advisories": [
+        {
+          "id": "RUSTSEC-2024-0320",
+          "modified": "2024-11-01T12:31:51Z"
+        }
+      ]
+    }
+  ]
+}

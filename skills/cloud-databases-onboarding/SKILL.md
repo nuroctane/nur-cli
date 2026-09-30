@@ -1,6 +1,7 @@
 ---
 name: cloud-databases-onboarding
 metadata:
+  version: "1.0.0"
   category: Databases
 description: >-
   Guides users through discovering their database requirements, recommends a
@@ -89,6 +90,25 @@ Limit your actions to creating and validating draft artifacts for user review.
     *   Add a custom default tag like `resource_generated_by = "cloud db
         onboarding skill"` under the `default_tags` block or as a resource
         label/tag.
+    *   **gcloud CLI Generation**: When drafting `gcloud` CLI commands or shell
+        scripts, you MUST follow the instructions in the `gcloud` skill
+        (`../gcloud/SKILL.md`). Specifically:
+        *   Always use `gcloud beta` command group for database provisioning
+            (e.g., `gcloud beta <group> <resource> create`).
+        *   Validate leaf-level syntax using `gcloud help <leaf_command>` prior
+            to proposing commands.
+        *   Append explicit `--project=<PROJECT_ID>` and explicit location flags
+            (`--region`, `--zone`, or `--location`).
+        *   Use `--dry-run` or `--validate-only` preview flags where supported.
+        *   Include custom label/tag flags (e.g.
+            `--labels=resource_generated_by=cloud_db_onboarding_skill`) on
+            generated `gcloud` provisioning commands.
+        *   **Do NOT include `--quiet` (`-q`)**: Provisioning commands are
+            drafted for interactive human user review and execution, so do NOT
+            include non-interactive `--quiet` or `-q` flags.
+        *   **No Live Write Execution**: The skill MUST ONLY draft provisioning
+            commands or code for user review and MUST NOT execute mutating/write
+            infrastructure operations directly.
 
 4.  **Validate Infrastructure Code (Validate):** Before finalizing, you must
     validate the drafted infrastructure code to verify syntax and configuration
@@ -107,3 +127,4 @@ Limit your actions to creating and validating draft artifacts for user review.
 ## Supporting Resources & Documentation
 
 - [Google Cloud Databases Overview](https://cloud.google.com/products/databases.md.txt)
+-   [gcloud CLI Skill](../gcloud/SKILL.md)

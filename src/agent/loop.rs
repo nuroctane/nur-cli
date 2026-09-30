@@ -78,6 +78,7 @@ pub enum AgentEvent {
     /// The model asked the user a close-ended question (`question` tool).
     /// The TUI shows a modal; headless runners answer `dismissed`.
     QuestionRequest {
+        turn_cancel: CancellationToken,
         question: String,
         header: String,
         options: Vec<(String, String)>,
@@ -579,6 +580,24 @@ impl AgentRunner {
         tx: &mpsc::UnboundedSender<AgentEvent>,
         cancel: &CancellationToken,
     ) -> Result<String> {
+        crate::typesafe::context::scope(session.id.clone(), cancel.clone(), async {
+            let result = self
+                .run_turn_scoped(session, user_text, usage, tx, cancel)
+                .await;
+            record_auxiliary_telemetry(&session.id);
+            result
+        })
+        .await
+    }
+
+    async fn run_turn_scoped(
+        &self,
+        session: &mut Session,
+        user_text: &str,
+        usage: &mut UsageTracker,
+        tx: &mpsc::UnboundedSender<AgentEvent>,
+        cancel: &CancellationToken,
+    ) -> Result<String> {
         // Peer lifecycle presence (pi-peer port): make this session addressable
         // by other sessions and mark it working for the turn. Best-effort and
         // non-fatal - a registry we cannot write is a discovery problem only.
@@ -715,6 +734,7 @@ impl AgentRunner {
         // the turn before every stage has run.
         let mut emergency_compact_attempted = false;
         let mut emergency_local_trim_done = false;
+        let mut recovery_window: Option<u64> = None;
         // Preflight context-window recoveries (compact + retry instead of
         // dying) for this user turn.
         let mut preflight_recoveries: u8 = 0;
@@ -850,7 +870,8 @@ impl AgentRunner {
             }
 
             let mode_now = self.permission_mode.get();
-            let instructions = prompt_ctx.render(mode_now, &self.tools.todos_snapshot().render());
+            let mut instructions =
+                prompt_ctx.render(mode_now, &self.tools.todos_snapshot().render());
 
             usage.set_state(format!("thinking (turn {turns})"));
             let _ = tx.send(AgentEvent::Status(format!(
@@ -898,8 +919,18 @@ impl AgentRunner {
             if turns <= 1 {
                 tools = self.typesafe_narrow_tools(tools, &user_text, tx).await;
             }
+            let output_reserve = if let Some(window) = recovery_window {
+                fit_recovery_request(
+                    session,
+                    &mut instructions,
+                    &mut tools,
+                    window,
+                    self.config.request_output_reserve_tokens,
+                )
+            } else {
+                self.config.request_output_reserve_tokens
+            };
             let attribution = attribute_request(&instructions, &tools, &session.input_items);
-            let output_reserve = self.config.request_output_reserve_tokens;
             if let Some(block) = preflight_request_budget(
                 &self.config,
                 usage,
@@ -915,6 +946,11 @@ impl AgentRunner {
                     // - never kill the session for something compaction can
                     // fix, on any provider. Bounded so a pathological
                     // estimate cannot spin the loop.
+                    PreflightBlock::ContextWindow(_) if recovery_window.is_some() => {
+                        // The fitted envelope is already minimal. Send it so a
+                        // provider rejection can reduce the recovery target;
+                        // never repeat the same local estimate forever.
+                    }
                     PreflightBlock::ContextWindow(reason)
                         if preflight_recoveries < MAX_PREFLIGHT_RECOVERIES =>
                     {
@@ -953,12 +989,12 @@ impl AgentRunner {
                     // a turn-stopper. If the provider still rejects, the
                     // context-limit recovery path below takes over.
                     PreflightBlock::ContextWindow(reason) => {
-                        let kept = emergency_compact_session(self, session);
+                        emergency_compact_session(self, session);
+                        emergency_local_trim_done = true;
+                        recovery_window = Some(self.config.context_window.saturating_mul(3) / 4);
                         compactions = compactions.saturating_add(1);
-                        let _ = tx.send(AgentEvent::Status(format!(
-                            "request preflight: {reason} - recovered a minimal {kept}-item \
-                                 recent context locally and sending anyway"
-                        )));
+                        let _ = tx.send(AgentEvent::Status(format!("request preflight: {reason} - fitting retained context and output reservation")));
+                        continue;
                     }
                     PreflightBlock::Budget(msg) => {
                         // The only preflight that ends a turn: an explicit
@@ -1062,16 +1098,20 @@ impl AgentRunner {
                     //      handled above)
                     //   2. model-assisted compaction (once)
                     //   3. local trim to a minimal recent working set
-                    // Only when the provider rejects even that minimal
-                    // context is the error surfaced - at that point the
-                    // route itself is broken, not the context size.
+                    // Repeated size rejections shrink the full envelope and
+                    // output reservation; cancellation and explicit budgets
+                    // remain available throughout recovery.
                     if emergency_local_trim_done {
+                        let previous = recovery_window.unwrap_or(self.config.context_window);
+                        recovery_window = Some((previous / 2).max(256));
                         let _ = tx.send(AgentEvent::Status(
-                            "provider rejected even the minimal recovered context - \
-                                 the route appears broken"
+                            "context recovery - reducing retained payload and output reservation"
                                 .into(),
                         ));
-                        return Err(error);
+                        if previous <= 256 {
+                            tokio::select! { _ = cancel.cancelled() => return Err(NurError::Interrupted), _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {} }
+                        }
+                        continue;
                     }
                     emergency_compactions = emergency_compactions.saturating_add(1);
                     if !emergency_compact_attempted {
@@ -1101,6 +1141,8 @@ impl AgentRunner {
                                 // compaction is needed.
                                 let kept = emergency_compact_session(self, session);
                                 emergency_local_trim_done = true;
+                                recovery_window =
+                                    Some(self.config.context_window.saturating_mul(3) / 4);
                                 compactions = compactions.saturating_add(1);
                                 let _ = tx.send(AgentEvent::Status(format!(
                                     "model compaction failed ({compact_error}); recovered a \
@@ -1111,6 +1153,7 @@ impl AgentRunner {
                     } else {
                         let kept = emergency_compact_session(self, session);
                         emergency_local_trim_done = true;
+                        recovery_window = Some(self.config.context_window.saturating_mul(3) / 4);
                         compactions = compactions.saturating_add(1);
                         let _ = tx.send(AgentEvent::Status(format!(
                             "context still over the window after compaction - recovered a \
@@ -1628,12 +1671,12 @@ impl AgentRunner {
                         // result is still in context: answer it from that
                         // knowledge instead of paying for the tool again.
                         let skip = reason.clone();
-                        handles.push(tokio::task::spawn_blocking(move || {
+                        handles.push(crate::typesafe::context::spawn_blocking(move || {
                             (call_id, name, Ok(skip))
                         }));
                         continue;
                     }
-                    handles.push(tokio::task::spawn_blocking(move || {
+                    handles.push(crate::typesafe::context::spawn_blocking(move || {
                         let res = host.dispatch(
                             &name,
                             &args,
@@ -1668,7 +1711,7 @@ impl AgentRunner {
                     let tname = name.clone();
                     let model = self.config.model.clone();
                     let spill_max = self.config.tool_result_max_chars as usize;
-                    let body = tokio::task::spawn_blocking(move || {
+                    let body = crate::typesafe::context::spawn_blocking(move || {
                         crate::headroom::prepare_tool_body(
                             &hr, &sid, &tname, body, ok, spill_max, &model,
                         )
@@ -1906,7 +1949,7 @@ impl AgentRunner {
                 let name = call.name.clone();
                 let args = call.arguments.clone();
                 let cancel_t = cancel.clone();
-                let exec = tokio::task::spawn_blocking(move || {
+                let exec = crate::typesafe::context::spawn_blocking(move || {
                     host.dispatch(
                         &name,
                         &args,
@@ -1947,7 +1990,7 @@ impl AgentRunner {
                 let tname = call.name.clone();
                 let model = self.config.model.clone();
                 let spill_max = self.config.tool_result_max_chars as usize;
-                tokio::task::spawn_blocking(move || {
+                crate::typesafe::context::spawn_blocking(move || {
                     crate::headroom::prepare_tool_body(
                         &hr, &sid, &tname, body, true, spill_max, &model,
                     )
@@ -2056,7 +2099,7 @@ impl AgentRunner {
         let parts = super::goal::split_parts(&goal.text);
         let evidence = super::goal::completion_evidence(&session.input_items, 12_000);
         let state = serde_json::json!({ "goal": goal.text, "evidence": evidence });
-        let verdict = tokio::task::spawn_blocking(move || {
+        let verdict = crate::typesafe::context::spawn_blocking(move || {
             super::goal::verify_completion(&cfg, &parts, &state)
         })
         .await
@@ -2208,7 +2251,7 @@ impl AgentRunner {
             })
             .collect();
         let asked = specialists.clone();
-        let judged = match tokio::task::spawn_blocking(move || {
+        let judged = match crate::typesafe::context::blocking(move || {
             let state = serde_json::json!({
                 "task": crate::typesafe::harness::judge_preview(&task_owned, 2_000),
                 "note": "Each question is about one tool below; answer yes when the task needs it",
@@ -2306,7 +2349,7 @@ impl AgentRunner {
             .collect();
         let goal = typesafe_goal(session, 3);
         let cfg_for_task = cfg.clone();
-        let judged = match tokio::task::spawn_blocking(move || {
+        let judged = match crate::typesafe::context::spawn_blocking(move || {
             let state =
                 serde_json::json!({ "goal": goal, "pending": "these calls have not run yet" });
             crate::typesafe::harness::judge_calls(
@@ -2428,7 +2471,7 @@ impl AgentRunner {
         let evidence = typesafe_trace_evidence(&session.input_items, 24);
         let cfg_for_task = cfg.clone();
         let skill_for_task = skill.clone();
-        let (verdict, missed) = tokio::task::spawn_blocking(move || {
+        let (verdict, missed) = crate::typesafe::context::blocking(move || {
             let v = crate::typesafe::harness::judge_skill_use(
                 &cfg_for_task,
                 &request,
@@ -2545,7 +2588,7 @@ impl AgentRunner {
             .collect();
         let goal = typesafe_goal(session, 3);
         let cfg_for_task = cfg.clone();
-        let judged = match tokio::task::spawn_blocking(move || {
+        let judged = match crate::typesafe::context::spawn_blocking(move || {
             let state = serde_json::json!({ "goal": goal });
             crate::typesafe::harness::judge_calls(
                 &cfg_for_task,
@@ -2772,7 +2815,7 @@ impl AgentRunner {
             let tname = call.name.clone();
             let model = self.config.model.clone();
             let spill_max = self.config.tool_result_max_chars as usize;
-            let body = tokio::task::spawn_blocking(move || {
+            let body = crate::typesafe::context::spawn_blocking(move || {
                 crate::headroom::prepare_tool_body(&hr, &sid, &tname, body, ok, spill_max, &model)
             })
             .await
@@ -2857,8 +2900,12 @@ impl AgentRunner {
                 true,
             ));
         }
+        if cancel.is_cancelled() {
+            return Err(NurError::Interrupted);
+        }
         let (otx, orx) = oneshot::channel();
         let _ = tx.send(AgentEvent::QuestionRequest {
+            turn_cancel: cancel.clone(),
             question: parsed.question.clone(),
             header: parsed.header.clone(),
             options: parsed.options.clone(),
@@ -2904,7 +2951,7 @@ impl AgentRunner {
             "options": labels,
         });
         let cfg_for_task = cfg.clone();
-        let judged = tokio::task::spawn_blocking(move || {
+        let judged = crate::typesafe::context::blocking(move || {
             crate::typesafe::harness::noul(
                 &cfg_for_task,
                 &state,
@@ -3059,6 +3106,73 @@ fn plan_mode_allows(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recovery_fits_large_items_and_preserves_schema_and_retrieval() {
+        const CHILD: &str = "NUR_RECOVERY_FIT_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let root =
+                std::env::temp_dir().join(format!("nur-recovery-fit-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&root).unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact", "agent::r#loop::tests::recovery_fits_large_items_and_preserves_schema_and_retrieval", "--nocapture"]).env(CHILD,"1").env("NUR_HOME",&root).output().unwrap();
+            std::fs::remove_dir_all(root).unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let mut session = Session::new_for_provider("fake", "vllm", ".");
+        let body = "日本語 example result 🔎 ".repeat(2000);
+        session.input_items = vec![
+            user_text_item("Please finish the current task"),
+            serde_json::json!({"type":"function_call","call_id":"owned","name":"read_file","arguments":"{\"path\":\"notes.md\"}"}),
+            function_call_output_item("owned", &body),
+        ];
+        let mut instructions = "Detailed instructions ".repeat(3000);
+        let mut tools = vec![crate::api::types::ToolDef {
+            type_: "function".into(),
+            name: "read_file".into(),
+            description: Some("File reader ".repeat(100)),
+            parameters: Some(
+                serde_json::json!({"type":"object","required":["path"],"properties":{"path":{"type":"string","description":"a path"}},"additionalProperties":false}),
+            ),
+        }];
+        let reserve =
+            fit_recovery_request(&mut session, &mut instructions, &mut tools, 4096, 100_000);
+        assert!(
+            attribute_request(&instructions, &tools, &session.input_items).estimated_input_tokens()
+                + reserve
+                <= 4096
+        );
+        assert!(reserve <= 512);
+        assert_eq!(
+            tools[0].parameters.as_ref().unwrap()["required"],
+            serde_json::json!(["path"])
+        );
+        assert_eq!(
+            tools[0].parameters.as_ref().unwrap()["properties"]["path"]["type"],
+            "string"
+        );
+        let stored = super::super::context_store::list(&session.id);
+        assert!(stored
+            .iter()
+            .any(
+                |variable| super::super::context_store::get(&session.id, &variable.name)
+                    .is_some_and(|var| var.body.as_deref() == Some(body.as_str()))
+            ));
+        for item in &session.input_items {
+            if item["type"] == "function_call_output" {
+                assert!(session
+                    .input_items
+                    .iter()
+                    .any(|call| call["type"] == "function_call"
+                        && call["call_id"] == item["call_id"]));
+            }
+        }
+    }
 
     #[test]
     fn explicit_compact_honors_jev_even_without_large_savings() {
@@ -5288,55 +5402,61 @@ fn record_auxiliary_telemetry(session_id: &str) {
     // TypeSafe/Jev judgments are billed work outside the primary chat call, and
     // they buy back tokens the primary call does not have to carry. Recorded as a
     // delta so the session tally the TUI chip shows stays cumulative.
-    let jev = crate::typesafe::telemetry::take_delta();
-    if !jev.is_empty() {
-        // Where it really came from: a local bridge and the hosted API must never
-        // be confused in the audit trail.
-        let ts_cfg = crate::config::load_config()
-            .map(|c| c.typesafe)
-            .unwrap_or_default();
-        let route = if jev.route.is_empty() {
-            crate::typesafe::client::effective_base_url(&ts_cfg)
-        } else {
-            jev.route.clone()
-        };
-        let model = if !jev.model.is_empty() {
-            jev.model.clone()
-        } else if ts_cfg.model.trim().is_empty() {
-            crate::typesafe::client::DEFAULT_MODEL.to_string()
-        } else {
-            ts_cfg.model.trim().to_string()
-        };
-        receipt::record(
-            session_id,
-            receipt::Event::AuxiliaryInference {
-                purpose: "typesafe system one judgments".into(),
-                route,
-                model,
-                processing: "remote".into(),
-                input_tokens: jev.input_tokens,
-                output_tokens: jev.output_tokens,
-                cost_usd: None,
-                cost_provenance: "typesafe: provider-reported usage; pricing not published by \
-                                  the endpoint"
+    for jev in crate::typesafe::telemetry::take_for_session(session_id) {
+        if !jev.is_empty() {
+            // Where it really came from: a local bridge and the hosted API must never
+            // be confused in the audit trail.
+            let ts_cfg = crate::config::load_config()
+                .map(|c| c.typesafe)
+                .unwrap_or_default();
+            let route = if jev.route.is_empty() {
+                crate::typesafe::client::effective_base_url(&ts_cfg)
+            } else {
+                jev.route.clone()
+            };
+            let model = if !jev.model.is_empty() {
+                jev.model.clone()
+            } else if ts_cfg.model.trim().is_empty() {
+                crate::typesafe::client::DEFAULT_MODEL.to_string()
+            } else {
+                ts_cfg.model.trim().to_string()
+            };
+            receipt::record(
+                session_id,
+                receipt::Event::AuxiliaryInference {
+                    purpose: "typesafe system one judgments".into(),
+                    route: route.clone(),
+                    model,
+                    processing: if crate::typesafe::client::is_loopback_endpoint(&route) {
+                        "local"
+                    } else {
+                        "remote"
+                    }
                     .into(),
-                outcome: format!(
-                    "requests {} · questions {} · decisions {} · escalations {} · gated {} · \
+                    input_tokens: jev.input_tokens,
+                    output_tokens: jev.output_tokens,
+                    cost_usd: None,
+                    cost_provenance: "typesafe: provider-reported usage; pricing not published by \
+                                  the endpoint"
+                        .into(),
+                    outcome: format!(
+                        "requests {} · questions {} · decisions {} · escalations {} · gated {} · \
                      pruned {} call(s)/{} result(s) · ~{} tokens kept out of context · \
                      frontier compaction calls avoided {} · failures {}",
-                    jev.requests,
-                    jev.questions,
-                    jev.decisions,
-                    jev.escalations,
-                    jev.gated_calls,
-                    jev.pruned_calls,
-                    jev.pruned_results,
-                    jev.tokens_saved(),
-                    jev.frontier_calls_avoided,
-                    jev.failures,
-                ),
-            },
-        );
+                        jev.requests,
+                        jev.questions,
+                        jev.decisions,
+                        jev.escalations,
+                        jev.gated_calls,
+                        jev.pruned_calls,
+                        jev.pruned_results,
+                        jev.tokens_saved(),
+                        jev.frontier_calls_avoided,
+                        jev.failures,
+                    ),
+                },
+            );
+        }
     }
 }
 
@@ -5775,7 +5895,7 @@ async fn plan_unrouted_child(
     }
     let cfg = config.clone();
     let task = prompt.clone();
-    let planned = tokio::task::spawn_blocking(move || {
+    let planned = crate::typesafe::context::blocking(move || {
         crate::typesafe::route::plan_child(&cfg, &task, &context)
     })
     .await
@@ -6419,7 +6539,7 @@ async fn compact_session_inner(
             .with_goal(typesafe_goal(session, ts.compaction.goal_prompts));
         let for_task = items.clone();
         let cfg = ts.clone();
-        let outcome = tokio::task::spawn_blocking(move || {
+        let outcome = crate::typesafe::context::blocking(move || {
             crate::typesafe::compact::try_compact_items(&cfg, &for_task, &opts)
         })
         .await
@@ -6685,6 +6805,148 @@ fn emergency_compact_session(runner: &AgentRunner, session: &mut Session) -> usi
     session.input_items = new_items;
     runner.persist_session(session);
     session.input_items.len()
+}
+
+/// Fit all request components, retaining every tool name and valid schema.
+/// Original large payloads stay retrievable, and call/result pairs are removed
+/// together when their arguments alone cannot fit the provider window.
+fn fit_recovery_request(
+    session: &mut Session,
+    instructions: &mut String,
+    tools: &mut [crate::api::types::ToolDef],
+    window: u64,
+    reserve: u64,
+) -> u64 {
+    fn kind(item: &Value) -> &str {
+        item.get("type").and_then(Value::as_str).unwrap_or("")
+    }
+    fn call_id(item: &Value) -> &str {
+        item.get("call_id").and_then(Value::as_str).unwrap_or("")
+    }
+    fn compact_schema(value: &mut Value) {
+        if let Some(object) = value.as_object_mut() {
+            object.remove("description");
+            object.remove("examples");
+            object.remove("title");
+            if let Some(properties) = object.get_mut("properties").and_then(Value::as_object_mut) {
+                for property in properties.values_mut() {
+                    compact_schema(property);
+                }
+            }
+            for field in ["items", "additionalProperties"] {
+                if let Some(value) = object.get_mut(field) {
+                    compact_schema(value);
+                }
+            }
+            for field in ["oneOf", "anyOf", "allOf"] {
+                if let Some(values) = object.get_mut(field).and_then(Value::as_array_mut) {
+                    for value in values {
+                        compact_schema(value);
+                    }
+                }
+            }
+        }
+    }
+    fn excerpt(session: &str, name: &str, body: &str, limit: usize) -> String {
+        let name = format!("{name}_{}", uuid::Uuid::new_v4().simple());
+        let saved = super::context_store::register(
+            session,
+            &name,
+            body,
+            "context_recovery",
+            "provider-window",
+        );
+        let pointer = match saved {
+            Ok(variable) => format!("Full content: context tool peek/slice/search name={} (id={}).", variable.name, variable.id),
+            Err(_) => "Full prior dialogue/tool results remain in the persisted session and precompact backup; original skills remain on disk.".into(),
+        };
+        let notice =
+            format!("[Context recovery. {pointer} Retrieve omitted details before acting.]\n");
+        let remaining = limit.saturating_sub(notice.len());
+        let mut head_end = (remaining / 2).min(body.len());
+        while !body.is_char_boundary(head_end) {
+            head_end -= 1;
+        }
+        let mut tail_start = body.len().saturating_sub(remaining / 2);
+        while !body.is_char_boundary(tail_start) {
+            tail_start += 1;
+        }
+        let head = &body[..head_end];
+        let tail = &body[tail_start..];
+        format!("{notice}{head}\n{tail}")
+    }
+    let reserve = reserve.min(window / 8);
+    for tool in tools.iter_mut() {
+        if let Some(description) = &mut tool.description {
+            *description = description.chars().take(240).collect();
+        }
+        if let Some(parameters) = &mut tool.parameters {
+            compact_schema(parameters);
+        }
+    }
+    let instruction_limit = (window.saturating_mul(4) / 3).max(512) as usize;
+    if instructions.len() > instruction_limit {
+        *instructions = excerpt(
+            &session.id,
+            "recovery_instructions",
+            instructions,
+            instruction_limit,
+        );
+    }
+    let fixed = attribute_request(instructions, tools, &[])
+        .estimated_input_tokens()
+        .saturating_add(reserve)
+        .saturating_add(128);
+    let available_chars = window.saturating_sub(fixed).saturating_mul(4).max(512) as usize;
+    let individual = available_chars / session.input_items.len().max(1);
+    let mut omitted_calls = std::collections::HashSet::new();
+    for (index, item) in session.input_items.iter_mut().enumerate() {
+        let encoded = serde_json::to_string(item).unwrap_or_default();
+        if encoded.len() <= individual.max(256) {
+            continue;
+        }
+        if kind(item) == "function_call" {
+            omitted_calls.insert(call_id(item).to_string());
+            continue;
+        }
+        if kind(item) == "function_call_output" {
+            let body = item
+                .get("output")
+                .and_then(Value::as_str)
+                .unwrap_or(&encoded)
+                .to_string();
+            item["output"] = Value::String(excerpt(
+                &session.id,
+                &format!("recovery_result_{index}"),
+                &body,
+                individual.max(256),
+            ));
+        } else {
+            *item = user_text_item(&excerpt(
+                &session.id,
+                &format!("recovery_item_{index}"),
+                &encoded,
+                individual.max(256),
+            ));
+        }
+    }
+    session
+        .input_items
+        .retain(|item| !omitted_calls.contains(call_id(item)));
+    // Remove older dialogue/pairs as complete groups until the envelope fits.
+    while session.input_items.len() > 1
+        && attribute_request(instructions, tools, &session.input_items)
+            .estimated_input_tokens()
+            .saturating_add(reserve)
+            > window
+    {
+        let id = call_id(&session.input_items[0]).to_string();
+        session.input_items.remove(0);
+        if !id.is_empty() {
+            session.input_items.retain(|item| call_id(item) != id);
+        }
+    }
+    reserve
 }
 
 fn snapshot_before_compact(session: &Session) {

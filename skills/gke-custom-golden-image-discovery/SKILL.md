@@ -1,6 +1,7 @@
 ---
 name: gke-custom-golden-image-discovery
 metadata:
+  version: "1.0.0"
   category: Containers
 description: >-
   Discovers golden base images for creating GKE custom node images based on

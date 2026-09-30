@@ -72,6 +72,8 @@ def render(tsv_path: str, out_path: str, scale: float = 1.0) -> None:
 
     px = int(15 * scale)
     font = load_font(px)
+    symbol_path = r"C:\Windows\Fonts\seguisym.ttf"
+    symbol_font = ImageFont.truetype(symbol_path, px) if os.path.exists(symbol_path) else font
     cw = font.getlength("M")
     lh = int(px * 1.32)
     pad = int(8 * scale)
@@ -92,8 +94,8 @@ def render(tsv_path: str, out_path: str, scale: float = 1.0) -> None:
         if bg_rgb != theme_bg:
             draw.rectangle([x0, y0, x0 + cell_w - 1, y0 + lh - 1], fill=bg_rgb)
         if sym.strip():
-            bold = bool(int(mods) & 1) if mods.isdigit() else False
-            draw.text((x0, y0), sym, font=font, fill=fg_rgb)
+            glyph_font = symbol_font if sym[0] in "▌▍▪•✓☐▏─" else font
+            draw.text((x0, y0), sym, font=glyph_font, fill=fg_rgb)
     img.save(out_path)
     print(f"{out_path}  {img.size[0]}x{img.size[1]}")
 

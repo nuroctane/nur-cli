@@ -195,7 +195,7 @@ Arguments:
 - NeMo Guardrails Documentation: https://docs.nvidia.com/nemo/guardrails/latest/index.html
 - Guardrails AI Framework: https://github.com/guardrails-ai/guardrails
 - Guardrails AI Hub (Validators): https://guardrailsai.com/hub
-- Microsoft Presidio (PII Engine): https://github.com/microsoft/presidio
+- Microsoft Presidio (PII Engine): https://github.com/data-privacy-stack/presidio
 - OpenAI Guardrails Python: https://github.com/openai/openai-guardrails-python
 - Colang 2.0 Guide: https://docs.nvidia.com/nemo/guardrails/latest/configure-rails/colang/index.html
 - NeMo Guardrails Security Guidelines: https://docs.nvidia.com/nemo/guardrails/latest/security/guidelines.html

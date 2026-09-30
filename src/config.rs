@@ -1212,23 +1212,82 @@ pub fn atomic_write(path: &std::path::Path, content: &[u8]) -> std::io::Result<(
         fs::create_dir_all(parent)?;
     }
     let mut tmp = path.to_path_buf();
-    let ext = format!(
-        "tmp.{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    );
+    let ext = format!("tmp.{}", uuid::Uuid::new_v4().simple());
     tmp.set_extension(ext);
+    struct TemporaryFile(std::path::PathBuf);
+    impl Drop for TemporaryFile {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.0);
+        }
+    }
+    let _cleanup = TemporaryFile(tmp.clone());
     {
-        let mut f = fs::File::create(&tmp)?;
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
+        if let Ok(metadata) = fs::metadata(path) {
+            f.set_permissions(metadata.permissions())?;
+        }
         f.write_all(content)?;
         f.sync_all()?;
     }
-    // Windows can't rename over existing file that is open? fs::rename overwrites.
-    let _ = fs::remove_file(path);
-    fs::rename(&tmp, path)?;
-    Ok(())
+    #[cfg(windows)]
+    let result = {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+        };
+        let source_path = tmp.canonicalize()?;
+        let parent = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(std::path::Path::new("."));
+        let destination_path = parent.canonicalize()?.join(path.file_name().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "atomic write needs a file name",
+            )
+        })?);
+        let source: Vec<u16> = source_path
+            .as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        let destination: Vec<u16> = destination_path
+            .as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let mut delay = std::time::Duration::from_millis(2);
+        loop {
+            if unsafe {
+                MoveFileExW(
+                    source.as_ptr(),
+                    destination.as_ptr(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+                )
+            } != 0
+            {
+                break Ok(());
+            }
+            let error = std::io::Error::last_os_error();
+            // Readers and antivirus can temporarily hold a replacement target
+            // without delete sharing. Keep the previous snapshot intact while
+            // waiting; permanent permission errors still reach the caller.
+            if !matches!(error.raw_os_error(), Some(5 | 32 | 33))
+                || std::time::Instant::now() >= deadline
+            {
+                break Err(error);
+            }
+            std::thread::sleep(delay);
+            delay = (delay * 2).min(std::time::Duration::from_millis(32));
+        }
+    };
+    #[cfg(not(windows))]
+    let result = fs::rename(&tmp, path);
+    result
 }
 
 pub fn save_config(cfg: &Config) -> Result<()> {
@@ -1319,6 +1378,50 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn atomic_replacement_keeps_concurrent_readers_on_complete_snapshots() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+        let root = std::env::temp_dir().join(format!("nur-atomic-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("snapshot.json");
+        let first = vec![b'a'; 8192];
+        let second = vec![b'b'; 16384];
+        atomic_write(&path, &first).unwrap();
+        let running = Arc::new(AtomicBool::new(true));
+        let worker_running = running.clone();
+        let worker_path = path.clone();
+        let reader = std::thread::spawn(move || {
+            let mut reads = 0;
+            while worker_running.load(Ordering::Acquire) || reads < 50 {
+                let bytes = fs::read(&worker_path).expect("snapshot vanished during replacement");
+                assert!(
+                    bytes == first || bytes == second,
+                    "reader saw a partial snapshot"
+                );
+                reads += 1;
+            }
+            reads
+        });
+        for i in 0..50 {
+            atomic_write(
+                &path,
+                &vec![if i % 2 == 0 { b'b' } else { b'a' }; if i % 2 == 0 { 16384 } else { 8192 }],
+            )
+            .unwrap();
+        }
+        running.store(false, Ordering::Release);
+        assert!(reader.join().unwrap() >= 50);
+        assert_eq!(
+            fs::read_dir(&root).unwrap().count(),
+            1,
+            "temporary files leaked"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn hex_colour_parsing_never_panics_on_multibyte_input() {

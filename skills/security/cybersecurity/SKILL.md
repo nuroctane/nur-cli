@@ -1,6 +1,6 @@
 ---
 name: cybersecurity
-description: "Router into 817 Anthropic-Cybersecurity-Skills (MITRE ATT&CK, NIST CSF, ATLAS, D3FEND, AI RMF, F3). Use for security investigations, DFIR, red/blue team playbooks."
+description: "Router into 800+ Anthropic-Cybersecurity-Skills (MITRE ATT&CK, NIST CSF, ATLAS, D3FEND, AI RMF, F3). Use for security investigations, DFIR, red/blue team playbooks."
 ---
 
 # Cybersecurity skills library
@@ -12,7 +12,7 @@ Source: https://github.com/mukul975/Anthropic-Cybersecurity-Skills (Apache-2.0, 
 ## How Meta uses this pack
 
 - Full skill bodies live under `~/.agents/skills/` (and mirrors) after ecosystem ensure.
-- Do **not** load all 817 into context. Progressive disclosure:
+- Do **not** load all 800+ into context. Progressive disclosure:
   1. Match the user task to a skill **name** via list/grep of skill dirs or index.
   2. `skill(action=read, name=<kebab-name>)` for the full playbook.
   3. Execute workflow steps with bash/read tools; map findings to ATT&CK IDs.

@@ -1,6 +1,7 @@
 ---
 name: cloud-monitoring-metric-selection
 metadata:
+  version: "1.0.0"
   category: CloudObservabilityAndMonitoring
 description: >-
   Retrieve, query, and identify relevant Google Cloud Monitoring metric

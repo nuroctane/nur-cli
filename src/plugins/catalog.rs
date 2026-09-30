@@ -639,7 +639,7 @@ pub const CATALOG: &[PluginEntry] = &[
         name: "Antigravity Awesome Skills",
         description: "Large community skill index (sickn33) - browse then install selectively",
         category: "catalog",
-        source_url: "https://github.com/sickn33/antigravity-awesome-skills.git",
+        source_url: "https://github.com/sickn33/agentic-awesome-skills.git",
         path_in_repo: None,
     },
 ];

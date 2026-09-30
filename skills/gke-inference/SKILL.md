@@ -3,13 +3,18 @@ name: gke-inference
 description: >-
   Deploys and optimizes AI/ML inference workloads on GKE, using GPUs, TPUs, and
   model servers. Use when deploying GKE inference servers, configuring GKE GPU
-  resources for inference, or deploying LLMs on GKE. Don't use for generic
-  batch jobs or HPC task queues (use gke-batch-hpc instead).
+  resources for inference, or deploying LLMs on GKE. Don't use for migrating
+  existing AI workloads to GKE (use google-cloud-solution-guided-gke-ai-migration),
+  GKE RAG with Cloud SQL/AlloyDB (use google-cloud-solution-rag-enterprise-search-gke-sqldb),
+  or batch/HPC (use gke-batch-hpc).
 metadata:
+  version: "1.0.1"
   category: Containers
 ---
 
 # GKE AI/ML Inference
+
+> **Routing Note:** For migrating existing AI workloads to GKE, open `google-cloud-solution-guided-gke-ai-migration/SKILL.md`. For GKE RAG with Cloud SQL or AlloyDB (`pgvector`), open `google-cloud-solution-rag-enterprise-search-gke-sqldb/SKILL.md`.
 
 This reference covers deploying AI/ML inference workloads on GKE using Google's
 Inference Quickstart (GIQ) and best practices for LLM serving.

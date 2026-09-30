@@ -87,6 +87,6 @@ diff <(ls /proc/ | grep -E '^[0-9]+$' | sort -n) \
 ### References
 
 - Volatility3 Linux Plugins: https://volatility3.readthedocs.io/en/latest/volatility3.plugins.linux.html
-- LiME: https://github.com/504ensicsLabs/LiME
+- LiME: https://github.com/jtsylve/LiME
 - rkhunter: http://rkhunter.sourceforge.net/
 - MITRE T1014 Rootkit: https://attack.mitre.org/techniques/T1014/

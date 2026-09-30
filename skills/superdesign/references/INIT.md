@@ -3,6 +3,8 @@ You are performing a **Superdesign Init** — analyzing this repository to build
 ## Output Directory
 Write all files to `.superdesign/init/` in the project root.
 
+Init creates repository discovery artifacts only. It does not know the remote project, draft ids, final payload-budgeted context bundle, or extracted project components, so it MUST NOT create `.superdesign/resume.json`. The first successful UI draft/iteration writes that durable state per [RESUME.md](RESUME.md). If a full init is regenerated later, treat existing target resume entries as needing freshness validation before their next generation; preserve their project/draft ids while refreshing only affected context.
+
 ## Analysis Steps
 
 ### 1. Detect Framework & Component Library
@@ -26,7 +28,7 @@ For each component, include:
 
 Focus on **shared UI primitives** (Button, Input, Dialog, Card, Select, Checkbox, Table, Tabs, etc.), not page-specific components.
 
-⚠️ This file should contain the ACTUAL CODE of components, not just a list of names.
+This file should contain the ACTUAL CODE of components, not just a list of names.
 
 ### 3. Write `layouts.md`
 Find and READ all shared layout components. These are the components that appear on every page or across multiple pages:
@@ -55,18 +57,15 @@ Map out the page/route structure:
 For key pages (home, dashboard, main features), include a brief summary of what the page renders.
 
 ### 5. Write `theme.md`
-Extract the design system / theme tokens. **Include FULL file contents**, not summaries:
-- Read and include FULL CSS variable definitions (`:root`, `[data-theme]`, etc.)
-- Read and include FULL Tailwind config (`tailwind.config.*`) — especially `theme.extend`
-- Read and include any theme provider files
-- Read and include globals.css, index.css, or equivalent
-- Capture: colors, fonts, spacing scale, border radius, shadows, breakpoints
+Extract the design system / theme tokens. Structure the file in **two parts, in this order**:
 
-**IMPORTANT**: Include the COMPLETE raw files in fenced code blocks:
-- Full `tailwind.config.ts/js` content
+**Part 1 — Compact token summary (at the TOP).** A concise, readable digest of the actual values: the color palette (token name → value, incl. `:root` and `.dark`), font families and type scale, spacing scale, border-radius, shadows, and breakpoints. This summary is the budget-friendly context the design flow reaches for first — the PAYLOAD BUDGET rule in [SUPERDESIGN.md](SUPERDESIGN.md) points here to avoid passing a giant `globals.css` whole. Keep it tight enough to pass as context on its own.
+
+**Part 2 — Raw source dumps (BELOW the summary).** The complete raw files in fenced code blocks, for when the full source is needed:
+- Full `tailwind.config.ts/js` content (especially `theme.extend`)
 - Full `globals.css` / `index.css` content
-- Full CSS variable definitions
-- Any design token files
+- Full CSS variable definitions (`:root`, `[data-theme]`, etc.)
+- Any theme provider files and design token files
 
 ### 6. Write `pages.md`
 For each key page/route in the app (home, dashboard, main features — up to 10 pages), build a **complete component dependency tree** by tracing imports recursively.
@@ -96,7 +95,7 @@ Dependencies:
 - src/components/layout/Footer.tsx
 ```
 
-This tree is the **SINGLE SOURCE OF TRUTH** for which files to pass as `--context-file` when designing a page. If a file appears in the tree, it MUST be included.
+This tree is the **candidate set** of files to pass as `--context-file` when designing a page — the starting point for context selection. It is not an unconditional include-everything list: apply the PAYLOAD BUDGET rules in [SUPERDESIGN.md](SUPERDESIGN.md) when selecting, so the payload does not 400.
 
 Prioritize the most important/complex pages (home, dashboard, settings, etc.). Skip trivial pages (404, offline, status).
 
@@ -155,4 +154,4 @@ This file serves as a "menu" — the design workflow reads it to decide which co
 - Keep descriptions concise — the goal is machine-readable context, not documentation
 
 ## Key Principle: INCLUDE ACTUAL CODE
-The init files should contain **actual implementation code** (.tsx, .css, .ts), not just documentation or descriptions. Superdesign needs real code to reproduce UI accurately. Be generous with the content — more context is always better than less.
+The init files should contain **actual implementation code** (.tsx, .css, .ts), not just documentation or descriptions. Superdesign needs real code to reproduce UI accurately. Be thorough and complete for the key pages and shared UI — but bounded and deduplicated, not padded. These files are the discovery layer; the actual design calls pass only the target page's necessary context under the PAYLOAD BUDGET (see [SUPERDESIGN.md](SUPERDESIGN.md)), so oversized dumps just raise reader/token cost without helping.

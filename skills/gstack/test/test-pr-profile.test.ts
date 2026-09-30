@@ -1,0 +1,163 @@
+import { describe, expect, test } from 'bun:test';
+import {
+  PR_PROFILE_CASE_IDS, PR_PROFILE_MAPS, packageChangeOnlyVersion, selectPrProfile, validatePrProfileInventory,
+  type PrProfileMaps,
+} from '../scripts/test-pr-profile';
+
+const maps: PrProfileMaps = {
+  e2eTouchfiles: {
+    'ceo-smoke': ['plan-ceo-review/**'],
+    'ceo-full': ['plan-ceo-review/**'],
+    'ceo-periodic': ['plan-ceo-review/**'],
+    'autoplan-full': ['autoplan/**'],
+    'browse-smoke': ['browse/**'],
+  },
+  tiers: {
+    'ceo-smoke': 'gate', 'ceo-full': 'gate', 'ceo-periodic': 'periodic',
+    'autoplan-full': 'periodic', 'browse-smoke': 'gate',
+  },
+  judgeTouchfiles: {
+    'plan-ceo-review/SKILL.md modes': ['plan-ceo-review/**'],
+    'browse quality': ['browse/**'],
+  },
+  globalTouchfiles: ['test/helpers/shared-runner.ts'],
+};
+const profile = ['ceo-smoke', 'browse-smoke'];
+const select = (options: Partial<Parameters<typeof selectPrProfile>[0]> = {}) => selectPrProfile({
+  maps, profile, selectedE2E: ['ceo-smoke', 'ceo-full', 'ceo-periodic'],
+  selectedJudges: ['plan-ceo-review/SKILL.md modes'],
+  changedFiles: ['plan-ceo-review/SKILL.md.tmpl'], ...options,
+});
+
+describe('fast PR coverage policy', () => {
+  test('canonical short probes exist in the unchanged broad gate census', () => {
+    expect(() => validatePrProfileInventory()).not.toThrow();
+    expect(PR_PROFILE_CASE_IDS).toContain('plan-ceo-review-benefits');
+    expect(PR_PROFILE_CASE_IDS).toContain('plan-review-report');
+    expect(PR_PROFILE_CASE_IDS).toContain('auq-format-gate');
+    for (const tier of Object.values(PR_PROFILE_MAPS.tiers)) expect(['gate', 'periodic']).toContain(tier);
+  });
+
+  test('keeps relevant short probes and the failing CEO quality obligation; reports broad work', () => {
+    const result = select();
+    expect(result.mode).toBe('pr');
+    expect(result.e2e).toEqual(['ceo-smoke']);
+    expect(result.judges).toEqual(['plan-ceo-review/SKILL.md modes']);
+    expect(result.deferred.map(({ id, tier }) => ({ id, tier }))).toEqual([
+      { id: 'ceo-full', tier: 'gate' }, { id: 'ceo-periodic', tier: 'periodic' },
+    ]);
+    expect(result.needsFullValidation).toBe(false);
+  });
+
+  test('does not add unrelated short probes or drop selected quality judges', () => {
+    const result = select({ selectedJudges: ['browse quality', 'plan-ceo-review/SKILL.md modes'] });
+    expect(result.e2e).not.toContain('browse-smoke');
+    expect(result.judges).toEqual(['browse quality', 'plan-ceo-review/SKILL.md modes']);
+  });
+
+  test('unknown source dependencies restore the full gate and judges, but never launch periodic work', () => {
+    const result = select({ changedFiles: ['lib/new-runtime.ts'] });
+    expect(result.mode).toBe('full-fallback');
+    expect(result.unknownFiles).toEqual(['lib/new-runtime.ts']);
+    expect(result.e2e).toEqual(['browse-smoke', 'ceo-full', 'ceo-smoke']);
+    expect(result.judges).toEqual(['browse quality', 'plan-ceo-review/SKILL.md modes']);
+    expect(result.deferred.map(x => x.id)).toEqual(['autoplan-full', 'ceo-periodic']);
+    expect(result.reasons[0]).toContain('Unknown dependencies');
+  });
+
+  test('unknown runner helpers and paid test files also trigger broad fallback', () => {
+    for (const file of ['test/helpers/new-runner.ts', 'test/fixtures/new-prompt.ts', 'test/skill-e2e-new.test.ts', 'bun.lock']) {
+      expect(select({ changedFiles: [file] }).mode).toBe('full-fallback');
+    }
+  });
+
+  test('docs, free tests and touchfile-map edits do not accidentally spend on the full gate', () => {
+    for (const file of ['README.md', 'docs/testing.md', 'VERSION', 'AGENTS.md', 'CLAUDE.md', 'agents-digest/gstack-AGENTS.md', 'test/new-parser.test.ts', 'test/helpers/touchfiles-data.ts']) {
+      expect(select({ changedFiles: [file], selectedE2E: [], selectedJudges: [] }).mode).toBe('pr');
+    }
+  });
+
+  test('only verified package version metadata is safe to ignore', () => {
+    const old = JSON.stringify({ version: '1', scripts: { test: 'bun test' }, dependencies: { bun: '1' } });
+    expect(packageChangeOnlyVersion(old, old.replace('"version":"1"', '"version":"2"'))).toBe(true);
+    expect(packageChangeOnlyVersion(old, old.replace('bun test', 'bun skip'))).toBe(false);
+    expect(packageChangeOnlyVersion(old, old.replace('"bun":"1"', '"bun":"2"'))).toBe(false);
+    expect(packageChangeOnlyVersion(old, '{}')).toBe(false);
+    expect(packageChangeOnlyVersion(old, 'broken')).toBe(false);
+  });
+
+  test('a periodic-only prompt reports deferred coverage instead of a quick-check claim', () => {
+    const result = select({ changedFiles: ['autoplan/SKILL.md.tmpl'], selectedE2E: ['autoplan-full'], selectedJudges: [] });
+    expect(result.e2e).toEqual([]);
+    expect(result.deferred.map(x => x.id)).toEqual(['autoplan-full']);
+    expect(result.missingCoverage).toEqual([]);
+    expect(result.deferredPromptFiles).toEqual(['autoplan/SKILL.md.tmpl']);
+    expect(result.needsFullValidation).toBe(false);
+  });
+
+  test('an unrelated retained check does not satisfy a changed prompt', () => {
+    const result = select({ changedFiles: ['autoplan/sections/phase-close.md'], selectedE2E: ['browse-smoke'], selectedJudges: ['browse quality'] });
+    expect(result.needsFullValidation).toBe(false);
+    expect(result.missingCoverage).toEqual([]);
+    expect(result.deferredPromptFiles).toEqual(['autoplan/sections/phase-close.md']);
+  });
+
+  test('verified template identity covers its generated artifact while reporting the original path', () => {
+    const generatedMaps = { ...maps,
+      e2eTouchfiles: { ...maps.e2eTouchfiles, 'generated-broad': ['generated/SKILL.md.tmpl'] },
+      tiers: { ...maps.tiers, 'generated-broad': 'periodic' as const },
+    };
+    const result = select({ maps: generatedMaps, selectedE2E: ['generated-broad'], selectedJudges: [],
+      changedFiles: ['generated/SKILL.md'], sourceAliases: { 'generated/SKILL.md': 'generated/SKILL.md.tmpl' } });
+    expect(result.unknownFiles).toEqual([]);
+    expect(result.deferredPromptFiles).toEqual(['generated/SKILL.md']);
+    expect(result.needsFullValidation).toBe(false);
+    expect(select({ maps: generatedMaps, selectedE2E: ['generated-broad'], selectedJudges: [],
+      changedFiles: ['generated/SKILL.md'] }).needsFullValidation).toBe(true);
+  });
+
+  test('an unknown new skill is visibly unvalidated even after broad fallback', () => {
+    const result = select({ changedFiles: ['new-skill/SKILL.md.tmpl'] });
+    expect(result.mode).toBe('full-fallback');
+    expect(result.needsFullValidation).toBe(true);
+  });
+
+  test('a selected judge alone can cover a changed prompt with broad behavioral work deferred', () => {
+    const result = select({ selectedE2E: ['ceo-periodic'], selectedJudges: ['plan-ceo-review/SKILL.md modes'] });
+    expect(result.e2e).toEqual([]);
+    expect(result.needsFullValidation).toBe(false);
+    expect(result.deferred).toHaveLength(1);
+  });
+
+  test('a missing selected prompt dependency is detected even when there are no selected cases', () => {
+    const result = select({ selectedE2E: [], selectedJudges: [] });
+    expect(result.needsFullValidation).toBe(true);
+    const globalPrompt = select({ maps: { ...maps, globalTouchfiles: ['plan-ceo-review/**'] }, selectedE2E: [], selectedJudges: [] });
+    expect(globalPrompt.needsFullValidation).toBe(true);
+  });
+
+  test('null selections expand inventories while an empty selection remains empty', () => {
+    expect(select({ selectedE2E: null, selectedJudges: null }).e2e).toEqual(['browse-smoke', 'ceo-smoke']);
+    const empty = select({ selectedE2E: [], selectedJudges: [], changedFiles: ['README.md'] });
+    expect(empty.e2e).toEqual([]);
+    expect(empty.judges).toEqual([]);
+    expect(empty.needsFullValidation).toBe(false);
+  });
+
+  test('normalizes Windows paths and deduplicates selection and changes', () => {
+    const result = select({ changedFiles: ['plan-ceo-review\\SKILL.md.tmpl', 'plan-ceo-review/SKILL.md.tmpl'], selectedE2E: ['ceo-smoke', 'ceo-smoke'] });
+    expect(result.e2e).toEqual(['ceo-smoke']);
+    expect(result.unknownFiles).toEqual([]);
+    expect(result.needsFullValidation).toBe(false);
+  });
+
+  test('rejects stale profile IDs, incorrect tiers, missing cadence, and unknown selections', () => {
+    expect(() => select({ profile: ['missing'] })).toThrow('broad gate census');
+    expect(() => select({ profile: ['ceo-periodic'] })).toThrow('broad gate census');
+    expect(() => select({ profile: ['ceo-smoke', 'ceo-smoke'] })).toThrow('Duplicate');
+    expect(() => select({ maps: { ...maps, tiers: { 'ceo-smoke': 'gate' } } })).toThrow('broad gate census');
+    expect(() => select({ maps: { ...maps, tiers: { ...maps.tiers, 'ceo-full': undefined! } } })).toThrow('no broad');
+    expect(() => select({ selectedE2E: ['missing'] })).toThrow('Unregistered');
+    expect(() => select({ selectedJudges: ['missing judge'] })).toThrow('Unregistered');
+  });
+});

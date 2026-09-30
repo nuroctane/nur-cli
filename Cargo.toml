@@ -1,6 +1,6 @@
 [package]
 name = "nur-cli"
-version = "0.40.1"
+version = "0.41.0"
 edition = "2021"
 description = "NurCLI - fully loaded multi-provider coding agent (TUI, inline kitty/sixel vision, tools, sandbox, TypeSafe/Jev typed judgments with local engines, Graphify/PLUR/Ruflo/Executor + sc-research whitehat pack + historical SC vuln library)."
 license = "GPL-3.0-or-later"
@@ -18,27 +18,27 @@ path = "src/main.rs"
 [dependencies]
 clap = { version = "4", features = ["derive", "env"] }
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls", "blocking"], default-features = false }
+reqwest = { version = "0.13.5", features = ["json", "stream", "rustls", "blocking", "form", "query", "http2", "system-proxy"], default-features = false }
 helix-ast = "0.1.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.8"
-dirs = "5"
-thiserror = "1"
-ratatui = "0.29"
+toml = "1.1.6"
+dirs = "7"
+thiserror = "2"
+ratatui = "0.30.2"
 # Markdown block structure for the transcript composer. Same version
 # tui-markdown already pulls in, so this adds no new node to the tree -
 # tui-markdown stays the inline/code styling engine, this parses structure.
 pulldown-cmark = { version = "0.13", default-features = false }
-# Pinned to the last release on ratatui 0.29 (0.3.6+ moved to ratatui-core).
-tui-markdown = "=0.3.5"
-# Pinned to the last releases on ratatui 0.29 (newer versions moved to ratatui 0.30 / ratatui-core).
-tui-scrollview = "=0.5.1"
+# Update these together: they share ratatui-core and terminal backend types.
+tui-markdown = "0.3.10"
+
+tui-scrollview = "0.6.8"
 # Inline image peeks (sixel/kitty/iTerm2). Heavy (image codecs) — behind the
 # default `image-peek` feature so `--no-default-features` yields a leaner build.
-ratatui-image = { version = "=8.0.1", default-features = false, features = ["crossterm"], optional = true }
+ratatui-image = { version = "11.1.0", default-features = false, features = ["crossterm"], optional = true }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"], optional = true }
-crossterm = "0.28"
+crossterm = "0.29"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 regex = "1"
@@ -50,15 +50,18 @@ unicode-width = "0.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rpassword = "7"
-colored = "2"
+colored = "3"
 arboard = "3"
 sha2 = "0.11.0"
-base64 = "0.22.1"
+base64 = "0.23.1"
 # ZCode credential store decryption (enc:v1 AES-256-GCM envelopes).
-aes-gcm = "0.10"
+aes-gcm = "0.11.1"
 # Firecrawl anydoc — local office/PDF → GFM (nickscamara / firecrawl/anydoc).
 # Optional so lean builds can drop the document stack.
-anydoc = { version = "0.1.6", optional = true }
+anydoc = { version = "0.2.4", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_Registry", "Win32_Storage_FileSystem", "Win32_Security"] }
 
 [features]
 default = ["image-peek", "anydoc"]

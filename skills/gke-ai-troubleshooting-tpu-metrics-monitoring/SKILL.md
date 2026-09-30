@@ -7,6 +7,7 @@ description: >-
   preemption interruptions, and calculating MTTR or MTBI metrics for GKE TPUs.
   Don't use for general non-TPU GKE workload monitoring or non-metric TPU debugging.
 metadata:
+  version: "1.0.0"
   category: CloudObservabilityAndMonitoring
 ---
 

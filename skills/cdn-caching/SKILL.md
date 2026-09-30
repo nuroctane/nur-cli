@@ -114,19 +114,20 @@ Vercel caches at multiple layers between the visitor and your backend. A request
   | `REVALIDATED` | Foreground revalidation after a delete (or `Pragma: no-cache`)   |
   | `BYPASS`      | Caching skipped (`no-store`, `private`, cookies, etc.)           |
 
-- **Cache reason** (`cacheReason`) — the finer _explanation_ of that outcome for a single request. The `cache_result` metric lumps all `MISS`es (and all `STALE`s) together; the reason is the only thing that tells them apart. Nine values, three per group:
+- **Cache reason** (`cacheReason`) — the finer _explanation_ of that outcome for a single request. The `cache_result` metric lumps all `MISS`es (and all `STALE`s) together; the reason is the only thing that tells them apart. Ten values: four for MISS, three map to BYPASS, three for STALE:
 
-  | `cacheReason`      | Refines  | Meaning                                                                       |
-  | ------------------ | -------- | ----------------------------------------------------------------------------- |
-  | `cold`             | MISS     | Cache empty for this key/variant (first request or evicted); the function ran |
-  | `collapsed`        | MISS     | Concurrent requests to one uncached path collapsed into a single invocation   |
-  | `error`            | MISS     | An error prevented serving from cache                                         |
-  | `draft_mode`       | → BYPASS | Next.js Draft Mode active — bypassed so editors see live content              |
-  | `prerender_bypass` | → BYPASS | Prerender-bypass cookie/token present                                         |
-  | `crawler`          | → BYPASS | SEO-crawler UA — full response served so bots index real content              |
-  | `stale_time`       | STALE    | Time-based `revalidate` interval elapsed; regenerating in background (SWR)     |
-  | `stale_tag`        | STALE    | Tag invalidated (`revalidateTag` / `invalidateByTag`); regenerating           |
-  | `stale_error`      | STALE    | A revalidation attempt **failed**; serving the last-good copy (a bug signal)  |
+  | `cacheReason`        | Refines  | Meaning                                                                       |
+  | --------------------- | -------- | ----------------------------------------------------------------------------- |
+  | `cold`                | MISS     | Cache empty for this key/variant (first request or evicted); the function ran |
+  | `collapsed`           | MISS     | Concurrent requests to one uncached path collapsed into a single invocation   |
+  | `error`               | MISS     | An error prevented serving from cache                                         |
+  | `vary_key_denied`     | MISS     | Origin's `Vary` header names a high-cardinality header (e.g. `Cookie`); response can't be cached |
+  | `draft_mode`          | → BYPASS | Next.js Draft Mode active — bypassed so editors see live content              |
+  | `prerender_bypass`    | → BYPASS | Prerender-bypass cookie/token present                                         |
+  | `crawler`             | → BYPASS | SEO-crawler UA — full response served so bots index real content              |
+  | `stale_time`          | STALE    | Time-based `revalidate` interval elapsed; regenerating in background (SWR)     |
+  | `stale_tag`           | STALE    | Tag invalidated (`revalidateTag` / `invalidateByTag`); regenerating           |
+  | `stale_error`         | STALE    | A revalidation attempt **failed**; serving the last-good copy (a bug signal)  |
 
   A raw `MISS` with reason `draft_mode` / `prerender_bypass` / `crawler` is **displayed as `BYPASS`** (all usually expected). The three `stale_*` reasons separate a healthy time refresh (`stale_time`) from a broad-tag blast (`stale_tag`) from a failing regen (`stale_error`). Read `cacheReason` from `vercel logs` or the dashboard Logs "Reason" row — the `x-vercel-cache-reason` header is internal-only and not visible via `curl`.
 
@@ -144,7 +145,7 @@ Vercel caches at multiple layers between the visitor and your backend. A request
 
 Reach for the Vercel CLI. `vercel metrics` gives aggregate numbers (requires [Observability Plus](https://vercel.com/docs/observability/observability-plus)); `vercel logs` shows per-request behavior.
 
-Metrics need to be queried by team and project (`-S <team> -p <project>`). Filter production with `-f "environment eq 'production'"` (there is no `--prod` flag). Run `vercel metrics schema <metric>` to discover dimensions; use `-F json` for machine-readable output. With `-g`, remember **`--limit` is per time bucket** — omit `-g` when you need totals across the whole window.
+Metrics need to be queried by team and project (`-S <team> -p <project>`). Filter production with `--prod` (equivalent to `--filter 'environment:production'`; the CLI's filter syntax is KQL — the older OData `eq`/`and` syntax is deprecated). Run `vercel metrics schema <metric>` to discover dimensions; use `--format json` for machine-readable output. With `-g`, remember **`--limit` is per time bucket** — omit `-g` when you need totals across the whole window.
 
 ### Cache hit rate
 
@@ -154,18 +155,18 @@ Start here for an overall picture of how well caching is working.
 
 ```bash
 vercel metrics vercel.request.count -S <team> -p <project> \
-  -f "environment eq 'production'" --group-by cache_result --since 24h
+  --prod --group-by cache_result --since 24h
 ```
 
 **Step 2 — where misses concentrate.** Split the `MISS` bucket (and optionally `STALE`) by `path_type`, then by `route` or `request_path`:
 
 ```bash
 vercel metrics vercel.request.count -S <team> -p <project> \
-  -f "environment eq 'production' and cache_result eq 'MISS'" \
+  --prod -f "cache_result:MISS" \
   --group-by path_type --since 24h
 
 vercel metrics vercel.request.count -S <team> -p <project> \
-  -f "environment eq 'production' and cache_result eq 'MISS' and path_type eq 'prerender'" \
+  --prod -f "cache_result:MISS AND path_type:prerender" \
   --group-by request_path --since 24h
 ```
 
@@ -189,11 +190,11 @@ vercel metrics vercel.isr_operation.write_units -S <team> -p <project> -a sum --
 ```bash
 # numerator: cache serves — sum the HIT + STALE + PRERENDER buckets
 vercel metrics vercel.request.count -S <team> -p <project> \
-  -f "environment eq 'production' and (cache_result eq 'HIT' or cache_result eq 'STALE')" \
+  --prod -f "cache_result:(HIT OR STALE)" \
   --group-by route -a sum --since 24h
 # denominator: ISR writes
 vercel metrics vercel.isr_operation.write_units -S <team> -p <project> \
-  -f "environment eq 'production'" --group-by route -a sum --since 24h
+  --prod --group-by route -a sum --since 24h
 ```
 
 High is good; near or below ~1 means you regenerate about as fast as the page is read (wasted writes) → lengthen the revalidate interval or move time-based to on-demand tag revalidation.
@@ -223,7 +224,7 @@ vercel metrics vercel.isr_operation.write_units -S <team> -p <project> \
 
 ```bash
 vercel metrics vercel.request.count -S <team> -p <project> \
-  -f "triggering_tag ne null" --group-by triggering_tag --since 24h
+  -f "triggering_tag:*" --group-by triggering_tag --since 24h
 ```
 
 Tags with a large blast radius that revalidate frequently are the usual root cause of high write_units. Prefer granular tags (`product-${id}`) and on-demand invalidation over short time-based intervals for event-driven content.
@@ -238,13 +239,13 @@ Before tuning headers or revalidate intervals, confirm what's left after those t
 
 ```bash
 vercel metrics vercel.request.count -S <team> -p <project> \
-  -f "cache_result eq 'BYPASS'" --group-by bot_category --since 24h
+  -f "cache_result:BYPASS" --group-by bot_category --since 24h
 
 vercel metrics vercel.request.count -S <team> -p <project> \
-  -f "cache_result eq 'BYPASS'" --group-by user_agent --since 24h
+  -f "cache_result:BYPASS" --group-by user_agent --since 24h
 
 vercel metrics vercel.request.count -S <team> -p <project> \
-  -f "cache_result eq 'BYPASS'" --group-by request_method --since 24h
+  -f "cache_result:BYPASS" --group-by request_method --since 24h
 ```
 
 The **Firewall/WAF** with the `vercel-firewall` skill can be used to manage verified SEO crawlers, block abusive bots, and rate-limit junk traffic before it distorts your hit-rate picture.

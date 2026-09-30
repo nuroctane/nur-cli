@@ -43,7 +43,7 @@ A common hunt outcome is detecting suspicious PowerShell — MITRE ATT&CK **T105
 - Chainsaw binary. Download a release from GitHub or build from source:
   ```bash
   # Build from source (Rust toolchain required)
-  git clone https://github.com/WithSecureLabs/chainsaw.git
+  git clone https://github.com/WithSecureOpenSource/chainsaw.git
   cd chainsaw && cargo build --release
   ./target/release/chainsaw --version
   # or: nix profile install github:WithSecureLabs/chainsaw
@@ -157,9 +157,9 @@ chainsaw lint -r ./rules --kind sigma
 
 | Tool | Purpose | Source |
 |------|---------|--------|
-| Chainsaw | Fast EVTX/artifact hunting and search | https://github.com/WithSecureLabs/chainsaw |
+| Chainsaw | Fast EVTX/artifact hunting and search | https://github.com/WithSecureOpenSource/chainsaw |
 | SigmaHQ rules | Community detection rules | https://github.com/SigmaHQ/sigma |
-| Chainsaw mappings | Sigma-to-EVTX field mappings | https://github.com/WithSecureLabs/chainsaw/tree/master/mappings |
+| Chainsaw mappings | Sigma-to-EVTX field mappings | https://github.com/WithSecureOpenSource/chainsaw/tree/master/mappings |
 | Hayabusa | Alternative Sigma EVTX timeline tool | https://github.com/Yamato-Security/hayabusa |
 | Timeline Explorer | Review CSV output | https://ericzimmerman.github.io/ |
 

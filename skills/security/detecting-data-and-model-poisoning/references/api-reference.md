@@ -45,4 +45,4 @@ Install: `pip install safetensors`
 
 - ART defenses docs: https://adversarial-robustness-toolbox.readthedocs.io/en/latest/modules/defences/detector_poisoning.html
 - Cleanlab docs: https://docs.cleanlab.ai/
-- safetensors: https://github.com/huggingface/safetensors
+- safetensors: https://github.com/safetensors/safetensors

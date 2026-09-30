@@ -1,4 +1,1 @@
-cadgen==0.4.28
-ezdxf
-playwright
-shapely
+cadgen[snapshot]==0.7.4

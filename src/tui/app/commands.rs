@@ -4,7 +4,7 @@
 //! of `app`, so it retains access to `App`'s private fields and methods. The
 //! command table itself (`COMMANDS`) and the dispatch entry point live here.
 
-use super::{fmt_num, scan_prompt, App, Cell, TurnMode, COMMANDS};
+use super::{fmt_num, scan_prompt, App, Cell, QueuedPrompt, TurnMode, COMMANDS};
 use crate::agent::{self, AgentEvent, PermissionMode, Session};
 use crate::theme::Tone;
 use crate::tools::ToolHost;
@@ -118,6 +118,7 @@ fn spawn_detached(bin: &str, args: &[&str]) -> std::io::Result<()> {
 impl App {
     // ── slash commands ──────────────────────────────────────────────────
     pub(super) fn run_command(&mut self, raw: &str) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         let mut parts = raw.splitn(2, ' ');
         let cmd = parts.next().unwrap_or("");
         let arg = parts.next().unwrap_or("").trim().to_string();
@@ -170,6 +171,7 @@ impl App {
             }
             "/skills" => {
                 self.startup.list_skills = true;
+                agent::skill_cache::invalidate_cache();
                 self.refresh_skill_palette_cache();
             }
             "/usage" | "/cost" => self.cmd_usage(),
@@ -878,12 +880,21 @@ impl App {
     /// OpenSEO — open the dashboard + MCP docs and point at the setup. OpenSEO is
     /// an MCP server (no CLI); connect it via the `executor`/`/mcp` gateway.
     fn cmd_openseo(&mut self) {
-        let _ = crate::open_uri::open("https://openseo.so/docs/mcp");
-        let _ = crate::open_uri::open("https://app.openseo.so");
+        self.background_ui(
+            || {
+                crate::open_uri::open("https://openseo.so/docs/mcp")?;
+                crate::open_uri::open("https://app.openseo.so")
+            },
+            |app, result| {
+                if let Err(error) = result {
+                    app.push_error(error.to_string());
+                }
+            },
+        );
         self.push_note(
             Tone::Skill,
             "OpenSEO — open-source Semrush/Ahrefs alternative (SEO via MCP)\n  \
-             opened dashboard + MCP docs in your browser\n  \
+             opening dashboard + MCP docs in your browser\n  \
              1. sign up / self-host, then connect the MCP: https://openseo.so/docs/mcp\n  \
              2. add it via the executor gateway (/mcp) so its tools are callable\n  \
              3. then ask for keyword research · backlinks · rank tracking · site audit · competitor SEO\n  \
@@ -1084,24 +1095,13 @@ impl App {
     /// store. Other providers' keys are untouched.
     fn cmd_logout(&mut self) {
         let provider = self.cfg.provider.clone();
-        match crate::auth::logout(false) {
-            Ok(()) => {
-                self.authed = false;
-                self.provider_selected();
-                let label = crate::providers::by_id(&provider)
-                    .map(|p| p.name)
-                    .unwrap_or(provider.as_str());
-                let mut msg = format!(
-                    "signed out of {label} - cleared its active and saved credential copies"
-                );
-                msg.push_str(
-                    ".\n  other providers' saved keys are untouched — /login to switch or sign \
-                     in again. (env keys still apply on restart)",
-                );
-                self.push_note(Tone::Mode, msg);
+        let selected = provider.clone();
+        self.account_work(true, move || crate::auth::delete_provider_credentials(&selected), move |app, result| {
+            match result {
+                Ok(_) => { app.authed = false; app.provider_selected(); app.push_note(Tone::Mode, format!("signed out of {provider} - cleared its active and saved credential copies.\n  other providers' saved keys are untouched - /login to switch or sign in again. (env keys still apply on restart)")); }
+                Err(error) => { app.provider_selected(); app.push_error(format!("logout failed: {error}")); }
             }
-            Err(e) => self.push_error(format!("logout failed: {e}")),
-        }
+        });
     }
 
     fn cmd_help(&mut self) {
@@ -1178,6 +1178,7 @@ impl App {
     }
 
     fn cmd_new(&mut self) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         if self.busy {
             self.push_error("wait for the current turn to finish".into());
             return;
@@ -1185,6 +1186,7 @@ impl App {
         if let Some(s) = &self.session {
             let _ = s.save();
         }
+        self.discard_pending_requests();
         let session = Session::new_for_provider(
             &self.cfg.model,
             &self.cfg.provider,
@@ -1234,7 +1236,7 @@ impl App {
             let mut usage = *usage;
             let res = tokio::select! {
                 _ = cancel.cancelled() => Err(crate::error::NurError::Interrupted),
-                r = agent::compact_session(&runner, &mut session, &mut usage) => r,
+                r = crate::typesafe::context::scope(session.id.clone(), cancel.clone(), agent::compact_session(&runner, &mut session, &mut usage)) => r,
             };
             let interrupted = matches!(res, Err(crate::error::NurError::Interrupted));
             let _ = tx.send(AgentEvent::Done {
@@ -1524,6 +1526,7 @@ impl App {
         panel: Vec<String>,
         show_user_cell: bool,
     ) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         let active = crate::providers::by_id(&self.cfg.provider)
             .copied()
             .unwrap_or(*crate::providers::default_provider());
@@ -2024,6 +2027,7 @@ impl App {
         let clean = target.to_string_lossy().replace(r"\\?\", "");
         let target = PathBuf::from(&clean);
         let from = self.cwd.display().to_string();
+        self.discard_pending_requests();
         self.cwd = target.clone();
         self.refresh_skill_palette_cache();
         if let Some(s) = &mut self.session {
@@ -2358,6 +2362,7 @@ impl App {
     }
 
     pub(super) fn cmd_resume(&mut self, arg: &str) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         if self.busy {
             self.push_error("wait for the current turn to finish".into());
             return;
@@ -2382,6 +2387,7 @@ impl App {
                     (!loaded.cwd.eq_ignore_ascii_case(&here)).then(|| loaded.cwd.clone())
                 };
                 loaded.cwd = self.cwd.display().to_string();
+                self.discard_pending_requests();
                 self.session_id = loaded.id.clone();
                 let mut tracker =
                     UsageTracker::new(loaded.id.clone(), self.cfg.model.clone(), self.cwd.clone());
@@ -2708,12 +2714,17 @@ impl App {
     /// the goal turn is queued to run right after the current one (the queued
     /// card can still be steered in immediately without cancelling).
     fn start_goal_turn(&mut self, goal: &str) {
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
         let model_prompt = goal_turn_prompt(goal);
         if self.busy {
             // Queued cards replay their text as the prompt (steer / cut in /
             // after-turn), so the card carries the full instruction.
-            self.queue.push_back(model_prompt.clone().into());
-            self.cells.push(Cell::Queued { text: model_prompt });
+            let queued = QueuedPrompt::new(model_prompt.clone(), &self.session_id, &self.cwd);
+            self.cells.push(Cell::Queued {
+                id: queued.id,
+                text: model_prompt,
+            });
+            self.queue.push_back(queued);
             self.scroll_to_bottom();
             self.push_note(
                 Tone::Plan,

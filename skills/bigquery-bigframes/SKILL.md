@@ -1,9 +1,11 @@
 ---
 name: bigquery-bigframes
 metadata:
+  version: "2.0.0"
   category: BigDataAndAnalytics
 description: >-
-  Generates Python code using BigQuery DataFrames (BigFrames), the pandas/scikit-learn-style API over BigQuery. Use when writing BigFrames code or doing pandas-style dataframe/ML work against BigQuery (e.g. in a notebook). Don't use for SQL-first workflows or the google-cloud-bigquery client library — use bigquery-basics.
+  Generates Python code using BigQuery DataFrames (BigFrames). Use by default for any Python data task involving BigQuery, including data processing, analysis, and machine learning. Don't use for SQL-first workflows or the google-cloud-bigquery client library — use bigquery-basics.
+
 ---
 
 # BigFrames (BigQuery DataFrame) basics
@@ -11,16 +13,18 @@ BigFrames is a Python library that lets you take advantage of BigQuery
 data processing by using familiar Python APIs.
 
 ## Dataframe API best practices
+
 * **Stay in the Cloud**: Perform data cleaning, transformation, and analysis
   via BigFrames methods to leverage BigQuery's scale rather than downloading
   data.
 * **Prefer partial ordering mode**: Enable partial ordering mode right after
-  importing BigFrames. This speeds up data processing significantly by relaxing
-  row-sequence constraints.
-  ```python
-  import bigframes.pandas as bpd
-  bpd.options.bigquery.ordering_mode = 'partial'
-  ```
+    importing BigFrames. This speeds up data processing significantly by relaxing
+    row-sequence constraints.
+
+    ```python
+    import bigframes.pandas as bpd
+    bpd.options.bigquery.ordering_mode = 'partial'
+    ```
 * **Use `peek()` for data preview**: Use `peek(n)` to preview data instead of
   `head(n)`. `peek(n)` randomly samples `n` rows and is significantly faster.
   `head(n)` returns rows in strict order and fails in `partial` ordering mode

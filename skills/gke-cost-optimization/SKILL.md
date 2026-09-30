@@ -7,6 +7,7 @@ description: >-
   requests, or selecting Spot VMs and machine types. Don't use for general
   compute class provisioning or GPU Selection (use gke-compute-classes instead).
 metadata:
+  version: "1.0.0"
   category: CloudObservabilityAndMonitoring
 ---
 

@@ -726,7 +726,7 @@ const hydrated = hydrateResourceIO(step, observabilityRevivers);
 
 ### Data Hydration (Devalue Format)
 
-Step I/O is serialized via [devalue](https://github.com/Rich-Harris/devalue) with a 4-byte format prefix (`devl`). Without hydration, `input`/`output` are Uint8Array-like objects with numeric keys:
+Step I/O is serialized via [devalue](https://github.com/sveltejs/devalue) with a 4-byte format prefix (`devl`). Without hydration, `input`/`output` are Uint8Array-like objects with numeric keys:
 `{"0":100,"1":101,"2":118,"3":108,...}` — these are NOT usable values.
 
 **Always hydrate before using I/O data:**

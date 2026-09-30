@@ -1,6 +1,7 @@
 ---
 name: agent-platform-model-registry
 metadata:
+  version: "1.0.0"
   category: AiAndMachineLearning
 description: >-
   Agent Platform Model Registry Management. Use when you need to upload, list,
@@ -28,39 +29,61 @@ following safety tiers based on the action requested:
 2.  **Tier M: Mutating & Reversible (`upload`, `update`)**
     *   Requires **interactive confirmation** with 'Yes'/'No' options. The
         confirmation prompt MUST contain the exact, literal command string with
-        all required flags (e.g. `--region=us-central1`, `--display-name="..."`)
-        — natural-language paraphrases are NOT sufficient.
+        all required flags (e.g. `--region=us-central1`, `--project=...`,
+        `--display-name="..."`) — natural-language paraphrases are NOT
+        sufficient.
     *   **Same-turn restriction**: NEVER execute the command in the same turn as
-        presenting the confirmation prompt. Stop and wait for the user's reply;
-        only execute after explicit 'Yes' / approval.
+        receiving the request or presenting the confirmation prompt! In Turn 1,
+        you MUST ONLY present the interactive confirmation card with the exact,
+        literal command string. Stop and wait for the user's reply; only execute
+        in the subsequent turn after explicit 'Yes' / approval. Executing
+        `upload` or `update` in Turn 1 without prior confirmation is strictly
+        prohibited.
+    *   **Mid-flow parameter changes / rejection**: If the user rejects the
+        prompt or changes any parameters (e.g., display name, description,
+        parent model), do NOT execute the old command. Adapt immediately and
+        present a NEW confirmation prompt with the updated literal command and
+        wait for approval.
 3.  **Tier D: Destructive & Irreversible (`delete`)**
     *   Requires **explicit typed confirmation** (e.g. "I confirm" or "Yes,
         delete it"). Ask for confirmation IMMEDIATELY — before any pre-flight
         checks (don't check if the model is deployed to endpoints first).
     *   **Same-turn restriction**: NEVER execute in the same turn as asking for
         typed confirmation. Wait for the user to reply in a new turn.
+    *   **Mid-flow target changes**: If the user changes their mind (e.g.,
+        "delete the second model instead"), do NOT delete the first model.
+        Present a fresh typed confirmation prompt for the newly selected model
+        ID and wait for approval.
+4.  **Cost Estimation**: Model Registry operations manage catalog metadata and
+    stored model artifacts without provisioning serving compute or endpoints. Do
+    NOT call the `estimate_cost` tool for Model Registry actions, as
+    `estimate_cost` is designed for serving infrastructure (endpoints/batch
+    prediction) and will return an error if called for registry operations. If
+    including cost in the preview card, state that Model Registry operations
+    incur no serving compute charges ($0.00 compute charges; standard Cloud
+    Storage pricing applies to model artifacts).
 
-## Phase 0: Environment Setup
+## Phase 0: Environment Setup & Parameter Resolution
 
-**CRITICAL**: Before running any commands, you MUST ensure the environment is
-correctly initialized by following these steps:
+**CRITICAL**: Before running any commands, verify that all necessary parameters
+are known:
 
-1.  **Google Cloud Authentication**: Authenticate with your Google Cloud
-    credentials and configure active Application Default Credentials (ADC) for
-    Agent Platform access:
-
-    ```bash
-    gcloud auth login
-    gcloud auth application-default login
-    ```
-
-2.  **Set Project**: Configure the active project for subsequent commands:
-
-    ```bash
-    gcloud config set project $PROJECT_ID
-    ```
-
-3.  **Region**: Always specify `--region=$LOCATION_ID` on each command below. Do
+1.  **Missing Region or Project**: Follow the base environment grounding policy:
+    if a session location or project is already set from prior turns, reuse it
+    without re-asking. If missing from both prompt and session context, at most
+    one direct lookup is permitted (e.g. `gcloud config get project` or `gcloud
+    config get compute/region`). If still unresolved or ambiguous, pause and
+    explicitly ask the user for the missing parameter before executing mutating
+    or resource-specific commands.
+2.  **Missing Model ID**: If the user asks to update or describe a model without
+    providing the model ID, pause and ask the user for the model ID, or offer to
+    list models first to help them find it.
+3.  **Placeholder Substitution**: If the user's requested display name contains
+    a placeholder token (e.g., `<unique-suffix>`, `[suffix]`, or `<timestamp>`),
+    generate a short unique alphanumeric string or timestamp and substitute it
+    cleanly. Never pass unexpanded literal placeholder tokens to the API.
+4.  **Region and Project Flags**: Always pass `--region=$LOCATION_ID` and
+    `--project=$PROJECT_ID` explicitly on all `gcloud ai models` commands. Do
     NOT use `global`.
 
 ## 1. Listing Models (Tier R)
@@ -70,7 +93,8 @@ numeric IDs. No confirmation is required.
 
 ```bash
 gcloud ai models list \
-    --region=$LOCATION_ID
+    --region=$LOCATION_ID \
+    --project=$PROJECT_ID
 ```
 
 ## 2. Describing a Model (Tier R)
@@ -80,14 +104,16 @@ required.
 
 ```bash
 gcloud ai models describe $MODEL_ID \
-    --region=$LOCATION_ID
+    --region=$LOCATION_ID \
+    --project=$PROJECT_ID
 ```
 
 To target a specific version:
 
 ```bash
 gcloud ai models describe ${MODEL_ID}@${VERSION_ID} \
-    --region=$LOCATION_ID
+    --region=$LOCATION_ID \
+    --project=$PROJECT_ID
 ```
 
 ## 3. Uploading a Model (Tier M)
@@ -101,33 +127,52 @@ proceeding.**
 ```bash
 gcloud ai models upload \
     --region=$LOCATION_ID \
-    --display-name="my-custom-model" \
-    --container-image-uri="gcr.io/my-project/my-model:latest" \
-    --artifact-uri="gs://my-bucket/path/to/artifacts"
+    --project=$PROJECT_ID \
+    --display-name="<DISPLAY_NAME>" \
+    --container-image-uri="<CONTAINER_IMAGE_URI>" \
+    [--artifact-uri="<ARTIFACT_URI>"]
 ```
 
 > [!IMPORTANT]
 >
 > This is a Tier M operation — see [Safety & Confirmation Tiers] above.
-
-To upload a new version of an existing model, use the `--parent-model` flag or
-specify the parent model ID.
+>
+> -   If the user specifies "with no artifact URI", omit `--artifact-uri`.
+> -   If registering a new version of an existing model, include
+>     `--parent-model=$PARENT_MODEL_ID`.
+> -   Substitute `<DISPLAY_NAME>` with the exact name requested by the user.
 
 ## 4. Updating a Model (Tier M)
 
-Update metadata fields like display name, description, or labels. **Action
-requires an inline confirmation card before proceeding.**
+Update metadata fields like display name or description. Note that `gcloud ai
+models` does NOT have an `update` subcommand. Instead, model metadata updates
+MUST be executed using the Vertex AI Python SDK
+(`google.cloud.aiplatform.Model`).
+
+**Action requires an inline confirmation card containing the exact script before
+proceeding.**
 
 ```bash
-gcloud ai models update $MODEL_ID \
-    --region=$LOCATION_ID \
-    --display-name="new-display-name" \
-    --description="Updated description"
+python3 -c "
+from google.cloud import aiplatform
+
+aiplatform.init(project='$PROJECT_ID', location='$LOCATION_ID')
+model = aiplatform.Model('$MODEL_ID')
+model.update(display_name='<NEW_DISPLAY_NAME>', description='<NEW_DESCRIPTION>')
+print(f'Successfully updated model: {model.resource_name}')
+"
 ```
 
 > [!IMPORTANT]
 >
 > This is a Tier M operation — see [Safety & Confirmation Tiers] above.
+>
+> -   If only updating the display name, pass
+>     `model.update(display_name='<NEW_DISPLAY_NAME>')`.
+> -   If only updating the description, pass
+>     `model.update(description='<NEW_DESCRIPTION>')`.
+> -   The confirmation card MUST display the exact python command snippet above.
+>     NEVER execute in Turn 1; wait for explicit user approval.
 
 ## 5. Deleting a Model (Tier D)
 
@@ -136,7 +181,8 @@ typed confirmation before proceeding.**
 
 ```bash
 gcloud ai models delete $MODEL_ID \
-    --region=$LOCATION_ID
+    --region=$LOCATION_ID \
+    --project=$PROJECT_ID
 ```
 
 > [!WARNING]

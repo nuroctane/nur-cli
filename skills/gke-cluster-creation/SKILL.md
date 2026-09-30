@@ -8,6 +8,7 @@ description: >-
   clusters. Don't use for application onboarding or deployment configuration
   (use gke-app-onboarding instead).
 metadata:
+  version: "1.0.0"
   category: Containers
 ---
 

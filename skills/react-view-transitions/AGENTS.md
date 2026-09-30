@@ -810,7 +810,7 @@ The `types` array (second argument) lets you vary animation based on transition 
 
 **Suspense reveal does not animate:** Suspense resolves in a separate transition without navigation types. Use string `enter`/`exit` props rather than a type map.
 
-**Layout VT prevents page VTs from animating:** Nested VTs skip their own enter/exit when they mount or unmount as one unit with a parent VT. Keep route boundaries in pages, not a layout wrapping `{children}`. React has experimental upstream `parentEnter`/`parentExit` work ([PR #36690](https://github.com/facebook/react/pull/36690)), but those props are not currently available in the Next.js client runtime; do not recommend them in a Next.js app unless the installed runtime and docs explicitly include them.
+**Layout VT prevents page VTs from animating:** Nested VTs skip their own enter/exit when they mount or unmount as one unit with a parent VT. Keep route boundaries in pages, not a layout wrapping `{children}`. React has experimental upstream `parentEnter`/`parentExit` work ([PR #36690](https://github.com/react/react/pull/36690)), but those props are not currently available in the Next.js client runtime; do not recommend them in a Next.js app unless the installed runtime and docs explicitly include them.
 
 **Same-route content does not animate with `update`:** Nested VTs can own the mutation before an outer boundary sees it. For a real identity change, use `key` with a stable `name` and `share` instead.
 

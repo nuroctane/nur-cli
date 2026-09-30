@@ -1,0 +1,22 @@
+{
+  "provider": "anthropic",
+  "model": "claude-sonnet-5",
+  "prompt": "Finish the request after recovering from the provider context limit.",
+  "setup_home_files": {
+    "config.toml": "provider=\"anthropic\"\nmodel=\"claude-sonnet-5\"\nbase_url=\"http://127.0.0.1:{port}/v1\"\nrequest_output_reserve_tokens=131072\ncontext_window=1000000\nnative_memory=false\n[typesafe]\nenabled=false\n"
+  },
+  "script": [
+    {
+      "max_envelope_chars": 80000,
+      "text": "CONTEXT_RECOVERED_OK"
+    }
+  ],
+  "expect": {
+    "stdout_contains": [
+      "CONTEXT_RECOVERED_OK"
+    ],
+    "min_requests": 3,
+    "protocol": "messages",
+    "last_request_max_envelope_chars": 80000
+  }
+}

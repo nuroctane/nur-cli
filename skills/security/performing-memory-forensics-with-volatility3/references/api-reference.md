@@ -43,5 +43,5 @@
 
 - Volatility 3: https://github.com/volatilityfoundation/volatility3
 - Symbol tables: https://downloads.volatilityfoundation.org/volatility3/symbols/
-- LiME: https://github.com/504ensicsLabs/LiME
+- LiME: https://github.com/jtsylve/LiME
 - MemProcFS: https://github.com/ufrisk/MemProcFS

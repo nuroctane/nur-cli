@@ -2,6 +2,11 @@
 
 NurCLI is community software. Keys and sessions stay on your machine.
 
+On Windows, links and file paths open through native shell APIs, with paths
+passed as data. Bridge termination checks process creation identity and the
+bridge instance. These changes prevent shell interpretation of filenames and
+termination through stale PID records.
+
 ## Where secrets live
 
 | Location | Contents |

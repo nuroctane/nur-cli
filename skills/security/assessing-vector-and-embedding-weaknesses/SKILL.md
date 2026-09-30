@@ -221,7 +221,7 @@ for hit in client.search("docs", model.encode(["help"])[0].tolist(), limit=10):
 | sentence-transformers | Embedding generation for testing | https://www.sbert.net/ |
 | Qdrant client | Vector store + filtered search | https://qdrant.tech/documentation/ |
 | Chroma / Weaviate / Pinecone | Alternative vector stores | https://docs.trychroma.com/ |
-| vec2text | Embedding-inversion research baseline | https://github.com/jxmorris12/vec2text |
+| vec2text | Embedding-inversion research baseline | https://github.com/vec2text/vec2text |
 | MITRE ATLAS | AML.T0024 Exfiltration via ML Inference API | https://atlas.mitre.org/ |
 
 ## Validation Criteria

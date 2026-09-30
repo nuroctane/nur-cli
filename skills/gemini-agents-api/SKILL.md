@@ -1,6 +1,7 @@
 ---
 name: gemini-agents-api
 metadata:
+  version: "1.0.0"
   category: AiAndMachineLearning
 description: Manages custom Agent resources on Gemini Enterprise Agent Platform. Use when the user wants to programmatically create, configure, list, update, or delete stateful, server-managed Agent resources (including mounting files, skills, and tools) before executing conversations.
 ---

@@ -5,6 +5,7 @@ description: >-
   Use when reserving remote Android devices, establishing connection tunnels, checking session status, or extending/cancelling leases.
   Don't use for iOS or local device/hardware inquiries.
 metadata:
+  version: "0.5.0"
   category: CloudInfrastructureAndServices
 ---
 

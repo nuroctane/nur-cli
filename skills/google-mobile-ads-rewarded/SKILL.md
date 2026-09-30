@@ -6,7 +6,7 @@ description: >-
   applications. Use when the task involves setting up rewarded ads. Don't use
   for "rewarded interstitial" ads.
 metadata:
-  version: 1.1.0
+  version: "1.1.0"
   category: GoogleAds
 ---
 # Google Mobile Ads SDK - Rewarded Ads

@@ -1,0 +1,46 @@
+name: validate
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+jobs:
+  harness:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      NUR_HOME: ${{ runner.temp }}/nur-validation
+      NUR_DISABLE_NATIVE_MEMORY: '1'
+      NUR_NO_UPDATE: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          components: clippy
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      - run: python -m pip install pyte
+      - run: python tests/test_skill_maintenance.py
+      - run: python tests/test_headroom_helper.py
+      - run: python scripts/generate_skill_intents.py --check
+      - run: python scripts/check_skill_snapshot.py
+      - run: cargo clippy --all-targets --no-default-features --locked -- -D warnings
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --bin nur --locked
+      - run: cargo build --bin nur --locked
+      - run: python tests/e2e/run_e2e.py --bin target/debug/nur${{ runner.os == 'Windows' && '.exe' || '' }}
+      - run: python tests/e2e/run_startup.py --bin target/debug/nur${{ runner.os == 'Windows' && '.exe' || '' }}
+      - run: python tests/e2e/run_regressions.py --bin target/debug/nur${{ runner.os == 'Windows' && '.exe' || '' }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: harness-${{ matrix.os }}
+          path: |
+            target/e2e
+            target/startup-e2e
+            target/regression-e2e

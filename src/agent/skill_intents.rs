@@ -1,8 +1,6 @@
 //! Expanded NL triggers for all 700+ skills — comprehensive JSON index.
-//! This file loads `skill_intents.json` (generated from ~/.nur/skills,
-//! ~/.agents/skills, and repo skills) which contains
-//! triggers for every installed skill, not just the hardcoded INTENT_RULES.
-//! The JSON is 600-700KB and is parsed once via OnceLock.
+//! Loads the deterministic repository index; installed bodies are resolved at
+//! activation time. Metadata is parsed once via OnceLock.
 
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
@@ -17,6 +15,8 @@ pub struct SkillIntentEntry {
     pub triggers: Vec<String>,
     #[serde(default)]
     pub keywords: Vec<String>,
+    #[serde(default)]
+    pub aliases: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -86,8 +86,31 @@ pub fn find_by_expanded_triggers<'a>(user_norm: &str, installed: &'a [Skill]) ->
         return None;
     }
     // Build quick lookup of installed names for fast check
-    let installed_names: std::collections::HashSet<&str> =
-        installed.iter().map(|s| s.name.as_str()).collect();
+    let mut installed_by_name = std::collections::HashMap::new();
+    for skill in installed {
+        installed_by_name
+            .entry(skill.name.to_ascii_lowercase())
+            .or_insert(skill);
+    }
+    for skill in installed {
+        if let Some(folder) = skill.path.parent().and_then(|p| p.file_name()) {
+            installed_by_name
+                .entry(folder.to_string_lossy().to_ascii_lowercase())
+                .or_insert(skill);
+        }
+    }
+    for entry in parsed_entries() {
+        let name = entry.name.to_ascii_lowercase();
+        if !installed_by_name.contains_key(&name) {
+            if let Some(skill) = entry
+                .aliases
+                .iter()
+                .find_map(|alias| installed_by_name.get(&alias.to_ascii_lowercase()).copied())
+            {
+                installed_by_name.insert(name, skill);
+            }
+        }
+    }
 
     // Score every matching trigger instead of returning the first hit: the
     // map's iteration order is arbitrary, so a generic single-word trigger
@@ -100,13 +123,10 @@ pub fn find_by_expanded_triggers<'a>(user_norm: &str, installed: &'a [Skill]) ->
         user_norm.split(|c: char| !c.is_alphanumeric()).collect();
     let mut best: Option<(u64, usize, u64, String, &'a Skill)> = None;
     for (trigger_norm, skill_name) in trigger_map().iter() {
-        if !installed_names.contains(skill_name.as_str()) {
-            continue;
-        }
         if !phrase_matches(user_norm, trigger_norm) {
             continue;
         }
-        let Some(sk) = installed.iter().find(|s| s.name == *skill_name) else {
+        let Some(&sk) = installed_by_name.get(&skill_name.to_ascii_lowercase()) else {
             continue;
         };
         let words = trigger_norm.split_whitespace().count() as u64;
@@ -138,7 +158,19 @@ pub fn stats() -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::skills::{load_skills, normalize_intent_text};
+    use crate::agent::skills::normalize_intent_text;
+
+    fn shipped_skills() -> Vec<Skill> {
+        parsed_entries()
+            .iter()
+            .map(|entry| Skill {
+                name: entry.name.clone(),
+                description: entry.description.clone(),
+                body: String::new(),
+                path: std::path::PathBuf::from("SKILL.md"),
+            })
+            .collect()
+    }
 
     #[test]
     fn startup_pack_has_slash_and_natural_language_routes() {
@@ -168,8 +200,7 @@ mod tests {
 
     #[test]
     fn expanded_triggers_cover_fable() {
-        let cwd = std::env::current_dir().unwrap();
-        let skills = load_skills(&cwd);
+        let skills = shipped_skills();
         // Should find fable-method from expanded triggers
         let user = normalize_intent_text("please use the fable method for this refactor");
         let found = find_by_expanded_triggers(&user, &skills);
@@ -184,8 +215,7 @@ mod tests {
     /// the generated index with the aliases a user would actually type.
     #[test]
     fn expanded_triggers_cover_typesafe() {
-        let cwd = std::env::current_dir().unwrap();
-        let skills = load_skills(&cwd);
+        let skills = shipped_skills();
         assert!(
             skills.iter().any(|s| s.name == "typesafe-ai"),
             "the shipped typesafe-ai skill must be discoverable from the repo"
@@ -210,8 +240,7 @@ mod tests {
 
     #[test]
     fn expanded_triggers_cover_scan() {
-        let cwd = std::env::current_dir().unwrap();
-        let skills = load_skills(&cwd);
+        let skills = shipped_skills();
         let user = normalize_intent_text("scan the codebase for issues");
         // scan is single word, but our expanded triggers include "scan" for scan skill
         // However single-word "scan" alone is too generic? We have "scan" as trigger for scan skill
@@ -232,8 +261,7 @@ mod tests {
     /// "audit" trigger of the UI-audit skill, regardless of map order.
     #[test]
     fn scoring_prefers_domain_precise_triggers_over_generic_ones() {
-        let cwd = std::env::current_dir().unwrap();
-        let skills = load_skills(&cwd);
+        let skills = shipped_skills();
         let user = normalize_intent_text("audit all smart contracts in this codebase");
         if let Some(found) = find_by_expanded_triggers(&user, &skills) {
             assert_ne!(

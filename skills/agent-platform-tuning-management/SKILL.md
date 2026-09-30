@@ -1,6 +1,7 @@
 ---
 name: agent-platform-tuning-management
 metadata:
+  version: "1.0.0"
   category: AiAndMachineLearning
 description: >-
   Manages GenAI tuning jobs in Agent Platform. Use this to list, get, or cancel
@@ -26,11 +27,26 @@ following safety tiers based on the action requested:
     *   **Rule**: No confirmation needed. You may execute these commands
         immediately to gather information for the user.
 2.  **Tier D: Destructive & Interruptive (`cancel`)**
-    *   **Rule**: This requires **explicit typed confirmation**. You MUST output
-        a text message to the user explaining that this will stop the tuning
-        process and any progress will be lost, and asking them to type "I
-        confirm" or "Yes, cancel it". You MUST ask for this confirmation
-        IMMEDIATELY, before executing the cancel command.
+    *   **Rule**: Cancellation is a Tier D action requiring **explicit typed
+        confirmation** (e.g. "I confirm" or "Yes, cancel it").
+    *   **Required Fields in Dry-Run Confirmation Card**: Before cancelling a
+        tuning job, you MUST present a dry-run confirmation preview clearly
+        listing:
+        *   **Target Resource**: The full tuning job resource name or ID (e.g.
+            `projects/<PROJECT_ID>/locations/<REGION>/tuningJobs/<JOB_ID>`).
+        *   **Command / Script**: The exact cancellation command or Python code
+            to be executed.
+        *   **Expected Effect**: Stops the ongoing tuning job; any in-progress
+            training will be halted and cannot be resumed.
+        *   Ask the user to explicitly confirm (e.g., "Do you confirm? Please
+            reply with 'I confirm' or 'Yes, cancel it'.").
+    *   **Same-turn restriction**: NEVER execute the cancellation in the same
+        turn as presenting the preview card. Stop immediately and wait for the
+        user to confirm in a new turn. Even if the user provided pre-emptive
+        confirmation (e.g. "Yes, I confirm, cancel tuning job ...") or provides
+        a corrected job ID, you MUST present the dry-run preview for that
+        specific job ID and wait for confirmation in a separate turn before
+        issuing the cancellation.
 
 ## Phase 0: Environment Setup
 
@@ -141,16 +157,19 @@ print(f"Tuning Model: {job.tuned_model_display_name}")
 If the user explicitly requests to stop, abort, or cancel a running tuning job:
 
 **Safety Check**: **Action requires explicit typed confirmation before
-proceeding.** You MUST ask the user for confirmation before generating or
-providing this script, even if they provided the job ID, unless they explicitly
-use confirming language like "Yes, I confirm, cancel tuning job 123456".
+proceeding.** You MUST present a dry-run confirmation card listing the Target
+Resource, Command/Script, and Expected Effect, and ask the user to type "I
+confirm" or "Yes, cancel it". Even if the user provided confirming language
+pre-emptively or is providing a corrected/new job ID, you MUST present the
+preview card for that specific job ID and wait for their explicit approval in a
+new turn.
 
 > [!IMPORTANT]
 >
-> **NEVER pre-emptively provide or execute any cancellation code before
+> **NEVER pre-emptively execute any cancellation code or command before
 > receiving the user's response in a new turn.** You must never speculate or
-> assume that confirmation will be given. Asking for confirmation and providing
-> the code in a single parallel turn is a severe safety violation.
+> assume that confirmation will be given. Executing cancellation in the same
+> turn as presenting the preview card is a severe safety violation.
 
 ```python
 from google.cloud import aiplatform_v1

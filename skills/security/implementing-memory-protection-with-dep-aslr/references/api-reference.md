@@ -59,5 +59,5 @@ readelf -d binary | grep BIND_NOW
 ### References
 
 - Windows Exploit Protection: https://learn.microsoft.com/en-us/microsoft-365/security/defender-endpoint/exploit-protection
-- checksec: https://github.com/slimm609/checksec.sh
+- checksec: https://github.com/slimm609/checksec
 - ASLR: https://en.wikipedia.org/wiki/Address_space_layout_randomization

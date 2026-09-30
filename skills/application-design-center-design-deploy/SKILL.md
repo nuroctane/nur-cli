@@ -14,7 +14,7 @@ description: >-
   - Only use for Terraform coding within the ADC context.
 license: Apache-2.0
 metadata:
-  version: v1
+  version: "1.0.0"
   publisher: google
   category: CloudInfrastructure
 ---

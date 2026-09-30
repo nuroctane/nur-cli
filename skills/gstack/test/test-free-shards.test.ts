@@ -1,0 +1,1320 @@
+import { describe, test, expect } from 'bun:test';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
+import { readPidStartTime } from '../browse/src/xvfb';
+import {
+  isFreeTestFile,
+  collectFreeTestFiles,
+  detectWindowsFragility,
+  curateWindowsSafe,
+  stableHash,
+  assignFilesToShards,
+  buildShardArgs,
+  normalizeRelativePath,
+  runFreeShard,
+  FreeRunReporter,
+  buildRunEpilogue,
+  FREE_TEST_TIMEOUT_MS,
+  DEFAULT_WALL_TIMEOUT_MS,
+  PER_FILE_WALL_MS,
+  wallTimeoutForShard,
+  KNOWN_WINDOWS_INCOMPATIBLE,
+  TEST_ROOTS,
+  TREE_MUTATING,
+  WORKER_HOSTILE,
+} from '../scripts/test-free-shards';
+import {
+  loadFreeTestDurations,
+  packShardsByDuration,
+  wallTimeoutForPackedShard,
+  createFreeCiPlan,
+  validateFreeCiPlan,
+  verifyFreeCiResults,
+  eligibleFreeRetryFiles,
+  selectQuickFreeFiles,
+  unseededFreeFiles,
+  QUICK_CORE,
+  type FreeCiResult,
+  DEFAULT_WALL_TIMEOUT_MS as WALL_BASE_MS,
+} from '../scripts/test-free-shards';
+
+const ROOT = path.resolve(import.meta.dir, '..');
+
+const OWNERSHIP_ACTOR = `
+import * as fs from 'fs';
+import * as path from 'path';
+import { spawn } from 'child_process';
+import { spyOn } from 'bun:test';
+import { readPidStartTime } from ${JSON.stringify(path.join(ROOT, 'browse/src/xvfb.ts'))};
+const [role, directory, mode, name = 'owned'] = process.argv.slice(2);
+const file = (suffix) => path.join(directory, name + suffix);
+const wait = async (filename) => {
+  const deadline = Date.now() + 5000;
+  while (!fs.existsSync(filename)) {
+    if (Date.now() > deadline) throw new Error('fixture readiness deadline');
+    await Bun.sleep(10);
+  }
+};
+const write = (filename, value) => {
+  fs.mkdirSync(path.dirname(filename), {recursive:true});
+  fs.writeFileSync(filename + '.tmp', JSON.stringify(value));
+  fs.renameSync(filename + '.tmp', filename);
+};
+const identity = (pid) => ({pid, start: readPidStartTime(pid), ticks: process.platform === 'linux'
+  ? fs.readFileSync('/proc/' + pid + '/stat', 'utf8').split(') ')[1].trim().split(/\\s+/)[19] : null});
+if (role === 'leaf') {
+  setInterval(() => {}, 1000);
+} else if (role === 'daemon') {
+  const children = [0,1].map(index => spawn(process.execPath, [import.meta.filename, 'leaf', directory, mode, name], {
+    detached:true, stdio:'ignore', env:process.env,
+  }));
+  await Bun.sleep(50);
+  const owned = [identity(process.pid), ...children.map(child => identity(child.pid))];
+  const server = Bun.serve({hostname:'127.0.0.1', port:0, fetch() {
+    fs.appendFileSync(file('.http'), 'request\\n'); return new Response('ok');
+  }});
+  const state = {pid:process.pid, instanceId:name + '-' + process.pid, port:server.port, token:crypto.randomUUID(),
+    chromiumPid:owned[1].pid, chromiumStartTime:owned[1].start};
+  const agent = {pid:owned[2].pid, startTime:owned[2].start, gen:'fixture', ownerPid:process.pid, ownerStartTime:owned[0].start};
+  write(process.env.BROWSE_STATE_FILE, state);
+  write(path.join(path.dirname(process.env.BROWSE_STATE_FILE), 'terminal-agent-pid'), agent);
+  write(file('.ready'), {owned, state, agent, stateFile:process.env.BROWSE_STATE_FILE});
+  process.on('SIGTERM', () => {});
+  process.on('SIGINT', () => {
+    write(file('.interrupted'), {at:Date.now()});
+    if (mode === 'cancel-force') return;
+    const current = JSON.parse(fs.readFileSync(path.join(path.dirname(process.env.BROWSE_STATE_FILE), 'terminal-agent-pid'), 'utf8'));
+    try { process.kill(current.pid, 'SIGTERM'); } catch {}
+    for (const child of children) try { child.kill('SIGTERM'); } catch {}
+    const finish = () => {
+      fs.rmSync(process.env.BROWSE_STATE_FILE, {force:true});
+      fs.rmSync(path.join(path.dirname(process.env.BROWSE_STATE_FILE), 'terminal-agent-pid'), {force:true});
+      process.exit(0);
+    };
+    if (mode === 'cancel-cold-probes') setTimeout(finish, 2200);
+    else if (mode === 'exit-environment-race') setTimeout(finish, 200);
+    else finish();
+  });
+} else if (role === 'shard') {
+  const daemon = spawn(process.execPath, [import.meta.filename, 'daemon', directory, mode], {
+    detached:true, stdio:'ignore', env:process.env,
+  });
+  daemon.unref();
+  await wait(file('.ready'));
+  if (!mode.endsWith('cold-probes')) await Bun.sleep(400);
+  const own = JSON.parse(fs.readFileSync(file('.ready'), 'utf8'));
+  if (mode.includes('mix') || mode === 'replaced-pid') {
+    const sibling = JSON.parse(fs.readFileSync(path.join(directory, 'sibling.ready'), 'utf8'));
+    if (mode === 'endpoint-mix') write(process.env.BROWSE_STATE_FILE, {...own.state, port:sibling.state.port, token:sibling.state.token});
+    if (mode === 'full-state-mix') {
+      write(process.env.BROWSE_STATE_FILE, sibling.state);
+      write(path.join(path.dirname(process.env.BROWSE_STATE_FILE), 'terminal-agent-pid'), sibling.agent);
+    }
+    if (mode === 'terminal-mix') write(path.join(path.dirname(process.env.BROWSE_STATE_FILE), 'terminal-agent-pid'),
+      {...sibling.agent, ownerPid:own.state.pid, ownerStartTime:own.owned[0].start});
+    if (mode === 'chromium-mix') write(process.env.BROWSE_STATE_FILE,
+      {...own.state, chromiumPid:sibling.state.chromiumPid, chromiumStartTime:sibling.state.chromiumStartTime});
+    if (mode === 'replaced-pid') write(process.env.BROWSE_STATE_FILE, {...own.state, pid:sibling.state.pid});
+  }
+  if (mode === 'stale-child-start') write(process.env.BROWSE_STATE_FILE, {...own.state, chromiumStartTime:'stale'});
+  if (mode === 'replaced-start') write(file('.replace-start'), true);
+  write(file('.shard-ready'), true);
+  if (mode === 'timeout' || mode.startsWith('cancel')) await new Promise(() => {});
+  console.log('Ran 3 tests across 1 files. [12.00ms]');
+  process.exit(mode === 'failure' ? 3 : 0);
+} else if (role === 'harness') {
+  if (mode === 'settle-cold-probes') Object.defineProperty(process, 'platform', {value:'darwin'});
+  let spy;
+  if (['replaced-start', 'exit-environment-race', 'unavailable-environment'].includes(mode)) {
+    const original = fs.readFileSync;
+    spy = spyOn(fs, 'readFileSync').mockImplementation((filename, ...args) => {
+      const value = original(filename, ...args);
+      if (String(filename).endsWith('/environ') && fs.existsSync(file('.ready'))
+        && (mode === 'unavailable-environment' || mode === 'exit-environment-race' && fs.existsSync(file('.interrupted')))) {
+        const own = JSON.parse(original(file('.ready'), 'utf8'));
+        if (String(filename) === '/proc/' + own.state.pid + '/environ') {
+          fs.appendFileSync(file('.denials'), 'denied\\n');
+          throw Object.assign(new Error('controlled unavailable environment ' + own.state.token), {code:'EACCES', path:String(filename)});
+        }
+      }
+      if (String(filename).endsWith('/stat') && fs.existsSync(file('.replace-start'))) {
+        const own = JSON.parse(original(file('.ready'), 'utf8'));
+        if (String(filename) === '/proc/' + own.state.pid + '/stat') {
+          const split = value.lastIndexOf(') ') + 2;
+          const fields = value.slice(split).trim().split(/\\s+/); fields[19] = String(Number(fields[19]) + 1);
+          return value.slice(0, split) + fields.join(' ');
+        }
+      }
+      return value;
+    });
+  } else if (mode === 'directory-remove-failure') {
+    const original = fs.rmSync;
+    spy = spyOn(fs, 'rmSync').mockImplementation((filename, ...args) => {
+      if (fs.existsSync(file('.ready'))) {
+        const own = JSON.parse(fs.readFileSync(file('.ready'), 'utf8'));
+        if (String(filename) === path.dirname(path.dirname(own.stateFile))) {
+          throw Object.assign(new Error('controlled directory removal failure'), {code:'EACCES'});
+        }
+      }
+      return original(filename, ...args);
+    });
+  }
+  try {
+    const {runFreeShard} = await import(${JSON.stringify(path.join(ROOT, 'scripts/test-free-shards.ts'))});
+    const result = await runFreeShard(['ownership-fixture'], 1, 1, {
+      rootDir:${JSON.stringify(ROOT)}, quiet:true, log:() => {}, wallTimeoutMs:mode === 'timeout' ? 1200 : 15000,
+      env:mode.endsWith('cold-probes') ? {...process.env, PATH:process.env.GSTACK_FIXTURE_PATH} : process.env,
+      commandFor:() => ({command:process.execPath, args:[import.meta.filename, 'shard', directory, mode]}),
+    });
+    write(file('.result'), result);
+  } finally { spy?.mockRestore(); }
+}
+`;
+
+function ownershipProcessAlive(identity: { pid: number; start: string; ticks: string | null }): boolean {
+  if (process.platform === 'linux') {
+    try {
+      const raw = fs.readFileSync(`/proc/${identity.pid}/stat`, 'utf8');
+      const fields = raw.slice(raw.lastIndexOf(') ') + 2).trim().split(/\s+/);
+      return fields[0] !== 'Z' && fields[0] !== 'X' && fields[19] === identity.ticks;
+    } catch { return false; }
+  }
+  return readPidStartTime(identity.pid) === identity.start;
+}
+
+describe('test-free-shards: owned detached browser settlement', () => {
+  for (const mode of ['success', 'failure', 'timeout', 'cancel', 'cancel-force', 'endpoint-mix', 'full-state-mix',
+    'terminal-mix', 'chromium-mix', 'replaced-pid', 'stale-child-start', 'replaced-start', 'exit-environment-race',
+    'unavailable-environment', 'directory-remove-failure', 'cancel-cold-probes', 'settle-cold-probes']) {
+    test.skipIf(process.platform === 'win32' || ((['replaced-start', 'exit-environment-race', 'unavailable-environment'].includes(mode) || mode.endsWith('cold-probes')) && process.platform !== 'linux'))(mode, async () => {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'free-owned-browser-'));
+      const actor = path.join(directory, 'actor.ts');
+      fs.writeFileSync(actor, OWNERSHIP_ACTOR);
+      const probeLog = path.join(directory, 'probes.jsonl');
+      const bin = path.join(directory, 'bin');
+      if (mode.endsWith('cold-probes')) {
+        fs.mkdirSync(bin);
+        for (const tool of ['ps', 'pgrep']) {
+          fs.writeFileSync(path.join(bin, tool), `#!/usr/bin/env bun
+import * as fs from 'node:fs';
+const args = process.argv.slice(2);
+const record = (event) => fs.appendFileSync(${JSON.stringify(probeLog)}, JSON.stringify({event, pid:process.pid, parent:process.ppid, at:Date.now(), args}) + '\\n');
+record('start');
+await Bun.sleep(args.includes('lstart=') ? 1700 : 350);
+const child = Bun.spawn([${JSON.stringify(Bun.which(tool))}, ...args], {stdout:'inherit', stderr:'inherit', timeout:1000});
+const code = await child.exited;
+record('complete');
+process.exit(code);
+`, { mode: 0o755 });
+        }
+      }
+      const waitFor = async (filename: string) => {
+        const deadline = Date.now() + 8000;
+        while (!fs.existsSync(filename)) {
+          if (Date.now() > deadline) throw new Error('ownership fixture did not become ready');
+          await Bun.sleep(10);
+        }
+      };
+      const processes: ReturnType<typeof Bun.spawn>[] = [];
+      try {
+        const sibling = Bun.spawn([process.execPath, actor, 'daemon', directory, 'sibling', 'sibling'], {
+          env: { ...process.env, BROWSE_STATE_FILE: path.join(directory, 'sibling-state', 'browse.json'), GSTACK_FREE_SHARD_ID: 'sibling' },
+          stdout: 'ignore', stderr: 'ignore',
+        });
+        processes.push(sibling);
+        await waitFor(path.join(directory, 'sibling.ready'));
+        const harness = Bun.spawn([process.execPath, actor, 'harness', directory, mode], {
+          env: mode.endsWith('cold-probes') ? { ...process.env, PATH: bin + path.delimiter + process.env.PATH, GSTACK_FIXTURE_PATH: process.env.PATH } : process.env,
+          stdout: 'ignore', stderr: 'pipe',
+        });
+        processes.push(harness);
+        const stderr = new Response(harness.stderr).text();
+        await waitFor(path.join(directory, 'owned.shard-ready'));
+        const readyAt = Date.now();
+        let cancelledAt: number | undefined;
+        if (mode.startsWith('cancel')) {
+          cancelledAt = Date.now();
+          harness.kill('SIGTERM');
+        }
+        const watchdog = setTimeout(() => harness.kill('SIGKILL'), 20000);
+        let exit: number;
+        try { exit = await harness.exited; } finally { clearTimeout(watchdog); }
+        const output = await stderr;
+        expect({ exit, output }).toEqual({ exit: mode.startsWith('cancel') ? 143 : 0, output: expect.any(String) });
+        const own = JSON.parse(fs.readFileSync(path.join(directory, 'owned.ready'), 'utf8'));
+        const other = JSON.parse(fs.readFileSync(path.join(directory, 'sibling.ready'), 'utf8'));
+        const result = JSON.parse(fs.readFileSync(path.join(directory, 'owned.result'), 'utf8'));
+        expect(output).not.toContain(own.state.token);
+        expect(output).not.toContain(other.state.token);
+        const invalid = ['full-state-mix', 'terminal-mix', 'chromium-mix', 'replaced-pid', 'stale-child-start', 'replaced-start',
+          'unavailable-environment', 'directory-remove-failure', 'settle-cold-probes'].includes(mode);
+        expect(result.status).toBe(mode === 'timeout' ? 'timed-out' : invalid || mode === 'failure' || mode.startsWith('cancel') ? 'failed' : 'passed');
+        expect(result.unattributedFailures).toBe(invalid || mode === 'timeout' || mode.startsWith('cancel') ? 1 : 0);
+        if (invalid) {
+          expect(fs.existsSync(path.dirname(own.stateFile))).toBe(true);
+          expect(fs.existsSync(path.join(directory, 'owned.interrupted'))).toBe(mode === 'directory-remove-failure');
+          expect(eligibleFreeRetryFiles([result])).toBeNull();
+        } else {
+          await Bun.sleep(100);
+          expect(fs.existsSync(path.dirname(path.dirname(own.stateFile)))).toBe(false);
+          expect(fs.existsSync(path.join(directory, 'owned.interrupted'))).toBe(true);
+        }
+        if (cancelledAt !== undefined) {
+          const interruption = JSON.parse(fs.readFileSync(path.join(directory, 'owned.interrupted'), 'utf8'));
+          expect(interruption.at - cancelledAt).toBeLessThan(mode === 'cancel-cold-probes' ? 2500 : 1000);
+          expect(Date.now() - cancelledAt).toBeLessThan(mode === 'cancel-cold-probes' ? 6500 : 7000);
+        }
+        if (mode.endsWith('cold-probes')) {
+          if (mode === 'settle-cold-probes') expect(Date.now() - readyAt).toBeLessThan(10400);
+          const before = fs.readFileSync(probeLog, 'utf8');
+          const probes = before.trim().split('\n').map(line => JSON.parse(line));
+          const starts = probes.filter(row => row.event === 'start');
+          expect(starts.length).toBeGreaterThan(0);
+          if (mode === 'cancel-cold-probes') {
+            expect(starts.every(row => row.at >= cancelledAt!)).toBe(true);
+            expect(probes.filter(row => row.event === 'complete').length).toBe(3);
+          }
+          for (const probe of starts) {
+            expect(fs.existsSync('/proc/' + probe.pid)).toBe(false);
+            const completed = probes.find(row => row.pid === probe.pid && row.event === 'complete');
+            if (completed) expect(completed.at - probe.at).toBeLessThan(probe.args.includes('lstart=') ? 2000 : 500);
+          }
+          await Bun.sleep(300);
+          expect(fs.readFileSync(probeLog, 'utf8')).toBe(before);
+        }
+        expect(own.owned.map(ownershipProcessAlive)).toEqual(mode === 'unavailable-environment'
+          ? [true, true, true] : [mode === 'replaced-start', false, false]);
+        expect(other.owned.map(ownershipProcessAlive)).toEqual([true, true, true]);
+        expect(fs.existsSync(path.join(directory, 'sibling.interrupted'))).toBe(false);
+        expect(fs.existsSync(path.join(directory, 'sibling.http'))).toBe(false);
+        expect(fs.existsSync(path.join(directory, 'owned.http'))).toBe(false);
+        if (mode === 'exit-environment-race' || mode === 'unavailable-environment') expect(fs.existsSync(path.join(directory, 'owned.denials'))).toBe(true);
+      } finally {
+        for (const name of ['owned', 'sibling']) {
+          const receipt = path.join(directory, `${name}.ready`);
+          if (!fs.existsSync(receipt)) continue;
+          const metadata = JSON.parse(fs.readFileSync(receipt, 'utf8'));
+          for (const identity of metadata.owned) if (ownershipProcessAlive(identity)) process.kill(identity.pid, 'SIGKILL');
+          const ownedRoot = path.dirname(path.dirname(metadata.stateFile));
+          if (name === 'owned' && path.dirname(ownedRoot) === fs.realpathSync(os.tmpdir())
+            && /^gstack-free-shard-[A-Za-z0-9]+$/.test(path.basename(ownedRoot))
+            && fs.existsSync(ownedRoot) && fs.realpathSync(ownedRoot) === ownedRoot) {
+            fs.rmSync(ownedRoot, { recursive: true, force: true });
+          }
+        }
+        for (const child of processes) {
+          if (child.exitCode === null) child.kill('SIGKILL');
+          await child.exited;
+        }
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
+    }, 30000);
+  }
+});
+
+describe('test-free-shards: isolated CI and explicit quick feedback', () => {
+  const files = Array.from({ length: 8 }, (_, i) => `test/sample-${i}.test.ts`);
+  const durations = Object.fromEntries(files.map((file, i) => [file, (i + 1) * 1_000]));
+  const plan = createFreeCiPlan(files, 4, durations, 'revision-a');
+  const receipts = (): FreeCiResult[] => plan.shards.map(shard => ({
+    planId: plan.id, revision: plan.revision, retry: null,
+    outcome: { shard: shard.shard, files: shard.files, status: 'passed', exitCode: 0,
+      elapsedMs: 10, groupPid: null, failingFiles: [], unattributedFailures: 0,
+      summary: { testsRan: shard.files.length, filesRan: shard.files.length, sawTerminalSummary: true } },
+  }));
+
+  test('one deterministic duration plan covers the complete census exactly once', () => {
+    expect(createFreeCiPlan([...files].reverse(), 4, durations, 'revision-a')).toEqual(plan);
+    expect(plan.shards.flatMap(shard => shard.files).sort()).toEqual(files);
+    expect(Math.max(...plan.shards.map(shard => shard.predictedMs))).toBe(9_000);
+    expect(() => validateFreeCiPlan(plan, files, 'revision-a')).not.toThrow();
+    expect(() => validateFreeCiPlan(plan, files.slice(1), 'revision-a')).toThrow(/every free file/);
+    expect(() => validateFreeCiPlan(plan, files, 'other-revision')).toThrow(/identity or revision/);
+    expect(() => validateFreeCiPlan({ ...plan, id: 'stale' }, files, 'revision-a')).toThrow(/identity/);
+  });
+
+  test('missing, duplicate, stale and partial receipts cannot clear the aggregate', () => {
+    expect(() => verifyFreeCiResults(plan, receipts())).not.toThrow();
+    expect(() => verifyFreeCiResults(plan, receipts().slice(1))).toThrow(/Missing or duplicate/);
+    const duplicate = receipts(); duplicate[1] = duplicate[0];
+    expect(() => verifyFreeCiResults(plan, duplicate)).toThrow(/identity, shard or file/);
+    const stale = receipts(); stale[0].revision = 'old';
+    expect(() => verifyFreeCiResults(plan, stale)).toThrow(/identity, shard or file/);
+    const partial = receipts(); partial[0].outcome.files = [];
+    expect(() => verifyFreeCiResults(plan, partial)).toThrow(/file coverage/);
+  });
+
+  test('timeout, truncation and false exit-zero receipts remain failures', () => {
+    for (const status of ['timed-out', 'failed'] as const) {
+      const failed = receipts(); failed[0].outcome.status = status;
+      failed[0].outcome.unattributedFailures = 1;
+      expect(() => verifyFreeCiResults(plan, failed)).toThrow(/Failed or incomplete/);
+    }
+    const inconsistent = receipts(); inconsistent[0].outcome.exitCode = 1;
+    expect(() => verifyFreeCiResults(plan, inconsistent)).toThrow(/Inconsistent passing/);
+  });
+
+  test('claimed success requires terminal evidence that every planned file executed', () => {
+    const absent = receipts(); delete absent[0].outcome.summary;
+    expect(() => verifyFreeCiResults(plan, absent)).toThrow(/execution summary/);
+    const truncated = receipts(); truncated[0].outcome.summary!.sawTerminalSummary = false;
+    expect(() => verifyFreeCiResults(plan, truncated)).toThrow(/execution summary/);
+    const partial = receipts(); partial[0].outcome.summary!.filesRan = plan.shards[0].files.length - 1;
+    expect(() => verifyFreeCiResults(plan, partial)).toThrow(/execution summary/);
+    const missingCount = receipts(); missingCount[0].outcome.summary!.testsRan = null;
+    expect(() => verifyFreeCiResults(plan, missingCount)).toThrow(/execution summary/);
+  });
+
+  test('retains original failures and enforces the five-file retry cap across machines', () => {
+    const retried = receipts();
+    const markRetried = (index: number) => {
+      const result = retried[index];
+      result.retry = { ...result.outcome, files: [...result.outcome.files], shard: 5 };
+      result.outcome = { ...result.outcome, status: 'failed', exitCode: 1, failingFiles: [...result.outcome.files] };
+    };
+    markRetried(0);
+    expect(() => verifyFreeCiResults(plan, retried)).not.toThrow();
+    delete retried[0].retry!.summary;
+    expect(() => verifyFreeCiResults(plan, retried)).toThrow(/Failed or incomplete/);
+    retried[0].retry!.summary = { testsRan: 1, filesRan: 1, sawTerminalSummary: true };
+    expect(() => verifyFreeCiResults(plan, retried)).toThrow(/Failed or incomplete/);
+    retried[0].retry!.summary = { ...retried[0].outcome.summary! };
+    retried[0].retry!.files = [];
+    expect(() => verifyFreeCiResults(plan, retried)).toThrow(/Failed or incomplete/);
+    retried[0].retry!.files = [...retried[0].outcome.files];
+    markRetried(1); markRetried(2);
+    expect(() => verifyFreeCiResults(plan, retried)).toThrow(/five-file limit/);
+  });
+
+  test('a passing retry cannot replace foreign, sibling-shard or duplicate failure attribution', () => {
+    for (const failures of [['test/unplanned.test.ts'], [plan.shards[1].files[0]],
+      [plan.shards[0].files[0], plan.shards[0].files[0]]]) {
+      const results = receipts(), first = results[0];
+      first.outcome = { ...first.outcome, status: 'failed', exitCode: 1, failingFiles: failures };
+      first.retry = { ...receipts()[0].outcome, files: [...new Set(failures)],
+        summary: { testsRan: 1, filesRan: new Set(failures).size, sawTerminalSummary: true } };
+      expect(eligibleFreeRetryFiles([first.outcome])).toBeNull();
+      expect(() => verifyFreeCiResults(plan, results)).toThrow(/Failed or incomplete/);
+    }
+  });
+
+  test('quick feedback includes its deterministic core and known fast free files only', () => {
+    const candidates = [...QUICK_CORE, ...files, 'test/unknown.test.ts', 'test/codex-e2e.test.ts'];
+    const measured = { ...durations, [QUICK_CORE[0]]: 99_000, 'test/codex-e2e.test.ts': 1 };
+    expect(selectQuickFreeFiles(candidates, measured)).toEqual([...QUICK_CORE, ...files.slice(0, 2)]);
+    expect(QUICK_CORE.every(file => collectFreeTestFiles(ROOT).includes(file))).toBe(true);
+    expect(selectQuickFreeFiles([
+      'test/qa-functional-observer.test.ts', 'test/qa-checkpoint-evidence.test.ts',
+      'test/test-free-shards-capture.test.ts', 'test/qa-exploratory-callers.test.ts',
+    ], {})).toEqual([
+      'test/qa-functional-observer.test.ts', 'test/qa-checkpoint-evidence.test.ts',
+      'test/test-free-shards-capture.test.ts',
+    ]);
+  });
+
+  test('CLI emits a shared plan, accounts for an empty shard, and rejects missing receipts', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'free-ci-contract-'));
+    const script = path.join(ROOT, 'scripts/test-free-shards.ts');
+    const planPath = path.join(dir, 'plan.json');
+    const resultDir = path.join(dir, 'results');
+    try {
+      const planned = Bun.spawnSync([process.execPath, script, '--ci-plan', planPath, '--shards', '2000'], { timeout: 10_000 });
+      expect(planned.exitCode, planned.stderr.toString()).toBe(0);
+      const emitted = JSON.parse(fs.readFileSync(planPath, 'utf8'));
+      expect(JSON.parse(planned.stdout.toString()).shard).toHaveLength(2001);
+      expect(emitted.shards.at(-1).files).toEqual(['test/bootstrap-retention.test.ts']);
+      const empty = emitted.shards.find((shard: { files: string[] }) => shard.files.length === 0);
+      const ran = Bun.spawnSync([process.execPath, script, '--ci-run', planPath, '--shard', String(empty.shard),
+        '--result', path.join(resultDir, 'empty.json')], { timeout: 10_000 });
+      expect(ran.exitCode, ran.stderr.toString()).toBe(0);
+      const emptyOutcome = JSON.parse(fs.readFileSync(path.join(resultDir, 'empty.json'), 'utf8')).outcome;
+      expect(emptyOutcome.files).toEqual([]);
+      expect(emptyOutcome.summary).toEqual({ testsRan: 0, filesRan: 0, sawTerminalSummary: false });
+      const sample = emitted.shards.find((shard: { files: string[] }) => shard.files.includes('test/strict-output.test.ts'));
+      const nonempty = Bun.spawnSync([process.execPath, script, '--ci-run', planPath, '--shard', String(sample.shard),
+        '--result', path.join(resultDir, 'sample.json')], { timeout: 10_000 });
+      expect(nonempty.exitCode, nonempty.stderr.toString()).toBe(0);
+      const summary = JSON.parse(fs.readFileSync(path.join(resultDir, 'sample.json'), 'utf8')).outcome.summary;
+      expect(summary.sawTerminalSummary).toBe(true);
+      expect(summary.filesRan).toBe(sample.files.length);
+      expect(summary.testsRan).toBeGreaterThan(0);
+      const aggregate = Bun.spawnSync([process.execPath, script, '--ci-verify', planPath, '--results', resultDir], { timeout: 10_000 });
+      expect(aggregate.exitCode).toBe(1);
+      expect(aggregate.stderr.toString()).toContain('Missing or duplicate CI shard results');
+      const quick = Bun.spawnSync([process.execPath, script, '--quick', '--list'], { timeout: 10_000 });
+      expect(quick.exitCode, quick.stderr.toString()).toBe(0);
+      expect(quick.stdout.toString()).toContain('not release acceptance');
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe('test-free-shards: exclusive host-state phase', () => {
+  test('CI keeps the entire census while giving the procfs fixture a separate machine', () => {
+    const files = collectFreeTestFiles(ROOT);
+    const plan = createFreeCiPlan(files, 20, loadFreeTestDurations() ?? {}, 'host-state-fixture');
+    expect(TREE_MUTATING['test/bootstrap-retention.test.ts']).toContain('procfs');
+    expect(plan.shards).toHaveLength(21);
+    expect(plan.shards.at(-1)!.files).toEqual(['test/bootstrap-retention.test.ts']);
+    expect(plan.shards.slice(0, -1).flatMap(shard => shard.files)).not.toContain('test/bootstrap-retention.test.ts');
+    expect(plan.shards.flatMap(shard => shard.files).sort()).toEqual(files);
+    expect(() => validateFreeCiPlan(plan, files, 'host-state-fixture')).not.toThrow();
+    expect(() => verifyFreeCiResults(plan, [])).toThrow('Missing or duplicate');
+  });
+
+  test.each(['success', 'retry-reader', 'retry-exclusive', 'truncated-exclusive', 'cancel'])('actual main CLI routing: %s', async mode => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'free-exclusive-'));
+    let child: ReturnType<typeof Bun.spawn> | undefined;
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    try {
+      for (const file of ['scripts/test-free-shards.ts', 'scripts/test-strict-output.ts',
+        'test/helpers/paid-test-set.ts', 'test/helpers/touchfiles.ts', 'test/helpers/touchfiles-data.ts', 'test/helpers/test-selection.ts']) {
+        const target = path.join(directory, file);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.copyFileSync(path.join(ROOT, file), target);
+      }
+      const selected = ['test/reader-a.test.ts', 'test/reader-b.test.ts', 'test/bootstrap-retention.test.ts'];
+      const eventsFile = path.join(directory, 'events.jsonl');
+      for (const [index, file] of selected.entries()) {
+        fs.writeFileSync(path.join(directory, file), `
+          import { test, expect } from 'bun:test';
+          import * as fs from 'node:fs';
+          import * as path from 'node:path';
+          const root = ${JSON.stringify(directory)};
+          const file = ${JSON.stringify(file)};
+          const index = ${index};
+          const mode = ${JSON.stringify(mode)};
+          const record = event => fs.appendFileSync(${JSON.stringify(eventsFile)}, JSON.stringify({ file, event }) + '\\n');
+          test('selected fixture', async () => {
+            const attemptFile = path.join(root, 'attempt-' + index);
+            const attempt = fs.existsSync(attemptFile) ? Number(fs.readFileSync(attemptFile, 'utf8')) + 1 : 1;
+            fs.writeFileSync(attemptFile, String(attempt));
+            record('start');
+            if (index < 2) {
+              fs.writeFileSync(path.join(root, 'ready-' + index), 'ready');
+              const deadline = Date.now() + 2000;
+              while (!fs.existsSync(path.join(root, 'ready-' + (1 - index)))) {
+                if (Date.now() >= deadline) throw new Error('readers did not overlap');
+                await Bun.sleep(10);
+              }
+              if (mode === 'cancel') await new Promise(() => {});
+              fs.writeFileSync(path.join(root, 'finished-' + index), 'finished');
+            } else {
+              expect(fs.existsSync(path.join(root, 'finished-0'))).toBe(true);
+              expect(fs.existsSync(path.join(root, 'finished-1'))).toBe(true);
+              if (mode === 'truncated-exclusive') process.exit(0);
+            }
+            record('end');
+            if ((mode === 'retry-reader' && index === 0) || (mode === 'retry-exclusive' && index === 2)) expect(attempt).toBe(2);
+          });
+        `);
+      }
+      fs.writeFileSync(path.join(directory, 'scripts/free-test-durations.json'), JSON.stringify({ durations: Object.fromEntries(selected.map(file => [file, 100])) }));
+      child = Bun.spawn([process.execPath, path.join(directory, 'scripts/test-free-shards.ts')], {
+        cwd: directory, stdout: 'pipe', stderr: 'pipe',
+        env: { ...process.env, GSTACK_FREE_JOBS: '2', GSTACK_FREE_RETRY_FLAKY: '1', GSTACK_FLAKE_LEDGER: path.join(directory, 'flakes.jsonl') },
+      });
+      watchdog = setTimeout(() => child!.kill('SIGKILL'), 10000);
+      const stdout = new Response(child.stdout).text();
+      const stderr = new Response(child.stderr).text();
+      if (mode === 'cancel') {
+        const deadline = Date.now() + 3000;
+        while (!fs.existsSync(path.join(directory, 'ready-0')) || !fs.existsSync(path.join(directory, 'ready-1'))) {
+          if (Date.now() >= deadline) throw new Error('parallel phase did not start');
+          await Bun.sleep(10);
+        }
+        child.kill('SIGTERM');
+      }
+      const exit = await child.exited;
+      const output = await stdout + await stderr;
+      const events = fs.readFileSync(eventsFile, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      expect(output).toContain('then 1 exclusive host-state file(s) serially');
+      expect(output).not.toContain('tree-mutating');
+      if (mode === 'cancel') {
+        expect(exit, output).toBe(143);
+        expect(events.map(event => event.file).sort()).toEqual(selected.slice(0, 2));
+        expect(output).not.toContain('shard 3/3 (1 files)');
+        expect(output).not.toContain('flaky-retry:');
+      } else {
+        expect(exit, output).toBe(mode === 'truncated-exclusive' ? 1 : 0);
+        expect(events.slice(0, 2).map(event => event.file).sort()).toEqual(selected.slice(0, 2));
+        expect(events.slice(0, 4).filter(event => event.event === 'end')).toHaveLength(2);
+        expect(events[4]).toEqual({ file: selected[2], event: 'start' });
+        const counts = selected.map(file => events.filter(event => event.file === file && event.event === 'start').length);
+        expect(counts).toEqual(mode === 'retry-reader' ? [2, 1, 1] : mode === 'retry-exclusive' ? [1, 1, 2] : [1, 1, 1]);
+        if (mode.startsWith('retry-')) {
+          expect(output).toContain('FLAKY-PASS');
+          expect(events[6]).toEqual({ file: selected[mode === 'retry-reader' ? 0 : 2], event: 'start' });
+        } else if (mode === 'truncated-exclusive') {
+          expect(output).toContain('flaky-retry skipped');
+          expect(output).not.toContain('FLAKY-PASS');
+        }
+      }
+    } finally {
+      if (watchdog) clearTimeout(watchdog);
+      if (child && child.exitCode === null) { child.kill('SIGKILL'); await child.exited; }
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  }, 15000);
+});
+
+describe('test-free-shards: enumeration', () => {
+  test('isFreeTestFile rejects non-test files', () => {
+    expect(isFreeTestFile('test/foo.ts')).toBe(false);
+    expect(isFreeTestFile('test/foo.test.ts')).toBe(true);
+    expect(isFreeTestFile('test/foo.test.tsx')).toBe(true);
+    expect(isFreeTestFile('test/foo.test.mjs')).toBe(true);
+  });
+
+  test('isFreeTestFile rejects paid eval tests', () => {
+    expect(isFreeTestFile('test/skill-e2e-foo.test.ts')).toBe(false);
+    expect(isFreeTestFile('test/skill-llm-eval.test.ts')).toBe(false);
+    expect(isFreeTestFile('test/codex-e2e.test.ts')).toBe(false);
+    expect(isFreeTestFile('test/codex-e2e-sol-scope.test.ts')).toBe(false);
+  });
+
+  test('collectFreeTestFiles returns sorted, deduped, only-free list', () => {
+    const files = collectFreeTestFiles(ROOT);
+    expect(files.length).toBeGreaterThan(10);
+    expect(files).toEqual([...files].sort());
+    expect(new Set(files).size).toBe(files.length);
+    for (const f of files) {
+      expect(isFreeTestFile(f)).toBe(true);
+    }
+  });
+
+  test('normalizeRelativePath converts Windows backslashes to forward slashes', () => {
+    expect(normalizeRelativePath('test\\foo\\bar.test.ts')).toBe('test/foo/bar.test.ts');
+    expect(normalizeRelativePath('test/foo/bar.test.ts')).toBe('test/foo/bar.test.ts');
+  });
+});
+
+describe('test-free-shards: Windows curation', () => {
+  function withTempFile(content: string, fn: (filePath: string) => void): void {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'curation-test-'));
+    const file = path.join(dir, 'sample.test.ts');
+    fs.writeFileSync(file, content);
+    try {
+      fn(file);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test('detects /bin/bash hardcode', () => {
+    withTempFile(`spawn('/bin/bash', ['-c', 'echo hi']);`, (f) => {
+      expect(detectWindowsFragility(f)?.reason).toBe('hardcoded /bin/sh or /bin/bash');
+    });
+  });
+
+  test('detects spawn("sh", ...)', () => {
+    // tripwire-exempt: string fixture fed to detectWindowsFragility, not a call
+    withTempFile(`spawnSync('sh', ['-c', 'command -v claude']);`, (f) => {
+      expect(detectWindowsFragility(f)?.reason).toBe('spawn("sh", ...)');
+    });
+  });
+
+  test('detects raw /tmp/ paths', () => {
+    withTempFile(`const TMPERR = '/tmp/codex-err.txt';`, (f) => {
+      expect(detectWindowsFragility(f)?.reason).toBe('raw /tmp/ path (use os.tmpdir())');
+    });
+  });
+
+  test('detects which claude shell command', () => {
+    // tripwire-exempt: string fixture fed to detectWindowsFragility, not a call
+    withTempFile(`execSync('which claude').trim();`, (f) => {
+      expect(detectWindowsFragility(f)?.reason).toBe('which claude (use Bun.which)');
+    });
+  });
+
+  test('Windows-safe code passes the filter', () => {
+    withTempFile(`import { spawn } from 'child_process'; spawn(claude.command, args);`, (f) => {
+      expect(detectWindowsFragility(f)).toBeNull();
+    });
+  });
+
+  test('still detects a direct bin shebang launch', () => {
+    withTempFile(`spawnSync(path.join(ROOT, 'bin', 'tool'), [], { timeout: 1000 });`, (f) => {
+      expect(detectWindowsFragility(f)?.reason).toBe('spawns bin/ shebang script (Windows CreateProcess does not parse shebangs)');
+    });
+  });
+
+  test('curateWindowsSafe partitions files into safe + excluded', () => {
+    const files = collectFreeTestFiles(ROOT);
+    const result = curateWindowsSafe(files, ROOT);
+    expect(result.safe.length + result.excluded.length).toBe(files.length);
+    // Its bin/ reference is passed to Bun argv, so it must exercise native
+    // Windows taskkill supervision instead of disappearing behind curation.
+    expect(result.safe).toContain('test/claude-code-runner.test.ts');
+    expect(result.safe).toContain('test/claude-code-windows-job.test.ts');
+    expect(result.safe).toContain('test/qa-deadline.test.ts');
+    expect(result.safe).toContain('test/qa-deadline-selection.test.ts');
+    // These replay real callbacks with injected subprocess/SDK boundaries.
+    // Fixture-only bin paths must not hide the native PATH/supervision checks.
+    expect(result.safe).toContain('test/setup-gbrain-remote-caller.test.ts');
+    expect(result.safe).toContain('test/cso-windows-build-contract.test.ts');
+    // Sanity: at least one excluded entry, since we know test/ship-version-sync.test.ts uses /bin/bash
+    expect(result.excluded.length).toBeGreaterThan(0);
+    // Every excluded entry has a non-empty reason
+    for (const { reason } of result.excluded) {
+      expect(reason.length).toBeGreaterThan(0);
+    }
+  });
+
+  test('retains native POSIX coverage in the full suite without admitting it to the Windows profile', () => {
+    const posixOnly = [
+      'test/qa-functional-fixture.test.ts',
+      'test/qa-functional-observer-atomic.test.ts',
+      'test/docsync-report-interface.test.ts',
+    ];
+    const portable = [
+      'test/docsync-lifecycle-interface.test.ts',
+      'test/docsync-authority.test.ts',
+      'test/qa-browser-preservation.test.ts',
+      'test/review-enum-lifecycle.test.ts',
+      'test/shared-libs-source-reads.test.ts',
+    ];
+    const fullSuite = collectFreeTestFiles(ROOT);
+    for (const file of [...posixOnly, ...portable]) expect(fullSuite).toContain(file);
+    const result = curateWindowsSafe([...posixOnly, ...portable], ROOT);
+    expect(result.safe).toEqual(portable);
+    expect(result.excluded.map(({ file }) => file)).toEqual(posixOnly);
+    for (const { reason } of result.excluded) expect(reason).toMatch(/Linux inotify|POSIX signal/);
+  });
+
+  test('excludes POSIX CSO helper suites while retaining portable image metadata coverage', () => {
+    const posixOnly = [
+      'test/cso-preparation-adversarial.test.ts',
+      'test/cso-preparation-container.test.ts',
+      'test/cso-preparation-executor.test.ts',
+      'test/cso-scanner-cli.test.ts',
+      'test/cso-verification-cleanup.test.ts',
+      'test/cso-witness.test.ts',
+    ];
+    const portable = ['test/cso-image-provisioning.test.ts', 'test/cso-public-ghcr.test.ts'];
+    const result = curateWindowsSafe([...posixOnly, ...portable], ROOT);
+    expect(result.safe).toEqual(portable);
+    expect(result.excluded.map(({ file }) => file).sort()).toEqual(posixOnly.sort());
+    for (const { reason } of result.excluded) expect(reason).toMatch(/Linux|POSIX|Windows/);
+  });
+});
+
+describe('test-free-shards: sharding', () => {
+  test('stableHash is deterministic', () => {
+    expect(stableHash('foo.test.ts')).toBe(stableHash('foo.test.ts'));
+    expect(stableHash('foo.test.ts')).not.toBe(stableHash('bar.test.ts'));
+  });
+
+  test('assignFilesToShards partitions every file across exactly shardCount shards', () => {
+    const files = ['a.test.ts', 'b.test.ts', 'c.test.ts', 'd.test.ts', 'e.test.ts'];
+    const shards = assignFilesToShards(files, 3);
+    expect(shards.length).toBe(3);
+    expect(shards.flat().sort()).toEqual([...files].sort());
+  });
+
+  test('empty shards are preserved so indices stay stable for a CI matrix', () => {
+    // 2 files can never occupy 10 shards — the rest MUST be present and empty,
+    // not filtered out (filtering renumbered every later shard by occupancy).
+    const files = ['a.test.ts', 'b.test.ts'];
+    const shards = assignFilesToShards(files, 10);
+    expect(shards.length).toBe(10);
+    expect(shards.flat().sort()).toEqual([...files].sort());
+    expect(shards.some((s) => s.length === 0)).toBe(true);
+  });
+
+  test("a file's shard index depends only on its own path — other files never renumber it", () => {
+    const target = 'test/target.test.ts';
+    const expected = stableHash(target) % 7;
+    const alone = assignFilesToShards([target], 7);
+    const crowded = assignFilesToShards(
+      [target, 'test/a.test.ts', 'test/b.test.ts', 'test/c.test.ts', 'test/d.test.ts', 'browse/test/e.test.ts'],
+      7,
+    );
+    expect(alone.findIndex((s) => s.includes(target))).toBe(expected);
+    expect(crowded.findIndex((s) => s.includes(target))).toBe(expected);
+  });
+
+  test('assignFilesToShards rejects invalid shard counts', () => {
+    expect(() => assignFilesToShards(['a.test.ts'], 0)).toThrow();
+    expect(() => assignFilesToShards(['a.test.ts'], -1)).toThrow();
+  });
+
+  test('shards are stable across runs (same files always land in same shard)', () => {
+    const files = ['x.test.ts', 'y.test.ts', 'z.test.ts'];
+    const a = assignFilesToShards(files, 5);
+    const b = assignFilesToShards(files, 5);
+    expect(a).toEqual(b);
+  });
+});
+
+describe('test-free-shards: shard args', () => {
+  test('resolves exact absolute selectors (no substring shard bleed) and pins the per-test timeout', () => {
+    const args = buildShardArgs(['test/foo.test.ts'], { rootDir: ROOT });
+    expect(args[0]).toBe('test');
+    expect(args[1]).toBe(path.resolve(ROOT, 'test/foo.test.ts'));
+    expect(args).toContain(`--timeout=${FREE_TEST_TIMEOUT_MS}`);
+    expect(args).toContain('--max-concurrency=1');
+    expect(args).not.toContain('--parallel');
+    expect(args).not.toContain('--concurrent');
+  });
+
+  test('parallel mode swaps serial max-concurrency for --parallel', () => {
+    const args = buildShardArgs(['test/foo.test.ts'], { rootDir: ROOT, parallel: true });
+    expect(args).toContain('--parallel');
+    expect(args).not.toContain('--max-concurrency=1');
+  });
+
+  test('per-test timeout matches the 30s the package.json test script used before the repoint', () => {
+    expect(FREE_TEST_TIMEOUT_MS).toBe(30_000);
+  });
+});
+
+describe('test-free-shards: strict shard execution', () => {
+  // Fake command seam, same pattern as test/paid-shards.test.ts: each "file"
+  // label selects a child command. Unlike the paid runner, runFreeShard
+  // enforces the terminal-summary file count on injected commands too, so
+  // fake PASSING commands must print a synthetic bun summary line.
+  const SUMMARY_1 = 'Ran 3 tests across 1 files. [12.00ms]';
+  const BUSY_LOOP = 'const end = Date.now() + 600000; while (Date.now() < end) {}';
+  const FAIL_LINE = '(fa' + 'il) planted failure [0.10ms]'; // split so this source file never contains a raw bun fail line
+
+  const commandFor = (files: string[]) => {
+    const mode = files[0];
+    if (mode === 'spin') return { command: process.execPath, args: ['-e', BUSY_LOOP] };
+    if (mode === 'no-summary') return { command: process.execPath, args: ['-e', 'console.log("ok")'] };
+    if (mode === 'fail-exit') {
+      return { command: process.execPath, args: ['-e', `console.log(${JSON.stringify(SUMMARY_1)}); process.exit(3)`] };
+    }
+    if (mode === 'fail-line-exit-zero') {
+      return { command: process.execPath, args: ['-e', `console.log(${JSON.stringify(FAIL_LINE)}); console.log(${JSON.stringify(SUMMARY_1)})`] };
+    }
+    if (mode === 'wrong-file-count') {
+      return { command: process.execPath, args: ['-e', 'console.log("Ran 3 tests across 4 files. [12.00ms]")'] };
+    }
+    return { command: process.execPath, args: ['-e', `console.log(${JSON.stringify(SUMMARY_1)})`] };
+  };
+
+  test('exit 0 WITHOUT bun\'s terminal summary is a FAILURE (anti-truncation backstop)', async () => {
+    const outcome = await runFreeShard(['no-summary'], 1, 1, { commandFor, quiet: true, log: () => {} });
+    expect(outcome.status).toBe('failed');
+    expect(outcome.exitCode).toBe(0);
+  });
+
+  test('exit 0 WITH the terminal summary passes, and the per-shard epilogue line is printed', async () => {
+    const lines: string[] = [];
+    const outcome = await runFreeShard(['pass'], 1, 1, { commandFor, quiet: true, log: (l) => lines.push(l) });
+    expect(outcome.status).toBe('passed');
+    expect(lines.some((l) => /^\[test:free\] shard 1\/1: 1 files, \d+s, pass$/.test(l))).toBe(true);
+  });
+
+  test('a non-zero exit stays a failure even when the summary is present', async () => {
+    const outcome = await runFreeShard(['fail-exit'], 1, 1, { commandFor, quiet: true, log: () => {} });
+    expect(outcome.status).toBe('failed');
+    expect(outcome.exitCode).toBe(3);
+  });
+
+  test('a printed (fail) result line is a failure even on exit 0 (bun exit-code bug class)', async () => {
+    const outcome = await runFreeShard(['fail-line-exit-zero'], 1, 1, { commandFor, quiet: true, log: () => {} });
+    expect(outcome.status).toBe('failed');
+    expect(outcome.exitCode).toBe(0);
+  });
+
+  test('a summary reporting the wrong file count is a failure (partial execution)', async () => {
+    const outcome = await runFreeShard(['wrong-file-count'], 1, 1, { commandFor, quiet: true, log: () => {} });
+    expect(outcome.status).toBe('failed');
+  });
+
+  test('a spinning shard is killed at the wall-clock deadline and reported timed-out, distinct from failed', async () => {
+    const lines: string[] = [];
+    const outcome = await runFreeShard(['spin'], 1, 1, {
+      commandFor, quiet: true, wallTimeoutMs: 1_200, log: (l) => lines.push(l),
+    });
+    expect(outcome.status).toBe('timed-out');
+    expect(outcome.status).not.toBe('failed');
+    // Killed at the deadline, not left to burn the full 600s busy loop.
+    expect(outcome.elapsedMs).toBeLessThan(30_000);
+    expect(outcome.groupPid).toBeGreaterThan(0);
+    if (process.platform !== 'win32') {
+      expect(() => process.kill(outcome.groupPid as number, 0)).toThrow();
+    }
+    expect(lines.some((l) => /^\[test:free\] shard 1\/1: 1 files, \d+s, timed-out$/.test(l))).toBe(true);
+  }, 30_000);
+
+  test('an empty shard is a fast no-op success and never spawns (stable CI-matrix indices)', async () => {
+    const lines: string[] = [];
+    const outcome = await runFreeShard([], 7, 20, {
+      commandFor: () => { throw new Error('an empty shard must not spawn a child'); },
+      log: (l) => lines.push(l),
+    });
+    expect(outcome.status).toBe('passed');
+    // Mutation-caught gap: bun strips types at runtime, so a missing
+    // failingFiles here feeds undefined into the flaky-retry flatMap.
+    expect(outcome.failingFiles).toEqual([]);
+    expect(outcome.unattributedFailures).toBe(0);
+    expect(lines.some((l) => /^\[test:free\] shard 7\/20: 0 files, 0s, pass$/.test(l))).toBe(true);
+  });
+
+  test('the log-file path is announced once at start and the PASS epilogue repeats it', async () => {
+    const lines: string[] = [];
+    const outcome = await runFreeShard(['pass'], 1, 1, { commandFor, quiet: true, log: (l) => lines.push(l) });
+    expect(outcome.status).toBe('passed');
+    const announced = lines.filter((l) => /^\[test:free\] full log: .+gstack-free-test-.+\.log$/.test(l));
+    expect(announced.length).toBe(1);
+    // PASS epilogue carries the counts from the terminal summary + the log path.
+    expect(lines.some((l) => /^\[test:free\] PASS — 3 tests, 1 files, \d+s\. Full log: .+\.log$/.test(l))).toBe(true);
+  });
+
+  test('spawned shard gets throwaway TMPDIR but NEVER an injected GSTACK_HOME', async () => {
+    // GSTACK_HOME injection was tried and reverted: one shared scratch home
+    // per invocation made 6,900 tests share MUTABLE state — config tests
+    // wrote keys that relink/update-check tests then read (12 measured
+    // cross-contamination failures). This pin keeps the regression out.
+    const captureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'free-shard-env-'));
+    const dump = path.join(captureDir, 'env.json');
+    try {
+      const script =
+        `const fs = require("fs");`
+        + `fs.writeFileSync(${JSON.stringify(dump)}, JSON.stringify({`
+        + `  home: process.env.GSTACK_HOME ?? null, tmp: process.env.TMPDIR,`
+        + `  tmpExists: fs.existsSync(process.env.TMPDIR || "") }));`
+        + `console.log(${JSON.stringify(SUMMARY_1)});`;
+      const outcome = await runFreeShard(['env-dump'], 1, 1, {
+        commandFor: () => ({ command: process.execPath, args: ['-e', script] }),
+        quiet: true,
+        log: () => {},
+      });
+      expect(outcome.status).toBe('passed');
+      const seen = JSON.parse(fs.readFileSync(dump, 'utf8'));
+      // GSTACK_HOME passes through untouched (whatever the parent had, incl. unset).
+      expect(seen.home).toBe(process.env.GSTACK_HOME ?? null);
+      // TMPDIR is a per-shard throwaway, cleaned up once the shard finishes.
+      expect(seen.tmp).toContain('gstack-free-shard-');
+      expect(seen.tmpExists).toBe(true);
+      expect(seen.tmp).not.toBe(process.env.TMPDIR ?? '');
+      expect(fs.existsSync(seen.tmp)).toBe(false);
+    } finally {
+      fs.rmSync(captureDir, { recursive: true, force: true });
+    }
+  });
+
+  test('concurrent shards isolate browser state and remove it on success or failure', async () => {
+    const captureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'free-shard-browse-'));
+    const inheritedState = path.join(captureDir, 'host-browse.json');
+    const parentState = process.env.BROWSE_STATE_FILE;
+    fs.writeFileSync(inheritedState, 'host daemon state');
+    try {
+      const outcomes = await Promise.all([0, 3].map((exitCode, index) => {
+        const dump = path.join(captureDir, `shard-${index}.json`);
+        const script = `
+          const fs = require('fs');
+          const path = require('path');
+          const { resolveConfig } = require(${JSON.stringify(path.join(ROOT, 'browse/src/config.ts'))});
+          const config = resolveConfig();
+          fs.mkdirSync(config.stateDir, { recursive: true });
+          fs.writeFileSync(config.stateFile, ${JSON.stringify(String(index))});
+          fs.writeFileSync(${JSON.stringify(dump)}, JSON.stringify({
+            state: process.env.BROWSE_STATE_FILE,
+            resolvedState: config.stateFile,
+            tmp: process.env.TMPDIR,
+            profile: process.env.CHROMIUM_PROFILE,
+            written: fs.readFileSync(config.stateFile, 'utf8'),
+          }));
+          console.log(${JSON.stringify(SUMMARY_1)});
+          process.exit(${exitCode});
+        `;
+        return runFreeShard(['browser-state'], index + 1, 2, {
+          env: { ...process.env, BROWSE_STATE_FILE: inheritedState },
+          commandFor: () => ({ command: process.execPath, args: ['-e', script] }),
+          quiet: true,
+          log: () => {},
+        });
+      }));
+      expect(outcomes.map((outcome) => outcome.status)).toEqual(['passed', 'failed']);
+      const seen = [0, 1].map((index) => JSON.parse(fs.readFileSync(path.join(captureDir, `shard-${index}.json`), 'utf8')));
+      expect(seen[0].state).not.toBe(seen[1].state);
+      expect(seen[0].profile).not.toBe(seen[1].profile);
+      for (const [index, shard] of seen.entries()) {
+        expect(shard.state).not.toBe(inheritedState);
+        expect(shard.resolvedState).toBe(shard.state);
+        expect(shard.written).toBe(String(index));
+        const ownedRoot = path.dirname(shard.tmp);
+        expect(path.relative(ownedRoot, shard.state)).toBe(path.join('.gstack', 'browse.json'));
+        expect(path.dirname(shard.profile)).toBe(ownedRoot);
+        expect(fs.existsSync(ownedRoot)).toBe(false);
+        expect(fs.existsSync(shard.state)).toBe(false);
+      }
+      expect(fs.readFileSync(inheritedState, 'utf8')).toBe('host daemon state');
+      expect(process.env.BROWSE_STATE_FILE).toBe(parentState);
+    } finally {
+      fs.rmSync(captureDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('test-free-shards: output contract (log capture, quiet console, failure epilogue)', () => {
+  // Convention from the block above: never write a raw bun fail line into this
+  // source file — build it at runtime so a printed source excerpt can't trip
+  // the strict classifier.
+  const FAIL_WORD = '(fa' + 'il)';
+  const failLine = (name: string) => `${FAIL_WORD} ${name} [0.10ms]`;
+  const SUMMARY_1 = 'Ran 3 tests across 1 files. [12.00ms]';
+
+  /** Fake child that prints the given lines (stdout, then stderr) and exits. */
+  const commandPrinting = (stdoutLines: string[], stderrLines: string[] = [], exitCode = 0) => () => ({
+    command: process.execPath,
+    args: ['-e',
+      stdoutLines.map((l) => `console.log(${JSON.stringify(l)});`).join('')
+      + stderrLines.map((l) => `console.error(${JSON.stringify(l)});`).join('')
+      + (exitCode !== 0 ? `process.exit(${exitCode});` : ''),
+    ],
+  });
+
+  test('failure epilogue names the failing test, attributed to its file-chunk header', async () => {
+    const lines: string[] = [];
+    const commandFor = commandPrinting(['test/planted.test.ts:', failLine('planted failure'), SUMMARY_1]);
+    const outcome = await runFreeShard(['planted'], 1, 1, { commandFor, quiet: true, log: (l) => lines.push(l) });
+    expect(outcome.status).toBe('failed');
+    expect(lines.some((l) =>
+      /^\[test:free\] FAIL — 1 failing test\(s\) in 1 file\(s\), 0 crashed worker\(s\)\. Full log: .+\.log$/.test(l),
+    )).toBe(true);
+    expect(lines).toContain('  ✗ test/planted.test.ts — planted failure');
+  });
+
+  test('crash markers surface in the epilogue as crashed+retried workers', async () => {
+    const lines: string[] = [];
+    const commandFor = commandPrinting([
+      'test/crashy.test.ts:',
+      '⟳ crashed running test/crashy.test.ts, retrying',
+      'test/crashy.test.ts:',
+      '✗ test/crashy.test.ts (crashed: exited)',
+      'Ran 0 tests across 1 files. [12.00ms]',
+    ], [], 1);
+    const outcome = await runFreeShard(['crashy'], 1, 1, { commandFor, quiet: true, log: (l) => lines.push(l) });
+    expect(outcome.status).toBe('failed');
+    expect(lines.some((l) =>
+      /^\[test:free\] FAIL — 0 failing test\(s\) in 0 file\(s\), 1 crashed worker\(s\)\. Full log: /.test(l),
+    )).toBe(true);
+    expect(lines).toContain('  ⚠ crashed+retried: test/crashy.test.ts');
+  });
+
+  test('default console is quiet: noise stays in the log; fail/error/summary lines pass through', async () => {
+    const consoleOut: string[] = [];
+    const commandFor = commandPrinting([
+      'PASSING-NOISE gitleaks ascii art',
+      'test/noisy.test.ts:',
+      failLine('quiet mode failure'),
+      'error: expect(received).toBe(expected)',
+      'Ran 1 tests across 1 files. [1.00ms]',
+    ], ['telemetry stderr spam']);
+    const outcome = await runFreeShard(['noisy'], 1, 1, {
+      commandFor, consoleWrite: (t) => consoleOut.push(t), log: () => {},
+    });
+    expect(outcome.status).toBe('failed');
+    const joined = consoleOut.join('');
+    expect(joined).toContain(failLine('quiet mode failure'));
+    expect(joined).toContain('error: expect(received).toBe(expected)');
+    expect(joined).toContain('Ran 1 tests across 1 files.');
+    expect(joined).not.toContain('PASSING-NOISE');
+    expect(joined).not.toContain('telemetry stderr spam');
+    expect(joined).not.toContain('test/noisy.test.ts:'); // headers feed the epilogue, not the console
+  });
+
+  test('--verbose restores the full firehose to the console', async () => {
+    const consoleOut: string[] = [];
+    const commandFor = commandPrinting(
+      ['PASSING-NOISE gitleaks ascii art', SUMMARY_1],
+      ['telemetry stderr spam'],
+    );
+    const outcome = await runFreeShard(['pass'], 1, 1, {
+      commandFor, verbose: true, consoleWrite: (t) => consoleOut.push(t), log: () => {},
+    });
+    expect(outcome.status).toBe('passed');
+    const joined = consoleOut.join('');
+    expect(joined).toContain('PASSING-NOISE gitleaks ascii art');
+    expect(joined).toContain('telemetry stderr spam');
+  });
+
+  test('quiet suppresses the console entirely, even with an injected sink', async () => {
+    const consoleOut: string[] = [];
+    const commandFor = commandPrinting(['PASSING-NOISE', failLine('hidden'), SUMMARY_1]);
+    await runFreeShard(['pass'], 1, 1, {
+      commandFor, quiet: true, consoleWrite: (t) => consoleOut.push(t), log: () => {},
+    });
+    expect(consoleOut).toEqual([]);
+  });
+
+  test('the full child stream lands in the per-run log file, including console-filtered noise', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'free-log-'));
+    const logFilePath = path.join(dir, 'run.log');
+    try {
+      const lines: string[] = [];
+      const commandFor = commandPrinting(['stdout NOISE-A', SUMMARY_1], ['stderr NOISE-B']);
+      const outcome = await runFreeShard(['pass'], 1, 1, { commandFor, quiet: true, logFilePath, log: (l) => lines.push(l) });
+      expect(outcome.status).toBe('passed');
+      expect(lines).toContain(`[test:free] full log: ${logFilePath}`);
+      const logged = fs.readFileSync(logFilePath, 'utf8');
+      expect(logged).toContain('stdout NOISE-A');
+      expect(logged).toContain('stderr NOISE-B');
+      expect(logged).toContain('Ran 3 tests across 1 files.');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('colored fail lines are attributed after ANSI stripping (a prior grep missed them)', async () => {
+    const lines: string[] = [];
+    const colored = `\u001B[31m${failLine('colored failure')}\u001B[0m`;
+    const commandFor = commandPrinting(['test/colored.test.ts:', colored, 'Ran 1 tests across 1 files. [1.00ms]']);
+    const outcome = await runFreeShard(['colored'], 1, 1, { commandFor, quiet: true, log: (l) => lines.push(l) });
+    expect(outcome.status).toBe('failed');
+    expect(lines).toContain('  ✗ test/colored.test.ts — colored failure');
+  });
+
+  test('wall-timeout epilogue lists wedge suspects: header seen, no results, no summary', async () => {
+    const lines: string[] = [];
+    const commandFor = () => ({
+      command: process.execPath,
+      args: ['-e', 'console.log("test/wedged.test.ts:");console.log("wedged noise");setTimeout(() => {}, 600000);'],
+    });
+    const outcome = await runFreeShard(['wedged'], 1, 1, {
+      commandFor, quiet: true, wallTimeoutMs: 1_500, log: (l) => lines.push(l),
+    });
+    expect(outcome.status).toBe('timed-out');
+    expect(lines).toContain('  ⏱ in flight at kill: test/wedged.test.ts');
+    // The epilogue headline shape stays stable across statuses.
+    expect(lines.some((l) => l.startsWith('[test:free] FAIL — '))).toBe(true);
+  }, 30_000);
+
+  test('timeout with no observable header falls back to the buffered-parallel explanation', () => {
+    const reporter = new FreeRunReporter(['test/a.test.ts', 'test/b.test.ts']);
+    reporter.end();
+    const lines = buildRunEpilogue('timed-out', reporter.report(), 5_000, '/tmp/x.log');
+    expect(lines.some((l) => l.includes('in flight at kill: unknown'))).toBe(true);
+    expect(lines.some((l) => l.includes('2 planned file(s) produced no output'))).toBe(true);
+  });
+
+  test('duplicate fail lines dedupe; pre-header failures are labeled unattributed', () => {
+    const reporter = new FreeRunReporter(['test/a.test.ts']);
+    reporter.write(`${failLine('early unattributed')}\n`, 'stderr');
+    reporter.write('test/a.test.ts:\n', 'stderr');
+    reporter.write(`${failLine('dup')}\n${failLine('dup')}\n`, 'stderr');
+    reporter.end();
+    const report = reporter.report();
+    expect(report.failures).toEqual([
+      { file: null, testName: 'early unattributed' },
+      { file: 'test/a.test.ts', testName: 'dup' },
+    ]);
+    const lines = buildRunEpilogue('failed', report, 1_000, '/tmp/x.log');
+    expect(lines).toContain('  ✗ (unattributed) — early unattributed');
+    expect(lines).toContain('  ✗ test/a.test.ts — dup');
+    expect(lines.some((l) => l.includes('2 failing test(s) in 2 file(s)'))).toBe(true);
+  });
+
+  test("a later file's header ends the previous chunk — completed noisy files are not wedge suspects", () => {
+    const reporter = new FreeRunReporter(['test/done.test.ts', 'test/hung.test.ts']);
+    reporter.write('test/done.test.ts:\n', 'stderr');
+    reporter.write('noise from the completed file\n', 'stderr');
+    reporter.write('test/hung.test.ts:\n', 'stderr');
+    reporter.write('noise before the hang\n', 'stderr');
+    reporter.end();
+    // No terminal summary: only the still-open chunk is in flight.
+    expect(reporter.report().inFlight).toEqual(['test/hung.test.ts']);
+  });
+
+  test('../-prefixed printed paths canonicalize to planned relative paths (symlinked cwd)', () => {
+    const reporter = new FreeRunReporter(['browse/test/x.test.ts']);
+    reporter.write('../../../work/repo/browse/test/x.test.ts:\n', 'stderr');
+    reporter.write(`${failLine('boom')}\n`, 'stderr');
+    reporter.end();
+    expect(reporter.report().failures[0]).toEqual({ file: 'browse/test/x.test.ts', testName: 'boom' });
+  });
+});
+
+describe('test-free-shards: GitHub Actions log-group attribution', () => {
+  const failLine = (name: string) => `(fail) ${name} [1.00ms]`;
+  // On GHA (GITHUB_ACTIONS=1) bun wraps each file's section in ::group::.
+  // Unstripped, the real header fails FILE_HEADER_RE, failures attribute to
+  // the PREVIOUS file, and the terminal recap's re-printed (fail) lines land
+  // under a phantom second file — the first Linux run reported 5 real
+  // failures as 10 across 2 files.
+  test('::group::-wrapped headers attribute failures to the right file, once', () => {
+    const reporter = new FreeRunReporter(['test/a.test.ts', 'test/b.test.ts']);
+    reporter.write('::group::test/a.test.ts:\n', 'stderr');
+    reporter.write('::endgroup::\n', 'stderr');
+    reporter.write('::group::test/b.test.ts:\n', 'stderr');
+    reporter.write(`${failLine('planted')}\n`, 'stderr');
+    reporter.write('::endgroup::\n', 'stderr');
+    // Terminal recap re-prints the failing file header + result line.
+    reporter.write('1 tests failed:\n', 'stderr');
+    reporter.write('::group::test/b.test.ts:\n', 'stderr');
+    reporter.write(`${failLine('planted')}\n`, 'stderr');
+    reporter.end();
+    expect(reporter.report().failures).toEqual([{ file: 'test/b.test.ts', testName: 'planted' }]);
+  });
+
+  test('headerless recap re-prints do not invent a phantom failing file', () => {
+    // Round-3 CI shape: bun's recap prints "N tests failed:" then the (fail)
+    // lines with NO file headers — the stale currentFile (an innocent file)
+    // was charged with the previous file's failures.
+    const reporter = new FreeRunReporter(['test/a.test.ts', 'test/b.test.ts']);
+    reporter.write('::group::test/a.test.ts:\n', 'stderr');
+    reporter.write(`${failLine('planted')}\n`, 'stderr');
+    reporter.write('::endgroup::\n', 'stderr');
+    reporter.write('::group::test/b.test.ts:\n', 'stderr');
+    reporter.write('(pass-ish output, no failures here)\n', 'stderr');
+    reporter.write('2 tests failed:\n', 'stderr');
+    reporter.write(`${failLine('planted')}\n`, 'stderr');
+    reporter.write(`${failLine('planted')}\n`, 'stderr');
+    reporter.end();
+    expect(reporter.report().failures).toEqual([{ file: 'test/a.test.ts', testName: 'planted' }]);
+  });
+});
+
+describe('test-free-shards: curated-list census pins', () => {
+  // A renamed test file must FAIL here, not silently drop its serialization
+  // (a phantom TREE_MUTATING key means the reader races regenerating shards
+  // again) or its serial-child quarantine (WORKER_HOSTILE).
+  test('every TREE_MUTATING and WORKER_HOSTILE key names a real free test file', () => {
+    const census = new Set(collectFreeTestFiles(ROOT));
+    const stale = [...Object.keys(TREE_MUTATING), ...Object.keys(WORKER_HOSTILE)]
+      .filter((key) => !census.has(key));
+    expect(stale).toEqual([]);
+  });
+
+  test('every KNOWN_WINDOWS_INCOMPATIBLE entry names a real free test file', () => {
+    const census = new Set(collectFreeTestFiles(ROOT));
+    const stale = KNOWN_WINDOWS_INCOMPATIBLE.map((e) => e.file).filter((f) => !census.has(f));
+    expect(stale).toEqual([]);
+  });
+
+  test('every TEST_ROOTS entry exists on disk and contributes at least one test file', () => {
+    const files = collectFreeTestFiles(ROOT);
+    for (const root of TEST_ROOTS) {
+      expect(fs.existsSync(path.join(ROOT, root))).toBe(true);
+      expect(files.some((f) => f.startsWith(`${root}/`))).toBe(true);
+    }
+  });
+});
+
+describe('test-free-shards: wall-timeout scaling', () => {
+  test('typical local shard keeps the 6-minute floor', () => {
+    expect(wallTimeoutForShard(70)).toBe(DEFAULT_WALL_TIMEOUT_MS);
+  });
+
+  test('oversized shards (jobs=1 machines, Windows lane) scale linearly past the floor', () => {
+    expect(wallTimeoutForShard(130)).toBe(130 * PER_FILE_WALL_MS);
+    expect(wallTimeoutForShard(420)).toBe(420 * PER_FILE_WALL_MS);
+  });
+
+  test('an explicit base above the scaled value wins', () => {
+    expect(wallTimeoutForShard(10, 10 * 60_000)).toBe(10 * 60_000);
+  });
+});
+
+
+describe('test-free-shards: duration-aware packing (full-suite LPT)', () => {
+  const files = ['test/a.test.ts', 'test/b.test.ts', 'test/c.test.ts', 'test/d.test.ts'];
+
+  test('LPT balances by cost, not count', () => {
+    const durations = {
+      'test/a.test.ts': 90_000, // one giant file
+      'test/b.test.ts': 30_000,
+      'test/c.test.ts': 30_000,
+      'test/d.test.ts': 30_000,
+    };
+    const { shards, predictedMs } = packShardsByDuration(files, 2, durations);
+    // The giant file gets its own shard; the three smalls share the other.
+    expect(shards.map((s) => s.length).sort()).toEqual([1, 3]);
+    expect(Math.max(...predictedMs)).toBe(90_000);
+  });
+
+  test('deterministic for identical inputs', () => {
+    const durations = { 'test/a.test.ts': 5, 'test/b.test.ts': 5, 'test/c.test.ts': 5, 'test/d.test.ts': 5 };
+    const one = packShardsByDuration(files, 3, durations);
+    const two = packShardsByDuration([...files].reverse(), 3, durations);
+    expect(one.shards).toEqual(two.shards);
+  });
+
+  test('unknown files get 75th-percentile pessimism (placed early, never the tail)', () => {
+    const durations = {
+      'test/a.test.ts': 1_000,
+      'test/b.test.ts': 2_000,
+      'test/c.test.ts': 100_000,
+      // test/d.test.ts unrecorded → p75 of known = 100_000 (pessimistic)
+    };
+    const { shards } = packShardsByDuration(files, 2, durations);
+    // The unknown must NOT be packed as if free: it lands opposite the
+    // 100s file, not stacked onto it.
+    const shardOfC = shards.findIndex((s) => s.includes('test/c.test.ts'));
+    const shardOfD = shards.findIndex((s) => s.includes('test/d.test.ts'));
+    expect(shardOfC).not.toBe(shardOfD);
+  });
+
+  test('every file lands in exactly one shard', () => {
+    const { shards } = packShardsByDuration(files, 3, {});
+    expect(shards.flat().sort()).toEqual([...files].sort());
+  });
+
+  test('invalid shard count throws', () => {
+    expect(() => packShardsByDuration(files, 0, {})).toThrow();
+  });
+
+  test('files missing from the seed are named, and --ci-plan warns on stderr without touching the matrix', () => {
+    expect(unseededFreeFiles(files, { 'test/a.test.ts': 1, 'test/c.test.ts': 1 })).toEqual(['test/b.test.ts', 'test/d.test.ts']);
+    expect(unseededFreeFiles(files, Object.fromEntries(files.map(f => [f, 1])))).toEqual([]);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'free-seed-drift-'));
+    try {
+      const seedPath = path.join(dir, 'seed.json');
+      fs.writeFileSync(seedPath, JSON.stringify({ version: 1, durations: { 'test/strict-output.test.ts': 1_000 } }));
+      const planned = Bun.spawnSync([process.execPath, path.join(ROOT, 'scripts/test-free-shards.ts'), '--ci-plan', path.join(dir, 'plan.json'), '--shards', '2'], {
+        env: { ...process.env, GSTACK_FREE_TEST_DURATIONS: seedPath }, timeout: 10_000,
+      });
+      expect(planned.exitCode, planned.stderr.toString()).toBe(0);
+      expect(JSON.parse(planned.stdout.toString())).toEqual({ shard: [1, 2, 3] });
+      const plan = JSON.parse(fs.readFileSync(path.join(dir, 'plan.json'), 'utf8'));
+      expect(plan.shards[2].files).toEqual(['test/bootstrap-retention.test.ts']);
+      expect(planned.stderr.toString()).toMatch(/\d+ file\(s\) have no recorded duration .*bun run test:ubicloud --record-durations/);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test('corrupt seed falls back to null (hash sharding), never throws', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'durations-seed-'));
+    const seedPath = path.join(dir, 'seed.json');
+    fs.writeFileSync(seedPath, '{ definitely not json');
+    const prev = process.env.GSTACK_FREE_TEST_DURATIONS;
+    process.env.GSTACK_FREE_TEST_DURATIONS = seedPath;
+    try {
+      expect(loadFreeTestDurations()).toBeNull();
+      // Missing file: silent null (fresh checkouts are normal).
+      process.env.GSTACK_FREE_TEST_DURATIONS = path.join(dir, 'missing.json');
+      expect(loadFreeTestDurations()).toBeNull();
+      // Valid seed round-trips, non-numeric entries dropped.
+      fs.writeFileSync(seedPath, JSON.stringify({ version: 1, durations: { 'test/a.test.ts': 42, bad: 'nope' } }));
+      process.env.GSTACK_FREE_TEST_DURATIONS = seedPath;
+      expect(loadFreeTestDurations()).toEqual({ 'test/a.test.ts': 42 });
+    } finally {
+      if (prev === undefined) delete process.env.GSTACK_FREE_TEST_DURATIONS;
+      else process.env.GSTACK_FREE_TEST_DURATIONS = prev;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('packed shards get duration-aware walls (count heuristic is wrong under LPT)', () => {
+    // A packed shard predicted at 120s must get a 360s wall even though its
+    // file COUNT would produce only the 6-minute base under the old formula.
+    expect(wallTimeoutForPackedShard(120_000)).toBe(Math.max(WALL_BASE_MS, 360_000));
+    // Tiny prediction: base still floors it.
+    expect(wallTimeoutForPackedShard(1_000)).toBe(WALL_BASE_MS);
+  });
+
+  test('packed walls never undercut the per-file floor (predictions do not transfer across machines)', () => {
+    // The duration seed is recorded on fast CI; a syscall-supervised sandbox
+    // replays the same files 2-4x slower. A 253-file shard predicted at ~242s
+    // got wall-killed at predicted×3 = 725s while genuinely progressing —
+    // the count-based floor (253 × 5s = 1265s) the runner always guaranteed
+    // must survive duration packing. Looser is allowed, tighter is not.
+    expect(wallTimeoutForPackedShard(242_000, WALL_BASE_MS, 253)).toBe(253 * 5_000);
+    // When the prediction is the larger bound, it still wins.
+    expect(wallTimeoutForPackedShard(600_000, WALL_BASE_MS, 10)).toBe(1_800_000);
+  });
+});

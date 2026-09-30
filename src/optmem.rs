@@ -463,81 +463,48 @@ fn looks_like_memo_script(bytes: &[u8]) -> bool {
         || head.starts_with("#!")
 }
 
-/// Best-effort install: download memo script into ~/.optmem/memo.
+/// Install the reviewed upstream script without touching the memory tree.
 pub fn ensure_install() -> Result<String, String> {
+    const URL: &str = "https://raw.githubusercontent.com/VictorTaelin/OptMem/1fb164cf39028047781f72ac3bb1e5a691c1dcb0/memo";
+    const SHA256: &str = "3dc120d01be3115ef6267eab4103e7909fc830d6227b549f20991ba999ee9ffb";
     let home = optmem_home();
+    if let Some(existing) = memo_bin() {
+        let current = fs::read(&existing).map_err(|e| e.to_string())?;
+        if !crate::ecosystem::ecosystem_force_pub()
+            || crate::agent::receipt::sha256_hex(&current) == SHA256
+        {
+            return Ok(format!("OptMem already present at {}", existing.display()));
+        }
+    }
     fs::create_dir_all(&home).map_err(|e| e.to_string())?;
-    fs::create_dir_all(memory_dir()).map_err(|e| e.to_string())?;
-
-    if memo_bin().is_some() {
-        return Ok(format!("OptMem already present at {}", home.display()));
-    }
-
-    let url = "https://raw.githubusercontent.com/VictorTaelin/OptMem/main/memo";
     let dest = home.join("memo");
-    let tmp = home.join("memo.download");
-
-    let downloaded = if let Some(curl) = find_bin("curl") {
-        run_capture(
-            &curl,
-            &[
-                "-fsSL",
-                "--max-time",
-                "60",
-                url,
-                "-o",
-                &tmp.to_string_lossy(),
-            ],
-            None,
-            70_000,
-        )
-        .is_ok()
-            && tmp.is_file()
-    } else {
-        false
-    };
-
-    #[cfg(windows)]
-    let downloaded = downloaded || {
-        let ps = format!(
-            "Invoke-WebRequest -Uri '{}' -OutFile '{}' -UseBasicParsing -TimeoutSec 60",
-            url,
-            tmp.display()
-        );
-        run_capture(
-            "powershell",
-            &["-NoProfile", "-NonInteractive", "-Command", &ps],
-            None,
-            70_000,
-        )
-        .is_ok()
-            && tmp.is_file()
-    };
-
-    if !downloaded {
-        let _ = fs::remove_file(&tmp);
-        return Err(
-            "could not download OptMem memo - install manually: \
-             curl -fsSL https://raw.githubusercontent.com/VictorTaelin/OptMem/main/install.sh | sh"
-                .into(),
-        );
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let bytes = client
+        .get(URL)
+        .send()
+        .and_then(|response| response.error_for_status())
+        .and_then(|response| response.bytes())
+        .map_err(|e| e.to_string())?;
+    if !looks_like_memo_script(&bytes) || crate::agent::receipt::sha256_hex(&bytes) != SHA256 {
+        return Err("OptMem download did not match the reviewed upstream SHA256".into());
     }
-
-    let bytes = fs::read(&tmp).map_err(|e| e.to_string())?;
-    if !looks_like_memo_script(&bytes) {
-        let _ = fs::remove_file(&tmp);
-        return Err(
-            "downloaded OptMem memo failed integrity check (not a memo script) - install manually"
-                .into(),
-        );
+    if dest.exists() {
+        fs::copy(
+            &dest,
+            home.join(format!("memo.backup.{}", uuid::Uuid::new_v4())),
+        )
+        .map_err(|e| e.to_string())?;
     }
-    fs::rename(&tmp, &dest).map_err(|e| e.to_string())?;
+    crate::config::atomic_write(&dest, &bytes).map_err(|e| e.to_string())?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&dest, fs::Permissions::from_mode(0o755));
+        fs::set_permissions(&dest, fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
     }
-    Ok(format!("installed memo -> {}", dest.display()))
+    Ok(format!("installed verified memo -> {}", dest.display()))
 }
 
 /// Prompt block for root agents (not subagents).

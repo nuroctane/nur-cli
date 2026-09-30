@@ -1,6 +1,7 @@
 ---
 name: workload-manager-basics
 metadata:
+  version: "1.0.0"
   category: CloudObservabilityAndMonitoring
 description: >-
   Use this skill to manage Google Cloud Workload Manager evaluations, rules,

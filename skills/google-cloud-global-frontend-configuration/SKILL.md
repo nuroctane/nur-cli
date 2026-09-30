@@ -1,6 +1,7 @@
 ---
 name: google-cloud-global-frontend-configuration
 metadata:
+  version: "1.0.0"
   category: Networking
 description: |
   Guides agents through a 6-step discovery process to design and deploy Google Cloud global external Application Load Balancers with Cloud CDN, Cloud Armor, and Service Extensions, mapping workload requirements to best-practice configurations.
@@ -122,7 +123,7 @@ Propose a "Recommended Configuration" based entirely on the Workload Type from S
 ---
 
 ## Relevant Documentation & Supportive Links
-- [Cloud Load Balancing Overview](https://cloud.google.com/load-balancing/docs/overview)
+- [Cloud Load Balancing Overview](https://cloud.google.com/load-balancing/docs/load-balancing-overview)
 - [Cloud CDN Documentation](https://cloud.google.com/cdn/docs)
 - [Cloud Armor Documentation](https://cloud.google.com/armor/docs)
 - [Cloud Load Balancing Service Extensions](https://cloud.google.com/service-extensions/docs/overview)

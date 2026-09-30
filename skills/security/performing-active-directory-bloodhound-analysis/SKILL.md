@@ -242,8 +242,8 @@ Code Execution as SYSTEM
 
 ## References
 
-- BloodHound GitHub: https://github.com/BloodHoundAD/BloodHound
+- BloodHound GitHub: https://github.com/SpecterOps/BloodHound-Legacy
 - BloodHound CE: https://github.com/SpecterOps/BloodHound
-- SharpHound: https://github.com/BloodHoundAD/SharpHound
+- SharpHound: https://github.com/SpecterOps/SharpHound
 - MITRE ATT&CK S0521: https://attack.mitre.org/software/S0521/
 - SpecterOps BloodHound Documentation: https://bloodhound.readthedocs.io/

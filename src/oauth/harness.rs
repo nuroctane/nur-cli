@@ -728,7 +728,7 @@ pub mod zhipu {
         let mut sealed = ct;
         sealed.extend_from_slice(&tag);
         let plain = cipher
-            .decrypt(Nonce::from_slice(&iv), sealed.as_ref())
+            .decrypt(&Nonce::try_from(iv.as_slice()).ok()?, sealed.as_ref())
             .ok()?;
         String::from_utf8(plain).ok()
     }
@@ -1242,7 +1242,7 @@ mod tests {
         let iv = [7u8; 12];
         let sealed = cipher
             .encrypt(
-                Nonce::from_slice(&iv),
+                &Nonce::from(iv),
                 b"zai-oauth-access-token-123456".as_slice(),
             )
             .unwrap();

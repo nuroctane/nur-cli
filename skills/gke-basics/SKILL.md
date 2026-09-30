@@ -1,16 +1,19 @@
 ---
 name: gke-basics
 metadata:
+  version: "1.1.1"
   category: Containers
 description: >-
   Manages core GKE cluster provisioning, credentials, Autopilot vs Standard selection,
   and workload deployment. Use when creating GKE clusters, fetching kubectl credentials,
-  configuring Workload Identity, or deciding between Autopilot and Standard modes.
-  Don't use for specialized GKE networking (use gke-networking), advanced security hardening
+  or deciding between Autopilot and Standard modes. Don't use for Workload Identity
+  (use gke-workload-identity), GKE networking (use gke-networking), security hardening
   (use gke-platform-security or gke-workload-security), or cluster upgrades (use gke-upgrades).
 ---
 
 # GKE Basics & Critical Gotchas
+
+> **Routing Note:** For Workload Identity KSA/GSA setup, open `gke-workload-identity/SKILL.md`. For cluster security flags (`--database-encryption-key`, `--security-posture`, RBAC, Shielded Nodes, Binary Authorization), open `gke-platform-security/SKILL.md`. For cluster upgrades or maintenance windows, open `gke-upgrades/SKILL.md`. For generating Kubernetes YAML manifests (`Deployment`, `StatefulSet`, `Service`, `HTTPRoute`, `PodDisruptionBudget`), open `gke-manifest-generation/SKILL.md`.
 
 Managed Kubernetes platform on Google Cloud. Defaults to Autopilot mode unless Standard is explicitly required.
 
@@ -39,13 +42,7 @@ Managed Kubernetes platform on Google Cloud. Defaults to Autopilot mode unless S
      ```
 
 2. **Workload Identity (IAM Binding):**
-   * Never mount raw GCP Service Account JSON keys in Pods.
-   * Annotate the Kubernetes ServiceAccount (`KSA`) to bind to the Google Service Account (`GSA`):
-     ```yaml
-     metadata:
-       annotations:
-         iam.gke.io/gcp-service-account: GSA_NAME@PROJECT_ID.iam.gserviceaccount.com
-     ```
+   * Never mount raw GCP Service Account JSON keys in Pods; open `gke-workload-identity/SKILL.md` for KSA/GSA setup.
 
 3. **Autopilot Resource Requests:**
    * In Autopilot, CPU requests must be specified in increments of 250m (0.25 vCPU). If an unaligned CPU request (e.g., 300m) is requested, round up to the nearest 250m increment (500m / 0.5 vCPU).

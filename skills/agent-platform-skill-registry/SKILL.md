@@ -1,6 +1,7 @@
 ---
 name: agent-platform-skill-registry
 metadata:
+  version: "1.0.0"
   category: AiAndMachineLearning
 description: >
   Interact with the Gemini Enterprise Agent Platform Skill Registry to create

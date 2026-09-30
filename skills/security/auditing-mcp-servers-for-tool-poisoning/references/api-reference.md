@@ -54,6 +54,6 @@ Install: `pip install mcp`
 
 ## External References
 
-- mcp-scan README: https://github.com/invariantlabs-ai/mcp-scan/blob/main/README.md
+- mcp-scan README: https://github.com/snyk/agent-scan/blob/main/README.md
 - MCP spec: https://modelcontextprotocol.io/specification
 - MCP Python SDK: https://github.com/modelcontextprotocol/python-sdk

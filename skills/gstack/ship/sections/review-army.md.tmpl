@@ -1,0 +1,131 @@
+## Step 9: Pre-Landing Review
+
+Set CYCLES to 0 on first entry only. Keep existing approvals; changed finding scope
+needs a new decision. Run checklist/design, specialists (9.1), merge/Red Team (9.2),
+exploratory QA (9.2.1), dedup (9.3), then fixes and logging (9.4).
+Gated/unsupported specialists skip only their dispatch, never QA or Step 11.
+Steps 10–11 queue findings without editing; include those findings in this pass.
+Every repeat starts before the checklist read and captures a fresh REVIEW_START.
+Finish the complete review and QA before applying any fix in Step 9.4.
+
+{{CONFIDENCE_CALIBRATION}}
+
+### Core checklist
+
+This pass is static; defer product probes to Step 9.2.1.
+
+1. Read `~/.claude/skills/gstack/review/checklist.md`. If the file cannot be read, **STOP** and report the error.
+
+2. Before reading the diff, run `~/.claude/skills/gstack/bin/gstack-review-log --start review` and save its token as REVIEW_START. Then run `git diff origin/<base>`. Read non-ignored untracked source files too (`git ls-files --others --exclude-standard`); the snapshot includes them.
+
+3. Apply the review checklist in two passes:
+   - **Pass 1 (CRITICAL):** SQL & Data Safety, LLM Output Trust Boundary
+   - **Pass 2 (INFORMATIONAL):** All remaining categories
+
+### Design-lite checklist
+
+Its numbering is local to this checklist. When frontend review applies, `/ship`
+automatically attempts this optional design check; `enabled` expresses that choice,
+not a new user question. Step 11 has its own outside-review switch and required native pass.
+
+{{DESIGN_REVIEW_LITE}}
+
+The parent owns design-lite; the Design specialist is an independent read.
+Before final counting/Fix-First, merge the same evidenced design defect at the same path/line
+into one item with both sources and stricter ASK. Retain actual specialist stats;
+distinct defects stay separate and neither pass substitutes for the other.
+
+{{REVIEW_ARMY}}
+
+{{QA_REVIEW}}
+
+{{CROSS_REVIEW_DEDUP}}
+
+## Step 9.4: Fix-First and persistence
+
+Before edits, inspect every dispatched reader/writer's handle. Wait for return
+or confirm termination; otherwise log incomplete through items 5–6 and STOP
+without edits. After terminal failure, independent evidence may support fixes,
+but missing dispatched output still blocks continuation, even with a QA exception.
+
+1. **Classify only unmatched or reopened findings as AUTO-FIX or ASK** after Step 9.3 matches all sources, including queued Steps 10–11 findings, per the Fix-First Heuristic in
+   checklist.md. Critical findings lean toward ASK; informational lean toward AUTO-FIX.
+
+2. **Auto-fix all AUTO-FIX items.** Apply each fix. Output one line per fix:
+   `[AUTO-FIXED] [file:line] Problem → what you did`
+
+3. **If ASK items remain,** present them in ONE AskUserQuestion:
+   - List each with number, severity, problem, recommended fix
+   - Per-item options: A) Fix  B) Skip
+   - Overall RECOMMENDATION
+   - If 3 or fewer ASK items, you may use individual AskUserQuestion calls instead
+
+   Save each explicit Skip immediately in the invocation action list with its
+   identity, scope and supporting source evidence; keep it across repeats.
+
+4. **Finish and log this pass before choosing the next step.** Recheck freshness
+   (Step 9.2.1) before items 5–6. Increment CYCLES
+   once if fixes were applied. Complete items 5–6 exactly once with the original
+   REVIEW_START. Missing dispatched output uses `status:"unavailable"`,
+   `completed:false` and `converged:false`; fixes also require `converged:false`.
+   Then commit named fixed files, if any
+   (`git add <fixed-files> && git commit -m "fix: pre-landing review fixes"`).
+
+5. Output summary: `Pre-Landing Review: N issues — M auto-fixed, K asked (J fixed, L skipped)`
+
+   If coverage is incomplete: `Pre-Landing Review: INCOMPLETE — <missing reviewers>`.
+   Otherwise, if no issues found: `Pre-Landing Review: No issues found.`
+
+6. Persist the review result to the review log:
+```bash
+~/.claude/skills/gstack/bin/gstack-review-log '{"skill":"review","timestamp":"TIMESTAMP","status":"STATUS","issues_found":N,"critical":N,"informational":N,"quality_score":SCORE,"specialists":SPECIALISTS_JSON,"findings":FINDINGS_JSON,"commit":"'"$(git rev-parse --short HEAD)"'","via":"ship","completed":COMPLETED,"converged":CONVERGED,"cycles":CYCLES}' --finish REVIEW_START
+```
+- `TIMESTAMP`: ISO 8601. `STATUS`: `unavailable` for missing dispatched reviewer output;
+  otherwise `clean` only for completed coverage with no
+  unresolved non-advisory defects; otherwise `issues_found`. N counts current
+  unresolved defects, not original totals. Missing coverage is not a defect.
+- `REVIEW_START`: this pass's Step 9 token captured before reading the diff;
+  never recapture at persistence to certify unreviewed fixes.
+- `COMPLETED`: checklist and dispatched specialists/Red Team finish, and all required probes pass.
+  Failed, blocked, inconclusive or not-run required probes mean false, never clean.
+  Record accepted untested risk separately, not as passing verification.
+  Undispatched host-unsupported/gated specialists do not block; retain their labels.
+- `CONVERGED`: completed with zero fixes. `CYCLES`: fix cycles performed, initially 0.
+- `quality_score`: Step 9.2's score, or `10.0` when specialists were skipped/unsupported.
+- `specialists`: `{}` for a small-diff skip; otherwise every considered specialist's Step 9.2 stats:
+  `{"dispatched":true,"findings":N,"critical":N,"informational":N}` or
+  `{"dispatched":false,"reason":"scope|gated"}`.
+- `findings`: checklist, specialist, exploratory QA and queued Steps 10–11 records with
+  `{"fingerprint":"path:line:category","severity":"CRITICAL|INFORMATIONAL","action":"ACTION"}`.
+  ACTION: `"auto-fixed"`, `"fixed"` (approved), or `"skipped"` (explicit Skip).
+  Merge revalidated invocation decisions by identity and advisory/defect kind;
+  preserve `advisory`, `evidence_paths` and `helper_target`.
+Save the review output — it goes into the PR body in Step 19.
+
+### Decide whether to repeat Step 9
+
+After persistence, record missing dispatched output, CYCLES and applied fixes in
+the invocation record. Apply these decisions in order:
+
+1. **Dispatched reviewer output missing:** STOP and name each failed specialist or
+   Red Team. Retain queued fixes and restore coverage. If this pass made edits,
+   resume at the next decision; otherwise run a fresh complete Step 9. A successful
+   peer or a QA exception cannot replace missing dispatched coverage.
+2. **Third fixing cycle reached (`CYCLES >= 3`):** STOP and report recurring findings with
+   `converged:false`; do not run a fourth fixing cycle.
+3. **Fixes applied below the cap:** Insert Step 5, affected Steps 6–8 and all of
+   Step 9 before the pending Step 10 in the work list. Tests must pass or retain approval for the same verified pre-existing
+   failures and scope. Keep CYCLES and scoped approvals across this repeat.
+4. **No edits in this pass:** Resolve the required-probe gate below. Only after it
+   clears may you continue to Step 10. Undispatched gated/unsupported specialists
+   do not block independently, but never replace QA or required native review.
+
+**Required-probe parent gate:** With completed checklist and dispatched reviewers,
+failed/unavailable required probes block continuation.
+Use AskUserQuestion: stop for repair (recommended), or explicitly accept each
+named probe's concrete risk. Skipping a fix is not risk acceptance or a passing
+probe. Keep actual outcomes and incomplete flags; VERIFY_RESULT stays fail for
+plan-check exceptions. This cannot waive missing reviewer output, recurring fixes
+or independent test/security gates.
+
+---

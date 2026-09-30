@@ -5,7 +5,7 @@ description: >-
   (gcsfuse). Use when interacting with gcsfuse: decide whether FUSE, native
   gs:// reads, or Filestore/Managed Lustre fits a workload, deploy tuned mounts
   on GKE, Compute Engine, or Cloud Run, enable and size file, stat, and list
-  caches, tune mount flags or config-file settings, apply workload profiles,
+  caches, tune mount flags (--implicit-dirs) or config-file settings, apply workload profiles,
   keep ML checkpointing safe (rename atomicity, hierarchical namespace/HNS,
   close-time finalization, concurrent writers), or diagnose slow training,
   low throughput, or bill spikes with gcsfuse metrics. Covers mount semantics,
@@ -13,10 +13,10 @@ description: >-
   principal:// bindings, profile StorageClasses, sidecar sizing), and Cloud Run
   volume mounts. Don't use for bucket administration or data management without
   a mount (google-cloud-storage-basics) or fully POSIX-compliant shared file
-  systems (Filestore, Managed Lustre).
+  systems (Filestore, Managed Lustre; use gke-storage).
 license: Apache-2.0
 metadata:
-  version: v1
+  version: "1.0.1"
   publisher: google
   tags: "gcs, gcsfuse, fuse, mount, file-system"
   category: Storage

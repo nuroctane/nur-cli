@@ -48,6 +48,6 @@ with evtx.Evtx("Security.evtx") as log:
 ## References
 
 - python-evtx: https://github.com/williballenthin/python-evtx
-- Chainsaw: https://github.com/WithSecureLabs/chainsaw
+- Chainsaw: https://github.com/WithSecureOpenSource/chainsaw
 - Hayabusa: https://github.com/Yamato-Security/hayabusa
 - Sigma rules: https://github.com/SigmaHQ/sigma

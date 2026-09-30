@@ -1,6 +1,7 @@
 ---
 name: agent-platform-inference
 metadata:
+  version: "1.0.0"
   category: AiAndMachineLearning
 description: >-
   Connects to and performs inference with Google Cloud Agent Platform GenAI
@@ -70,6 +71,19 @@ read-only; other safety tiers are omitted):
         > * **Input Prompt**: "Summarize the plot of Hamlet in 3 sentences"
         >
         > Do you confirm? [Yes/No]
+    *   **Post-Execution Response Grounding (CRITICAL)**:
+        After receiving explicit user approval and executing the inference call
+        via the SDK, the response returning the generated text **MUST
+        explicitly confirm the execution parameters** alongside the model's
+        output. Never return a bare model response alone. Always include:
+        *   **Model ID**: The exact model ID used (e.g. `gemini-2.5-pro`
+            or `<MODEL_ID>`).
+        *   **SDK**: The SDK used (e.g. `Google GenAI SDK (google-genai)`
+            or `OpenAI SDK`).
+        *   **Project ID**: The Google Cloud project ID/number used.
+        *   **Region**: The region or endpoint location used (e.g. `global`
+            or `us-central1`).
+        *   **Generated Output**: The model's complete generated answer.
 
 ## Phase 0: Environment Setup
 

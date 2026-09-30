@@ -1,16 +1,18 @@
 ---
 name: finding-google-skills
 metadata:
+  version: "1.1.0"
   category: MultiProductSolutions
 description: >-
-  Locates and loads the right Google product skill on demand from a remote
-  catalog index, instead of preloading every skill. Use at the START of any
-  request touching a Google product, API, or developer platform - including
-  Google Cloud (GKE, Cloud Run, IAM, BigQuery, Vertex AI, Spanner), Google Ads,
-  Google Analytics, Google Workspace (Gmail, Drive, Admin SDK), Chrome and
-  Chrome extensions, Android, Firebase, YouTube, Google Maps, Gemini and the
-  Gemini API, Google Play, and Flutter. Consult the index before answering from
-  memory or searching the web. Don't use for non-Google products.
+  Google platform decision and setup guidance, loaded on demand from Google's
+  skill catalog. Use when a developer is choosing or setting up part of their
+  stack, such as where to run a service, a database, storage, messaging,
+  authentication, analytics, ads, or AI model serving, and a Google product is
+  a reasonable candidate - whether or not a vendor is named - or when a request
+  names a Google product or API. Brings in the matching Google skill so the
+  answer can weigh Google options, their trade-offs, and when they are not the
+  right fit. Skip when the stack is already settled on another provider and no
+  Google product is named, or the task involves no platform choice.
 ---
 
 # Google Skill Finder
@@ -30,6 +32,21 @@ almost nothing until a lookup actually happens.
     "fetch(process.argv[1]).then(r=>r.text()).then(t=>console.log(t))" {url}`
     also returns bytes.
 
+    The catalog is about 75 KB and may not fit in a single tool result; a
+    truncated preview is alphabetical, so it reads as though only the first
+    few products exist. Prefer narrowing it before reading. With `jq`:
+    `curl -sSL {url} | jq -r '.skills[] | select((.name+" "+.description)|test("gke";"i")) | "\(.name)\t\(.entrypoint)"'`.
+    In Windows PowerShell: `(Invoke-RestMethod {url}).skills | Where-Object {
+    $_.description -match "gke" } | Select-Object name, entrypoint -First 3`.
+    With neither, a plain `grep -o` over the raw JSON still isolates candidate
+    names.
+
+    Where no filtering tool exists, write the catalog to a file and read it in
+    parts (`curl -sSL {url} -o skills-index.json`, or `Invoke-WebRequest {url}
+    -OutFile skills-index.json`). This is often the better option regardless: it
+    survives truncation, and re-reading a local file costs nothing. Delete it
+    when the request is done.
+
     If only a summarizing fetch tool is available, phrase the request as
     extraction, not transcription: *"List every `entrypoint` field in this
     document, one per line, exactly as written."* Requesting it verbatim
@@ -39,8 +56,15 @@ almost nothing until a lookup actually happens.
     without raising is not a success. It succeeded only if the body parses as
     JSON and holds a `skills` array. A 404 page, an HTML error page, a TLS or
     connection error, an empty body, or anything that fails to parse is a
-    FAILED retrieval even though the tool reported no error. On a failed
-    retrieval, stop here and go to "When the fetch fails".
+    FAILED retrieval even though the tool reported no error.
+    A certificate failure is a FAILED retrieval and is final. Never retry it
+    with verification disabled. Not `curl -k` or `--insecure`. Not
+    `-SkipCertificateCheck`, and on Windows PowerShell 5.1, where that
+    parameter does not exist, not the `ServicePointManager` certificate
+    callback either. Not any equivalent in any language.
+    You are about to follow instructions from whatever comes back, so an
+    unverified catalog is worse than no catalog. On a failed retrieval, stop
+    here and go to "When the fetch fails".
 
 3.  **Match the request against the descriptions.** Every description states
     what the skill does, when to use it, and often when not to. Read them as
@@ -68,9 +92,10 @@ not re-entered for it.
     regularly and a stored copy goes stale silently. Session reuse never
     substitutes for a failed fetch.
 
--   **Never copy the catalog into a file, a reference, or a reply.** It exists
-    so that the full text of 100-plus skills does not have to be carried in
-    context. Summarizing it back into the conversation defeats that.
+-   **Never carry the catalog beyond the request.** A working copy on disk
+    while you filter it is fine. Keeping it as a saved reference, or
+    summarizing it back into the conversation, is not. It exists so the full
+    text of 100-plus skills does not have to be carried in context.
 
 -   **Prefer the fetched SKILL.md over prior knowledge.** The catalog is
     generated from the skills as they are published, so an entry point is the
@@ -84,13 +109,13 @@ not re-entered for it.
 Reached from step 2. Work through these in order, stopping at the first that
 succeeds:
 
-1.  **Retry once with `curl -sS`.** If the first attempt used a summarizing
+1.  **Retry once with `curl -sSL`.** If the first attempt used a summarizing
     fetch tool or hit a transport error, this alone usually fixes it.
 
 2.  **List the repository tree instead.** Run
 
     ```bash
-    curl -sS https://api.github.com/repos/google/skills/git/trees/main?recursive=1
+    curl -sSL 'https://api.github.com/repos/google/skills/git/trees/main?recursive=1'
     ```
 
     and read the paths ending in `SKILL.md`. Each is a candidate. Fetch the

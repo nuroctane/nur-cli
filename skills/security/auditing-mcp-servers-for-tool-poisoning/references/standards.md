@@ -24,7 +24,7 @@
 
 ## Official Resources
 
-- mcp-scan (Invariant Labs): https://github.com/invariantlabs-ai/mcp-scan
+- mcp-scan (Invariant Labs): https://github.com/snyk/agent-scan
 - Invariant Labs tool-poisoning disclosure: https://invariantlabs.ai/blog/introducing-mcp-scan
 - OWASP MCP Top 10: https://owasp.org/www-project-mcp-top-10/
 - Model Context Protocol spec: https://modelcontextprotocol.io/

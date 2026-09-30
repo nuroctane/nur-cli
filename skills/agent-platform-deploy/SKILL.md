@@ -1,6 +1,7 @@
 ---
 name: agent-platform-deploy
 metadata:
+  version: "1.0.3"
   category: AiAndMachineLearning
 description: >-
   Deploy open models or custom weights from Model Garden to Agent Platform
@@ -13,10 +14,8 @@ description: >-
   up endpoints. Also use when copying and deploying a 1P Tuned Model. Don't
   use for pure listing/discovery questions of the form "is X deployed?",
   "list my endpoints", or "which regions have models running?" — for those
-  use `agent-platform-endpoint-management`. Don't use for public Vertex AI
-  deployments (use the `vertex-deploy`
-  skill) or for running model evaluations (use the `agent-platform-eval-flywheel`
-  skill).
+  use `agent-platform-endpoint-management`. Don't use for running model evaluations
+  (use `agent-platform-eval-flywheel` skill).
 ---
 
 # Agent Platform Model Garden Deploy Skill
@@ -42,7 +41,16 @@ following safety tiers based on the action requested:
         immediately to gather information for the user.
 2.  **Tier M: Mutating & Reversible (`deploy`, `undeploy-model`)**
     *   **Rule**: This requires explicit user confirmation. You MUST present a
-        clear confirmation prompt to the user explaining the proposed command.
+        clear dry-run confirmation card containing:
+
+        1.  Exact proposed request: the `:deploy` request body for a deployment
+            (§3), or the `gcloud` command code block for `undeploy-model`.
+        2.  Model identifier, destination project ID, and target region.
+        3.  Machine type and accelerator configuration.
+        4.  Estimated hourly cost ($/hr).
+        5.  Endpoint display name.
+        6.  Explicit confirmation prompt asking the user to approve before
+            execution.
         You MUST wait for their explicit confirmation before executing. For
         `undeploy-model`, you MUST first verify that the endpoint and deployed
         model exist; if `describe` or `list` returns a 404 or empty result, you
@@ -57,6 +65,15 @@ following safety tiers based on the action requested:
         a text message explaining the irreversible nature of endpoint or model
         deletion and asking the user to type "I confirm" or "Yes, delete it"
         before executing the deletion command.
+
+> [!IMPORTANT]
+>
+> **Always Output Complete Text Response (NEVER Emit Empty Text)**: After
+> executing any tool call (such as the `:deploy` API call, `gcloud ai endpoints
+> delete`, `gcloud ai endpoints list`, or status checks), you MUST formulate and
+> return a complete, informative textual response to the user. Explicitly report
+> the operation ID, endpoint name/ID, error message, or list of resources.
+> **NEVER finish a turn with empty text or silence**.
 
 ## 1. Prerequisites
 
@@ -136,68 +153,16 @@ gcloud ai model-garden models list-deployment-config \
 > replace them with a remembered model name for a user-facing recommendation —
 > always re-run steps 2-4 first, then cite the exact string from the catalog.
 
-## 2.1 Region Availability Check for Publisher Endpoints (Gemini + LoRA base)
+## 2.1 Region Availability Check (Gemini + LoRA only)
 
-> [!NOTE] **Skip this section** if the user is asking to deploy an open-weights
-> model from Model Garden (Gemma, Llama, DeepSeek, Qwen, or any user-supplied
-> weights) — i.e. anything served via `gcloud ai model-garden models deploy`
-> onto a dedicated endpoint. These models have no per-region availability
-> restriction; the Model Garden catalog is global. The real failure modes for an
-> unusual region are (a) the requested accelerator/machine type isn't offered in
-> that region, or (b) the project has no quota — both surface as a clean error
-> at deploy time before any resources are provisioned (§3's cost-confirm gate
-> catches them). Go straight to §3.
+> For first-party Gemini or LoRA deploys, you must verify region availability
+> before proceeding. Load the full instructions with
+> `load_skill_resource(skill_name='agent-platform-deploy',
+> file_path='references/region_availability.md')`.
 >
-> **Apply this section** only if the user is asking to serve a first-party
-> managed Gemini model (`google/gemini-*`) or a fine-tuned Gemini LoRA adapter —
-> both of which route through a publisher endpoint whose regional availability
-> actually varies.
-
-Before responding to any deploy request that names a specific region for a
-first-party managed model (`google/gemini-*`) or a fine-tuned Gemini LoRA
-adapter, you **MUST** verify the model is actually available in that region by
-making a live API call. Do not rely on Google Search, training-corpus knowledge,
-or publisher documentation for availability claims — regional availability
-changes frequently and grounded text can be stale or wrong.
-
-Probe only the exact model and region the user asked about. Do not probe other
-models as a "control" — you cannot infer anything about model A's availability
-from model B's status, because a different model may itself be unavailable in
-the reference region for unrelated reasons.
-
-For first-party publisher models (`google/*`), probe with a real
-`:generateContent` call using a minimal valid payload:
-
-```bash
-curl -sS -o /dev/null -w "%{http_code}\n" \
-    -H "Authorization: Bearer $(gcloud auth print-access-token)" \
-    -H "Content-Type: application/json" \
-    "https://${LOCATION_ID}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${LOCATION_ID}/publishers/google/${MODEL_ID}:generateContent" \
-    -d "{\"contents\":{\"role\":\"user\",\"parts\":{\"text\":\"${PROBE_TEXT:-hi}\"}}}"
-```
-
-For fine-tuned Gemini LoRA models (deploying a user-tuned adapter on top of a
-base Gemini model), probe the **base model** in the target region using the same
-`:generateContent` call above with `${MODEL_ID}` set to the base (e.g.
-`gemini-2.5-flash` if the adapter was tuned on `gemini-2.5-flash`). The LoRA
-adapter cannot serve in a region where its base model isn't available.
-
-Interpret the probe result and act:
-
--   **200** — model is available in that region. Proceed with the deploy.
--   **404** — model is not available in that region. STOP. Tell the user plainly
-    that the model isn't offered in that region and list the regions where it is
-    available (from `gcloud ai model-garden models list
-    --filter="name~$MODEL_NAME"` without `--region`). Do not silently switch
-    regions. Do not proceed to write deploy code or SDK initialization for the
-    unsupported region. Do not run additional "control" probes to double-check
-    the 404 — the target-region probe is authoritative.
--   **Any other outcome** (permission denied, quota, transient failure, etc.) —
-    do not conclude the model is available or unavailable. Explain the
-    underlying cause in plain language (e.g. "your account doesn't have access
-    to this project's Vertex AI API — enable it in the console or switch
-    projects") and the concrete next action.
-
+> **Skip this** for open-weights models (Gemma, Llama, DeepSeek, Qwen) and for
+> Gemini-tuned models — they have no per-region publisher endpoint restriction.
+> Go straight to §3.
 
 ## 3. Deploying a Model
 
@@ -205,35 +170,28 @@ Interpret the probe result and act:
 > compute resources and incurs costs.
 >
 > 1.  You **MUST** compute an hourly $ estimate for the requested
->     `--machine-type` before proposing a deploy. Try, in order, and fall
->     through on any failure (tool unavailable, tool returns `status !=
->     "success"`, script exits non-zero, script rejects the machine type):
+>     `--machine-type` before proposing a deploy. Try each source below in
+>     order, falling through to the next on any failure:
 >
->     a. If the `estimate_cost` tool is available AND returns `status ==
->     "success"`, use its result -- it returns live SKU-resolved pricing
->     (machine + accelerator + total) from `CostEstimationService` rather than a
->     hardcoded snapshot. On any other status (including `error`), fall through
->     to (b).
+>     -   Run `scripts/calculate_cost.py`. The accelerator type and count are
+>         fixed per machine type in Model Garden and derived automatically.
+>         Example:
 >
->     b. Otherwise, run `scripts/calculate_cost.py`. The accelerator type and
->     count are fixed per machine type in Model Garden and derived
->     automatically. Example:
+>         ```bash
+>         python3 scripts/calculate_cost.py \
+>             --machine-type=g2-standard-48
+>         ```
 >
->     ```bash
->     python3 scripts/calculate_cost.py \
->         --machine-type=g2-standard-48
->     ```
+>         If the script exits non-zero (unknown `--machine-type` — a routine
+>         state for machines in the Model Garden catalog but not yet in the
+>         price snapshot, e.g. A4/B200 today), fall through to the next source.
+>         Do NOT invent a number.
 >
->     If the script exits non-zero (unknown `--machine-type` — a routine state
->     for machines in the Model Garden catalog but not yet in the price
->     snapshot, e.g. A4/B200 today), fall through to (c). Do NOT invent a
->     number.
->
->     c. Fall back to
->     [Agent Platform prediction pricing](https://cloud.google.com/products/gemini-enterprise-agent-platform/pricing?hl=en#prediction-and-explanation)
->     if the tool is unavailable AND the script does not know the requested
->     machine type. Read the accelerator + hourly rate directly off that page
->     and cite the URL in the estimate you present to the user.
+>     -   Fall back to
+>         [Agent Platform prediction pricing](https://cloud.google.com/products/gemini-enterprise-agent-platform/pricing?hl=en#prediction-and-explanation)
+> if no source above produced a
+>         number. Read the accelerator + hourly rate directly off that page and
+>         cite the URL in the estimate you present to the user.
 >
 > 2.  You **MUST** present this cost estimation to the user and warn them that
 >     this is the **list price**, which may differ from their actual bill due to
@@ -241,9 +199,80 @@ Interpret the probe result and act:
 > 3.  You **MUST ALWAYS** request explicit confirmation from the user agreeing
 >     to the estimated cost before executing any `deploy` command.
 
-To deploy a model, use the `deploy` command. It is highly recommended to use the
-`--asynchronous` flag for long-running deployments, and then poll the status if
-necessary.
+To deploy an open-weights Model Garden model, call the `:deploy` API directly
+with `curl`.
+
+If a deployment is rejected for quota, report the API's error verbatim.
+
+> [!IMPORTANT]
+>
+> -   **Cost Pushback & Hardware Renegotiation**: If the user pushes back on
+>     cost (e.g., "That is too expensive, can you try a smaller
+>     configuration?"), or requests an invalid or unsupported hardware
+>     combination (e.g. `g2-standard-48g` with 4x H100 GPUs), explain the
+>     constraint or invalidity clearly, check `list-deployment-config` to
+>     identify the supported alternative (e.g., `g2-standard-24` with 2x L4 or
+>     `g2-standard-12` with 1x L4), compute its cost estimate with a single
+>     query, and **immediately render a complete Tier M dry-run confirmation
+>     card** for that recommended configuration in the same response.
+> -   **Region Failover & Quota Exhaustion**: When a deployment fails due to
+>     quota or capacity in the requested region (e.g. `QUOTA_EXCEEDED` or
+>     `RESOURCE_EXHAUSTED`), identify an alternative supported region (e.g.
+>     `us-east4` or `us-east1`), compute its cost estimate with a single query,
+>     and **immediately render a complete Tier M dry-run confirmation card with
+>     the new `--region` and exact command in the same response**. State the
+>     alternative region directly without making unverified capacity claims.
+> -   **Efficient Tool Execution (No Redundant Calls)**: Do NOT execute
+>     redundant `models list`, `list-deployment-config`, or `--help` commands if
+>     the model ID, region, or hardware configuration are already known or
+>     resolved. Run each discovery command strictly once.
+> -   **Single Status Check & Response Formatting (CRITICAL)**:
+>     -   When initiating a deployment (the `:deploy` call in §3), the response
+>         immediately returns a long-running operation. **Formulate and return
+>         your textual confirmation response with the operation ID and endpoint
+>         display name immediately**. Do NOT call `operations describe` in the
+>         same turn as deployment initiation.
+>     -   When the user explicitly asks to check deployment status (e.g.,
+>         "Please check to see the status of the deployment" or "Can you check
+>         if the deployment has finished?"):
+>         -   **NEVER run `sleep` commands, `while` loops, or repeated polling
+>             calls**.
+>         -   Execute `gcloud ai operations describe <OP_ID> --region=<REGION>`
+>             **strictly ONCE**.
+>         -   **ALWAYS output a full textual response** reporting the operation
+>             status (e.g. "The deployment operation
+>             `projects/.../operations/...` is currently in progress / running
+>             (created at `...`). Asynchronous model deployment typically takes
+>             10–15 minutes to complete").
+>         -   Only proceed with sending a test prediction if the status check
+>             confirms the endpoint is already serving and ready.
+> -   **Alphanumeric Project ID**: Always specify the alphanumeric Project ID
+>     (e.g. `my-gcp-project`) for `--project`, NOT the numeric project number
+>     (e.g. `123456789012`). If given a numeric project number and its Project
+>     ID is not available, pass the number inside a fully-qualified resource
+>     name, e.g. `gcloud ai endpoints list
+>     --region=projects/123456789012/locations/us-central1`, or as a positional
+>     resource, `gcloud ai endpoints describe
+>     projects/123456789012/locations/us-central1/endpoints/<ENDPOINT_ID>
+>     --region=us-central1`. If a command is still refused because
+>     `core/project` is set to a project number, the sandbox's own project was
+>     seeded as a number: every `gcloud ai` call then needs an explicit
+>     `--project=<PROJECT_ID>`, which a resource name cannot substitute for.
+>     Report that instead of retrying.
+> -   **Valid User-Specified Hardware Priority**: When the user specifies an
+>     explicit, valid hardware configuration (e.g. `g2-standard-96` with 8
+>     `NVIDIA_L4` GPUs, or `g2-standard-12` with 1 `NVIDIA_L4` GPU), honor that
+>     requested configuration for the dry-run preview and cost estimation rather
+>     than overriding it with default recommendations. However, if the requested
+>     configuration is **invalid or unsupported** (e.g. mismatched GPU count
+>     such as `g2-standard-12` with 2 L4 GPUs, or non-existent machine shapes),
+>     follow the **Cost Pushback & Hardware Renegotiation** rule above: explain
+>     the invalidity clearly, identify the supported alternative (e.g.
+>     `g2-standard-24` with 2 L4 GPUs), calculate its cost, and immediately
+>     present the confirmation card for the valid alternative.
+> -   **Endpoint Display Name**: If the user specifies or requests an endpoint
+>     name or display name (e.g. `'usersim-gemma-eval-...'`), you MUST always
+>     include `--endpoint-display-name="<NAME>"` in the `deploy` command.
 
 ### Example: Deploying an open-weights model from Model Garden
 
@@ -261,78 +290,82 @@ directly.
 
 PROJECT_ID=$(gcloud config get-value project)
 LOCATION_ID="us-central1" # Recommended default region
-MODEL_ID="<PUBLISHER>/<FAMILY>@<VERSION-ID>" # PLACEHOLDER — replace with the exact ID from `gcloud ai model-garden models list`
+# Replace placeholder with exact ID from `gcloud ai model-garden models list`:
+MODEL_ID="<PUBLISHER>/<FAMILY>@<VERSION-ID>"
 
 echo "Deploying model $MODEL_ID to project $PROJECT_ID in $LOCATION_ID..."
 
-# Model Garden can automatically select the required hardware based on the list-deployment-config if hardware params are omitted.
-# Below is a comprehensive command with all supported parameters:
-gcloud ai model-garden models deploy \
-    --project=$PROJECT_ID \
-    --region=$LOCATION_ID \
-    --model=$MODEL_ID \
-    --machine-type="g2-standard-48" \
-    --accelerator-type="NVIDIA_L4" \
-    --accelerator-count=4 \
-    --endpoint-display-name="my-open-model-deployment" \
-    --hugging-face-access-token="YOUR_HF_TOKEN" \
-    --reservation-affinity="reservation-affinity-type=specific-reservation,key=compute.googleapis.com/reservation-name,values=my-reservation" \
-    --asynchronous
+# The API takes the model as a resource name, while the catalog ID is
+# "<PUBLISHER>/<FAMILY>@<VERSION-ID>". Split on the first "/" to convert.
+PUBLISHER_MODEL="publishers/${MODEL_ID%%/*}/models/${MODEL_ID#*/}"
+
+# Omit deployConfig entirely to select the recommended default config.
+# Comprehensive request with supported fields. Returns a long-running
+# operation, so this is inherently asynchronous.
+curl -sS -X POST \
+    "https://${LOCATION_ID}-aiplatform.googleapis.com/v1beta1/projects/${PROJECT_ID}/locations/${LOCATION_ID}:deploy" \
+    -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+    -H "Content-Type: application/json" \
+    -d "{
+      \"publisherModelName\": \"${PUBLISHER_MODEL}\",
+      \"modelConfig\": {
+        \"acceptEula\": true
+      },
+      \"endpointConfig\": {
+        \"endpointDisplayName\": \"my-open-model-deployment\"
+      },
+      \"deployConfig\": {
+        \"dedicatedResources\": {
+          \"machineSpec\": {
+            \"machineType\": \"g2-standard-12\",
+            \"acceleratorType\": \"NVIDIA_L4\",
+            \"acceleratorCount\": 1
+          },
+          \"minReplicaCount\": 1
+        }
+      }
+    }"
 
 echo "Deployment initiated asynchronously."
 ```
 
-### Example: Deploying Custom Weights
+The response is a `GoogleLongrunningOperation`. Its `name` field is the full
+operation path, `projects/<PROJECT>/locations/<REGION>/operations/<OP_ID>`; §4
+accepts either that or the bare `<OP_ID>`.
 
-To deploy a model using custom weights, you can use the exact same `deploy`
-command. Instead of providing the model garden model ID, provide the Google
-Cloud Storage (GCS) URI to your custom weights folder in the `--model` flag.
+-   Set `modelConfig.huggingFaceAccessToken` when deploying gated Hugging Face
+    models that require authentication.
+-   Set `deployConfig.dedicatedResources.machineSpec.reservationAffinity` if
+    using reserved compute.
 
-```bash
-#!/bin/bash
-# Example script to deploy a model with custom weights from a GCS bucket
+### 1P Tuned Model Cross-Region Copy and Deployment
 
-PROJECT_ID=$(gcloud config get-value project)
-LOCATION_ID="us-central1"
-# Replace with the gs:// URI pointing to your custom weights
-MODEL_GCS_URI="gs://your-bucket-name/path/to/custom-weights"
-
-echo "Deploying custom model from $MODEL_GCS_URI to project $PROJECT_ID in $LOCATION_ID..."
-
-gcloud ai model-garden models deploy \
-    --project=$PROJECT_ID \
-    --region=$LOCATION_ID \
-    --model=$MODEL_GCS_URI \
-    --machine-type="g2-standard-12" \
-    --accelerator-type="NVIDIA_L4" \
-    --endpoint-display-name="my-custom-model" \
-    --asynchronous
-
-echo "Deployment initiated asynchronously."
-```
+> For the detailed tuned model copy and deployment workflow, load
+> `load_skill_resource(skill_name='agent-platform-deploy',
+> file_path='references/copy_deploy_guide.md')`. That guide covers the execution
+> sequence, tier assignments for copy/deploy/delete commands, hardware
+> renegotiation, test prediction verification, and the in-progress operation
+> lock.
 
 ## 4. Checking Deployment Status
 
-When you deploy a model asynchronously using the `--asynchronous` flag, the
-`deploy` command will return an operation ID. You can use this ID to check the
-ongoing status of the deployment.
+The `:deploy` call in §3 is asynchronous in itself -- there is no flag to
+pass -- and returns a long-running operation whose `name` is the operation ID.
+You can use that ID to check the ongoing status of the deployment.
 
 ```bash
 gcloud ai operations describe YOUR_OPERATION_ID \
     --region=$LOCATION_ID
 ```
 
-> [!NOTE] As an agent, you can also offer to check the status of a deployment
-> for the user if they provide an operation ID or if they just initiated the
-> deployment with you.
-
-Alternatively, you can list your endpoints to see if it shows up and check the
-Cloud Console under the "Online prediction" tab.
-
-```bash
-gcloud ai endpoints list \
-    --region=$LOCATION_ID
-```
+> [!IMPORTANT]
+>
+> **Single Status Check Only (No Sleep / Polling Loops)**: Model deployment
+> operations take 10–30 minutes. NEVER run `sleep` commands (e.g. `sleep 45 &&
+> ...`) or loop `operations describe` repeatedly in a turn. Run `gcloud ai
+> operations describe` **strictly ONCE**. If `done` is not true, immediately
+> return the operation ID and in-progress status to the user and explain that
+> deployment takes 10–15 minutes.
 
 Note: Large models (roughly 20B+ parameters) may take 15-20 minutes to fully
 deploy and start serving.
@@ -357,14 +390,18 @@ ENDPOINT_ID="YOUR_ENDPOINT_ID"
 PROMPT=${1:-"Explain quantum computing in simple terms."}
 
 echo "Fetching dedicated Endpoint DNS..."
-ENDPOINT_URL=$(gcloud ai endpoints describe $ENDPOINT_ID --project=$PROJECT_ID --region=$LOCATION_ID --format="value(dedicatedEndpointDns)")
+ENDPOINT_URL=$(gcloud ai endpoints describe $ENDPOINT_ID \
+    --project=$PROJECT_ID \
+    --region=$LOCATION_ID \
+    --format="value(dedicatedEndpointDns)")
 
 if [ -z "$ENDPOINT_URL" ]; then
-    echo "Error: Could not retrieve a dedicated endpoint URL. Verify your ENDPOINT_ID."
+    echo "Error: Could not retrieve dedicated endpoint URL for $ENDPOINT_ID."
     exit 1
 fi
 
 echo "Sending prediction request to $ENDPOINT_URL..."
+
 curl -X POST \
   -H "Authorization: Bearer $(gcloud auth print-access-token)" \
   -H "Content-Type: application/json" \
@@ -378,70 +415,15 @@ curl -X POST \
       }
     ]
   }'
+
 ```
 
 ## 5. Undeploying and Cleaning Up
 
-To stop incurring charges, you must undeploy the model from the endpoint. This
-is a multi-step process if you don't already have the exact endpoint and
-deployed model IDs.
-
-### Example: Finding and Undeploying a Model
-
-Here is a bash script demonstrating how to find the IDs and undeploy the model.
-
-```bash
-#!/bin/bash
-# Example script to undeploy a model
-
-PROJECT_ID=$(gcloud config get-value project)
-LOCATION_ID="us-central1"
-# The model ID used during deployment (without the provider prefix sometimes, or exactly as listed in describe)
-# It's usually easier to find the specific ID via `gcloud ai models list`
-# For this example, let's assume we know the exact Endpoint ID and Deployed Model ID.
-
-# 1. Find the Endpoint ID
-echo "Listing endpoints in $LOCATION_ID:"
-gcloud ai endpoints list --project=$PROJECT_ID --region=$LOCATION_ID
-
-# (Assuming you extracted ENDPOINT_ID from the above output)
-# ENDPOINT_ID="your_endpoint_id"
-
-# 2. Find the Deployed Model ID
-echo "Listing models in $LOCATION_ID to find model description:"
-gcloud ai models list --project=$PROJECT_ID --region=$LOCATION_ID
-
-# (Assuming you found the specific MODEL_ID)
-# MODEL_ID="your_model_id"
-# gcloud ai models describe $MODEL_ID --project=$PROJECT_ID --region=$LOCATION_ID
-# (Extract the deployedModelId from the output)
-# DEPLOYED_MODEL_ID="your_deployed_model_id"
-
-# 3. Undeploy
-echo "Undeploying model $DEPLOYED_MODEL_ID from endpoint $ENDPOINT_ID..."
-gcloud ai endpoints undeploy-model $ENDPOINT_ID \
-    --project=$PROJECT_ID \
-    --region=$LOCATION_ID \
-    --deployed-model-id=$DEPLOYED_MODEL_ID
-
-echo "Model undeployed."
-
-# 4. Delete Endpoint
-echo "Deleting endpoint $ENDPOINT_ID..."
-gcloud ai endpoints delete $ENDPOINT_ID \
-    --project=$PROJECT_ID \
-    --region=$LOCATION_ID \
-    --quiet
-echo "Endpoint deleted."
-
-# 5. Delete Model
-echo "Deleting model $MODEL_ID..."
-gcloud ai models delete $MODEL_ID \
-    --project=$PROJECT_ID \
-    --region=$LOCATION_ID \
-    --quiet
-echo "Model deleted."
-```
+> For the full undeploy and cleanup procedure (find endpoint, undeploy model,
+> delete endpoint, delete model), load
+> `load_skill_resource(skill_name='agent-platform-deploy',
+> file_path='references/undeploy_guide.md')`.
 
 > [!WARNING] Failing to undeploy a model will result in continuous charges for
 > the allocated compute resources, even if you are not sending prediction
@@ -449,20 +431,6 @@ echo "Model deleted."
 
 ## 6. Troubleshooting
 
-### Deployment Failure: Quota or Resource Exhausted
-
-If your deployment fails (or stays in an error state) due to `QUOTA_EXCEEDED` or
-`RESOURCE_EXHAUSTED` errors, the specific hardware requested (e.g., `NVIDIA_L4`
-or `g2-standard-24`) is either not available in your chosen region or exceeds
-your project's quota limits.
-
-**Solution:** Look closely at the error message returned. It will often
-recommend an alternative region or machine type that currently has availability.
-**Ask the user for confirmation** to retry the deployment using the suggested
-`--region` or `--machine-type` parameters.
-
-> [!WARNING] If the alternative suggestions involve changing the machine type or
-> accelerator, you **MUST** recalculate the estimated cost by re-running
-> `scripts/calculate_cost.py` with the new params (see §3), warn the user about
-> list prices versus actual billing, and get their explicit confirmation for the
-> new cost before retrying the deployment.
+> For troubleshooting quota/resource exhausted errors and hardware fallback,
+> load `load_skill_resource(skill_name='agent-platform-deploy',
+> file_path='references/troubleshooting.md')`.

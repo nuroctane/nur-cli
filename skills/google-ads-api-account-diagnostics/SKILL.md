@@ -5,7 +5,7 @@ description: >-
 metadata:
   category: GoogleAds
   author: google-ads-api-team
-  version: "1.0"
+  version: "1.0.0"
 ---
 
 # Google Ads API Account Performance Diagnostics Skill

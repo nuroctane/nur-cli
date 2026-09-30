@@ -1,0 +1,214 @@
+---
+name: qa-only
+preamble-tier: 4
+version: 1.0.0
+description: |
+  Report browser/API/CLI/job/worker/webhook bugs. Produces a
+  structured report with contract evidence or browser scores and repro steps — but never
+  fixes anything. Use when asked to "just report bugs", "qa report only", or
+  "test but don't fix". For the full test-fix-verify loop, use /qa instead.
+  Proactively suggest when the user wants a bug report without any code changes. (gstack)
+voice-triggers:
+  - "bug report"
+  - "just check for bugs"
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - AskUserQuestion
+  - WebSearch
+triggers:
+  - qa report only
+  - just report bugs
+  - test but dont fix
+---
+
+{{PREAMBLE}}
+
+# /qa-only: Report-Only QA Testing
+
+Explore the selected surfaces and report reproducible behavior with evidence.
+**NEVER fix anything or change product tests.** Write only reports, evidence and
+owned temporary fixtures; the Additional Rules below define these limits.
+
+In shared sections, **caller** means this /qa-only workflow. The user sets its
+permissions; an invoking workflow may restrict them further. **Owned** means created
+for this run or explicitly assigned to it, not merely writable. Neither term permits repairs.
+
+{{SECTION_INDEX:qa-only}}
+
+Start at Request Parameters, then follow the sections below in order.
+
+## Request Parameters
+
+**Parse the user's request for these parameters:**
+
+| Parameter | Default | Override example |
+|-----------|---------|-----------------:|
+| Target | (infer from request/repository or ask) | Browser URL, API route, CLI command, job, worker or webhook |
+| Mode | full | `--quick`, `--regression <previous-report-or-baseline>` |
+| Output dir | `.gstack/qa-reports/` | `Output to /tmp/qa` |
+| Scope | Selected target (or diff-scoped) | `Focus on duplicate webhook delivery` |
+
+Use an isolated synthetic identity for functional probes. For browser sessions,
+follow Browser Setup; never request credentials in chat.
+
+Parsing records the request; it does not start browser setup. If both `--quick` and
+`--regression` are supplied, ask the user to choose one mode before setup or probes.
+
+**On a feature branch without an explicit scope:** Use diff-aware testing of changed
+and adjacent behavior. Do not discover a browser merely because no URL was supplied.
+
+## Test Plan Context
+
+Look for a test plan in this conversation. If this session already knows the
+project's state directory, also Read its newest `*-test-plan-*.md` when permitted.
+Do not create state or run bookkeeping helpers just to find optional context.
+Prefer the plan covering more requested contracts; break ties by recency.
+If neither exists, use git diff analysis.
+
+{{LEARNINGS_SEARCH}}
+
+## Select Surfaces and Isolation
+
+Load the shared preparation gate now: complete its scope and selected-method Reads,
+await their results, and select the surfaces. Defer charters, clocks and probes to
+Run the Selected Checks, after report ownership and conditional browser setup below.
+
+{{SECTION:exploratory}}
+
+Each surface's method defines Full, Quick and Regression. A mode flag applies to all
+selected surfaces unless the request names one surface; the others default to Full.
+For mixed Regression, the argument is the prior combined report. Resolve its functional
+replay evidence and browser baseline links first, then give each method its own baseline.
+A missing baseline blocks that surface's regression coverage, not independent checks.
+In mixed runs, use the user's surface order, defaulting to functional then browser.
+Finish one surface's probes before starting the next surface's clock; any supplied
+absolute deadline still applies to both. Do not reset a clock when switching surfaces.
+
+## Prepare Report Artifacts
+
+Resolve and preserve supplied prior report/baseline paths and their evidence links
+before writing. Select the requested output dir or `.gstack/qa-reports`; create it if absent.
+Use that directory as `REPORT_DIR` only when it is empty; otherwise choose a fresh owned run subdirectory.
+Use `run-YYYYMMDDTHHMMSSZ` in UTC, adding a suffix on collision.
+All local reports, baselines and evidence use this directory.
+Never overwrite artifacts from earlier runs. Preserve this run's baselines,
+screenshots and exploration notes when finalizing its report.
+
+A caller's fixed artifact paths and permissions take precedence. An existing empty
+directory already established as owned by the caller needs no new shell commands
+to revalidate it; use the caller's supported interface and fixed destinations.
+If safe preservation is impossible within those permissions, report an output blocker;
+do not expand write authority or silently redirect required artifacts.
+
+For `{target}`, use the browser hostname, CLI executable basename, or named
+API service/job/worker/webhook. Replace characters other than letters, digits and
+hyphens with hyphens. For mixed targets, use
+`mixed-{project-label}`, sanitizing the repository name the same way; use `mixed-target`
+when no repository name is available. List the individual targets in the report.
+
+Set `REPORT_FILE` to the caller's final report filename, otherwise
+`$REPORT_DIR/qa-report-{target}-{YYYY-MM-DD}.md`. Charters and final findings use this
+same file, not a sidecar.
+
+## Browser Setup (conditional)
+
+**Browser surface only:** load its setup; functional-only runs skip this section.
+
+{{QA_RESOURCE:browser-setup}}
+
+---
+
+## Run the Selected Checks
+
+Use the shared section already loaded above; do not restart its preparation.
+With its required Reads complete and report ownership resolved, Write the charters
+into the owned report and wait for the successful
+Write result before starting any probe clock or baseline. Use `REPORT_FILE`. State each expected result,
+risk, entrypoint, isolation and exit condition before probing; never invent the plan later.
+A failed baseline contract stays failed. Before browser probes, source/diff reads only
+map changes to pages and flows; read `TODOS.md` if present to identify known bugs.
+During browser discovery, observe behavior without reading source to diagnose it.
+
+---
+
+## Output
+
+### Assemble the report
+
+After probing stops, load the finalization procedure below. Use retained evidence;
+this step does not authorize more probes or restart an expired clock.
+Do not preload reporting. To recover from an accidental early Read:
+If already read, issue another Read now and await its
+acknowledgement, even if the tool reports unchanged content.
+The no-repeat rule covers preparation Reads, not this finalization Read.
+
+{{SECTION:reporting}}
+
+Use templates from this host's installed QA directory. For mixed runs, use separate browser and functional sections in this same report.
+Keep common metadata once: date, branch/revision, caller/authority, mode, scope and timing/stop reason.
+Preserve the initial charters under **Charters** after that metadata, before findings.
+
+- **Browser:** `templates/qa-report-template.md`: targets, URL, framework,
+  page/screenshot counts, findings, health/category scores and regression comparison.
+- **Functional:** `templates/functional-report-template.md`: native tools/runtime,
+  fixture ownership, contracts, findings, discoveries/proposed tests and cleanup.
+
+Each proposed test carries a value card; propose it only when it passes this bar:
+
+{{TEST_VALUE_BAR:qa}}
+
+Nest remaining headings per surface, without duplicating the shared title or metadata.
+Preserve surface-specific scope, timing and coverage limits.
+Browser scores apply only to browser coverage; never combine them with functional
+outcomes. In each section link the current baseline or replay evidence and checkpoints;
+for functional regression the report plus replay evidence is the baseline. Regression
+also links the prior input baseline/report; missing required replay inputs block affected
+coverage. Prior baselines are not applicable to Full/Quick. Report-only
+repair/test fields contain proposals or not-run status, never claims of edits.
+
+### Write the checked report
+
+After the reporting procedure's consistency check, write `REPORT_FILE` and the
+project copy below. These are the default report destinations; a caller's narrower
+permissions or fixed paths override them. Do not create a forbidden second copy.
+
+Use this session's existing project slug and state directory for the project copy.
+If unknown or not writable within the supplied permissions, report that copy as
+blocked; still write the permitted local report. Do not run state-setup helpers.
+Write identical content to `~/.gstack/projects/{slug}/{user}-{branch}-test-outcome-{datetime}.md`.
+Get `{user}`/`{branch}` from `git config user.name`/`git branch --show-current`
+(fallbacks: `unknown-user`/`detached`); sanitize like `{target}`. Use UTC `YYYYMMDDTHHMMSSZ`.
+If that destination exists, choose a fresh suffixed filename; never replace a prior report.
+
+### Output Structure
+
+`REPORT_DIR` stays the report root throughout the run. For browser-only and mixed
+runs, keep screenshots in `$REPORT_DIR/screenshots/` and the browser baseline in
+`$REPORT_DIR/baseline.json`.
+The shared loop's mixed-surface split applies only to clocks and checkpoints:
+
+| Run | Clock/checkpoint directory |
+|-----|----------------------------|
+| One surface (browser or functional) | `$REPORT_DIR` |
+| Mixed: browser probes | `$REPORT_DIR/browser` |
+| Mixed: functional probes | `$REPORT_DIR/functional` |
+
+Each probe directory holds its own `exploration-NNN.json` sequence and, only when
+timed, `deadline.json`. Caller-fixed paths override this layout. Do not reassign
+`REPORT_DIR` to a surface directory or move the shared browser artifact paths.
+
+## Additional Rules (qa-only specific)
+
+1. **Never fix bugs or write product tests.** Find and document only. Necessary read-only
+    source discovery is allowed for functional targets, while browser discovery stays
+    black-box. Do not edit product code, tests, dependencies, config or tracked state
+    through any tool, including shell writes, renames, deletions and edit-then-restore.
+    Never commit, stash or bootstrap. Proposed regressions belong in report artifacts.
+2. **During preflight, check documented native commands and test infrastructure.** For browser targets, inspect documentation only for this framework check, before discovery. If absent,
+    report missing coverage and proposed cases without installing anything. An unavailable
+    command/service is not a product defect. Never invoke /qa or another skill from this report-only run.
+    When the browser app's repository is available and no framework is documented, say
+    "No test framework detected. Run `/qa` to bootstrap in a separate, user-authorized repair session."
+    Functional targets keep the gap without a new framework.

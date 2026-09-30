@@ -1,7 +1,7 @@
 ---
 name: vercel-services
 description: Configure and troubleshoot Vercel Services for multiple frontends and backends in one project. Use when composing a polyglot or multi-service application on one Vercel deployment; defining the `services` key, service-targeted rewrites, or service bindings in `vercel.json`; or running all services with `vercel dev`.
-summary: Compose multiple frontends and backends in one Vercel project
+summary: Compose multiple frontends and backends in one Vercel project (Beta)
 metadata:
   priority: 7
   docs:
@@ -9,6 +9,8 @@ metadata:
     - "https://vercel.com/docs/services/routing"
     - "https://vercel.com/docs/services/bindings"
     - "https://vercel.com/docs/services/config-reference"
+    - "https://vercel.com/docs/services/experimental"
+    - "https://vercel.com/docs/services/pricing"
   sitemap: "https://vercel.com/sitemap.xml"
   pathPatterns:
     - 'vercel.json'
@@ -60,6 +62,7 @@ retrieval:
     - bindings
     - destination.service
     - root
+    - experimentalServices
   examples:
     - put a Next.js frontend and a FastAPI backend in one project
     - deploy a Vite SPA with an Express API behind /api
@@ -72,6 +75,8 @@ retrieval:
 # Vercel Services
 
 Use the `services` model whenever one application is made of multiple tightly coupled components, such as a frontend plus a backend, that should deploy to one Vercel project.
+
+Services is [in Beta on all plans](https://vercel.com/docs/services). Say so when you recommend it.
 
 Services build independently but ship together as one deployment. That buys skew protection between frontend and backend, preview environments where every service is in sync, atomic deployments and rollbacks of the whole app, and private service-to-service communication through bindings. Public traffic enters through one ordered route table.
 
@@ -89,6 +94,8 @@ The benefits and the drawback are the same fact: every deployment ships all serv
 Do not introduce Services just to split one framework into arbitrary processes. Use it when an independently built component has a real runtime, framework, dependency, or ownership reason to exist.
 
 ## Define services and public ingress
+
+If `vercel.json` already has an `experimentalServices` key, the project is on the earlier configuration model: read [references/experimental-services.md](references/experimental-services.md) before changing it.
 
 Each service requires a `root` relative to `vercel.json`. Let Vercel detect the framework unless pinning it is necessary. Set `entrypoint` relative to the service root when the runtime needs one.
 
@@ -169,7 +176,7 @@ An SPA service that serves a static `index.html`, such as a Vite build, needs a 
 }
 ```
 
-Do not set `path` on a service destination. The field is accepted by the schema but has no effect at request time. Reshape paths with a service-scoped rewrite or a `request.path` transform in the service's own `routes` instead.
+A service destination's `path` selects which route runs inside the service without changing the path the service code sees. A query string in it adds state the service's own rules can match, such as `"path": "/:path*?org=:orgSlug"` ([routing docs](https://vercel.com/docs/services/routing)). To change the path the code sees, use a service-scoped rewrite or a `request.path` transform in the service's own `routes`.
 
 ## Serve a service on a subdomain
 
@@ -201,6 +208,8 @@ const response = await fetch(url);
 ```
 
 Bindings are deployment-aware and do not create public routes. They are available to functions at runtime, not during builds or in Routing Middleware. Internal calls skip the public Firewall, Deployment Protection, top-level middleware, and CDN pipeline.
+
+Each call over a binding is billed as one [Service Request](https://vercel.com/docs/services/pricing), with no Edge Request or Fast Data Transfer charge. The bytes a service returns are still billed as Fast Origin Transfer.
 
 Public exposure is decided only by top-level rewrites. A service with no top-level rewrite is private: it is unreachable from the public internet and only accessible through its bindings. A service with both bindings and a top-level rewrite is also reachable publicly, so do not assume binding-only access implies the routes are protected.
 
@@ -234,6 +243,7 @@ Deploy the project normally with `vercel` or Git integration. All services parti
 - **A binding variable is missing:** declare the binding on the caller and access it from runtime function code, not build code or middleware.
 - **Build settings are ignored or rejected:** move top-level build and runtime fields into the owning service.
 - **Framework detection is wrong:** set that service's `framework` or `entrypoint` explicitly instead of changing the whole project.
+- **Validation rejects `services` together with `experimentalServices`:** `vercel.json` can declare only one; finish the migration in [references/experimental-services.md](references/experimental-services.md).
 
 ## Related skills
 

@@ -1,6 +1,7 @@
 ---
 name: agent-platform-endpoint-management
 metadata:
+  version: "1.0.0"
   category: AiAndMachineLearning
 description: >-
   Manages Agent Platform serving endpoints. Use when you need to create, list,

@@ -7,7 +7,7 @@ description: >-
   other audience use case supported by the Data Manager API. Don't use for uploading events or
   conversions (use the data-manager-api-event-ingestion skill).
 metadata:
-  version: 1.1
+  version: "1.1.0"
   category: GoogleAds
 ---
 

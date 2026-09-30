@@ -1,0 +1,254 @@
+/** Opt-in pending Edit metadata for launcher-owned Autoplan plan artifacts. */
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { ownedAutoplanArtifact, hasPendingAutoplanArtifactHistory } from './autoplan-artifact-permission';
+import { createAutoplanEditDigest, validAutoplanEditDigest, type AutoplanEditDigest } from './autoplan-artifact-digest';
+import { readPlanCountTranscript, type NativePublicToolEvent } from './plan-count-transcript';
+
+// Suffix commitments are capped at 8192 hashes; old metadata/input limits stay unchanged.
+const MAX_BYTES = 1024 * 1024, MAX_INPUT = 4 * 1024 * 1024, MAX_IDS = 128;
+const reasons = ['invalid_event','record_error','lock_conflict','concurrent_pending','conflicting_replay',
+  'record_overflow','input_overflow','stdin_timeout','hook_error','approval_withheld'] as const;
+type Reason = typeof reasons[number];
+const object = (v: unknown): v is Record<string, any> => v !== null && typeof v === 'object' && !Array.isArray(v);
+const id = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(v);
+const keys = (v: Record<string, any>, allowed: string[]) => Object.keys(v).every(k => allowed.includes(k));
+// Windows' native bash -c transport collapses adjacent backslashes before Bash
+// parses the command. Empty quoted segments preserve each run as exact argv.
+const quote = (v: string) => `'${v.replaceAll("'", "'\\''").replace(/\\{2,}/g, run => process.platform === 'win32' ? run.split('').join("''") : run)}'`;
+export interface PendingAutoplanArtifact {
+  source:'pre_tool_use'; sessionId:string; toolUseId:string; tool:'Edit'; file:string; timestamp:string; editDigest?:AutoplanEditDigest;
+  /** Validated recorder tombstones; exposed only by the published-current opt-in. */
+  hookSeenIds?:string[];
+}
+interface Pending extends PendingAutoplanArtifact { transcriptPath:string }
+interface State { version:1; cwd:string; config:string; stateRoot:string; engTestPlanRoot?:string; sessionId?:string; approvalStartedAt?:number; seenIds:string[]; pending:Pending|null }
+
+function scopedTranscript(file: unknown, config: string, session: string): file is string {
+  if (typeof file !== 'string' || !path.isAbsolute(file)) return false;
+  const rel = path.relative(path.join(config, 'projects'), file).split(path.sep);
+  if (rel.length !== 2 || !rel[0] || rel[0] === '..' || rel[0] === '.' || rel[1] !== `${session}.jsonl`) return false;
+  try { return fs.lstatSync(file).isFile() && !fs.lstatSync(path.join(config,'projects')).isSymbolicLink() &&
+    !fs.lstatSync(path.dirname(file)).isSymbolicLink() &&
+    fs.realpathSync(file) === path.join(fs.realpathSync(config),'projects',...rel); } catch { return false; }
+}
+const isEngTestPlan = (file:string) => /-eng-review-test-plan-\d{8}-\d{6}\.md$/.test(path.basename(file));
+// An explicit second root is kind-bound: it never grants native plans there,
+// or QA artifacts under the native-plan root. Without it, legacy scope stays.
+function artifactRoot(file:string, state:Pick<State,'stateRoot'|'engTestPlanRoot'>):string {
+  return state.engTestPlanRoot && isEngTestPlan(file) ? state.engTestPlanRoot : state.stateRoot;
+}
+function readState(file:string, cwd:string, config:string, stateRoot:string, engTestPlanRoot?:string): State {
+  const stat = fs.lstatSync(file);
+  if (!stat.isFile() || stat.size > MAX_BYTES) throw Error('record');
+  const s = JSON.parse(fs.readFileSync(file,'utf8'));
+  if (!object(s) || !keys(s,['version','cwd','config','stateRoot','engTestPlanRoot','sessionId','approvalStartedAt','seenIds','pending']) || s.version !== 1 ||
+      (s.approvalStartedAt !== undefined && (!Number.isSafeInteger(s.approvalStartedAt) || s.approvalStartedAt <= 0)) ||
+      s.cwd !== cwd || s.config !== config || s.stateRoot !== stateRoot || s.engTestPlanRoot !== engTestPlanRoot || (s.sessionId !== undefined && !id(s.sessionId)) ||
+      !Array.isArray(s.seenIds) || s.seenIds.length > MAX_IDS || !s.seenIds.every(id) || new Set(s.seenIds).size !== s.seenIds.length ||
+      (s.sessionId === undefined && (s.seenIds.length || s.pending !== null))) throw Error('record');
+  const p = s.pending;
+  if (p !== null && (!object(p) || !keys(p,['source','sessionId','toolUseId','tool','file','timestamp','transcriptPath','editDigest']) ||
+      p.source !== 'pre_tool_use' || p.tool !== 'Edit' || p.sessionId !== s.sessionId || !id(p.toolUseId) || !s.seenIds.includes(p.toolUseId) ||
+      (p.editDigest!==undefined && !validAutoplanEditDigest(p.editDigest)) ||
+      !scopedTranscript(p.transcriptPath,config,p.sessionId) || !Number.isFinite(Date.parse(p.timestamp)) ||
+      !ownedAutoplanArtifact(p.file,{cwd,ownedStateRoot:artifactRoot(p.file,s as State)}))) throw Error('record');
+  return s as State;
+}
+function poison(file:string, reason:Reason) {
+  try { fs.writeFileSync(file+'.invalid',JSON.stringify({reason})+'\n',{mode:0o600,flag:'wx'}); } catch { /* already invalid or closed */ }
+}
+export function createAutoplanArtifactRecorder(cwd:string, config:string, stateRoot:string, approveEdits=false, engTestPlanOnly=false, engTestPlanRoot?:string) {
+  if ((engTestPlanOnly || engTestPlanRoot !== undefined) && !approveEdits) throw Error('Eng test-plan scope requires explicit approval opt-in');
+  if (engTestPlanRoot !== undefined && (!path.isAbsolute(engTestPlanRoot) || !fs.lstatSync(engTestPlanRoot).isDirectory())) throw Error('owned QA root required');
+  if (![cwd,config,stateRoot].every(path.isAbsolute) || !fs.lstatSync(stateRoot).isDirectory()) throw Error('owned runtime required');
+  const createdAt = Date.now();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(),'gstack-autoplan-artifact-')), file = path.join(dir,'state.json');
+  fs.writeFileSync(file,JSON.stringify({version:1,cwd,config,stateRoot,...(engTestPlanRoot ? {engTestPlanRoot} : {}),seenIds:[],pending:null})+'\n',{mode:0o600});
+  // Git Bash needs slash-separated command paths. Data arguments keep their
+  // exact native spelling to match the owned event and persisted state.
+  const shellPath = (value:string) => process.platform === 'win32' ? value.replaceAll('\\','/') : value;
+  const command = [shellPath(process.execPath),shellPath(import.meta.path),'--record',file,cwd,config,stateRoot,...(approveEdits ? ['--approve-edits'] : []),...(engTestPlanOnly ? ['--eng-test-plan-only'] : []),...(engTestPlanRoot ? ['--eng-test-plan-root',engTestPlanRoot] : [])].map(quote).join(' ');
+  // Foreign/current file mutations invalidate concurrent owned identity. Only
+  // allowlisted Edit requests can become pending; Write supplies no authority.
+  const hook = {matcher:'^(Write|Edit)$',hooks:[{type:'command',command,timeout:5}]};
+  return {file,hooks:{PreToolUse:[hook],PostToolUse:[hook],PostToolUseFailure:[hook]},
+    // Only the owning caller activates approval, once, at the actual slash-command start.
+    startEditApproval: approveEdits ? (startedAt:number) => {
+      let lock:number|undefined;
+      const temporary = `${file}.start.tmp`;
+      try {
+        if (!Number.isSafeInteger(startedAt) || startedAt < createdAt || startedAt > Date.now() ||
+            fs.existsSync(file+'.invalid')) throw Error('invalid approval start');
+        lock=fs.openSync(file+'.lock','wx',0o600);
+        const state=readState(file,cwd,config,stateRoot,engTestPlanRoot);
+        if (state.approvalStartedAt !== undefined || state.pending) throw Error('approval already started or pending');
+        state.approvalStartedAt=startedAt;
+        fs.writeFileSync(temporary,JSON.stringify(state)+'\n',{mode:0o600,flag:'wx'});fs.renameSync(temporary,file);
+      } catch (error) { poison(file,'record_error'); throw error; }
+      finally {
+        try { fs.rmSync(temporary,{force:true}); } catch {}
+        if (lock!==undefined) { fs.closeSync(lock);fs.unlinkSync(file+'.lock'); }
+      }
+    } : undefined,
+    dispose:()=>fs.rmSync(dir,{recursive:true,force:true})};
+}
+
+/** Reuses the pending UI path's history gate; current publication supplies no success. */
+function canApproveEdit(e:Record<string,any>, pending:Pending, state:State):boolean {
+  if (state.approvalStartedAt === undefined || !validAutoplanEditDigest(pending.editDigest)) return false;
+  const tools:NativePublicToolEvent[]=[];
+  const transcript=readPlanCountTranscript(state.config,state.cwd,event=>tools.push(event),pending.transcriptPath);
+  const current=tools.filter(event=>event.toolUseId===pending.toolUseId);
+  if (current.length) {
+    const use=current[0]!, input=use.input;
+    // A published request must be the same one that invoked this hook. No
+    // completed or conflicting identity can be removed from the history gate.
+    if (current.length!==1 || use.kind!=='use' || use.name!=='Edit' || use.sessionId!==pending.sessionId ||
+        !/^msg_[A-Za-z0-9_-]{1,160}$/.test(use.messageId??'') || !/^req_[A-Za-z0-9_-]{1,160}$/.test(use.requestId??'') ||
+        !Number.isFinite(Date.parse(use.timestamp)) || Date.parse(use.timestamp)<state.approvalStartedAt ||
+        Date.parse(use.timestamp)>Date.parse(pending.timestamp) || input?.file_path!==pending.file ||
+        input.old_string!==e.tool_input.old_string || input.new_string!==e.tool_input.new_string ||
+        (input.replace_all!==undefined && input.replace_all!==false)) return false;
+  }
+  if (!hasPendingAutoplanArtifactHistory({cwd:state.cwd,ownedStateRoot:artifactRoot(pending.file,state),
+      commandStartedAt:state.approvalStartedAt,now:Date.now(),transcriptStatus:transcript.status,
+      publicTools:tools.filter(event=>event.toolUseId!==pending.toolUseId),pending})) return false;
+  // Re-read after the journal checks. Missing/duplicate old_string, changed
+  // bytes, or a file modified after this hook's timestamp cannot gain approval.
+  const fresh=createAutoplanEditDigest(pending.file,e.tool_input.old_string,e.tool_input.new_string);
+  return !!fresh && JSON.stringify(fresh)===JSON.stringify(pending.editDigest) &&
+    Math.floor(fs.statSync(pending.file).mtimeMs)<=Date.parse(pending.timestamp);
+}
+
+/** Persists metadata/digests only. Opted-in approval never supplies tool success or phase credit. */
+export function recordAutoplanArtifact(input:string, file:string, cwd:string, config:string, stateRoot:string, approveEdits=false, engTestPlanOnly=false, engTestPlanRoot?:string) {
+  let approved=false;
+  let lock:number|undefined, reason:Reason='invalid_event';
+  const temporary = `${file}.${process.pid}.tmp`;
+  try {
+    if (Buffer.byteLength(input)>MAX_INPUT) { reason='input_overflow'; throw Error('input'); }
+    const e = JSON.parse(input);
+    if (object(e) && (e.agent_id !== undefined || (typeof e.cwd === 'string' && e.cwd !== cwd))) return;
+    if (fs.existsSync(file+'.invalid')) return;
+    reason='lock_conflict'; lock=fs.openSync(file+'.lock','wx',0o600);
+    reason='record_error'; const old=readState(file,cwd,config,stateRoot,engTestPlanRoot);
+    reason='invalid_event';
+    if (!object(e) || e.cwd!==cwd || !['PreToolUse','PostToolUse','PostToolUseFailure'].includes(e.hook_event_name) ||
+        !['Write','Edit'].includes(e.tool_name) || !id(e.session_id) || !id(e.tool_use_id) ||
+        !scopedTranscript(e.transcript_path,config,e.session_id) || !object(e.tool_input) ||
+        typeof e.tool_input.file_path!=='string') throw Error('event');
+    if (old.sessionId!==undefined && old.sessionId!==e.session_id) return;
+    const previous=old.pending;
+    // An unseen completion reveals an unobserved concurrent mutation. It cannot
+    // leave an older request current; a known old completion is harmless.
+    if (previous && previous.toolUseId!==e.tool_use_id && !old.seenIds.includes(e.tool_use_id)) {
+      reason='concurrent_pending'; throw Error('unobserved concurrent mutation');
+    }
+    if (previous?.toolUseId===e.tool_use_id && (e.tool_name!=='Edit' || previous.file!==e.tool_input.file_path || previous.transcriptPath!==e.transcript_path)) {
+      reason='conflicting_replay'; throw Error('identity changed');
+    }
+    const eligible=e.tool_name==='Edit' && ownedAutoplanArtifact(e.tool_input.file_path,{cwd,ownedStateRoot:artifactRoot(e.tool_input.file_path,old)}) &&
+      (!engTestPlanOnly || isEngTestPlan(e.tool_input.file_path));
+    if (!eligible) {
+      if (previous && e.hook_event_name==='PreToolUse') { reason='concurrent_pending'; throw Error('foreign pending'); }
+      return;
+    }
+    const state:State={...old,sessionId:e.session_id};
+    if (e.hook_event_name==='PreToolUse') {
+      if (old.seenIds.includes(e.tool_use_id)) {
+        if (previous?.toolUseId===e.tool_use_id && previous.editDigest) {
+          reason='conflicting_replay';
+          const digest=typeof e.tool_input.old_string==='string' && typeof e.tool_input.new_string==='string' &&
+            (e.tool_input.replace_all===undefined || e.tool_input.replace_all===false)
+            ? createAutoplanEditDigest(e.tool_input.file_path,e.tool_input.old_string,e.tool_input.new_string, previous.editDigest.clippedAdditions !== undefined) : undefined;
+          if (!digest || JSON.stringify(digest)!==JSON.stringify(previous.editDigest)) throw Error('request changed');
+        }
+        return;
+      }
+      if (previous) { reason='concurrent_pending'; throw Error('concurrent'); }
+      // Match the published-path edit scope; inspect but never retain content.
+      if (typeof e.tool_input.old_string!=='string' || !e.tool_input.old_string || typeof e.tool_input.new_string!=='string' ||
+          e.tool_input.new_string===e.tool_input.old_string ||
+          (e.tool_input.replace_all!==undefined && e.tool_input.replace_all!==false)) throw Error('edit scope');
+      state.pending={source:'pre_tool_use',sessionId:e.session_id,toolUseId:e.tool_use_id,tool:'Edit',file:e.tool_input.file_path,
+        timestamp:new Date().toISOString(),transcriptPath:e.transcript_path};
+      const digest=createAutoplanEditDigest(e.tool_input.file_path,e.tool_input.old_string,e.tool_input.new_string);
+      if (digest) state.pending.editDigest=digest;
+    } else if (previous?.toolUseId===e.tool_use_id) state.pending=null;
+    // Success/failure hooks clear pending and tombstone the ID, but never
+    // supply successful history or phase coverage. Those still require JSONL.
+    if (!state.seenIds.includes(e.tool_use_id)) state.seenIds=[...state.seenIds,e.tool_use_id];
+    if (approveEdits && e.hook_event_name==='PreToolUse' && state.pending) approved=canApproveEdit(e,state.pending,state);
+    const serialized=JSON.stringify(state)+'\n'; reason='record_overflow';
+    if (state.seenIds.length>MAX_IDS || Buffer.byteLength(serialized)>MAX_BYTES) throw Error('record overflow');
+    reason='record_error'; fs.writeFileSync(temporary,serialized,{mode:0o600,flag:'wx'}); fs.renameSync(temporary,file);
+    // Persist the exact failed pending identity for diagnostics, but never let
+    // the opted-in caller retry a rejected Edit through terminal navigation.
+    if (approveEdits && state.approvalStartedAt!==undefined && e.hook_event_name==='PreToolUse' && !approved)
+      poison(file,'approval_withheld');
+  } catch { approved=false; poison(file,reason); }
+  finally {
+    try { fs.rmSync(temporary,{force:true}); } catch {}
+    if (lock!==undefined) { try { fs.closeSync(lock); fs.unlinkSync(file+'.lock'); } catch { poison(file,'record_error'); } }
+  }
+  return approved && !fs.existsSync(file+'.invalid');
+}
+
+export function autoplanArtifactRecorderStatus(file:string|undefined,cwd:string,config:string|null,stateRoot:string|undefined,engTestPlanRoot?:string):
+  {status:'disabled'|'missing'|'busy'|'idle'|'pending'|'invalid';reason?:string} {
+  if (!file || !config || !stateRoot) return {status:'disabled'};
+  try {
+    if (fs.existsSync(file+'.invalid')) {
+      const stat=fs.lstatSync(file+'.invalid');
+      if (!stat.isFile() || stat.size>1024) return {status:'invalid',reason:'record_error'};
+      const r=JSON.parse(fs.readFileSync(file+'.invalid','utf8'))?.reason;
+      return {status:'invalid',reason:reasons.includes(r) ? r : 'unknown'};
+    }
+    if (fs.existsSync(file+'.lock')) return {status:'busy'};
+    if (!fs.existsSync(file)) return {status:'missing'};
+    return {status:readState(file,cwd,config,stateRoot,engTestPlanRoot).pending ? 'pending' : 'idle'};
+  } catch { return {status:'invalid',reason:'record_error'}; }
+}
+/** Native approval owns pending Edits; UI navigation resumes only when idle. */
+export function autoplanArtifactApprovalBoundary(status:ReturnType<typeof autoplanArtifactRecorderStatus>):'clear'|'pending'|'failed' {
+  if (status.status==='idle') return 'clear';
+  if (status.status==='pending' || status.status==='busy') return 'pending';
+  return 'failed';
+}
+export function readPendingAutoplanArtifact(file:string|undefined,cwd:string,config:string|null,stateRoot:string|undefined,
+  startedAt:number, publicTools:readonly NativePublicToolEvent[], now=Date.now(), allowPublished=false, engTestPlanRoot?:string): PendingAutoplanArtifact|undefined {
+  if (!file || !config || !stateRoot || !Number.isFinite(startedAt) || !Number.isFinite(now) ||
+      autoplanArtifactRecorderStatus(file,cwd,config,stateRoot,engTestPlanRoot).status!=='pending') return undefined;
+  try {
+    const state=readState(file,cwd,config,stateRoot,engTestPlanRoot), p=state.pending!;
+    const time=Date.parse(p.timestamp), sessions=new Set(publicTools.map(e=>e.sessionId));
+    if (sessions.size!==1 || !sessions.has(p.sessionId) || time<startedAt || time>now ||
+        (!allowPublished && publicTools.some(e=>e.toolUseId===p.toolUseId))) return undefined;
+    const {transcriptPath:_,...pending}=p;
+    return allowPublished ? {...pending,hookSeenIds:[...state.seenIds]} : pending;
+  } catch { return undefined; }
+}
+if (import.meta.main && process.argv[2]==='--record') {
+  const [file,cwd,config,stateRoot,...flags]=process.argv.slice(3);
+  const approval=flags.shift()==='--approve-edits';
+  const engTestPlanOnly=flags[0]==='--eng-test-plan-only';
+  if (engTestPlanOnly) flags.shift();
+  const engTestPlanRoot=flags[0]==='--eng-test-plan-root' ? flags[1] : undefined;
+  const validFlags=flags.length===0 || (flags.length===2 && typeof engTestPlanRoot==='string');
+  if (file && cwd && config && stateRoot && validFlags) {
+    const timer=setTimeout(()=>{poison(file,'stdin_timeout');process.exit(0);},4000);
+    try {
+      const chunks:Uint8Array[]=[]; let size=0;
+      for await (const chunk of Bun.stdin.stream()) {
+        size+=chunk.byteLength;
+        if (size>MAX_INPUT) { poison(file,'input_overflow');process.exit(0); }
+        chunks.push(chunk);
+      }
+      const approved=recordAutoplanArtifact(Buffer.concat(chunks).toString('utf8'),file,cwd,config,stateRoot,approval,engTestPlanOnly,engTestPlanRoot);
+      if (approved) process.stdout.write(JSON.stringify({hookSpecificOutput:{hookEventName:'PreToolUse',permissionDecision:'allow'}})+'\n');
+    } catch { poison(file,'hook_error'); }
+    finally { clearTimeout(timer); }
+  }
+}

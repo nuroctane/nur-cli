@@ -1,0 +1,99 @@
+/** Bounded, body-free evidence from one owned PreToolUse Edit request. */
+import * as fs from 'node:fs';
+import { createHash } from 'node:crypto';
+const MAX_BYTES = 1024 * 1024, MAX_LINES = 512;
+// Covers ordinary 120-column crops, including combining scalars, without
+// storing any request text. Overflow is explicit and supplies no crop authority.
+const MAX_SUFFIX_SCALARS = 256, MAX_SUFFIX_HASHES = 8192;
+type ClippedAdditions = {version: 1; status: 'overflow'} | {version: 1; status: 'complete'; startLine: number;
+  lines: Array<{line: number; lineHash: string; nextLineHash: string; suffixHashes: string[]}>};
+const suffixHash = (line: number, lineHash: string, nextLineHash: string, suffix: string) =>
+  sha(JSON.stringify([line, lineHash, nextLineHash, suffix]));
+const sha = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex');
+export const autoplanEditLineHash = (line: string) => sha(line.replace(/\s/g, ''));
+export interface AutoplanEditDigest {
+  version: 1;
+  beforeSHA256: string;
+  requestSHA256: string;
+  oldLineHashes: string[];
+  newLineHashes: string[];
+  clippedAdditions?: ClippedAdditions;
+}
+export function validAutoplanEditDigest(value: unknown): value is AutoplanEditDigest {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const v = value as Record<string, unknown>;
+  const hashes = (a: unknown): a is string[] => Array.isArray(a) && a.length > 0 && a.length <= MAX_LINES &&
+    Array.from(a).every(h => typeof h === 'string' && /^[a-f0-9]{64}$/.test(h));
+  const base = Object.keys(v).length === (v.clippedAdditions === undefined ? 5 : 6) && v.version === 1 && typeof v.beforeSHA256 === 'string' &&
+    /^[a-f0-9]{64}$/.test(v.beforeSHA256) && typeof v.requestSHA256 === 'string' &&
+    /^[a-f0-9]{64}$/.test(v.requestSHA256) && hashes(v.oldLineHashes) && hashes(v.newLineHashes) &&
+    v.oldLineHashes.length + v.newLineHashes.length <= MAX_LINES;
+  if (!base) return false;
+  if (v.clippedAdditions === undefined) return true;
+  const c = v.clippedAdditions as Record<string, any>;
+  if (!c || typeof c !== 'object' || Array.isArray(c) || c.version !== 1) return false;
+  if (c.status === 'overflow') return Object.keys(c).length === 2;
+  if (c.status !== 'complete' || Object.keys(c).length !== 4 || !Number.isSafeInteger(c.startLine) || c.startLine < 1 ||
+      !Array.isArray(c.lines) || !c.lines.length || c.lines.length > MAX_LINES) return false;
+  let count = 0, previousLine = c.startLine - 1;
+  return Array.from(c.lines).every((row: any) => {
+    if (!row || typeof row !== 'object' || Array.isArray(row) || Object.keys(row).length !== 4 ||
+        !Number.isSafeInteger(row.line) || row.line <= previousLine || row.line < c.startLine ||
+        row.line >= c.startLine + (v.newLineHashes as string[]).length ||
+        row.lineHash !== (v.newLineHashes as string[])[row.line - c.startLine] ||
+        typeof row.nextLineHash !== 'string' || !/^[a-f0-9]{64}$/.test(row.nextLineHash) ||
+        (row.line - c.startLine + 1 < (v.newLineHashes as string[]).length &&
+          row.nextLineHash !== (v.newLineHashes as string[])[row.line - c.startLine + 1]) ||
+        !hashes(row.suffixHashes) || row.suffixHashes.length > MAX_SUFFIX_SCALARS) return false;
+    previousLine = row.line; count += row.suffixHashes.length;
+    return count <= MAX_SUFFIX_HASHES;
+  });
+}
+/** The caller must validate the owned path before this capped, no-follow read. */
+export function readAutoplanDigestFile(file: string): Buffer | undefined {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+    const initial = fs.fstatSync(fd);
+    if (!initial.isFile() || initial.size > MAX_BYTES) return undefined;
+    const buffer = Buffer.alloc(MAX_BYTES + 1); let length = 0;
+    while (length < buffer.length) {
+      const n = fs.readSync(fd, buffer, length, buffer.length - length, null);
+      if (!n) break; length += n;
+    }
+    const final = fs.fstatSync(fd);
+    if (length > MAX_BYTES || length !== initial.size || final.size !== initial.size ||
+        final.mtimeMs !== initial.mtimeMs || final.ctimeMs !== initial.ctimeMs) return undefined;
+    return buffer.subarray(0, length);
+  } catch { return undefined; }
+  finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+export function createAutoplanEditDigest(file: string, removed: string, added: string, clipped = true): AutoplanEditDigest | undefined {
+  const oldLines = removed.split('\n'), newLines = added.split('\n');
+  if (!removed || removed === added || oldLines.length + newLines.length > MAX_LINES) return undefined;
+  const bytes = readAutoplanDigestFile(file); if (!bytes) return undefined;
+  const before = bytes.toString('utf8'), at = before.indexOf(removed);
+  // Require one exact old substring. Only complete request lines can match a
+  // displayed row; partial edge lines cannot establish added-line authority.
+  if (!Buffer.from(before).equals(bytes) || at < 0 || at !== before.lastIndexOf(removed)) return undefined;
+  const digest: AutoplanEditDigest = { version: 1, beforeSHA256: sha(bytes), requestSHA256: sha(JSON.stringify([removed, added])),
+    oldLineHashes: oldLines.map(autoplanEditLineHash), newLineHashes: newLines.map(autoplanEditLineHash) };
+  const end = at + removed.length;
+  if (!clipped || (at > 0 && before[at - 1] !== '\n') || (end < before.length && before[end] !== '\n')) return digest;
+  if (Buffer.byteLength(added) > MAX_BYTES) { digest.clippedAdditions = {version: 1, status: 'overflow'}; return digest; }
+  const startLine = before.slice(0, at).split('\n').length;
+  const afterLine = end < before.length ? before.slice(end + 1).split('\n', 1)[0] : undefined;
+  const originals = new Set(before.split('\n').map(autoplanEditLineHash));
+  const candidates = newLines.map((text, index) => ({index, scalars: Array.from(text.replace(/\s/g, ''))}))
+    .filter(row => row.scalars.length && !originals.has(digest.newLineHashes[row.index]!) &&
+      !digest.oldLineHashes.includes(digest.newLineHashes[row.index]!) && (row.index + 1 < newLines.length || afterLine !== undefined));
+  const count = candidates.reduce((sum, row) => sum + Math.min(row.scalars.length, MAX_SUFFIX_SCALARS), 0);
+  if (count > MAX_SUFFIX_HASHES) digest.clippedAdditions = {version: 1, status: 'overflow'};
+  else if (count) digest.clippedAdditions = {version: 1, status: 'complete', startLine, lines: candidates.map(row => {
+    const line = startLine + row.index, lineHash = digest.newLineHashes[row.index]!;
+    const nextLineHash = digest.newLineHashes[row.index + 1] ?? autoplanEditLineHash(afterLine!);
+    return {line, lineHash, nextLineHash, suffixHashes: Array.from({length: Math.min(row.scalars.length, MAX_SUFFIX_SCALARS)},
+      (_, index) => suffixHash(line, lineHash, nextLineHash, row.scalars.slice(-index - 1).join('')))};
+  })};
+  return digest;
+}

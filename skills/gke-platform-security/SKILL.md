@@ -4,13 +4,15 @@ description: >-
   Plans, configures, and hardens platform-level Google Kubernetes Engine (GKE)
   cluster security. Covers cluster add-ons (Secret Manager enablement), RBAC
   hardening (disabling insecure bindings, audit tools), Binary Authorization,
+  Secrets Encryption (--database-encryption-key), Security Posture (--security-posture),
   enabling Shielded Nodes, GKE Sandbox cluster enablement, GKE IAM roles, and
   cross-service authentication IAM patterns. Use when securing cluster control
   planes, hardening GKE RBAC, enabling Shielded Nodes, enabling GKE Sandbox runtime,
   enabling cluster-wide security add-ons, or managing GKE IAM roles. Don't use
-  for workload-level security (Workload Identity, SecretProviderClass, PSS, NetPol,
-  gVisor pod runtimeClassName; use gke-workload-security instead).
+  for Workload Identity (use gke-workload-identity) or workload-level security
+  (SecretProviderClass, PSS, NetPol, gVisor pod runtimeClassName; use gke-workload-security).
 metadata:
+  version: "1.0.1"
   category: Security
 ---
 
@@ -192,8 +194,8 @@ gcloud projects add-iam-policy-binding <PROJECT_ID> \
 
 - [GKE Cluster Hardening Guide](https://cloud.google.com/kubernetes-engine/docs/how-to/hardening-your-cluster)
 - [GKE RBAC Best Practices](https://cloud.google.com/kubernetes-engine/docs/best-practices/rbac)
-- [Secret Manager Add-on for GKE](https://cloud.google.com/kubernetes-engine/docs/how-to/secret-manager)
-- [Binary Authorization on GKE](https://cloud.google.com/binary-authorization/docs/getting-started-gke)
+- [Secret Manager Add-on for GKE](https://cloud.google.com/secret-manager/docs/secret-manager-managed-csi-component)
+- [Binary Authorization on GKE](https://cloud.google.com/binary-authorization/docs/setting-up)
 - [Shielded GKE Nodes](https://cloud.google.com/kubernetes-engine/docs/how-to/shielded-gke-nodes)
-- [GKE Sandbox (gVisor)](https://cloud.google.com/kubernetes-engine/docs/concepts/sandbox)
+- [GKE Sandbox (gVisor)](https://cloud.google.com/kubernetes-engine/docs/how-to/sandbox-pods)
 ```

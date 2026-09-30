@@ -28,10 +28,6 @@ file already exists and has been validated. This skill does not slice models.
 - Before a live start, state the physical checks: clear build plate, correct plate/filament/nozzle, safe surroundings, and operator nearby.
 - Publishing MQTT is only a start request. Confirm acceptance with printer status/UI and physical observation.
 
-## CAD Viewer Handoff
-
-After completing Bambu work that creates or modifies a local `.3mf` print artifact, you must ALWAYS hand the explicit file path to `$cad-viewer` when that skill is installed. CAD Viewer does not open `.gcode`, so a plain G-code artifact takes no handoff. `$cad-viewer` must start CAD Viewer if it is not already running and return link(s) to the relevant created or updated file(s); if `$cad-viewer` is unavailable or startup fails, report that instead of silently omitting the handoff.
-
 ## Workflow
 
 1. Generate and validate plain G-code with `$gcode`.
@@ -88,8 +84,8 @@ request.
 
 ## Handoff Modes
 
-`--handoff template-project` is the validated A1 Mini path from this repo's LAN
-debugging. It starts from validated plain `.gcode`, copies a known-good
+`--handoff template-project` is the A1 Mini path validated against a real
+printer over LAN. It starts from validated plain `.gcode`, copies a known-good
 same-printer `.gcode.3mf` template, replaces `Metadata/plate_N.gcode`, writes
 the plate MD5, uploads the project to the FTPS root, and publishes
 `print.project_file` with `url: ftp:///<name>.gcode.3mf`.

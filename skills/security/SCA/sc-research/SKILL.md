@@ -118,8 +118,8 @@ Deception is defender-owned-surfaces only: lawful gate in `agentic-defense-game-
 |-----|--------|
 | [DarkNavySecurity/web3-skills](https://github.com/DarkNavySecurity/web3-skills) | `/contract-auditor`, `/client-auditor`, `/exploit-investigator` (public txs / IR only). X: [@DarkNavyOrg](https://x.com/DarkNavyOrg) [@Defi_Nerd_sec](https://x.com/Defi_Nerd_sec) |
 | [Cyfrin/solskill](https://github.com/Cyfrin/solskill) | `/solidity`, BattleChain. X: [@PatrickAlphaC](https://x.com/PatrickAlphaC) |
-| [0xinit/cryptoskills](https://github.com/0xinit/cryptoskills) | Slither/Echidna/protocol primers (install on demand; repo may 404) |
-| [shuvonsec/claude-bug-bounty](https://github.com/shuvonsec/claude-bug-bounty) `web3-audit` | 10-class checklist, not an exploit cookbook |
+| [andresdefi/cryptoskills](https://github.com/andresdefi/cryptoskills) | Slither/Echidna/protocol primers (install on demand) |
+| [shuvonsec/claude-bug-bounty](https://github.com/awarexone/Agentic-Bug-Hunter) `web3-audit` | 10-class checklist, not an exploit cookbook |
 | QuillShield skills | [@QuillAudits_AI](https://x.com/QuillAudits_AI) |
 | mariano-aguero / zpano / yolodolo42 / Wizbisy Solidity auditors | Firm-style SKILL.md on GitHub |
 

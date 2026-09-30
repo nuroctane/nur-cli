@@ -1,6 +1,7 @@
 ---
 name: google-cloud-solution-agentic-ai-bidirectional-streaming
 metadata:
+  version: "1.0.0"
   category: MultiProductSolutions
 description: >-
   Guides agents to interactively discover customer requirements

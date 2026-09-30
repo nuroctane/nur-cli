@@ -1,14 +1,16 @@
 ---
 name: google-cloud-filestore-autoscale
 metadata:
+  version: "1.0.0"
   category: Storage
 description: >-
   Inspects Google Cloud Filestore capacity and utilization, evaluates storage
   scaling rules, and performs capacity autoscaling (scale UP for low free space
   or scale DOWN for cost optimization). Use when monitoring Filestore instance
   headroom, resizing instance shares, configuring automated growth/shrink
-  thresholds, or preventing out-of-space outages. Don't use for Cloud Storage
-  (GCS) buckets, Persistent Disk block storage, or NetApp Volumes.
+  thresholds (custom thresholds apply globally across projects in session memory),
+  or preventing out-of-space outages. Don't use for Cloud Storage (GCS) buckets,
+  Persistent Disk block storage, or NetApp Volumes.
 ---
 
 # Google Cloud Filestore Autoscale
@@ -17,16 +19,31 @@ This skill enables agents to inspect, evaluate, and modify Google Cloud
 Filestore instance capacities across GCP projects based on configured
 thresholds.
 
+## Prerequisites / IAM Requirements
+
+Before an agent or user can execute this skill, their runtime Service Account
+must possess the following IAM roles on the target project(s):
+
+-   **`roles/file.editor`** (Required for listing instances and triggering scale
+    up/down updates)
+-   **`roles/monitoring.viewer`** (Required for reading Cloud Monitoring
+    capacity metrics `used_bytes`)
+-   **`roles/mcp.toolUser`** (Required if utilizing backend Filestore MCP tools)
+
 ## Quick Start
 
-1. Ensure `gcloud` is installed. See [gcloud installation guide](https://cloud.google.com/sdk/docs/install) if needed.
-2. Enable essential APIs:
-   ```bash
-   gcloud services enable file.googleapis.com monitoring.googleapis.com --quiet
-   ```
-2. Inspect fleet capacity and free space (see "Discovery & Read Operations" below).
-3. Evaluate against configured up/down capacity thresholds.
-4. Scale target instances and apply attribution tags.
+1.  Ensure `gcloud` is installed. See
+    [gcloud installation guide](https://cloud.google.com/sdk/docs/install) if
+    needed.
+2.  Enable essential APIs:
+
+    ```bash
+    gcloud services enable file.googleapis.com monitoring.googleapis.com --quiet
+    ```
+3.  Inspect fleet capacity and free space (see "Discovery & Read Operations"
+    below).
+4.  Evaluate against configured up/down capacity thresholds.
+5.  Scale target instances and apply attribution tags.
 
 ## Attribution
 
@@ -38,6 +55,7 @@ CLOUDSDK_METRICS_ENVIRONMENT="gcs-skills gcs-skills/1.0 (skill:google-cloud-file
 gcloud filestore instances update ...
 ```
 On direct HTTP calls to the REST API, append the `User-Agent`:
+
 ```
 User-Agent: gcs-skills/1.0 (skill:google-cloud-filestore-autoscale)
 ```
@@ -46,12 +64,14 @@ User-Agent: gcs-skills/1.0 (skill:google-cloud-filestore-autoscale)
 
 For purely conceptual, educational, or informational questions (e.g., "What are Filestore scaling limits?",
 "Can Basic instances scale down?", "Explain Filestore Tiers"):
+
 *   **Rule**: **Answer immediately using your pre-trained knowledge and the matrix below.**
 *   **Constraint**: **Do not execute external tool calls or API requests** for basic knowledge questions.
 
 ## Handling "No-Command" Constraints (CRITICAL)
 
 If the user prompt contains constraints like "Do not execute commands", "without executing", or "read-only":
+
 *   **Rule**: **Strictly avoid calling the `run_command` tool** to execute any shell or `gcloud` commands (including read-only list/describe commands).
 *   **Discovery**:
     1.  First, check if Filestore MCP tools (`list_instances`, `get_instance`) are available and use them (these are API calls, not command executions).
@@ -66,6 +86,7 @@ Filestore tiers enforce specific boundaries and behaviors. The skill must accept
 See `references/instance-tiers-specs.md` for the full Tier & Capacity Limits Matrix (Min/Max capacities, step increments).
 
 **Critical Thresholds:**
+
 - **Basic HDD / Basic SSD**: Can scale up, but **cannot scale down**.
 - **Zonal / Regional**: Can scale down, but cannot shrink below their minimum floor (1 TiB or 10 TiB depending on band) AND cannot shrink below the current `used_bytes` metric.
 
@@ -73,30 +94,96 @@ See `references/instance-tiers-specs.md` for the full Tier & Capacity Limits Mat
 
 ### 1. Discovery & Read Operations
 
-- **MCP-First**: Prefer using Filestore MCP tools (`list_instances`, `get_instance`) to discover and inspect fleet capacity.
-- **CLI Fallback**: If MCP is unavailable, use `gcloud filestore instances list --project={project_id}`. You MUST ask for the Project ID if not provided (e.g., "to avoid inspection of unrelated projects in a multi-project environment").
-- **Utilization**: Fetch the 5-minute average of `file.googleapis.com/nfs/server/used_bytes` from the Cloud Monitoring API to evaluate `used_bytes`. If you cannot fetch this programmatically, state the formulas explicitly for the user.
+-   **Step 1 (Fleet Discovery)**: Call the MCP tool
+    `list_instances(parent='projects/{project_id}/locations/-')` or CLI `gcloud
+    filestore instances list --project={project_id}` to discover all Filestore
+    instances in the target project. Read the `capacityGb` and `tier` directly
+    from the instances returned.
+-   **Step 2 (Single Bulk Utilization Metric Query)**: Immediately after
+    discovering instances, query the Cloud Monitoring API for the
+    `file.googleapis.com/nfs/server/used_bytes` metric across the entire project
+    in a single request (see `references/monitoring-metrics.md` for
+    runtime-specific options including GCP REST API, `gcloud`, `curl`, and MCP
+    tools).
+
+    **CRITICAL**: Make exactly ONE bulk metric request for the entire project.
+    **NEVER emit multiple per-instance queries or loops.** Do NOT filter by zone
+    or region.
+
+-   **Step 3 (Metric Extraction & Calculation)**:
+
+    -   Match each instance's short name (or `resource.labels.instance_name` /
+        `metric.labels.instance_name`) in the returned `timeSeries` data to
+        extract its latest `int64Value` bytes.
+    -   If an instance is not listed in `timeSeries` or has no points, default
+        its `used_bytes` to 0.
+    -   Calculate `used_bytes_gb = used_bytes / (1024^3)`.
+    -   Calculate `Free Space % = ((capacityGb - used_bytes_gb) / capacityGb) *
+        100`.
+    -   NEVER leave `Used Bytes` or `Free Space %` as "N/A". Populate actual
+        numbers into the output summary table.
 
 ### 2. Autoscale Needed Matrix
 
 The skill must categorize each evaluated instance into one of 5 definitive verdicts. On the initial analysis/fleet inspection run, the skill suggests the required scaling action with target capacity and update commands, and **prompts for user confirmation before executing any autoscale modifications**. State the value of the "Autoscale Needed" column clearly as one of the following:
 
-- **Yes (Scale Up)**: Triggered when free space percentage is below the scale-up safety threshold (< 15% free space remaining). The evaluation response MUST explicitly state that the current free space percentage is below the 15% scale-up safety threshold. Capacity must be increased by 10% (default) or step-size minimum, rounded to the tier's step increment, not exceeding the maximum capacity. Suggest target capacity, provide the attributed `gcloud` update command, and MUST conclude the response with a clear question prompting the user for confirmation to execute (e.g., *"Would you like me to proceed with scaling `[instance]` from [A] TiB to [B] TiB? Please confirm to execute."*).
-- **Yes (Scale Down)**: Triggered when free space exceeds the scale-down threshold (> 30% free space remaining) and the instance is eligible for downscaling. Capacity must be decreased by 10% (default), rounded to step size. Target capacity must be `>= max(tier_min, used_bytes)`. Suggest target capacity, cost savings, and provide the attributed `gcloud` update command, prompting the user for confirmation to execute.
-- **No (Healthy)**: Triggered when the instance's free space is within the optimal operating range (15% – 30%). No action required.
-- **No (At min capacity limit)**: Triggered when free space is > 30%, but the instance is already at the minimum allowed tier capacity floor (e.g. 1 TiB or 10 TiB) or currently used space limit. No action can be taken.
-- **No (Tier cannot scale down)**: Triggered when free space is > 30%, but the instance is on a Basic tier (Basic HDD / Basic SSD) which does not support downscaling. The agent must explicitly inform the user that scale-down is not supported and suggest data migration instead. No action can be taken.
+-   **Yes (Scale Up)**: Triggered when free space percentage is below the
+    scale-up safety threshold (< 15% free space remaining). The evaluation
+    response MUST explicitly state that the current free space percentage is
+    below the 15% scale-up safety threshold. Capacity must be increased by 10%
+    (default) or step-size minimum, rounded to the tier's step increment (256
+    GiB for Small Band [1–9.75 TiB], 2.5 TiB for Large Band [10–100 TiB], as
+    specified in `references/instance-tiers-specs.md`), not exceeding the
+    maximum capacity. Suggest target capacity, provide the attributed `gcloud`
+    update command, and MUST conclude the response with a clear question
+    prompting the user for confirmation to execute (e.g., *"Would you like me to
+    proceed with scaling `[instance]` from [A] TiB to [B] TiB? Please confirm to
+    execute."*).
+-   **Yes (Scale Down)**: Triggered when free space exceeds the scale-down
+    threshold (> 30% free space remaining) and the instance is eligible for
+    downscaling (Zonal or Regional / Enterprise tiers). Apply the default step
+    reduction of -10% of current capacity, aligned to the tier's step increment
+    (256 GiB for Small Band [1–9.75 TiB], 2.5 TiB for Large Band [10–100 TiB],
+    as specified in `references/instance-tiers-specs.md`). For example, for a 2
+    TiB (2048 GiB) Enterprise / Regional instance, rounding to the 256 GiB step
+    yields a proposed target capacity of 1.75 TiB (1792 GiB, or 1.8 TiB). The
+    response MUST explicitly verify that the proposed target capacity (e.g. 1.75
+    TiB / 1792 GiB or 1.8 TiB) remains strictly above both the tier's minimum
+    capacity floor (e.g. 1 TiB for Enterprise / Small Band, 10 TiB for Large
+    Band) and currently used space (e.g. 0.9 TiB). Do NOT reduce directly to the
+    floor in a single step. Suggest target capacity, estimated cost savings,
+    provide the attributed `gcloud` update command, and prompt the user for
+    confirmation to execute.
+-   **No (Healthy)**: Triggered when the instance's free space is within the
+    optimal operating range (15% – 30%). No action required.
+-   **No (At min capacity limit)**: Triggered when free space is > 30%, but the
+    instance is already at the minimum allowed tier capacity floor (e.g. 1 TiB
+    for Small Band or 10 TiB for Large Band) or currently used space limit. No
+    action can be taken.
+-   **No (Tier cannot scale down)**: Triggered when free space is > 30%, but the
+    instance is on a Basic tier (Basic HDD / Basic SSD) which does not support
+    downscaling. The agent must explicitly inform the user that scale-down is
+    not supported and suggest data migration instead. No action can be taken.
 
 ### Output Format
 
 **Every status report, evaluation, or recommendation response MUST include a markdown table summarizing the evaluated instances.** Even if evaluating a single instance, format it as a table.
 The table MUST contain the following columns:
+
 *   `Instance`
 *   `Service Tier`
 *   `Provisioned Capacity`
 *   `Used Bytes`
 *   `Free Space %`
 *   `Autoscale Needed` (MUST contain one of: `Yes (Scale Up)`, `Yes (Scale Down)`, `No (Healthy)`, `No (At min capacity limit)`, or `No (Tier cannot scale down)`)
+
+Example standard output table:
+
+```markdown
+| Instance | Service Tier | Provisioned Capacity | Used Bytes | Free Space % | Autoscale Needed | Proposed Action |
+|---|---|---|---|---|---|---|
+| `[instance-name]` | REGIONAL | 2048 GiB | 900 GiB | 56.05% | Yes (Scale Down) | Scale down to 1792 GiB. `CLOUDSDK_METRICS_ENVIRONMENT=... gcloud filestore instances update ...` |
+```
 
 ### 3. Execution & Confirmation Workflow
 
@@ -111,11 +198,25 @@ The table MUST contain the following columns:
    - If execution fails due to Prod mutation restrictions, output the failure reason and provide the user with the exact attributed `gcloud` command to run manually, reminding them to confirm before manual execution.
 
 ### Custom Thresholds
-If the user passes custom threshold values in prompts (e.g. "Scale up if free space drops below 10% with a 20% step"), apply these globally across projects for the active session and acknowledge the new configuration. **You MUST explicitly state in your response that these custom thresholds apply globally across all projects in the active session memory.**
+
+When the user configures or passes custom threshold values in prompts (e.g.
+"Scale up if free space drops below 10% with a 20% step", or custom
+max_threshold / up_increment):
+
+1.  **Global Session Memory Confirmation**: The response MUST accept and
+    acknowledge the custom thresholds and MUST explicitly confirm that custom
+    thresholds apply globally across projects in session memory, explicitly
+    mentioning the target project IDs evaluated or active in session memory to
+    prevent accidental cross-project misconfiguration.
+2.  **Configuration Summary**: The response MUST display the updated active
+    configuration summary showing all active thresholds and step increments.
+3.  **Preserve Overrides**: The response MUST NOT revert to default thresholds
+    (15% / 10%) when custom overrides are provided.
 
 ## Reference Directory
 
 For progressive disclosure of deeper topics, consult the `references/` directory:
+
 - [Instance Tiers & Specs](references/instance-tiers-specs.md)
 - [Monitoring Metrics Formulas](references/monitoring-metrics.md)
 - [Troubleshooting & Errors](references/troubleshooting-errors.md)

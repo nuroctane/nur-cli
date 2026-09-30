@@ -5,9 +5,8 @@
 //! tokens billed, judgments used, escalations, and the frontier work it
 //! replaced (compaction that never had to call a big model).
 //!
-//! The queue is process-global and drained by the same owner that consumes
-//! Headroom telemetry (see `agent::loop::record_auxiliary_telemetry`), so
-//! receipts stay in one place.
+//! Status counters are cumulative. Receipts drain only their owning session,
+//! turn and route, including work propagated through blocking workers.
 
 use serde::{Deserialize, Serialize};
 use std::sync::{Mutex, OnceLock};
@@ -127,6 +126,7 @@ struct Counters {
 }
 
 impl Counters {
+    #[cfg(test)]
     fn take_delta(&mut self) -> TypesafeTelemetry {
         let delta = delta_between(&self.total, &self.last);
         self.last = self.total.clone();
@@ -144,6 +144,37 @@ fn queue() -> &'static Mutex<Counters> {
     QUEUE.get_or_init(|| Mutex::new(Counters::default()))
 }
 
+#[derive(Default)]
+struct OwnerLedger {
+    routes: std::collections::HashMap<(String, String), TypesafeTelemetry>,
+    decisions: TypesafeTelemetry,
+}
+fn owners() -> &'static Mutex<std::collections::HashMap<(String, String), OwnerLedger>> {
+    static OWNERS: OnceLock<Mutex<std::collections::HashMap<(String, String), OwnerLedger>>> =
+        OnceLock::new();
+    OWNERS.get_or_init(Default::default)
+}
+
+pub fn take_for_session(session_id: &str) -> Vec<TypesafeTelemetry> {
+    let Some(owner) =
+        super::context::current().map(|scope| (session_id.to_string(), scope.turn_id))
+    else {
+        return Vec::new();
+    };
+    let ledger = owners()
+        .lock()
+        .ok()
+        .and_then(|mut owners| owners.remove(&owner));
+    let Some(ledger) = ledger else {
+        return Vec::new();
+    };
+    let mut out: Vec<_> = ledger.routes.into_values().collect();
+    if !ledger.decisions.is_empty() {
+        out.push(ledger.decisions);
+    }
+    out
+}
+
 /// Add one request's worth of accounting.
 ///
 /// `route` and `model` are what actually served it, so a local bridge and the
@@ -155,7 +186,10 @@ pub fn record_request(
     output_tokens: u64,
     questions: u64,
 ) {
-    mutate(|t| {
+    if super::context::check().is_err() {
+        return;
+    }
+    let update = |t: &mut TypesafeTelemetry| {
         if !route.trim().is_empty() {
             t.route = route.trim().to_string();
         }
@@ -166,7 +200,22 @@ pub fn record_request(
         t.questions += questions;
         t.input_tokens += input_tokens;
         t.output_tokens += output_tokens;
-    });
+    };
+    if let Ok(mut counters) = queue().lock() {
+        update(&mut counters.total);
+    }
+    if let Some(scope) = super::context::current().filter(|s| !s.session_id.is_empty()) {
+        if let Ok(mut owners) = owners().lock() {
+            update(
+                owners
+                    .entry((scope.session_id, scope.turn_id))
+                    .or_default()
+                    .routes
+                    .entry((route.into(), model.into()))
+                    .or_default(),
+            );
+        }
+    }
 }
 
 /// Mark a request as one of several that ran concurrently.
@@ -210,9 +259,20 @@ pub fn record_prune(calls: u64, results: u64, chars_saved: u64, frontier_calls_a
     });
 }
 
-fn mutate(f: impl FnOnce(&mut TypesafeTelemetry)) {
+fn mutate(mut f: impl FnMut(&mut TypesafeTelemetry)) {
+    if super::context::check().is_err() {
+        return;
+    }
     if let Ok(mut g) = queue().lock() {
         f(&mut g.total);
+    }
+    if let Some(scope) = super::context::current().filter(|s| !s.session_id.is_empty()) {
+        if let Ok(mut owners) = owners().lock() {
+            f(&mut owners
+                .entry((scope.session_id, scope.turn_id))
+                .or_default()
+                .decisions);
+        }
     }
 }
 
@@ -221,21 +281,7 @@ pub fn snapshot() -> TypesafeTelemetry {
     queue().lock().map(|g| g.total.clone()).unwrap_or_default()
 }
 
-/// Everything recorded since the previous call, as a delta.
-///
-/// This is what receipt recording uses: the chip and `/typesafe` want the
-/// session totals ([`snapshot`]), while the append-only receipt wants only what
-/// happened in this batch. Draining the queue outright for receipts would reset
-/// the read-out, so the two consumers get different views of the same counters.
-pub fn take_delta() -> TypesafeTelemetry {
-    // Snapshot and baseline advance share a lock. Concurrent readers cannot
-    // install an older snapshot after a newer one and double-count requests.
-    queue()
-        .lock()
-        .map(|mut g| g.take_delta())
-        .unwrap_or_default()
-}
-
+#[cfg(test)]
 fn delta_between(current: &TypesafeTelemetry, prev: &TypesafeTelemetry) -> TypesafeTelemetry {
     TypesafeTelemetry {
         route: current.route.clone(),
@@ -268,6 +314,39 @@ pub fn take() -> TypesafeTelemetry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concurrent_turns_keep_session_and_route_accounting_separate() {
+        let session = uuid::Uuid::new_v4().to_string();
+        let scope = |turn: &str| super::super::context::Scope {
+            cancel: Default::default(),
+            session_id: session.clone(),
+            turn_id: turn.into(),
+            deadline: None,
+        };
+        let a = scope("parent");
+        let b = scope("child");
+        let record = |owner, route, tokens| {
+            super::super::context::with_sync(Some(owner), || {
+                record_request(route, "model", tokens, 2, 1);
+                record_decision(Some(0.9), true, 0.5);
+            })
+        };
+        std::thread::scope(|workers| {
+            workers.spawn(|| record(a.clone(), "http://127.0.0.1:8788/v1/systemone", 10));
+            workers.spawn(|| record(b.clone(), "https://api.typesafe.ai/v1/systemone", 50));
+        });
+        let parent = super::super::context::with_sync(Some(a), || take_for_session(&session));
+        let child = super::super::context::with_sync(Some(b), || take_for_session(&session));
+        assert_eq!(parent.iter().map(|t| t.input_tokens).sum::<u64>(), 10);
+        assert_eq!(child.iter().map(|t| t.input_tokens).sum::<u64>(), 50);
+        assert!(parent
+            .iter()
+            .filter(|t| t.requests > 0)
+            .all(|t| t.route.contains("127.0.0.1")));
+        assert_eq!(parent.iter().map(|t| t.decisions).sum::<u64>(), 1);
+        assert_eq!(child.iter().map(|t| t.decisions).sum::<u64>(), 1);
+    }
 
     #[test]
     fn reset_clears_the_delta_baseline() {

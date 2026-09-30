@@ -1,6 +1,7 @@
 ---
 name: cloud-monitoring-list-time-series-request
 metadata:
+  version: "1.0.0"
   category: CloudObservabilityAndMonitoring
 description: >-
   Generates valid Cloud Monitoring ListTimeSeries requests and aggregation

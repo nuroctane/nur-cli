@@ -8,7 +8,7 @@ description: >-
   audience or event ingestion logic (use the data-manager-api-audience-ingestion
   or data-manager-api-event-ingestion skills instead).
 metadata:
-  version: 1.0
+  version: "1.0.2"
   category: GoogleAds
 ---
 # Data Manager API Setup
@@ -48,7 +48,7 @@ matches the API's specifications.
 Select the language-specific installation guide below:
 
 *   [Python Setup Reference](references/python.md) (packages: `google-ads-datamanager` and `google-ads-datamanager-util`)
-*   [Java Setup Reference](references/java.md) (packages: `com.google.api-ads:data-manager` and `data-manager-util`)
-*   [Node Setup Reference](references/node.md) (packages: `@google-ads/datamanager` and `@google-ads/data-manager-util`)
+*   [Java Setup Reference](references/java.md) (packages: `com.google.api-ads:data-manager` and `com.google.api-ads:data-manager-util`)
+*   [Node Setup Reference](references/node.md) (packages: `@google-ads/datamanager` and `@google-ads/datamanager-util`)
 *   [PHP Setup Reference](references/php.md) (packages: `googleads/data-manager` and `googleads/data-manager-util`)
-*   [.NET Setup Reference](references/dotnet.md) (packages: `Google.Ads.DataManager.V1` and `Google.Ads.DataManager.Util.csproj`)
+*   [.NET Setup Reference](references/dotnet.md) (packages: `Google.Ads.DataManager.V1` and `Google.Ads.DataManager.Util`)

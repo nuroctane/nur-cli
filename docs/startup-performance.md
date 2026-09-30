@@ -99,3 +99,31 @@ These changes are included in **v0.39.1**. The measurements above were collected
 before the release version bump, using the same implementation, release profile,
 and default features. Release binaries and checksums are available on
 [GitHub Releases](https://github.com/nuroctane/nur-cli/releases/tag/v0.39.1).
+
+## v0.41.0 review and stack validation
+
+The [stack refresh](stack-update-2026-09-30.md) retains the first-paint worker
+boundary and verifies blocked account writes, queued resets, explicit refresh,
+bridge ownership, cancellation and all three provider protocols. Ten startup
+cases and ten terminal regression cases pass against the real binary. These
+cover built-in commands while indexing, blocked model/auth work and animation.
+
+An actual production draw benchmark uses 300 user/assistant pairs with code and
+lists, all animations enabled, and an isolated home. Debug-build observations:
+
+| Scenario | Median draw | p95 draw | Mean allocations | Mean allocated bytes |
+|---|---:|---:|---:|---:|
+| Idle animation | 4.69 ms | 6.93 ms | 1,023 | 292,294 |
+| Typing | 4.94 ms | 7.68 ms | 1,043 | 288,242 |
+| Scrolling | 5.64 ms | 16.49 ms | 1,054 | 290,204 |
+| Streaming | 20.29 ms | 33.06 ms | 1,188 | 911,207 |
+| After theme change | 5.16 ms | 7.56 ms | 47,215 | 23,040,172 |
+| After resize | 5.33 ms | 9.09 ms | 21,601 | 5,051,087 |
+
+The first resize draw dropped from 7,245 ms to 932 ms by retaining finished
+unwrapped Markdown across width changes. A real theme change still reparses
+styles, taking 5,653 ms for this unusually long debug fixture. Its transition
+is included in allocation averages; steady-state percentile figures alone do
+not describe transition cost. Theme-aware parsed-block caching is a further
+rendering opportunity. These are local debug observations, not release latency
+guarantees, reboot timings or history-replay measurements.

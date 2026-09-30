@@ -6,6 +6,7 @@ description: >-
   for backup policies, disaster recovery, or GKE cluster restores. Don't use
   for database backups.
 metadata:
+  version: "1.0.0"
   category: Storage
 ---
 

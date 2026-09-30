@@ -1,0 +1,446 @@
+## Review Sections (8 passes, after Step 0 is complete)
+
+**Anti-skip rule:** Never condense, abbreviate, or skip any review pass (1-8) regardless of plan type (strategy, spec, code, infra). Every pass in this skill exists for a reason. "This is a strategy doc so DX passes don't apply" is always wrong — DX gaps are where adoption breaks down. If a pass genuinely has zero findings, say "No issues found" and move on — but you must evaluate it.
+
+{{ANTI_SHORTCUT_CLAUSE}}
+
+**Review continuity:** Evaluate all eight passes against the current plan and its
+declared baseline. Continue the same working list from Step 0, retaining unresolved
+gaps and required verification. Run the Decision gate before drafting options in
+any pass or responding to outside findings; a new pass does not reset approvals.
+
+- **Prior approval:** For a later or outside proposal, compare its evidence with the prior decision and options already considered.
+  A disclosed tradeoff or rejected alternative is not new evidence merely because a reviewer prefers it;
+  identify a concrete contradiction or changed assumption before reopening.
+  Carry exact approved follow-through and the Decision gate's routine review work
+  forward without a new approval. Inspect source before stating behavior or restoring
+  a declared destination; if verification is unavailable, record that dependency.
+  This does not authorize new presentation choices, behavior, channels or optional
+  verification depth. New independent remedies remain pending decisions.
+- **Scope:** Unverified loss of existing coverage remains a risk to verify,
+  not proof that a new release policy is needed. Establish what the existing
+  contract actually guarantees before claiming that a remedy or delay is required.
+  If a necessary remedy crosses an explicit scope boundary, name that boundary and
+  obtain scope approval before choosing or applying the remedy.
+- **Options:** Name one changed commitment or value. For every option, try accepting
+  one change while rejecting another; if viable, split them before asking.
+  A code example and an optional checklist are separate choices, as are a timer and its release-gate policy.
+
+In DX POLISH, improve the accepted journey using existing capabilities. A checklist
+or Hall of Fame example is a lens, not a requirement to add its features. Identify
+out-of-scope opportunities separately; do not add APIs or change established
+behavior to earn 10/10. "FIX TO 10" means resolve evidenced, in-scope gaps through
+the Decision gate; retain honest residual scores. Reuse prior decisions across
+passes and outside voice. Implementation details and proof of one chosen behavior
+stay together; independent policies each need their own decision.
+
+{{LEARNINGS_SEARCH}}
+
+### DX Trend Check
+
+Before starting review passes, check for prior DX reviews on this project:
+
+```bash
+eval "$(~/.claude/skills/gstack/bin/gstack-slug 2>/dev/null)"
+~/.claude/skills/gstack/bin/gstack-review-read 2>/dev/null | grep plan-devex-review || echo "NO_PRIOR_DX_REVIEWS"
+```
+
+If prior reviews exist, display the trend:
+```
+DX TREND (prior reviews):
+  Dimension        | Prior Score | Notes
+  Getting Started  | 4/10        | from 2026-03-15
+  ...
+```
+
+### Pass 1: Getting Started Experience (Zero Friction)
+
+Rate 0-10: Can a developer go from zero to hello world in under 5 minutes?
+
+**Evidence recall:** Reference the competitive benchmark from 0C (target tier), the
+magical moment from 0D (delivery vehicle), and any Install/Hello World friction
+points from 0F.
+
+Load reference: Read the "## Pass 1" section from `~/.claude/skills/gstack/plan-devex-review/dx-hall-of-fame.md`.
+
+Evaluate:
+- **Installation**: One command? One click? No prerequisites?
+- **First run**: Does the first command produce visible, meaningful output?
+- **Sandbox/Playground**: Can developers try before installing?
+- **Free tier**: No credit card, no sales call, no company email?
+- **Quick start guide**: Copy-paste complete? Shows real output?
+- **Auth/credential bootstrapping**: How many steps between "I want to try" and "it works"?
+- **Magical moment delivery**: Is the vehicle chosen in 0D actually in the plan?
+- **Competitive gap**: How far is the TTHW from the target tier chosen in 0C?
+
+FIX TO 10: Write the ideal getting started sequence. Specify exact commands,
+expected output, and time budget per step. Target: 3 steps or fewer, under the
+time chosen in 0C.
+
+Stripe test: Can a [persona from 0A] go from "never heard of this" to "it worked"
+in one terminal session without leaving the terminal?
+
+**STOP.** Run the Decision gate; ask only for a new or justified reopened decision. Recommend + WHY. Reference the persona.
+
+### Pass 2: API/CLI/SDK Design (Usable + Useful)
+
+Rate 0-10: Is the interface intuitive, consistent, and complete?
+
+**Evidence recall:** Does the API surface match [persona from 0A]'s mental model?
+A YC founder expects `tool.do(thing)`. A platform engineer expects
+`tool.configure(options).execute(thing)`.
+
+Load reference: Read the "## Pass 2" section from `~/.claude/skills/gstack/plan-devex-review/dx-hall-of-fame.md`.
+
+Evaluate:
+- **Naming**: Guessable without docs? Consistent grammar?
+- **Defaults**: Every parameter has a sensible default? Simplest call gives useful result?
+- **Consistency**: Same patterns across the entire API surface?
+- **Completeness**: 100% coverage or do devs drop to raw HTTP for edge cases?
+- **Discoverability**: Can devs explore from CLI/playground without docs?
+- **Reliability/trust**: Latency, retries, rate limits, idempotency, offline behavior?
+- **Progressive disclosure**: Simple case is production-ready, complexity revealed gradually?
+- **Persona fit**: Does the interface match how [persona] thinks about the problem?
+
+Good API design test: Can a [persona] use this API correctly after seeing one example?
+
+**STOP.** Run the Decision gate; ask only for a new or justified reopened decision. Recommend + WHY.
+
+### Pass 3: Error Messages & Debugging (Fight Uncertainty)
+
+Rate 0-10: When something goes wrong, does the developer know what happened, why,
+and how to fix it?
+
+**Evidence recall:** Reference any error-related friction points from 0F and confusion
+points from 0G.
+
+Load reference: Read the "## Pass 3" section from `~/.claude/skills/gstack/plan-devex-review/dx-hall-of-fame.md`.
+
+**Trace 3 specific error paths** from the plan or codebase. For each, evaluate against
+the three-tier system from the Hall of Fame:
+- **Tier 1 (Elm):** Conversational, first person, exact location, suggested fix
+- **Tier 2 (Rust):** Error code links to tutorial, primary + secondary labels, help section
+- **Tier 3 (Stripe API):** Structured JSON with type, code, message, param, doc_url
+
+For each error path, show what the developer currently sees vs. what they should see.
+
+Also evaluate:
+- **Permission/sandbox/safety model**: What can go wrong? How clear is the blast radius?
+- **Debug mode**: Verbose output available?
+- **Stack traces**: Useful or internal framework noise?
+
+**STOP.** Run the Decision gate; ask only for a new or justified reopened decision. Recommend + WHY.
+
+### Pass 4: Documentation & Learning (Findable + Learn by Doing)
+
+Rate 0-10: Can a developer find what they need and learn by doing?
+
+**Evidence recall:** Does the docs architecture match [persona from 0A]'s learning
+style? A YC founder needs copy-paste examples front and center. A platform engineer
+needs architecture docs and API reference.
+
+Load reference: Read the "## Pass 4" section from `~/.claude/skills/gstack/plan-devex-review/dx-hall-of-fame.md`.
+
+Evaluate:
+- **Information architecture**: Find what they need in under 2 minutes?
+- **Progressive disclosure**: Beginners see simple, experts find advanced?
+- **Code examples**: Copy-paste complete? Work as-is? Real context?
+- **Interactive elements**: Playgrounds, sandboxes, "try it" buttons?
+- **Versioning**: Docs match the version dev is using?
+- **Tutorials vs references**: Both exist?
+
+**STOP.** Run the Decision gate; ask only for a new or justified reopened decision. Recommend + WHY.
+
+### Pass 5: Upgrade & Migration Path (Credible)
+
+Rate 0-10: Can developers upgrade without fear?
+
+Load reference: Read the "## Pass 5" section from `~/.claude/skills/gstack/plan-devex-review/dx-hall-of-fame.md`.
+
+Evaluate:
+- **Backward compatibility**: What breaks? Blast radius limited?
+- **Deprecation warnings**: Advance notice? Actionable? ("use newMethod() instead")
+- **Migration guides**: Step-by-step for every breaking change?
+- **Codemods**: Automated migration scripts?
+- **Versioning strategy**: Semantic versioning? Clear policy?
+
+**STOP.** Run the Decision gate; ask only for a new or justified reopened decision. Recommend + WHY.
+
+### Pass 6: Developer Environment & Tooling (Valuable + Accessible)
+
+Rate 0-10: Does this integrate into developers' existing workflows?
+
+**Evidence recall:** Does local dev setup work for [persona from 0A]'s typical
+environment?
+
+Load reference: Read the "## Pass 6" section from `~/.claude/skills/gstack/plan-devex-review/dx-hall-of-fame.md`.
+
+Evaluate:
+- **Editor integration**: Language server? Autocomplete? Inline docs?
+- **CI/CD**: Works in GitHub Actions, GitLab CI? Non-interactive mode?
+- **TypeScript support**: Types included? Good IntelliSense?
+- **Testing support**: Easy to mock? Test utilities?
+- **Local development**: Hot reload? Watch mode? Fast feedback?
+- **Cross-platform**: Mac, Linux, Windows? Docker? ARM/x86?
+- **Local env reproducibility**: Works across OS, package managers, containers, proxies?
+- **Observability/testability**: Dry-run mode? Verbose output? Sample apps? Fixtures?
+
+**STOP.** Run the Decision gate; ask only for a new or justified reopened decision. Recommend + WHY.
+
+### Pass 7: Community & Ecosystem (Findable + Desirable)
+
+Rate 0-10: Is there a community, and does the plan invest in ecosystem health?
+
+Load reference: Read the "## Pass 7" section from `~/.claude/skills/gstack/plan-devex-review/dx-hall-of-fame.md`.
+
+Evaluate:
+- **Open source**: Code open? Permissive license?
+- **Community channels**: Where do devs ask questions? Someone answering?
+- **Examples**: Real-world, runnable? Not just hello world?
+- **Plugin/extension ecosystem**: Can devs extend it?
+- **Contributing guide**: Process clear?
+- **Pricing transparency**: No surprise bills?
+
+**STOP.** Run the Decision gate; ask only for a new or justified reopened decision. Recommend + WHY.
+
+### Pass 8: DX Measurement & Feedback Loops (Implement + Refine)
+
+Rate 0-10: Does the plan include ways to measure and improve DX over time?
+
+Load reference: Read the "## Pass 8" section from `~/.claude/skills/gstack/plan-devex-review/dx-hall-of-fame.md`.
+
+Evaluate:
+- **TTHW tracking**: Can you measure getting started time? Is it instrumented?
+- **Journey analytics**: Where do devs drop off?
+- **Feedback mechanisms**: Bug reports? NPS? Feedback button?
+- **Friction audits**: Periodic reviews planned?
+- **Boomerang readiness**: Will /devex-review be able to measure reality vs. plan?
+
+Measure the approved 0C clock and 0D useful result. Include the full documented
+start state; do not substitute a warm execution timer or a different endpoint.
+Prefer the simplest method that measures the chosen target. A target tier does not itself approve telemetry, an automated
+release gate, or a recurring human process; ask about those independent policies
+only when proposing them, with ownership and frequency explicit.
+
+**STOP.** Run the Decision gate; ask only for a new or justified reopened decision. Recommend + WHY.
+
+### Appendix: Claude Code Skill DX Checklist
+
+**Conditional: only run when product type includes "Claude Code skill".**
+
+This is NOT a scored pass. It's a checklist of proven patterns from gstack's own DX.
+
+Load reference: Read the "## Claude Code Skill DX Checklist" section from
+`~/.claude/skills/gstack/plan-devex-review/dx-hall-of-fame.md`.
+
+Check each item. For any unchecked item, explain what's missing and suggest the fix.
+
+**STOP.** AskUserQuestion for any item that requires a design decision.
+
+When this host runs an outside voice, build its review context from the working list
+before truncating the plan body. Preserve the exact approved exceptions to the selected
+mode, alongside the persona, clock, target and evidence limits. Reconcile findings
+against that context and inspected source before proposing remedies. Correct
+unsupported draft claims directly; preserve unknown behavior as verification work.
+A new guarantee, optional example or measurement extension remains a decision;
+required proof of the accepted contract does not reopen that contract.
+
+{{CODEX_PLAN_REVIEW}}
+
+## CRITICAL RULE — How to ask questions
+
+Follow the AskUserQuestion format from the Preamble above. Additional rules for
+DX reviews:
+
+* **One new or reopened decision = one AskUserQuestion call.** Run the Decision gate before drafting options. Never combine independent decisions, including in separate question tabs.
+* **Ground every question in evidence.** Reference the persona, competitive benchmark,
+  empathy narrative, or friction trace. Never ask a question in the abstract.
+* **Frame pain from the persona's perspective.** Not "developers would be frustrated"
+  but "[persona from 0A] would hit this at minute [N] of their getting-started flow
+  and [specific consequence: abandon, file an issue, hack a workaround]."
+* Present 2-3 options. For each: effort to fix, impact on developer adoption.
+* **Map to DX First Principles above.** One sentence connecting your recommendation
+  to a specific principle (e.g., "This violates 'zero friction at T0' because
+  [persona] needs 3 extra config steps before their first API call").
+* **No pending decisions:** report the section's findings, evidence and dispositions,
+  then proceed. If it has no findings, state "No issues, moving on." Otherwise,
+  ask only for new or justified reopened decisions identified by the Decision gate.
+  An independent choice still needs approval even when its fix is obvious;
+  routine verification or restoring an existing declared contract does not.
+* Assume the user hasn't looked at this window in 20 minutes. Re-ground every question.
+
+## Required Outputs
+
+Update existing artifact sections in place. Keep Step 0 evidence above review decisions and later review sections. Complete all body additions and ordering before the Review Log and review report; assemble the body first, then append the report at the actual file end.
+
+### Developer Persona Card
+The persona card from Step 0A. This goes at the top of the plan's DX section.
+
+### Developer Empathy Narrative
+The first-person narrative from Step 0B, updated with user corrections.
+
+### Competitive DX Benchmark
+The benchmark table from Step 0C, updated with the product's post-review scores.
+
+### Magical Moment Specification
+The chosen delivery vehicle from Step 0D with implementation requirements.
+
+### Developer Journey Map
+The journey map from Step 0F, updated with all friction point resolutions.
+
+### First-Time Developer Confusion Report
+The roleplay report from Step 0G, annotated with which items were addressed.
+
+### "NOT in scope" section
+DX improvements considered and explicitly deferred, with one-line rationale each.
+
+### "What already exists" section
+Existing docs, examples, error handling, and DX patterns that the plan should reuse.
+
+### TODOS.md updates
+After all review passes are complete, present each potential TODO as its own individual
+AskUserQuestion. Never batch. For DX debt: missing error messages, unspecified upgrade
+paths, documentation gaps, missing SDK languages. Each TODO gets:
+* **What:** One-line description
+* **Why:** The concrete developer pain it causes
+* **Pros:** What you gain (adoption, retention, satisfaction)
+* **Cons:** Cost, complexity, or risks
+* **Context:** Enough detail for someone to pick this up in 3 months
+* **Depends on / blocked by:** Prerequisites
+
+Options: **A)** Add to TODOS.md **B)** Skip **C)** Build it now
+
+### DX Scorecard
+
+```
++====================================================================+
+|              DX PLAN REVIEW — SCORECARD                             |
++====================================================================+
+| Dimension            | Score  | Prior  | Trend  |
+|----------------------|--------|--------|--------|
+| Getting Started      | __/10  | __/10  | __ ↑↓  |
+| API/CLI/SDK          | __/10  | __/10  | __ ↑↓  |
+| Error Messages       | __/10  | __/10  | __ ↑↓  |
+| Documentation        | __/10  | __/10  | __ ↑↓  |
+| Upgrade Path         | __/10  | __/10  | __ ↑↓  |
+| Dev Environment      | __/10  | __/10  | __ ↑↓  |
+| Community            | __/10  | __/10  | __ ↑↓  |
+| DX Measurement       | __/10  | __/10  | __ ↑↓  |
++--------------------------------------------------------------------+
+| TTHW                 | __ min | __ min | __ ↑↓  |
+| Competitive Rank     | [Champion/Competitive/Needs Work/Red Flag]   |
+| Magical Moment       | [designed/missing] via [delivery vehicle]    |
+| Product Type         | [type]                                      |
+| Mode                 | [EXPANSION/POLISH/TRIAGE]                    |
+| Overall DX           | __/10  | __/10  | __ ↑↓  |
++====================================================================+
+| DX PRINCIPLE COVERAGE                                               |
+| Zero Friction      | [covered/gap]                                  |
+| Learn by Doing     | [covered/gap]                                  |
+| Fight Uncertainty  | [covered/gap]                                  |
+| Opinionated + Escape Hatches | [covered/gap]                       |
+| Code in Context    | [covered/gap]                                  |
+| Magical Moments    | [covered/gap]                                  |
++====================================================================+
+```
+
+If all passes 8+: "DX plan is solid. Developers will have a good experience."
+If any below 6: Flag as critical DX debt with specific impact on adoption.
+If TTHW > 10 min: Flag as blocking issue.
+
+### DX Implementation Checklist
+
+```
+DX IMPLEMENTATION CHECKLIST
+============================
+[ ] Time to hello world < [target from 0C]
+[ ] Installation is one command
+[ ] First run produces meaningful output
+[ ] Magical moment delivered via [vehicle from 0D]
+[ ] Every error message has: problem + cause + fix + docs link
+[ ] API/CLI naming is guessable without docs
+[ ] Every parameter has a sensible default
+[ ] Docs have copy-paste examples that actually work
+[ ] Examples show real use cases, not just hello world
+[ ] Upgrade path documented with migration guide
+[ ] Breaking changes have deprecation warnings + codemods
+[ ] TypeScript types included (if applicable)
+[ ] Works in CI/CD without special configuration
+[ ] Free tier available, no credit card required
+[ ] Changelog exists and is maintained
+[ ] Search works in documentation
+[ ] Community channel exists and is monitored
+```
+
+{{TASKS_SECTION_EMIT:devex-review}}
+
+### Unresolved Decisions
+If any AskUserQuestion goes unanswered, note here. Never silently default.
+
+{{PLAN_FILE_REVIEW_REPORT}}
+
+## Review Log
+
+When a plan/report file is in scope, persist only after its successful write and Read-back
+above. On failure, report the error and stop; do not log completion or an accepted decision.
+**PLAN MODE EXCEPTION — ALWAYS RUN after verification:** these commands write review
+metadata to `~/.gstack/`; the following dashboard reads the saved result.
+
+```bash
+~/.claude/skills/gstack/bin/gstack-review-log '{"skill":"plan-devex-review","timestamp":"TIMESTAMP","status":"STATUS","initial_score":N,"overall_score":N,"product_type":"PRODUCT_TYPE","tthw_current":"TTHW_CURRENT","tthw_target":"TTHW_TARGET","mode":"MODE","persona":"PERSONA","competitive_tier":"COMPETITIVE_TIER","unresolved":N,"commit":"COMMIT"}'
+```
+
+TIMESTAMP = current ISO 8601 datetime; STATUS = "clean" if score 8+ AND 0 unresolved, else "issues_open"; other fields from the DX Scorecard + Step 0; COMMIT = `git rev-parse --short HEAD`.
+
+{{REVIEW_DASHBOARD}}
+
+{{LEARNINGS_LOG}}
+
+{{GBRAIN_SAVE_RESULTS}}
+
+{{BRAIN_WRITE_BACK}}
+
+{{BRAIN_CACHE_REFRESH}}
+
+## Next Steps — Review Chaining
+
+After displaying the Review Readiness Dashboard, recommend next reviews:
+
+**Recommend /plan-eng-review if eng review is not skipped globally** — DX issues often
+have architectural implications. If this DX review found API design problems, error
+handling gaps, or CLI ergonomics issues, eng review should validate the fixes.
+
+**Suggest /plan-design-review if user-facing UI exists** — DX review focuses on
+developer-facing surfaces; design review covers end-user-facing UI.
+
+**Recommend /devex-review after implementation** — the boomerang. Plan said TTHW would
+be [target from 0C]. Did reality match? Run /devex-review on the live product to find
+out. This is where the competitive benchmark pays off: you have a concrete target to
+measure against.
+
+Use AskUserQuestion with applicable options:
+- **A)** Run /plan-eng-review next (required gate)
+- **B)** Run /plan-design-review (only if UI scope detected)
+- **C)** Ready to implement, run /devex-review after shipping
+- **D)** Skip, I'll handle next steps manually
+
+## Mode Quick Reference
+```
+             | DX EXPANSION     | DX POLISH          | DX TRIAGE
+Scope        | Push UP (opt-in) | Maintain           | Critical only
+Posture      | Enthusiastic     | Rigorous           | Surgical
+Competitive  | Full benchmark   | Full benchmark     | Skip
+Magical      | Full design      | Verify exists      | Skip
+Journey      | All stages +     | All stages         | Install + Hello
+             | best-in-class    |                    | World only
+Passes       | All 8, expanded  | All 8, standard    | Pass 1 + 3 only
+Outside voice| Recommended      | Recommended        | Skip
+```
+
+## Formatting Rules
+
+* NUMBER issues (1, 2, 3...) and LETTERS for options (A, B, C...).
+* Label with NUMBER + LETTER (e.g., "3A", "3B").
+* One sentence max per option.
+* After each pass, report its findings. Wait for any pending decision before moving on.
+* Rate before and after each pass for scannability.

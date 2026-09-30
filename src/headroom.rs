@@ -102,6 +102,32 @@ pub fn find_headroom_bin() -> Option<String> {
 }
 
 pub fn find_python() -> Option<String> {
+    // `uv tool install headroom-ai` isolates the library from system Python.
+    // Use its interpreter, including a custom UV_TOOL_DIR, before PATH aliases.
+    static TOOL_ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    let root = TOOL_ROOT.get().cloned().or_else(|| {
+        let root = std::env::var_os("UV_TOOL_DIR")
+            .map(PathBuf::from)
+            .or_else(|| {
+                let uv = find_bin("uv")?;
+                let directory =
+                    crate::ecosystem::run_capture(&uv, &["tool", "dir"], None, 5_000).ok()?;
+                Some(PathBuf::from(directory.trim()))
+            })?;
+        let _ = TOOL_ROOT.set(root.clone());
+        Some(root)
+    });
+    if let Some(root) = root {
+        let environment = root.join("headroom-ai");
+        let python = if cfg!(windows) {
+            environment.join("Scripts/python.exe")
+        } else {
+            environment.join("bin/python")
+        };
+        if python.is_file() {
+            return Some(python.to_string_lossy().into_owned());
+        }
+    }
     find_bin("python3")
         .or_else(|| find_bin("python"))
         .or_else(|| find_bin("py"))
@@ -437,6 +463,39 @@ pub fn prepare_tool_body(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uv_tool_interpreter_takes_precedence_and_late_install_is_detected() {
+        const CHILD: &str = "NUR_TEST_HEADROOM_UV_CHILD";
+        if let Some(root) = std::env::var_os(CHILD) {
+            let root = PathBuf::from(root);
+            let interpreter = root.join("headroom-ai").join(if cfg!(windows) {
+                "Scripts/python.exe"
+            } else {
+                "bin/python"
+            });
+            let _ = find_python();
+            std::fs::create_dir_all(interpreter.parent().unwrap()).unwrap();
+            std::fs::write(&interpreter, b"fixture interpreter").unwrap();
+            assert_eq!(
+                find_python(),
+                Some(interpreter.to_string_lossy().into_owned())
+            );
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("nur-headroom-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "headroom::tests::uv_tool_interpreter_takes_precedence_and_late_install_is_detected", "--nocapture"])
+            .env(CHILD, &root).env("UV_TOOL_DIR", &root).env("NUR_HOME", &root)
+            .output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
     use crate::config::HeadroomConfig;
 
     #[test]

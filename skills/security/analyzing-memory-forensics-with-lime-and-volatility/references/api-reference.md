@@ -53,6 +53,6 @@ diff pslist.txt psscan.txt
 
 ### References
 
-- LiME: https://github.com/504ensicsLabs/LiME
+- LiME: https://github.com/jtsylve/LiME
 - Volatility 3: https://github.com/volatilityfoundation/volatility3
 - Volatility 3 docs: https://volatility3.readthedocs.io/

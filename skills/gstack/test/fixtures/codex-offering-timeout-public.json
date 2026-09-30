@@ -1,0 +1,109 @@
+{
+  "sourceRevision": "e39797c46bb1fde0abb06ca161972b6a62df680c",
+  "engSectionSha256": "feba0c7ca5c3080acceb22022e369ac0c24375203bbc4f080cc983e5aff83c6f",
+  "logSha256": "3161fbabf565d279e4b07248d2347e20c8302d17f5ecf62064838289e7a07163",
+  "transcriptSha256": "c5496cb31e0be13be6d6b1a3d9460951cb2e0ac92c2c1e8f1c46c96bf3325d4e",
+  "case": "codex-offered-eng-review",
+  "cases": [
+    {
+      "attempt": 1,
+      "exitReason": "timeout",
+      "timeoutMs": 120000,
+      "maxTurns": 8,
+      "firstToolSeconds": 10,
+      "writeSeconds": 103,
+      "summaryBytes": 13113,
+      "summaryWords": 1646,
+      "summarySha256": "16db43fb8764e74503e710c08afa277593dbe742fbf4e7d6985af535e8083780",
+      "writeAcknowledged": true,
+      "providerFinalResult": false,
+      "tools": [
+        {
+          "name": "Bash",
+          "elapsedSeconds": 10,
+          "acknowledged": true,
+          "isError": false,
+          "target": null
+        },
+        {
+          "name": "Read",
+          "elapsedSeconds": 19,
+          "acknowledged": true,
+          "isError": false,
+          "target": "<fixture>/plan-eng-review/sections/review-sections.md"
+        },
+        {
+          "name": "Read",
+          "elapsedSeconds": 27,
+          "acknowledged": true,
+          "isError": false,
+          "target": "<fixture>/plan-eng-review/sections/review-sections.md"
+        },
+        {
+          "name": "Read",
+          "elapsedSeconds": 32,
+          "acknowledged": true,
+          "isError": false,
+          "target": "<fixture>/plan-eng-review/sections/review-sections.md"
+        },
+        {
+          "name": "Bash",
+          "elapsedSeconds": 39,
+          "acknowledged": true,
+          "isError": false,
+          "target": null
+        },
+        {
+          "name": "Write",
+          "elapsedSeconds": 103,
+          "acknowledged": true,
+          "isError": false,
+          "target": "<fixture>/codex-offered-eng-review-summary.md"
+        }
+      ]
+    },
+    {
+      "attempt": 2,
+      "exitReason": "timeout",
+      "timeoutMs": 120000,
+      "maxTurns": 8,
+      "firstToolSeconds": 17,
+      "writeSeconds": 105,
+      "summaryBytes": 11822,
+      "summaryWords": 1505,
+      "summarySha256": "29f9cc50b017b0a5bd59212d5fb4fffa362a2139f6e5f2be0b9f8ce5afc81686",
+      "writeAcknowledged": true,
+      "providerFinalResult": false,
+      "tools": [
+        {
+          "name": "Bash",
+          "elapsedSeconds": 17,
+          "acknowledged": true,
+          "isError": false,
+          "target": null
+        },
+        {
+          "name": "Read",
+          "elapsedSeconds": 24,
+          "acknowledged": true,
+          "isError": false,
+          "target": "<fixture>/plan-eng-review/sections/review-sections.md"
+        },
+        {
+          "name": "Bash",
+          "elapsedSeconds": 39,
+          "acknowledged": true,
+          "isError": false,
+          "target": null
+        },
+        {
+          "name": "Write",
+          "elapsedSeconds": 105,
+          "acknowledged": true,
+          "isError": false,
+          "target": "<fixture>/codex-offered-eng-review-summary.md"
+        }
+      ]
+    }
+  ]
+}

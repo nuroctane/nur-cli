@@ -4,8 +4,10 @@ description: Vercel deployment and CI/CD expert guidance. Use when deploying, pr
 metadata:
   priority: 6
   docs:
-    - "https://vercel.com/docs/deployments/overview"
+    - "https://vercel.com/docs/deployments"
     - "https://vercel.com/docs/git"
+    - "https://vercel.com/docs/deployments/promoting-a-deployment"
+    - "https://vercel.com/docs/deployment-checks"
   sitemap: "https://vercel.com/sitemap.xml"
   pathPatterns:
     - '.github/workflows/*.yml'
@@ -93,10 +95,15 @@ vercel deploy --prebuilt --prod
 
 **When to use `--prebuilt`:** Custom CI pipelines where you control the build step, need build caching at the CI level, or need to run tests between build and deploy.
 
+**Prebuilt limits:** [System Environment Variables are missing at build time](https://vercel.com/docs/cli/deploy#when-not-to-use---prebuilt), and Next.js Skew Protection needs a [custom deployment ID](https://vercel.com/docs/skew-protection#custom-deployment-id).
+
 ### Promote & Rollback
 
 ```bash
-# Promote a preview deployment to production
+# Stage a production deployment without assigning domains
+vercel deploy --prod --skip-domain
+
+# Promote it (instant, no rebuild)
 vercel promote <deployment-url-or-id>
 
 # Rollback to the previous production deployment
@@ -106,7 +113,9 @@ vercel rollback
 vercel rollback <deployment-url-or-id>
 ```
 
-**Promote vs deploy --prod:** `promote` is instant — it re-points the production alias without rebuilding. Use it when a preview deployment has been validated and is ready for production.
+**Promote a production deployment, not a preview.** Promoting a staged production deployment is instant and serves the same build. Promoting a preview rebuilds it with production environment variables, so the tested build is not the one released.
+
+**Rollback turns off auto-assignment.** New production pushes stop going live until `vercel promote` restores it.
 
 ### Inspect Deployments
 
@@ -124,6 +133,10 @@ vercel logs <deployment-url> --follow
 
 ## CI/CD Integration
 
+### When to Add a CI Pipeline
+
+The Git integration builds every push, posts preview URLs on pull requests, and deploys the production branch. Use CI for what Vercel does not run: tests, security scans, performance budgets, and approval gates. Gate releases on them with [Deployment Checks](references/deployment-checks.md) while Vercel keeps building. Deploy from CI only when the build must run in your runner, such as to keep source code off Vercel or for GitHub Enterprise Server.
+
 ### Required Environment Variables
 
 Every CI pipeline needs these three variables:
@@ -134,7 +147,7 @@ VERCEL_ORG_ID=<org-id>           # From .vercel/project.json
 VERCEL_PROJECT_ID=<project-id>   # From .vercel/project.json
 ```
 
-Set these as secrets in your CI provider. Never commit them to source control.
+Set these as secrets in your CI provider. Never commit them to source control. The CLI reads `VERCEL_TOKEN` from the environment; do not pass `--token`, which exposes it in process lists and logs.
 
 ### GitHub Actions
 
@@ -143,6 +156,11 @@ name: Deploy to Vercel
 on:
   push:
     branches: [main]
+
+env:
+  VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
 
 jobs:
   deploy:
@@ -154,120 +172,69 @@ jobs:
         run: npm install -g vercel
 
       - name: Pull Vercel Environment
-        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+        run: vercel pull --yes --environment=production
 
       - name: Build
-        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+        run: vercel build --prod
 
       - name: Deploy
-        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+        run: vercel deploy --prebuilt --prod
 ```
 
-### OIDC Federation (Secure Backend Access)
+### Other CI Pipelines and Backend Access
 
-Vercel OIDC federation is for **secure backend access** — letting your deployed Vercel functions authenticate with third-party services (AWS, GCP, HashiCorp Vault) without storing long-lived secrets. It does **not** replace `VERCEL_TOKEN` for CLI deployments.
-
-**What OIDC does:** Your Vercel function requests a short-lived OIDC token from Vercel at runtime, then exchanges it with an external provider's STS/token endpoint for scoped credentials.
-
-**What OIDC does not do:** Authenticate the Vercel CLI in CI pipelines. All `vercel pull`, `vercel build`, and `vercel deploy` commands still require `--token=${{ secrets.VERCEL_TOKEN }}`.
-
-**When to use OIDC:**
-- Serverless functions that need to call AWS APIs (S3, DynamoDB, SQS)
-- Functions authenticating to GCP services via Workload Identity Federation
-- Any runtime service-to-service auth where you want to avoid storing static secrets in Vercel env vars
-
-### GitLab CI
-
-```yaml
-deploy:
-  image: node:20
-  stage: deploy
-  script:
-    - npm install -g vercel
-    - vercel pull --yes --environment=production --token=$VERCEL_TOKEN
-    - vercel build --prod --token=$VERCEL_TOKEN
-    - vercel deploy --prebuilt --prod --token=$VERCEL_TOKEN
-  only:
-    - main
-```
-
-### Bitbucket Pipelines
-
-```yaml
-pipelines:
-  branches:
-    main:
-      - step:
-          name: Deploy to Vercel
-          image: node:20
-          script:
-            - npm install -g vercel
-            - vercel pull --yes --environment=production --token=$VERCEL_TOKEN
-            - vercel build --prod --token=$VERCEL_TOKEN
-            - vercel deploy --prebuilt --prod --token=$VERCEL_TOKEN
-```
+| Task | Read |
+| --- | --- |
+| Post preview URLs on pull requests from GitHub Actions, or deploy from GitLab CI or Bitbucket Pipelines | [references/cli-pipelines.md](references/cli-pipelines.md) |
+| Let deployed functions reach AWS, GCP, or Vault without static secrets (OIDC federation) | [references/oidc-federation.md](references/oidc-federation.md) |
+| Deployment Checks, or testing protected deployments from CI | [references/deployment-checks.md](references/deployment-checks.md) |
 
 ## Common CI Patterns
 
-### Preview Deployments on PRs
+### Release Only Tested Builds
+
+With Git deployments, require [Deployment Checks](references/deployment-checks.md). When CI deploys with the CLI, stage a production deployment, test it, then promote that build:
 
 ```yaml
-# GitHub Actions
-on:
-  pull_request:
-    types: [opened, synchronize]
+env:
+  VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
 
 jobs:
-  preview:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: npm install -g vercel
-      - run: vercel pull --yes --environment=preview --token=${{ secrets.VERCEL_TOKEN }}
-      - run: vercel build --token=${{ secrets.VERCEL_TOKEN }}
-      - id: deploy
-        run: echo "url=$(vercel deploy --prebuilt --token=${{ secrets.VERCEL_TOKEN }})" >> $GITHUB_OUTPUT
-      - name: Comment PR
-        uses: actions/github-script@v7
-        with:
-          script: |
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `Preview: ${{ steps.deploy.outputs.url }}`
-            })
-```
-
-### Promote After Tests Pass
-
-```yaml
-jobs:
-  deploy-preview:
-    # ... deploy preview ...
-    outputs:
-      url: ${{ steps.deploy.outputs.url }}
-
-  e2e-tests:
-    needs: deploy-preview
-    runs-on: ubuntu-latest
-    steps:
-      - run: npx playwright test --base-url=${{ needs.deploy-preview.outputs.url }}
-
-  promote:
-    needs: [deploy-preview, e2e-tests]
+  stage:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
+    steps:
+      # ... checkout, install, vercel pull --environment=production, vercel build --prod ...
+      - id: deploy
+        run: echo "url=$(vercel deploy --prebuilt --prod --skip-domain)" >> $GITHUB_OUTPUT
+
+  e2e-tests:
+    needs: stage
+    runs-on: ubuntu-latest
+    steps:
+      # ... checkout, install, bypass header in playwright.config.ts (see references/deployment-checks.md) ...
+      - run: npx playwright test
+        env:
+          BASE_URL: ${{ needs.stage.outputs.url }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+
+  promote:
+    needs: [stage, e2e-tests]
+    runs-on: ubuntu-latest
     steps:
       - run: npm install -g vercel
-      - run: vercel promote ${{ needs.deploy-preview.outputs.url }} --token=${{ secrets.VERCEL_TOKEN }}
+      - run: vercel promote ${{ needs.stage.outputs.url }}
 ```
 
 ## Global CLI Flags for CI
 
 | Flag | Purpose |
 |------|---------|
-| `--token <token>` | Authenticate (required in CI) |
+| `--token <token>` | Authenticate; in CI, set `VERCEL_TOKEN` instead |
 | `--yes` / `-y` | Skip confirmation prompts |
 | `--scope <team>` | Execute as a specific team |
 | `--cwd <dir>` | Set working directory |
@@ -276,7 +243,7 @@ jobs:
 
 1. **Always use `--prebuilt` in CI** — separates build from deploy, enables build caching and test gates
 2. **Use `vercel pull` before build** — ensures correct env vars and project settings
-3. **Prefer `promote` over re-deploy** — instant, no rebuild, same artifact
+3. **Release only tested builds** — Deployment Checks (Git) or staged production builds (CLI)
 4. **Use OIDC federation for runtime backend access** — lets Vercel functions auth to AWS/GCP without static secrets (does not replace `VERCEL_TOKEN` for CLI)
 5. **Pin the Vercel CLI version in CI** — `npm install -g vercel@latest` can break unexpectedly
 6. **Add `--yes` flag in CI** — prevents interactive prompts from hanging pipelines
@@ -289,16 +256,16 @@ jobs:
 | Custom CI/CD (Actions, CircleCI) | Prebuilt deploy | `vercel build && vercel deploy --prebuilt` |
 | Monorepo with Turborepo | Affected + remote cache | `turbo run build --affected --remote-cache` |
 | Preview for every PR | Default behavior | Auto-creates preview URL per branch |
-| Promote preview to production | CLI promotion | `vercel promote <url>` |
+| Release a tested build | Deployment Checks (Git) or staged production (CLI) | Required checks, or `vercel deploy --prod --skip-domain` → test → `vercel promote <url>` |
 | Atomic deploys with DB migrations | Two-phase | Run migration → verify → `vercel promote` |
-| Edge-first architecture | Edge Functions | Set `runtime: 'edge'` in route config |
+| Latency-sensitive regional data | Vercel Functions | Keep the Node.js default; set the function region near the data |
 
 ## Common Build Errors
 
 | Error | Cause | Fix |
 |-------|-------|-----|
 | `ERR_PNPM_OUTDATED_LOCKFILE` | Lockfile doesn't match package.json | Run `pnpm install`, commit lockfile |
-| `NEXT_NOT_FOUND` | Root directory misconfigured | Set `rootDirectory` in Project Settings |
+| `NEXT_NOT_FOUND` | Root directory misconfigured | Set Root Directory in Project Settings |
 | `Invalid next.config.js` | Config syntax error | Validate config locally with `next build` |
 | `functions/api/*.js` mismatch | Wrong file structure | Move to `app/api/` directory (App Router) |
 | `Error: EPERM` | File permission issue in build | Don't `chmod` in build scripts; use postinstall |
@@ -340,7 +307,7 @@ Based on the deployment outcome:
 - **Success (production)** → "Your production site is live. Run `/status` to see the full project overview."
 - **Build error** → "Check the build logs above. Common fixes: verify `build` script in package.json, check for missing env vars with `/env list`, ensure dependencies are installed."
 - **Missing env vars** → "Run `/env pull` to sync environment variables locally, or `/env list` to review what's configured on Vercel."
-- **Monorepo issues** → "Ensure the correct project root is configured in Vercel project settings. Check `vercel.json` for `rootDirectory`."
+- **Monorepo issues** → "Set the Root Directory in Project Settings to the app's folder; `vercel.json` has no `rootDirectory` key."
 - **Post-deploy errors detected** → "Review errors above. Check `vercel logs <url> --level error` for details. If drains are configured, correlate with external monitoring."
 - **No monitoring configured** → "Set up drains or install an error tracking integration before the next production deploy. Run `/status` for a full observability diagnostic."
 
@@ -348,7 +315,7 @@ Based on the deployment outcome:
 
 - [Deployments](https://vercel.com/docs/deployments)
 - [Vercel CLI](https://vercel.com/docs/cli)
-- [GitHub Actions](https://vercel.com/docs/deployments/git/vercel-for-github)
-- [GitLab CI](https://vercel.com/docs/deployments/git/vercel-for-gitlab)
-- [Bitbucket Pipelines](https://vercel.com/docs/deployments/git/vercel-for-bitbucket)
+- [GitHub Actions](https://vercel.com/docs/git/vercel-for-github)
+- [GitLab CI](https://vercel.com/docs/git/vercel-for-gitlab)
+- [Bitbucket Pipelines](https://vercel.com/docs/git/vercel-for-bitbucket)
 - [OIDC Federation](https://vercel.com/docs/oidc)

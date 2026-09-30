@@ -106,11 +106,13 @@ def isolated_env(home, port):
 
 
 def tool_messages(request):
-    return [
-        str(m.get("content", ""))
-        for m in request.get("messages", [])
-        if m.get("role") == "tool"
-    ]
+    out = [str(m.get("content", "")) for m in request.get("messages", []) if m.get("role") == "tool"]
+    out += [str(item.get("output", "")) for item in request.get("input", []) if isinstance(item, dict) and item.get("type") == "function_call_output"]
+    for message in request.get("messages", []):
+        content = message.get("content", [])
+        if isinstance(content, list):
+            out += [str(item.get("content", "")) for item in content if item.get("type") == "tool_result"]
+    return out
 
 
 def check(scenario, result, workspace, requests):
@@ -127,7 +129,17 @@ def check(scenario, result, workspace, requests):
     for needle in expect.get("stderr_contains", []):
         if needle not in result.stderr:
             failures.append(f"stderr lacks {needle!r}")
+    protocol = expect.get("protocol")
+    if protocol and any(not r.get("_path", "").endswith("/" + protocol) for r in requests):
+        failures.append(f"requests used the wrong wire protocol, expected {protocol}")
     sent = "\n".join(json.dumps(r) for r in requests)
+    if "min_requests" in expect and len(requests) < expect["min_requests"]:
+        failures.append(f"only {len(requests)} requests, expected at least {expect['min_requests']}")
+    if expect.get("last_request_max_envelope_chars") and requests:
+        request = requests[-1]
+        reserve = request.get("max_output_tokens",request.get("max_tokens",request.get("max_completion_tokens",0))) or 0
+        if len(json.dumps(request,ensure_ascii=False)) + reserve*4 > expect["last_request_max_envelope_chars"]:
+            failures.append("final request did not fit the provider envelope")
     for needle in expect.get("requests_lack", []):
         if needle in sent:
             failures.append(f"a model request contains {needle!r}")
@@ -201,11 +213,17 @@ def run_scenario(binary, scenario_path):
             (workspace / rel).write_text(text, encoding="utf-8")
         provider, port, log = start_provider(scenario["script"], tmp)
         env = isolated_env(tmp / "home", port)
+        if scenario.get("provider"):
+            provider_id = scenario["provider"]
+            env["OPENAI_API_KEY"] = "e2e-isolated-key"
+            env["ANTHROPIC_API_KEY"] = "e2e-isolated-key"
+            config = Path(env["NUR_HOME"]) / "config.toml"
+            config.write_text(f'provider="{provider_id}"\nbase_url="http://127.0.0.1:{port}/v1"\nmodel="{scenario.get("model", "e2e-model")}"\n', encoding="utf-8")
         # Files under the scenario's nur home (hooks.toml, config additions).
         # "{home}" and "{workspace}" are replaced with the real paths.
         nur_home = Path(env["NUR_HOME"])
         for rel, text in scenario.get("setup_home_files", {}).items():
-            text = text.replace("{home}", nur_home.as_posix()).replace("{workspace}", workspace.as_posix())
+            text = text.replace("{home}", nur_home.as_posix()).replace("{workspace}", workspace.as_posix()).replace("{port}",str(port))
             (nur_home / rel).parent.mkdir(parents=True, exist_ok=True)
             (nur_home / rel).write_text(text, encoding="utf-8")
         try:
@@ -273,7 +291,12 @@ def main():
     binary = find_binary(opts.bin)
     paths = sorted((HERE / "scenarios").glob("*.json"))
     if opts.names:
+        unknown = sorted(set(opts.names) - {p.stem for p in paths})
+        if unknown:
+            parser.error("unknown scenarios: " + ", ".join(unknown))
         paths = [p for p in paths if p.stem in opts.names]
+    if not paths:
+        parser.error("no scenarios selected")
     OUT.mkdir(parents=True, exist_ok=True)
     # One fresh index per suite run: a copy older than nur's 24h TTL would be
     # ignored, silently putting every scenario back on the cold scan.
@@ -298,7 +321,9 @@ def main():
         for f in r["failures"]:
             print(f"      {f}")
     failed = sum(not r["passed"] for r in reports)
-    print(f"\n{len(reports) - failed}/{len(reports)} passed · artifacts in {OUT}")
+    skipped = sum(bool(r.get("skipped")) for r in reports)
+    passed = len(reports) - failed - skipped
+    print(f"\n{passed} passed / {failed} failed / {skipped} skipped · artifacts in {OUT}")
     sys.exit(1 if failed else 0)
 
 

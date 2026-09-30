@@ -2,6 +2,16 @@
 
 NurCLI ships with an auto-provisioned knowledge stack.
 
+The [v0.41.0 refresh](stack-update-2026-09-30.md) records upstream skill commits
+and resource hashes. Complete managed trees refresh together; local additions
+and Nur adaptations remain available. Explicit `ecosystem ensure --force`
+updates installed companions as well as missing ones. Headroom uses its isolated
+uv interpreter when installed as a tool, so inline compression works without
+installing the library into global Python.
+
+`nur ecosystem refresh-skills` refreshes only global metadata and confirms that a
+complete snapshot was saved. It does not resolve credentials or install packages.
+
 ## Components
 
 | Component | Role |
@@ -12,7 +22,7 @@ NurCLI ships with an auto-provisioned knowledge stack.
 | **Executor** | MCP / OpenAPI gateway catalog |
 | **GraphJin** | GraphJin - governed GraphQL→SQL over live databases (`graphjin` tool · `/graphjin`). npm-installed when Node is present, with a SQLite demo config seeded under `~/.nur/graphjin/` so `graphjin serve --demo --path <dir>` works out of the box; point `GRAPHJIN_CONFIG_PATH` at a real database to go live |
 | **dogwood** | [Dogwood](https://github.com/dogwood-policy/dogwood) runtime verification for AI agents - a Cedar-extending policy language with temporal logic (since / formerly / once / count_within) over the tool-call event stream (`dogwood` tool). Auto-installed via cargo when available (`cargo install --git https://github.com/dogwood-policy/dogwood amzn-dogwood-cli`); default policy pack under `~/.nur/dogwood/`. The reference interpreter is an on-demand evaluation/guardrail, not a runtime gate |
-| **omp** | [Oh My Pi](https://omp.sh) coding-agent backend - metered, cancellation-aware `omp -p` delegation with authenticated economy-model discovery and isolated focused prompts (requires **omp >= 18.0.9**, Bun >= 1.3.14; `ecosystem ensure` auto-upgrades) |
+| **omp** | [Oh My Pi](https://omp.sh) coding-agent backend - metered, cancellation-aware `omp -p` delegation with authenticated economy-model discovery and isolated focused prompts (requires **omp >= 18.4.4**, Bun >= 1.3.14; `ecosystem ensure` auto-upgrades) |
 | **browser** | [agent-browser-cli](https://github.com/sleepinginsummer/agent-browser-cli) real **default browser** bridge (Arc / Chrome / Edge / Brave / …) - perception + control via the `browser` tool; `nur browser setup` stages the extension once |
 | **terminal-browser** | [terminal-browser.com](https://terminal-browser.com/) in-terminal Chromium (`terminal_browser` tool · `/tb`). Native/WSL when the upstream binary is present; on Windows Nur falls back to agent-browser-cli so open/snapshot/click still work |
 | **Cua** | [trycua/cua](https://github.com/trycua/cua) computer-use driver (`cua-driver`) - full-desktop automation via MCP + CLI. Auto-installed on single-shot install **without** the elevated autostart daemon (`-NoAutoStart`). Toggle the always-on background daemon in-app with **`/cua on`** / **`/cua off`** (`/cua status` to check); or use it on demand with `cua-driver serve` / wire its MCP with `cua-driver mcp-config` |

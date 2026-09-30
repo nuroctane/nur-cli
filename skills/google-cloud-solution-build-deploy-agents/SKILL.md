@@ -1,6 +1,7 @@
 ---
 name: google-cloud-solution-build-deploy-agents
 metadata:
+  version: "1.0.0"
   category: MultiProductSolutions
 description: >-
   Designs, builds, and deploys AI agents or multi-agent systems on Google Cloud.

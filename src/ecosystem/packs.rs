@@ -16,7 +16,7 @@ const SKILL_PACKS: &[(&str, &str)] = &[
     ("emilkowalski/skills", "design"),
     // Website reverse-engineering skill (clone-website)
     ("JCodesMore/ai-website-cloner-template", "clone-website"),
-    // 817 cybersecurity skills (MITRE/NIST mapped)
+    // the cybersecurity skill pack (MITRE/NIST mapped)
     ("mukul975/Anthropic-Cybersecurity-Skills", "cybersecurity"),
     // Also land core engineering packs into ~/.agents via skills CLI when available
     // (plugins path below is primary; this dual-writes for Agent Skills compat).
@@ -48,7 +48,8 @@ pub fn ensure_skills_cli(node_ok: bool) -> ComponentStatus {
         c.detail = "needs Node.js".into();
         return c;
     }
-    if find_bin("skills").is_none() {
+    if find_bin("skills").is_none() || super::ecosystem_force_pub() {
+        let _guard = super::npm_lock();
         let _ = run_quiet("npm", &["install", "-g", "skills@latest"], None, 300_000);
     }
     if let Some(bin) = find_bin("skills") {
@@ -72,7 +73,8 @@ pub fn ensure_akm(node_ok: bool) -> ComponentStatus {
         return c;
     }
     // akm-cli ships a bun wrapper on Windows; also try running via node.
-    if find_bin("akm").is_none() {
+    if find_bin("akm").is_none() || super::ecosystem_force_pub() {
+        let _guard = super::npm_lock();
         let _ = run_quiet("npm", &["install", "-g", "akm-cli@latest"], None, 300_000);
     }
     // Prefer bun if present (akm's native runtime).
@@ -191,7 +193,7 @@ pub fn ensure_graphjin() -> ComponentStatus {
     // Out-of-the-box: install via npm when Node exists and graphjin is
     // missing (serialized under the shared npm lock like every other pack).
     let node_ok = super::which("node") || super::which("node.exe");
-    if find_bin("graphjin").is_none() && node_ok {
+    if (find_bin("graphjin").is_none() || super::ecosystem_force_pub()) && node_ok {
         let _guard = super::npm_lock();
         let npm = find_bin("npm").unwrap_or_else(|| "npm".into());
         let _ = super::run_quiet(&npm, &["install", "-g", "graphjin@latest"], None, 600_000);
@@ -301,7 +303,7 @@ pub fn ensure_omp() -> ComponentStatus {
     let current = best_omp();
     let needs_upgrade = match &current {
         None => true,
-        Some((_, ver)) => !omp_meets_feature_floor(ver),
+        Some((_, ver)) => super::ecosystem_force_pub() || !omp_meets_feature_floor(ver),
     };
     if needs_upgrade {
         upgrade_omp(&mut c);
@@ -339,7 +341,7 @@ pub fn ensure_omp() -> ComponentStatus {
 // omp 18 (can1357/oh-my-pi): session-resume corruption fix (18.0.8), OMP_APP_NAME
 // usage attribution (18.0.7), Claude subscription OAuth fixes. The CLI surface nur
 // delegates with (`-p`, `--mode json`, `--no-session`, `--tools`) is unchanged.
-const OMP_FEATURE_FLOOR: (u64, u64, u64) = (18, 0, 9);
+const OMP_FEATURE_FLOOR: (u64, u64, u64) = (18, 4, 4);
 const BUN_OMP_FLOOR: (u64, u64, u64) = (1, 3, 14);
 
 fn upgrade_omp(c: &mut ComponentStatus) {
@@ -712,6 +714,28 @@ fn mirror_missing_tree(
     source: &std::path::Path,
     destination: &std::path::Path,
 ) -> std::io::Result<()> {
+    if destination.is_symlink() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "skill mirror root is a symlink",
+        ));
+    }
+    fs::create_dir_all(destination)?;
+    let marker = destination.join(".nur-mirror.json");
+    let mut managed: std::collections::HashMap<String, String> = fs::read(&marker)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+    mirror_managed_tree(source, destination, destination, &mut managed)?;
+    crate::config::atomic_write(&marker, &serde_json::to_vec(&managed)?)
+}
+
+fn mirror_managed_tree(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+    root: &std::path::Path,
+    managed: &mut std::collections::HashMap<String, String>,
+) -> std::io::Result<()> {
     fs::create_dir_all(destination)?;
     for entry in fs::read_dir(source)? {
         let entry = entry?;
@@ -730,19 +754,37 @@ fn mirror_missing_tree(
             continue;
         }
         let target = destination.join(&name);
+        if target.is_symlink() {
+            continue;
+        }
         if file_type.is_dir() {
-            mirror_missing_tree(&entry.path(), &target)?;
-        } else if file_type.is_file() && !target.exists() {
-            // Mirror MISSING files only: the destination's primary SKILL.md
-            // (and any locally customized file) must never be overwritten.
-            fs::copy(entry.path(), target)?;
+            mirror_managed_tree(&entry.path(), &target, root, managed)?;
+        } else if file_type.is_file() && name_text != ".nur-mirror.json" {
+            let key = target
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            let incoming = fs::read(entry.path())?;
+            let digest = crate::agent::receipt::sha256_hex(&incoming);
+            let current = fs::read(&target)
+                .ok()
+                .map(|body| crate::agent::receipt::sha256_hex(&body));
+            let owned = current.is_none() || current.as_ref() == managed.get(&key);
+            if current.as_ref() == Some(&digest) {
+                managed.insert(key, digest);
+            } else if owned {
+                crate::config::atomic_write(&target, &incoming)?;
+                fs::set_permissions(&target, fs::metadata(entry.path())?.permissions())?;
+                managed.insert(key, digest);
+            }
         }
     }
     Ok(())
 }
 
 /// Catalog / index skills that point the agent at large packs without loading
-/// 817 full playbooks into every prompt.
+/// the whole pack of playbooks into every prompt.
 fn write_catalog_skills() -> Result<(), String> {
     let root = nur_home().join("skills");
     fs::create_dir_all(&root).map_err(|e| e.to_string())?;
@@ -874,7 +916,7 @@ User says: clone this site, reverse-engineer URL, pixel-perfect rebuild, copy th
 
 const CYBER_ROUTER: &str = r#"---
 name: cybersecurity
-description: "Router into 817 Anthropic-Cybersecurity-Skills (MITRE ATT&CK, NIST CSF, ATLAS, D3FEND, AI RMF, F3). Use for security investigations, DFIR, red/blue team playbooks."
+description: "Router into Anthropic-Cybersecurity-Skills (MITRE ATT&CK, NIST CSF, ATLAS, D3FEND, AI RMF, F3). Use for security investigations, DFIR, red/blue team playbooks."
 ---
 
 # Cybersecurity skills library
@@ -886,7 +928,7 @@ Source: https://github.com/mukul975/Anthropic-Cybersecurity-Skills (Apache-2.0, 
 ## How Meta uses this pack
 
 - Full skill bodies live under `~/.agents/skills/` (and mirrors) after ecosystem ensure.
-- Do **not** load all 817 into context. Progressive disclosure:
+- Do **not** load the entire pack into context. Progressive disclosure:
   1. Match the user task to a skill **name** via list/grep of skill dirs or index.
   2. `skill(action=read, name=<kebab-name>)` for the full playbook.
   3. Execute workflow steps with bash/read tools; map findings to ATT&CK IDs.
@@ -915,7 +957,8 @@ description: "Dynamic context pruning patterns (OpenCode DCP / Sleev). Meta has 
 
 # Context pruning (DCP-inspired)
 
-Upstream: https://github.com/Opencode-DCP/opencode-dynamic-context-pruning  
+Upstream: https://github.com/Tarquinen/opencode-dynamic-context-pruning
+
 Successor focus: https://sleev.ai (`npm i -g sleev`)
 
 OpenCode's DCP plugin is **OpenCode-specific**. Meta implements the same goals natively:
@@ -1014,7 +1057,9 @@ mod tests {
         assert!(!omp_meets_feature_floor("omp/16.3.5"));
         assert!(!omp_meets_feature_floor("omp/17.2.0"));
         assert!(!omp_meets_feature_floor("omp/18.0.8"));
-        assert!(omp_meets_feature_floor("omp/18.0.9"));
+        assert!(!omp_meets_feature_floor("omp/18.0.9"));
+        assert!(!omp_meets_feature_floor("omp/18.4.3"));
+        assert!(omp_meets_feature_floor("omp/18.4.4"));
         assert!(omp_meets_feature_floor("omp/19.0.0"));
     }
 
@@ -1058,6 +1103,39 @@ mod tests {
             .join("GUIDE.md")
             .is_file());
         assert!(destination.join("scripts").join("inspect.py").is_file());
+        std::fs::write(
+            source.join("scripts").join("inspect.py"),
+            "print('updated')",
+        )
+        .unwrap();
+        std::fs::write(
+            destination
+                .join("platforms")
+                .join("android")
+                .join("GUIDE.md"),
+            "custom guide",
+        )
+        .unwrap();
+        std::fs::write(
+            source.join("platforms").join("android").join("GUIDE.md"),
+            "new upstream guide",
+        )
+        .unwrap();
+        mirror_missing_tree(&source, &destination).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(destination.join("scripts").join("inspect.py")).unwrap(),
+            "print('updated')"
+        );
+        assert_eq!(
+            std::fs::read_to_string(
+                destination
+                    .join("platforms")
+                    .join("android")
+                    .join("GUIDE.md")
+            )
+            .unwrap(),
+            "custom guide"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 }

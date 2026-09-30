@@ -1,9 +1,10 @@
 ---
 name: google-cloud-networking-observability
 metadata:
+  version: "1.0.3"
   category: Compute
 description: >-
-  Investigates Google Cloud networking issues by analyzing logs, metrics, and diagnostics. Use when investigating VPC Flow Logs (including cost estimation), NAT, firewall, or threat logs, querying latency and throughput metrics, or running Connectivity Tests for path diagnostics. Don't use for generic VM management or non-observability tasks.
+  Investigates Google Cloud networking issues by analyzing GCP logs, metrics, and diagnostics. Use when investigating dropped network traffic, packet drops, drop reasons, VPC Flow Logs (including Private Service Connect / PSC, serverless / App Engine Direct VPC, and cost estimation), NAT, firewall, or threat logs, querying latency and throughput metrics, or running Connectivity Tests for path diagnostics. Don't use for generic VM management or non-observability tasks.
 ---
 
 # Google Cloud Networking Observability Expert
@@ -26,7 +27,8 @@ description: >-
     that identify malicious traffic patterns (for example, SQL injection or
     malware) using deep packet inspection.
 -   **VPC Flow Logs**: Capture sample IP traffic to and from network interfaces.
-    Use for traffic analysis, volume trends, and top talkers.
+    Use for traffic analysis, volume trends, top talkers, dropped traffic, and
+    packet loss.
 -   **Firewall Logs**: Record connection attempts matched by firewall rules. Use
     to identify "DENY" events or verify "ALLOW" rules.
 -   **Cloud NAT Logs**: Audit NAT translations. Use to audit traffic going
@@ -45,6 +47,10 @@ description: >-
     `big_query_linked_dataset`, `_AllLogs`) before using Cloud Logging for
     high-volume analysis or aggregations. This is the preferred method for
     finding trends or top-blocking rules.
+-   **Schema & Sample Discovery**: Before writing complex aggregations or filter
+    queries in BigQuery or Cloud Logging, first inspect a single sample log
+    record (`LIMIT 1` in SQL or `--limit=1` in `gcloud logging read`) to verify
+    the exact payload schema and field paths.
 -   **Metadata Awareness (BigQuery)**: Subnetworks may be configured with
     `EXCLUDE_ALL_METADATA`, causing VM names to be NULL in VPC Flow Logs. If a
     query by VM name returns nothing, retry using the internal IP address
@@ -96,8 +102,9 @@ the corresponding reference file:
 -   **Connectivity Test Analysis**:
     [references/connectivity-tests.md](references/connectivity-tests.md)
 
-> **CRITICAL**: If the user asks for **Cost Estimation**, you MUST strictly use `references/vpc-flow-logs-cost-estimation.md`. Do NOT read or use `references/vpc-flow-analysis.md` for cost estimation tasks.
-
+> **CRITICAL**: If the user asks for **Cost Estimation**, you MUST strictly use
+> `references/vpc-flow-logs-cost-estimation.md`. Do NOT read or use
+> `references/vpc-flow-analysis.md` for cost estimation tasks.
 
 ## Boundaries (CRITICAL)
 

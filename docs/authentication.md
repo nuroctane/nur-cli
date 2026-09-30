@@ -1,5 +1,10 @@
 # Authentication
 
+Account summaries, credential refresh and writes run on workers. `/login`,
+provider/model selection, key entry and logout stay interactive during skill
+indexing or a stalled credential operation. Completion belongs to the current
+selection; an older result cannot overwrite a later choice.
+
 NurCLI is multi-provider. Sign-in is usually: pick a provider, then enter its API key
 (local servers can skip the key). For selected providers you can also **sign in with a
 browser** (device code / SSO), same idea as `hf auth login`, `az login`, or `aws sso login`.

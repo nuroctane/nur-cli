@@ -24,12 +24,10 @@ if [[ -z "${REGION}" ]]; then
     exit 1
 fi
 
-
 echo "PROJECT_ID: ${PROJECT_ID}"
 echo "Account: ${USER_EMAIL}"
 echo "Env: ${ENV}"
 echo "Region: ${REGION}"
-
 if ! gcloud config configurations describe "${ENV}-cdmodel" > /dev/null 2>&1; then
   gcloud config configurations create "${ENV}-cdmodel"
   gcloud config set core/project "${PROJECT_ID}"

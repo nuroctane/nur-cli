@@ -3,9 +3,13 @@ name: gke-observability
 description: >-
   Configures GKE observability, including Cloud Logging, Cloud Monitoring, and
   managed Prometheus. Use when configuring GKE monitoring, setting up GKE logging,
-  or configuring Prometheus metrics collection. Don't use to configure local
-  application logging frameworks or external APMs outside GKE.
+  or configuring Prometheus metrics collection, and to troubleshoot Managed
+  Service for Prometheus (GMP) issues such as missing metrics, unhealthy scrape
+  targets, PodMonitoring misconfiguration, rule/alert evaluation failures, and
+  monitoring permission errors. Don't use to configure local application logging
+  frameworks or external APMs outside GKE.
 metadata:
+  version: "1.1.0"
   category: CloudObservabilityAndMonitoring
 ---
 
@@ -258,10 +262,93 @@ resource.type="k8s_event" AND jsonPayload.reason="FailedScheduling"
 resource.type="k8s_cluster" AND logName:"cloudaudit.googleapis.com"
 ```
 
+## Troubleshooting Managed Prometheus (GMP)
+
+Diagnose GMP ingestion, rule, and query problems. Stay read-only (`kubectl get`
+/ `describe` / `logs`) and propose config changes; do not mutate live resources
+directly.
+
+### First: split ingestion-side vs query-side
+
+Before anything else, query the `up` metric in the **Metrics Explorer PromQL
+tab** in Cloud Monitoring. If `up` returns data, ingestion works and the problem
+is query-side (Grafana / PromQL / permissions). If `up` is empty, the problem is
+ingestion-side (collectors, scrape config, or write permission).
+
+### Ingestion-side
+
+1.  **Check GMP system pods.** They run in `gmp-system` on Standard clusters and
+    `gke-gmp-system` on Autopilot. Look for `gmp-operator`, `collector`
+    (DaemonSet), and `rule-evaluator` not `Running` or with high restarts:
+
+    ```bash
+    kubectl get pods -n gmp-system            # gke-gmp-system on Autopilot
+    kubectl logs -n gmp-system -l app.kubernetes.io/name=collector -c prometheus
+    ```
+
+    A collector in `CrashLoopBackOff` with `OOMKilled` usually means high metric
+    cardinality - drop unneeded series/labels (see cost section below) or apply a
+    VPA to the collector.
+
+2.  **Check PodMonitoring / ClusterPodMonitoring.** The three classic mistakes:
+    - `spec.selector.matchLabels` does not match the target Pod labels.
+    - A `PodMonitoring` only discovers targets **in its own namespace** - use
+      `ClusterPodMonitoring` for cluster-wide scope.
+    - `spec.endpoints.port` must reference the **named** container port (e.g.
+      `port: web`), not the port number.
+
+3.  **Enable target status for scrape errors.** Propose patching
+    `OperatorConfig` in `gmp-public` with `features.targetStatus.enabled: true`;
+    once applied, `kubectl describe podmonitoring <name>` and read `Active Targets`,
+    `Unhealthy Targets`, and `Last Error` (for example `connection refused`, HTTP 404,
+    `context deadline exceeded`). Disable it again when done - it can OOM the
+    operator on large clusters.
+
+### Permissions (403 / no data written)
+
+GMP components inherit the **node service account**. Ingestion needs
+`roles/monitoring.metricWriter` (error `Permission monitoring.timeSeries.create
+denied` in collector logs); the `rule-evaluator` and query paths need
+`roles/monitoring.viewer` (403 / `PermissionDenied`). If a query app (like
+Grafana) uses Workload Identity, the bound Google service account also needs
+`roles/monitoring.viewer`.
+
+### Rule and alert evaluation
+
+Rule scope is decided by the resource kind: `Rules` (single namespace),
+`ClusterRules` (whole cluster), and `GlobalRules` (all data in the metrics
+scope). You **must** use `GlobalRules` to write rules against Cloud Monitoring
+metrics - a `Rules`/`ClusterRules` resource silently returns no data for them.
+Check `rule-evaluator` logs (`-c evaluator`) for parse/permission errors.
+
+### Query-side (Grafana / PromQL)
+
+-   **Data source** must point at the GMP frontend query proxy, not
+    `localhost:9090`, and the HTTP **Method must be GET** - `POST` fails with
+    `no match[] parameter provided`.
+-   **Grafana template variables:** use the two-argument form
+    `label_values(<metric>, <label>)`; the single-argument
+    `label_values(<label>)` is not supported by the GMP API.
+-   **Cloud Monitoring metrics** that exist for multiple resource types need a
+    `monitored_resource` label matcher, otherwise the query fails with
+    `series selector must specify a label matcher on monitored resource name`.
+
+### Cost, cardinality, and quota
+
+Use the Cloud Monitoring **Metrics Management** page to find the metrics driving
+billable samples and high cardinality. Reduce them with `metricRelabeling` in
+the `PodMonitoring` (`action: drop` for whole metrics, `action: labeldrop` for
+unbounded labels like `user_id`/`request_id`) or by raising the scrape
+`interval`. `429` / `RESOURCE_EXHAUSTED` errors mean you have hit the Cloud
+Monitoring API ingestion or query quota - optimize first, then request a quota
+increase.
+
 ## Supporting Links
 
 -   [GKE system metrics](https://docs.cloud.google.com/monitoring/api/metrics_kubernetes)
 -   [GKE Observability Documentation](https://cloud.google.com/kubernetes-engine/docs/concepts/observability)
 -   [Google Cloud Managed Service for Prometheus](https://cloud.google.com/stackdriver/docs/managed-prometheus)
+-   [Troubleshoot Managed Service for Prometheus](https://docs.cloud.google.com/stackdriver/docs/managed-prometheus/troubleshooting.md.txt)
+-   [Rule evaluation (Rules / ClusterRules / GlobalRules)](https://docs.cloud.google.com/stackdriver/docs/managed-prometheus/rules-managed.md.txt)
 -   [Cloud Logging Query Language (LQL)](https://cloud.google.com/logging/docs/view/logging-query-language)
 -   [Google Cloud Monitoring Alerts](https://cloud.google.com/monitoring/alerts)

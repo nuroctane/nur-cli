@@ -1,6 +1,7 @@
 ---
 name: agent-platform-alert-configuration
 metadata:
+  version: "1.0.0"
   category: AiAndMachineLearning
 description: >-
   Configures best-practice alerting policies for AI agents using OpenTelemetry

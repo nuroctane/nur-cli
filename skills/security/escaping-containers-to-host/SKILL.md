@@ -258,7 +258,7 @@ kubectl get pod <pod> -o jsonpath='{.spec.containers[*].securityContext}'
 | amicontained | Capability/namespace/seccomp introspection | https://github.com/genuinetools/amicontained |
 | deepce | Docker enumeration & escape automation | https://github.com/stealthcopter/deepce |
 | CDK | Container/K8s penetration toolkit | https://github.com/cdk-team/CDK |
-| runc PoC (CVE-2024-21626) | Leaky Vessels reference exploit | https://github.com/strikoder/cve-2024-21626-runc-1.1.11-escape |
+| runc PoC (CVE-2024-21626) | Leaky Vessels reference exploit | https://github.com/Strikoder-Premium/cve-2024-21626-runc-1.1.11-escape |
 | Sysdig runc 2025 advisory | CVE-2025-31133/52565/52881 analysis | https://www.sysdig.com/blog/runc-container-escape-vulnerabilities |
 | Palo Alto Leaky Vessels | CVE-2024-21626 deep dive | https://www.paloaltonetworks.com/blog/cloud-security/leaky-vessels-vulnerabilities-container-escape/ |
 

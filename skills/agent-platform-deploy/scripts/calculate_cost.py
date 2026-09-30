@@ -1,7 +1,7 @@
 """Estimate the hourly deployment cost for a Model Garden deployment.
 
-Sandbox-executable Python script that computes an hourly $ estimate for a
-`gcloud ai model-garden models deploy` invocation, given `--machine-type`.
+Computes an hourly $ estimate for a Model Garden deploy, given
+`--machine-type`.
 
 Prices are hardcoded from live `CostEstimationService.CalculateEstimate`
 RPC responses (autopush blade, us-central1) captured on LAST_UPDATED.

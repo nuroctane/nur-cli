@@ -5,7 +5,7 @@ description: "Dynamic context pruning patterns (OpenCode DCP / Sleev). Meta has 
 
 # Context pruning (DCP-inspired)
 
-Upstream: https://github.com/Opencode-DCP/opencode-dynamic-context-pruning  
+Upstream: https://github.com/Tarquinen/opencode-dynamic-context-pruning  
 Successor focus: https://sleev.ai (`npm i -g sleev`)
 
 OpenCode's DCP plugin is **OpenCode-specific**. Meta implements the same goals natively:

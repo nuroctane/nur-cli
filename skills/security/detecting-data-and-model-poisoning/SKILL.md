@@ -187,7 +187,7 @@ Remove flagged samples (intersection of Cleanlab + ART signals is highest-confid
 |------|---------|--------|
 | Adversarial Robustness Toolbox | Activation clustering & spectral-signature poisoning defenses | https://github.com/Trusted-AI/adversarial-robustness-toolbox |
 | Cleanlab | Label/data-quality issue detection | https://github.com/cleanlab/cleanlab |
-| safetensors | Safe (non-pickle) weight serialization | https://github.com/huggingface/safetensors |
+| safetensors | Safe (non-pickle) weight serialization | https://github.com/safetensors/safetensors |
 | OWASP LLM04:2025 | Data and Model Poisoning reference | https://genai.owasp.org/llmrisk/llm042025-data-and-model-poisoning/ |
 | MITRE ATLAS | AI threat technique taxonomy | https://atlas.mitre.org/ |
 

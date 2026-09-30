@@ -9,7 +9,7 @@ description: >-
   the Data Manager API. Don't use for uploading audience members (use the
   data-manager-api-audience-ingestion skill).
 metadata:
-  version: 1.1
+  version: "1.2.0"
   category: GoogleAds
 ---
 # Data Manager API Event Ingestion
@@ -24,16 +24,36 @@ metadata:
 
 ### Step 1: Identify Use Case & Read Documentation
 
--   **Determine Destination Account Type**: [CRITICAL] If it's not
-    explicitly stated, STOP and CLARIFY with the user where the data is being
-    sent (e.g., Google Ads, Floodlight, Google Analytics)
-    BEFORE generating any code. Do not assume Google Ads by default. This maps
-    to the `account_type` field of the `operating_account` in the `Destination`,
+-   **Determine Destination Account Type**: [CRITICAL] If it can't be determined
+    from the user's context, consider clarifying which destination events are
+    being ingested to before generating any code. This maps to the
+    `account_type` field of the `operating_account` in the `Destination`,
     and also determines valid event identifiers and requirements.
--   **Read Documentation**: [CRITICAL] Follow the
-    [Send events guide](https://developers.google.com/data-manager/api/devguides/events/send-events.md.txt)
-    to implement the integration, as steps for configuring and sending the
-    request may vary between destinations.
+-   **Identify User Intent**:
+    -   **Implementing ingestion code**: Follow the relevant
+        implementation guide for the destination and use case in the
+        **Implementation guide** column below. This is critical to ensure field
+        requirements are met and destinations are correctly configured.
+    -   **Checking request status or inspecting errors**: Refer to the
+        [Error Handling & Troubleshooting](#error-handling-troubleshooting)
+        section below.
+    -   **Migrating from another Google API**: Refer to
+        [Step 3: Retrieve Migration Guides](#step-3-retrieve-migration-guides)
+        below to extract the full contents of the relevant field mapping guide.
+
+| Destination (`operating_account.account_type`) | Use case | Implementation guide |
+| :--- | :--- | :--- |
+| **Google Ads** (`GOOGLE_ADS`) | Offline conversions, enhanced conversions for leads | [Send events](https://developers.google.com/data-manager/api/devguides/events/google-ads/offline/send-events.md.txt) |
+| **Google Ads** (`GOOGLE_ADS`) | Multi-source conversions supplementing the Google tag | [Send events](https://developers.google.com/data-manager/api/devguides/events/google-ads/online/send-events.md.txt) |
+| **Google Ads** (`GOOGLE_ADS`) | Store sales conversions | [Send events](https://developers.google.com/data-manager/api/devguides/events/google-ads/store-sales/send-events.md.txt) |
+| **Google Analytics** (`GOOGLE_ANALYTICS_PROPERTY`) | Recommended and custom GA4 events | [Send events](https://developers.google.com/data-manager/api/devguides/events/analytics/recommended-custom-events/send-events.md.txt) |
+| **Google Analytics** (`GOOGLE_ANALYTICS_PROPERTY`) | Multi-source events with a transaction ID | [Send events](https://developers.google.com/data-manager/api/devguides/events/analytics/online/send-events.md.txt) |
+| **Floodlight** (`FLOODLIGHT_CONFIG`) | Floodlight offline conversions | [Send events](https://developers.google.com/data-manager/api/devguides/events/cm360/offline/send-events.md.txt) |
+| **Floodlight** (`FLOODLIGHT_CONFIG`) | Multi-source conversions supplementing the Google or Floodlight tag | [Send events](https://developers.google.com/data-manager/api/devguides/events/cm360/online/send-events.md.txt) |
+
+If the request doesn't match any row, fetch the
+[Events overview](https://developers.google.com/data-manager/api/devguides/events.md.txt)
+to find the right guide rather than guessing.
 
 ### Step 2: Retrieve Code Sample
 
@@ -57,19 +77,19 @@ metadata:
 
 #### Google Ads
 
-*   **Google Ads API Offline Conversions**:
+*   **Offline conversions, enhanced conversions for leads** (migrating from the Google Ads API):
     [Google Ads Offline Conversions Migration Field Mappings](https://developers.google.com/data-manager/api/devguides/events/google-ads/offline/upgrade/field-mappings.md.txt)
-*   **Google Ads API Store Sales**:
+*   **Store sales conversions** (migrating from the Google Ads API):
     [Google Ads Store Sales Migration Field Mappings](https://developers.google.com/data-manager/api/devguides/events/google-ads/store-sales/upgrade/field-mappings.md.txt)
 
 #### Google Analytics
 
-*   **Measurement Protocol (Google Analytics)**:
+*   **Recommended and custom GA4 events** (migrating from the Google Analytics Measurement Protocol):
     [Google Analytics Measurement Protocol Migration Field Mappings](https://developers.google.com/data-manager/api/devguides/events/analytics/measurement-protocol/upgrade/field-mappings.md.txt)
 
-#### Campaign Manager 360 (CM360)
+#### Floodlight
 
-*   **Campaign Manager 360 API Offline Conversions**:
+*   **Floodlight offline conversions** (migrating from the Campaign Manager 360 API):
     [Campaign Manager 360 Offline Conversions Migration Field Mappings](https://developers.google.com/data-manager/api/devguides/events/cm360/offline/upgrade/field-mappings.md.txt)
 
 ### Step 4: Implementation

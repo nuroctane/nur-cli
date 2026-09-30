@@ -8,6 +8,7 @@ description: >-
   Don't use for analyzing IAM v2 deny policies, VPC Service Controls, or performing
   general policy troubleshooting.
 metadata:
+  version: "1.0.0"
   category: Security
 ---
 

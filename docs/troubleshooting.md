@@ -8,6 +8,11 @@ Model requests and skill commands queue until their dependencies are ready.
 Existing skill metadata stays available during refresh;
 no skill pack needs to be removed to make the editor responsive.
 
+Account writes and summaries also run on workers. A blocked credential refresh
+does not freeze key entry, logout, model selection or quitting. Use `/skills
+refresh` for nested external additions instead of waiting for reconciliation.
+Updated skill folder aliases retain older slash names.
+
 To identify a remaining delay, launch with `NUR_STARTUP_TRACE=1`. On PowerShell:
 
 ```powershell

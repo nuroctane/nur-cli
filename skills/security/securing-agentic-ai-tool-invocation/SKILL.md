@@ -238,7 +238,7 @@ Every decision from steps 4-6 is logged with actor, tool, argument hash, and dec
 
 | Tool | Purpose | Source |
 |------|---------|--------|
-| NVIDIA NeMo Guardrails | Programmable input/output/tool rails | https://github.com/NVIDIA/NeMo-Guardrails |
+| NVIDIA NeMo Guardrails | Programmable input/output/tool rails | https://github.com/NVIDIA-NeMo/Guardrails |
 | jsonschema | Per-tool argument allowlisting | https://python-jsonschema.readthedocs.io/ |
 | AWS STS / boto3 | Scoped, short-lived per-call credentials | https://boto3.amazonaws.com/ |
 | OWASP Agentic AI Top 10 | Threats and controls for agents | https://genai.owasp.org/resource/agentic-ai-threats-and-mitigations/ |

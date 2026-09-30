@@ -1,6 +1,7 @@
 ---
 name: gke-ai-troubleshooting-jobset-interruption
 metadata:
+  version: "1.0.0"
   category: Containers
 description: >-
   Diagnoses GKE JobSet interruptions, restarts, and preemptions for AI/ML training workloads autonomously.

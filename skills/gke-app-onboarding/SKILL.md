@@ -7,6 +7,7 @@ description: >-
   general GKE cluster administration or upgrades (use gke-basics or
   gke-upgrades instead).
 metadata:
+  version: "1.0.0"
   category: Containers
 ---
 

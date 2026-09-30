@@ -4,7 +4,7 @@ import argparse
 import json
 import re
 import sys
-from typing import TextIO
+from typing import Any, TextIO
 
 from google.cloud import storage
 
@@ -29,7 +29,7 @@ from google.cloud import storage
 # share a value. It is not published anywhere: unlike the price, it has to be
 # measured, and the authoritative billable token count is only reported by the
 # tuning service after a job completes, which is too late to estimate from.
-MODEL_DATA = {
+MODEL_DATA: dict[str, dict[str, Any]] = {
     'google/gemma4@gemma-4-e2b-it': {
         'display_name': 'Gemma 4 E2B IT',
         'modes': {
@@ -124,9 +124,23 @@ MODEL_DATA = {
             'PEFT': {'tokens_per_character': 0.295, 'cost_per_1m_tokens': 5.77},
         },
     },
+    'qwen/qwen3-6@qwen3.6-27b': {
+        'display_name': 'Qwen 3.6 27B',
+        'modes': {
+            'PEFT': {'tokens_per_character': 0.247, 'cost_per_1m_tokens': 4.42},
+        },
+    },
+    'qwen/qwen3-6@qwen3.6-35b-a3b': {
+        'display_name': 'Qwen 3.6 35B A3B',
+        'modes': {
+            'PEFT': {'tokens_per_character': 0.247, 'cost_per_1m_tokens': 1.33},
+        },
+    },
     'qwen/qwen3-5@qwen3.5-9b': {
         'display_name': 'Qwen 3.5 9B',
-        'modes': {},  # Catalogued for tuning, no published price yet.
+        'modes': {
+            'Full': {'tokens_per_character': 0.247, 'cost_per_1m_tokens': 0.60},
+        },
     },
     'qwen/qwen3@qwen3-4b': {
         'display_name': 'Qwen 3 4B',
@@ -151,6 +165,12 @@ MODEL_DATA = {
         'modes': {
             'PEFT': {'tokens_per_character': 0.246, 'cost_per_1m_tokens': 6.57},
             'Full': {'tokens_per_character': 0.246, 'cost_per_1m_tokens': 6.57},
+        },
+    },
+    'zai-org/glm-4.7-flash@glm-4.7-flash': {
+        'display_name': 'GLM 4.7 Flash',
+        'modes': {
+            'PEFT': {'tokens_per_character': 0.234, 'cost_per_1m_tokens': 1.50},
         },
     },
 }
@@ -255,9 +275,16 @@ def count_characters(input_file: str) -> int:
   with _open_jsonl(input_file) as f:
     for line in f:
       data = json.loads(line)
-      for message in data['messages']:
-        content = message['content']
-        total_character_count += len(content)
+      if 'messages' in data:
+        for message in data['messages']:
+          content = message.get('content', '') or ''
+          total_character_count += len(content)
+      elif 'prompt' in data:
+        total_character_count += len(data.get('prompt', '') or '')
+        total_character_count += len(data.get('completion', '') or '')
+      elif 'input' in data:
+        total_character_count += len(data.get('input', '') or '')
+        total_character_count += len(data.get('output', '') or '')
   return total_character_count
 
 

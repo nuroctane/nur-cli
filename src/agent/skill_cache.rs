@@ -291,6 +291,25 @@ pub fn warm_global() {
     let _ = load_global_at(&nur_home(), &global_roots());
 }
 
+/// Explicit maintenance must confirm that the complete snapshot was persisted.
+pub fn refresh_global() -> std::io::Result<usize> {
+    let home = nur_home();
+    let roots = global_roots();
+    crate::cache_io::publish(
+        &home.join("cache/skills-generation"),
+        uuid::Uuid::new_v4().to_string().as_bytes(),
+    )?;
+    let snapshot = load_global_at(&home, &roots);
+    let stored: SkillCacheFile = serde_json::from_slice(&fs::read(cache_path(&home))?)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    if !fresh(&stored, &generation(&home), &root_snapshot(&roots)) {
+        return Err(std::io::Error::other(
+            "a complete fresh skill snapshot was not published",
+        ));
+    }
+    Ok(snapshot.skills.len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

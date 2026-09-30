@@ -1,6 +1,7 @@
 ---
 name: agent-platform-rag-engine-management
 metadata:
+  version: "1.0.0"
   category: AiAndMachineLearning
 description: >-
   Manage and query Agent Platform RAG Engine Corpora and retrieve grounded
@@ -13,35 +14,41 @@ description: >-
 # Agent Platform RAG Engine Management
 
 This skill provides instructions on how to interact with Agent Platform RAG
-Engine using the Agent Platform Python SDK. You
-MUST use the `vertexai` Python SDK to perform RAG Engine operations, rather than
-raw REST calls or MCP tools, because this code is intended to be run by external
-clients.
+Engine using the Agent Platform Python SDK. You MUST use the `vertexai` Python
+SDK to perform RAG Engine operations, rather than raw REST calls or MCP tools,
+because this code is intended to be run by external clients.
 
 ## Safety & Confirmation Tiers (CRITICAL)
 
 Before executing any commands or scripts on behalf of the user, you must adhere
 to the following safety tiers based on the action requested:
 
-1.  **Tier R: Read-only (`list_corpora`, `list_files`, `get_corpus`, `retrieval_query`)**
-    *   No confirmation needed. Execute immediately to gather information or retrieve grounded contexts.
-2.  **Tier RC: Read-only but consumes Compute Resources (`client.models.generate_content`)**
+1.  **Tier R: Read-only (`list_corpora`, `list_files`, `get_corpus`,
+    `retrieval_query`)**
+    *   No confirmation needed. Execute immediately to gather information or
+        retrieve grounded contexts.
+2.  **Tier RC: Read-only but consumes Compute Resources
+    (`client.models.generate_content`)**
+
     *   Requires **interactive confirmation** with 'Yes'/'No' options before
-    executing grounded content generation. The confirmation prompt MUST
-    clearly explain the proposed generation execution and its key parameters
-    (e.g., target corpus ID, query text, target model). Natural-language
-    paraphrases without specifying exact parameters are insufficient, as
-    explicit parameter listing is required to ensure unambiguous user approval
-    of the specific resource and configuration.
+        executing grounded content generation. The confirmation prompt MUST
+        clearly explain the proposed generation execution and its key parameters
+        (e.g., target corpus ID, query text, target model). Natural-language
+        paraphrases without specifying exact parameters are insufficient, as
+        explicit parameter listing is required to ensure unambiguous user
+        approval of the specific resource and configuration.
     *   **Same-turn restriction**: Do not execute the generation code in the
-    same turn as presenting the confirmation prompt. Stop and wait for the
-    user's reply; only execute after explicit 'Yes' / approval.
+        same turn as presenting the confirmation prompt. Stop and wait for the
+        user's reply; only execute after explicit 'Yes' / approval.
     *   **Gold Standard Example**:
+
         > I will perform grounded content generation with the following
         > parameters. Please confirm this information before I proceed:
+        >
         > *   **Target Corpus ID**: `projects/123/locations/us/ragCorpora/abc`
         > *   **Target Model**: `gemini-2.5-pro`
         > *   **Query Text**: "What are the company policies on remote work?"
+        >
         > Do you confirm? [Yes/No]
 
 ## Phase 0: Environment Setup
@@ -52,25 +59,24 @@ the environment is correctly initialized by following these steps:
 1.  **Google Cloud Authentication**: Authenticate with your Google Cloud
     credentials and configure active Application Default Credentials (ADC) for
     Agent Platform access:
-    
+
     ```bash
     gcloud auth login
     gcloud auth application-default login
     ```
-2.  **Virtual Environment**: Create and activate a dedicated virtual
-    environment:
-    
+
+2.  **Python Dependencies**: This skill needs `google-cloud-aiplatform` and
+    `google-genai`. Do **not** create a virtual environment — it starts empty
+    and hides packages the environment already provides, forcing a redundant
+    install. Probe, and install only what is missing:
+
     ```bash
-    python3 -m venv ~/rag_agent_venv
-    source ~/rag_agent_venv/bin/activate
+    python3 -c "import vertexai, google.genai" \
+      || pip install google-cloud-aiplatform google-genai
     ```
-3.  **Install Dependencies**: Install the required Agent Platform SDKs:
-    
-    ```bash
-    pip install google-cloud-aiplatform google-genai
-    ```
-4.  **Execution**: Advise the user that every time they execute a Python
-    snippet, they must ensure this virtual environment is activated first.
+
+3.  **Execution**: Run Python snippets with a plain `python3`. There is no
+    environment to activate first.
 
 ## Workflow Decision Tree
 
@@ -90,8 +96,10 @@ the environment is correctly initialized by following these steps:
     *   **Answer questions using RAG Engine** -> Proceed to [4. Answering the
         User with Retrieved Context].
 
-> [!TIP] **Placeholder Parameter Replacement:** The Python scripts below use
-> bracketed string placeholders (like `"{project_id}"`, `"{region}"`, and
+> [!TIP]
+>
+> **Placeholder Parameter Replacement:** The Python scripts below use bracketed
+> string placeholders (like `"{project_id}"`, `"{region}"`, and
 > `"{corpus_id}"`). You **MUST** dynamically replace these placeholders with the
 > actual Project ID, Region, and Corpus ID values provided in the user's prompt
 > (or active context) before generating, providing, or executing the scripts.

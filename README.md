@@ -5,6 +5,8 @@
 ### Extremely efficient token spend
 
 **Use fewer paid tokens by default.**
+
+**v0.41.0:** [CLI and skills refresh](docs/stack-update-2026-09-30.md): updated Rust and companion stacks, complete pinned skill trees, responsive account controls, safe bridge ownership, prompt cancellation, and long-transcript rendering fixes.
 The harness supersedes stale duplicate reads, spills large tool results, preserves provider prompt caches, and compacts repeatedly using an OMP-style response reserve instead of a premature fixed percentage. It also supports local context estimates when providers omit usage, prompt caching, local models, and focused Oh My Pi delegation through a verified authenticated economy model.
 
 **v0.40.1:** `/effort` now says when a route takes no effort field. Chat Completions routes (OpenRouter, Groq, Nous Portal, xAI API keys, local servers) send none, so nur reports that instead of naming a level they never receive; the level stays saved for routes that take one. See [effort levels](docs/configuration.md#reasoning-effort-levels).

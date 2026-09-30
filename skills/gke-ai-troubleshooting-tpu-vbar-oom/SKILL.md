@@ -9,6 +9,7 @@ description: >-
   collection conflicts on GKE TPU v6e nodes. Don't use for general non-TPU container
   OOM troubleshooting or standard GKE node lifecycle operations.
 metadata:
+  version: "1.0.0"
   category: CloudObservabilityAndMonitoring
 ---
 

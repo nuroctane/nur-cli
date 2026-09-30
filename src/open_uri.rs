@@ -13,19 +13,7 @@ pub fn open(target: &str) -> Result<(), String> {
     }
     #[cfg(windows)]
     {
-        // Empty window title is required so `start` does not treat a
-        // quoted URL (with # or &) as the title.
-        let status = Command::new("cmd.exe")
-            .args(["/C", "start", "", target])
-            .spawn()
-            .map_err(|e| e.to_string())?
-            .wait()
-            .map_err(|e| e.to_string())?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(format!("start exited {status}"))
-        }
+        shell_open(std::ffi::OsStr::new(target))
     }
     #[cfg(target_os = "macos")]
     {
@@ -48,38 +36,51 @@ pub fn open(target: &str) -> Result<(), String> {
 /// Open a path with the system default handler, without going through a shell
 /// where the OS allows it (a shell mangles paths containing spaces or `&`).
 pub fn open_path(path: &Path) -> Result<(), String> {
-    file_command(path)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("{}: {e}", path.display()))
-}
-
-/// Command that opens `path` with the OS default **application**.
-///
-/// Split out from [`open_path`] so the exact program and arguments can be
-/// asserted in a test without launching anything on the user's desktop.
-fn file_command(path: &Path) -> Command {
     #[cfg(windows)]
     {
-        // `start` needs the empty title first, or a quoted path is read as the
-        // window title. A shell is required here: the file association lives in
-        // the shell, and Explorer would only reveal the file, not open it.
-        let mut c = Command::new("cmd.exe");
-        c.args(["/C", "start", ""]).arg(path);
-        c
+        shell_open(path.as_os_str())
     }
+    #[cfg(not(windows))]
+    {
+        file_command(path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("{}: {e}", path.display()))
+    }
+}
+
+#[cfg(windows)]
+fn shell_open(target: &std::ffi::OsStr) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::Shell::{
+        ShellExecuteExW, SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW,
+    };
+    let mut wide: Vec<u16> = target.encode_wide().collect();
+    if wide.contains(&0) {
+        return Err("target contains a NUL character".into());
+    }
+    wide.push(0);
+    // A filename/URL is data for the association API, never cmd.exe source.
+    let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
+    info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+    info.fMask = SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC;
+    info.lpFile = wide.as_ptr();
+    info.nShow = windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    if unsafe { ShellExecuteExW(&mut info) } == 0 {
+        Err(std::io::Error::last_os_error().to_string())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+fn file_command(path: &Path) -> Command {
     #[cfg(target_os = "macos")]
-    {
-        let mut c = Command::new("open");
-        c.arg(path);
-        c
-    }
+    let mut c = Command::new("open");
     #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        let mut c = Command::new("xdg-open");
-        c.arg(path);
-        c
-    }
+    let mut c = Command::new("xdg-open");
+    c.arg(path);
+    c
 }
 
 /// Command that reveals `path` in the OS **file manager**.
@@ -134,42 +135,13 @@ impl PathKind {
     }
 }
 
-/// How long an existence probe stays warm. Long enough that a transcript full
-/// of paths costs a handful of syscalls per render, short enough that a
-/// directory created a moment ago becomes clickable without a restart.
-const DIR_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(10);
-/// Hard cap on cached probes; cleared wholesale when exceeded (transcripts
-/// reference far fewer distinct paths than this).
-const DIR_CACHE_MAX: usize = 512;
-
-type DirectoryCache = std::collections::HashMap<String, (Option<PathKind>, std::time::Instant)>;
-static DIR_CACHE: std::sync::Mutex<Option<DirectoryCache>> = std::sync::Mutex::new(None);
-
-/// Cached "what is this path" probe: `Some(Dir)` / `Some(File)` / `None`.
-fn kind_cached(key: &str, path: &Path) -> Option<PathKind> {
-    let now = std::time::Instant::now();
-    {
-        let guard = DIR_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(cache) = guard.as_ref() {
-            if let Some((hit, at)) = cache.get(key) {
-                if now.duration_since(*at) < DIR_CACHE_TTL {
-                    return *hit;
-                }
-            }
-        }
-    }
-    let hit = match std::fs::metadata(path) {
+/// This probe is used only by background link discovery and CLI callers.
+fn kind_cached(_key: &str, path: &Path) -> Option<PathKind> {
+    match std::fs::metadata(path) {
         Ok(m) if m.is_dir() => Some(PathKind::Dir),
         Ok(_) => Some(PathKind::File),
         Err(_) => None,
-    };
-    let mut guard = DIR_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-    let cache = guard.get_or_insert_with(std::collections::HashMap::new);
-    if cache.len() >= DIR_CACHE_MAX {
-        cache.clear();
     }
-    cache.insert(key.to_string(), (hit, now));
-    hit
 }
 
 /// Find file and directory paths in a single visual line.
@@ -185,17 +157,30 @@ pub fn find_path_spans(
     base: &Path,
 ) -> Vec<(usize, usize, std::path::PathBuf, PathKind)> {
     let mut out = Vec::new();
-    // Cheap gate: a path candidate always carries a separator or `~`.
-    if !plain.contains(['/', '\\', '~']) {
+    if !plain.contains(['/', '\\', '~', '.', '"', '\'']) {
         return out;
     }
     let mut byte = 0usize;
     while byte < plain.len() {
-        let c = plain[byte..].chars().next().unwrap_or('\0');
-        // Path characters only; everything else ends the token.
-        let is_path_char = !c.is_whitespace()
-            && !matches!(
-                c,
+        let ch = plain[byte..].chars().next().unwrap();
+        if matches!(ch, '"' | '\'' | '`') {
+            let start = byte + ch.len_utf8();
+            if let Some(end) = plain[start..].find(ch).map(|i| start + i) {
+                if let Some((path, kind)) = resolve_target(&plain[start..end], base) {
+                    out.push((
+                        UnicodeWidthStr::width(&plain[..start]),
+                        UnicodeWidthStr::width(&plain[..end]),
+                        path,
+                        kind,
+                    ));
+                }
+                byte = end + ch.len_utf8();
+                continue;
+            }
+        }
+        if ch.is_whitespace()
+            || matches!(
+                ch,
                 '"' | '\''
                     | '`'
                     | '<'
@@ -210,56 +195,61 @@ pub fn find_path_spans(
                     | '*'
                     | ','
                     | ';'
-            );
-        if !is_path_char {
-            byte += c.len_utf8();
+            )
+        {
+            byte += ch.len_utf8();
             continue;
         }
         let start = byte;
-        let mut end = byte;
-        while end < plain.len() {
-            let ch = plain[end..].chars().next().unwrap_or('\0');
-            if ch.is_whitespace()
-                || matches!(
-                    ch,
-                    '"' | '\''
-                        | '`'
-                        | '<'
-                        | '>'
-                        | '('
-                        | ')'
-                        | '['
-                        | ']'
-                        | '{'
-                        | '}'
-                        | '|'
-                        | '*'
-                        | ','
-                        | ';'
-                )
-            {
-                break;
-            }
-            end += ch.len_utf8();
-        }
-        byte = end.max(start + 1);
-        let raw = &plain[start..end];
-        let Some(token) = trim_path_token(raw) else {
+        let end = plain[start..]
+            .find(|c: char| {
+                c.is_whitespace()
+                    || matches!(
+                        c,
+                        '"' | '\''
+                            | '`'
+                            | '<'
+                            | '>'
+                            | '('
+                            | ')'
+                            | '['
+                            | ']'
+                            | '{'
+                            | '}'
+                            | '|'
+                            | '*'
+                            | ','
+                            | ';'
+                    )
+            })
+            .map_or(plain.len(), |i| start + i);
+        byte = end;
+        let Some(token) = trim_path_token(&plain[start..end]) else {
             continue;
         };
-        if !token.contains(['/', '\\']) {
+        if !token.contains(['/', '\\', '.']) {
             continue;
         }
-        let resolved = resolve_path(&token, base);
-        let Some(kind) = kind_cached(&resolved.to_string_lossy(), &resolved) else {
-            continue;
-        };
-        let start_col =
-            UnicodeWidthStr::width(&plain[..start + (raw.len() - raw.trim_start().len())]);
-        let end_col = start_col + UnicodeWidthStr::width(token.as_str());
-        out.push((start_col, end_col, resolved, kind));
+        if let Some((path, kind)) = resolve_target(&token, base) {
+            let col = UnicodeWidthStr::width(&plain[..start]);
+            out.push((
+                col,
+                col + UnicodeWidthStr::width(token.as_str()),
+                path,
+                kind,
+            ));
+        }
     }
     out
+}
+
+/// Resolve a complete destination. Called on the link worker, never during draw.
+pub fn resolve_target(target: &str, base: &Path) -> Option<(std::path::PathBuf, PathKind)> {
+    if target.is_empty() || target.contains("://") {
+        return None;
+    }
+    let path = resolve_path(target, base);
+    kind_cached(&path.to_string_lossy(), &path).map(|kind| (path, kind))
 }
 
 /// Trim the punctuation prose wraps a path in, keeping Windows drive colons and
@@ -380,6 +370,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn quoted_paths_keep_spaces_parentheses_and_unicode() {
+        let root = std::env::temp_dir().join(format!("nur-quoted-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("日本語 notes (final) & 20%.md");
+        std::fs::write(&file, "fixture").unwrap();
+        let text = format!("日本語 see \"{}\" please", file.display());
+        let spans = find_path_spans(&text, &root);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].2, file);
+        assert_eq!(spans[0].0, 12);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn finds_simple_https() {
         let spans = find_url_spans("see https://excalidraw.com/#json=abc,key please");
         assert_eq!(spans.len(), 1);
@@ -440,8 +444,8 @@ mod tests {
             .collect();
         assert_eq!(
             found.len(),
-            1,
-            "only the directory carries a separator: {found:?}"
+            2,
+            "relative filenames and directories are clickable: {found:?}"
         );
         assert!(
             found[0].0.ends_with("tui") && found[0].1 == PathKind::Dir,
@@ -481,36 +485,24 @@ mod tests {
         assert!(find_path_spans("just some words here", &std::env::temp_dir()).is_empty());
     }
 
-    /// The click has to hand the OS the real path, un-shelled where possible:
-    /// a directory goes to the file manager, a file to its associated app.
+    /// A target rejected by the association API must not execute its shell text.
+    #[cfg(windows)]
     #[test]
-    fn open_commands_target_the_file_manager_and_the_default_app() {
-        let dir = Path::new("/tmp/example dir");
-        let file = Path::new("/tmp/example file.txt");
-        let d = dir_command(dir);
-        let f = file_command(file);
-        assert!(d.get_args().any(|a| a == dir));
-        assert!(f.get_args().any(|a| a == file));
-
-        #[cfg(windows)]
-        {
-            assert_eq!(d.get_program(), "explorer.exe");
-            #[cfg(windows)]
-            assert_eq!(f.get_program(), "cmd.exe");
-            // `start` reads a quoted path as the window title without the empty
-            // title argument first.
-            let args: Vec<String> = f
-                .get_args()
-                .map(|a| a.to_string_lossy().to_string())
-                .collect();
-            assert_eq!(args[0], "/C");
-            assert_eq!(args[1], "start");
-            assert_eq!(args[2], "");
-        }
-        #[cfg(not(windows))]
-        {
-            assert_eq!(d.get_program(), "open");
-            assert_eq!(f.get_program(), "open");
-        }
+    fn metacharacters_are_data_at_the_native_launch_boundary() {
+        let dir = std::env::temp_dir().join(format!("nur-launch-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join("executed.txt");
+        let target = format!(
+            "{}&echo owned>{}&rem",
+            dir.join("absent.no_nur_association").display(),
+            marker.display()
+        );
+        assert!(shell_open(std::ffi::OsStr::new(&target)).is_err());
+        assert!(
+            !marker.exists(),
+            "the filename must never become shell source"
+        );
+        assert!(shell_open(std::ffi::OsStr::new("bad\0target")).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

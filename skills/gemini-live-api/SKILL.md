@@ -1,6 +1,7 @@
 ---
 name: gemini-live-api
 metadata:
+  version: "1.0.0"
   category: AiAndMachineLearning
 description: >-
   Generates a Gemini LiveAPI client service class in the user's chosen programming
