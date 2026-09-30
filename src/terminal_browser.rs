@@ -609,7 +609,7 @@ pub fn try_install_native() -> Option<String> {
     }
     #[cfg(unix)]
     {
-        return run_capture(
+        run_capture(
             "bash",
             &[
                 "-lc",
@@ -618,7 +618,7 @@ pub fn try_install_native() -> Option<String> {
             None,
             600_000,
         )
-        .ok();
+        .ok()
     }
     #[cfg(windows)]
     {

@@ -689,16 +689,11 @@ pub mod opencode {
     }
 
     fn opencode_bin() -> Option<PathBuf> {
-        which_cli("opencode").or_else(|| {
-            #[cfg(windows)]
-            {
-                which_cli("opencode.cmd").or_else(|| which_cli("opencode.exe"))
-            }
-            #[cfg(not(windows))]
-            {
-                None
-            }
-        })
+        let command = which_cli("opencode");
+        #[cfg(windows)]
+        let command =
+            command.or_else(|| which_cli("opencode.cmd").or_else(|| which_cli("opencode.exe")));
+        command
     }
 
     /// `opencode auth login` (interactive provider picker / OAuth).

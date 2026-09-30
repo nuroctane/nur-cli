@@ -1104,10 +1104,7 @@ fn file_sha256(path: &std::path::Path) -> std::io::Result<String> {
         if hash.len() == 64 {
             Ok(hash)
         } else {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "sha256 parse failed",
-            ))
+            Err(std::io::Error::other("sha256 parse failed"))
         }
     }
 }

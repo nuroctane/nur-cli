@@ -196,7 +196,10 @@ The offline renderer does not use Firebase collaboration. Its complete Firebase
 configuration is now removed by the build script and the repeatable upstream
 refresh. Bundle hashes, byte counts and source fingerprints regenerate together;
 Mermaid, editable Excalidraw export and rasterization remain available. No skill
-was removed. An older Tailscale alert (#1) concerned an `xxx` placeholder in a
+was removed. Six bundle drift/rebuild checks pass. A real headless browser also
+passes all seven rendering APIs with external requests blocked, including SVG,
+editable scenes, PNG export/downscaling and image dimensions. An older Tailscale
+alert (#1) concerned an `xxx` placeholder in a
 CI/CD example; the guide now reads a key from the CI secret store instead.
 
 `python scripts/check_vendored_credentials.py` rejects both credential formats
