@@ -249,22 +249,6 @@ fn which_exists(name: &str) -> bool {
     Path::new(name).is_file() || which(name).is_some()
 }
 
-/// Kill a process and its whole tree (grandchildren included).
-fn kill_tree(child: &mut std::process::Child) {
-    #[cfg(windows)]
-    {
-        // taskkill /T takes the entire tree down; child.kill() alone leaves
-        // grandchildren (e.g. cmd → node) running.
-        let _ = Command::new("taskkill")
-            .args(["/PID", &child.id().to_string(), "/T", "/F"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
 /// Clamp model-requested timeouts into a sane band.
 pub fn clamp_timeout_ms(requested: u64) -> u64 {
     requested.clamp(1_000, MAX_TIMEOUT_MS)
@@ -277,6 +261,9 @@ pub fn run_in_shell(
     timeout_ms: u64,
     cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<String> {
+    if cancel.is_cancelled() {
+        return Err(NurError::Tool("command cancelled before launch".into()));
+    }
     let kind = backend.kind;
     let label = backend.label.clone();
     let timeout_ms = clamp_timeout_ms(timeout_ms);
@@ -319,6 +306,7 @@ pub fn run_in_shell(
     let mut child = cmd
         .spawn()
         .map_err(|e| NurError::Tool(format!("command failed to start: {e}")))?;
+    let process_tree = crate::process_tree::ProcessTree::attach(&child);
 
     // Drain pipes on threads so a chatty child can't deadlock on a full pipe.
     let progress = Arc::new(AtomicU64::new(now_ms()));
@@ -336,7 +324,7 @@ pub fn run_in_shell(
             Ok(Some(status)) => break status,
             Ok(None) => {
                 if cancel.is_cancelled() {
-                    kill_tree(&mut child);
+                    process_tree.terminate(&mut child);
                     let _ = join_with_timeout(out_h, JOIN_AFTER_KILL_MS);
                     let _ = join_with_timeout(err_h, JOIN_AFTER_KILL_MS);
                     return Err(NurError::Tool(
@@ -344,7 +332,7 @@ pub fn run_in_shell(
                     ));
                 }
                 if Instant::now() >= deadline {
-                    kill_tree(&mut child);
+                    process_tree.terminate(&mut child);
                     let _ = join_with_timeout(out_h, JOIN_AFTER_KILL_MS);
                     let _ = join_with_timeout(err_h, JOIN_AFTER_KILL_MS);
                     return Err(NurError::Tool(format!(
@@ -358,7 +346,7 @@ pub fn run_in_shell(
                     let last = progress.load(Ordering::Relaxed);
                     let idle_for = now_ms().saturating_sub(last);
                     if idle_for >= IDLE_TIMEOUT_MS {
-                        kill_tree(&mut child);
+                        process_tree.terminate(&mut child);
                         let _ = join_with_timeout(out_h, JOIN_AFTER_KILL_MS);
                         let _ = join_with_timeout(err_h, JOIN_AFTER_KILL_MS);
                         return Err(NurError::Tool(format!(
@@ -371,7 +359,7 @@ pub fn run_in_shell(
                 thread::sleep(Duration::from_millis(30));
             }
             Err(e) => {
-                kill_tree(&mut child);
+                process_tree.terminate(&mut child);
                 let _ = join_with_timeout(out_h, JOIN_AFTER_KILL_MS);
                 let _ = join_with_timeout(err_h, JOIN_AFTER_KILL_MS);
                 return Err(NurError::Tool(format!("command wait failed: {e}")));

@@ -25,6 +25,7 @@ mod optmem;
 mod penecho;
 mod plugins;
 mod pricing;
+mod process_tree;
 mod provider_logos;
 mod providers;
 mod startup;

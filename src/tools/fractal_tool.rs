@@ -370,13 +370,14 @@ impl Tool for Fractal {
 /// most fractal actions are classified read-only (no approval prompt).
 fn path_bearing_args(parts: &[String]) -> Vec<String> {
     let mut out = Vec::new();
-    for (i, a) in parts.iter().enumerate() {
+    let mut parts = parts.iter();
+    while let Some(a) = parts.next() {
         if let Some(v) = a.strip_prefix("--path=") {
             out.push(v.to_string());
         } else if a == "--path" {
             // `--path <value>`: an absent value is reported as empty so the
             // caller rejects it rather than silently passing the flag through.
-            out.push(parts.get(i + 1).cloned().unwrap_or_default());
+            out.push(parts.next().cloned().unwrap_or_default());
         } else if std::path::Path::new(a).is_absolute() {
             out.push(a.clone());
         }
@@ -403,9 +404,13 @@ mod tests {
             vec!["/etc/passwd".to_string()]
         );
         // A bare absolute path with no flag still counts.
+        #[cfg(windows)]
+        let absolute = r"C:\Windows\System32";
+        #[cfg(not(windows))]
+        let absolute = "/var/data";
         assert_eq!(
-            path_bearing_args(&parts(r"C:\Windows\System32")),
-            vec![r"C:\Windows\System32".to_string()]
+            path_bearing_args(&parts(absolute)),
+            vec![absolute.to_string()]
         );
         // Missing value surfaces as empty so the caller can reject it.
         assert_eq!(path_bearing_args(&parts("--path")), vec![String::new()]);

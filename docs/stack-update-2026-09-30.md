@@ -125,8 +125,9 @@ copy was updated as well. Node 24.14.1 and Bun 1.3.14 satisfy the checked engine
 ## Local validation
 
 Both default and no-default-feature builds pass Clippy with warnings denied.
-The final Rust suite passes 1,068 tests with 18 intentionally ignored previews
-and benchmarks. Thirteen maintenance-tool tests cover ownership, backups, complete
+The final Windows Rust suite passes 1,070 tests. Eighteen previews/benchmarks
+and one subprocess fixture are intentionally ignored in ordinary runs.
+Thirteen maintenance-tool tests cover ownership, backups, complete
 resources, destination escapes, portable hashes, executable modes, deterministic
 indexing, duplicate precedence, staged artifact integrity, reviewed overrides
 folder aliases, offline bundle regeneration, redacted credential detection and
@@ -179,6 +180,12 @@ floor in every theme at both tested widths.
   hosted runners. The release profile stays unchanged. Platform-specific imports
   and helpers retain their correct configuration boundaries. Unix installation
   writes the actual requested directory to PATH with literal shell quoting.
+- Windows shell/Fractal cancellation uses owned native job handles instead of
+  blocking on `taskkill`. The reproduced Fractal deadline/cancel regression fell
+  from 62 seconds to 0.44 seconds. Already-cancelled work returns before launch;
+  successful background work survives normal completion. Job lifecycle tests
+  exercise real isolated child processes. Unix path passthrough consumes each
+  `--path` value once, and root-path checks use each platform's path semantics.
 
 See [startup measurements](startup-performance.md) for the original baseline.
 

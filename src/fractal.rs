@@ -88,20 +88,6 @@ fn read_capped(pipe: Option<impl Read>) -> Vec<u8> {
     buf
 }
 
-fn kill_tree(child: &mut std::process::Child) {
-    #[cfg(windows)]
-    {
-        // `child.kill()` alone leaves grandchildren (python → git → …) running.
-        let _ = Command::new("taskkill")
-            .args(["/PID", &child.id().to_string(), "/T", "/F"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
 /// Spawn `bin args`, capturing both streams, bounded by `timeout_ms` and by
 /// `cancel`. Kills the whole process tree on either. `Err` is a single
 /// human-readable line describing why no output exists.
@@ -112,6 +98,9 @@ fn run_capture(
     timeout_ms: u64,
     cancel: Option<&CancellationToken>,
 ) -> std::result::Result<Capture, String> {
+    if cancel.is_some_and(CancellationToken::is_cancelled) {
+        return Err("fractal cancelled by user before launch".into());
+    }
     let mut cmd = Command::new(bin);
     cmd.args(args)
         .stdin(Stdio::null())
@@ -123,6 +112,7 @@ fn run_capture(
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("failed to spawn fractal: {e}"))?;
+    let process_tree = crate::process_tree::ProcessTree::attach(&child);
 
     // Drain both pipes on threads so a chatty child can't deadlock on a full pipe.
     let out_pipe = child.stdout.take();
@@ -136,13 +126,13 @@ fn run_capture(
             Ok(Some(s)) => break s,
             Ok(None) => {
                 if cancel.map(|c| c.is_cancelled()).unwrap_or(false) {
-                    kill_tree(&mut child);
+                    process_tree.terminate(&mut child);
                     let _ = out_h.join();
                     let _ = err_h.join();
                     return Err("fractal cancelled by user (process tree killed)".into());
                 }
                 if Instant::now() >= deadline {
-                    kill_tree(&mut child);
+                    process_tree.terminate(&mut child);
                     let _ = out_h.join();
                     let _ = err_h.join();
                     return Err(format!(
@@ -153,7 +143,7 @@ fn run_capture(
                 thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
             }
             Err(e) => {
-                kill_tree(&mut child);
+                process_tree.terminate(&mut child);
                 return Err(format!("waiting on fractal failed: {e}"));
             }
         }
@@ -619,10 +609,10 @@ ModuleNotFoundError: No module named 'fcntl'
         let started = Instant::now();
         let err = run_capture(&bin, &args, None, 400, None).unwrap_err();
         assert!(err.contains("timed out"), "{err}");
-        // Bounds sit far below the child's 120s run and far above what spawning
-        // and `taskkill` cost on a loaded Windows machine (5s flaked at 5.5s).
+        // Native job termination must not inherit taskkill's minute-long WMI
+        // stalls; the child itself would run for 120 seconds.
         assert!(
-            started.elapsed() < Duration::from_secs(60),
+            started.elapsed() < Duration::from_secs(5),
             "deadline not enforced: {:?}",
             started.elapsed()
         );
@@ -633,7 +623,7 @@ ModuleNotFoundError: No module named 'fcntl'
         let err = run_capture(&bin, &args, None, 60_000, Some(&cancel)).unwrap_err();
         assert!(err.contains("cancelled"), "{err}");
         assert!(
-            started.elapsed() < Duration::from_secs(60),
+            started.elapsed() < Duration::from_secs(5),
             "cancel not honoured promptly: {:?}",
             started.elapsed()
         );

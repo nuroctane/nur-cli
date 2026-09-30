@@ -373,6 +373,7 @@ mod tests {
 
     #[test]
     fn detects_drive_root() {
+        #[cfg(windows)]
         assert!(is_dangerous_workspace(Path::new(r"C:\")));
         assert!(is_dangerous_workspace(Path::new("/")));
     }
