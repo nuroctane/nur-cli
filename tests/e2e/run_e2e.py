@@ -44,13 +44,37 @@ def find_binary(explicit):
     return Path(found)
 
 
+def spawn_process(*args, **kwargs):
+    proc = subprocess.Popen(*args, **kwargs)
+    if os.name == "nt":
+        # The uv/venv launcher may own a second interpreter. Track the owned
+        # tree natively so test cleanup cannot stall in taskkill's WMI lookup.
+        import ctypes
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+        kernel.CreateJobObjectW.restype = wintypes.HANDLE
+        kernel.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        kernel.AssignProcessToJobObject.restype = wintypes.BOOL
+        kernel.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        kernel.TerminateJobObject.restype = wintypes.BOOL
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle.restype = wintypes.BOOL
+        job = kernel.CreateJobObjectW(None, None)
+        if job and kernel.AssignProcessToJobObject(job, int(proc._handle)):
+            proc._nur_job = (kernel, job)
+        elif job:
+            kernel.CloseHandle(job)
+    return proc
+
+
 def start_provider(script, workdir):
     script_file = workdir / "script.json"
     script_file.write_text(json.dumps(script), encoding="utf-8")
     log = workdir / "requests.jsonl"
     log.write_text("", encoding="utf-8")
     port_file = workdir / "port"
-    proc = subprocess.Popen(
+    proc = spawn_process(
         [sys.executable, str(HERE / "fake_provider.py"), str(script_file), str(log), str(port_file)]
     )
     deadline = time.time() + 10
@@ -66,7 +90,17 @@ def stop_tree(proc):
     """Kill a process and its children. On Windows sys.executable can be a venv
     launcher whose real interpreter is a child that plain kill() leaves running."""
     if os.name == "nt":
-        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
+        tracking = getattr(proc, "_nur_job", None)
+        if tracking:
+            kernel, job = tracking
+            kernel.TerminateJobObject(job, 1)
+            kernel.CloseHandle(job)
+            del proc._nur_job
+        else:
+            try:
+                subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, timeout=2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
     else:
         proc.kill()
     proc.wait()
@@ -234,7 +268,7 @@ def run_scenario(binary, scenario_path):
             args += ["--yes"] if mode == "auto" else ["--mode", mode]
             args.append(scenario["prompt"])
             started = time.time()
-            child = subprocess.Popen(
+            child = spawn_process(
                 args,
                 env=env,
                 cwd=workspace,
