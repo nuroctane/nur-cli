@@ -126,10 +126,11 @@ copy was updated as well. Node 24.14.1 and Bun 1.3.14 satisfy the checked engine
 
 Both default and no-default-feature builds pass Clippy with warnings denied.
 The final Rust suite passes 1,068 tests with 18 intentionally ignored previews
-and benchmarks. Twelve maintenance-tool tests cover ownership, backups, complete
+and benchmarks. Thirteen maintenance-tool tests cover ownership, backups, complete
 resources, destination escapes, portable hashes, executable modes, deterministic
 indexing, duplicate precedence, staged artifact integrity, reviewed overrides
-folder aliases, offline bundle regeneration and redacted credential detection. Two
+folder aliases, offline bundle regeneration, redacted credential detection and
+rejection of unreviewed upstream credentials before any tree is copied. Two
 helper API tests verify inline compression, returned message selection and
 explicit file-read protection.
 
@@ -200,7 +201,8 @@ CI/CD example; the guide now reads a key from the CI secret store instead.
 
 `python scripts/check_vendored_credentials.py` rejects both credential formats
 in tracked resources without printing values. Validation runs it alongside the
-resource-integrity check. Both adaptations are recorded in the upstream manifest
+resource-integrity check. Upstream imports also reject new matching values before
+copying any files. Both adaptations are recorded in the upstream manifest
 so future refreshes retain them. The historical commits still contain the
 upstream public identifier and placeholder; no credential owned by Nur was
 identified, and no Git history was rewritten.

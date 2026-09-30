@@ -25,6 +25,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from check_vendored_credentials import findings as credential_findings
 
 REPO = Path(__file__).resolve().parent.parent
 SKILLS = REPO / "skills"
@@ -363,7 +364,13 @@ def refresh_tree(source, destination, previous, frontmatter=None, overrides=None
     if not destination.resolve().is_relative_to(SKILLS.resolve()) or destination.is_symlink():
         raise ValueError(f"unsafe skill destination: {destination}")
     files, preserved = {}, []
-    for name, contents in prepared_resources(source, destination, overrides).items():
+    resources = prepared_resources(source, destination, overrides)
+    for name, contents in resources.items():
+        findings = list(credential_findings(contents))
+        if findings:
+            kinds = ", ".join(sorted({kind for kind, _ in findings}))
+            raise ValueError(f"upstream resource needs credential review: {destination.name}/{name} ({kinds}; values redacted)")
+    for name, contents in resources.items():
         target = destination / name
         if target.is_symlink() or not target.resolve().is_relative_to(SKILLS.resolve()):
             raise ValueError(f"unsafe resource destination: {target}")

@@ -11,6 +11,7 @@ import sys
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "scripts"))
 
 
 def load(name):
@@ -27,6 +28,21 @@ credentials = load("check_vendored_credentials")
 
 
 class MaintenanceTests(unittest.TestCase):
+    def test_refresh_rejects_new_unreviewed_credentials_before_copying(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "upstream"
+            source.mkdir()
+            (source / "SKILL.md").write_text("guide")
+            value = b"AIza" + b"B" * 35
+            (source / "settings.js").write_bytes(b"key='" + value + b"'")
+            with patch.object(sync, "SKILLS", root / "skills"):
+                with self.assertRaises(ValueError) as error:
+                    sync.refresh_tree(source, root / "skills/demo", {})
+            self.assertNotIn(value.decode(), str(error.exception))
+            self.assertFalse((root / "skills/demo/settings.js").exists())
+            self.assertFalse((root / "skills/demo/SKILL.md").exists())
+
     def test_embedded_credentials_are_detected_without_disclosing_values(self):
         # Match inside a minified artifact and an example command, without
         # including any actual credentials in the repository test fixture.
