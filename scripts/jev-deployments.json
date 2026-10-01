@@ -1,0 +1,559 @@
+{
+  "reviewed": "2026-10-01",
+  "engines": {
+    "cygnet": {
+      "evidence": "https://github.com/blockbrain-ai/cygnet-recipe",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "model": "cygnet"
+    },
+    "winnow-12b": {
+      "evidence": "https://huggingface.co/EldanRing/Winnow-12B",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "jev-1.13.0": {
+      "evidence": "https://docs.typesafe.ai",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "endpoint": "https://api.typesafe.ai"
+    },
+    "jev-omni": {
+      "evidence": "https://huggingface.co/akhilaaa3/Jev-Omni",
+      "notes": "Install the model card requirements and obtain its jev_omni.py loader. Supply its directory with --adapter-dir; CUDA and roughly 50 GB FP32 weights memory are required by the reference runtime.",
+      "local_adapter": "jev_model_adapters:OmniAdapter"
+    },
+    "decider-4b-v2": {
+      "evidence": "https://github.com/Mapika/decider",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "semif-qwen3.5-4b": {
+      "evidence": "https://github.com/TheoLeeCJ/openjev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_adapters.semif_direct:SemIfDirectAdapter"
+    },
+    "spark-s1-4b-v6": {
+      "evidence": "https://github.com/abhishek085/open-spark-jev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "protocol": "systemone"
+    },
+    "metask-jev-4b": {
+      "evidence": "https://github.com/metask-ai/metask-jev",
+      "notes": "Install source inference/requirements.txt; pass --adapter-dir <checkout>/inference. Uses the published per-kind calibration.",
+      "model": "wayfind/metask-jev-4b-policy-mix",
+      "local_adapter": "jev_model_adapters:MetaskAdapter"
+    },
+    "hopper": {
+      "evidence": "https://huggingface.co/HopitAI/hopper",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "malkuth-4b": {
+      "evidence": "https://github.com/newfull5/malkuth",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "reflex-4b": {
+      "evidence": "https://github.com/kshetrajna12/reflex",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "jev-local": {
+      "evidence": "https://github.com/us/jev-local",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "djev": {
+      "evidence": "https://github.com/Davipar/djev-dev",
+      "notes": "Durable receipts are polled only at the same origin; credentials never follow redirects. The local djev-dev server uses /v1/systemone, selected with --protocol systemone.",
+      "endpoint": "https://api.djev.dev",
+      "model": "djev"
+    },
+    "raw-qwen3-4b-instruct-2507": {
+      "evidence": "https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_model_adapters:RawLogitAdapter"
+    },
+    "jqv": {
+      "evidence": "https://github.com/Octalab-Inc/jqv",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "jevk5-v02": {
+      "evidence": "https://github.com/allebee/jevk5",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "protocol": "systemone"
+    },
+    "qwen35-9b-jev-data-mix-v2": {
+      "evidence": "https://huggingface.co/jsaurabh/qwen3.5-9b-jev-data-mix-v2",
+      "notes": "Install Nimble at the model-card pin f136b3f75721fda4ea961f73993cc50b08488835 and PEFT. Obtain the published bench/qwen35_nimble_lora.py and pass its directory with --adapter-dir. Uses its frozen schema encoding, not generic chat.",
+      "local_adapter": "qwen35_nimble_lora:Qwen35NimbleLoraAdapter"
+    },
+    "standardone-8b": {
+      "evidence": "https://huggingface.co/StandardThinking/StandardOne-8B",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "ninfer-qwen3.8-flash-next": {
+      "evidence": "https://github.com/igorls/ninfer",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "protocol": "systemone"
+    },
+    "swanone": {
+      "evidence": "https://github.com/blockbrain-ai/swanone-recipe",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "raw-qwen3-8b": {
+      "evidence": "https://huggingface.co/Qwen/Qwen3-8B",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_model_adapters:RawLogitAdapter"
+    },
+    "decider-2b": {
+      "evidence": "https://huggingface.co/Mapika/decider-2b",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "system-one-sg": {
+      "evidence": "https://github.com/sgoedecke/system-one",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_adapters.sg_system_one:SgSystemOneAdapter"
+    },
+    "system-one-open": {
+      "evidence": "https://github.com/mithalouni/system-one-open",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "kushal-gemma4-31b-it-autoloops": {
+      "evidence": "https://www.autoloops.ai",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "gpt-6-luna-low": {
+      "evidence": "https://developers.openai.com/api/docs/models/gpt-6-luna",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "model": "gpt-6-luna",
+      "endpoint": "https://api.openai.com/v1",
+      "options": {
+        "reasoning_effort": "low"
+      }
+    },
+    "gpt-6-luna": {
+      "evidence": "https://developers.openai.com/api/docs/models/gpt-6-luna",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "model": "gpt-6-luna",
+      "endpoint": "https://api.openai.com/v1"
+    },
+    "jevone": {
+      "evidence": "https://huggingface.co/juspay/jev-one",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "kev-4b": {
+      "evidence": "https://github.com/jaredpalmer/kev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "kev-8b": {
+      "evidence": "https://github.com/jaredpalmer/kev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "open-alternative-jev": {
+      "evidence": "https://github.com/ikermoel/open-alternative-jev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_adapters.so1_decider:So1DeciderAdapter"
+    },
+    "nimble-9b": {
+      "evidence": "https://github.com/bespokelabsai/nimble",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "malkuth-2b": {
+      "evidence": "https://github.com/newfull5/malkuth",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "openjev-sglang": {
+      "evidence": "https://github.com/ekzhang/openjev-sglang",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "decider-35b-a3b": {
+      "evidence": "https://huggingface.co/Mapika/decider-35b-a3b",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "localjev-qwen3.5-4b": {
+      "evidence": "https://github.com/amithgc/local-jev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "open-jev-zefan-9b": {
+      "evidence": "https://github.com/Zefan-Cai/Open-Jev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "decision-2b": {
+      "evidence": "https://huggingface.co/flymy-ai/decision-2b-preview",
+      "notes": "Download and review the exact source model package, install its requirements, and pass its directory using --adapter-dir. One model package per process; its loader checks assets and pointer-head contracts.",
+      "local_adapter": "jev_model_adapters:FlyMyAdapter"
+    },
+    "gpt-5.6-luna": {
+      "evidence": "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "model": "gpt-5.6-luna",
+      "endpoint": "https://api.openai.com/v1"
+    },
+    "typecastlm": {
+      "evidence": "https://github.com/mihail-gribov/typecastlm",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "jev-qwen3.5-9b-base-nvfp4": {
+      "evidence": "https://huggingface.co/WIlfLin/JEV-Qwen3.5-9B-Base-NVFP4",
+      "notes": "Start the published custom SGLang serve.py on loopback, then connect --upstream http://127.0.0.1:8231. Stock generation pipelines do not implement the choice readout.",
+      "protocol": "choice"
+    },
+    "gemini-3.1-flash-lite": {
+      "evidence": "https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-lite",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "model": "gemini-3.1-flash-lite",
+      "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai"
+    },
+    "ninfer-qwen3.8-27b": {
+      "evidence": "https://github.com/igorls/ninfer",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "protocol": "systemone"
+    },
+    "ninfer-qwen3.8-27b-t1.5": {
+      "evidence": "https://github.com/igorls/ninfer",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "protocol": "systemone"
+    },
+    "instinct": {
+      "evidence": "https://github.com/fstandhartinger/jevbench/issues/69",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "endpoint": "https://api.zoowork.ai",
+      "model": "instinct"
+    },
+    "openjev-thinking": {
+      "evidence": "https://github.com/razorback16/openjev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "protocol": "systemone"
+    },
+    "djev-thinking": {
+      "evidence": "https://github.com/Davipar/djev-dev",
+      "notes": "Durable receipts are polled only at the same origin; credentials never follow redirects. The local djev-dev server uses /v1/systemone, selected with --protocol systemone.",
+      "endpoint": "https://api.djev.dev",
+      "model": "djev"
+    },
+    "litjev": {
+      "evidence": "https://github.com/zhengxuyu/litjev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "raw-phi-4-mini": {
+      "evidence": "https://huggingface.co/microsoft/Phi-4-mini-instruct",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_model_adapters:RawLogitAdapter"
+    },
+    "opensourcejev-qwen35-4b-q4km": {
+      "evidence": "https://github.com/sabeel111/OpenSourceJev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "reflex-27b": {
+      "evidence": "https://github.com/kshetrajna12/reflex",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "open-jev-zefan-2b": {
+      "evidence": "https://github.com/Zefan-Cai/Open-Jev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "gliner2-large": {
+      "evidence": "https://huggingface.co/fastino/gliner2-large-v1",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_adapters.gliner2_local:Gliner2LocalAdapter"
+    },
+    "qwen3-reranker-4b": {
+      "evidence": "https://huggingface.co/Qwen/Qwen3-Reranker-4B",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_model_adapters:RerankerAdapter"
+    },
+    "deepseek-flash": {
+      "evidence": "https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash",
+      "notes": "Use --model to select the exact currently served DeepSeek snapshot; the benchmark name does not pin a vendor alias.",
+      "model": "deepseek-chat",
+      "endpoint": "https://api.deepseek.com/v1"
+    },
+    "simplejev-qwen3.5-0.8b": {
+      "evidence": "https://github.com/featherless-ai/simple-jev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "simplejev-qwen3.8-27b": {
+      "evidence": "https://github.com/featherless-ai/simple-jev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "decision-machine-1": {
+      "evidence": "https://www.milliseconds.ai",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "gliner2.5-multi": {
+      "evidence": "https://huggingface.co/fastino/gliner2.5-multi-v1",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_adapters.gliner2_local:Gliner2LocalAdapter"
+    },
+    "gliner2": {
+      "evidence": "https://github.com/fastino-ai/GLiNER2",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_adapters.gliner2_local:Gliner2LocalAdapter"
+    },
+    "jevact": {
+      "evidence": "https://github.com/fstandhartinger/jevbench/issues/66",
+      "notes": "Published /api/infer contract is supported. The submitted public endpoint is cleartext HTTP and is deliberately not used as a default. Connect your secured HTTPS deployment or loopback tunnel with --upstream.",
+      "protocol": "jevact"
+    },
+    "clm-8b": {
+      "evidence": "https://github.com/Contrastive-LM/CLM",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "protocol": "systemone"
+    },
+    "kev-0.6b": {
+      "evidence": "https://github.com/jaredpalmer/kev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "raw-qwen3-0.6b": {
+      "evidence": "https://huggingface.co/Qwen/Qwen3-0.6B",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_model_adapters:RawLogitAdapter"
+    },
+    "gliner2.5-small": {
+      "evidence": "https://huggingface.co/fastino/gliner2.5-small-v1",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_adapters.gliner2_local:Gliner2LocalAdapter"
+    },
+    "raw-qwen3-1.7b": {
+      "evidence": "https://huggingface.co/Qwen/Qwen3-1.7B",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_model_adapters:RawLogitAdapter"
+    },
+    "mirror": {
+      "evidence": "https://github.com/Bluusun/Decision-API",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "zerank-2": {
+      "evidence": "https://huggingface.co/zeroentropy/zerank-2-reranker",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_model_adapters:RerankerAdapter"
+    },
+    "jeff": {
+      "evidence": "https://github.com/logan-markewich/jeff",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "smalljev": {
+      "evidence": "https://github.com/isHeSatoshi/smalljev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_adapters.smalljev_local:SmallJevLocalAdapter"
+    },
+    "opendecision": {
+      "evidence": "https://github.com/deepanwadhwa/OpenDecision",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "bge-reranker-v2-m3": {
+      "evidence": "https://huggingface.co/BAAI/bge-reranker-v2-m3",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_model_adapters:RerankerAdapter"
+    },
+    "certo": {
+      "evidence": "https://huggingface.co/altslate/certo-decision-model",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_adapters.certo_local:CertoLocalAdapter"
+    },
+    "decision-fast": {
+      "evidence": "https://huggingface.co/flymy-ai/decision-fast-preview",
+      "notes": "Download and review the exact source model package, install its requirements, and pass its directory using --adapter-dir. One model package per process; its loader checks assets and pointer-head contracts.",
+      "local_adapter": "jev_model_adapters:FlyMyAdapter"
+    },
+    "gte-reranker-modernbert-base": {
+      "evidence": "https://huggingface.co/Alibaba-NLP/gte-reranker-modernbert-base",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_model_adapters:RerankerAdapter"
+    },
+    "kev-0.5b": {
+      "evidence": "https://github.com/jaredpalmer/kev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "laya": {
+      "evidence": "https://huggingface.co/convaiinnovations/laya",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_adapters.laya_local:LayaLocalAdapter"
+    },
+    "lev-350m": {
+      "evidence": "https://github.com/franckverrot/lev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "protocol": "systemone"
+    },
+    "mghafiri-qwen3.5-0.8b-decision-model": {
+      "evidence": "https://huggingface.co/mghafiri/qwen3.5-0.8B-decision-model",
+      "notes": "Install the source jevlite package, download the complete model snapshot, and pass the local snapshot path with --model. The source loads calibration.json.",
+      "local_adapter": "jev_model_adapters:JevLiteAdapter"
+    },
+    "mxbai-rerank-base-v2": {
+      "evidence": "https://huggingface.co/mixedbread-ai/mxbai-rerank-base-v2",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_model_adapters:RerankerAdapter"
+    },
+    "needle-3": {
+      "evidence": "https://github.com/cactus-compute/needle",
+      "notes": "Label-only output supports choice with confidence 0 and no probabilities. Probability-based safety policies abstain. Install cactus-needle from the source instructions.",
+      "local_adapter": "jev_adapters.needle_local:NeedleLocalAdapter"
+    },
+    "needle-3-tools": {
+      "evidence": "https://github.com/cactus-compute/needle",
+      "notes": "Label-only output supports choice with confidence 0 and no probabilities. Probability-based safety policies abstain. Install cactus-needle from the source instructions.",
+      "local_adapter": "jev_adapters.needle_local:NeedleLocalAdapter",
+      "options": {
+        "request_options": {
+          "choice_mode": "tools"
+        }
+      }
+    },
+    "open-jev-deberta-v3-large": {
+      "evidence": "https://github.com/kotoba-lang/typed-decisions",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_adapters.local_openjev:LocalOpenJevAdapter",
+      "model": "com-kotobalabs/open-jev-deberta-v3-large"
+    },
+    "open-jev-json-canvas-joshuasp": {
+      "evidence": "https://github.com/JoshuaSP/open-jev",
+      "notes": "Install the published inference extra and pass the reviewed source checkout using --adapter-dir. The reusable source harness returns labels; choice is exposed with confidence 0. Probability policies abstain.",
+      "local_adapter": "jev_model_adapters:CanvasAdapter"
+    },
+    "openjev-verdict": {
+      "evidence": "https://github.com/Heman10x-NGU/openJev-verdict-2.0",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_model_adapters:VerdictAdapter"
+    },
+    "openjev-verdict-1.4": {
+      "evidence": "https://huggingface.co/heman10x/rlcd-modernbert-151m",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_adapters.verdict_local:VerdictLocalAdapter"
+    },
+    "qwen3.8-27b": {
+      "evidence": "https://huggingface.co/Qwen/Qwen3.8-27B",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "verdict-small": {
+      "evidence": "https://github.com/Manavarya09/verdict",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "von-395m": {
+      "evidence": "https://github.com/wfzyx/von",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "classifier-dev-fast": {
+      "evidence": "https://classifier.dev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "endpoint": "https://classifier.dev"
+    },
+    "jevk5-v0.3-4b": {
+      "evidence": "https://github.com/allebee/jevk5",
+      "notes": "Install the v0.3.0 runtime and its v0.3 checkpoint. v0.2 remains a separate roster entry; do not replace its weights silently.",
+      "protocol": "systemone",
+      "source": "https://github.com/allebee/jevk5"
+    },
+    "plumb-4b": {
+      "evidence": "https://github.com/crh225/plumb",
+      "notes": "Use the exact source checkpoint and start its published server. Supply --model using GET /v1/models from that server; variants remain distinct.",
+      "source": "https://github.com/crh225/plumb",
+      "protocol": "systemone",
+      "model": "crh225/plumb-4b"
+    },
+    "decision-4b-v12": {
+      "evidence": "https://www.benchmarkheaven.com/jev-models/decision-4b-v12",
+      "notes": "The benchmark has not published a source or public deployment contract for this exact entry. Connect an owned native server with --protocol systemone or supply its reviewed --adapter module:Class. Nur does not invent a model, key or endpoint."
+    },
+    "imajev-4b-rtx5090-a2": {
+      "evidence": "https://github.com/mohit67890/imajev",
+      "notes": "Use the exact source checkpoint and start its published server. Supply --model using GET /v1/models from that server; variants remain distinct.",
+      "source": "https://github.com/mohit67890/imajev",
+      "protocol": "systemone",
+      "model": "imajev-4b"
+    },
+    "decision-4b-v11": {
+      "evidence": "https://www.benchmarkheaven.com/jev-models/decision-4b-v11",
+      "notes": "The benchmark has not published a source or public deployment contract for this exact entry. Connect an owned native server with --protocol systemone or supply its reviewed --adapter module:Class. Nur does not invent a model, key or endpoint."
+    },
+    "surogate-rune-26b-a4b-v3-rtxpro6000-a2": {
+      "evidence": "https://huggingface.co/surogate/rune-26b-a4b-GGUF",
+      "notes": "Use the exact source checkpoint and start its published server. Supply --model using GET /v1/models from that server; variants remain distinct.",
+      "source": "https://huggingface.co/surogate/rune-26b-a4b-GGUF",
+      "protocol": "systemone-rune",
+      "model": null
+    },
+    "autojev-27b": {
+      "evidence": "https://huggingface.co/arafathusayn/autojev-27b",
+      "notes": "Use AutoJev DecisionModel / autojev-serve with the matching checkpoint. Upstream weights can require Hugging Face access; Nur never imports HF tokens from agent logs.",
+      "source": "https://github.com/denis-pplx/autojev"
+    },
+    "autojev-27b-rtxpro6000-a2": {
+      "evidence": "https://huggingface.co/arafathusayn/autojev-27b",
+      "notes": "Use AutoJev DecisionModel / autojev-serve with the matching checkpoint. Upstream weights can require Hugging Face access; Nur never imports HF tokens from agent logs.",
+      "protocol": "systemone",
+      "source": "https://github.com/denis-pplx/autojev"
+    },
+    "eikos-27b": {
+      "evidence": "https://www.benchmarkheaven.com/jev-models/eikos-27b",
+      "notes": "The benchmark has not published a source or public deployment contract for this exact entry. Connect an owned native server with --protocol systemone or supply its reviewed --adapter module:Class. Nur does not invent a model, key or endpoint."
+    },
+    "simplejev-qwen3.6-35b-a3b": {
+      "evidence": "https://github.com/featherless-ai/simple-jev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "nemotron-diffusion-8b": {
+      "evidence": "https://github.com/pst2154/Nemotron_Jev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    "bev-bonsai-27b": {
+      "evidence": "https://huggingface.co/Reza2kn/Bev",
+      "notes": "Use Bev v0.1.2 with its pinned Prism runtime. Its /v1/systemone endpoint supports all three primitives. --url http://127.0.0.1:18781",
+      "protocol": "systemone",
+      "model": "bev-bonsai-27b"
+    },
+    "deem-0.8-v1": {
+      "evidence": "https://huggingface.co/LibertAIDAI/deem-0.8-v1",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "protocol": "systemone"
+    },
+    "evalengine-decision-4b": {
+      "evidence": "https://huggingface.co/evalengine/decision-4b",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_model_adapters:EvalengineAdapter"
+    },
+    "instinct-dual-4b": {
+      "evidence": "https://github.com/fstandhartinger/jevbench/issues/123",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "protocol": "systemone",
+      "endpoint": "https://api.zoowork.ai",
+      "model": "instinct-dual-4b"
+    },
+    "bosun-v31-0.6b": {
+      "evidence": "https://huggingface.co/Hanno-Labs/bosun-v3.1-0.6b",
+      "notes": "The checkpoint requires custom loader code. Supply a reviewed immutable revision and explicit trust_remote_code=true in --adapter-options. No code is automatically downloaded from the catalog.",
+      "local_adapter": "jev_model_adapters:BosunAdapter"
+    },
+    "laya-multilingual": {
+      "evidence": "https://huggingface.co/convaiinnovations/laya/tree/1c5edc17a7acd8701df6fc341c0d179f1c62c982/multilingual",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "protocol": "systemone"
+    },
+    "laya-typed-decisions": {
+      "evidence": "https://huggingface.co/convaiinnovations/laya/tree/1c5edc17a7acd8701df6fc341c0d179f1c62c982/typed-decisions",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "protocol": "systemone"
+    },
+    "manchego-v21-v15": {
+      "evidence": "https://github.com/nschlaepfer/manchego-serve",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "protocol": "systemone"
+    },
+    "jobe-qwen3.5-4b": {
+      "evidence": "https://github.com/MantisShrimpdev/jobe",
+      "notes": "Use the exact source checkpoint and start its published server. Supply --model using GET /v1/models from that server; variants remain distinct.",
+      "source": "https://github.com/MantisShrimpdev/jobe",
+      "protocol": "systemone",
+      "model": null
+    },
+    "mica-v01-4b": {
+      "evidence": "https://github.com/akivet/Mica-v0.1-4B",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "protocol": "systemone",
+      "source": "https://github.com/akivet/Mica-v0.1-4B",
+      "model": "mica-v0.1-4b"
+    },
+    "openjev-razorback16": {
+      "evidence": "https://github.com/razorback16/openjev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "protocol": "systemone",
+      "source": "https://github.com/razorback16/openjev",
+      "model": "openjev-latest",
+      "endpoint": "https://api.codiv.ai"
+    }
+  }
+}

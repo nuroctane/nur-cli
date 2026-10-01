@@ -72,7 +72,8 @@ impl Tool for ExecutorTool {
         let argv: Vec<String> = match action.as_str() {
             "status" | "help" => vec!["--help".into()],
             "install" => vec!["install".into()],
-            "sources" => vec!["tools".into(), "sources".into()],
+            // `tools sources` was renamed `tools integrations` (Executor 1.6).
+            "sources" => vec!["tools".into(), "integrations".into()],
             "search" => {
                 let q = arg_str(args, "query")?;
                 vec!["tools".into(), "search".into(), q]

@@ -194,6 +194,10 @@ pub struct Config {
     /// only when a key is present; a no-op without one.
     #[serde(default)]
     pub typesafe: TypesafeConfig,
+    /// Enclave security agents over MCP (`enclave` tool, `/enclave`). Its key
+    /// lives in `ENCLAVE_MCP_API_KEY` or the credential store, not here.
+    #[serde(default)]
+    pub enclave: EnclaveConfig,
     /// Theme setup additions (accent override, inline-image protocol).
     #[serde(default)]
     pub theme_setup: ThemeConfig,
@@ -341,6 +345,11 @@ pub struct TypesafeConfig {
     /// anything in this file is plain text on disk.
     #[serde(default)]
     pub api_key: String,
+    /// Explicit credential slot for a third-party judgment endpoint.
+    #[serde(default)]
+    pub key_env: String,
+    #[serde(default)]
+    pub credential_provider: String,
     /// System One endpoint. Empty = `https://api.typesafe.ai/v1/systemone`.
     #[serde(default)]
     pub base_url: String,
@@ -617,6 +626,8 @@ impl Default for TypesafeConfig {
         Self {
             enabled: true,
             api_key: String::new(),
+            key_env: String::new(),
+            credential_provider: String::new(),
             base_url: String::new(),
             model: String::new(),
             timeout_ms: default_typesafe_timeout_ms(),
@@ -631,6 +642,32 @@ impl Default for TypesafeConfig {
             skills: TypesafeSkillsConfig::default(),
             routing: TypesafeRoutingConfig::default(),
             tools: TypesafeToolsConfig::default(),
+        }
+    }
+}
+
+/// `[enclave]` - Enclave (enclave.ai) security agents, reached natively over
+/// MCP. Docs: `docs/enclave.md`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnclaveConfig {
+    /// MCP endpoint. Empty = `https://mcp.enclave.ai/`. Must be https; plain
+    /// http is accepted only for a loopback host (local testing).
+    #[serde(default)]
+    pub url: String,
+    /// Upper bound on one MCP request, in seconds (default 120).
+    #[serde(default = "default_enclave_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
+fn default_enclave_timeout_secs() -> u64 {
+    120
+}
+
+impl Default for EnclaveConfig {
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            timeout_secs: default_enclave_timeout_secs(),
         }
     }
 }
@@ -912,6 +949,7 @@ impl Default for Config {
             headroom: HeadroomConfig::default(),
             optmem: OptmemConfig::default(),
             typesafe: TypesafeConfig::default(),
+            enclave: EnclaveConfig::default(),
             theme_setup: ThemeConfig::default(),
             prewalk: PrewalkConfig::default(),
             compaction: CompactionConfig::default(),
@@ -1313,10 +1351,13 @@ impl Config {
             let name = crate::providers::by_id(&self.provider)
                 .map(|p| p.name)
                 .unwrap_or(self.provider.as_str());
+            let role = crate::providers::sidecar_role(&self.provider);
             return Err(NurError::Config(format!(
-                "provider '{name}' is not a chat model - it is the TypeSafe (Jev) boost layer. \
-                 Keep it as the credential that lifts every provider (tool `typesafe`, \
-                 `/typesafe`), and set `provider` to a chat provider such as '{}'.",
+                "provider '{name}' is not a chat model - it is a {}. Keep it as the credential \
+                 behind {} ({}), and set `provider` to a chat provider such as '{}'.",
+                role.kind,
+                role.serves,
+                role.surface,
                 crate::providers::default_provider().id
             )));
         }

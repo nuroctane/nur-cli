@@ -15,7 +15,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from fake_provider import State, make_handler
+from fake_provider import FakeMcp, State, make_handler
 from run_e2e import find_binary, isolated_env
 from run_startup import BuilderLease, Terminal
 
@@ -190,6 +190,42 @@ def account_lock(binary, action):
         terminal_log(term, work)
 
 
+def enclave_key(binary):
+    """`/enclave login` saves a sidecar key that `/enclave` then uses, and the
+    active chat provider stays exactly as it was."""
+    work, workspace, home, env = fixture('enclave-key')
+    key = 'enc_sk_regression_saved_0006'
+    mcp = FakeMcp({'key': key, 'tools': [{'name': 'list_findings', 'description': 'List findings.',
+                                          'inputSchema': {'type': 'object', 'properties': {}}}]},
+                  str(work / 'mcp.jsonl'))
+    provider = server(make_handler(State([], work / 'requests.jsonl'), mcp))
+    port = provider.server_port
+    config(home, port, extra=f'[typesafe]\nenabled=false\n\n[enclave]\nurl="http://127.0.0.1:{port}/mcp"\n')
+    term = None
+    try:
+        term = Terminal(binary, workspace, env)
+        term.until('F6 inspect', 5)
+        term.type_text('/enclave login'); term.write('\r')
+        # A sidecar goes straight to key entry: no import or browser method.
+        term.until('MCP key', 5)
+        for char in key: term.write(char); term.pump(.02)
+        term.write('\r')
+        # Like any scoped credential, saving returns to the picker.
+        term.until('choose a provider', 5)
+        term.write('\x1b')
+        term.until('security agents now available', 5)
+        term.type_text('/enclave'); term.write('\r')
+        term.until('tools      1 (list_findings)', 10)
+        assert '(saved key)' in '\n'.join(term.screen.display)
+        settings = (home / '.nur/config.toml').read_text(encoding='utf-8')
+        assert 'provider="vllm"' in settings.replace(' ', ''), settings
+        term.type_text('/quit'); term.write('\r')
+        wait_for(lambda: not term.proc.isalive() if os.name == 'nt' else term.proc.poll() is not None, 5)
+    finally:
+        terminal_log(term, work)
+        provider.shutdown()
+
+
 def cancelled_judgment(binary, provider_name='vllm', model='e2e-model'):
     work, workspace, home, env = fixture('cancel-' + provider_name)
     entered, release = threading.Event(), threading.Event()
@@ -275,7 +311,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--bin'); parser.add_argument('cases', nargs='*')
     args = parser.parse_args(); binary = find_binary(args.bin).resolve()
-    cases = {'queue-reset':queue_reset, 'bridge-ownership':bridge_ownership, 'external-skill-refresh':external_skill_refresh}
+    cases = {'queue-reset':queue_reset, 'bridge-ownership':bridge_ownership, 'external-skill-refresh':external_skill_refresh,
+             'enclave-key':enclave_key}
     cases.update({f'account-{action}':lambda b, action=action: account_lock(b, action) for action in ['logout','key','model','delete']})
     cases.update({f'cancel-{provider}':lambda b, p=provider, m=model: cancelled_judgment(b, p, m) for provider, model in [('vllm','e2e-model'), ('openai','gpt-5.5'), ('anthropic','claude-sonnet-5')]})
     unknown = set(args.cases) - cases.keys()

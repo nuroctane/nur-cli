@@ -2,6 +2,33 @@
 title: Local engines (Jev contract, no key)
 ---
 
+## Full Jev model library
+
+The pinned [JevBench v1.5.4 roster](jev-models.md) includes all 112 published systems, including variants and unmeasured entries. `nur jev models --search <text>` and `/jev models <text>` search it offline. `nur jev info <id>` and `/jev info <id>` show source, interface, model, hardware, deployment notes, and connection commands.
+
+```bash
+nur jev models --search mica
+nur jev info mica-v01-4b
+# Start the matching source runtime, then connect its native API:
+nur jev use --engine mica-v01-4b --url http://127.0.0.1:8010
+# A hosted native API uses its own credential slot:
+nur jev login instinct
+nur jev use --engine instinct
+# Translate another API shape through the local bridge:
+nur jev login djev
+nur jev start --engine djev
+nur jev use
+# Load an installed local library through its adapter:
+nur jev start --engine gliner2
+nur jev use
+```
+
+Native System One, list-question System One, Surogate decisions, djev receipts, structured OpenAI-compatible chat, classifier.dev, choice-only NVFP4, JevAct, and JevBench `run(task)` servers have distinct transports. `--protocol` overrides a source runtime's default. `--upstream`, `--model`, `--adapter module:Class`, `--adapter-dir`, and non-secret JSON `--adapter-options` support self-hosted variants. Model weights and dependencies remain optional. Nur does not install checkpoints or execute downloaded source by listing the catalog. Some benchmark-only entries lack public deployment artifacts; their metadata says so and supports connecting an owned server or supplied adapter.
+
+Use `nur jev login <id>` with hidden input, or `--key-env <ENV_NAME>`. Selected credentials are exclusive and never fall back to a TypeSafe key. HTTP is limited to loopback, other endpoints require HTTPS, and redirects and cross-origin receipt polling are refused. Never put credentials into URLs or adapter options.
+
+Malformed probabilities, changed candidates, detected input truncation, missing dependencies, and upstream failures return no judgment. Label-only engines answer a choice with confidence zero and no fabricated distribution; probability-based policies abstain. Reranker relevance and raw candidate logits are relative scores, not proven correctness confidence. Validate an engine on your own tasks with `nur jev eval` before relying on it.
+
 # Local typed decisions
 
 Bridge lifecycle operations are serialized. Starting the existing owned bridge

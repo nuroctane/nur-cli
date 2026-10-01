@@ -13,6 +13,7 @@ termination through stale PID records.
 |----------|----------|
 | `~/.nur/auth.json` | Provider API key / tokens after `/login` or `nur auth login` |
 | Env `NUR_API_KEY` / vendor keys | Optional override (never printed in logs) |
+| `~/.nur/provider_keys.json` | Scoped and sidecar keys (TypeSafe, Enclave, failover routes); private file permissions |
 | `~/.nur/plugins/` | Marketplace skill packs (local clones; no secrets) |
 | `~/.nur/sessions/` | Session files + `.json.bak` / `.precompact.bak` (no key) |
 | `~/.nur/tool-results/` | Spilled large tool outputs (may include workspace text) |
@@ -44,7 +45,8 @@ NurCLI hardens shell execution by default:
 - **SSRF blocks**: web tools reject private-IP targets
 - **Atomic IO**: all writes to `~/.nur/` use atomic file operations (write-to-temp, rename)
 - **Session bak**: each session save copies the previous file to `*.json.bak` first
-- **Optional rules**: `permissions.toml` deny/ask/allow; plan mode still blocks code authoring / VCS
+- **Optional rules**: `permissions.toml` deny/ask/allow; plan mode still blocks code authoring / VCS. Rules hold for read-only tools too: a call a deny or ask rule names leaves the free parallel batch and takes the gated path
+- **What the model reads, it sees**: as in Claude Code and Codex, file contents and tool output reach your provider verbatim, secrets included. nur never redacts tool results, because a rewritten key corrupts the config edits the model makes. To keep a file away from the model, deny it, e.g. `deny = ["read_file:*.env"]` in `~/.nur/permissions.toml`. Rules match a tool's primary argument (the path for file tools, the command for `bash`), so a repo-wide `grep` or a `cat` in `bash` can still surface the file; deny those patterns too if that matters. (nur's own spill files, context store and memory still refuse secret-shaped bodies.)
 - **Optional hooks**: `hooks.toml` pre/post tool shell (local only; you control the script)
 - **TypeSafe (Jev) guard**: the `typesafe` tool is declared read-only, so it runs without approval, and it refuses secret-shaped content in `state` / `query` / `candidates` before any request is sent. A loopback endpoint needs no key (local engine); a hosted endpoint needs `TYPESAFE_API_KEY`
 
@@ -62,6 +64,18 @@ Each provider in the picker carries a **privacy tier**, shown as a badge:
 Tiers are built in from a review of each provider's public policy, and you can override any of them for your own account/endpoint with **Alt+P** in the provider picker (saved as a `provider_privacy` override — no config file).
 
 **Failover respects privacy.** When the active provider returns a server error, nur can retry against a configured `fallback_providers` chain (set up in `/failover`). Failover **never silently downgrades** you to a weaker privacy tier than your active provider — a weaker fallback is skipped unless you set `failover_allow_downgrade`. It also only fails over *before any output has streamed*, so the transcript never duplicates. Fallback keys come from each provider's own env var or a key/OAuth session you save in `/failover` — never from the active provider's `auth.json`.
+
+## Enclave security agents
+
+The `enclave` tool sends its key only as a bearer token over https to the
+configured Enclave MCP endpoint (plain http only for a loopback host) and never
+follows redirects, so the key cannot be replayed elsewhere; the model sees a
+fingerprint at most. Listing is read-only. Every `call` takes the approval path
+and is treated as high impact regardless of the server's own hints, because it
+can start pentests against real systems; plan mode blocks it. Tool results are
+external data, not instructions. See [enclave.md](./enclave.md).
+
+---
 
 ## Session receipt (verify what ran)
 

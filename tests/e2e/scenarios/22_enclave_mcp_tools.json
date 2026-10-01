@@ -1,0 +1,50 @@
+{
+  "description": "Enclave over native MCP with a key saved by `nur auth login`: every request carries the bearer key, tools are listed across pages, an expired session is reopened, a call streamed over SSE (with a server ping) reaches the model, and the key never does.",
+  "prompt": "Use Enclave to list the critical security findings.",
+  "setup_commands": [["auth", "login", "--provider", "enclave", "--key", "enc_sk_e2e_stored_key_0001"]],
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n\n[enclave]\nurl = \"http://127.0.0.1:{port}/mcp\"\n"
+  },
+  "mcp": {
+    "key": "enc_sk_e2e_stored_key_0001",
+    "page_size": 1,
+    "sse": true,
+    "forget_session_on": "tools/call",
+    "instructions": "Start with list_findings before running new work.",
+    "tools": [
+      {
+        "name": "list_findings",
+        "description": "List open security findings for the organization.",
+        "inputSchema": {"type": "object", "properties": {"severity": {"type": "string"}}},
+        "annotations": {"readOnlyHint": true}
+      },
+      {
+        "name": "start_pentest",
+        "description": "Start an autonomous pentest against an in-scope application.",
+        "inputSchema": {"type": "object", "required": ["target"], "properties": {"target": {"type": "string"}}}
+      }
+    ],
+    "results": {
+      "list_findings": {"content": [{"type": "text", "text": "FINDING-7 critical: SQL injection in /login"}]}
+    }
+  },
+  "script": [
+    {"tool_calls": [{"name": "enclave", "arguments": {"action": "tools"}}]},
+    {"tool_calls": [{"name": "enclave", "arguments": {"action": "call", "tool": "list_findings", "arguments": {"severity": "critical"}}}]},
+    {"text": "Enclave reports one critical finding."}
+  ],
+  "expect": {
+    "stdout_contains": ["Enclave reports one critical finding."],
+    "requests": 3,
+    "tool_results": [
+      {"request": 2, "contains": ["list_findings(severity?: string)  [read-only]", "start_pentest(target: string)", "Start with list_findings before running new work."]},
+      {"request": 3, "contains": ["FINDING-7 critical: SQL injection in /login"]}
+    ],
+    "requests_lack": ["enc_sk_e2e_stored_key_0001"],
+    "mcp": {
+      "bearer": "enc_sk_e2e_stored_key_0001",
+      "methods": ["initialize", "notifications/initialized", "tools/list", "tools/list", "tools/call", "initialize", "notifications/initialized", "tools/call", "(response)"],
+      "call_arguments": {"list_findings": {"severity": "critical"}}
+    }
+  }
+}

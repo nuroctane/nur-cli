@@ -233,13 +233,23 @@ mod tests {
     fn markdown_destinations_survive_hard_wraps_and_duplicate_labels() {
         let a = "https://example.com/long/destination?a=one&b=two";
         let b = "https://other.test/different";
-        let lines = crate::tui::markdown::render_markdown(&format!("[same]({a}) and [same]({b})"), Style::default());
+        let lines = crate::tui::markdown::render_markdown(
+            &format!("[same]({a}) and [same]({b})"),
+            Style::default(),
+        );
         let (rows, hits) = wrap_lines_with_links(&lines, 16);
         let targets: Vec<_> = hits.iter().flatten().map(|hit| hit.2.as_ref()).collect();
-        assert!(targets.iter().filter(|target| **target == a).count() > 1, "long link did not preserve its destination: {targets:?}");
+        assert!(
+            targets.iter().filter(|target| **target == a).count() > 1,
+            "long link did not preserve its destination: {targets:?}"
+        );
         assert!(targets.contains(&b));
         for (row, hits) in rows.iter().zip(&hits) {
-            let width: usize = row.spans.iter().map(|span| UnicodeWidthStr::width(span.content.as_ref())).sum();
+            let width: usize = row
+                .spans
+                .iter()
+                .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+                .sum();
             assert!(hits.iter().all(|(lo, hi, _)| lo < hi && *hi <= width));
         }
     }

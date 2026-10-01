@@ -1,0 +1,25 @@
+{
+  "description": "As in Claude Code and Codex, a file the model reads reaches the provider verbatim - nur never redacts tool results, because rewritten secrets corrupt config edits. A deny rule in permissions.toml is how a file is kept from the model, and it holds for read-only tools too.",
+  "prompt": "Read both env files.",
+  "setup_files": {
+    ".env": "OPENAI_API_KEY=sk-e2etestsecret0123456789abcdefghijklmnop\n",
+    "prod.env": "DATABASE_URL=postgres://deploy:prod-only-secret-7731@db.internal/app\n"
+  },
+  "setup_home_files": {
+    "permissions.toml": "deny = [\"read_file:*prod.env\"]\n"
+  },
+  "script": [
+    {"tool_calls": [{"name": "read_file", "arguments": {"path": ".env"}}]},
+    {"tool_calls": [{"name": "read_file", "arguments": {"path": "prod.env"}}]},
+    {"text": "Read the allowed file; the other is denied."}
+  ],
+  "expect": {
+    "stdout_contains": ["Read the allowed file; the other is denied."],
+    "requests": 3,
+    "tool_results": [
+      {"request": 2, "contains": ["OPENAI_API_KEY=sk-e2etestsecret0123456789abcdefghijklmnop"]},
+      {"request": 3, "contains": ["permissions.toml"]}
+    ],
+    "requests_lack": ["prod-only-secret-7731"]
+  }
+}

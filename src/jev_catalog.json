@@ -1,0 +1,2837 @@
+{
+  "version": 1,
+  "benchmark": "JevBench v1.5.4",
+  "revision": "c5dfe93d0b297948aa7a5a3475aefb8a726dfe63",
+  "source": "https://github.com/fstandhartinger/model-market-comparison/blob/c5dfe93d0b297948aa7a5a3475aefb8a726dfe63/data/raw/benchmarks/jevbench/v1.5/jevbench-v1.5.4-results.json",
+  "sha256": "0cf210b76bf85084a5f3fb40fb109e9a2c2f93df42ff6628696377666e89db45",
+  "engines": [
+    {
+      "id": "cygnet",
+      "name": "Cygnet (blockbrain, frozen Gemma-4-12B-it)",
+      "source": "https://github.com/blockbrain-ai/cygnet-recipe",
+      "protocol": "systemone",
+      "adapter": "images/cygnet/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "shim MIT; weights Apache-2.0 with Google's Gemma Prohibited Use Policy",
+      "open": "yes",
+      "hardware": "RTXPRO6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 1,
+      "model": "cygnet",
+      "evidence": "https://github.com/blockbrain-ai/cygnet-recipe",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "winnow-12b",
+      "name": "Winnow-12B Q8",
+      "source": "https://huggingface.co/EldanRing/Winnow-12B",
+      "protocol": "systemone",
+      "adapter": "images/winnow-12b/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "Apache-2.0, including the applicable Gemma 4 base/derivative licence terms",
+      "open": "yes",
+      "hardware": "RTX6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 2,
+      "model": "EldanRing/Winnow-12B",
+      "evidence": "https://huggingface.co/EldanRing/Winnow-12B",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "jev-1.13.0",
+      "name": "Jev 1.13.0 (TypeSafe AI)",
+      "source": "https://docs.typesafe.ai",
+      "protocol": "systemone",
+      "adapter": "harness/specs/jev-1.13.0.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "proprietary API",
+      "open": "no",
+      "hardware": "the operator's hosted API",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 3,
+      "model": "jev-latest",
+      "evidence": "https://docs.typesafe.ai",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "endpoint": "https://api.typesafe.ai"
+    },
+    {
+      "id": "jev-omni",
+      "name": "Jev-Omni (akhilaaa3, Gemma-4-12B merged)",
+      "source": "https://huggingface.co/akhilaaa3/Jev-Omni",
+      "protocol": "adapter",
+      "adapter": "images/jev-omni/spec.json:omni_v15.JevOmni",
+      "license": "Apache-2.0, following Gemma 4; dataset rights stated separately by the author",
+      "open": "yes",
+      "hardware": "RTX6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 6,
+      "model": "akhilaaa3/Jev-Omni",
+      "evidence": "https://huggingface.co/akhilaaa3/Jev-Omni",
+      "notes": "Install the model card requirements and obtain its jev_omni.py loader. Supply its directory with --adapter-dir; CUDA and roughly 50 GB FP32 weights memory are required by the reference runtime.",
+      "local_adapter": "jev_model_adapters:OmniAdapter"
+    },
+    {
+      "id": "decider-4b-v2",
+      "name": "decider-4b v2 (Mapika)",
+      "source": "https://github.com/Mapika/decider",
+      "protocol": "systemone",
+      "adapter": "images/decider-4b-v2/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "Apache-2.0 (package and weights)",
+      "open": "yes",
+      "hardware": "RTX5090",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 7,
+      "model": null,
+      "evidence": "https://github.com/Mapika/decider",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "semif-qwen3.5-4b",
+      "name": "SemIf, formerly OpenJev (Qwen3.5-4B, TheoLeeCJ)",
+      "source": "https://github.com/TheoLeeCJ/openjev",
+      "protocol": "run",
+      "adapter": "images/semif-qwen3.5-4b/spec.json:remote_inproc_v15.RemoteInprocV15Adapter",
+      "license": "MIT (code); Qwen3.5 weights Apache-2.0",
+      "open": "yes",
+      "hardware": "RTX5090",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 12,
+      "model": null,
+      "evidence": "https://github.com/TheoLeeCJ/openjev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_adapters.semif_direct:SemIfDirectAdapter"
+    },
+    {
+      "id": "spark-s1-4b-v6",
+      "name": "spark-s1-4b-v6 (Open Spark Jev, abhishek085)",
+      "source": "https://github.com/abhishek085/open-spark-jev",
+      "protocol": "systemone",
+      "adapter": "images/spark-s1-4b-v6/spec.json:spark_v15.Spark",
+      "license": "Apache-2.0 (code and weights); base Qwen/Qwen3.5-4B Apache-2.0",
+      "open": "yes",
+      "hardware": "RTX6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 13,
+      "model": null,
+      "evidence": "https://github.com/abhishek085/open-spark-jev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "metask-jev-4b",
+      "name": "metask-jev-4b",
+      "source": "https://github.com/metask-ai/metask-jev",
+      "protocol": "adapter",
+      "adapter": "images/metask-jev-4b/spec.json:metask_v15.MetaskJevWarm",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "RTX5090",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1622
+      },
+      "rank": 14,
+      "model": "wayfind/metask-jev-4b-policy-mix",
+      "evidence": "https://github.com/metask-ai/metask-jev",
+      "notes": "Install source inference/requirements.txt; pass --adapter-dir <checkout>/inference. Uses the published per-kind calibration.",
+      "local_adapter": "jev_model_adapters:MetaskAdapter"
+    },
+    {
+      "id": "hopper",
+      "name": "Hopper",
+      "source": "https://huggingface.co/HopitAI/hopper",
+      "protocol": "systemone",
+      "adapter": "images/hopper/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "Component-specific terms recorded in RESULT.md; submitted adapter release and Qwen base retain their respective terms",
+      "open": "yes",
+      "hardware": "A6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 15,
+      "model": "HopitAI/hopper",
+      "evidence": "https://huggingface.co/HopitAI/hopper",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "malkuth-4b",
+      "name": "Malkuth-4B (newfull5, Kev post-train)",
+      "source": "https://github.com/newfull5/malkuth",
+      "protocol": "systemone",
+      "adapter": "images/malkuth-4b/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "CC-BY-NC-4.0, research use only (XNLI and RACE in the training mix)",
+      "open": "yes",
+      "hardware": "RTX5090",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 16,
+      "model": null,
+      "evidence": "https://github.com/newfull5/malkuth",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "reflex-4b",
+      "name": "reflex 4B (kshetrajna12)",
+      "source": "https://github.com/kshetrajna12/reflex",
+      "protocol": "systemone",
+      "adapter": "images/reflex-4b/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "MIT (code, adapter); Apache-2.0 (base)",
+      "open": "yes",
+      "hardware": "H100",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 18,
+      "model": null,
+      "evidence": "https://github.com/kshetrajna12/reflex",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "jev-local",
+      "name": "jev-local (Qwen3.5-9B)",
+      "source": "https://github.com/us/jev-local",
+      "protocol": "systemone",
+      "adapter": "images/jev-local/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "no licence stated in the repository (public code); Apache-2.0 base weights",
+      "open": "yes",
+      "hardware": "H100",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 19,
+      "model": null,
+      "evidence": "https://github.com/us/jev-local",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "djev",
+      "name": "djev (Maisa, diffusion-gemma)",
+      "source": "https://github.com/Davipar/djev-dev",
+      "protocol": "djev",
+      "adapter": "images/djev/spec.json:jevbench.adapters.djev.DjevAdapter",
+      "license": "Apache-2.0 code; Google DiffusionGemma Apache-2.0 weights; no djev-specific weights",
+      "open": "yes",
+      "hardware": "H100",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 20,
+      "model": "djev",
+      "evidence": "https://github.com/Davipar/djev-dev",
+      "notes": "Durable receipts are polled only at the same origin; credentials never follow redirects. The local djev-dev server uses /v1/systemone, selected with --protocol systemone.",
+      "endpoint": "https://api.djev.dev"
+    },
+    {
+      "id": "raw-qwen3-4b-instruct-2507",
+      "name": "Raw Qwen3 4B Instruct 2507 direct logits",
+      "source": "https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507",
+      "protocol": "adapter",
+      "adapter": "images/raw-qwen3-4b-instruct-2507/spec.json:raw_adapter.RawControlAdapter",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "A6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 21,
+      "model": "Qwen/Qwen3-4B-Instruct-2507",
+      "evidence": "https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_model_adapters:RawLogitAdapter"
+    },
+    {
+      "id": "jqv",
+      "name": "jqv (Qwen3-32B zero-shot)",
+      "source": "https://github.com/Octalab-Inc/jqv",
+      "protocol": "systemone",
+      "adapter": "images/jqv/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "Apache-2.0 (Qwen3-32B weights); serving code public",
+      "open": "yes",
+      "hardware": "H100",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 22,
+      "model": null,
+      "evidence": "https://github.com/Octalab-Inc/jqv",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "jevk5-v02",
+      "name": "JevK5 v0.2.0",
+      "source": "https://github.com/allebee/jevk5",
+      "protocol": "systemone",
+      "adapter": "images/jevk5-v02/spec.json:jevk5_direct.JevK5DirectAdapter",
+      "license": "Apache-2.0 (code/adapter); Apache-2.0 (Qwen3.5-4B base)",
+      "open": "unknown",
+      "hardware": "RTX5090",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 23,
+      "model": null,
+      "evidence": "https://github.com/allebee/jevk5",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "qwen35-9b-jev-data-mix-v2",
+      "name": "Qwen3.5-9B Jev-like data-mix v2",
+      "source": "https://huggingface.co/jsaurabh/qwen3.5-9b-jev-data-mix-v2",
+      "protocol": "adapter",
+      "adapter": "images/qwen35-9b-jev-data-mix-v2/spec.json:qwen35_nimble_lora.Qwen35NimbleLoraAdapter",
+      "license": "Apache-2.0 (adapter code and weights; Qwen3.5-9B base is Apache-2.0)",
+      "open": "unknown",
+      "hardware": "A6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 24,
+      "model": "jsaurabh/qwen3.5-9b-jev-data-mix-v2",
+      "evidence": "https://huggingface.co/jsaurabh/qwen3.5-9b-jev-data-mix-v2",
+      "notes": "Install Nimble at the model-card pin f136b3f75721fda4ea961f73993cc50b08488835 and PEFT. Obtain the published bench/qwen35_nimble_lora.py and pass its directory with --adapter-dir. Uses its frozen schema encoding, not generic chat.",
+      "local_adapter": "qwen35_nimble_lora:Qwen35NimbleLoraAdapter"
+    },
+    {
+      "id": "standardone-8b",
+      "name": "Standard One 8B (Standard Thinking)",
+      "source": "https://huggingface.co/StandardThinking/StandardOne-8B",
+      "protocol": "systemone",
+      "adapter": "images/standardone-8b/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "Apache-2.0 (jev-adapter server, LoRA and merged weights; base Ministral 3 8B Apache-2.0)",
+      "open": "yes",
+      "hardware": "RTX5090",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 25,
+      "model": "StandardThinking/StandardOne-8B",
+      "evidence": "https://huggingface.co/StandardThinking/StandardOne-8B",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "ninfer-qwen3.8-flash-next",
+      "name": "NInfer Qwen3.8-Flash-Next mixed",
+      "source": "https://github.com/igorls/ninfer",
+      "protocol": "systemone",
+      "adapter": "images/ninfer-qwen3.8-flash-next/spec.json:ninfer_native.NInferNativeAdapter",
+      "license": "Qwen Community License 1.0 (model); Apache-2.0 (engine)",
+      "open": "yes",
+      "hardware": "RTXPRO6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 26,
+      "model": null,
+      "evidence": "https://github.com/igorls/ninfer",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "swanone",
+      "name": "swanOne (blockbrain, Qwen3.8-Flash-Next NVFP4)",
+      "source": "https://github.com/blockbrain-ai/swanone-recipe",
+      "protocol": "systemone",
+      "adapter": "images/swanone/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "patches Apache-2.0, shim MIT; weights under the Qwen licence (LICENSE-NOTICE.md)",
+      "open": "yes",
+      "hardware": "RTXPRO6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 28,
+      "model": null,
+      "evidence": "https://github.com/blockbrain-ai/swanone-recipe",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "raw-qwen3-8b",
+      "name": "Raw Qwen3 8B direct logits",
+      "source": "https://huggingface.co/Qwen/Qwen3-8B",
+      "protocol": "adapter",
+      "adapter": "images/raw-qwen3-8b/spec.json:raw_adapter.RawControlAdapter",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "A6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 29,
+      "model": "Qwen/Qwen3-8B",
+      "evidence": "https://huggingface.co/Qwen/Qwen3-8B",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_model_adapters:RawLogitAdapter"
+    },
+    {
+      "id": "decider-2b",
+      "name": "decider-2b (Mapika)",
+      "source": "https://huggingface.co/Mapika/decider-2b",
+      "protocol": "systemone",
+      "adapter": "images/decider-2b/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "H100",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 30,
+      "model": "Mapika/decider-2b",
+      "evidence": "https://huggingface.co/Mapika/decider-2b",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "system-one-sg",
+      "name": "system-one (Qwen3-8B, Sean Goedecke)",
+      "source": "https://github.com/sgoedecke/system-one",
+      "protocol": "run",
+      "adapter": "images/system-one-sg/spec.json:remote_inproc_v15.RemoteInprocV15Adapter",
+      "license": "no licence file in the repository as of 19 Sep; Qwen3 weights Apache-2.0",
+      "open": "yes",
+      "hardware": "RTX5090",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 31,
+      "model": "Qwen/Qwen3-8B",
+      "evidence": "https://github.com/sgoedecke/system-one",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_adapters.sg_system_one:SgSystemOneAdapter"
+    },
+    {
+      "id": "system-one-open",
+      "name": "system-one-open (Gemma 4 E2B LoRA on an L4)",
+      "source": "https://github.com/mithalouni/system-one-open",
+      "protocol": "systemone-list",
+      "adapter": "harness/specs/system-one-open.json:jevbench.adapters.systemone_list.SystemOneListAdapter",
+      "license": "MIT (repository LICENSE; Gemma weights keep Google’s terms)",
+      "open": "yes",
+      "hardware": "the author's public demo endpoint",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 32,
+      "model": null,
+      "evidence": "https://github.com/mithalouni/system-one-open",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "kushal-gemma4-31b-it-autoloops",
+      "name": "Autoloops – Gemma 4 31B IT",
+      "source": "https://www.autoloops.ai",
+      "protocol": "adapter",
+      "adapter": "harness/specs/kushal-gemma4-31b-it-autoloops.json:extra.autoloops_systemone.AutoloopsSystemOneAdapter",
+      "license": "Gemma terms of use (Google) for the base weights; hosted Autoloops service",
+      "open": "no",
+      "hardware": "the operator's hosted API",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 33,
+      "model": null,
+      "evidence": "https://www.autoloops.ai",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "gpt-6-luna-low",
+      "name": "GPT-6 Luna (low reasoning effort)",
+      "source": "https://developers.openai.com/api/docs/models/gpt-6-luna",
+      "protocol": "openai",
+      "adapter": "harness/specs/gpt-6-luna-low.json:jevbench.adapters.openai_compat.OpenAICompatAdapter",
+      "license": "proprietary API",
+      "open": "unknown",
+      "hardware": "the operator's hosted API",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 34,
+      "model": "gpt-6-luna",
+      "evidence": "https://developers.openai.com/api/docs/models/gpt-6-luna",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "endpoint": "https://api.openai.com/v1",
+      "options": {
+        "reasoning_effort": "low"
+      }
+    },
+    {
+      "id": "gpt-6-luna",
+      "name": "GPT-6 Luna (default medium reasoning effort)",
+      "source": "https://developers.openai.com/api/docs/models/gpt-6-luna",
+      "protocol": "openai",
+      "adapter": "harness/specs/gpt-6-luna.json:jevbench.adapters.openai_compat.OpenAICompatAdapter",
+      "license": "proprietary API",
+      "open": "unknown",
+      "hardware": "the operator's hosted API",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 35,
+      "model": "gpt-6-luna",
+      "evidence": "https://developers.openai.com/api/docs/models/gpt-6-luna",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "endpoint": "https://api.openai.com/v1"
+    },
+    {
+      "id": "jevone",
+      "name": "JevOne",
+      "source": "https://huggingface.co/juspay/jev-one",
+      "protocol": "systemone",
+      "adapter": "images/jevone/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "Component-specific JevOne/Qwen/SGLang terms recorded in RESULT.md",
+      "open": "yes",
+      "hardware": "RTXPRO6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 36,
+      "model": "juspay/jev-one",
+      "evidence": "https://huggingface.co/juspay/jev-one",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "kev-4b",
+      "name": "kev 4B (research preview)",
+      "source": "https://github.com/jaredpalmer/kev",
+      "protocol": "systemone",
+      "adapter": "images/kev-4b/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "Apache-2.0",
+      "open": true,
+      "hardware": "A6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 37,
+      "model": null,
+      "evidence": "https://github.com/jaredpalmer/kev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "kev-8b",
+      "name": "kev 8B (research preview)",
+      "source": "https://github.com/jaredpalmer/kev",
+      "protocol": "systemone",
+      "adapter": "images/kev-8b/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "Apache-2.0",
+      "open": true,
+      "hardware": "A6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 38,
+      "model": null,
+      "evidence": "https://github.com/jaredpalmer/kev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "open-alternative-jev",
+      "name": "open-alternative-jev (Qwen3.5-4B, IkerMoel)",
+      "source": "https://github.com/ikermoel/open-alternative-jev",
+      "protocol": "run",
+      "adapter": "images/open-alternative-jev/spec.json:remote_inproc_v15.RemoteInprocV15Adapter",
+      "license": "Apache-2.0 (code and weights)",
+      "open": "yes",
+      "hardware": "RTX5090",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 39,
+      "model": "Qwen/Qwen3.5-4B",
+      "evidence": "https://github.com/ikermoel/open-alternative-jev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_adapters.so1_decider:So1DeciderAdapter"
+    },
+    {
+      "id": "nimble-9b",
+      "name": "Bespoke Nimble 9B (Bespoke Labs)",
+      "source": "https://github.com/bespokelabsai/nimble",
+      "protocol": "systemone",
+      "adapter": "images/nimble-9b/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "Apache-2.0 (weights); repository without a licence file as of 19 Sep",
+      "open": "yes",
+      "hardware": "A6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 40,
+      "model": null,
+      "evidence": "https://github.com/bespokelabsai/nimble",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "malkuth-2b",
+      "name": "Malkuth-2B (newfull5, Kev post-train)",
+      "source": "https://github.com/newfull5/malkuth",
+      "protocol": "systemone",
+      "adapter": "images/malkuth-2b/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "CC-BY-NC-4.0, research use only (XNLI and RACE in the training mix)",
+      "open": "yes",
+      "hardware": "RTX5090",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 41,
+      "model": null,
+      "evidence": "https://github.com/newfull5/malkuth",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "openjev-sglang",
+      "name": "openjev-sglang (Qwen3.6-35B-A3B on SGLang)",
+      "source": "https://github.com/ekzhang/openjev-sglang",
+      "protocol": "systemone",
+      "adapter": "harness/specs/openjev-sglang.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "no licence file in the repository as of 2026-09-19; Qwen3.6 weights keep their own terms",
+      "open": "yes",
+      "hardware": "the author's public demo endpoint",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 42,
+      "model": null,
+      "evidence": "https://github.com/ekzhang/openjev-sglang",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "decider-35b-a3b",
+      "name": "decider-35b-a3b (Mapika)",
+      "source": "https://huggingface.co/Mapika/decider-35b-a3b",
+      "protocol": "systemone",
+      "adapter": "images/decider-35b-a3b/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "H100",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 43,
+      "model": "Mapika/decider-35b-a3b",
+      "evidence": "https://huggingface.co/Mapika/decider-35b-a3b",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "localjev-qwen3.5-4b",
+      "name": "local-jev Qwen3.5-4B",
+      "source": "https://github.com/amithgc/local-jev",
+      "protocol": "systemone",
+      "adapter": "images/localjev-qwen3.5-4b/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "MIT code; Apache-2.0 Qwen weights",
+      "open": "yes",
+      "hardware": "A6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 44,
+      "model": null,
+      "evidence": "https://github.com/amithgc/local-jev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "open-jev-zefan-9b",
+      "name": "Open-Jev 9B (Zefan Cai)",
+      "source": "https://github.com/Zefan-Cai/Open-Jev",
+      "protocol": "systemone",
+      "adapter": "images/open-jev-zefan-9b/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "MIT (loader); Apache-2.0 (adapter and pinned Qwen base); CC0-1.0 public training projection",
+      "open": "yes",
+      "hardware": "H100",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 46,
+      "model": null,
+      "evidence": "https://github.com/Zefan-Cai/Open-Jev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "decision-2b",
+      "name": "Decision 2B (FlyMy.AI, v59)",
+      "source": "https://huggingface.co/flymy-ai/decision-2b-preview",
+      "protocol": "adapter",
+      "adapter": "images/decision-2b/spec.json:flymy_v15.FlyMyPackage",
+      "license": "Apache-2.0 notices on the included code and the pinned base; the weights are an evaluation preview under EVALUATION-PERMISSION.md, not a cleared commercial release",
+      "open": "yes",
+      "hardware": "RTX6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 47,
+      "model": "flymy-ai/decision-2b-preview",
+      "evidence": "https://huggingface.co/flymy-ai/decision-2b-preview",
+      "notes": "Download and review the exact source model package, install its requirements, and pass its directory using --adapter-dir. One model package per process; its loader checks assets and pointer-head contracts.",
+      "local_adapter": "jev_model_adapters:FlyMyAdapter"
+    },
+    {
+      "id": "gpt-5.6-luna",
+      "name": "GPT-5.6 Luna (low reasoning effort)",
+      "source": "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
+      "protocol": "openai",
+      "adapter": "harness/specs/gpt-5.6-luna.json:jevbench.adapters.openai_compat.OpenAICompatAdapter",
+      "license": "proprietary API",
+      "open": "no",
+      "hardware": "the operator's hosted API",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 48,
+      "model": "gpt-5.6-luna",
+      "evidence": "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "endpoint": "https://api.openai.com/v1"
+    },
+    {
+      "id": "typecastlm",
+      "name": "typecastlm (Mikhail Gribov, Qwen3.5-4B computed head)",
+      "source": "https://github.com/mihail-gribov/typecastlm",
+      "protocol": "systemone",
+      "adapter": "images/typecastlm/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "Apache-2.0 (package and weights)",
+      "open": "yes",
+      "hardware": "RTX5090",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 49,
+      "model": null,
+      "evidence": "https://github.com/mihail-gribov/typecastlm",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "jev-qwen3.5-9b-base-nvfp4",
+      "name": "JEV Qwen3.5-9B Base NVFP4",
+      "source": "https://huggingface.co/WIlfLin/JEV-Qwen3.5-9B-Base-NVFP4",
+      "protocol": "choice",
+      "adapter": "images/jev-qwen3.5-9b-base-nvfp4/spec.json:jev_choice_http.Adapter",
+      "license": "Apache-2.0 entrant and upstream checkpoint",
+      "open": "yes",
+      "hardware": "RTX5090",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 50,
+      "model": "WIlfLin/JEV-Qwen3.5-9B-Base-NVFP4",
+      "evidence": "https://huggingface.co/WIlfLin/JEV-Qwen3.5-9B-Base-NVFP4",
+      "notes": "Start the published custom SGLang serve.py on loopback, then connect --upstream http://127.0.0.1:8231. Stock generation pipelines do not implement the choice readout."
+    },
+    {
+      "id": "gemini-3.1-flash-lite",
+      "name": "Gemini 3.1 Flash-Lite",
+      "source": "https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-lite",
+      "protocol": "openai",
+      "adapter": "harness/specs/gemini-3.1-flash-lite.json:jevbench.adapters.openai_compat.OpenAICompatAdapter",
+      "license": "proprietary API",
+      "open": "no",
+      "hardware": "the operator's hosted API",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 51,
+      "model": "gemini-3.1-flash-lite",
+      "evidence": "https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-lite",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai"
+    },
+    {
+      "id": "ninfer-qwen3.8-27b",
+      "name": "NInfer Qwen3.8-27B NVFP4",
+      "source": "https://github.com/igorls/ninfer",
+      "protocol": "systemone",
+      "adapter": "images/ninfer-qwen3.8-27b/spec.json:ninfer_native.NInferNativeAdapter",
+      "license": "Apache-2.0 (engine and submitted 27B artifact/base)",
+      "open": "yes",
+      "hardware": "RTX5090",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 54,
+      "model": null,
+      "evidence": "https://github.com/igorls/ninfer",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "ninfer-qwen3.8-27b-t1.5",
+      "name": "NInfer Qwen3.8-27B NVFP4 (T=1.5)",
+      "source": "https://github.com/igorls/ninfer",
+      "protocol": "systemone",
+      "adapter": "images/ninfer-qwen3.8-27b-t1.5/derive_from_27b.py:derive_t15",
+      "license": "Apache-2.0 (engine and submitted 27B artifact/base)",
+      "open": "yes",
+      "hardware": "RTX5090",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 56,
+      "model": null,
+      "evidence": "https://github.com/igorls/ninfer",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "instinct",
+      "name": "Instinct (ZooWork, Qwen3.8-27B)",
+      "source": "https://github.com/fstandhartinger/jevbench/issues/69",
+      "protocol": "systemone",
+      "adapter": "harness/specs/instinct.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "proprietary service over Apache-2.0 base weights (Qwen3.8-27B)",
+      "open": "no",
+      "hardware": "the author's public demo endpoint",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 57,
+      "model": "instinct",
+      "evidence": "https://github.com/fstandhartinger/jevbench/issues/69",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "endpoint": "https://api.zoowork.ai"
+    },
+    {
+      "id": "openjev-thinking",
+      "name": "OpenJev (thinking, BF16)",
+      "source": "https://github.com/razorback16/openjev",
+      "protocol": "systemone",
+      "adapter": "images/openjev-thinking/spec.json:openjev_thinking.ThinkingOpenJev",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "H100",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 58,
+      "model": null,
+      "evidence": "https://github.com/razorback16/openjev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "djev-thinking",
+      "name": "djev (thinking)",
+      "source": "https://github.com/Davipar/djev-dev",
+      "protocol": "djev",
+      "adapter": "images/djev-thinking/spec.json:djev_thinking_v15.DjevThinkingV15Adapter",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "H100",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1357
+      },
+      "rank": 59,
+      "model": "djev",
+      "evidence": "https://github.com/Davipar/djev-dev",
+      "notes": "Durable receipts are polled only at the same origin; credentials never follow redirects. The local djev-dev server uses /v1/systemone, selected with --protocol systemone.",
+      "endpoint": "https://api.djev.dev"
+    },
+    {
+      "id": "litjev",
+      "name": "LitJev (Qwen3.8-27B)",
+      "source": "https://github.com/zhengxuyu/litjev",
+      "protocol": "systemone",
+      "adapter": "images/litjev/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "Apache-2.0 (code); Apache-2.0 base weights",
+      "open": "yes",
+      "hardware": "H100",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 60,
+      "model": null,
+      "evidence": "https://github.com/zhengxuyu/litjev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "raw-phi-4-mini",
+      "name": "Raw Phi-4 mini direct logits",
+      "source": "https://huggingface.co/microsoft/Phi-4-mini-instruct",
+      "protocol": "adapter",
+      "adapter": "images/raw-phi-4-mini/spec.json:raw_adapter.RawControlAdapter",
+      "license": "MIT",
+      "open": "yes",
+      "hardware": "A6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 62,
+      "model": "microsoft/Phi-4-mini-instruct",
+      "evidence": "https://huggingface.co/microsoft/Phi-4-mini-instruct",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_model_adapters:RawLogitAdapter"
+    },
+    {
+      "id": "opensourcejev-qwen35-4b-q4km",
+      "name": "OpenSourceJev (Qwen3.5-4B Q4_K_M, native llama.cpp)",
+      "source": "https://github.com/sabeel111/OpenSourceJev",
+      "protocol": "systemone",
+      "adapter": "images/opensourcejev-qwen35-4b-q4km/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "MIT (repository code); Apache-2.0 (Qwen/Qwen3.5-4B base and unsloth/Qwen3.5-4B-GGUF Q4_K_M conversion)",
+      "open": "unknown",
+      "hardware": "A6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 63,
+      "model": null,
+      "evidence": "https://github.com/sabeel111/OpenSourceJev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "reflex-27b",
+      "name": "reflex-27b (Qwen3.8-27B)",
+      "source": "https://github.com/kshetrajna12/reflex",
+      "protocol": "systemone",
+      "adapter": "images/reflex-27b/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "MIT code; Apache-2.0 Qwen weights",
+      "open": "yes",
+      "hardware": "H100",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 64,
+      "model": null,
+      "evidence": "https://github.com/kshetrajna12/reflex",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "open-jev-zefan-2b",
+      "name": "Open-Jev 2B (Zefan Cai)",
+      "source": "https://github.com/Zefan-Cai/Open-Jev",
+      "protocol": "systemone",
+      "adapter": "images/open-jev-zefan-2b/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "MIT (loader); Apache-2.0 (adapter and pinned Qwen base); CC0-1.0 public training projection",
+      "open": "yes",
+      "hardware": "H100",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 65,
+      "model": null,
+      "evidence": "https://github.com/Zefan-Cai/Open-Jev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "gliner2-large",
+      "name": "GLiNER2 large (Fastino)",
+      "source": "https://huggingface.co/fastino/gliner2-large-v1",
+      "protocol": "adapter",
+      "adapter": "images/gliner2-large/spec.json:warm_adapter.WarmLoaded",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "cpu",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 66,
+      "model": "fastino/gliner2-large-v1",
+      "evidence": "https://huggingface.co/fastino/gliner2-large-v1",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_adapters.gliner2_local:Gliner2LocalAdapter"
+    },
+    {
+      "id": "qwen3-reranker-4b",
+      "name": "Qwen3-Reranker-4B",
+      "source": "https://huggingface.co/Qwen/Qwen3-Reranker-4B",
+      "protocol": "adapter",
+      "adapter": "images/qwen3-reranker-4b/spec.json:reranker_adapter.RerankerAdapter",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "A6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 67,
+      "model": "Qwen/Qwen3-Reranker-4B",
+      "evidence": "https://huggingface.co/Qwen/Qwen3-Reranker-4B",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_model_adapters:RerankerAdapter"
+    },
+    {
+      "id": "deepseek-flash",
+      "name": "DeepSeek V4.1 Flash (thinking default)",
+      "source": "https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash",
+      "protocol": "openai",
+      "adapter": "harness/specs/deepseek-flash.json:jevbench.adapters.openai_compat.OpenAICompatAdapter",
+      "license": "open weights, proprietary API route",
+      "open": "weights",
+      "hardware": "the operator's hosted API",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1587
+      },
+      "rank": 68,
+      "model": "deepseek-chat",
+      "evidence": "https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash",
+      "notes": "Use --model to select the exact currently served DeepSeek snapshot; the benchmark name does not pin a vendor alias.",
+      "endpoint": "https://api.deepseek.com/v1"
+    },
+    {
+      "id": "simplejev-qwen3.5-0.8b",
+      "name": "SimpleJev (Qwen3.5-0.8B, CPU)",
+      "source": "https://github.com/featherless-ai/simple-jev",
+      "protocol": "systemone",
+      "adapter": "images/simplejev-qwen3.5-0.8b/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "Apache-2.0 server; Apache-2.0 Qwen3.5-0.8B checkpoint",
+      "open": "yes",
+      "hardware": "cpu",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1617
+      },
+      "rank": 69,
+      "model": null,
+      "evidence": "https://github.com/featherless-ai/simple-jev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "simplejev-qwen3.8-27b",
+      "name": "SimpleJev Qwen3.8-27B",
+      "source": "https://github.com/featherless-ai/simple-jev",
+      "protocol": "systemone",
+      "adapter": "harness/specs/simplejev-qwen3.8-27b.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "Apache-2.0 (Qwen weights); repository licence not stated",
+      "open": "yes",
+      "hardware": "the author's public demo endpoint",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 70,
+      "model": null,
+      "evidence": "https://github.com/featherless-ai/simple-jev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "decision-machine-1",
+      "name": "decision-machine-1 (milliseconds.ai)",
+      "source": "https://www.milliseconds.ai",
+      "protocol": "systemone",
+      "adapter": "harness/specs/decision-machine-1.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "proprietary API, closed weights",
+      "open": "no",
+      "hardware": "the operator's hosted API",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 71,
+      "model": null,
+      "evidence": "https://www.milliseconds.ai",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "gliner2.5-multi",
+      "name": "GLiNER2.5 multi (Fastino, 287M)",
+      "source": "https://huggingface.co/fastino/gliner2.5-multi-v1",
+      "protocol": "adapter",
+      "adapter": "images/gliner2.5-multi/spec.json:warm_adapter.WarmLoaded",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "cpu",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 72,
+      "model": "fastino/gliner2.5-multi-v1",
+      "evidence": "https://huggingface.co/fastino/gliner2.5-multi-v1",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_adapters.gliner2_local:Gliner2LocalAdapter"
+    },
+    {
+      "id": "gliner2",
+      "name": "GLiNER2 (Fastino, gliner2.5-base)",
+      "source": "https://github.com/fastino-ai/GLiNER2",
+      "protocol": "adapter",
+      "adapter": "images/gliner2/spec.json:warm_adapter.WarmLoaded",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "cpu",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 74,
+      "model": "fastino/gliner2.5-base-v1",
+      "evidence": "https://github.com/fastino-ai/GLiNER2",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_adapters.gliner2_local:Gliner2LocalAdapter"
+    },
+    {
+      "id": "jevact",
+      "name": "JevAct (einptein, jev1-2b-v2)",
+      "source": "https://github.com/fstandhartinger/jevbench/issues/66",
+      "protocol": "jevact",
+      "adapter": "harness/specs/jevact.json:jevbench.adapters.jevact_api.JevActApiAdapter",
+      "license": "not stated (the author published only an endpoint and the evaluation client)",
+      "open": "no",
+      "hardware": "the author's public demo endpoint",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1496
+      },
+      "rank": 76,
+      "model": null,
+      "evidence": "https://github.com/fstandhartinger/jevbench/issues/66",
+      "notes": "Published /api/infer contract is supported. The submitted public endpoint is cleartext HTTP and is deliberately not used as a default. Connect your secured HTTPS deployment or loopback tunnel with --upstream."
+    },
+    {
+      "id": "clm-8b",
+      "name": "CLM-8B (Contrastive-LM, clm-latest)",
+      "source": "https://github.com/Contrastive-LM/CLM",
+      "protocol": "systemone",
+      "adapter": "images/clm-8b/spec.json:clm_adapter.CLMAdapter",
+      "license": "Apache-2.0 (code and CLM-v0.1-8B head); Qwen3-8B encoder Apache-2.0",
+      "open": "yes",
+      "hardware": "RTXPRO6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 77,
+      "model": null,
+      "evidence": "https://github.com/Contrastive-LM/CLM",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "kev-0.6b",
+      "name": "kev 0.6B (research preview)",
+      "source": "https://github.com/jaredpalmer/kev",
+      "protocol": "systemone",
+      "adapter": "images/kev-0.6b/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "Apache-2.0",
+      "open": true,
+      "hardware": "A6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 78,
+      "model": null,
+      "evidence": "https://github.com/jaredpalmer/kev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "raw-qwen3-0.6b",
+      "name": "Raw Qwen3 0.6B direct logits",
+      "source": "https://huggingface.co/Qwen/Qwen3-0.6B",
+      "protocol": "adapter",
+      "adapter": "images/raw-qwen3-0.6b/spec.json:raw_adapter.RawControlAdapter",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "A6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 79,
+      "model": "Qwen/Qwen3-0.6B",
+      "evidence": "https://huggingface.co/Qwen/Qwen3-0.6B",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_model_adapters:RawLogitAdapter"
+    },
+    {
+      "id": "gliner2.5-small",
+      "name": "GLiNER2.5 small (Fastino, 74M)",
+      "source": "https://huggingface.co/fastino/gliner2.5-small-v1",
+      "protocol": "adapter",
+      "adapter": "images/gliner2.5-small/spec.json:warm_adapter.WarmLoaded",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "cpu",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 80,
+      "model": "fastino/gliner2.5-small-v1",
+      "evidence": "https://huggingface.co/fastino/gliner2.5-small-v1",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_adapters.gliner2_local:Gliner2LocalAdapter"
+    },
+    {
+      "id": "raw-qwen3-1.7b",
+      "name": "Raw Qwen3 1.7B direct logits",
+      "source": "https://huggingface.co/Qwen/Qwen3-1.7B",
+      "protocol": "adapter",
+      "adapter": "images/raw-qwen3-1.7b/spec.json:raw_adapter.RawControlAdapter",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "A6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 81,
+      "model": "Qwen/Qwen3-1.7B",
+      "evidence": "https://huggingface.co/Qwen/Qwen3-1.7B",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_model_adapters:RawLogitAdapter"
+    },
+    {
+      "id": "mirror",
+      "name": "Mirror",
+      "source": "https://github.com/Bluusun/Decision-API",
+      "protocol": "systemone",
+      "adapter": "images/mirror/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "Apache-2.0 wrapper and Mirror release; upstream DeBERTa/model assets retain their own terms",
+      "open": "yes",
+      "hardware": "cpu",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1253
+      },
+      "rank": 82,
+      "model": null,
+      "evidence": "https://github.com/Bluusun/Decision-API",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "zerank-2",
+      "name": "ZeroEntropy zerank-2",
+      "source": "https://huggingface.co/zeroentropy/zerank-2-reranker",
+      "protocol": "adapter",
+      "adapter": "images/zerank-2/spec.json:reranker_adapter.RerankerAdapter",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "A6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 83,
+      "model": "zeroentropy/zerank-2-reranker",
+      "evidence": "https://huggingface.co/zeroentropy/zerank-2-reranker",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_model_adapters:RerankerAdapter"
+    },
+    {
+      "id": "jeff",
+      "name": "jeff (Logan Markewich, GLiFormer 400M)",
+      "source": "https://github.com/logan-markewich/jeff",
+      "protocol": "systemone",
+      "adapter": "images/jeff/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "MIT (code); GLiFormer weights per their model card",
+      "open": "yes",
+      "hardware": "cpu",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1620
+      },
+      "rank": 84,
+      "model": null,
+      "evidence": "https://github.com/logan-markewich/jeff",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "smalljev",
+      "name": "smalljev semantic-v9",
+      "source": "https://github.com/isHeSatoshi/smalljev",
+      "protocol": "run",
+      "adapter": "images/smalljev/spec.json:remote_inproc_v15.RemoteInprocV15Adapter",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "A6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 85,
+      "model": null,
+      "evidence": "https://github.com/isHeSatoshi/smalljev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_adapters.smalljev_local:SmallJevLocalAdapter"
+    },
+    {
+      "id": "opendecision",
+      "name": "OpenDecision (ModernBERT-large zero-shot)",
+      "source": "https://github.com/deepanwadhwa/OpenDecision",
+      "protocol": "systemone",
+      "adapter": "images/opendecision/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "H100",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 87,
+      "model": null,
+      "evidence": "https://github.com/deepanwadhwa/OpenDecision",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "bge-reranker-v2-m3",
+      "name": "BAAI bge-reranker-v2-m3",
+      "source": "https://huggingface.co/BAAI/bge-reranker-v2-m3",
+      "protocol": "adapter",
+      "adapter": "images/bge-reranker-v2-m3/spec.json:reranker_adapter.RerankerAdapter",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "A6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 88,
+      "model": "BAAI/bge-reranker-v2-m3",
+      "evidence": "https://huggingface.co/BAAI/bge-reranker-v2-m3",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_model_adapters:RerankerAdapter"
+    },
+    {
+      "id": "certo",
+      "name": "Certo v1 (AltSlate Labs)",
+      "source": "https://huggingface.co/altslate/certo-decision-model",
+      "protocol": "adapter",
+      "adapter": "images/certo/spec.json:certo_v15.CertoLocalV15Adapter",
+      "license": "MIT",
+      "open": "yes",
+      "hardware": "A6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 89,
+      "model": "altslate/certo-decision-model",
+      "evidence": "https://huggingface.co/altslate/certo-decision-model",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_adapters.certo_local:CertoLocalAdapter"
+    },
+    {
+      "id": "decision-fast",
+      "name": "Decision Fast (FlyMy.AI, v53a)",
+      "source": "https://huggingface.co/flymy-ai/decision-fast-preview",
+      "protocol": "adapter",
+      "adapter": "images/decision-fast/spec.json:flymy_v15.FlyMyPackage",
+      "license": "Apache-2.0 notices on the included code and the pinned base; the weights are an evaluation preview under EVALUATION-PERMISSION.md, not a cleared commercial release",
+      "open": "yes",
+      "hardware": "RTX6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 90,
+      "model": "flymy-ai/decision-fast-preview",
+      "evidence": "https://huggingface.co/flymy-ai/decision-fast-preview",
+      "notes": "Download and review the exact source model package, install its requirements, and pass its directory using --adapter-dir. One model package per process; its loader checks assets and pointer-head contracts.",
+      "local_adapter": "jev_model_adapters:FlyMyAdapter"
+    },
+    {
+      "id": "gte-reranker-modernbert-base",
+      "name": "Alibaba GTE Reranker ModernBERT-base",
+      "source": "https://huggingface.co/Alibaba-NLP/gte-reranker-modernbert-base",
+      "protocol": "adapter",
+      "adapter": "images/gte-reranker-modernbert-base/spec.json:reranker_adapter.RerankerAdapter",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "A6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 91,
+      "model": "Alibaba-NLP/gte-reranker-modernbert-base",
+      "evidence": "https://huggingface.co/Alibaba-NLP/gte-reranker-modernbert-base",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_model_adapters:RerankerAdapter"
+    },
+    {
+      "id": "kev-0.5b",
+      "name": "kev 0.5B",
+      "source": "https://github.com/jaredpalmer/kev",
+      "protocol": "systemone",
+      "adapter": "images/kev-0.5b/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "Apache-2.0",
+      "open": true,
+      "hardware": "A6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 92,
+      "model": null,
+      "evidence": "https://github.com/jaredpalmer/kev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "laya",
+      "name": "Laya (Convai Innovations, ModernBERT-large 421M)",
+      "source": "https://huggingface.co/convaiinnovations/laya",
+      "protocol": "adapter",
+      "adapter": "images/laya/spec.json:warm_adapter.WarmLoaded",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "cpu",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 93,
+      "model": "convaiinnovations/laya",
+      "evidence": "https://huggingface.co/convaiinnovations/laya",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_adapters.laya_local:LayaLocalAdapter"
+    },
+    {
+      "id": "lev-350m",
+      "name": "lev-350m (Franck Verrot, LFM2.5-350M)",
+      "source": "https://github.com/franckverrot/lev",
+      "protocol": "systemone",
+      "adapter": "images/lev-350m/spec.json:lev_v15.LevAdapter",
+      "license": "Apache-2.0 (code); weights under LiquidAI's LFM1.0 licence, following the LFM2.5-350M base",
+      "open": "yes",
+      "hardware": "RTX6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 94,
+      "model": null,
+      "evidence": "https://github.com/franckverrot/lev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "mghafiri-qwen3.5-0.8b-decision-model",
+      "name": "Qwen3.5-0.8B Decision Model (Mourad Ghafiri)",
+      "source": "https://huggingface.co/mghafiri/qwen3.5-0.8B-decision-model",
+      "protocol": "adapter",
+      "adapter": "images/mghafiri-qwen3.5-0.8b-decision-model/spec.json:mghafiri_adapter.JevLite",
+      "license": "MIT code and training data; Apache-2.0 model weights",
+      "open": "yes",
+      "hardware": "cpu",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 95,
+      "model": "mghafiri/qwen3.5-0.8B-decision-model",
+      "evidence": "https://huggingface.co/mghafiri/qwen3.5-0.8B-decision-model",
+      "notes": "Install the source jevlite package, download the complete model snapshot, and pass the local snapshot path with --model. The source loads calibration.json.",
+      "local_adapter": "jev_model_adapters:JevLiteAdapter"
+    },
+    {
+      "id": "mxbai-rerank-base-v2",
+      "name": "Mixedbread mxbai-rerank-base-v2",
+      "source": "https://huggingface.co/mixedbread-ai/mxbai-rerank-base-v2",
+      "protocol": "adapter",
+      "adapter": "images/mxbai-rerank-base-v2/spec.json:reranker_adapter.RerankerAdapter",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "A6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 96,
+      "model": "mixedbread-ai/mxbai-rerank-base-v2",
+      "evidence": "https://huggingface.co/mixedbread-ai/mxbai-rerank-base-v2",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_model_adapters:RerankerAdapter"
+    },
+    {
+      "id": "needle-3",
+      "name": "Needle 3 (Cactus, 2-bit, local CPU)",
+      "source": "https://github.com/cactus-compute/needle",
+      "protocol": "adapter",
+      "adapter": "images/needle-3/spec.json:jevbench.adapters.needle_local.NeedleLocalAdapter",
+      "license": "Apache-2.0 (model and package)",
+      "open": "yes",
+      "hardware": "cpu",
+      "support": {
+        "choice": "label",
+        "noul": "label",
+        "score": "label"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1101
+      },
+      "rank": 97,
+      "model": null,
+      "evidence": "https://github.com/cactus-compute/needle",
+      "notes": "Label-only output supports choice with confidence 0 and no probabilities. Probability-based safety policies abstain. Install cactus-needle from the source instructions.",
+      "local_adapter": "jev_adapters.needle_local:NeedleLocalAdapter"
+    },
+    {
+      "id": "needle-3-tools",
+      "name": "Needle 3, options as tools (post-hoc adapter mode)",
+      "source": "https://github.com/cactus-compute/needle",
+      "protocol": "adapter",
+      "adapter": "images/needle-3-tools/spec.json:jevbench.adapters.needle_local.NeedleLocalAdapter",
+      "license": "Apache-2.0 (model and package)",
+      "open": "yes",
+      "hardware": "cpu",
+      "support": {
+        "choice": "label",
+        "noul": "label",
+        "score": "label"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1306
+      },
+      "rank": 98,
+      "model": null,
+      "evidence": "https://github.com/cactus-compute/needle",
+      "notes": "Label-only output supports choice with confidence 0 and no probabilities. Probability-based safety policies abstain. Install cactus-needle from the source instructions.",
+      "local_adapter": "jev_adapters.needle_local:NeedleLocalAdapter",
+      "options": {
+        "request_options": {
+          "choice_mode": "tools"
+        }
+      }
+    },
+    {
+      "id": "open-jev-deberta-v3-large",
+      "name": "open-jev-deberta-v3-large (local CPU)",
+      "source": "https://github.com/kotoba-lang/typed-decisions",
+      "protocol": "adapter",
+      "adapter": "images/open-jev-deberta-v3-large/spec.json:warm_adapter.WarmLoaded",
+      "license": "Apache-2.0 (model card); DeBERTa-v3 keeps its own terms",
+      "open": "yes",
+      "hardware": "cpu",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1610
+      },
+      "rank": 99,
+      "model": "com-kotobalabs/open-jev-deberta-v3-large",
+      "evidence": "https://github.com/kotoba-lang/typed-decisions",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_adapters.local_openjev:LocalOpenJevAdapter"
+    },
+    {
+      "id": "open-jev-json-canvas-joshuasp",
+      "name": "Open Jev JSON Canvas (JoshuaSP)",
+      "source": "https://github.com/JoshuaSP/open-jev",
+      "protocol": "adapter",
+      "adapter": "images/open-jev-json-canvas-joshuasp/spec.json:joshuasp_adapter.JoshuaSPCanvasAdapter",
+      "license": "MIT code; Apache-2.0 DiffusionGemma weights",
+      "open": "yes",
+      "hardware": "H100",
+      "support": {
+        "choice": "label",
+        "noul": "label",
+        "score": "label"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 100,
+      "model": null,
+      "evidence": "https://github.com/JoshuaSP/open-jev",
+      "notes": "Install the published inference extra and pass the reviewed source checkout using --adapter-dir. The reusable source harness returns labels; choice is exposed with confidence 0. Probability policies abstain.",
+      "local_adapter": "jev_model_adapters:CanvasAdapter"
+    },
+    {
+      "id": "openjev-verdict",
+      "name": "openJev Verdict (heman10x, ModernBERT-base 151M)",
+      "source": "https://github.com/Heman10x-NGU/openJev-verdict-2.0",
+      "protocol": "adapter",
+      "adapter": "images/openjev-verdict/spec.json:warm_adapter.WarmLoaded",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "cpu",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 101,
+      "model": null,
+      "evidence": "https://github.com/Heman10x-NGU/openJev-verdict-2.0",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_model_adapters:VerdictAdapter"
+    },
+    {
+      "id": "openjev-verdict-1.4",
+      "name": "openJev Verdict 1.4",
+      "source": "https://huggingface.co/heman10x/rlcd-modernbert-151m",
+      "protocol": "adapter",
+      "adapter": "images/openjev-verdict-1.4/spec.json:warm_adapter.WarmLoaded",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "cpu",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 102,
+      "model": "heman10x/rlcd-modernbert-151m",
+      "evidence": "https://huggingface.co/heman10x/rlcd-modernbert-151m",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_adapters.verdict_local:VerdictLocalAdapter"
+    },
+    {
+      "id": "qwen3.8-27b",
+      "name": "Qwen3.8 27B (Chutes TEE)",
+      "source": "https://huggingface.co/Qwen/Qwen3.8-27B",
+      "protocol": "openai",
+      "adapter": "harness/specs/qwen3.8-27b.json:jevbench.adapters.openai_compat.OpenAICompatAdapter",
+      "license": "open weights",
+      "open": "weights",
+      "hardware": "the operator's hosted API",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1600
+      },
+      "rank": 103,
+      "model": "Qwen/Qwen3.8-27B",
+      "evidence": "https://huggingface.co/Qwen/Qwen3.8-27B",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "verdict-small",
+      "name": "verdict-small (Manavarya09, multilingual-e5-small 118M)",
+      "source": "https://github.com/Manavarya09/verdict",
+      "protocol": "systemone",
+      "adapter": "images/verdict-small/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "Apache-2.0 (verdictml code and the Manav2op/verdict-small checkpoint over intfloat/multilingual-e5-small)",
+      "open": "yes",
+      "hardware": "cpu",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 104,
+      "model": null,
+      "evidence": "https://github.com/Manavarya09/verdict",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "von-395m",
+      "name": "Von (wfzyx, Option-Marker 395M)",
+      "source": "https://github.com/wfzyx/von",
+      "protocol": "systemone",
+      "adapter": "images/von-395m/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "Apache-2.0 code; Apache-2.0 weights (answerdotai/ModernBERT-large base)",
+      "open": "unknown",
+      "hardware": "cpu",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 105,
+      "model": null,
+      "evidence": "https://github.com/wfzyx/von",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "classifier-dev-fast",
+      "name": "classifier.dev (fast tier)",
+      "source": "https://classifier.dev",
+      "protocol": "classifier-dev",
+      "adapter": "harness/specs/classifier-dev-fast.json:jevbench.adapters.classifier_dev.ClassifierDevAdapter",
+      "license": "MIT (code); hosted service",
+      "open": "no",
+      "hardware": "the operator's hosted API",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": null,
+      "model": "fast",
+      "evidence": "https://classifier.dev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "endpoint": "https://classifier.dev"
+    },
+    {
+      "id": "jevk5-v0.3-4b",
+      "name": "JevK5 v0.3 (4B)",
+      "source": "https://github.com/allebee/jevk5",
+      "protocol": "systemone",
+      "adapter": "images/jevk5-v0.3-4b/spec.json:jevk5_v15.JevK5Warm",
+      "license": "not recorded",
+      "open": "unknown",
+      "hardware": "H100",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 4,
+      "model": null,
+      "evidence": "https://github.com/allebee/jevk5",
+      "notes": "Install the v0.3.0 runtime and its v0.3 checkpoint. v0.2 remains a separate roster entry; do not replace its weights silently."
+    },
+    {
+      "id": "plumb-4b",
+      "name": "Plumb-4B (crh225, JevK5 v0.2 + LoRA)",
+      "source": "https://github.com/crh225/plumb",
+      "protocol": "systemone",
+      "adapter": "images/plumb-4b/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "not recorded",
+      "open": "unknown",
+      "hardware": "H100",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 5,
+      "model": "crh225/plumb-4b",
+      "evidence": "https://github.com/crh225/plumb",
+      "notes": "Use the exact source checkpoint and start its published server. Supply --model using GET /v1/models from that server; variants remain distinct."
+    },
+    {
+      "id": "decision-4b-v12",
+      "name": "Decision 4B v1.2 (FlyMyJev, Qwen3.5-4B + LoRA)",
+      "source": "https://www.benchmarkheaven.com/jev-models/decision-4b-v12",
+      "protocol": "systemone",
+      "adapter": "images/decision-4b-v12/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "not recorded",
+      "open": "unknown",
+      "hardware": "H100",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 8,
+      "model": null,
+      "evidence": "https://www.benchmarkheaven.com/jev-models/decision-4b-v12",
+      "notes": "The benchmark has not published a source or public deployment contract for this exact entry. Connect an owned native server with --protocol systemone or supply its reviewed --adapter module:Class. Nur does not invent a model, key or endpoint."
+    },
+    {
+      "id": "imajev-4b-rtx5090-a2",
+      "name": "Imajev-4B (RTX 5090)",
+      "source": "https://github.com/mohit67890/imajev",
+      "protocol": "systemone",
+      "adapter": "A2 reviewed bundle",
+      "license": "not recorded",
+      "open": "unknown",
+      "hardware": "RTX 5090",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 9,
+      "model": "imajev-4b",
+      "evidence": "https://github.com/mohit67890/imajev",
+      "notes": "Use the exact source checkpoint and start its published server. Supply --model using GET /v1/models from that server; variants remain distinct."
+    },
+    {
+      "id": "decision-4b-v11",
+      "name": "Decision 4B v1.1 (FlyMyJev, Qwen3.5-4B + LoRA)",
+      "source": "https://www.benchmarkheaven.com/jev-models/decision-4b-v11",
+      "protocol": "systemone",
+      "adapter": "images/decision-4b-v11/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "not recorded",
+      "open": "unknown",
+      "hardware": "H100",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 10,
+      "model": null,
+      "evidence": "https://www.benchmarkheaven.com/jev-models/decision-4b-v11",
+      "notes": "The benchmark has not published a source or public deployment contract for this exact entry. Connect an owned native server with --protocol systemone or supply its reviewed --adapter module:Class. Nur does not invent a model, key or endpoint."
+    },
+    {
+      "id": "surogate-rune-26b-a4b-v3-rtxpro6000-a2",
+      "name": "Surogate Rune 26B-A4B v3 (RTX PRO 6000)",
+      "source": "https://huggingface.co/surogate/rune-26b-a4b-GGUF",
+      "protocol": "systemone-rune",
+      "adapter": "A2 reviewed bundle",
+      "license": "not recorded",
+      "open": "unknown",
+      "hardware": "RTX PRO 6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 17,
+      "model": null,
+      "evidence": "https://huggingface.co/surogate/rune-26b-a4b-GGUF",
+      "notes": "Use the exact source checkpoint and start its published server. Supply --model using GET /v1/models from that server; variants remain distinct."
+    },
+    {
+      "id": "autojev-27b",
+      "name": "AutoJev-27B (denis-pplx, Qwen3.8-27B)",
+      "source": "https://github.com/denis-pplx/autojev",
+      "protocol": "systemone",
+      "adapter": "images/autojev-27b/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "not recorded",
+      "open": "unknown",
+      "hardware": "H100",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 52,
+      "model": null,
+      "evidence": "https://huggingface.co/arafathusayn/autojev-27b",
+      "notes": "Use AutoJev DecisionModel / autojev-serve with the matching checkpoint. Upstream weights can require Hugging Face access; Nur never imports HF tokens from agent logs."
+    },
+    {
+      "id": "autojev-27b-rtxpro6000-a2",
+      "name": "AutoJev-27B (RTX PRO 6000)",
+      "source": "https://github.com/denis-pplx/autojev",
+      "protocol": "systemone",
+      "adapter": "A2 reviewed bundle",
+      "license": "not recorded",
+      "open": "unknown",
+      "hardware": "RTX PRO 6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 53,
+      "model": null,
+      "evidence": "https://huggingface.co/arafathusayn/autojev-27b",
+      "notes": "Use AutoJev DecisionModel / autojev-serve with the matching checkpoint. Upstream weights can require Hugging Face access; Nur never imports HF tokens from agent logs."
+    },
+    {
+      "id": "eikos-27b",
+      "name": "Eikos-27B (caiovicentino1, Qwen3.8-27B)",
+      "source": "https://www.benchmarkheaven.com/jev-models/eikos-27b",
+      "protocol": "systemone",
+      "adapter": "images/eikos-27b/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "not recorded",
+      "open": "unknown",
+      "hardware": "H100",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "complete",
+        "rows": 1624,
+        "missing": 0,
+        "answered_ok": 1624
+      },
+      "rank": 55,
+      "model": null,
+      "evidence": "https://www.benchmarkheaven.com/jev-models/eikos-27b",
+      "notes": "The benchmark has not published a source or public deployment contract for this exact entry. Connect an owned native server with --protocol systemone or supply its reviewed --adapter module:Class. Nur does not invent a model, key or endpoint."
+    },
+    {
+      "id": "simplejev-qwen3.6-35b-a3b",
+      "name": "SimpleJev Qwen3.6-35B-A3B",
+      "source": "https://github.com/featherless-ai/simple-jev",
+      "protocol": "systemone",
+      "adapter": "harness/specs/simplejev-qwen3.6-35b-a3b.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "Apache-2.0 (Qwen weights); repository licence not stated",
+      "open": "yes",
+      "hardware": "the author's public demo endpoint",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "partial",
+        "rows": 678,
+        "missing": 946,
+        "answered_ok": 677
+      },
+      "rank": null,
+      "model": null,
+      "evidence": "https://github.com/featherless-ai/simple-jev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "nemotron-diffusion-8b",
+      "name": "Nemotron Diffusion 8B (pst2154, optimized vLLM)",
+      "source": "https://github.com/pst2154/Nemotron_Jev",
+      "protocol": "systemone",
+      "adapter": "a3/candidates/nemotron-diffusion-8b/spec.json:jevbench.adapters.typesafe.TypeSafeAdapter",
+      "license": "MIT (application code); modified vLLM runtime Apache-2.0; nvidia/Nemotron-Labs-Diffusion-8B keeps its upstream licence",
+      "open": "yes",
+      "hardware": "H100",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "answered_ok": 1624,
+        "missing": 0,
+        "rows": 1624,
+        "status": "complete"
+      },
+      "rank": 45,
+      "model": null,
+      "evidence": "https://github.com/pst2154/Nemotron_Jev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "bev-bonsai-27b",
+      "name": "Bev / Bonsai 27B",
+      "source": "https://huggingface.co/Reza2kn/Bev",
+      "protocol": "systemone",
+      "adapter": "",
+      "license": "Not independently recorded",
+      "open": "yes",
+      "hardware": "H100",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "answered_ok": 1624,
+        "missing": 0,
+        "rows": 1624,
+        "status": "complete"
+      },
+      "rank": 61,
+      "model": "bev-bonsai-27b",
+      "evidence": "https://huggingface.co/Reza2kn/Bev",
+      "notes": "Use Bev v0.1.2 with its pinned Prism runtime. Its /v1/systemone endpoint supports all three primitives. --url http://127.0.0.1:18781"
+    },
+    {
+      "id": "deem-0.8-v1",
+      "name": "Deem 0.8B v1",
+      "source": "https://huggingface.co/LibertAIDAI/deem-0.8-v1",
+      "protocol": "systemone",
+      "adapter": "",
+      "license": "Not independently recorded",
+      "open": "yes",
+      "hardware": "H100",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "answered_ok": 1624,
+        "missing": 0,
+        "rows": 1624,
+        "status": "complete"
+      },
+      "rank": 75,
+      "model": "LibertAIDAI/deem-0.8-v1",
+      "evidence": "https://huggingface.co/LibertAIDAI/deem-0.8-v1",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "evalengine-decision-4b",
+      "name": "Decision-4B (Eval Engine / Chromia)",
+      "source": "https://huggingface.co/evalengine/decision-4b",
+      "protocol": "adapter",
+      "adapter": "",
+      "license": "Not independently recorded",
+      "open": "yes",
+      "hardware": "H100",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "answered_ok": 1550,
+        "missing": 0,
+        "reason": "PREREG-R23 §6 as amended: 1550 of 1624 valid, 0 missing, 74 x 422, 74 not HTTP 200 - shown, not ranked",
+        "rows": 1624,
+        "status": "partial"
+      },
+      "rank": null,
+      "model": "evalengine/decision-4b",
+      "evidence": "https://huggingface.co/evalengine/decision-4b",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "local_adapter": "jev_model_adapters:EvalengineAdapter"
+    },
+    {
+      "id": "instinct-dual-4b",
+      "name": "Instinct Dual 4B",
+      "source": "https://github.com/fstandhartinger/jevbench/issues/123",
+      "protocol": "systemone",
+      "adapter": "",
+      "license": "Not independently recorded",
+      "open": "no",
+      "hardware": "operator-hosted free-preview API",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "answered_ok": 1624,
+        "missing": 0,
+        "rows": 1624,
+        "status": "complete"
+      },
+      "rank": 27,
+      "model": "instinct-dual-4b",
+      "evidence": "https://github.com/fstandhartinger/jevbench/issues/123",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "endpoint": "https://api.zoowork.ai"
+    },
+    {
+      "id": "bosun-v31-0.6b",
+      "name": "Bosun v3.1 0.6B",
+      "source": "https://huggingface.co/Hanno-Labs/bosun-v3.1-0.6b",
+      "protocol": "adapter",
+      "adapter": "",
+      "license": "apache-2.0, not gated; LICENSE + NOTICE (Clause Logic Inc.) present at the pinned revision",
+      "open": "yes",
+      "hardware": "cpu",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "answered_ok": 1624,
+        "missing": 0,
+        "rows": 1624,
+        "status": "complete"
+      },
+      "rank": 73,
+      "model": "Hanno-Labs/bosun-v3.1-0.6b",
+      "evidence": "https://huggingface.co/Hanno-Labs/bosun-v3.1-0.6b",
+      "notes": "The checkpoint requires custom loader code. Supply a reviewed immutable revision and explicit trust_remote_code=true in --adapter-options. No code is automatically downloaded from the catalog.",
+      "local_adapter": "jev_model_adapters:BosunAdapter"
+    },
+    {
+      "id": "laya-multilingual",
+      "name": "Laya multilingual",
+      "source": "https://huggingface.co/convaiinnovations/laya/tree/1c5edc17a7acd8701df6fc341c0d179f1c62c982/multilingual",
+      "protocol": "systemone",
+      "adapter": "",
+      "license": "apache-2.0, not gated",
+      "open": "yes",
+      "hardware": "cpu",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "answered_ok": 1624,
+        "missing": 0,
+        "rows": 1624,
+        "status": "complete"
+      },
+      "rank": 86,
+      "model": "convaiinnovations/laya",
+      "evidence": "https://huggingface.co/convaiinnovations/laya/tree/1c5edc17a7acd8701df6fc341c0d179f1c62c982/multilingual",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "laya-typed-decisions",
+      "name": "Laya typed-decisions",
+      "source": "https://huggingface.co/convaiinnovations/laya/tree/1c5edc17a7acd8701df6fc341c0d179f1c62c982/typed-decisions",
+      "protocol": "systemone",
+      "adapter": "",
+      "license": "apache-2.0, not gated",
+      "open": "yes",
+      "hardware": "cpu",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "answered_ok": 1624,
+        "missing": 0,
+        "rows": 1624,
+        "status": "complete"
+      },
+      "rank": 106,
+      "model": "convaiinnovations/laya",
+      "evidence": "https://huggingface.co/convaiinnovations/laya/tree/1c5edc17a7acd8701df6fc341c0d179f1c62c982/typed-decisions",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "manchego-v21-v15",
+      "name": "Manchego v2.1",
+      "source": "https://github.com/nschlaepfer/manchego-serve",
+      "protocol": "systemone",
+      "adapter": "",
+      "license": "Apache-2.0 (code and weights, author-declared)",
+      "open": "yes",
+      "hardware": "RTX6000",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "answered_ok": 1624,
+        "missing": 0,
+        "rows": 1624,
+        "status": "complete"
+      },
+      "rank": 11,
+      "model": null,
+      "evidence": "https://github.com/nschlaepfer/manchego-serve",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "jobe-qwen3.5-4b",
+      "name": "Jobe Qwen3.5-4B (frozen)",
+      "source": "https://github.com/MantisShrimpdev/jobe",
+      "protocol": "systemone",
+      "adapter": "",
+      "license": null,
+      "open": null,
+      "hardware": null,
+      "support": null,
+      "status": "not measured",
+      "rank": null,
+      "model": null,
+      "evidence": "https://github.com/MantisShrimpdev/jobe",
+      "notes": "Use the exact source checkpoint and start its published server. Supply --model using GET /v1/models from that server; variants remain distinct."
+    },
+    {
+      "id": "mica-v01-4b",
+      "name": "mica-v01-4b",
+      "source": "https://github.com/akivet/Mica-v0.1-4B",
+      "protocol": "systemone",
+      "adapter": "",
+      "license": null,
+      "open": null,
+      "hardware": null,
+      "support": null,
+      "status": "partial run",
+      "rank": null,
+      "model": "mica-v0.1-4b",
+      "evidence": "https://github.com/akivet/Mica-v0.1-4B",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults."
+    },
+    {
+      "id": "openjev-razorback16",
+      "name": "OpenJev (DiffusionGemma 26B-A4B NVFP4, razorback16)",
+      "source": "https://github.com/razorback16/openjev",
+      "protocol": "systemone",
+      "adapter": "",
+      "license": null,
+      "open": null,
+      "hardware": null,
+      "support": null,
+      "status": "not measured",
+      "rank": null,
+      "model": "openjev-latest",
+      "evidence": "https://github.com/razorback16/openjev",
+      "notes": "Use the published source runtime and its matching checkpoint. Benchmark hardware and private pod URLs are not deployment defaults.",
+      "endpoint": "https://api.codiv.ai"
+    }
+  ]
+}

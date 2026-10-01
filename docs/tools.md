@@ -18,6 +18,7 @@ All native tools available to the NurCLI agent.
 | **agent** | `todo_write` `submit_plan` `agent` `harness` | - |
 | **memory** | `optmem` `connectome` `mem` `memory` `plur` `ruflo` | indigo |
 | **judgments** | `typesafe` | violet |
+| **security** | `enclave` | teal |
 | **context** | `context` `anydoc` | sky |
 | **async** | `bg` `admission` `goal` `proposal` `message` | amber |
 | **diagrams** | `excalidraw` `tldraw` `penecho` | pink |
@@ -265,6 +266,17 @@ probabilities, and a `confidence` below `[typesafe] escalate_confidence` is an
 escalation rather than a judgment. Provider-agnostic: this boosts whichever model
 you are using. Key from `TYPESAFE_API_KEY`, `/auth` → `TypeSafe · Jev`, or
 `~/.nur/typesafe.key`. Details: [typesafe.md](./typesafe.md).
+
+### `enclave`
+
+[Enclave](https://enclave.ai) security agents over native MCP (Streamable HTTP to
+`https://mcp.enclave.ai/`): pentests, code security review, findings, CVE
+monitoring. Actions: `status` · `tools` (catalog with parameters and the server's
+instructions; `tool=<name>` for one full schema) · `call` (`tool` + `arguments`, an
+object matching that tool's schema). `status` and `tools` are read-only; `call`
+is approval-gated and high impact, and an "always" rule is scoped to one Enclave
+tool. Key from `ENCLAVE_MCP_API_KEY` or `nur auth login --provider enclave`.
+Also `/enclave`. Details: [enclave.md](./enclave.md).
 
 
 ### `dogwood`

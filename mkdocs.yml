@@ -67,6 +67,9 @@ nav:
   - Ecosystem: ecosystem.md
   - TypeSafe - Jev: typesafe.md
   - Local Jev engines: jev-local.md
+  - Jev model library: jev-models.md
+  - Local usage ledger: ledger.md
+  - Enclave security agents: enclave.md
   - Jev performance evaluation: jev-performance-evaluation.md
   - Memory Routing: research/memory-routing.md
   - "Evaluation: Ax & GraphJin": integrations-ax-graphjin.md

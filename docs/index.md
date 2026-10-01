@@ -1,5 +1,9 @@
 # NurCLI
 
+Browse every system in the [Jev model library](jev-models.md) with `nur jev models` or `/jev models`. Connect hosted or local engines with isolated credentials and the matching [runtime guide](jev-local.md). `nur ledger` and `/ledger` provide a [local usage ledger](ledger.md) across seven agents without importing keys or prompts. `/startup-skill` opens the startup workflow pack.
+
+**v0.42.0:** The full [Jev model library](jev-models.md), isolated engine credentials, [seven-agent usage ledger](ledger.md), native [Enclave MCP](enclave.md), and startup workflow router.
+
 **v0.41.0:** [CLI and skills refresh](stack-update-2026-09-30.md) updates the Rust
 and companion stacks, complete pinned skill trees, responsive account controls,
 safe bridge ownership, cancellation and long-transcript rendering.
@@ -32,7 +36,7 @@ question answers, and [Jev-first compaction](jev-performance-evaluation.md).
 
 **Fully loaded multi-provider terminal coding agent.** Not a thin wrapper.
 
-Custom Rust harness, dense gold TUI, **native vision**, 51 tools, a knowledge stack, and a hardened sandbox. Pick any of **65 providers** with `/login` (`/provider`), any model via `--model` / `/model`. **TypeSafe - Jev** typed judgments run *inside* the loop: which tool calls still earn their tokens, whether a result actually worked, what a fresh context can drop, which skill rules matter, which model is adequate - and they are **keyless on this machine** through three bundled local engines. Install marketplace plugins with `/plugins` (same picker UX as providers).
+Custom Rust harness, dense gold TUI, **native vision**, 52 tools, a knowledge stack, and a hardened sandbox. Pick any of **65 providers** with `/login` (`/provider`), any model via `--model` / `/model`. **TypeSafe - Jev** typed judgments run *inside* the loop: which tool calls still earn their tokens, whether a result actually worked, what a fresh context can drop, which skill rules matter, which model is adequate - and they are **keyless on this machine** through three bundled local engines. Install marketplace plugins with `/plugins` (same picker UX as providers).
 
 ```text
 nur           # gold interactive TUI
@@ -85,12 +89,12 @@ That's the normal upgrade. Pulls / rebuilds when you have a Laboratory checkout,
 | **TUI** | Streaming · duration chips · expandable thought/tool cards · click-to-peek (full write/edit content) · **queued follow-ups (steer · cut in)** · **green/red transcript diffs** · **prompt menu (fork · edit · revert · copy)** · drag-select · always-on scrollbar · ↓ End · sticky prompt · sessions browser · approval mini-diff · lean banner · **`/login` (65 providers)** · **`/model` (live model list)** · **`/plugins` marketplace** · **`/goal` `/bro` `/adhd` `/scan` `/btw` `/codesearch` `/mc` `/feedback` `/tips` · **`/<skill>`**** · **`/budget` `/poor` `/permissions` `/hooks` `/cd` `/doctor`** · **every path in the transcript is a link that opens** · **block-structured markdown** (headings, lists, quotes and rules as structure, not punctuation) · **LaTeX** when built with `image-peek` · **`/receipt` verifies the session hash chain** |
 | **Agent** | Manual / plan / auto · tool loop · subagents · todos · **Jev-scored compaction** (survivors verbatim, no summary) · **pre-exec tool gate + post-exec result judge** · **session $ / token budgets** · **tool-result spill** · Esc cancel · Shift+Tab mid-turn · prompt-cache keys · **Chat Completions adapter** for non-Responses providers |
 | **Vision** | `look` (images / short video) · `extract_frames` (ffmpeg keyframes) · prompt auto-attach of media paths |
-| **Tools** | read · edit · bash · web · **browser** (incl. **element picking**) · **terminal-browser** (`/tb`) · git · judgments (`typesafe`) · memory (`optmem` `connectome` `mem`) · diagrams (`excalidraw` `tldraw` `penecho`) · policy (`dogwood`) · background (`bg`) and async (`admission` `goal` `proposal` `message` `question`) · docs (`anydoc`) · a persistent **Python REPL** · knowledge stack · agent (all first-class) |
-| **Ecosystem** | Graphify · GraphJin · PLUR · Ruflo · Executor · **omp** · **browser** · **TypeSafe - Jev** (+ **three keyless local engines**) · **OptMem** · **Headroom** · **Connectome** · **dogwood** · **tldraw** · **egaki** · AKM · **1,000+ installed skills** (1,587 shipped here) · **plugin marketplace** (`~/.nur/plugins`, incl. **Fable**) · **natural-language + slash skill activation** (*think like fable*, *site cli*, *TDD this*, `/fable-method`, `/adhd`, `/<skill>`, …). Full install at setup; later open = TTL repair (`ecosystem_auto_ensure`) |
+| **Tools** | read · edit · bash · web · **browser** (incl. **element picking**) · **terminal-browser** (`/tb`) · git · judgments (`typesafe`) · security agents (`enclave`) · memory (`optmem` `connectome` `mem`) · diagrams (`excalidraw` `tldraw` `penecho`) · policy (`dogwood`) · background (`bg`) and async (`admission` `goal` `proposal` `message` `question`) · docs (`anydoc`) · a persistent **Python REPL** · knowledge stack · agent (all first-class) |
+| **Ecosystem** | Graphify · GraphJin · PLUR · Ruflo · Executor · **omp** · **browser** · **TypeSafe - Jev** (+ **three keyless local engines**) · **Enclave** (security agents over MCP) · **OptMem** · **Headroom** · **Connectome** · **dogwood** · **tldraw** · **egaki** · AKM · **1,000+ installed skills** (1,587 shipped here) · **plugin marketplace** (`~/.nur/plugins`, incl. **Fable**) · **natural-language + slash skill activation** (*think like fable*, *site cli*, *TDD this*, `/fable-method`, `/adhd`, `/<skill>`, …). Full install at setup; later open = TTL repair (`ecosystem_auto_ensure`) |
 | **Hardening** | Sandbox · bash denylist · SSRF blocks · atomic `~/.nur` IO · session **`.json.bak`** · **permissions.toml** · optional **hooks.toml** · API retries · install SHA-256 · `nur doctor` |
 | **Host panels** | Live `status.json` / `usage.jsonl` · **`NUR_*`** env exports · Orca hook (`nur-hook.cmd`) |
 
-**Current version: v0.41.0**
+**Current version: v0.42.0**
 
 ---
 
@@ -107,6 +111,7 @@ That's the normal upgrade. Pulls / rebuilds when you have a Laboratory checkout,
 - **[Security](security.md)** - Where secrets live, sandbox, reporting
 - **[TypeSafe - Jev](typesafe.md)** - Typed judgments in the loop (tool gate, result judge, compaction, skills, routing)
 - **[Local Jev engines](jev-local.md)** - The same contract with no key: openJev-verdict-2.0, Bespoke-Nimble-9B, Laya Core ML
+- **[Enclave](enclave.md)** - Security agents over native MCP: pentests, code security review, findings
 - **[Troubleshooting](troubleshooting.md)** - `nur doctor`, common issues
 
 ---

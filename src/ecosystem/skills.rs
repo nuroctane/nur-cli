@@ -84,6 +84,10 @@ pub fn install_bundled_skills() -> Result<Vec<String>> {
 }
 
 const BUNDLED: &[(&str, &str)] = &[
+    (
+        "startup-skill",
+        include_str!("../../skills/startup-skill/SKILL.md"),
+    ),
     ("plur", PLUR_SKILL),
     ("ruflo", RUFLO_SKILL),
     ("graphify", GRAPHIFY_SKILL),

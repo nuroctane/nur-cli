@@ -245,6 +245,10 @@ pub const COMMANDS: &[(&str, &str)] = &[
         "Jev boost layer (TypeSafe System One): status | on | off | ask <state>",
     ),
     ("/jev", "alias of /typesafe"),
+    (
+        "/enclave",
+        "Enclave security agents over MCP: status | tools [name] | login",
+    ),
     ("/prewalk", "OMP-style: strong model plans, then smol at first edit - on|off|status|into <model>|reset"),
     ("/egaki", "image/video gen via egaki (login --provider chatgpt supported)"),
     ("/image", "/image <path> - stage a vision attachment (F4 preview)"),
@@ -255,6 +259,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/ecosystem", "ecosystem readiness (graphify · plur · ruflo · excalidraw · …)"),
     ("/usage", "token usage + cost for this session  (/cost)"),
     ("/cost", "token usage + cost for this session  (alias of /usage)"),
+    ("/ledger", "local usage across seven agents: today | 7 | month | all"),
     ("/budget", "optional caps: /budget [cost|tokens|turns] <n|unlimited|0> · clear · save"),
     ("/turns", "agent rounds/prompt: /turns [n|unlimited|0]  (default unlimited)"),
     ("/poor", "cost-saver prompt (skip PLUR/skills/memory) · shows budget status · /poor status"),
@@ -2345,6 +2350,9 @@ pub struct App {
     auto_update_last_seen_at: u64,
     auto_update_announced_version: String,
     pub update_modal: Option<UpdateModal>,
+    /// Slash commands whose tool runs on a worker (network, subprocess); each
+    /// posts one result card when it finishes.
+    slash_jobs: Vec<std::sync::mpsc::Receiver<std::result::Result<String, String>>>,
 }
 
 /// Hand the terminal to a full-screen child program, run it, then take it back.
@@ -2789,6 +2797,7 @@ pub(super) fn new_app(
         auto_update_last_seen_at: 0,
         auto_update_announced_version: String::new(),
         update_modal: None,
+        slash_jobs: Vec::new(),
     }
 }
 
@@ -2940,6 +2949,9 @@ pub async fn run_tui(
         app.poll_plugin_picker();
         app.poll_auto_update();
         if app.poll_swarm_autoshow() {
+            dirty = true;
+        }
+        if app.poll_slash_jobs() {
             dirty = true;
         }
         while let Ok(ev) = app.rx.try_recv() {
@@ -6388,11 +6400,19 @@ impl App {
                 m.error = None;
                 m.buf.clear();
                 // Every provider can use the OMP bridge, while a subset also
-                // supports a first-party CLI and/or browser OAuth.
-                m.can_import = true;
+                // supports a first-party CLI and/or browser OAuth. A sidecar
+                // has only a key and is never the active route, exactly as
+                // when it is picked from the list.
+                let sidecar = crate::providers::is_sidecar_provider(p.id);
+                m.can_import = !sidecar;
+                m.fallback_key |= sidecar;
                 m.method_sel = 0;
                 m.form_scroll = 0;
-                m.stage = LoginStage::Method;
+                m.stage = if sidecar {
+                    LoginStage::Key
+                } else {
+                    LoginStage::Method
+                };
             }
             None => {
                 // Unknown alias: leave the picker open, filtered by the raw text.
@@ -6483,8 +6503,9 @@ impl App {
         if crate::providers::is_sidecar_provider(&id) {
             if let Some(m) = &mut self.login {
                 m.error = Some(format!(
-                    "{} is a boost layer, not a failover target - it has no chat model",
-                    provider.name
+                    "{} is a {}, not a failover target - it has no chat model",
+                    provider.name,
+                    crate::providers::sidecar_role(&id).kind
                 ));
             }
             return;
@@ -7680,6 +7701,30 @@ impl App {
     /// written by the background thread in `bootstrap::maybe_auto_update_on_launch`.
     /// If an update was installed during this TUI session, push a note so the user
     /// knows to restart. Throttled to avoid FS churn.
+    /// Post the cards of finished background slash commands.
+    pub fn poll_slash_jobs(&mut self) -> bool {
+        let mut finished = Vec::new();
+        self.slash_jobs.retain(|job| match job.try_recv() {
+            Ok(result) => {
+                finished.push(result);
+                false
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => true,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                finished.push(Err("background command ended without a result".into()));
+                false
+            }
+        });
+        let changed = !finished.is_empty();
+        for result in finished {
+            match result {
+                Ok(text) => self.push_note(Tone::Skill, text),
+                Err(error) => self.push_error(error),
+            }
+        }
+        changed
+    }
+
     pub fn poll_auto_update(&mut self) {
         const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
         const INITIAL_DELAY: std::time::Duration = std::time::Duration::from_secs(4);
@@ -8046,7 +8091,8 @@ impl App {
         if is_fallback {
             let message = if crate::providers::is_sidecar_provider(provider_id) {
                 format!(
-                    "typesafe - Jev key saved - System One judgments now boost every provider ({})",
+                    "{} ({})",
+                    crate::providers::sidecar_role(provider_id).saved,
                     provider.name
                 )
             } else {

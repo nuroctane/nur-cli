@@ -2045,7 +2045,7 @@ pub fn tool_color(name: &str) -> Color {
         "read_file" | "list_dir" | "grep" | "glob" => BLUE_300(),
         "write_file" | "edit_file" | "multi_edit" | "apply_patch" => VIOLET(),
         "bash" => AMBER(),
-        "web_fetch" | "web_search" | "browser" | "terminal_browser" => TEAL(),
+        "web_fetch" | "web_search" | "browser" | "terminal_browser" | "enclave" => TEAL(),
         "look" | "extract_frames" => PINK(),
         "git_status" | "git_diff" => CYAN(),
         "agent" | "omp" => PINK(),
@@ -2077,6 +2077,7 @@ pub fn tool_family(name: &str) -> &'static str {
         "plur" => "plur",
         "ruflo" => "ruflo",
         "executor" => "gateway",
+        "enclave" => "security",
         "submit_plan" => "plan",
         _ => "tool",
     }

@@ -1634,12 +1634,19 @@ impl AgentRunner {
                 return Err(NurError::Interrupted);
             }
 
-            // Contiguous parallel-safe batch
-            if is_concurrency_safe(&calls[idx].name, &calls[idx].arguments) {
+            // Contiguous parallel-safe batch. The batch skips the approval
+            // gate, so a call that a deny or ask rule names takes the gated
+            // path instead: a rule must hold for reads as well as writes.
+            let parallel = |call: &FunctionCallRef| {
+                is_concurrency_safe(&call.name, &call.arguments)
+                    && !matches!(
+                        self.permissions.decide(&call.name, &call.arguments),
+                        Some(RuleDecision::Deny | RuleDecision::Ask)
+                    )
+            };
+            if parallel(&calls[idx]) {
                 let mut batch_end = idx + 1;
-                while batch_end < calls.len()
-                    && is_concurrency_safe(&calls[batch_end].name, &calls[batch_end].arguments)
-                {
+                while batch_end < calls.len() && parallel(&calls[batch_end]) {
                     batch_end += 1;
                 }
                 let batch = &calls[idx..batch_end];
@@ -1835,6 +1842,15 @@ impl AgentRunner {
                             call.name
                         ),
                         "blocked · plan mode".into(),
+                    )
+                } else if self.permissions.decide(&call.name, &call.arguments)
+                    == Some(RuleDecision::Deny)
+                {
+                    (
+                        "denied by a permissions.toml rule - this call is off limits; \
+                         continue without it"
+                            .into(),
+                        "denied · permissions.toml".into(),
                     )
                 } else {
                     ("user denied this tool call".into(), "denied by user".into())
@@ -3022,7 +3038,7 @@ impl AgentRunner {
                     return true;
                 }
                 if let Ok(set) = self.approved_tools.lock() {
-                    if set.contains(name) {
+                    if set.contains(&super::permissions::session_grant_key(name, args)) {
                         return true;
                     }
                 }
@@ -3057,7 +3073,7 @@ impl AgentRunner {
             Ok(ApprovalDecision::Approve) => true,
             Ok(ApprovalDecision::ApproveAlways) => {
                 if let Ok(mut set) = self.approved_tools.lock() {
-                    set.insert(name.to_string());
+                    set.insert(super::permissions::session_grant_key(name, args));
                 }
                 true
             }
@@ -3205,13 +3221,43 @@ mod tests {
 
     #[tokio::test]
     async fn manual_compact_does_not_summarize_when_jev_cannot_prune() {
+        const CHILD: &str = "NUR_COMPACT_NO_JUDGMENT_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let root = std::env::temp_dir().join(format!("nur-compact-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&root).unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "agent::r#loop::tests::manual_compact_does_not_summarize_when_jev_cannot_prune",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env("NUR_HOME", &root)
+                .env_remove("NUR_JEV_LOCAL_URL")
+                .output()
+                .unwrap();
+            let resolved = root.canonicalize().unwrap();
+            assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+            std::fs::remove_dir_all(resolved).unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            return;
+        }
         let mut config = Config {
             native_memory: false,
             ..Config::default()
         };
         config.typesafe.enabled = true;
         config.typesafe.api_key = "test-only".into();
-        config.typesafe.base_url = "invalid://jev-test".into();
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        config.typesafe.base_url = format!(
+            "http://127.0.0.1:{}/v1/systemone",
+            closed.local_addr().unwrap().port()
+        );
+        drop(closed);
         config.typesafe.retries = 0;
         config.typesafe.compaction.enabled = true;
         config.typesafe.compaction.replace_summary = true;
@@ -6012,20 +6058,15 @@ fn resolve_subagent_target(
         let _ = tx.send(AgentEvent::Status(message.clone()));
         return SubagentTarget::Unavailable { message };
     };
-    // A sidecar (TypeSafe · Jev) has a credential like a provider but cannot
-    // serve a chat request: it answers typed questions, not turns. Point the
-    // caller at the thing that actually works instead of failing upstream.
+    // A sidecar (TypeSafe · Jev, Enclave) has a credential like a provider but
+    // cannot serve a chat request. Point the caller at the thing that actually
+    // works instead of failing upstream.
     if crate::providers::is_sidecar_provider(prov.id) {
+        let role = crate::providers::sidecar_role(prov.id);
         let message = format!(
-            "`{}` is not a chat provider - it is the {} boost layer, and it has no model to run \
-             a subagent on. Use tool `typesafe` (or `/typesafe`) for typed judgments, `route` to \
-             pick a model, or name a real provider here.",
-            prov.name,
-            if prov.id == "typesafe" {
-                "TypeSafe (Jev) System One"
-            } else {
-                "sidecar"
-            }
+            "`{}` is not a chat provider - it is a {}, and it has no model to run a subagent \
+             on. Use {} ({}), `route` to pick a model, or name a real provider here.",
+            prov.name, role.kind, role.surface, role.serves
         );
         let _ = tx.send(AgentEvent::Status(message.clone()));
         return SubagentTarget::Unavailable { message };

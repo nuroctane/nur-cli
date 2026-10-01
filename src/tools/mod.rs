@@ -4,6 +4,7 @@ mod apply_patch;
 mod bash;
 pub mod browser;
 pub mod egaki_tool;
+pub mod enclave_tool;
 pub mod terminal_browser;
 pub use terminal_browser::is_read_only_action as terminal_browser_is_read_only;
 mod admission_tool;
@@ -256,6 +257,7 @@ impl ToolHost {
             Box::new(dogwood_tool::Dogwood),
             Box::new(egaki_tool::Egaki),
             Box::new(executor_tool::ExecutorTool),
+            Box::new(enclave_tool::Enclave),
             Box::new(omp::OmpTool),
             Box::new(skill_tool::SkillTool),
             Box::new(memory_tool::MemoryTool),
@@ -346,6 +348,9 @@ impl ToolHost {
         }
         if has(&["external api", "openapi", "graphql", "mcp", "executor"]) {
             enabled.insert("executor");
+        }
+        if has(&["enclave", "pentest", "penetration test", "security finding"]) {
+            enabled.insert("enclave");
         }
         // A task that is *about* judgments gets the TypeSafe tool on the first
         // round: it is the surface for asking a typed question directly, and
@@ -451,6 +456,7 @@ impl ToolHost {
             "dogwood" => dogwood_tool::Dogwood.execute(&args, ctx),
             "egaki" => egaki_tool::Egaki.execute(&args, ctx),
             "executor" => executor_tool::ExecutorTool.execute(&args, ctx),
+            "enclave" => enclave_tool::Enclave.execute(&args, ctx),
             "omp" => omp::OmpTool.execute(&args, ctx),
             "skill" => skill_tool::SkillTool.execute(&args, ctx),
             "memory" => memory_tool::MemoryTool.execute(&args, ctx),
@@ -698,6 +704,7 @@ mod tests {
             "dogwood",
             "egaki",
             "executor",
+            "enclave",
             "omp",
             "skill",
             "memory",

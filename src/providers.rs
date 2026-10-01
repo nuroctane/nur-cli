@@ -101,8 +101,73 @@ pub const TYPESAFE_PROVIDER: Provider = Provider {
     browser_auth: false,
 };
 
+/// Enclave (enclave.ai) security agents - pinned with the sidecars.
+///
+/// Not a member of [`PROVIDERS`] for the same reason as TypeSafe: it serves no
+/// chat request. Its key (`enc_sk_...`, from Enclave Settings > MCP) opens
+/// Enclave's MCP server to every provider's model through the `enclave` tool.
+/// See [`crate::enclave`].
+pub const ENCLAVE_PROVIDER: Provider = Provider {
+    id: "enclave",
+    name: "Enclave · security agents",
+    base_url: "https://mcp.enclave.ai/",
+    default_model: "",
+    env_key: "ENCLAVE_MCP_API_KEY",
+    style: ApiStyle::ChatCompletions,
+    note: "pentests, code security, findings over MCP · every provider (not a chat model)",
+    key_optional: false,
+    browser_auth: false,
+};
+
 /// Entries pinned at the top of `/login` with special borders.
-pub const SIDECAR_PROVIDERS: &[Provider] = &[TYPESAFE_PROVIDER];
+pub const SIDECAR_PROVIDERS: &[Provider] = &[TYPESAFE_PROVIDER, ENCLAVE_PROVIDER];
+
+/// How login, validation and routing messages describe a sidecar.
+pub struct SidecarRole {
+    /// Brand used in prompts: "{label} API key".
+    pub label: &'static str,
+    /// What it is instead of a chat model: "a {kind}".
+    pub kind: &'static str,
+    /// Key modal title suffix.
+    pub key_title: &'static str,
+    /// What it gives every provider, shown beside its env var.
+    pub serves: &'static str,
+    /// Sentence printed after the CLI saves a key.
+    pub unlocks: &'static str,
+    /// Where the key comes from, for an empty-key error.
+    pub key_source: &'static str,
+    /// Its tool and slash command.
+    pub surface: &'static str,
+    /// TUI note after a key is saved.
+    pub saved: &'static str,
+}
+
+pub fn sidecar_role(id: &str) -> SidecarRole {
+    match id {
+        "enclave" => SidecarRole {
+            label: "Enclave",
+            kind: "security agent service",
+            key_title: "MCP key",
+            serves: "security agents for every provider",
+            unlocks: "Enclave's security agents (pentests, code security, findings) are now \
+                      available to every provider you use",
+            key_source: "the Enclave key is created at https://app.enclave.ai/settings?section=mcp",
+            surface: "tool `enclave`, /enclave",
+            saved: "enclave - key saved - security agents now available to every provider \
+                    (/enclave to check)",
+        },
+        _ => SidecarRole {
+            label: "TypeSafe",
+            kind: "boost layer",
+            key_title: "boost layer key",
+            serves: "typed judgments for every provider",
+            unlocks: "Typed judgments are now available to every provider you use",
+            key_source: "the TypeSafe key is created in the TypeSafe dashboard",
+            surface: "tool `typesafe`, /typesafe",
+            saved: "typesafe - Jev key saved - System One judgments now boost every provider",
+        },
+    }
+}
 
 /// Is this provider a sidecar/boost layer rather than a chat model?
 pub fn is_sidecar_provider(id: &str) -> bool {
@@ -2171,12 +2236,15 @@ mod tests {
     /// delegation target.
     #[test]
     fn typesafe_is_a_pinned_sidecar_not_a_catalog_provider() {
-        assert_eq!(sidecar_providers().len(), 1);
-        assert_eq!(sidecar_providers()[0].id, "typesafe");
+        let ids: Vec<&str> = sidecar_providers().iter().map(|p| p.id).collect();
+        assert_eq!(ids, ["typesafe", "enclave"]);
         assert!(is_sidecar_provider("typesafe"));
+        assert!(is_sidecar_provider("enclave"));
         assert!(!is_sidecar_provider("meta"));
         assert!(
-            !PROVIDERS.iter().any(|p| p.id == "typesafe"),
+            !PROVIDERS
+                .iter()
+                .any(|p| p.id == "typesafe" || p.id == "enclave"),
             "the chat catalog count and every doc that mirrors it stay valid"
         );
         // Resolvable as a credential-bearing id ...

@@ -1701,7 +1701,8 @@ fn sidecar_health_lines() -> Vec<String> {
             };
             let source = if sources.is_empty() {
                 format!(
-                    "none (boosts every provider once set; {})",
+                    "none ({} once set; {})",
+                    crate::providers::sidecar_role(provider.id).serves,
                     provider.env_key
                 )
             } else {
@@ -1894,19 +1895,21 @@ pub fn login_interactive(
     // this it would be written as the active provider and every turn would go
     // to a System One API that answers typed questions.
     if crate::providers::is_sidecar_provider(&provider) {
+        let role = crate::providers::sidecar_role(&provider);
         if import || browser {
-            let name = crate::providers::by_id(&provider)
-                .map(|p| p.name)
-                .unwrap_or(provider.as_str());
+            let (name, env_key) = crate::providers::by_id(&provider)
+                .map(|p| (p.name, p.env_key))
+                .unwrap_or((provider.as_str(), ""));
             return Err(NurError::Other(format!(
-                "{name} has no browser / CLI session to import - pass --key with the TypeSafe \
-                 API key (or export TYPESAFE_API_KEY)"
+                "{name} has no browser / CLI session to import - pass --key with the {} API \
+                 key (or export {env_key})",
+                role.label
             )));
         }
         let typed = match key_arg {
             Some(k) if !k.trim().is_empty() => k,
             _ => {
-                print!("TypeSafe API key: ");
+                print!("{} API key: ", role.label);
                 io::stdout().flush()?;
                 rpassword::read_password().unwrap_or_default()
             }
@@ -1994,21 +1997,23 @@ fn persist_cli_api_key(provider: &str, key: &str, cfg: &mut crate::config::Confi
 /// Store a credential for a provider nur must *not* route turns to (sidecars
 /// such as TypeSafe · Jev). The active provider and base_url are untouched.
 fn persist_cli_scoped_key(provider: &str, key: &str) -> Result<()> {
+    let role = crate::providers::sidecar_role(provider);
     if key.is_empty() {
-        return Err(NurError::Other(
-            "empty API key - the TypeSafe key is created in the TypeSafe dashboard".into(),
-        ));
+        return Err(NurError::Other(format!(
+            "empty API key - {}",
+            role.key_source
+        )));
     }
     save_provider_key(provider, key)?;
     let name = crate::providers::by_id(provider)
         .map(|p| p.name)
         .unwrap_or(provider);
-    println!("saved to {}", auth_path().display());
+    println!("saved to {}", crate::config::provider_keys_path().display());
     println!("credential: {provider} ({name})");
     println!("key: {}", key_fingerprint(key));
     println!(
-        "note: {name} is a boost layer, not your active provider. Typed judgments are now \
-         available to every provider you use (tool `typesafe`, /typesafe)."
+        "note: {name} is a {}, not your active provider. {} ({}).",
+        role.kind, role.unlocks, role.surface
     );
     Ok(())
 }

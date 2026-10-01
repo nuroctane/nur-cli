@@ -1,0 +1,19 @@
+{
+  "repository": "https://github.com/fstandhartinger/jevbench",
+  "commit": "bb05a335bc809e61b20c0f745d25499a82b326fc",
+  "files": {
+    "base.py": "fdddc42e4f71d774096f806c4ee844cc4c4b428385f01a017cb64153d7c089f4",
+    "gradio_space.py": "5c6748212c58fec6bb8728434aa0772de9e117faea4d651c839a3a6e65892c79",
+    "local_openjev.py": "9059a076e421c1aee58de9143e6fb4b8d2785d31aa7f33548466e784b78a1f93",
+    "semif_direct.py": "dbb46432e6be3f225f12a28363e44f717ec82fa9ada8dc4cf0fcf45ed2a2f17e",
+    "so1_decider.py": "3e44ad0dad03ee78bf2a876a54b6e0b756eec2100d671b08cf68ce3528db7913",
+    "sg_system_one.py": "3688070e4aa93f11d87c69915b69271d71f51231b45885be4cf5c7fca329c516",
+    "laya_local.py": "7bb75b8e81fd423b0914a0c3cdf74108231ad5ce24f26f38714599f5cdcd7dec",
+    "gliner2_local.py": "c7cdd480b941b6b39cf3e5deb761e585858bff9379662a5ea2bc09a06b9c553c",
+    "verdict_local.py": "2ad82354224687f434042a0bdbc1f0d713ea73f0d76040912441c0dc5a66e3e7",
+    "paw_local.py": "c8743f8c4da7513bfb0120b402425b8fd1674460ff0374e12309b576b91f0156",
+    "certo_local.py": "b112f302da1b3726590469bf2e925aa8374a5ccbeeeca81f0c155b7c8e4686d8",
+    "smalljev_local.py": "4a7d0b6cf85854d9fbc98fc4b738e7c03dcda0ef38cf7ccb4735791b61cff3f3",
+    "needle_local.py": "2e99720a58c050af8c052932091ca3746b3d085a17e0508b5615c360e09bd854"
+  }
+}

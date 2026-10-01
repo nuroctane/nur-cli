@@ -148,12 +148,32 @@ pub fn canonical(tool: &str, args_json: &str) -> String {
             .and_then(|c| c.as_str())
             .unwrap_or("")
             .to_string(),
+        // One remote action covers tools of very different impact, so an
+        // "always" rule names the Enclave tool it was granted for.
+        "enclave" => match v.get("action").and_then(|c| c.as_str()) {
+            Some("call") => format!(
+                "call:{}",
+                v.get("tool").and_then(|t| t.as_str()).unwrap_or("")
+            ),
+            action => action.unwrap_or("").to_string(),
+        },
         _ => String::new(),
     };
     if detail.is_empty() {
         tool.to_string()
     } else {
         format!("{tool}:{detail}")
+    }
+}
+
+/// What a session "always" grant covers. One Enclave call action spans tools
+/// of very different impact (read findings, start a pentest), so its grant
+/// names the Enclave tool; every other tool is granted by name.
+pub fn session_grant_key(tool: &str, args_json: &str) -> String {
+    if tool == "enclave" {
+        canonical(tool, args_json)
+    } else {
+        tool.to_string()
     }
 }
 
@@ -225,6 +245,33 @@ pub fn home_permissions_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Failure modes: approving one Enclave tool "always" approves another
+    // (reading findings would then silently cover starting a pentest), a
+    // repeat of the same tool still prompts, or other tools lose their
+    // by-name grant.
+    #[test]
+    fn session_grants_name_the_enclave_tool() {
+        let call = |tool: &str| {
+            serde_json::json!({"action": "call", "tool": tool, "arguments": {"x": 1}}).to_string()
+        };
+        let findings = session_grant_key("enclave", &call("list_findings"));
+        assert_ne!(
+            findings,
+            session_grant_key("enclave", &call("start_pentest"))
+        );
+        assert_eq!(
+            findings,
+            session_grant_key(
+                "enclave",
+                r#"{"tool":"list_findings","action":"call","arguments":{"x":2}}"#
+            )
+        );
+        assert_eq!(
+            session_grant_key("bash", r#"{"command":"rm -rf x"}"#),
+            "bash"
+        );
+    }
 
     #[test]
     fn glob_basics() {

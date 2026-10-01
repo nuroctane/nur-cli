@@ -94,6 +94,19 @@ pub enum Commands {
     },
     /// Show last known token usage (status / usage log paths)
     Usage,
+    /// Aggregate local Nur, Claude, Codex, Droid, Pi, Devin, and Command Code usage
+    Ledger {
+        #[arg(long, default_value="month", value_parser=["today","7","month","all"])]
+        period: String,
+        #[arg(long)]
+        json: bool,
+        /// Explicit home directory to read instead of this user's home
+        #[arg(long)]
+        home: Option<String>,
+        /// Download public API prices; reports otherwise run offline
+        #[arg(long)]
+        refresh_prices: bool,
+    },
     /// List recent sessions
     Sessions {
         /// Max rows (0 = all)
@@ -120,7 +133,7 @@ pub enum Commands {
         #[command(subcommand)]
         action: EcosystemCmd,
     },
-    /// Local System One engines (Jev contract): verdict · nimble · laya · mock
+    /// Jev model library, isolated credentials, hosted endpoints and local runtimes
     Jev {
         #[command(subcommand)]
         action: JevCmd,
@@ -248,10 +261,43 @@ pub enum BrowserCmd {
 /// Core ML, Apple Silicon only), plus `mock` for tests and demos.
 #[derive(Subcommand, Debug, Clone)]
 pub enum JevCmd {
+    /// Search the full pinned JevBench roster
+    Models {
+        #[arg(long)]
+        search: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show an engine's interface, source, hardware and connection steps
+    Info { engine: String },
+    /// Save an engine-specific key using hidden input
+    Login { engine: String },
     /// Show the endpoint, credential source, bridge state, and which backends this machine can run
     Status,
     /// Start a local engine (writes ~/.nur/jev/bridge.json)
     Start {
+        /// JevBench engine id (nur jev models)
+        #[arg(long)]
+        engine: Option<String>,
+        /// Model id or local weights path for an adapter
+        #[arg(long)]
+        model: Option<String>,
+        /// Engine API URL; HTTPS or loopback HTTP
+        #[arg(long)]
+        upstream: Option<String>,
+        #[arg(long, value_parser=["systemone","systemone-list","systemone-rune","openai","djev","run","classifier-dev","choice","jevact"])]
+        protocol: Option<String>,
+        /// Credential environment variable name (never the key value)
+        #[arg(long)]
+        key_env: Option<String>,
+        /// Installed Python adapter module:Class
+        #[arg(long)]
+        adapter: Option<String>,
+        #[arg(long)]
+        adapter_dir: Option<String>,
+        /// Non-secret constructor or request options as JSON
+        #[arg(long)]
+        adapter_options: Option<String>,
         /// Engine to serve
         #[arg(long, default_value = "verdict")]
         backend: String,
@@ -279,10 +325,20 @@ pub enum JevCmd {
     Stop,
     /// Point [typesafe] at the local bridge (needs no key); `--hosted` reverts
     Use {
+        /// Native TypeSafe-compatible engine id
+        #[arg(long)]
+        engine: Option<String>,
+        /// Native System One URL (HTTPS or loopback HTTP)
+        #[arg(long)]
+        url: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        key_env: Option<String>,
         #[arg(long, default_value_t = 8788)]
         port: u16,
         /// Go back to the hosted TypeSafe endpoint instead
-        #[arg(long)]
+        #[arg(long, conflicts_with_all=["engine","url","model","key_env"])]
         hosted: bool,
     },
     /// Run the bridge's own mapping selftest (no model, no downloads)

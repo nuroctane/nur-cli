@@ -10,7 +10,10 @@ A reply is {"text": "..."}, {"tool_calls": [{"name", "arguments"}]} (a string
 When the script runs out the server answers with a fixed text, so a runaway
 loop ends instead of hanging; the runner then fails on the request count.
 
-Usage: python fake_provider.py <script.json> <requests.jsonl> <port-file>
+With an MCP spec it also serves a Streamable HTTP MCP server (the Enclave
+stand-in) on the same port; see FakeMcp.
+
+Usage: python fake_provider.py <script.json> <requests.jsonl> <port-file> [<mcp.json> <mcp.jsonl>]
 """
 
 import json
@@ -42,6 +45,106 @@ class State:
             return self.replies.pop(0) if self.replies else {"text": EXHAUSTED}
 
 
+class FakeMcp:
+    """Scripted Streamable HTTP MCP server enforcing what a client must send.
+
+    Spec keys: key (required bearer), path (default /mcp), tools, results
+    (tool name -> CallToolResult), page_size (tools/list pagination), sse
+    (stream tools/call with a progress notification and a server ping first),
+    instructions, forget_session_on (answer the first such method with 404 so
+    the client must open a new session). Every request is logged.
+    """
+
+    def __init__(self, spec, log_path):
+        self.spec = spec
+        self.path = spec.get("path", "/mcp").rstrip("/")
+        self.log_path = log_path
+        self.lock = threading.Lock()
+        self.sessions = set()
+        self.opened = 0
+        self.forgot = False
+
+    def handle(self, handler, body):
+        headers = handler.headers
+        method = body.get("method") if isinstance(body, dict) else None
+        with self.lock, open(self.log_path, "a", encoding="utf-8") as log:
+            log.write(json.dumps({
+                "method": method or "(response)",
+                "auth": headers.get("authorization", ""),
+                "session": headers.get("mcp-session-id", ""),
+                "protocol": headers.get("mcp-protocol-version", ""),
+                "params": body.get("params") if isinstance(body, dict) else None,
+            }) + "\n")
+        if headers.get("authorization") != "Bearer " + self.spec["key"]:
+            handler._json(401, {"error": "Unauthorized", "message": "Missing or invalid Authorization header"},
+                          {"WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'})
+            return
+        if method == "initialize":
+            with self.lock:
+                self.opened += 1
+                session = f"fake-session-{self.opened}"
+                self.sessions.add(session)
+            result = {"protocolVersion": body["params"]["protocolVersion"], "capabilities": {"tools": {}},
+                      "serverInfo": {"name": "fake-enclave", "version": "0.0.1"}}
+            if self.spec.get("instructions"):
+                result["instructions"] = self.spec["instructions"]
+            handler._json(200, {"jsonrpc": "2.0", "id": body["id"], "result": result}, {"Mcp-Session-Id": session})
+            return
+        session = headers.get("mcp-session-id", "")
+        if session not in self.sessions:
+            handler._json(404 if session else 400, {"error": "unknown or missing session"})
+            return
+        if not headers.get("mcp-protocol-version"):
+            handler._json(400, {"error": "missing MCP-Protocol-Version"})
+            return
+        if method is None or method.startswith("notifications/"):
+            handler._empty(202)
+            return
+        with self.lock:
+            forget = self.spec.get("forget_session_on") == method and not self.forgot
+            if forget:
+                self.forgot = True
+                self.sessions.discard(session)
+        if forget:
+            handler._json(404, {"error": "session not found"})
+            return
+        if method == "tools/list":
+            tools = self.spec.get("tools", [])
+            size = self.spec.get("page_size") or max(len(tools), 1)
+            start = int((body.get("params") or {}).get("cursor") or 0)
+            page = {"tools": tools[start:start + size]}
+            if start + size < len(tools):
+                page["nextCursor"] = str(start + size)
+            self._reply(handler, body["id"], result=page)
+        elif method == "tools/call":
+            name = body["params"]["name"]
+            result = self.spec.get("results", {}).get(name)
+            if result is None:
+                self._reply(handler, body["id"], error={"code": -32602, "message": f"unknown tool {name}"})
+            else:
+                self._reply(handler, body["id"], result=result, stream=self.spec.get("sse", False))
+        else:
+            self._reply(handler, body["id"], error={"code": -32601, "message": f"method {method} not found"})
+
+    def _reply(self, handler, request_id, result=None, error=None, stream=False):
+        message = {"jsonrpc": "2.0", "id": request_id}
+        if error:
+            message["error"] = error
+        else:
+            message["result"] = result
+        if not stream:
+            handler._json(200, message)
+            return
+        handler.send_response(200)
+        handler.send_header("content-type", "text/event-stream")
+        handler.end_headers()
+        progress = {"jsonrpc": "2.0", "method": "notifications/progress", "params": {"progressToken": 1, "progress": 1}}
+        ping = {"jsonrpc": "2.0", "id": "server-ping-1", "method": "ping"}
+        for event in (progress, ping, message):
+            handler.wfile.write(f": keepalive\n\nevent: message\ndata: {json.dumps(event)}\n\n".encode())
+            handler.wfile.flush()
+
+
 def tool_calls_of(reply, n):
     return [
         {
@@ -59,7 +162,7 @@ def tool_calls_of(reply, n):
     ]
 
 
-def make_handler(state):
+def make_handler(state, mcp=None):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
             pass
@@ -72,6 +175,9 @@ def make_handler(state):
             length = int(self.headers.get("content-length", "0"))
             body = json.loads(self.rfile.read(length) or b"{}")
             path = self.path.rstrip("/")
+            if mcp and path == mcp.path:
+                mcp.handle(self, body)
+                return
             if not path.endswith(("/chat/completions", "/responses", "/messages")):
                 self._json(404, {"error": {"message": f"unexpected path {self.path}"}})
                 return
@@ -180,13 +286,20 @@ def make_handler(state):
             self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
             self.wfile.flush()
 
-        def _json(self, code, payload):
+        def _json(self, code, payload, headers=None):
             data = json.dumps(payload).encode()
             self.send_response(code)
             self.send_header("content-type", "application/json")
             self.send_header("content-length", str(len(data)))
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
             self.end_headers()
             self.wfile.write(data)
+
+        def _empty(self, code):
+            self.send_response(code)
+            self.send_header("content-length", "0")
+            self.end_headers()
 
     return Handler
 
@@ -195,7 +308,11 @@ def main():
     script_path, log_path, port_file = sys.argv[1:4]
     with open(script_path, encoding="utf-8") as f:
         script = json.load(f)
-    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(State(script, log_path)))
+    mcp = None
+    if len(sys.argv) > 5:
+        with open(sys.argv[4], encoding="utf-8") as f:
+            mcp = FakeMcp(json.load(f), sys.argv[5])
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(State(script, log_path), mcp))
     with open(port_file, "w", encoding="utf-8") as f:
         f.write(str(server.server_address[1]))
     server.serve_forever()

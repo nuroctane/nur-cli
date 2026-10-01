@@ -11,14 +11,19 @@ mod config;
 mod dogwood;
 mod ecosystem;
 mod egaki;
+mod enclave;
 mod error;
 mod fractal;
 mod gateway;
 mod gepa;
 mod headroom;
+mod jev_catalog;
 mod jev_eval;
 mod jev_local;
+mod jev_resources;
+mod ledger;
 mod local;
+mod mcp_http;
 mod oauth;
 mod open_uri;
 mod optmem;
@@ -140,6 +145,11 @@ async fn real_main() -> Result<()> {
         }
         Some(Commands::Usage) => {
             print_usage_summary()?;
+            return Ok(());
+        }
+        Some(Commands::Ledger { period, json, home, refresh_prices }) => {
+            let report=ledger::run(period,home.as_deref(),*refresh_prices)?;
+            println!("{}",if *json {serde_json::to_string_pretty(&report)?} else {ledger::format(&report)});
             return Ok(());
         }
         Some(Commands::Sessions { limit }) => {
@@ -551,7 +561,7 @@ async fn real_main() -> Result<()> {
     match &cli.command {
         // `nur jev` is dispatched (and returns) before the client is built: it
         // manages a local engine and needs no provider credential.
-        Some(Commands::Jev { .. }) => {}
+        Some(Commands::Jev { .. } | Commands::Ledger { .. }) => {}
         // `--continuous` drives the continuous runner, which is only wired to the
         // no-subcommand path; accepting it on `run` silently ignored it.
         Some(Commands::Run { .. }) if cli.continuous => {
@@ -796,6 +806,19 @@ fn run_browser_setup(open: bool) -> Result<()> {
 fn run_jev(action: cli::JevCmd) -> Result<()> {
     let cfg = load_config().unwrap_or_default();
     match action {
+        cli::JevCmd::Models { search, json } => {
+            println!("{}", jev_catalog::list(search.as_deref(), json))
+        }
+        cli::JevCmd::Info { engine } => println!("{}", jev_catalog::info(&engine)?),
+        cli::JevCmd::Login { engine } => {
+            let selected = jev_catalog::find(&engine)?;
+            let engine = &selected.id;
+            let key = rpassword::prompt_password(format!("API key for {engine} (hidden): "))?;
+            auth::save_provider_key(&format!("jev:{engine}"), &key)?;
+            theme::print_ok(&format!(
+                "saved credential for {engine}; other engine keys are unchanged"
+            ));
+        }
         cli::JevCmd::Status => {
             theme::print_info("nur jev · local typed decisions");
             for line in jev_local::status_lines(&cfg.typesafe) {
@@ -803,6 +826,14 @@ fn run_jev(action: cli::JevCmd) -> Result<()> {
             }
         }
         cli::JevCmd::Start {
+            engine,
+            model,
+            upstream,
+            protocol,
+            key_env,
+            adapter,
+            adapter_dir,
+            adapter_options,
             backend,
             port,
             verdict_model,
@@ -814,6 +845,65 @@ fn run_jev(action: cli::JevCmd) -> Result<()> {
             // Forwarded verbatim: the bridge's own CLI is the source of truth for
             // these, and a wrong one fails in the foreground with its own message.
             let mut extra: Vec<String> = Vec::new();
+            let selected = engine.as_deref().map(jev_catalog::find).transpose()?;
+            let upstream = upstream.or_else(|| selected.and_then(|e| e.endpoint.clone()));
+            let adapter_options = adapter_options
+                .or_else(|| selected.and_then(|e| e.options.as_ref().map(|v| v.to_string())));
+            let adapter_mode = selected.is_some() || upstream.is_some() || adapter.is_some();
+            let backend = if adapter_mode {
+                "adapter".to_string()
+            } else {
+                backend
+            };
+            if adapter_mode {
+                let resolved_adapter = adapter.or_else(|| {
+                    engine
+                        .as_deref()
+                        .and_then(jev_catalog::local_adapter)
+                        .map(str::to_string)
+                });
+                if upstream.is_none() && resolved_adapter.is_none() {
+                    return Err(error::NurError::Other(format!("this engine needs its native server (--upstream) or source library (--adapter).\n{}",jev_catalog::info(engine.as_deref().unwrap_or(""))?)));
+                }
+                let protocol = protocol.unwrap_or_else(|| {
+                    selected
+                        .map(|e| e.protocol.clone())
+                        .unwrap_or_else(|| "systemone".into())
+                });
+                if upstream.is_some() && protocol == "adapter" {
+                    return Err(error::NurError::Other("specify the server's --protocol; this benchmark entry has a model-specific adapter".into()));
+                }
+                if let Some(url) = &upstream {
+                    typesafe::client::validate_endpoint(url).map_err(error::NurError::Other)?;
+                }
+                let credential = selected.map(|e| format!("jev:{}", e.id));
+                let key_env = key_env.or_else(|| {
+                    credential
+                        .as_ref()
+                        .filter(|id| auth::load_provider_key(id).is_some())
+                        .map(|_| "NUR_JEV_ENGINE_KEY".into())
+                });
+                if let Some(slot) = &key_env {
+                    typesafe::client::validate_key_env(slot).map_err(error::NurError::Other)?;
+                }
+                for (flag, value) in [
+                    (
+                        "--model",
+                        model.or_else(|| selected.and_then(|e| e.model.clone())),
+                    ),
+                    ("--upstream", upstream),
+                    ("--protocol", Some(protocol)),
+                    ("--key-env", key_env),
+                    ("--adapter", resolved_adapter),
+                    ("--adapter-dir", adapter_dir),
+                    ("--adapter-options", adapter_options),
+                    ("--credential-provider", credential),
+                ] {
+                    if let Some(value) = value {
+                        extra.extend([flag.into(), value]);
+                    }
+                }
+            }
             for (flag, value) in [
                 ("--verdict-model", verdict_model),
                 ("--nimble-dir", nimble_dir),
@@ -842,9 +932,41 @@ fn run_jev(action: cli::JevCmd) -> Result<()> {
             let report = jev_local::stop()?;
             theme::print_ok(&report);
         }
-        cli::JevCmd::Use { port, hosted } => {
+        cli::JevCmd::Use {
+            port,
+            hosted,
+            engine,
+            url,
+            model,
+            key_env,
+        } => {
             let report = if hosted {
                 jev_local::use_hosted()?
+            } else if url.is_some() || engine.is_some() {
+                let selected = engine.as_deref().map(jev_catalog::find).transpose()?;
+                if selected.is_some_and(|e| e.protocol != "systemone") {
+                    return Err(error::NurError::Other("this engine needs `nur jev start --engine <id> --upstream <url>` to translate its interface".into()));
+                }
+                let url=url.or_else(||selected.and_then(|e|e.endpoint.clone())).ok_or_else(||error::NurError::Other("supply the engine's native --url; benchmark GPU endpoints are private and are never reused".into()))?;
+                let url = typesafe::client::normalize_local_bridge_url(&url)
+                    .ok_or_else(|| error::NurError::Other("empty Jev endpoint".into()))?;
+                typesafe::client::validate_endpoint(&url).map_err(error::NurError::Other)?;
+                if let Some(slot) = &key_env {
+                    typesafe::client::validate_key_env(slot).map_err(error::NurError::Other)?;
+                }
+                let mut cfg = load_config()?;
+                jev_local::preserve_inline_credential(&mut cfg.typesafe)?;
+                cfg.typesafe.base_url = url.clone();
+                cfg.typesafe.enabled = true;
+                cfg.typesafe.model = model
+                    .or_else(|| selected.and_then(|e| e.model.clone()))
+                    .unwrap_or_default();
+                cfg.typesafe.key_env = key_env.unwrap_or_default();
+                cfg.typesafe.credential_provider = selected
+                    .map(|e| format!("jev:{}", e.id))
+                    .unwrap_or_default();
+                config::save_config(&cfg)?;
+                format!("Jev endpoint set to {url}; selected credentials are isolated from the TypeSafe hosted key")
             } else {
                 jev_local::use_port(port)?
             };

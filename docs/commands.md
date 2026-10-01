@@ -464,6 +464,7 @@ Type these inside the `nur` TUI. Aliases are shown in the same row.
 | `/turns` | Per-session agent-turn ceiling (`0` = unlimited) |
 | `/poor` | Cost-saver lean prompt |
 | `/usage` · `/cost` | Token usage + estimated cost this session |
+| `/ledger [today\|7\|month\|all]` | Local usage across seven agents; [ledger reference](ledger.md) |
 | `/context` | Context-window utilization |
 | `/status` | Session snapshot: model · mode · cwd · tokens |
 | `/doctor` | Health check: version · auth · ecosystem · shell · **TypeSafe/Jev (ready on a local engine with no key)** |
@@ -483,6 +484,7 @@ Type these inside the `nur` TUI. Aliases are shown in the same row.
 | `/optmem` · `/memo` | OptMem permanent memory (`~/.optmem`): `status` · `wake` · `note` · `nap` · `recall` · `zoom` · `forget` · `config` · `doctor` |
 | `/typesafe` · `/jev` | Jev (TypeSafe System One) boost layer: status · `on`/`off` · `ask <state>` ([docs/typesafe.md](./typesafe.md)) |
 | `/typesafe-ai` | Loads the TypeSafe *skill* (how to design and use judgments) - distinct from `/typesafe`, which is the layer's status/controls |
+| `/enclave` | Enclave security agents over native MCP: `status` · `tools [name]` · `login` ([docs/enclave.md](./enclave.md)) |
 | `/headroom` | Context compression doctor (inline tool-result compress on by default) |
 | `/prewalk` | OMP-style: strong model plans, then cheap/smol at first edit after todos (`on` \| `off` \| `status` \| `into <model>` \| `reset`). Off by default. |
 | `/egaki` | Image/video gen via egaki (`login --provider chatgpt` supported) |

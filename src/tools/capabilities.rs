@@ -141,6 +141,7 @@ pub fn is_read_only(name: &str, args: &Value) -> bool {
         "dogwood" => crate::tools::dogwood_tool::is_read_only_action(&args.to_string()),
         "egaki" => crate::tools::egaki_tool::is_read_only_action(&args.to_string()),
         "executor" => crate::tools::executor_is_read_only(&args.to_string()),
+        "enclave" => crate::tools::enclave_tool::is_read_only_action(&args.to_string()),
         "omp" => crate::tools::omp::is_read_only_value(args),
         "browser" => crate::tools::browser_is_read_only(&args.to_string()),
         "terminal_browser" => crate::tools::terminal_browser_is_read_only(&args.to_string()),
@@ -202,6 +203,7 @@ pub fn is_destructive(name: &str, args: &Value) -> bool {
         "browser" => !is_read_only("browser", args),
         "terminal_browser" => !is_read_only("terminal_browser", args),
         "executor" => !is_read_only("executor", args),
+        "enclave" => !is_read_only("enclave", args),
         _ => false,
     }
 }

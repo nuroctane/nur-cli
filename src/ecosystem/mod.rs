@@ -55,7 +55,8 @@ const ECOSYSTEM_MARKER: &str = "ecosystem.json";
 ///     provider model docs, terminal-browser macOS/Linux status.
 /// 28: startup validation, competitors, positioning and pitch skill pack.
 /// 29: cohesive terminal/HTTP/document stack update and owned skill snapshots.
-pub(crate) const ECOSYSTEM_SCHEMA: u32 = 29;
+/// 30: bundled startup workflow router and expanded Jev engine resources.
+pub(crate) const ECOSYSTEM_SCHEMA: u32 = 30;
 /// Re-run ensure at most once per this many seconds unless forced.
 const ENSURE_TTL_SECS: u64 = 86_400;
 

@@ -224,6 +224,8 @@ impl App {
             "/optmem" | "/memo" => self.cmd_optmem(&arg),
             "/headroom" => self.cmd_headroom(&arg),
             "/typesafe" | "/jev" => self.cmd_typesafe(&arg),
+            "/ledger" => self.cmd_ledger(&arg),
+            "/enclave" => self.cmd_enclave(&arg),
             "/prewalk" => self.cmd_prewalk(&arg),
             "/egaki" => self.cmd_egaki(&arg),
             // `/image <path>`: stage a draft image for vision.
@@ -518,6 +520,18 @@ impl App {
     fn cmd_typesafe(&mut self, arg: &str) {
         let arg = arg.trim();
         let lower = arg.to_ascii_lowercase();
+        if lower == "models" || lower.starts_with("models ") {
+            let query = arg.strip_prefix("models").unwrap_or("").trim();
+            self.push_info(crate::jev_catalog::list(Some(query), false));
+            return;
+        }
+        if let Some(id) = arg.strip_prefix("info ") {
+            match crate::jev_catalog::info(id.trim()) {
+                Ok(text) => self.push_info(text),
+                Err(error) => self.push_error(error.to_string()),
+            }
+            return;
+        }
         if arg.is_empty()
             || lower == "status"
             || lower == "doctor"
@@ -531,14 +545,13 @@ impl App {
             }
             let report = crate::typesafe::doctor_report(&self.cfg.typesafe);
             let on = self.cfg.typesafe.enabled;
-            let key = crate::typesafe::client::api_key(&self.cfg.typesafe);
-            let active = key.is_some() && crate::typesafe::harness::available(&self.cfg.typesafe);
+            let active = crate::typesafe::harness::available(&self.cfg.typesafe);
             let state = match (on, active) {
                 (false, _) => "OFF (typesafe.enabled = false; /typesafe on to re-enable)",
                 (true, true) => "ON · Jev judgments active for this provider and every other",
                 (true, false) => {
-                    "no key yet · set TYPESAFE_API_KEY, or /auth and pick `TypeSafe · Jev` \
-                     (it is pinned at the top of the list)"
+                    "judgment layer unavailable · /jev models lists engines; use a local bridge, \
+                     an engine credential, or /auth and pick `TypeSafe · Jev`"
                 }
             };
             self.push_info(format!("typesafe · {state}\n{report}"));
@@ -572,6 +585,23 @@ impl App {
             _ => proposition(arg),
         };
         self.run_slash_tool("typesafe", &json);
+    }
+
+    fn cmd_ledger(&mut self, arg: &str) {
+        let period = if arg.trim().is_empty() {
+            "month"
+        } else {
+            arg.trim()
+        }
+        .to_string();
+        self.push_info("reading local usage logs...".into());
+        self.background_ui(
+            move || crate::ledger::run(&period, None, false),
+            |app, result| match result {
+                Ok(report) => app.push_info(crate::ledger::format(&report)),
+                Err(error) => app.push_error(error.to_string()),
+            },
+        );
     }
 
     /// OMP-style prewalk UI: strong model plans + todos, then smol at first edit.
@@ -767,6 +797,71 @@ impl App {
             serde_json::json!({"action":"image","prompt": arg}).to_string()
         };
         self.run_slash_tool("egaki", &json);
+    }
+
+    /// Run a slash command's tool on a worker: network and subprocess calls
+    /// must not freeze typing or drawing. `finish` shapes the card text.
+    fn run_slash_tool_bg(
+        &mut self,
+        name: &'static str,
+        args: serde_json::Value,
+        working: &str,
+        finish: impl FnOnce(std::result::Result<String, String>) -> std::result::Result<String, String>
+            + Send
+            + 'static,
+    ) {
+        self.push_info(format!("{working}..."));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cwd = self.cwd.clone();
+        let json = args.to_string();
+        let spawned = std::thread::Builder::new()
+            .name(format!("nur-slash-{name}"))
+            .spawn(move || {
+                let ctx = crate::tools::ToolContext {
+                    cwd,
+                    cancel: CancellationToken::new(),
+                };
+                let result = ToolHost::default()
+                    .dispatch(name, &json, &ctx)
+                    .map_err(|e| e.to_string());
+                let _ = tx.send(finish(result));
+            });
+        match spawned {
+            Ok(_) => self.slash_jobs.push(rx),
+            Err(e) => self.push_error(format!("{name}: could not start a worker: {e}")),
+        }
+    }
+
+    /// `/enclave` - Enclave security agents over MCP (tool `enclave`).
+    fn cmd_enclave(&mut self, arg: &str) {
+        let arg = arg.trim();
+        let (action, rest) = match arg.split_once(char::is_whitespace) {
+            Some((action, rest)) => (action.to_ascii_lowercase(), rest.trim().to_string()),
+            None => (arg.to_ascii_lowercase(), String::new()),
+        };
+        match action.as_str() {
+            "" | "status" | "doctor" => self.run_slash_tool_bg(
+                "enclave",
+                serde_json::json!({"action": "status"}),
+                "enclave · checking the MCP server",
+                |result| result,
+            ),
+            "tools" | "list" | "ls" => {
+                let mut args = serde_json::json!({"action": "tools"});
+                if !rest.is_empty() {
+                    args["tool"] = rest.into();
+                }
+                self.run_slash_tool_bg("enclave", args, "enclave · listing tools", |result| {
+                    result
+                });
+            }
+            "login" | "key" | "auth" => self.open_login_for(crate::enclave::PROVIDER_ID),
+            _ => self.push_info(
+                "enclave · /enclave [status] · /enclave tools [name] · /enclave login\n  \
+                 then ask for security work, e.g. \"use Enclave to review this repo\""
+                    .into(),
+            ),
+        }
     }
 
     fn run_slash_tool(&mut self, name: &str, json: &str) {
@@ -3503,48 +3598,47 @@ impl App {
         }
     }
 
-    /// Manage MCP servers via the Executor gateway (executor.sh).
+    /// Manage MCP servers via the Executor gateway (executor.sh). The CLI is a
+    /// subprocess, so it runs on a worker.
     fn cmd_mc(&mut self, arg: &str) {
         let arg = arg.trim();
         let action = if arg.is_empty() { "sources" } else { arg };
-        let json = match action {
-            "sources" | "list" | "ls" => r#"{"action":"sources"}"#.to_string(),
-            "status" => r#"{"action":"status"}"#.to_string(),
+        let args = match action {
+            "sources" | "list" | "ls" => serde_json::json!({"action": "sources"}),
+            "status" => serde_json::json!({"action": "status"}),
             "search" | "find" => {
                 self.push_error(
-                    "usage: /mc search <query>  — use the executor tool for calls".into(),
+                    "usage: /mc search <query>  - use the executor tool for calls".into(),
                 );
                 return;
             }
             _ if action.starts_with("search ") => {
                 let q = action.trim_start_matches("search ").trim();
-                serde_json::json!({"action":"search","query":q}).to_string()
+                serde_json::json!({"action": "search", "query": q})
             }
             other => {
                 self.push_error(format!(
-                    "unknown /mc action '{other}' — try: sources · status · search <q>"
+                    "unknown /mc action '{other}' - try: sources · status · search <q>"
                 ));
                 return;
             }
         };
-        let host = ToolHost::default();
-        let ctx = crate::tools::ToolContext {
-            cwd: self.cwd.clone(),
-            cancel: CancellationToken::new(),
-        };
-        match host.dispatch("executor", &json, &ctx) {
-            Ok(s) => self.push_note(
-                Tone::Skill,
-                format!(
+        self.run_slash_tool_bg(
+            "executor",
+            args,
+            "mcp · asking the executor gateway",
+            |result| match result {
+                Ok(s) => Ok(format!(
                     "mcp servers (via executor gateway)\n{s}\n\n\
-                     add one:  executor tool → action=call, or `executor install`\n\
-                     the agent uses the `executor` tool for OpenAPI/GraphQL/MCP calls"
-                ),
-            ),
-            Err(e) => self.push_error(format!(
-                "{e}\n  MCP is provided by the Executor gateway — `nur ecosystem ensure` installs it"
-            )),
-        }
+                     add one:  `executor web` opens the gateway's integrations UI\n\
+                     the agent uses the `executor` tool for OpenAPI/GraphQL/MCP calls\n\
+                     Enclave is built in: /enclave"
+                )),
+                Err(e) => Err(format!(
+                    "{e}\n  MCP is provided by the Executor gateway - `nur ecosystem ensure` installs it"
+                )),
+            },
+        );
     }
 
     /// The interaction tips that used to clutter the opening banner.

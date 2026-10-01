@@ -2256,4 +2256,41 @@ body
         let _ = std::fs::remove_dir_all(&root);
         assert_eq!(found.len(), 1, "expected nested SKILL.md, got {found:?}");
     }
+
+    #[test]
+    fn startup_router_activation_is_distinct_from_its_workflows() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("skills");
+        let skills: Vec<_> = [
+            "startup-skill",
+            "startup-design",
+            "startup-competitors",
+            "startup-positioning",
+            "startup-pitch",
+        ]
+        .iter()
+        .map(|name| parse_skill(&root.join(name).join("SKILL.md")).unwrap())
+        .collect();
+        for phrase in ["use startup-skill", "use startup skill", "/startup-skill"] {
+            assert_eq!(
+                detect_skill_activation(phrase, &skills).unwrap().0.name,
+                "startup-skill"
+            );
+            assert_eq!(
+                crate::agent::skill_intents::find_by_expanded_triggers(
+                    &normalize_intent_text(phrase),
+                    &skills
+                )
+                .unwrap()
+                .name,
+                "startup-skill"
+            );
+        }
+        assert_eq!(
+            detect_skill_activation("use startup competitors", &skills)
+                .unwrap()
+                .0
+                .name,
+            "startup-competitors"
+        );
+    }
 }

@@ -182,11 +182,34 @@ impl Availability {
 /// → nur's credential store (`nur auth login --provider typesafe`) →
 /// `~/.nur/typesafe.key` → `~/.typesafe_key` → `~/.config/typesafe/key`.
 pub fn api_key(cfg: &TypesafeConfig) -> Option<String> {
+    // Selecting an engine credential slot is exclusive. Missing credentials
+    // must never fall through to another vendor's key.
+    if !cfg.key_env.trim().is_empty() {
+        return std::env::var(cfg.key_env.trim())
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+    }
+    if !cfg.credential_provider.trim().is_empty() {
+        return crate::auth::load_provider_key(cfg.credential_provider.trim());
+    }
+    let endpoint = effective_base_url(cfg);
+    if is_loopback_endpoint(&endpoint) {
+        return None;
+    }
     let explicit = cfg.api_key.trim();
     if !explicit.is_empty() {
         // Config is already in memory: never cached, so an edit takes effect at
         // once.
         return Some(explicit.to_string());
+    }
+    if reqwest::Url::parse(&endpoint)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))
+        .as_deref()
+        != Some("api.typesafe.ai")
+    {
+        return None;
     }
     // The probe reads the environment, the credential store and a few files.
     // That is far too much work for a path the agent loop walks on every tool
@@ -296,35 +319,44 @@ pub fn normalize_local_bridge_url(raw: &str) -> Option<String> {
 /// A loopback engine was started and trusted by the user, so nur does not demand
 /// a credential for it. Anything reachable off-box still needs a key.
 pub fn is_loopback_endpoint(url: &str) -> bool {
-    let lower = url.trim().to_ascii_lowercase();
-    let authority = lower
-        .split("://")
-        .nth(1)
-        .unwrap_or(&lower)
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or("")
-        .trim_end_matches('/')
-        .to_string();
-    // Drop userinfo, then the port (keeping an IPv6 literal intact).
-    let authority = authority
-        .rsplit('@')
-        .next()
-        .unwrap_or(&authority)
-        .to_string();
-    let host = if authority.starts_with('[') {
-        authority
-            .split(']')
-            .next()
-            .unwrap_or(&authority)
-            .trim_start_matches('[')
-    } else {
-        authority.split(':').next().unwrap_or(&authority)
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
     };
-    matches!(
-        host,
-        "127.0.0.1" | "localhost" | "::1" | "0.0.0.0" | "host.docker.internal"
-    )
+    let host = parsed.host_str().unwrap_or("");
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .trim_matches(['[', ']'])
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+pub fn validate_endpoint(url: &str) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(url).map_err(|_| "invalid judgment endpoint URL")?;
+    if !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err("endpoint cannot contain credentials, query parameters, or fragments".into());
+    }
+    if parsed.host_str().is_none()
+        || !(parsed.scheme() == "https" || parsed.scheme() == "http" && is_loopback_endpoint(url))
+    {
+        return Err("judgment endpoint requires HTTPS; HTTP is allowed only on loopback".into());
+    }
+    Ok(())
+}
+
+pub fn validate_key_env(name: &str) -> Result<(), String> {
+    if name.is_empty()
+        || !name
+            .bytes()
+            .enumerate()
+            .all(|(i, b)| b == b'_' || b.is_ascii_alphabetic() || i > 0 && b.is_ascii_digit())
+    {
+        return Err("--key-env must be an environment variable name, not a key value".into());
+    }
+    Ok(())
 }
 
 /// The effective endpoint: a local-bridge env override wins over config.
@@ -342,8 +374,20 @@ pub fn effective_base_url(cfg: &TypesafeConfig) -> String {
 
 /// Where the key came from, for `doctor` (never the key itself).
 pub fn key_provenance(cfg: &TypesafeConfig) -> Option<&'static str> {
+    if !cfg.key_env.is_empty() {
+        return api_key(cfg).map(|_| "selected engine environment slot");
+    }
+    if !cfg.credential_provider.is_empty() {
+        return api_key(cfg).map(|_| "selected engine credential store slot");
+    }
+    if is_loopback_endpoint(&effective_base_url(cfg)) {
+        return Some("loopback engine (no key)");
+    }
     if !cfg.api_key.trim().is_empty() {
         return Some("config [typesafe] api_key");
+    }
+    if api_key(cfg).is_none() {
+        return None;
     }
     if api_key_from_env().is_some() {
         return Some("env TYPESAFE_API_KEY");
@@ -374,23 +418,36 @@ pub fn client(cfg: &TypesafeConfig) -> Availability {
         return Availability::Unavailable("disabled in config ([typesafe] enabled = false)".into());
     }
     let base_url = effective_base_url(cfg);
-    let key =
-        match api_key(cfg) {
-            Some(k) => k,
-            // A local engine needs no credential - that is the whole point of
-            // running one.
-            None if is_loopback_endpoint(&base_url) => LOCAL_KEY_PLACEHOLDER.to_string(),
-            None => return Availability::Unavailable(
+    if let Err(reason) = validate_endpoint(&base_url) {
+        return Availability::Unavailable(reason);
+    }
+    if !cfg.key_env.trim().is_empty() && api_key(cfg).is_none() {
+        return Availability::Unavailable(
+            "selected engine environment credential is unavailable".into(),
+        );
+    }
+    let key = match api_key(cfg) {
+        Some(k) => k,
+        // A local engine needs no credential - that is the whole point of
+        // running one.
+        None if is_loopback_endpoint(&base_url) => LOCAL_KEY_PLACEHOLDER.to_string(),
+        None if !cfg.credential_provider.is_empty() => {
+            return Availability::Unavailable("selected Jev engine has no credential; use `nur jev login <id>` or select --key-env".into());
+        }
+        None => {
+            return Availability::Unavailable(
                 "no TypeSafe key (set TYPESAFE_API_KEY, or `nur auth login --provider typesafe`), \
                  and this endpoint is not local - a loopback base_url or NUR_JEV_LOCAL_URL needs \
                  no key"
                     .into(),
-            ),
-        };
+            )
+        }
+    };
     let timeout = Duration::from_millis(cfg.timeout_ms.clamp(1_000, 180_000));
     // Keep synchronous callers independent of their surrounding async runtime.
     let http = match off_runtime(|| {
         reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .timeout(timeout)
             .user_agent(format!("nur-cli/{}", env!("CARGO_PKG_VERSION")))
             .build()
@@ -431,6 +488,9 @@ pub fn shared_client(cfg: &TypesafeConfig) -> Option<Arc<TypesafeClient>> {
         return None;
     }
     let base_url = effective_base_url(cfg);
+    if !cfg.key_env.trim().is_empty() && api_key(cfg).is_none() {
+        return None;
+    }
     let key = match api_key(cfg) {
         Some(k) => k,
         // A local bridge needs no key; hosted endpoints still do.
@@ -697,7 +757,9 @@ impl TypesafeClient {
                     let runtime = RUNTIME.get_or_init(|| tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().map_err(|e| e.to_string())).as_ref().map_err(Clone::clone)?;
                     runtime.block_on(async {
                         let request = async {
-                            let response = http.post(&self.base_url).bearer_auth(&self.key).header("content-type", "application/json").json(body).send().await.map_err(|e| e.to_string())?;
+                            let request=http.post(&self.base_url).header("content-type", "application/json").json(body);
+                            let request=if self.key==LOCAL_KEY_PLACEHOLDER {request} else {request.bearer_auth(&self.key)};
+                            let response = request.send().await.map_err(|_| "judgment transport failed".to_string())?;
                             let status = response.status();
                             let text = response.text().await.map_err(|e| e.to_string())?;
                             Ok::<_, String>((status, text))
@@ -717,16 +779,10 @@ impl TypesafeClient {
                     || status.as_u16() == 529
                     || status.is_server_error()
                 {
-                    Err(PostError::Retryable(format!(
-                        "typesafe {status}: {}",
-                        short(&text)
-                    )))
+                    Err(PostError::Retryable(format!("judgment endpoint {status}")))
                 } else {
                     // 401 / 422 are the caller's problem, not a network blip.
-                    Err(PostError::Permanent(format!(
-                        "typesafe {status}: {}",
-                        short(&text)
-                    )))
+                    Err(PostError::Permanent(format!("judgment endpoint {status}")))
                 }
             }
         }
@@ -887,6 +943,17 @@ fn short(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::typesafe::questions::Question;
+
+    #[test]
+    fn missing_selected_environment_key_never_uses_loopback_or_inline_fallback() {
+        let mut config = cfg();
+        config.base_url = "http://127.0.0.1:1/v1/systemone".into();
+        config.api_key = "fixture-legacy-key".into();
+        config.key_env = format!("NUR_JEV_MISSING_{}", uuid::Uuid::new_v4().simple());
+        assert!(api_key(&config).is_none());
+        assert!(!client(&config).is_ready());
+        assert!(shared_client(&config).is_none());
+    }
 
     #[test]
     fn cancellation_stops_retries_and_unscheduled_batches() {
@@ -1269,7 +1336,7 @@ mod tests {
     }
 
     /// The real transport, against a real socket: proves the reqwest path
-    /// (bearer header, request shape, response parsing) without a key or the
+    /// (key isolation, request shape, response parsing) without a key or the
     /// public network.
     #[test]
     fn a_real_http_round_trip_is_parsed() {
@@ -1309,10 +1376,7 @@ mod tests {
             .unwrap_or_default()
             .to_ascii_lowercase();
         assert!(request.starts_with("post /v1/systemone"), "{request}");
-        assert!(
-            request.contains("authorization: bearer round-trip-key"),
-            "{request}"
-        );
+        assert!(!request.contains("authorization:"), "{request}");
         assert!(request.contains("\"model\":\"jev-latest\""), "{request}");
         assert!(request.contains("\"instructions\":\"is it?\""), "{request}");
     }
@@ -1496,12 +1560,13 @@ mod tests {
             "http://localhost:8788/v1/systemone",
             "http://localhost/v1/systemone",
             "https://[::1]:8443/v1/systemone",
-            "http://0.0.0.0:8788",
             "http://user:pass@127.0.0.1:8788/v1/systemone",
         ] {
             assert!(is_loopback_endpoint(local), "{local} is local");
         }
         for remote in [
+            "http://0.0.0.0:8788",
+            "http://host.docker.internal:8788",
             "https://api.typesafe.ai/v1/systemone",
             "https://api.typesafe.ai.127.0.0.1.evil.example/v1/systemone",
             "http://10.0.0.5:8788/v1/systemone",

@@ -6,7 +6,11 @@
 
 **Use fewer paid tokens by default.**
 
+**v0.42.0:** Full [Jev model library](docs/jev-models.md), isolated engine credentials, a [seven-agent usage ledger](docs/ledger.md), native [Enclave MCP](docs/enclave.md), and the /startup-skill workflow router.
+
 **v0.41.0:** [CLI and skills refresh](docs/stack-update-2026-09-30.md): updated Rust and companion stacks, complete pinned skill trees, responsive account controls, safe bridge ownership, prompt cancellation, and long-transcript rendering fixes.
+
+The [full JevBench library](docs/jev-models.md) is available through `nur jev models` and `/jev models`: native endpoints, local library adapters, and model-specific connection recipes. Keys are selected per engine. [Local usage ledger](docs/ledger.md): `nur ledger` or `/ledger` aggregates seven agent log formats without importing keys or prompt content. `/startup-skill` routes to the installed startup validation, competitor research, positioning, and pitch workflows.
 The harness supersedes stale duplicate reads, spills large tool results, preserves provider prompt caches, and compacts repeatedly using an OMP-style response reserve instead of a premature fixed percentage. It also supports local context estimates when providers omit usage, prompt caching, local models, and focused Oh My Pi delegation through a verified authenticated economy model.
 
 **v0.40.1:** `/effort` now says when a route takes no effort field. Chat Completions routes (OpenRouter, Groq, Nous Portal, xAI API keys, local servers) send none, so nur reports that instead of naming a level they never receive; the level stays saved for routes that take one. See [effort levels](docs/configuration.md#reasoning-effort-levels).
@@ -197,8 +201,8 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 | **TUI** | Streaming · duration chips · thought/tool cards · peek · drag-select · scrollbar · sessions · multi-provider `/login` · **`/model` picker** · **`/plugins` marketplace** · `/goal` `/bro` `/adhd` `/scan` `/btw` `/codesearch` `/mc` `/feedback` `/tips` · **every skill as `/name`** · **41 themes including 18 chromatic studies + transparency mode** · **provider logo in the busy line + tab title** · **every path in the transcript is a link that opens** · **block-structured markdown** with theme-role colours · **LaTeX rendering** (image-peek build) · **`/receipt` verifies the hash chain** and exports spans · budgets · doctor |
 | **Agent** | Manual / plan / auto · tools · subagents · todos · auto-compact · session $ / token budgets · Esc cancel · Shift+Tab mid-turn · **NL skill auto-activation** |
 | **Vision** | `look` · `extract_frames` · prompt auto-attach · **compact image attachments with on-demand previews** (Ctrl+V paste or `/image <path>`, F4 preview) |
-| **Tools** | read · edit · bash · web · **browser** (incl. **element picking**) · git · knowledge · agent · **judgments** (`typesafe`) · **memory** (`optmem` `connectome` `mem`) · **diagrams** (`excalidraw` `tldraw` `penecho`) · **policy** (`dogwood`) · **background** (`bg`) · **async** (`admission` `goal` `proposal` `message` `question`) · **docs** (`anydoc`) · **python REPL** (`repl`) · **excalidraw** |
-| **Ecosystem** | Graphify · GraphJin · PLUR · Ruflo · Executor · **TypeSafe/Jev** (+ **keyless local engines**) · **OptMem** · **Headroom** · **Connectome** · **dogwood** · omp · browser · AKM · 1,000+ skills · **`/sc-research` whitehat DeFi + X bounty intel + historical vuln library** · **plugin marketplace** (Fable, Superpowers, Vercel, …) |
+| **Tools** | read · edit · bash · web · **browser** (incl. **element picking**) · git · knowledge · agent · **judgments** (`typesafe`) · **security agents** (`enclave`) · **memory** (`optmem` `connectome` `mem`) · **diagrams** (`excalidraw` `tldraw` `penecho`) · **policy** (`dogwood`) · **background** (`bg`) · **async** (`admission` `goal` `proposal` `message` `question`) · **docs** (`anydoc`) · **python REPL** (`repl`) · **excalidraw** |
+| **Ecosystem** | Graphify · GraphJin · PLUR · Ruflo · Executor · **TypeSafe/Jev** (+ **keyless local engines**) · **Enclave** (security agents over native MCP) · **OptMem** · **Headroom** · **Connectome** · **dogwood** · omp · browser · AKM · 1,000+ skills · **`/sc-research` whitehat DeFi + X bounty intel + historical vuln library** · **plugin marketplace** (Fable, Superpowers, Vercel, …) |
 | **Hardening** | Sandbox · denylist · SSRF blocks · atomic `~/.nur` IO · permissions/hooks · SHA-256 install · `nur doctor` |
 
 ---
@@ -256,6 +260,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 | knowledge | `graphify` `graphjin` `plur` `ruflo` `executor` `skill` `memory` |
 | diagrams | `excalidraw` (hand-drawn `.excalidraw` via excalidraw-cli) · `tldraw` (offline desktop boards) · `penecho` (20k canvas: ink, MathJax, plots) |
 | judgments | `typesafe` (System One typed decisions: gate a call, judge a result, rank, route) |
+| security | `enclave` ([Enclave](https://enclave.ai) security agents over native MCP: pentests, code security review, findings) |
 | memory | `optmem` (permanent, `~/.optmem`) · `connectome` (hierarchical + chronicle) · `mem` (vector/graph router) · `memory` · `plur` `ruflo` |
 | policy | `dogwood` (Cedar + temporal policy over an agent event stream) |
 | context | `context` (RLM store: register/peek/slice/search) · `anydoc` (PDF/DOCX/XLSX → markdown) |
@@ -287,6 +292,12 @@ layer over any `/theme` pick. Details: [docs/vision.md](./docs/vision.md).
 tool gate, result judge, compaction with no summary, skill checks, routing. One
 key, every provider. Details: [docs/typesafe.md](./docs/typesafe.md).
 
+**Enclave:** [Enclave](https://enclave.ai)'s autonomous security agents (pentests,
+code security review, findings, CVE monitoring) through Enclave's MCP server,
+spoken natively - no gateway. Enclave is not a chat provider, so its key is a
+sidecar like TypeSafe's: `nur auth login --provider enclave`, then ask for
+security work or run `/enclave`. Details: [docs/enclave.md](./docs/enclave.md).
+
 ### Ecosystem
 
 The TUI includes an **F6 session inspector** for changes, tools, agents, and
@@ -310,6 +321,7 @@ rendering. See [TUI controls](docs/tui.md#session-inspector-and-compact-activity
 | **[akarso](https://www.npmjs.com/package/akarso)** | Post/schedule across 14 social platforms (`/akarso`; outward-facing calls ask first) |
 | **[Headroom](https://github.com/headroomlabs-ai/headroom)** | Inline tool-result compression (default on; `[headroom] enabled = false` to disable) |
 | **[TypeSafe · Jev](https://docs.typesafe.ai)** | System One typed judgments woven through the harness (`/typesafe` · tool `typesafe`): tool gate, result judge, Jev-scored compaction with no summary, skill checks, routing. Provider-agnostic - one key boosts every provider. See [docs/typesafe.md](./docs/typesafe.md) |
+| **[Enclave](https://enclave.ai)** | Autonomous security agents over native MCP (`/enclave` · tool `enclave`): pentests, code security review, findings, CVE monitoring. Sidecar key, every provider; calls are approval-gated. See [docs/enclave.md](./docs/enclave.md) |
 | **[Local Jev engines](./docs/jev-local.md)** | Same typed contract on this machine, no key: openJev-verdict-2.0 (CPU), Bespoke-Nimble-9B (NVIDIA GPU / Apple Silicon MLX), Laya Core ML (Apple Silicon ANE), plus a mock backend. `nur jev start` · `nur jev use` |
 | **[OptMem](https://github.com/VictorTaelin/OptMem)** | Permanent memory at `~/.optmem` (`/optmem` · `/memo`) |
 | **[egaki](https://github.com/remorses/egaki)** | Image/video gen (`/egaki`; ChatGPT-sub login supported. `/image <path>` is vision attach) |

@@ -1,5 +1,5 @@
 {
-  "total_skills": 1710,
+  "total_skills": 1711,
   "note": "Comprehensive skill intent index - 700+ skills, expanded NL triggers. Must be updated when adding skills per AGENTS.md. Run: python scripts/generate_skill_intents.py",
   "skills": [
     {
@@ -45776,6 +45776,31 @@
         "enriched",
         "jtbd",
         "discovery"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "startup-skill",
+      "description": "Route startup validation, competitive research, positioning, or pitch work to the matching startup-skill workflow. Use when the user asks for startup-skill, startup validation, an idea validation plan, or a startup pitch.",
+      "path": "skills/startup-skill/SKILL.md",
+      "triggers": [
+        "/startup skill",
+        "/startup-skill",
+        "route startup",
+        "startup skill",
+        "startup-skill"
+      ],
+      "keywords": [
+        "startup",
+        "route",
+        "validation",
+        "competitive",
+        "research",
+        "positioning",
+        "pitch",
+        "matching",
+        "workflow",
+        "user"
       ],
       "aliases": []
     },

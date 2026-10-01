@@ -184,6 +184,11 @@ def expected_score(probabilities: dict[str, float], levels: list[str]) -> float:
 
 def answer_for(kind: str, q: dict, probabilities: dict[str, float]) -> dict:
     """Build the TypeSafe answer body for one question."""
+    if '__nur_label_only__' in probabilities:
+        label=probabilities['__nur_label_only__']
+        if kind!='choice' or label not in q['criteria']:
+            raise ContractError('a label-only engine cannot supply this probability judgment')
+        return {'type':'choice','choice':label,'probabilities':{},'confidence':0.0}
     if kind == "choice" and UPSTREAM_INSUFFICIENT in probabilities:
         # Abstention, before any re-projection onto the caller's options: mapping
         # a sentinel-only distribution back onto real labels would fabricate a
@@ -804,7 +809,54 @@ class LayaBackend(Backend):
         return {str(k): float(v) for k, v in probabilities.items()}
 
 
+class AdapterBackend(Backend):
+    """Native library adapters and HTTP transports behind the same contract."""
+    name = "adapter"
+    note = "configured Jev engine adapter"
+    max_state_tokens = 30000
+
+    def __init__(self, args=None):
+        self.args = args
+        self._adapter = None
+        if args and args.model: self.name=args.model
+
+    def available(self):
+        if self.args is None:
+            return False, "choose --engine, or supply --upstream / --adapter"
+        try:
+            from jev_engine_gateway import build_adapter
+            self._adapter = build_adapter(self.args)
+            return True, "adapter ready; model loads on the first judgment"
+        except (ImportError, ValueError, AttributeError) as error:
+            return False, f"adapter unavailable ({type(error).__name__}); check its dependencies and options"
+
+    def decide(self, kind, question, state):
+        from jev_engine_gateway import make_task, validate_probs
+        if self._adapter is None:
+            ok, _ = self.available()
+            if not ok:
+                raise ContractError("configured adapter is unavailable")
+        task = make_task(kind, question, state)
+        try:
+            result = self._adapter.run(task)
+            if not result.ok: raise ValueError('engine declined the judgment')
+            runtime=(getattr(result,'raw',None) or {}).get('runtime',{})
+            if runtime.get('state_truncated') is True:raise ValueError('engine truncated judgment state')
+            if result.probs is None:
+                if kind=='choice' and result.label in task.labels:
+                    return {'__nur_label_only__':result.label}
+                raise ValueError("engine returned no probability distribution")
+            probabilities = validate_probs(result.probs, task.labels)
+            if kind == "noul":
+                return {"true": probabilities["yes"], "false": probabilities["no"]}
+            return probabilities
+        except Exception as error:
+            # Upstream exceptions can contain the request, response, or auth header.
+            raise ContractError(f"adapter judgment failed ({type(error).__name__}); no judgment") from None
+
+
 BACKENDS = {
+    "adapter": AdapterBackend,
     "mock": MockBackend,
     "verdict": VerdictBackend,
     "nimble": NimbleBackend,
@@ -826,6 +878,8 @@ def backend_lock(name: str) -> "threading.RLock":
 
 
 def build_backend(name: str, args: argparse.Namespace) -> Backend:
+    if name == "adapter":
+        return AdapterBackend(args)
     if name == "verdict":
         return VerdictBackend(model=args.verdict_model, device=args.device)
     if name == "nimble":
@@ -1647,6 +1701,13 @@ def selftest() -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Local System One bridge for nur (Jev contract)")
     parser.add_argument("--backend", choices=sorted(BACKENDS), default="mock")
+    parser.add_argument("--model", default=None, help="engine model id or local weights path")
+    parser.add_argument("--upstream", default=None, help="engine API URL; HTTPS or loopback only")
+    parser.add_argument("--protocol", default="systemone")
+    parser.add_argument("--key-env", default="", help="credential environment slot; never a key value")
+    parser.add_argument("--adapter", default=None, help="installed local Python module:Class")
+    parser.add_argument("--adapter-dir", default=None, help="directory of a user-chosen local adapter")
+    parser.add_argument("--adapter-options", default=None, help="non-secret constructor/request options as JSON")
     parser.add_argument("--port", type=int, default=8788)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--device", default="cpu", help="verdict backend device (cpu/cuda/mps)")

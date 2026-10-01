@@ -1,0 +1,34 @@
+{
+  "description": "In manual mode an Enclave call is approval-gated even though listing is free: headless runs have nobody to approve, so the pentest never reaches the server.",
+  "prompt": "Start an Enclave pentest of the staging app.",
+  "mode": "manual",
+  "env": {"ENCLAVE_MCP_API_KEY": "enc_sk_e2e_manual_key_0004"},
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n\n[enclave]\nurl = \"http://127.0.0.1:{port}/mcp\"\n"
+  },
+  "mcp": {
+    "key": "enc_sk_e2e_manual_key_0004",
+    "tools": [
+      {
+        "name": "start_pentest",
+        "description": "Start an autonomous pentest against an in-scope application.",
+        "inputSchema": {"type": "object", "required": ["target"], "properties": {"target": {"type": "string"}}}
+      }
+    ],
+    "results": {"start_pentest": {"content": [{"type": "text", "text": "pentest started"}]}}
+  },
+  "script": [
+    {"tool_calls": [{"name": "enclave", "arguments": {"action": "tools"}}]},
+    {"tool_calls": [{"name": "enclave", "arguments": {"action": "call", "tool": "start_pentest", "arguments": {"target": "https://staging.example.test"}}}]},
+    {"text": "The pentest was not approved."}
+  ],
+  "expect": {
+    "stdout_contains": ["The pentest was not approved."],
+    "requests": 3,
+    "tool_results": [
+      {"request": 2, "contains": ["start_pentest(target: string)"]},
+      {"request": 3, "contains": ["denied"]}
+    ],
+    "mcp": {"methods": ["initialize", "notifications/initialized", "tools/list"]}
+  }
+}

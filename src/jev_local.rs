@@ -67,6 +67,26 @@ pub fn ensure_bridge_script() -> Result<PathBuf> {
     let dir = home();
     std::fs::create_dir_all(&dir)
         .map_err(|e| NurError::Other(format!("cannot create {}: {e}", dir.display())))?;
+    for (relative, body) in crate::jev_resources::RESOURCES {
+        let path = dir.join(relative);
+        let parent = path.parent().expect("resource parent");
+        if dir
+            .symlink_metadata()
+            .is_ok_and(|m| m.file_type().is_symlink())
+            || parent
+                .symlink_metadata()
+                .is_ok_and(|m| m.file_type().is_symlink())
+            || path
+                .symlink_metadata()
+                .is_ok_and(|m| m.file_type().is_symlink())
+        {
+            return Err(NurError::Other(
+                "refusing a symlink Jev resource path".into(),
+            ));
+        }
+        std::fs::create_dir_all(parent)?;
+        crate::config::atomic_write(&path, body.as_bytes())?;
+    }
     let dest = bridge_script();
     if dest
         .symlink_metadata()
@@ -384,9 +404,28 @@ fn spawn_bridge(backend: &str, port: u16, extra: &[String], instance: &str) -> R
     let mut cmd = std::process::Command::new(&py);
     crate::headroom::with_py_launcher(&py, &mut cmd);
     cmd.env("NUR_JEV_INSTANCE", instance);
+    // The credential value never appears in argv, bridge state, or logs.
+    if let Some(index) = extra.iter().position(|v| v == "--credential-provider") {
+        if let Some(provider) = extra.get(index + 1) {
+            if let Some(key) = crate::auth::load_provider_key(provider) {
+                cmd.env("NUR_JEV_ENGINE_KEY", key);
+            }
+        }
+    }
+    let filtered: Vec<_> = extra
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| {
+            !extra
+                .iter()
+                .position(|v| v == "--credential-provider")
+                .is_some_and(|p| *i == p || *i == p + 1)
+        })
+        .map(|(_, v)| v)
+        .collect();
     cmd.arg(&script)
         .args(["--backend", backend, "--port", &port.to_string()])
-        .args(extra)
+        .args(filtered)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
@@ -740,10 +779,21 @@ fn lifecycle_lease() -> Result<std::fs::File> {
     Ok(file)
 }
 
-/// Point nur's TypeSafe layer at the local bridge.
-///
-/// Writes `[typesafe] base_url` so the choice survives restarts; a key is not
-/// required for loopback, so nothing else has to change.
+/// Preserve a legacy inline key before changing its endpoint or credential slot.
+pub fn preserve_inline_credential(cfg: &mut TypesafeConfig) -> Result<()> {
+    if !cfg.api_key.trim().is_empty() {
+        let slot = if cfg.credential_provider.is_empty() {
+            "typesafe"
+        } else {
+            &cfg.credential_provider
+        };
+        crate::auth::save_provider_key(slot, &cfg.api_key)?;
+        cfg.api_key.clear();
+    }
+    Ok(())
+}
+
+/// Point the judgment layer at the local bridge without forwarding hosted keys.
 pub fn use_port(port: u16) -> Result<String> {
     let endpoint = format!("http://127.0.0.1:{port}/v1/systemone");
     // Pointing at a dead port looks identical to a working one from inside the
@@ -752,7 +802,12 @@ pub fn use_port(port: u16) -> Result<String> {
     let live = probe_port(port);
     let mut cfg = crate::config::load_config()?;
     let previous = cfg.typesafe.base_url.clone();
+    preserve_inline_credential(&mut cfg.typesafe)?;
     cfg.typesafe.base_url = endpoint.clone();
+    cfg.typesafe.enabled = true;
+    cfg.typesafe.model.clear();
+    cfg.typesafe.key_env.clear();
+    cfg.typesafe.credential_provider.clear();
     crate::config::save_config(&cfg)?;
     let mut out = format!(
         "typesafe base_url set to {endpoint}\n  previous: {}\n  a loopback endpoint needs no key, \
@@ -785,7 +840,12 @@ pub fn use_port(port: u16) -> Result<String> {
 /// Clear a local base_url, going back to the hosted endpoint.
 pub fn use_hosted() -> Result<String> {
     let mut cfg = crate::config::load_config()?;
+    preserve_inline_credential(&mut cfg.typesafe)?;
+    cfg.typesafe.enabled = true;
     cfg.typesafe.base_url = String::new();
+    cfg.typesafe.key_env.clear();
+    cfg.typesafe.credential_provider.clear();
+    cfg.typesafe.model.clear();
     crate::config::save_config(&cfg)?;
     Ok("typesafe base_url cleared - back to the hosted endpoint (a key is required again)".into())
 }
@@ -805,8 +865,15 @@ pub fn status_lines(cfg: &TypesafeConfig) -> Vec<String> {
     ));
     if let Some(key) = client::key_provenance(cfg) {
         lines.push(format!("credential: {key}"));
+    } else if !cfg.key_env.trim().is_empty() {
+        lines.push(
+            "credential: selected environment slot unavailable - judgments are inactive".into(),
+        );
     } else if local {
         lines.push("credential: none needed (loopback)".into());
+    } else if !cfg.credential_provider.is_empty() {
+        lines
+            .push("credential: selected engine slot unavailable - use `nur jev login <id>`".into());
     } else {
         lines.push("credential: none - hosted judgments are inactive".into());
     }

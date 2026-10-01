@@ -93,6 +93,13 @@ row. It can also run with **no key at all** against a local engine -
 a loopback endpoint needs no credential. See [typesafe.md](./typesafe.md) and
 [jev-local.md](./jev-local.md).
 
+**Enclave · security agents** (id `enclave`) is the second pinned sidecar.
+Enclave exposes an MCP server rather than a chat endpoint, so its key
+(`enc_sk_...`, created under Enclave Settings > MCP) is stored the same scoped
+way: `nur auth login --provider enclave`, `/enclave login`, or
+`ENCLAVE_MCP_API_KEY` (which wins over a saved key). It never becomes your
+active provider. See [enclave.md](./enclave.md).
+
 ## Supported browser and official-CLI sign-in
 
 NurCLI offers an end-to-end browser or official-CLI credential flow for exactly
@@ -437,6 +444,7 @@ Active **provider id / base URL / model** come from `~/.nur/config.toml`
 | Env `NUR_API_KEY` | Optional global override (never printed in logs) |
 | Env `META_API_KEY` | Optional key for the Meta Model API provider |
 | Env `TYPESAFE_API_KEY` | Optional key for the TypeSafe / Jev sidecar (`TYPESAFE_KEY` / `JEV_API_KEY`, or `~/.nur/typesafe.key`; local engines need none) |
+| Env `ENCLAVE_MCP_API_KEY` | Optional key for the Enclave sidecar (wins over `nur auth login --provider enclave`) |
 | Env `NUR_BASE_URL` | Optional API base override (self-hosted) |
 | `~/.nur/sessions/` | Session metadata (no key) |
 | `~/.nur/status.json` | Live token usage (no key) |
@@ -444,3 +452,7 @@ Active **provider id / base URL / model** come from `~/.nur/config.toml`
 
 !!! warning "Never commit"
     Never commit `~/.nur/`, `.env` files with keys, or session dumps containing base64 media.
+
+Jev engine credentials are isolated from chat providers and each other. `nur jev login <engine-id>` uses hidden input and stores the key in Nur's credential store under `jev:<engine-id>`. Alternatively, select an environment variable by name with `--key-env`. Missing selected credentials never fall back to another engine's key. HTTPS is required away from loopback; URLs cannot contain credentials, query parameters, or fragments. [Connection guide](jev-local.md).
+
+`nur ledger` aggregates local usage without importing credentials or requesting provider access. Its optional price refresh downloads only public rates. [Ledger privacy and accounting](ledger.md).

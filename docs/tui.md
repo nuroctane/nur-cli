@@ -347,6 +347,7 @@ The note is appended to your persistent memory file and recalled automatically i
 | `/headroom` | Context-compression status / doctor (inline tool-result compression is on by default) |
 | `/compact` | Honor configured Jev pruning without a summary; preserve history if no prune is possible; write `.precompact.bak` ([details](typesafe.md)) |
 | `/usage` | Show token usage and cost (`/cost`) — includes budget caps when set |
+| `/ledger [today\|7\|month\|all]` | Aggregate local agent usage in the background; charges, estimates, and unpriced requests remain distinct |
 | `/budget` | Optional caps (all **unlimited by default**): `/budget [cost\|tokens\|turns] <n\|unlimited\|0\|off> · clear · save` |
 | `/turns` | Agent rounds per prompt (default unlimited). Alias of `/budget turns` |
 | `/poor` | Toggle cost-saver prompt (skip PLUR/skills/memory; tools full). `/poor status` shows poor + budget. Does **not** set spend caps |
@@ -359,6 +360,12 @@ The note is appended to your persistent memory file and recalled automatically i
 |---------|---------|
 | `/typesafe` · `/jev` | The Jev layer: status, `on`/`off`, and `ask <proposition>` for one judgment by hand. Keyless on this machine through a local engine - see [typesafe.md](./typesafe.md) and [jev-local.md](./jev-local.md) |
 | `/typesafe-ai` | The *skill*: how to design and use judgments (distinct from `/typesafe`, which is the layer's controls) |
+
+### Security agents (Enclave)
+
+| Command | Purpose |
+|---------|---------|
+| `/enclave` | Enclave over native MCP: `status` (default) · `tools [name]` · `login`. Status and tool listing run in the background; see [enclave.md](./enclave.md) |
 
 ### Project and shell
 

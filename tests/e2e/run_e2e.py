@@ -70,15 +70,19 @@ def spawn_process(*args, **kwargs):
     return proc
 
 
-def start_provider(script, workdir):
+def start_provider(script, workdir, mcp=None):
     script_file = workdir / "script.json"
     script_file.write_text(json.dumps(script), encoding="utf-8")
     log = workdir / "requests.jsonl"
     log.write_text("", encoding="utf-8")
     port_file = workdir / "port"
-    proc = spawn_process(
-        [sys.executable, str(HERE / "fake_provider.py"), str(script_file), str(log), str(port_file)]
-    )
+    argv = [sys.executable, str(HERE / "fake_provider.py"), str(script_file), str(log), str(port_file)]
+    if mcp is not None:
+        # The same server also plays a remote MCP server (see FakeMcp).
+        (workdir / "mcp.json").write_text(json.dumps(mcp), encoding="utf-8")
+        (workdir / "mcp.jsonl").write_text("", encoding="utf-8")
+        argv += [str(workdir / "mcp.json"), str(workdir / "mcp.jsonl")]
+    proc = spawn_process(argv)
     deadline = time.time() + 10
     while not (port_file.exists() and port_file.read_text().strip()):
         if time.time() > deadline or proc.poll() is not None:
@@ -113,7 +117,7 @@ def stop_tree(proc):
 
 
 def isolated_env(home, port):
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("NUR_", "OPENAI_", "ANTHROPIC_"))}
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("NUR_", "OPENAI_", "ANTHROPIC_", "ENCLAVE_"))}
     env.update(
         {
             "NUR_HOME": str(home / ".nur"),
@@ -155,9 +159,25 @@ def tool_messages(request):
     return out
 
 
-def check(scenario, result, workspace, requests):
-    expect = scenario.get("expect", {})
+def check_mcp(expect, mcp_requests):
+    """What nur sent the remote MCP server: bearer, method order, call arguments."""
     failures = []
+    bearer = expect.get("bearer")
+    if bearer and any(r.get("auth") != f"Bearer {bearer}" for r in mcp_requests):
+        failures.append("an MCP request lacked the expected bearer key")
+    methods = [r.get("method") for r in mcp_requests]
+    if "methods" in expect and methods != expect["methods"]:
+        failures.append(f"MCP methods {methods}, expected {expect['methods']}")
+    for tool, arguments in expect.get("call_arguments", {}).items():
+        calls = [(r.get("params") or {}) for r in mcp_requests if r.get("method") == "tools/call"]
+        if not any(c.get("name") == tool and c.get("arguments") == arguments for c in calls):
+            failures.append(f"no tools/call of {tool} with {arguments!r}")
+    return failures
+
+
+def check(scenario, result, workspace, requests, mcp_requests=()):
+    expect = scenario.get("expect", {})
+    failures = check_mcp(expect["mcp"], list(mcp_requests)) if "mcp" in expect else []
     if "max_request_gap_seconds" in expect:
         times = [request.get("_received_at_seconds") for request in requests]
         if len(times) < 2 or any(value is None for value in times):
@@ -288,8 +308,9 @@ def run_scenario(binary, scenario_path):
             (workspace / rel).parent.mkdir(parents=True, exist_ok=True)
             (workspace / rel).write_text(text, encoding="utf-8")
         script = expand_workspace_paths(scenario["script"], workspace) if scenario.get("workspace_paths") else scenario["script"]
-        provider, port, log = start_provider(script, tmp)
+        provider, port, log = start_provider(script, tmp, scenario.get("mcp"))
         env = isolated_env(tmp / "home", port)
+        env.update(scenario.get("env", {}))
         if scenario.get("provider"):
             provider_id = scenario["provider"]
             env["OPENAI_API_KEY"] = "e2e-isolated-key"
@@ -303,6 +324,13 @@ def run_scenario(binary, scenario_path):
             text = text.replace("{home}", nur_home.as_posix()).replace("{workspace}", workspace.as_posix()).replace("{port}",str(port))
             (nur_home / rel).parent.mkdir(parents=True, exist_ok=True)
             (nur_home / rel).write_text(text, encoding="utf-8")
+        setup_failures = []
+        for command in scenario.get("setup_commands", []):
+            # CLI steps a user runs first, e.g. `nur auth login --provider ...`.
+            done = subprocess.run([str(binary), *command], env=env, cwd=workspace, stdin=subprocess.DEVNULL,
+                                  capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+            if done.returncode != 0:
+                setup_failures.append(f"setup `nur {' '.join(command)}` exited {done.returncode}: {done.stderr.strip()[:300]}")
         try:
             args = [str(binary), "--cwd", str(workspace), "run"]
             mode = scenario.get("mode", "auto")
@@ -337,9 +365,13 @@ def run_scenario(binary, scenario_path):
         if index.exists() and not WARM_CACHE.exists():
             WARM_CACHE.mkdir(parents=True)
             shutil.copy(index, WARM_CACHE / index.name)
-        failures = check(scenario, result, workspace, requests)
+        mcp_log = tmp / "mcp.jsonl"
+        mcp_requests = [json.loads(line) for line in mcp_log.read_text(encoding="utf-8").splitlines() if line] if mcp_log.exists() else []
+        failures = setup_failures + check(scenario, result, workspace, requests, mcp_requests)
         files = sorted(str(p.relative_to(workspace)) for p in workspace.rglob("*") if p.is_file())
         shutil.copy(log, out / "requests.jsonl")
+        if mcp_log.exists():
+            shutil.copy(mcp_log, out / "mcp_requests.jsonl")
     finally:
         leftover = remove_tree(tmp)
     if leftover:

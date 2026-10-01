@@ -1,0 +1,22 @@
+{
+  "description": "An Enclave key the server rejects (here from ENCLAVE_MCP_API_KEY) reaches the model as the server's reason plus how to replace the key, and nothing past initialize is attempted.",
+  "prompt": "Check what Enclave can do.",
+  "env": {"ENCLAVE_MCP_API_KEY": "enc_sk_expired_e2e_key_0002"},
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n\n[enclave]\nurl = \"http://127.0.0.1:{port}/mcp\"\n"
+  },
+  "mcp": {"key": "enc_sk_current_e2e_key_0003", "tools": []},
+  "script": [
+    {"tool_calls": [{"name": "enclave", "arguments": {"action": "tools"}}]},
+    {"text": "The Enclave key needs replacing."}
+  ],
+  "expect": {
+    "stdout_contains": ["The Enclave key needs replacing."],
+    "requests": 2,
+    "tool_results": [
+      {"request": 2, "contains": ["Enclave rejected the key", "Missing or invalid Authorization header", "nur auth login --provider enclave"]}
+    ],
+    "requests_lack": ["enc_sk_expired_e2e_key_0002"],
+    "mcp": {"methods": ["initialize"]}
+  }
+}

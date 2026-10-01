@@ -93,6 +93,8 @@ auto_update = true
 | `compaction.remote_endpoint` | string | unset | OMP-compatible compact URL; setting it opts in. Supports `{systemPrompt,prompt}` endpoints and OpenAI `/chat/completions`; failures fall back locally. The bounded transcript crosses this configured remote data boundary. Nur records endpoint origin, bounded input estimate, output estimate, and provider usage when returned in the session receipt. Env: `NUR_COMPACT_REMOTE_ENDPOINT` (+ `NUR_COMPACT_REMOTE=1` if only env) |
 | `typesafe.enabled` | bool | `true` | [TypeSafe](https://docs.typesafe.ai) (Jev) typed judgments for the harness: tool gate, result judge, Jev-scored compaction, skill checks, model routing. Needs a key (`TYPESAFE_API_KEY` or `/auth`); with none, every policy returns "no judgment" and behavior is unchanged. Full reference: [typesafe.md](./typesafe.md) |
 | `typesafe.model` | string | `jev-latest` | System One model that answers the questions |
+| `typesafe.key_env` | string | empty | Exclusive environment variable name for a selected Jev engine; never the key value |
+| `typesafe.credential_provider` | string | empty | Exclusive credential-store slot, set to `jev:<id>` by `nur jev use --engine <id>` |
 | `typesafe.base_url` | string | `https://api.typesafe.ai/v1/systemone` | System One endpoint. A **loopback** URL (127.0.0.1 / localhost / `[::1]`) needs no key and runs the whole judgment layer against a local engine - see [jev-local.md](./jev-local.md) |
 | `typesafe.act_confidence` | float | `0.85` | Confidence at or above which a judgment may change behavior |
 | `typesafe.escalate_confidence` | float | `0.5` | Below this the judgment is handed to a bigger model or a human instead of being acted on |
@@ -126,6 +128,8 @@ auto_update = true
 | `typesafe.routing.suggest` | bool | `true` | Show routing decisions in the transcript |
 | `typesafe.tools.subset` | bool | `false` | Narrow the tool surface on the first round of a turn (one Noul per specialist; later rounds get the full surface). Off because tool schemas ride the prompt cache |
 | `typesafe.tools.keep_probability` | float | `0.75` | How confident the answer must be that a tool is *not* needed before it is dropped (keeping is the safe direction) |
+| `enclave.url` | string | `https://mcp.enclave.ai/` | [Enclave](./enclave.md) MCP endpoint (empty = default). https only; plain http only for a loopback host. The key comes from `ENCLAVE_MCP_API_KEY` or the credential store, never this file |
+| `enclave.timeout_secs` | integer | `120` | Upper bound on one Enclave MCP request |
 | `headroom.enabled` | bool | `true` | [Headroom](https://github.com/headroomlabs-ai/headroom) inline compression of large tool results (needs the `headroom-ai` package; missing package = no-op) |
 | `headroom.mode` | string | `inline` | `inline` compresses tool results before they enter model context; `off` disables (proxy mode reserved) |
 | `headroom.min_chars` | integer | `2000` | Skip compression below this many chars |

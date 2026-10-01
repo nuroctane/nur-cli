@@ -1311,7 +1311,14 @@ fn draw_login_key(f: &mut Frame, app: &mut App, area: Rect) {
     let provider = crate::providers::by_id(&m.provider_id)
         .copied()
         .unwrap_or(*crate::providers::default_provider());
-    let want: u16 = if m.error.is_some() { 12 } else { 11 };
+    // A sidecar's hint takes two rows: the title already names it, and one
+    // row cannot hold what it serves plus its env var at the modal's width.
+    let hint_rows: u16 = if crate::providers::is_sidecar_provider(provider.id) {
+        2
+    } else {
+        1
+    };
+    let want: u16 = hint_rows + if m.error.is_some() { 11 } else { 10 };
     let rect = fit_modal_rect(area, 64, want, 44, 8);
     f.render_widget(Clear, rect);
     f.render_widget(
@@ -1323,7 +1330,11 @@ fn draw_login_key(f: &mut Frame, app: &mut App, area: Rect) {
     let title = if sidecar {
         // Not an error and not the active model: a credential that lifts every
         // provider, so it gets its own framing rather than the generic key modal.
-        format!(" ⚡ {} · boost layer key ", provider.name)
+        format!(
+            " ⚡ {} · {} ",
+            provider.name,
+            crate::providers::sidecar_role(provider.id).key_title
+        )
     } else if m.fallback_key {
         format!(" ↻ {} · provider-scoped key ", provider.name)
     } else {
@@ -1347,17 +1358,26 @@ fn draw_login_key(f: &mut Frame, app: &mut App, area: Rect) {
         field.push('▉');
     }
     let key_hint = if sidecar {
-        format!(
-            "{} key · env {} · typed judgments for every provider (not your active model)",
-            provider.name, provider.env_key
-        )
+        vec![
+            format!(
+                "{}, not your active model",
+                crate::providers::sidecar_role(provider.id).serves
+            ),
+            format!("or set {} instead of saving a key", provider.env_key),
+        ]
     } else if provider.key_optional {
-        format!("{} API key  (optional for local)", provider.name)
+        vec![format!("{} API key  (optional for local)", provider.name)]
     } else {
-        format!("{} API key  ·  env {}", provider.name, provider.env_key)
+        vec![format!(
+            "{} API key  ·  env {}",
+            provider.name, provider.env_key
+        )]
     };
-    let mut lines: Vec<Line> = vec![
-        Line::from(Span::styled(format!("  {key_hint}"), theme::style_faint())),
+    let mut lines: Vec<Line> = key_hint
+        .into_iter()
+        .map(|hint| Line::from(Span::styled(format!("  {hint}"), theme::style_faint())))
+        .collect();
+    lines.extend([
         Line::default(),
         Line::from(vec![
             Span::raw("  ".to_string()),
@@ -1388,11 +1408,15 @@ fn draw_login_key(f: &mut Frame, app: &mut App, area: Rect) {
         Line::from(vec![
             Span::raw("  ".to_string()),
             Span::styled(
-                format!("model {}  ·  {}", provider.default_model, provider.base_url),
+                if provider.default_model.is_empty() {
+                    format!("endpoint {}", provider.base_url)
+                } else {
+                    format!("model {}  ·  {}", provider.default_model, provider.base_url)
+                },
                 theme::style_faint(),
             ),
         ]),
-    ];
+    ]);
     if let Some(e) = &m.error {
         lines.push(Line::default());
         lines.push(Line::from(vec![
@@ -4160,7 +4184,7 @@ fn sg_cat_for_tool(name: &str) -> SgCat {
         // execution
         "bash" | "extract_frames" | "excalidraw" | "tldraw" => SgCat::Exec,
         // agent / delegation
-        "agent" | "omp" | "fractal" => SgCat::Agent,
+        "agent" | "omp" | "fractal" | "enclave" => SgCat::Agent,
         // knowledge / memory / planning
         "graphify" | "graphjin" | "plur" | "ruflo" | "memory" | "skill" | "todo_write"
         | "submit_plan" | "akarso" | "executor" | "penecho" | "t3code" => SgCat::Knowledge,

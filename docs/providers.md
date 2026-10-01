@@ -13,6 +13,10 @@ credential that gives every provider typed judgments, not a chat model, so
 selecting it stores a key and never becomes your active provider. It can also
 run with no key at all against a local engine (`NUR_JEV_LOCAL_URL`; see
 [jev-local.md](./jev-local.md)). See [typesafe.md](./typesafe.md).
+**Enclave · security agents** (id `enclave`) is pinned beside it on the same
+terms: Enclave serves MCP, not chat, so its key (`ENCLAVE_MCP_API_KEY`) gives
+every provider Enclave's security agents through the `enclave` tool. See
+[enclave.md](./enclave.md).
 `R` means Nur sends the Responses shape (`/responses`); `CC` means Chat
 Completions (`/chat/completions`); `AM` means the native Anthropic Messages
 shape (`/v1/messages`); and `GCC` means Google's Cloud Code native
