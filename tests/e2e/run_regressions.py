@@ -161,24 +161,27 @@ def account_lock(binary, action):
             term.type_text('/login openai'); term.write('\r')
             term.until('how to sign in', 5)
             # The API-key method is the second route after browser auth.
-            term.write('\x1b[B'); term.feed(.2); term.write('\r')
+            term.write('\x1b[B'); term.pump(.2); term.write('\r')
             term.until('API key', 5)
-            for char in 'synthetic-key': term.write(char); term.feed(.025)
-            term.write('\r'); term.feed(.1)
-            term.write('\x1b'); term.feed(.2); term.write('\x1b'); term.feed(.2)
-            term.write('\x1b'); term.feed(.2)
+            for char in 'synthetic-key': term.write(char); term.pump(.025)
+            term.write('\r'); term.pump(.1)
+            term.write('\x1b'); term.pump(.2); term.write('\x1b'); term.pump(.2)
+            term.write('\x1b'); term.pump(.2)
+            term.until('login dismissed', 5, found=lambda: all(
+                marker not in '\n'.join(term.screen.display)
+                for marker in ['choose a provider', 'how to sign in', 'API key']))
         elif action == 'model':
             term.type_text('/model chosen-model'); term.write('\r')
             term.until('model → chosen-model', 5)
         elif action == 'delete':
             term.type_text('/auth'); term.write('\r')
             term.until('auth vault', 5)
-            for char in 'github': term.write(char); term.feed(.025)
-            term.write('\x1b[3~'); term.feed(.2); term.write('\x1b'); term.feed(.2)
+            for char in 'github': term.write(char); term.pump(.025)
+            term.write('\x1b[3~'); term.pump(.2); term.write('\x1b'); term.pump(.2)
         term.type_text('ACCOUNT_WORKER_STILL_EDITABLE_7218')
         assert not (work / 'release').exists()
         # Quit must not wait for the store lease or the still-blocked refresh.
-        term.write('\x15'); term.feed(.2)
+        term.write('\x15'); term.pump(.2)
         term.type_text('/quit'); term.write('\r')
         wait_for(lambda: not term.proc.isalive() if os.name == 'nt' else term.proc.poll() is not None, 5)
     finally:
@@ -213,13 +216,13 @@ def cancelled_judgment(binary, provider_name='vllm', model='e2e-model'):
         term.write('\x1b')
         # Drain cancellation completion before asking for a new session.
         end = time.monotonic() + 1
-        while time.monotonic() < end: term.feed(.05)
+        while time.monotonic() < end: term.pump(.05)
         term.type_text('/new'); term.write('\r'); term.until('new session', 3)
         assert 'STALE_QUESTION_8512' not in '\n'.join(term.screen.display)
         requests_at_cancel = len(counts)
         release.set()
         end = time.monotonic() + .8
-        while time.monotonic() < end: term.feed(.05)
+        while time.monotonic() < end: term.pump(.05)
         assert len(counts) == requests_at_cancel, 'cancelled judgment made a later retry'
         assert 'STALE_QUESTION_8512' not in '\n'.join(term.screen.display)
         assert not (workspace / 'should-not-exist').exists()

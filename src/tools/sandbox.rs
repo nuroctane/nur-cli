@@ -380,26 +380,29 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn rejects_linked_outside_reads_and_new_writes() {
-        let tree = tempfile::tempdir().unwrap();
-        let root = tree.path().join("workspace");
-        let outside = tree.path().join("outside");
+        let tree = std::env::temp_dir().join(format!("nur-sandbox-links-{}", uuid::Uuid::new_v4()));
+        let root = tree.join("workspace");
+        let outside = tree.join("outside");
         fs::create_dir_all(&root).unwrap();
         fs::create_dir_all(&outside).unwrap();
         fs::write(outside.join("existing.txt"), "outside").unwrap();
         std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
         assert!(resolve_in_workspace(&root, "link/existing.txt").is_err());
         assert!(resolve_in_workspace(&root, "link/new/nested.txt").is_err());
+        fs::remove_dir_all(tree).unwrap();
     }
 
     #[cfg(unix)]
     #[test]
     fn rejects_dangling_links_before_the_target_is_created() {
-        let tree = tempfile::tempdir().unwrap();
-        let root = tree.path().join("workspace");
+        let tree =
+            std::env::temp_dir().join(format!("nur-sandbox-dangling-{}", uuid::Uuid::new_v4()));
+        let root = tree.join("workspace");
         fs::create_dir_all(&root).unwrap();
-        std::os::unix::fs::symlink(tree.path().join("uncreated"), root.join("link")).unwrap();
+        std::os::unix::fs::symlink(tree.join("uncreated"), root.join("link")).unwrap();
         assert!(resolve_in_workspace(&root, "link").is_err());
         assert!(resolve_in_workspace(&root, "link/new.txt").is_err());
+        fs::remove_dir_all(tree).unwrap();
     }
 
     #[test]

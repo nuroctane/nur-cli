@@ -380,15 +380,11 @@ fn spawn_bridge(backend: &str, port: u16, extra: &[String], instance: &str) -> R
     // interpreter as its *child*, so `state.pid` would name a process whose death
     // leaves the engine running and holding the port (`nur jev stop` then reported
     // "stopped" while the bridge kept answering). Resolve it first.
-    let (py, launcher_args) = match resolve_interpreter(&py) {
-        Some(real) => (real, Vec::new()),
-        None => (py, vec!["-3".to_string()]),
-    };
+    let py = resolve_interpreter(&py).unwrap_or(py);
     let mut cmd = std::process::Command::new(&py);
     crate::headroom::with_py_launcher(&py, &mut cmd);
     cmd.env("NUR_JEV_INSTANCE", instance);
-    cmd.args(&launcher_args)
-        .arg(&script)
+    cmd.arg(&script)
         .args(["--backend", backend, "--port", &port.to_string()])
         .args(extra)
         .stdin(std::process::Stdio::null())

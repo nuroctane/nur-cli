@@ -114,6 +114,12 @@ class Terminal:
             self.feed(.05)
         raise AssertionError(f'Screen never contained {text!r}: {ascii(chr(10).join(self.screen.display))}')
 
+    def pump(self, duration):
+        """Process terminal output for a real interval, including escape decoding."""
+        deadline = time.monotonic() + duration
+        while (remaining := deadline - time.monotonic()) > 0:
+            self.feed(min(.05, remaining))
+
     def draft_ends_with(self, text):
         # Each frame leaves the terminal cursor on the draft's caret, so the
         # draft is what precedes it. Rows between `║` borders are the palette.

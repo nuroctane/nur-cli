@@ -145,6 +145,10 @@ skill preparation before the first request does not mask process cleanup latency
 Windows short-path aliases resolve to the same workspace identity for existing
 reads and new nested writes. Parent escapes and symlink/junction escapes remain
 blocked, including links whose targets have not been created.
+Local bridge launch adds the Python-version flag only for the Windows `py`
+launcher; direct Python interpreters on Unix and Windows receive the script
+without that flag. The ownership regression verifies repeated start, nonce
+validation and shutdown on both platforms.
 In the local release terminal checks, first paint took 0.281-0.484 seconds with
 preparation workers blocked. Login, help, effort, context, a new session,
 workspace changes and quit all worked while indexing was held.
