@@ -69,12 +69,11 @@ pub fn resolve_in_workspace(cwd: &Path, path: &str) -> Result<PathBuf> {
     let lexical = normalize_path(&joined);
     let cwd_norm = normalize_path(&cwd_canon);
 
-    if !path_is_within(&lexical, &cwd_norm) {
-        return Err(escape_err(&lexical, &cwd_norm));
-    }
-
-    // If it exists, re-check via canonicalize (symlink / junction escape).
-    if lexical.exists() {
+    // Compare filesystem identity before spelling: Windows short names may be
+    // lexically outside the canonical root while naming files inside it.
+    // Include dangling links so failed canonicalization cannot permit a write
+    // through a link whose target does not exist yet.
+    if std::fs::symlink_metadata(&lexical).is_ok() {
         let real = lexical
             .canonicalize()
             .map(|p| strip_verbatim(&p))
@@ -89,21 +88,28 @@ pub fn resolve_in_workspace(cwd: &Path, path: &str) -> Result<PathBuf> {
     // existing ancestor to catch junction/symlink parents.
     let mut anc = lexical.as_path();
     while let Some(parent) = anc.parent() {
-        if parent.exists() {
+        if std::fs::symlink_metadata(parent).is_ok() {
             let real_parent = parent
                 .canonicalize()
                 .map(|p| strip_verbatim(&p))
                 .map_err(|e| NurError::Tool(format!("resolve {}: {e}", parent.display())))?;
-            if !path_is_within(&real_parent, &cwd_canon) && !path_is_within(&real_parent, &cwd_norm)
-            {
-                return Err(escape_err(&real_parent, &cwd_norm));
+            let suffix = lexical
+                .strip_prefix(parent)
+                .map_err(|e| NurError::Tool(format!("resolve {}: {e}", lexical.display())))?;
+            let resolved = real_parent.join(suffix);
+            if !path_is_within(&resolved, &cwd_norm) {
+                return Err(escape_err(&resolved, &cwd_norm));
             }
-            break;
+            return Ok(resolved);
         }
         anc = parent;
     }
 
-    Ok(lexical)
+    if path_is_within(&lexical, &cwd_norm) {
+        Ok(lexical)
+    } else {
+        Err(escape_err(&lexical, &cwd_norm))
+    }
 }
 
 /// Resolve a path for **read** tools: workspace sandbox, plus nur tool-result
@@ -369,6 +375,31 @@ mod tests {
         #[cfg(not(windows))]
         let outside = "/etc/hosts";
         assert!(resolve_in_workspace(&root, outside).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_linked_outside_reads_and_new_writes() {
+        let tree = tempfile::tempdir().unwrap();
+        let root = tree.path().join("workspace");
+        let outside = tree.path().join("outside");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("existing.txt"), "outside").unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+        assert!(resolve_in_workspace(&root, "link/existing.txt").is_err());
+        assert!(resolve_in_workspace(&root, "link/new/nested.txt").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_dangling_links_before_the_target_is_created() {
+        let tree = tempfile::tempdir().unwrap();
+        let root = tree.path().join("workspace");
+        fs::create_dir_all(&root).unwrap();
+        std::os::unix::fs::symlink(tree.path().join("uncreated"), root.join("link")).unwrap();
+        assert!(resolve_in_workspace(&root, "link").is_err());
+        assert!(resolve_in_workspace(&root, "link/new.txt").is_err());
     }
 
     #[test]

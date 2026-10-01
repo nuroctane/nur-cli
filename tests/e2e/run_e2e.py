@@ -240,6 +240,36 @@ def remove_tree(path):
     return locked
 
 
+def expand_workspace_paths(value, workspace):
+    """Use absolute file aliases in black-box sandbox cases."""
+    short = str(workspace)
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.GetShortPathNameW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+        kernel.GetShortPathNameW.restype = wintypes.DWORD
+        buffer = ctypes.create_unicode_buffer(32768)
+        length = kernel.GetShortPathNameW(short, buffer, len(buffer))
+        if not length or length >= len(buffer):
+            raise OSError(ctypes.get_last_error(), "could not resolve workspace alias")
+        short = buffer.value
+    aliases = {"{workspace}": workspace.as_posix(), "{workspace_alias}": Path(short).as_posix()}
+
+    def expand(item):
+        if isinstance(item, str):
+            for token, path in aliases.items():
+                item = item.replace(token, path)
+            return item
+        if isinstance(item, list):
+            return [expand(child) for child in item]
+        if isinstance(item, dict):
+            return {key: expand(child) for key, child in item.items()}
+        return item
+
+    return expand(value)
+
+
 def run_scenario(binary, scenario_path):
     scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
     name = scenario_path.stem
@@ -257,7 +287,8 @@ def run_scenario(binary, scenario_path):
         for rel, text in scenario.get("setup_files", {}).items():
             (workspace / rel).parent.mkdir(parents=True, exist_ok=True)
             (workspace / rel).write_text(text, encoding="utf-8")
-        provider, port, log = start_provider(scenario["script"], tmp)
+        script = expand_workspace_paths(scenario["script"], workspace) if scenario.get("workspace_paths") else scenario["script"]
+        provider, port, log = start_provider(script, tmp)
         env = isolated_env(tmp / "home", port)
         if scenario.get("provider"):
             provider_id = scenario["provider"]

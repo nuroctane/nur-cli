@@ -1,0 +1,22 @@
+{
+  "description": "Absolute paths using Windows short aliases must allow workspace reads and nested writes while rejecting parent escapes.",
+  "prompt": "Read the workspace fixture, write its nested output, then check that writing outside is rejected.",
+  "workspace_paths": true,
+  "setup_files": {"fixture.txt": "workspace alias fixture"},
+  "script": [
+    {"tool_calls": [{"name": "read_file", "arguments": {"path": "{workspace_alias}/fixture.txt"}}]},
+    {"tool_calls": [{"name": "write_file", "arguments": {"path": "{workspace_alias}/new/nested/result.txt", "contents": "alias write succeeded"}}]},
+    {"tool_calls": [{"name": "write_file", "arguments": {"path": "{workspace_alias}/../escaped.txt", "contents": "must not escape"}}]},
+    {"text": "Workspace aliases checked."}
+  ],
+  "expect": {
+    "stdout_contains": ["Workspace aliases checked."],
+    "requests": 4,
+    "files": {"new/nested/result.txt": "alias write succeeded"},
+    "absent_files": ["../escaped.txt"],
+    "tool_results": [
+      {"request": 2, "contains": ["workspace alias fixture"]},
+      {"request": 4, "contains": ["path escapes workspace sandbox"]}
+    ]
+  }
+}
