@@ -162,11 +162,12 @@ def account_lock(binary, action):
             term.until('how to sign in', 5)
             # The API-key method is the second route after browser auth.
             term.write('\x1b[B'); term.pump(.2); term.write('\r')
-            term.until('API key', 5)
+            term.until('env OPENAI_API_KEY', 5)
             for char in 'synthetic-key': term.write(char); term.pump(.025)
             term.write('\r'); term.pump(.1)
-            term.write('\x1b'); term.pump(.2); term.write('\x1b'); term.pump(.2)
-            term.write('\x1b'); term.pump(.2)
+            term.write('\x1b'); term.until('how to sign in', 5)
+            term.write('\x1b'); term.until('choose a provider', 5)
+            term.write('\x1b')
             term.until('login dismissed', 5, found=lambda: all(
                 marker not in '\n'.join(term.screen.display)
                 for marker in ['choose a provider', 'how to sign in', 'API key']))
