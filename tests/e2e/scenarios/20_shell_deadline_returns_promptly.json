@@ -8,7 +8,7 @@
   "expect": {
     "stdout_contains": ["The command timed out and control returned."],
     "requests": 2,
-    "max_seconds": 15,
+    "max_request_gap_seconds": 10,
     "tool_results": [{"request": 2, "contains": ["timed out after 1000ms"]}]
   }
 }

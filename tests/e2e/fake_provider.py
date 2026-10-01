@@ -16,6 +16,7 @@ Usage: python fake_provider.py <script.json> <requests.jsonl> <port-file>
 import json
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 EXHAUSTED = "[fake provider: script exhausted]"
@@ -32,7 +33,7 @@ class State:
         with self.lock:
             self.count += 1
             with open(self.log_path, "a", encoding="utf-8") as log:
-                log.write(json.dumps(body) + "\n")
+                log.write(json.dumps({**body, "_received_at_seconds": time.monotonic()}) + "\n")
             if self.replies and self.replies[0].get("max_envelope_chars"):
                 ceiling = self.replies[0]["max_envelope_chars"]
                 reserve = body.get("max_output_tokens", body.get("max_tokens", body.get("max_completion_tokens",0))) or 0

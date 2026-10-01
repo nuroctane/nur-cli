@@ -33,7 +33,9 @@ WARM_CACHE = OUT / ".warm-cache"
 
 def find_binary(explicit):
     if explicit:
-        return Path(explicit)
+        # Scenarios change cwd to a throwaway workspace. Resolve while still
+        # in the caller's directory; Unix exec resolves relative paths after cwd.
+        return Path(explicit).expanduser().resolve()
     for profile in ("release", "debug"):
         candidate = ROOT / "target" / profile / f"nur{EXE}"
         if candidate.exists():
@@ -89,6 +91,8 @@ def start_provider(script, workdir):
 def stop_tree(proc):
     """Kill a process and its children. On Windows sys.executable can be a venv
     launcher whose real interpreter is a child that plain kill() leaves running."""
+    if proc.poll() is not None and not getattr(proc, "_nur_job", None):
+        return
     if os.name == "nt":
         tracking = getattr(proc, "_nur_job", None)
         if tracking:
@@ -103,7 +107,9 @@ def stop_tree(proc):
                 proc.kill()
     else:
         proc.kill()
-    proc.wait()
+    if proc.poll() is None:
+        proc.kill()
+    proc.wait(timeout=5)
 
 
 def isolated_env(home, port):
@@ -149,11 +155,15 @@ def tool_messages(request):
     return out
 
 
-def check(scenario, result, workspace, requests, elapsed=None):
+def check(scenario, result, workspace, requests):
     expect = scenario.get("expect", {})
     failures = []
-    if "max_seconds" in expect and elapsed is not None and elapsed > expect["max_seconds"]:
-        failures.append(f"scenario took {elapsed:.2f}s, expected at most {expect['max_seconds']}s")
+    if "max_request_gap_seconds" in expect:
+        times = [request.get("_received_at_seconds") for request in requests]
+        if len(times) < 2 or any(value is None for value in times):
+            failures.append("missing provider receipt times for the shell deadline check")
+        elif max(right - left for left, right in zip(times, times[1:])) > expect["max_request_gap_seconds"]:
+            failures.append("tool execution exceeded the allowed model request interval")
     if result.returncode != expect.get("exit_code", 0):
         failures.append(f"exit code {result.returncode}, expected {expect.get('exit_code', 0)}")
     for needle in expect.get("stdout_contains", []):
@@ -172,7 +182,7 @@ def check(scenario, result, workspace, requests, elapsed=None):
     if "min_requests" in expect and len(requests) < expect["min_requests"]:
         failures.append(f"only {len(requests)} requests, expected at least {expect['min_requests']}")
     if expect.get("last_request_max_envelope_chars") and requests:
-        request = requests[-1]
+        request = {key: value for key, value in requests[-1].items() if not key.startswith("_")}
         reserve = request.get("max_output_tokens",request.get("max_tokens",request.get("max_completion_tokens",0))) or 0
         if len(json.dumps(request,ensure_ascii=False)) + reserve*4 > expect["last_request_max_envelope_chars"]:
             failures.append("final request did not fit the provider envelope")
@@ -288,6 +298,7 @@ def run_scenario(binary, scenario_path):
                 stdout, stderr = child.communicate()
                 result = subprocess.CompletedProcess(args, -1, stdout or "", (stderr or "") + "\n[timed out]")
             elapsed = time.time() - started
+            stop_tree(child)
         finally:
             stop_tree(provider)
         requests = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line]
@@ -295,7 +306,7 @@ def run_scenario(binary, scenario_path):
         if index.exists() and not WARM_CACHE.exists():
             WARM_CACHE.mkdir(parents=True)
             shutil.copy(index, WARM_CACHE / index.name)
-        failures = check(scenario, result, workspace, requests, elapsed)
+        failures = check(scenario, result, workspace, requests)
         files = sorted(str(p.relative_to(workspace)) for p in workspace.rglob("*") if p.is_file())
         shutil.copy(log, out / "requests.jsonl")
     finally:

@@ -135,12 +135,14 @@ rejection of unreviewed upstream credentials before any tree is copied. Two
 helper API tests verify inline compression, returned message selection and
 explicit file-read protection.
 
-The real binary passes 18 headless scenarios with one existing policy scenario
+The real binary passes 19 headless scenarios with one existing policy scenario
 explicitly skipped, all ten startup cases and all ten terminal regression cases.
 Coverage includes Chat Completions, Responses and Anthropic Messages, streamed
 tool calls, context-rejection recovery, blocked credentials, queued resets,
 external skill additions, bridge ownership and cancelled judgments.
-In the local release terminal checks, first paint took 0.281-0.312 seconds with
+The shell deadline scenario checks the interval between model requests so cold
+skill preparation before the first request does not mask process cleanup latency.
+In the local release terminal checks, first paint took 0.281-0.484 seconds with
 preparation workers blocked. Login, help, effort, context, a new session,
 workspace changes and quit all worked while indexing was held.
 
