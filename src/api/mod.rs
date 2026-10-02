@@ -7,6 +7,7 @@ pub mod fusion;
 pub mod gemini;
 pub mod local;
 pub mod models;
+pub mod perplexity;
 pub mod sse;
 pub mod types;
 

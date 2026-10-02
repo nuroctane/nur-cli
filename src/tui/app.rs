@@ -273,7 +273,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/context", "context-window utilization for this session"),
     ("/status", "session snapshot: model · mode · cwd · tokens"),
     ("/doctor", "health check: version · auth · ecosystem · shell"),
-    ("/permissions", "show or reload allow/deny/ask rules (permissions.toml)"),
+    ("/permissions", "show, reload or trust allow/deny/ask rules (permissions.toml)"),
     ("/hooks", "show local tool hook status (hooks.toml)"),
     ("/model", "show and switch models  (/models)"),
     ("/models", "show and switch models  (alias of /model)"),
@@ -2916,6 +2916,11 @@ pub async fn run_tui(
     if let Some(note) = workspace_note {
         app.push_note(Tone::Session, note);
     }
+    if let Some(note) = app.permissions.held_notice() {
+        app.push_note(Tone::Skill, note);
+    }
+    // Fetched while the user types, not in front of the first request.
+    crate::agent::prompt::prefetch_slow_sources(&app.cwd, &app.cfg);
     // Open screen is just the banner (splash · model · provider · cwd · session).
     // Ecosystem / mode / feature maps: /ecosystem · /mode · /help.
 

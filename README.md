@@ -17,7 +17,7 @@ The harness supersedes stale duplicate reads, spills large tool results, preserv
 </p>
 
 <p align="center">
-  <a href="https://www.nuroctane.xyz/cli#demo"><img src="docs/assets/nur-demo.webp" alt="NurCLI demo: an approval with its inline diff, live theme previews in 3D, and the 65-provider login vault" width="760"></a>
+  <a href="https://www.nuroctane.xyz/cli#demo"><img src="https://www.nuroctane.xyz/assets/nur-demo-poster.jpg" alt="NurCLI demo: the gold TUI with its live sidegraph, an inline diff and the fixed calc suite" width="760"></a>
   <br>
   <sub><a href="https://www.nuroctane.xyz/cli#demo">Watch the full demo</a></sub>
 </p>

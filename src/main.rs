@@ -147,6 +147,16 @@ async fn real_main() -> Result<()> {
             print_usage_summary()?;
             return Ok(());
         }
+        Some(Commands::Permissions { action }) => {
+            let requested = cli
+                .cwd
+                .as_ref()
+                .map(PathBuf::from)
+                .unwrap_or(std::env::current_dir()?);
+            let (cwd, _) = tools::resolve_safe_workspace(&requested, cli.cwd.is_some())?;
+            run_permissions_cli(action.as_ref(), &cwd)?;
+            return Ok(());
+        }
         Some(Commands::Ledger { period, json, home, refresh_prices }) => {
             let report=ledger::run(period,home.as_deref(),*refresh_prices)?;
             println!("{}",if *json {serde_json::to_string_pretty(&report)?} else {ledger::format(&report)});
@@ -651,6 +661,7 @@ async fn real_main() -> Result<()> {
         }
         Some(Commands::Auth { .. })
         | Some(Commands::Usage)
+        | Some(Commands::Permissions { .. })
         | Some(Commands::Sessions { .. })
         | Some(Commands::InstallHook)
         | Some(Commands::Install)
@@ -687,6 +698,37 @@ fn maybe_auto_update_on_launch(command: &Option<Commands>) -> bool {
     // Missing/corrupt config must not disable updates — default on.
     let enabled = load_config().map(|c| c.auto_update).unwrap_or(true);
     bootstrap::maybe_auto_update_on_launch(enabled)
+}
+
+fn run_permissions_cli(action: Option<&cli::PermissionsCmd>, cwd: &std::path::Path) -> Result<()> {
+    use agent::permissions::{trust_project, untrust_project, PermissionRules};
+    use cli::PermissionsCmd;
+    match action {
+        None | Some(PermissionsCmd::Show) => {
+            println!("{}", PermissionRules::load(cwd).summary());
+        }
+        Some(PermissionsCmd::Trust) => {
+            let allow = trust_project(cwd)?;
+            if allow.is_empty() {
+                theme::print_info("this project's .nur/permissions.toml has no allow rules to trust");
+            } else {
+                theme::print_ok(&format!(
+                    "trusted {} allow rule(s) for {}: {}",
+                    allow.len(),
+                    cwd.display(),
+                    allow.join(", ")
+                ));
+            }
+        }
+        Some(PermissionsCmd::Untrust) => {
+            if untrust_project(cwd)? {
+                theme::print_ok("this project's allow rules are held again");
+            } else {
+                theme::print_info("this project's allow rules were not trusted");
+            }
+        }
+    }
+    Ok(())
 }
 
 fn run_plugins_cli(action: Option<&cli::PluginsCmd>) -> Result<()> {
@@ -1274,6 +1316,11 @@ async fn run_headless(
     ade::set_title_prompt(prompt);
     let peer_session_id = std::env::var("NUR_SESSION_ID").unwrap_or_else(|_| session.id.clone());
     let peer_cwd = cwd.to_string_lossy().into_owned();
+    let permissions = agent::SharedPermissions::load(&cwd);
+    if let Some(note) = permissions.held_notice() {
+        eprintln!("note: {note}");
+    }
+    agent::prompt::prefetch_slow_sources(&cwd, &cfg);
     let runner = Arc::new(AgentRunner {
         client,
         config: cfg,
@@ -1281,7 +1328,7 @@ async fn run_headless(
         permission_mode,
         approved_tools: Arc::new(Mutex::new(HashSet::new())),
         tools: tools::ToolHost::default(),
-        permissions: agent::SharedPermissions::load(&cwd),
+        permissions,
         hooks: agent::hooks::HooksConfig::load(),
         is_subagent: false,
         prewalk_override: Arc::new(Mutex::new(None)),

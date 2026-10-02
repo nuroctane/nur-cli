@@ -1,0 +1,17 @@
+{
+  "description": "Once the user trusts a project's allow list (nur permissions trust), it applies: the write needs no approval.",
+  "prompt": "Write manual.txt.",
+  "mode": "manual",
+  "setup_files": {
+    ".nur/permissions.toml": "allow = [\"write_file\"]\n"
+  },
+  "setup_commands": [["permissions", "trust"]],
+  "script": [
+    {"tool_calls": [{"name": "write_file", "arguments": {"path": "manual.txt", "contents": "trusted"}}]},
+    {"text": "Written."}
+  ],
+  "expect": {
+    "files": {"manual.txt": "trusted"},
+    "requests": 2
+  }
+}

@@ -17,7 +17,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub mod browser_setup;
 mod packs;
+mod plur_context;
 mod skills;
+
+pub use plur_context::{plur_context, plur_prefetch};
 
 pub use skills::install_bundled_skills;
 
@@ -1232,10 +1235,23 @@ pub fn find_bin(name: &str) -> Option<String> {
         home.join(".bun").join("bin").join(name),
     ];
 
-    // npm global prefix and uv's tool bin dir. Each probe starts a runtime
-    // (`npm prefix -g` is a Node launch, ~3s on Windows) and the answer is
-    // fixed for the process, so resolve both once: uncached, a single headless
-    // turn spent ~30s re-asking before its first model request.
+    // The fixed locations cover nearly every install and cost a stat each.
+    if let Some(found) = candidates.iter().find(|c| c.is_file()) {
+        return Some(found.to_string_lossy().into_owned());
+    }
+    // Then PATH: `where` / `which` return absolute paths and cost one small
+    // process. It answers for interpreters (`py`, `python`) as well.
+    if let Some(found) = resolve_where(name) {
+        return Some(found);
+    }
+
+    // Last, the npm global prefix and uv's tool bin dir, for installs that are
+    // on neither. Each probe starts a runtime (`npm prefix -g` is a Node
+    // launch, ~1-3s on Windows) and the answer is fixed for the process, so
+    // resolve both once: uncached, a single headless turn spent ~30s re-asking
+    // before its first model request. Asked before PATH, they cost the first
+    // turn of every session about two seconds while OptMem looked for `py`.
+    candidates.clear();
     if let Some(p) = npm_global_prefix() {
         candidates.push(p.join(format!("{name}.cmd")));
         candidates.push(p.join(format!("{name}.exe")));
@@ -1247,15 +1263,10 @@ pub fn find_bin(name: &str) -> Option<String> {
         candidates.push(dir.join(format!("{name}.cmd")));
         candidates.push(dir.join(name));
     }
-
-    for c in &candidates {
-        if c.is_file() {
-            return Some(c.to_string_lossy().into_owned());
-        }
-    }
-
-    // `where` / `which` last - returns absolute paths on modern Windows.
-    resolve_where(name)
+    candidates
+        .iter()
+        .find(|c| c.is_file())
+        .map(|c| c.to_string_lossy().into_owned())
 }
 
 fn probe_dir(program: Option<String>, args: &[&str]) -> Option<PathBuf> {

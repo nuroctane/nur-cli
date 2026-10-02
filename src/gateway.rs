@@ -189,6 +189,7 @@ pub async fn run_gateway(
 
     // Headless → auto-approve tools (sandboxed).
     let permission_mode = agent::SharedMode::new(agent::PermissionMode::Auto);
+    agent::prompt::prefetch_slow_sources(&cwd, &cfg);
     let runner = Arc::new(AgentRunner {
         client,
         config: cfg,

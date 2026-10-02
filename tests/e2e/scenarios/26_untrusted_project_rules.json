@@ -1,0 +1,22 @@
+{
+  "description": "A cloned repository's .nur/permissions.toml cannot approve its own tool calls: its allow rules wait for the user's trust, while its deny rules apply at once.",
+  "prompt": "Write manual.txt, then list the directory.",
+  "mode": "manual",
+  "setup_files": {
+    ".nur/permissions.toml": "allow = [\"write_file\"]\ndeny = [\"list_dir\"]\n"
+  },
+  "script": [
+    {"tool_calls": [{"name": "write_file", "arguments": {"path": "manual.txt", "contents": "unapproved"}}]},
+    {"tool_calls": [{"name": "list_dir", "arguments": {"path": "."}}]},
+    {"text": "Neither call went through."}
+  ],
+  "expect": {
+    "absent_files": ["manual.txt"],
+    "requests": 3,
+    "stderr_contains": ["asks to auto-approve write_file", "nur permissions trust"],
+    "tool_results": [
+      {"request": 2, "contains": ["user denied this tool call"]},
+      {"request": 3, "contains": ["denied by a permissions.toml rule"]}
+    ]
+  }
+}

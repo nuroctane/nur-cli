@@ -148,6 +148,19 @@ The user chose maximum effort with multi-agent orchestration. When the work spli
 Small or single-step requests still get a direct answer; do not fan out work that does not split.
 "#;
 
+/// Start the prompt sources that launch a runtime (PLUR's Node CLI, OptMem's
+/// Python wake) as a session opens, so its first turn waits on neither, or
+/// only on whichever is still running. Later turns read their caches.
+pub fn prefetch_slow_sources(cwd: &Path, cfg: &crate::config::Config) {
+    if cfg.poor_mode {
+        return;
+    }
+    ecosystem::plur_prefetch(cwd);
+    if cfg.optmem.enabled {
+        crate::optmem::prefetch_wake();
+    }
+}
+
 impl PromptContext {
     /// Build the complete prompt on Tokio's blocking pool, for every provider.
     /// Skill activation can perform blocking Jev HTTP calls, and the other
@@ -207,17 +220,14 @@ impl PromptContext {
         user_text: Option<&str>,
         effort: &str,
     ) -> Self {
+        // Prefetched per workspace and refreshed between turns, so the PLUR CLI
+        // never runs in front of a model request (only a first turn may wait).
         let plur = if is_subagent || poor_mode {
             String::new()
         } else {
-            ecosystem::plur_inject(&format!(
-                "coding agent session in {}",
-                cwd.file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("workspace")
-            ))
-            .map(|s| format!("\n# PLUR shared memory (auto-injected)\n{s}\n"))
-            .unwrap_or_default()
+            ecosystem::plur_context(cwd)
+                .map(|s| format!("\n# PLUR shared memory (auto-injected)\n{s}\n"))
+                .unwrap_or_default()
         };
         let cfg = crate::config::load_config().unwrap_or_default();
         let optmem = crate::optmem::prompt_block(cfg.optmem.enabled, is_subagent, poor_mode);

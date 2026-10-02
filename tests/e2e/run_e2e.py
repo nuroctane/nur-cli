@@ -31,6 +31,32 @@ TIMEOUT_SECS = 180
 WARM_CACHE = OUT / ".warm-cache"
 
 
+def save_warm_index(nur_home):
+    """Keep the newest scenario's skill index, with the home it was built in."""
+    index = nur_home / "cache" / "skills-index.json"
+    if index.exists():
+        WARM_CACHE.mkdir(parents=True, exist_ok=True)
+        shutil.copy(index, WARM_CACHE / index.name)
+        (WARM_CACHE / "home.txt").write_text(str(nur_home), encoding="utf-8")
+
+
+def load_warm_index(nur_home):
+    """Seed a scenario's home with the saved index, its paths moved there.
+
+    The index records its roots, one of which is `<NUR_HOME>/skills`; copied
+    verbatim it never matches a new home, so every scenario rescanned cold."""
+    index, origin = WARM_CACHE / "skills-index.json", WARM_CACHE / "home.txt"
+    if not (index.exists() and origin.exists()):
+        return
+    old = origin.read_text(encoding="utf-8")
+    data = json.loads(index.read_text(encoding="utf-8"))
+    move = lambda path: str(nur_home) + path[len(old):] if path.startswith(old) else path
+    for entry in data.get("roots", []) + data.get("skills", []) + data.get("files", []):
+        entry["path"] = move(entry["path"])
+    (nur_home / "cache").mkdir(parents=True, exist_ok=True)
+    (nur_home / "cache" / "skills-index.json").write_text(json.dumps(data), encoding="utf-8")
+
+
 def find_binary(explicit):
     if explicit:
         # Scenarios change cwd to a throwaway workspace. Resolve while still
@@ -116,7 +142,7 @@ def stop_tree(proc):
     proc.wait(timeout=5)
 
 
-def isolated_env(home, port):
+def isolated_env(home, port, warm_skills=True):
     env = {k: v for k, v in os.environ.items() if not k.startswith(("NUR_", "OPENAI_", "ANTHROPIC_", "ENCLAVE_"))}
     env.update(
         {
@@ -138,10 +164,12 @@ def isolated_env(home, port):
     nur_home = home / ".nur"
     nur_home.mkdir(parents=True, exist_ok=True)
     # The skill index scans every global skill root cold (thousands of files
-    # on a developer machine). Reuse the first scenario's index so the suite
-    # measures nur, not one cold scan per scenario.
-    if WARM_CACHE.exists():
-        shutil.copytree(WARM_CACHE, nur_home / "cache", dirs_exist_ok=True)
+    # on a developer machine). Reuse the last scenario's index so the suite
+    # measures nur, not one cold scan per scenario. The startup and regression
+    # suites hold the index builder's lease to test indexing, so they start
+    # cold (warm_skills=False): a usable index would make skills ready at once.
+    if warm_skills:
+        load_warm_index(nur_home)
     (nur_home / "config.toml").write_text(
         f'provider = "vllm"\nbase_url = "http://127.0.0.1:{port}/v1"\nmodel = "e2e-model"\n',
         encoding="utf-8",
@@ -209,6 +237,23 @@ def check(scenario, result, workspace, requests, mcp_requests=()):
     for needle in expect.get("requests_lack", []):
         if needle in sent:
             failures.append(f"a model request contains {needle!r}")
+    for n, request in enumerate(requests, 1):
+        for field in expect.get("absent_request_fields", []):
+            value = request
+            for key in field.split("."):
+                value = value.get(key) if isinstance(value, dict) else None
+            if value is not None:
+                failures.append(f"request {n} sends {field}")
+        items = request.get("input") if isinstance(request.get("input"), list) else []
+        if "input_item_types" in expect:
+            for item in items:
+                if item.get("type") not in expect["input_item_types"]:
+                    failures.append(f"request {n} sends an input item of type {item.get('type')!r}")
+        if "content_part_types" in expect:
+            for item in items:
+                for part in item.get("content") if isinstance(item.get("content"), list) else []:
+                    if part.get("type") not in expect["content_part_types"]:
+                        failures.append(f"request {n} sends a {part.get('type')!r} content part")
     if "max_tool_result_chars" in expect:
         longest = max((len(t) for r in requests for t in tool_messages(r)), default=0)
         if longest > expect["max_tool_result_chars"]:
@@ -361,10 +406,7 @@ def run_scenario(binary, scenario_path):
         finally:
             stop_tree(provider)
         requests = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line]
-        index = tmp / "home" / ".nur" / "cache" / "skills-index.json"
-        if index.exists() and not WARM_CACHE.exists():
-            WARM_CACHE.mkdir(parents=True)
-            shutil.copy(index, WARM_CACHE / index.name)
+        save_warm_index(tmp / "home" / ".nur")
         mcp_log = tmp / "mcp.jsonl"
         mcp_requests = [json.loads(line) for line in mcp_log.read_text(encoding="utf-8").splitlines() if line] if mcp_log.exists() else []
         failures = setup_failures + check(scenario, result, workspace, requests, mcp_requests)

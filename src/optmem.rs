@@ -15,6 +15,7 @@ const NOTE_MAX_CHARS: usize = 280;
 const WAKE_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
 
 static WAKE_CACHE: Mutex<Option<(String, Instant, String)>> = Mutex::new(None);
+static WAKE_FETCH: Mutex<()> = Mutex::new(());
 
 pub fn optmem_home() -> PathBuf {
     dirs::home_dir()
@@ -232,18 +233,37 @@ pub fn wake_capped() -> Option<String> {
 /// Keyed by memory_dir so distinct MEMORY_DIR values do not share a wake blob.
 pub fn wake_capped_cached() -> Option<String> {
     let key = memory_dir().to_string_lossy().into_owned();
-    if let Ok(guard) = WAKE_CACHE.lock() {
-        if let Some((k, at, text)) = guard.as_ref() {
-            if k == &key && at.elapsed() < WAKE_CACHE_TTL {
-                return Some(text.clone());
-            }
-        }
+    let cached = || {
+        let guard = WAKE_CACHE.lock().ok()?;
+        let (k, at, text) = guard.as_ref()?;
+        (k == &key && at.elapsed() < WAKE_CACHE_TTL).then(|| text.clone())
+    };
+    if let Some(text) = cached() {
+        return Some(text);
+    }
+    // One `memo wake` at a time: a turn that arrives while the session's
+    // prefetch runs waits for it instead of starting a second interpreter.
+    let _fetching = WAKE_FETCH
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(text) = cached() {
+        return Some(text);
     }
     let fresh = wake_capped()?;
     if let Ok(mut guard) = WAKE_CACHE.lock() {
         *guard = Some((key, Instant::now(), fresh.clone()));
     }
     Some(fresh)
+}
+
+/// Fill the wake cache in the background, so a session's first turn does not
+/// wait on a Python interpreter before its model request.
+pub fn prefetch_wake() {
+    let _ = std::thread::Builder::new()
+        .name("optmem-wake".into())
+        .spawn(|| {
+            let _ = wake_capped_cached();
+        });
 }
 
 /// Drop the wake cache (e.g. after note/nap so the next turn sees fresh memory).

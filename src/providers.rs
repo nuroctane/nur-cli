@@ -684,6 +684,8 @@ const EFFORT_OPENAI_GPT6: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 /// Nous Portal's own effort ladder (Portal catalog `supported_efforts`):
 /// `stealth/ox-alpha` and most reasoning routes take `max`/`high`/`low`.
 pub const EFFORT_NOUS: &[&str] = &["low", "high", "max"];
+/// Perplexity Agent API `reasoning.effort` (one enum for every hosted model).
+const EFFORT_PERPLEXITY: &[&str] = &["minimal", "low", "medium", "high", "xhigh", "max"];
 
 /// Legacy Grok 3 mini exposes only the two ends.
 const EFFORT_LOW_HIGH: &[&str] = &["low", "high"];
@@ -721,6 +723,7 @@ pub fn effort_levels(provider_id: &str, model: &str) -> &'static [&'static str] 
         }
         "openai" | "openai-cc" if model.starts_with("gpt-6") => EFFORT_OPENAI_GPT6,
         "nous" => EFFORT_NOUS,
+        "perplexity" => EFFORT_PERPLEXITY,
         _ => EFFORT_OPENAI,
     }
 }
@@ -1256,11 +1259,13 @@ pub const PROVIDERS: &[Provider] = &[
     Provider {
         id: "perplexity",
         name: "Perplexity",
-        base_url: "https://api.perplexity.ai",
-        default_model: "sonar-pro",
+        // Sonar's Chat Completions endpoint was retired on 2026-09-27; the
+        // Agent API speaks Responses (`api::perplexity` fits it to the wire).
+        base_url: "https://api.perplexity.ai/v1",
+        default_model: "perplexity/sonar",
         env_key: "PERPLEXITY_API_KEY",
-        style: CC,
-        note: "Sonar · web-grounded",
+        style: R,
+        note: "Agent API · Sonar + frontier models",
         key_optional: false,
         browser_auth: false,
     },
@@ -2159,7 +2164,7 @@ pub fn builtin_privacy(id: &str) -> Privacy {
         //   openai/anthropic — no-train by default, ZDR available, short logs
         //   google — paid Gemini API is no-train
         //   xai — no-train by default, ZDR (enterprise)
-        //   mistral (paid) · cohere · perplexity Sonar — no-train
+        //   mistral (paid) · cohere · perplexity — no-train API data
         //   groq · cerebras · together · fireworks · deepinfra · hyperbolic ·
         //   nebius — inference clouds with ZDR / no-store defaults
         //   azure · bedrock — enterprise no-train + ZDR data handling

@@ -376,7 +376,7 @@ The note is appended to your persistent memory file and recalled automatically i
 | `/init` | Initialise project instructions (`NUR.md`) |
 | `/scan` | Map this codebase → local `.foglamp/scan.json`, then optionally publish to foglamp.dev. `/scan [focus]` centers the map. **Writes need manual/auto** (plan is lifted to auto). Ask only before **upload**, not before the local file. |
 | `/config` | Show config + data paths |
-| `/permissions` | Show or reload allow/deny/ask rules (`permissions.toml`) |
+| `/permissions` | Show or reload allow/deny/ask rules (`permissions.toml`); `trust` / `untrust` this project's allow rules |
 | `/hooks` | Local tool hook status (`hooks.toml`) |
 | `/doctor` | Inline health check: version · auth · ecosystem · shell · budgets |
 | `/help` | Show keys + commands reference |

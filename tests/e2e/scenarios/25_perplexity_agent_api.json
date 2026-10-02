@@ -1,0 +1,90 @@
+{
+  "provider": "perplexity",
+  "model": "perplexity/sonar",
+  "env": {
+    "PERPLEXITY_API_KEY": "e2e-isolated-key"
+  },
+  "prompt": "Write pplx.txt with AGENT_API_OK, read it back, then report PPLX_OK.",
+  "script": [
+    {
+      "reasoning": "OPENAI_SHAPED_REASONING_STATE",
+      "extra_output": [
+        {
+          "type": "search_results",
+          "results": [
+            {
+              "title": "Agent API",
+              "url": "https://docs.perplexity.ai/docs/agent-api/quickstart"
+            }
+          ]
+        }
+      ],
+      "text": "Writing the file first.",
+      "tool_calls": [
+        {
+          "name": "write_file",
+          "arguments": {
+            "path": "pplx.txt",
+            "contents": "AGENT_API_OK"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "name": "read_file",
+          "arguments": {
+            "path": "pplx.txt"
+          }
+        }
+      ]
+    },
+    {
+      "text": "PPLX_OK"
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "stdout_contains": [
+      "PPLX_OK"
+    ],
+    "protocol": "responses",
+    "requests": 3,
+    "files": {
+      "pplx.txt": {
+        "contains": [
+          "AGENT_API_OK"
+        ]
+      }
+    },
+    "tool_results": [
+      {
+        "request": 3,
+        "contains": [
+          "AGENT_API_OK"
+        ]
+      }
+    ],
+    "absent_request_fields": [
+      "include",
+      "tool_choice",
+      "parallel_tool_calls",
+      "prompt_cache_key",
+      "reasoning.summary"
+    ],
+    "input_item_types": [
+      "message",
+      "function_call",
+      "function_call_output"
+    ],
+    "content_part_types": [
+      "input_text",
+      "input_image",
+      "input_file"
+    ],
+    "requests_lack": [
+      "OPENAI_SHAPED_REASONING_STATE"
+    ]
+  }
+}

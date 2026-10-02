@@ -273,6 +273,24 @@ nur plugins uninstall <id>
 
 In the TUI, bare **`/plugins`** opens the full marketplace picker (provider-picker UX).
 
+### `nur permissions`
+
+Show the allow/deny/ask rules in force in this directory, or decide whether this
+project's own rules may approve tool calls.
+
+```bash
+nur permissions            # same as `nur permissions show`
+nur permissions trust      # apply this project's .nur/permissions.toml allow rules
+nur permissions untrust    # hold them again
+```
+
+A project's `.nur/permissions.toml` arrives with the repository, so its `deny`
+and `ask` rules always apply but its `allow` rules stay off until you trust them.
+Trust covers the list as it is now: if a later commit edits it, nur holds it
+again and says so at startup (`nur run` prints the note to stderr).
+
+---
+
 ### `nur doctor`
 
 Diagnose install, auth, config, ecosystem, and plugin marketplace readiness.
@@ -521,7 +539,7 @@ Type these inside the `nur` TUI. Aliases are shown in the same row.
 | `/todos` | Show the session task list |
 | `/init` | Generate a `NUR.md` project guide |
 | `/config` | Show config + data paths |
-| `/permissions` | Show or reload allow/deny/ask rules |
+| `/permissions` | Show or reload allow/deny/ask rules; `trust` / `untrust` this project's allow rules |
 | `/hooks` | Show local tool hook status |
 | `/feedback` | File a GitHub issue from here |
 | `/bug` | Report an issue (GitHub link) |

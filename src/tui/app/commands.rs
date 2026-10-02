@@ -1864,18 +1864,47 @@ impl App {
 
     fn cmd_permissions(&mut self, arg: &str) {
         let arg = arg.trim();
-        if arg == "reload" {
-            self.permissions.reload(&self.cwd);
-            self.push_note(
-                Tone::Skill,
-                format!("permissions reloaded\n{}", self.permissions.summary()),
-            );
-            return;
+        match arg {
+            "reload" => {
+                self.permissions.reload(&self.cwd);
+                self.push_note(
+                    Tone::Skill,
+                    format!("permissions reloaded\n{}", self.permissions.summary()),
+                );
+                return;
+            }
+            "trust" => {
+                let note = match crate::agent::permissions::trust_project(&self.cwd) {
+                    Ok(allow) if allow.is_empty() => {
+                        "this project's .nur/permissions.toml has no allow rules to trust".into()
+                    }
+                    Ok(allow) => format!(
+                        "trusted this project's allow rules: {}\n  editing that list holds it again",
+                        allow.join(", ")
+                    ),
+                    Err(e) => format!("could not record trust: {e}"),
+                };
+                self.permissions.reload(&self.cwd);
+                self.push_note(Tone::Skill, note);
+                return;
+            }
+            "untrust" => {
+                let note = match crate::agent::permissions::untrust_project(&self.cwd) {
+                    Ok(true) => "this project's allow rules are held again".into(),
+                    Ok(false) => "this project's allow rules were not trusted".into(),
+                    Err(e) => format!("could not update trust: {e}"),
+                };
+                self.permissions.reload(&self.cwd);
+                self.push_note(Tone::Skill, note);
+                return;
+            }
+            _ => {}
         }
         self.push_note(
             Tone::Skill,
             format!(
-                "{}\n  path   {}\n  /permissions reload  re-read files",
+                "{}\n  path   {}\n  /permissions reload  re-read files\n  \
+                 /permissions trust   apply this project's allow rules",
                 self.permissions.summary(),
                 crate::agent::permissions::home_permissions_path().display(),
             ),
@@ -2135,6 +2164,13 @@ impl App {
             Tone::Session,
             format!("cd\n  from  {from}\n  to    {clean}  · tools sandboxed here"),
         );
+        // The rules belong to the directory: the old project's must not follow
+        // the session, and the new one's deny rules apply from here on.
+        self.permissions.reload(&self.cwd);
+        if let Some(note) = self.permissions.held_notice() {
+            self.push_note(Tone::Skill, note);
+        }
+        crate::agent::prompt::prefetch_slow_sources(&self.cwd, &self.cfg);
     }
 
     /// Context-window utilization — how full the model's context is this turn.

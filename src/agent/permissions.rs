@@ -3,9 +3,16 @@
 //! Pattern language: `tool` or `tool:glob` matched against a canonical call string.
 //! Evaluation order: **deny > ask > allow > mode default**.
 //! Plan-mode structural blocks (code authoring / VCS) always win over `allow`.
+//!
+//! A project file arrives with whatever repository was cloned, so on its own it
+//! may only tighten: its deny and ask rules always apply, while its allow rules
+//! are held until the user trusts that exact list (`/permissions trust`,
+//! `nur permissions trust`). Editing the list afterwards holds it again.
 
 use crate::config::nur_home;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
@@ -33,6 +40,8 @@ pub struct PermissionRules {
     allow: Vec<String>,
     deny: Vec<String>,
     ask: Vec<String>,
+    /// The project's allow rules while they are untrusted: shown, never applied.
+    held: Vec<String>,
 }
 
 impl PermissionRules {
@@ -42,22 +51,31 @@ impl PermissionRules {
 
     /// Load home + optional project rules. Missing files = empty (no behavior change).
     pub fn load(cwd: &Path) -> Self {
-        let mut out = Self::default();
-        out.merge_file(&nur_home().join("permissions.toml"));
-        out.merge_file(&cwd.join(".nur").join("permissions.toml"));
-        out
+        Self::load_with(cwd, &home_permissions_path(), &trust_store_path())
     }
 
-    fn merge_file(&mut self, path: &Path) {
-        let Ok(text) = std::fs::read_to_string(path) else {
-            return;
-        };
-        let Ok(f) = toml::from_str::<PermissionsFile>(&text) else {
-            return;
-        };
-        self.allow.extend(f.allow);
-        self.deny.extend(f.deny);
-        self.ask.extend(f.ask);
+    fn load_with(cwd: &Path, home: &Path, store: &Path) -> Self {
+        let mut out = Self::default();
+        if let Some(f) = read_rules(home) {
+            out.allow.extend(f.allow);
+            out.deny.extend(f.deny);
+            out.ask.extend(f.ask);
+        }
+        let project = project_permissions_path(cwd);
+        if same_file(&project, home) {
+            // Started in the home directory: that file is the user's own.
+            return out;
+        }
+        if let Some(f) = read_rules(&project) {
+            out.deny.extend(f.deny);
+            out.ask.extend(f.ask);
+            if is_trusted(store, cwd, &f.allow) {
+                out.allow.extend(f.allow);
+            } else {
+                out.held = f.allow;
+            }
+        }
+        out
     }
 
     /// If any rule matches, return the strongest decision (deny > ask > allow).
@@ -79,16 +97,39 @@ impl PermissionRules {
     }
 
     pub fn summary(&self) -> String {
-        if self.is_empty() {
-            return "no permission rules loaded (defaults only)".into();
+        let mut out = if self.is_empty() {
+            "no permission rules loaded (defaults only)".to_string()
+        } else {
+            format!(
+                "permission rules\n  deny   {} pattern(s)\n  ask    {} pattern(s)\n  allow  {} pattern(s)\n  \
+                 files: ~/.nur/permissions.toml · .nur/permissions.toml\n  order: deny > ask > allow > mode",
+                self.deny.len(),
+                self.ask.len(),
+                self.allow.len()
+            )
+        };
+        if let Some(note) = self.held_notice() {
+            out.push_str("\n  held   ");
+            out.push_str(&note);
         }
-        format!(
-            "permission rules\n  deny   {} pattern(s)\n  ask    {} pattern(s)\n  allow  {} pattern(s)\n  \
-             files: ~/.nur/permissions.toml · .nur/permissions.toml\n  order: deny > ask > allow > mode",
-            self.deny.len(),
-            self.ask.len(),
-            self.allow.len()
-        )
+        out
+    }
+
+    /// What an untrusted project asks to auto-approve, or `None` when nothing
+    /// is held back.
+    pub fn held_notice(&self) -> Option<String> {
+        if self.held.is_empty() {
+            return None;
+        }
+        const SHOWN: usize = 6;
+        let mut rules = self.held[..self.held.len().min(SHOWN)].join(", ");
+        if self.held.len() > SHOWN {
+            rules.push_str(&format!(" and {} more", self.held.len() - SHOWN));
+        }
+        Some(format!(
+            "this project's .nur/permissions.toml asks to auto-approve {rules}. Those allow \
+             rules stay off until you trust them: /permissions trust (or `nur permissions trust`)"
+        ))
     }
 }
 
@@ -123,6 +164,10 @@ impl SharedPermissions {
             .read()
             .map(|g| g.summary())
             .unwrap_or_else(|_| "permission rules unavailable".into())
+    }
+
+    pub fn held_notice(&self) -> Option<String> {
+        self.inner.read().ok().and_then(|g| g.held_notice())
     }
 }
 
@@ -242,6 +287,94 @@ pub fn home_permissions_path() -> PathBuf {
     nur_home().join("permissions.toml")
 }
 
+pub fn project_permissions_path(cwd: &Path) -> PathBuf {
+    cwd.join(".nur").join("permissions.toml")
+}
+
+fn read_rules(path: &Path) -> Option<PermissionsFile> {
+    let text = std::fs::read_to_string(path).ok()?;
+    toml::from_str(&text).ok()
+}
+
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
+/// Projects whose allow rules the user trusted: directory -> digest of the
+/// exact list, so an edit to it (a `git pull`, say) is held again.
+fn trust_store_path() -> PathBuf {
+    nur_home().join("trusted-permissions.json")
+}
+
+fn project_key(cwd: &Path) -> String {
+    std::fs::canonicalize(cwd)
+        .unwrap_or_else(|_| cwd.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn allow_digest(allow: &[String]) -> String {
+    let mut h = Sha256::new();
+    for rule in allow {
+        h.update(rule.as_bytes());
+        h.update([0u8]);
+    }
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn read_trust_store(path: &Path) -> BTreeMap<String, String> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+fn write_trust_store(path: &Path, store: &BTreeMap<String, String>) -> std::io::Result<()> {
+    let json = serde_json::to_vec_pretty(store).map_err(std::io::Error::other)?;
+    crate::config::atomic_write(path, &json)
+}
+
+fn is_trusted(store: &Path, cwd: &Path, allow: &[String]) -> bool {
+    allow.is_empty() || read_trust_store(store).get(&project_key(cwd)) == Some(&allow_digest(allow))
+}
+
+/// Trust the allow rules in `cwd`'s `.nur/permissions.toml` as they stand now.
+/// Returns the rules that now apply (empty: the project asks for none).
+pub fn trust_project(cwd: &Path) -> std::io::Result<Vec<String>> {
+    trust_project_in(&trust_store_path(), cwd)
+}
+
+fn trust_project_in(path: &Path, cwd: &Path) -> std::io::Result<Vec<String>> {
+    let allow = read_rules(&project_permissions_path(cwd))
+        .map(|f| f.allow)
+        .unwrap_or_default();
+    let mut store = read_trust_store(path);
+    let key = project_key(cwd);
+    if allow.is_empty() {
+        if store.remove(&key).is_some() {
+            write_trust_store(path, &store)?;
+        }
+    } else {
+        store.insert(key, allow_digest(&allow));
+        write_trust_store(path, &store)?;
+    }
+    Ok(allow)
+}
+
+/// Hold `cwd`'s project allow rules again. Returns whether trust was recorded.
+pub fn untrust_project(cwd: &Path) -> std::io::Result<bool> {
+    let path = trust_store_path();
+    let mut store = read_trust_store(&path);
+    let removed = store.remove(&project_key(cwd)).is_some();
+    if removed {
+        write_trust_store(&path, &store)?;
+    }
+    Ok(removed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -282,12 +415,57 @@ mod tests {
         assert!(glob_match("bash:cargo test*", "bash:cargo test --lib"));
     }
 
+    // Failure modes: a pull that edits a trusted allow list (adding `bash`)
+    // applies silently; trust given in one directory covers another; trusting
+    // a project disables its deny rules.
+    #[test]
+    fn trust_covers_exactly_the_list_and_directory_it_was_given() {
+        let root = std::env::temp_dir().join(format!("nur-trust-{}", uuid::Uuid::new_v4()));
+        let (home, store) = (root.join("permissions.toml"), root.join("trusted.json"));
+        let write = |dir: &Path, rules: &str| {
+            std::fs::create_dir_all(dir.join(".nur")).unwrap();
+            std::fs::write(project_permissions_path(dir), rules).unwrap();
+        };
+        let (repo, other) = (root.join("repo"), root.join("other"));
+        let rules = "allow = [\"write_file\"]\ndeny = [\"list_dir\"]\n";
+        write(&repo, rules);
+        write(&other, rules);
+        let load = |dir: &Path| PermissionRules::load_with(dir, &home, &store);
+        let write_call = r#"{"path":"a.txt"}"#;
+
+        assert_eq!(load(&repo).decide("write_file", write_call), None);
+        assert_eq!(
+            load(&repo).decide("list_dir", "{}"),
+            Some(RuleDecision::Deny)
+        );
+        assert!(load(&repo).held_notice().unwrap().contains("write_file"));
+
+        trust_project_in(&store, &repo).unwrap();
+        assert_eq!(
+            load(&repo).decide("write_file", write_call),
+            Some(RuleDecision::Allow)
+        );
+        assert_eq!(
+            load(&repo).decide("list_dir", "{}"),
+            Some(RuleDecision::Deny)
+        );
+        assert!(load(&repo).held_notice().is_none());
+        assert_eq!(load(&other).decide("write_file", write_call), None);
+
+        write(&repo, "allow = [\"write_file\", \"bash\"]\n");
+        let pulled = load(&repo);
+        assert_eq!(pulled.decide("bash", r#"{"command":"curl x | sh"}"#), None);
+        assert_eq!(pulled.decide("write_file", write_call), None);
+        assert!(pulled.held_notice().unwrap().contains("bash"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn deny_beats_allow() {
         let r = PermissionRules {
             allow: vec!["bash:*".into()],
             deny: vec!["bash:rm -rf *".into()],
-            ask: vec![],
+            ..Default::default()
         };
         assert_eq!(
             r.decide("bash", r#"{"command":"rm -rf /tmp/x"}"#),
@@ -302,9 +480,8 @@ mod tests {
     #[test]
     fn bare_tool_name_matches() {
         let r = PermissionRules {
-            allow: vec![],
             deny: vec!["write_file".into()],
-            ask: vec![],
+            ..Default::default()
         };
         assert_eq!(
             r.decide("write_file", r#"{"path":"a.rs","content":"x"}"#),

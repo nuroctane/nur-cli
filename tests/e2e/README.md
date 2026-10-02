@@ -40,10 +40,12 @@ One JSON file per scenario in `scenarios/`:
 | Key | Meaning |
 |-----|---------|
 | `prompt`, `mode` | the `nur run` prompt; `auto` (default), `plan` or `manual` |
-| `script` | provider replies in order: `{"text"}`, `{"tool_calls": [{"name", "arguments"}]}` (string arguments are sent verbatim), or `{"status", "error"}` |
+| `provider`, `model`, `env` | run as a catalog provider (its wire format, pointed at the fake server) with this model; extra environment such as the provider's key variable |
+| `script` | provider replies in order: `{"text"}`, `{"tool_calls": [{"name", "arguments"}]}` (string arguments are sent verbatim), or `{"status", "error"}`. On the Responses wire a reply may add `reasoning` (an encrypted reasoning item) and `extra_output` (raw output items) |
 | `setup_files` | files created in the workspace first |
 | `setup_home_files` | files created in the nur home (`hooks.toml`, …); `{home}` and `{workspace}` expand |
-| `expect` | `exit_code`, `stdout_contains`/`stdout_lacks`, `stderr_contains`, `files` (exact text or `contains`/`lacks`), `absent_files`, `requests`, `tool_results` (per request), `requests_lack`, `max_tool_result_chars` |
+| `setup_commands` | `nur` subcommands run in the workspace before the prompt, e.g. `[["permissions", "trust"]]` |
+| `expect` | `exit_code`, `stdout_contains`/`stdout_lacks`, `stderr_contains`, `files` (exact text or `contains`/`lacks`), `absent_files`, `requests`, `tool_results` (per request), `requests_lack`, `max_tool_result_chars`, `absent_request_fields` (dotted paths such as `reasoning.summary`), `input_item_types` and `content_part_types` (the only types any request may send) |
 | `skip` | the reason a scenario is parked, for open product decisions |
 
 A run also fails if a process nur started is still holding files in the
@@ -64,15 +66,3 @@ scenario's home when it exits.
 - On Windows `dirs::home_dir()` ignores `HOME`/`USERPROFILE`, so a scenario
   still sees the real `~/.agents`, `~/.claude` and `~/.optmem`. Scenarios must
   not depend on their contents.
-
----
-
-## License
-
-**GNU General Public License v3.0 (or later)** — see [LICENSE](./LICENSE).
-
-Meta CLI is free software: you may redistribute it and/or modify it under the
-terms of the GPL as published by the Free Software Foundation, either version 3
-of the License, or (at your option) any later version. It is distributed in the
-hope that it will be useful, but **without any warranty**; without even the
-implied warranty of merchantability or fitness for a particular purpose.

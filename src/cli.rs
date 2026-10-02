@@ -170,6 +170,23 @@ pub enum Commands {
         #[command(subcommand)]
         action: BenchCmd,
     },
+    /// Allow/deny/ask rules: show them, or trust this project's allow rules
+    Permissions {
+        #[command(subcommand)]
+        action: Option<PermissionsCmd>,
+    },
+}
+
+/// A project's `.nur/permissions.toml` deny and ask rules always apply; its
+/// allow rules wait for `trust`.
+#[derive(Subcommand, Debug)]
+pub enum PermissionsCmd {
+    /// Show the rules in force in this directory (default)
+    Show,
+    /// Apply this project's allow rules, as they are now
+    Trust,
+    /// Hold this project's allow rules again
+    Untrust,
 }
 
 #[derive(Subcommand, Debug)]

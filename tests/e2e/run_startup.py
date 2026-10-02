@@ -179,7 +179,7 @@ def blocked_models(binary, skill=False, cancel=False, controls=False, compact=Fa
 
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    env = isolated_env(home, server.server_port)
+    env = isolated_env(home, server.server_port, warm_skills=False)
     env['TERM'] = 'xterm-256color'
     env['NUR_STARTUP_TRACE'] = str(work/'startup.jsonl')
     if skill:
@@ -278,7 +278,7 @@ def blocked_auth(binary, fail=False):
     work.mkdir(parents=True)
     home, workspace = work/'home', work/'workspace'
     workspace.mkdir()
-    env = isolated_env(home, 1)
+    env = isolated_env(home, 1, warm_skills=False)
     env['TERM'] = 'xterm-256color'
     helpers = work/'helpers'
     helpers.mkdir()
@@ -349,7 +349,7 @@ def commands_during_indexing(binary):
     home, workspace = work/'home', work/'workspace'
     workspace.mkdir()
     (workspace/'other').mkdir()
-    env = isolated_env(home, 1)
+    env = isolated_env(home, 1, warm_skills=False)
     env['TERM'] = 'xterm-256color'
     trace = work/'startup.jsonl'
     env['NUR_STARTUP_TRACE'] = str(trace)
@@ -408,7 +408,7 @@ def effort_persists(binary):
     work.mkdir(parents=True)
     home, workspace = work/'home', work/'workspace'
     workspace.mkdir()
-    env = isolated_env(home, 1)
+    env = isolated_env(home, 1, warm_skills=False)
     env['TERM'] = 'xterm-256color'
     config = home/'.nur/config.toml'
     config.write_text(
@@ -446,7 +446,7 @@ def banner_animates(binary):
     work.mkdir(parents=True)
     home, workspace = work/'home', work/'workspace'
     workspace.mkdir()
-    env = isolated_env(home, 1)
+    env = isolated_env(home, 1, warm_skills=False)
     env.pop('NO_COLOR', None)
     env['TERM'] = 'xterm-256color'
     env['COLORTERM'] = 'truecolor'

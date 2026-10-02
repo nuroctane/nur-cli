@@ -34,7 +34,7 @@ def fixture(name, port=1):
     work = OUT / f'{name}-{time.time_ns()}'
     workspace, home = work / 'workspace', work / 'home'
     workspace.mkdir(parents=True)
-    env = isolated_env(home, port)
+    env = isolated_env(home, port, warm_skills=False)
     env['TERM'] = 'xterm-256color'
     env['NUR_DISABLE_NATIVE_MEMORY'] = '1'
     env['NUR_STARTUP_TRACE'] = str(work / 'startup.jsonl')

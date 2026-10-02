@@ -660,7 +660,16 @@ impl ApiClient {
             wire.max_output_tokens = None;
         }
         sanitize_media_for_provider(&mut wire.input, &self.provider_id);
+        if self.is_perplexity_route() {
+            super::perplexity::shape_request(&mut wire);
+        }
         wire
+    }
+
+    /// Perplexity's Agent API, under its catalog id or a custom provider
+    /// pointed at its host.
+    fn is_perplexity_route(&self) -> bool {
+        self.provider_id == "perplexity" || self.base_url.contains("api.perplexity.ai")
     }
 
     /// Is this client pointed at an OpenCode gateway (Zen or Go)?

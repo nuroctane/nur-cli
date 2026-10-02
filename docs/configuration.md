@@ -267,6 +267,13 @@ tool behavior because tool support depends on the selected model template.
 
 Optional file: **`~/.nur/permissions.toml`** (and/or project **`.nur/permissions.toml`** - both are merged).
 
+A project file comes with the repository, so it can only tighten on its own: its
+`deny` and `ask` rules apply at once, while its `allow` rules are held until you
+trust that exact list with `/permissions trust` or `nur permissions trust`. An
+edit to the list (a `git pull`, say) holds it again, and nur tells you at
+startup what the project asks to auto-approve. Trust is recorded per directory
+in `~/.nur/trusted-permissions.json`; `/permissions untrust` withdraws it.
+
 ```toml
 # Patterns: "tool" or "tool:glob"  (* = any sequence)
 # Order: deny > ask > allow > mode default
@@ -283,7 +290,7 @@ allow = ["bash:git status*", "bash:cargo test*"]
 | **ask** | Force an approval prompt (even in auto) |
 | **allow** | Skip approval in manual (plan structural blocks still win) |
 
-Reload without restart: `/permissions reload`.
+Reload without restart: `/permissions reload`. `/cd` reloads them for the new directory.
 
 ---
 

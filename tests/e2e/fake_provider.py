@@ -6,7 +6,10 @@ system prompt, message order) as well as on what it did.
 
 A reply is {"text": "..."}, {"tool_calls": [{"name", "arguments"}]} (a string
 "arguments" is sent verbatim, so malformed JSON can be scripted), or
-{"status": 500, "error": "..."} for an HTTP failure.
+{"status": 500, "error": "..."} for an HTTP failure. On the Responses wire a
+reply may also carry "reasoning" (an encrypted reasoning item, as OpenAI returns
+with store=false) and "extra_output" (raw output items such as Perplexity's
+search_results), both emitted before the message.
 When the script runs out the server answers with a fixed text, so a runaway
 loop ends instead of hanging; the runner then fails on the request count.
 
@@ -234,6 +237,9 @@ def make_handler(state, mcp=None):
         def _responses(self, body, reply, n):
             output = []
             text = reply.get("text", "")
+            if reply.get("reasoning"):
+                output.append({"type":"reasoning", "id":f"rs-{n}", "summary":[], "encrypted_content":reply["reasoning"]})
+            output += reply.get("extra_output", [])
             if text:
                 output.append({"type":"message", "id":f"msg-{n}", "role":"assistant", "status":"completed", "content":[{"type":"output_text", "text":text, "annotations":[]}]})
             for i, call in enumerate(reply.get("tool_calls", [])):
@@ -248,7 +254,7 @@ def make_handler(state, mcp=None):
             for i, item in enumerate(output):
                 if item["type"] == "message":
                     self._event("response.output_text.delta", {"type":"response.output_text.delta", "output_index":i, "delta":text})
-                else:
+                elif item["type"] == "function_call":
                     args = item["arguments"]
                     for chunk in [args[:len(args)//2], args[len(args)//2:]]:
                         self._event("response.function_call_arguments.delta", {"type":"response.function_call_arguments.delta", "output_index":i, "item_id":item["id"], "delta":chunk})
