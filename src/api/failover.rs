@@ -664,7 +664,10 @@ mod tests {
         assert_eq!(targets.len(), 2);
         assert_eq!(targets[0].provider_id, "openai");
         assert_eq!(targets[0].style, ApiStyle::Responses); // OpenAI Responses API
-        assert_eq!(targets[0].model, "gpt-5.5");
+        assert_eq!(
+            targets[0].model,
+            crate::providers::by_id("openai").unwrap().default_model
+        );
         assert_eq!(targets[0].api_key, "key-openai");
         assert_eq!(targets[1].provider_id, "anthropic");
         assert_eq!(targets[1].style, ApiStyle::AnthropicMessages); // Messages, not Chat

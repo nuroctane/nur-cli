@@ -386,9 +386,7 @@ pub fn key_provenance(cfg: &TypesafeConfig) -> Option<&'static str> {
     if !cfg.api_key.trim().is_empty() {
         return Some("config [typesafe] api_key");
     }
-    if api_key(cfg).is_none() {
-        return None;
-    }
+    api_key(cfg)?;
     if api_key_from_env().is_some() {
         return Some("env TYPESAFE_API_KEY");
     }

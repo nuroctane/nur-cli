@@ -57,8 +57,9 @@ pub fn list(search: Option<&str>, json: bool) -> String {
     if json {
         return serde_json::to_string_pretty(&rows).unwrap_or_default();
     }
+    let unranked = engines().iter().filter(|e| e.rank.is_none()).count();
     let mut text = format!(
-        "JevBench v1.5.4 - {} of {} systems\n",
+        "Jev library - {} of {} engines (JevBench v1.5.4 roster and newer reviewed releases; {unranked} not yet ranked)\n",
         rows.len(),
         engines().len()
     );
@@ -101,7 +102,11 @@ pub fn info(id: &str) -> Result<String> {
     if local_adapter(id).is_some() {
         output.push_str(&format!("\nLocal: install the source project's dependencies in your Python environment, then:\n  nur jev start --engine {id}{}\n  nur jev use\n",if e.model.is_none() {" --model <weights-or-model-id>"} else {""}));
     }
-    if e.protocol == "systemone" {
+    if e.protocol == "systemone" && e.endpoint.is_some() {
+        output.push_str(&format!(
+            "\nConnect its public endpoint (catalog URL and model):\n  nur jev login {id}\n  nur jev use --engine {id}\n"
+        ));
+    } else if e.protocol == "systemone" {
         output.push_str(&format!("\nConnect the source project's native server:\n  nur jev use --engine {id} --url <https-or-loopback-systemone-url> --model <server-model-id>\n"));
     } else if e.protocol != "adapter" {
         output.push_str(&format!("\nConnect its API:\n  nur jev start --engine {id} --upstream <https-or-loopback-url> --model <model-id>\n  nur jev use\n"));

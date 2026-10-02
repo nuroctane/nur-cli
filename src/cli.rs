@@ -76,6 +76,9 @@ pub struct Cli {
     pub command: Option<Commands>,
 }
 
+// Parsed once at startup and matched once, so the size gap the lint warns
+// about costs nothing; boxing clap fields would only add noise.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Run a single agent turn headlessly (prints final answer)
@@ -259,6 +262,7 @@ pub enum BrowserCmd {
 /// nur already speaks, so the whole harness boost works with no cloud key:
 /// `verdict` (openJev-verdict-2.0), `nimble` (Bespoke-Nimble-9B), `laya` (Laya
 /// Core ML, Apple Silicon only), plus `mock` for tests and demos.
+#[allow(clippy::large_enum_variant)] // parsed once; see `Commands`
 #[derive(Subcommand, Debug, Clone)]
 pub enum JevCmd {
     /// Search the full pinned JevBench roster

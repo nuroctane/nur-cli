@@ -6,14 +6,7 @@
 
 **Use fewer paid tokens by default.**
 
-**v0.42.0:** Full [Jev model library](docs/jev-models.md), isolated engine credentials, a [seven-agent usage ledger](docs/ledger.md), native [Enclave MCP](docs/enclave.md), and the /startup-skill workflow router.
-
-**v0.41.0:** [CLI and skills refresh](docs/stack-update-2026-09-30.md): updated Rust and companion stacks, complete pinned skill trees, responsive account controls, safe bridge ownership, prompt cancellation, and long-transcript rendering fixes.
-
-The [full JevBench library](docs/jev-models.md) is available through `nur jev models` and `/jev models`: native endpoints, local library adapters, and model-specific connection recipes. Keys are selected per engine. [Local usage ledger](docs/ledger.md): `nur ledger` or `/ledger` aggregates seven agent log formats without importing keys or prompt content. `/startup-skill` routes to the installed startup validation, competitor research, positioning, and pitch workflows.
 The harness supersedes stale duplicate reads, spills large tool results, preserves provider prompt caches, and compacts repeatedly using an OMP-style response reserve instead of a premature fixed percentage. It also supports local context estimates when providers omit usage, prompt caching, local models, and focused Oh My Pi delegation through a verified authenticated economy model.
-
-**v0.40.1:** `/effort` now says when a route takes no effort field. Chat Completions routes (OpenRouter, Groq, Nous Portal, xAI API keys, local servers) send none, so nur reports that instead of naming a level they never receive; the level stays saved for routes that take one. See [effort levels](docs/configuration.md#reasoning-effort-levels).
 
 [TypeSafe · Jev](https://docs.typesafe.ai) judgments run inside the harness rather than beside it: one batched request decides which tool calls are still worth their tokens, whether a result actually worked, and what a fresh context can drop - so compaction writes no summary, survivors stay verbatim, and the frontier model is never paid to answer an if-statement. Provider-agnostic (one key lifts every model), and keyless on this machine through three supported local engines - openJev-verdict-2.0, Bespoke-Nimble-9B, and Laya Core ML ([docs/jev-local.md](./docs/jev-local.md)). Native failover, cross-provider subagents, and delegated OMP work all report their actual token and cost impact in Nur's session budgets and `/usage` totals.
 
@@ -24,7 +17,9 @@ The harness supersedes stale duplicate reads, spills large tool results, preserv
 </p>
 
 <p align="center">
-  <img src="docs/assets/nur-demo.gif" alt="NurCLI demo" width="600">
+  <a href="https://www.nuroctane.xyz/cli#demo"><img src="docs/assets/nur-demo.webp" alt="NurCLI demo: an approval with its inline diff, live theme previews in 3D, and the 65-provider login vault" width="760"></a>
+  <br>
+  <sub><a href="https://www.nuroctane.xyz/cli#demo">Watch the full demo</a></sub>
 </p>
 
 **Your personal coding agent.** Custom Rust harness, dense gold TUI, **native vision**, tools, knowledge stack, hardened sandbox. Multi-provider `/provider` plus a unified `/auth` vault. Any model via `--model` / `/model` / config.
@@ -33,7 +28,7 @@ The harness supersedes stale duplicate reads, spills large tool results, preserv
 nur          # interactive gold TUI
 ```
 
-[NurCLI]([https://www.nuroctane.xyz/cli])
+[NurCLI](https://www.nuroctane.xyz/cli)
 
 ---
 
@@ -182,20 +177,6 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 
 ---
 
-**v0.40.0**: Reasoning effort runs from `low` through `max` to `ultracode`, which pairs the strongest rung with parallel subagents for work that splits. Each route receives the nearest rung it accepts, Claude models now get effort through `output_config.effort`, and `/effort` saves the level. Concurrent nur processes share one OAuth refresh instead of spending a rotating refresh token twice. See [effort levels](docs/configuration.md#reasoning-effort-levels). Built-in controls, including `/login`, now work during skill indexing. The NUR banner's gradient shimmer and the TUI's idle animations run again; v0.38.3 had frozen them.
-
-**v0.39.1**: The interactive editor opens while skills, account credentials, and model metadata load in the background. Early submissions queue until preparation completes. Skill indexes refresh atomically without discarding the previous inventory. See the [startup investigation and measurements](docs/startup-performance.md).
-
-**v0.39.0**: Subagents the model does not route itself now run on a cheaper reachable model when the hop is known-price, at least 15% cheaper and no weaker in privacy, with parent context Jev judged directly useful (`[typesafe.routing]`, on by default). A black-box E2E suite drives the real binary against a scripted provider (`tests/e2e`). Fixes: a Jev-gated read after an edit could reuse stale contents; one-shot `nur run` no longer starts ecosystem installs; tool lookup no longer re-spawns npm/uv per call (headless startup ~2x faster); Windows hooks and the cmd.exe shell keep quoted paths; `META_API_KEY` is read only by the Meta provider, and install no longer deletes Meta's `muse` CLI. Sidegraph tool tracks carry their category colour. Legacy Meta/Muse aliases and dead code removed.
-
-**v0.38.3**: F6 opens a session inspector for changes, tools, agents, and context. Compact successful tool rows keep the transcript readable; viewport-only row preparation and quieter idle rendering reduce UI work. Includes compact image attachments, Jev-first manual compaction, 41 themes, and editable custom question answers. **[TUI](docs/tui.md)** · **[Vision](docs/vision.md)** · **[Theme collection](docs/themes.md)** · **[Jev evaluation](docs/jev-performance-evaluation.md)**
-
-**v0.37.3**: Cache-aware routing (`typesafe::route`): long sessions stay on the warm model, fresh children take the cheap one past a 15% margin, secret-touching tasks stay on ZDR/TEE/local. **[Docs](https://www.nuroctane.xyz/cli)**
-
-**v0.37.2**: Close-ended `question` modal (51 tools) · goal turns verify completion with Jev and stop on `BLOCKED:` · `nur jev eval` replays recorded judgments · request-size cap so a Jev batch is never sent oversized. OpenCode's free-tier 403 stays their client gate. **[Docs](https://www.nuroctane.xyz/cli)**
-
-**v0.37.1**: TypeSafe/Jev typed judgments wired through the harness (tool gate, result judge, Jev-scored compaction that writes no summary, skill-rule checks, model routing) · three keyless local engines on this machine (openJev-verdict-2.0, Bespoke-Nimble-9B, Laya Core ML) · OptMem compressions drain in one call · transcript paths that open · every doc trued up against the code (65 providers, 48 tools, 88 slash commands, 21 themes). **[Docs](https://www.nuroctane.xyz/cli)**
-
 | Surface | What ships |
 |---------|------------|
 | **TUI** | Streaming · duration chips · thought/tool cards · peek · drag-select · scrollbar · sessions · multi-provider `/login` · **`/model` picker** · **`/plugins` marketplace** · `/goal` `/bro` `/adhd` `/scan` `/btw` `/codesearch` `/mc` `/feedback` `/tips` · **every skill as `/name`** · **41 themes including 18 chromatic studies + transparency mode** · **provider logo in the busy line + tab title** · **every path in the transcript is a link that opens** · **block-structured markdown** with theme-role colours · **LaTeX rendering** (image-peek build) · **`/receipt` verifies the hash chain** and exports spans · budgets · doctor |
@@ -232,6 +213,8 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 - Session budgets (`/budget`), tool-result spill, smarter auto-compact
 - Optional `permissions.toml` / `hooks.toml`
 - `/poor` cost-saver prompt
+- **Usage ledger**: `nur ledger` · `/ledger` totals seven agent log formats locally, without importing keys or prompt content ([docs/ledger.md](docs/ledger.md))
+- `/startup-skill` routes to the installed startup validation, competitor research, positioning, and pitch workflows
 - Project instructions: `NUR.md` · `AGENTS.md` · `CLAUDE.md`
 - Session resume: `-c`, `-r`, `/sessions` (alias `/resume`)
 - **Takeover** cross-agent migration (`/takeover` · `/hijack`): import a session from **Claude Code · Codex · Cursor · Grok Build** into a native nur session and resume it. Two windows in one modal — press **`c`** to switch between `/sessions` and `/takeover`
@@ -290,7 +273,10 @@ layer over any `/theme` pick. Details: [docs/vision.md](./docs/vision.md).
 
 **TypeSafe (Jev):** a system-one boost layer for whatever provider you are using -
 tool gate, result judge, compaction with no summary, skill checks, routing. One
-key, every provider. Details: [docs/typesafe.md](./docs/typesafe.md).
+key, every provider. The full [Jev library](docs/jev-models.md) (`nur jev models`
+· `/jev models`) lists every engine with its native endpoint, local adapter, or
+connection recipe; keys are selected per engine. Details:
+[docs/typesafe.md](./docs/typesafe.md).
 
 **Enclave:** [Enclave](https://enclave.ai)'s autonomous security agents (pentests,
 code security review, findings, CVE monitoring) through Enclave's MCP server,

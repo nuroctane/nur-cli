@@ -2,38 +2,6 @@
 
 Browse every system in the [Jev model library](jev-models.md) with `nur jev models` or `/jev models`. Connect hosted or local engines with isolated credentials and the matching [runtime guide](jev-local.md). `nur ledger` and `/ledger` provide a [local usage ledger](ledger.md) across seven agents without importing keys or prompts. `/startup-skill` opens the startup workflow pack.
 
-**v0.42.0:** The full [Jev model library](jev-models.md), isolated engine credentials, [seven-agent usage ledger](ledger.md), native [Enclave MCP](enclave.md), and startup workflow router.
-
-**v0.41.0:** [CLI and skills refresh](stack-update-2026-09-30.md) updates the Rust
-and companion stacks, complete pinned skill trees, responsive account controls,
-safe bridge ownership, cancellation and long-transcript rendering.
-
-**v0.40.1:** `/effort` says when a route takes no effort field: Chat Completions routes
-(OpenRouter, Groq, Nous Portal, xAI API keys, local servers) send none, and the
-[effort table](configuration.md#reasoning-effort-levels) now says so too.
-
-**v0.40.0:** [Reasoning effort](configuration.md#reasoning-effort-levels) runs from
-`low` through `max` to `ultracode` (the strongest rung plus parallel subagents), mapped
-per route. Claude models now receive effort, `/effort` saves the level, and concurrent
-nur processes share one OAuth refresh. `/login` and other built-in controls now
-work while skills index; only dependent requests wait.
-The NUR banner's gradient shimmer and the TUI's ambient animations are restored.
-
-**v0.39.1:** The editor accepts drafts while skills, credentials, and model metadata load.
-Early submissions queue until preparation finishes. See the
-[startup investigation and measurements](startup-performance.md).
-
-**v0.39.0:** [Cache-aware subagent routing](typesafe.md) on by default, a
-black-box E2E suite, faster headless startup, Windows hook and shell quoting
-fixes, and category-coloured [sidegraph](tui.md#the-sidegraph-panel) tracks.
-
-**v0.38.3:** [Session inspector and compact activity](tui.md#session-inspector-and-compact-activity),
-viewport-only transcript row preparation, and quieter idle rendering.
-[Compact image attachments](vision.md) with on-demand previews and
-per-message queue ownership, [memory retrieval cues](tools.md#connectome), and
-four [startup workflow skills](ecosystem.md). Includes 41 themes, editable
-question answers, and [Jev-first compaction](jev-performance-evaluation.md).
-
 **Fully loaded multi-provider terminal coding agent.** Not a thin wrapper.
 
 Custom Rust harness, dense gold TUI, **native vision**, 52 tools, a knowledge stack, and a hardened sandbox. Pick any of **65 providers** with `/login` (`/provider`), any model via `--model` / `/model`. **TypeSafe - Jev** typed judgments run *inside* the loop: which tool calls still earn their tokens, whether a result actually worked, what a fresh context can drop, which skill rules matter, which model is adequate - and they are **keyless on this machine** through three bundled local engines. Install marketplace plugins with `/plugins` (same picker UX as providers).
@@ -90,11 +58,9 @@ That's the normal upgrade. Pulls / rebuilds when you have a Laboratory checkout,
 | **Agent** | Manual / plan / auto · tool loop · subagents · todos · **Jev-scored compaction** (survivors verbatim, no summary) · **pre-exec tool gate + post-exec result judge** · **session $ / token budgets** · **tool-result spill** · Esc cancel · Shift+Tab mid-turn · prompt-cache keys · **Chat Completions adapter** for non-Responses providers |
 | **Vision** | `look` (images / short video) · `extract_frames` (ffmpeg keyframes) · prompt auto-attach of media paths |
 | **Tools** | read · edit · bash · web · **browser** (incl. **element picking**) · **terminal-browser** (`/tb`) · git · judgments (`typesafe`) · security agents (`enclave`) · memory (`optmem` `connectome` `mem`) · diagrams (`excalidraw` `tldraw` `penecho`) · policy (`dogwood`) · background (`bg`) and async (`admission` `goal` `proposal` `message` `question`) · docs (`anydoc`) · a persistent **Python REPL** · knowledge stack · agent (all first-class) |
-| **Ecosystem** | Graphify · GraphJin · PLUR · Ruflo · Executor · **omp** · **browser** · **TypeSafe - Jev** (+ **three keyless local engines**) · **Enclave** (security agents over MCP) · **OptMem** · **Headroom** · **Connectome** · **dogwood** · **tldraw** · **egaki** · AKM · **1,000+ installed skills** (1,587 shipped here) · **plugin marketplace** (`~/.nur/plugins`, incl. **Fable**) · **natural-language + slash skill activation** (*think like fable*, *site cli*, *TDD this*, `/fable-method`, `/adhd`, `/<skill>`, …). Full install at setup; later open = TTL repair (`ecosystem_auto_ensure`) |
+| **Ecosystem** | Graphify · GraphJin · PLUR · Ruflo · Executor · **omp** · **browser** · **TypeSafe - Jev** (+ a **114-engine Jev library**, 34 local adapters) · **Enclave** (security agents over MCP) · **OptMem** · **Headroom** · **Connectome** · **dogwood** · **tldraw** · **egaki** · AKM · **1,000+ installed skills** (1,587 shipped here) · **plugin marketplace** (`~/.nur/plugins`, incl. **Fable**) · **natural-language + slash skill activation** (*think like fable*, *site cli*, *TDD this*, `/fable-method`, `/adhd`, `/<skill>`, …). Full install at setup; later open = TTL repair (`ecosystem_auto_ensure`) |
 | **Hardening** | Sandbox · bash denylist · SSRF blocks · atomic `~/.nur` IO · session **`.json.bak`** · **permissions.toml** · optional **hooks.toml** · API retries · install SHA-256 · `nur doctor` |
 | **Host panels** | Live `status.json` / `usage.jsonl` · **`NUR_*`** env exports · Orca hook (`nur-hook.cmd`) |
-
-**Current version: v0.42.0**
 
 ---
 

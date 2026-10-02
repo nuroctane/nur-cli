@@ -267,7 +267,7 @@ const PROVIDER_COUNT_DOC_SITES: &[&str] = &[
 /// withdrawn — `grok-4` is **not** served any more — so this is also what
 /// [`normalize_xai_model_id`] rewrites retired ids onto. The OAuth proxy
 /// (`cli-chat-proxy`) serves the same id, so key and browser sessions agree.
-pub const XAI_DEFAULT_MODEL: &str = "grok-4.5";
+pub const XAI_DEFAULT_MODEL: &str = "grok-4.7";
 
 /// Rewrite a retired / short Grok id onto one `api.x.ai` still serves.
 ///
@@ -313,7 +313,7 @@ pub fn normalize_xai_model_id(model: &str) -> String {
 ///
 /// Gateways (OpenCode Zen, OpenRouter) expose a bare `gemini-3.1-pro`, but
 /// `generativelanguage.googleapis.com` only accepts the `-preview` suffix.
-pub const GOOGLE_DEFAULT_MODEL: &str = "gemini-3.1-pro-preview";
+pub const GOOGLE_DEFAULT_MODEL: &str = "gemini-3.8-flash";
 
 /// Rewrite a retired Gemini id onto one the Gemini API still serves.
 ///
@@ -383,11 +383,12 @@ pub fn normalize_antigravity_model_id(model: &str) -> String {
     m.to_string()
 }
 
-/// Current general-purpose DeepSeek id.
-pub const DEEPSEEK_DEFAULT_MODEL: &str = "deepseek-v4-flash";
+/// Current general-purpose DeepSeek id (V4.1-Flash; the legacy
+/// `deepseek-v4-flash` name is still accepted and served by the same model).
+pub const DEEPSEEK_DEFAULT_MODEL: &str = "deepseek-flash";
 
 /// Official Meta Model API default ([models](https://dev.meta.ai/docs/models)).
-pub const META_DEFAULT_MODEL: &str = "muse-spark-1.2";
+pub const META_DEFAULT_MODEL: &str = "muse-spark-1.3";
 
 /// Z.AI general (prepaid / resource package) OpenAI-compatible host.
 pub const ZHIPU_BASE_URL: &str = "https://api.z.ai/api/paas/v4";
@@ -401,7 +402,7 @@ pub const ZHIPU_CODING_BASE_URL: &str = "https://api.z.ai/api/coding/paas/v4";
 /// GLM-5.3 is the Coding Plan flagship. The general `paas/v4` API still
 /// documents `glm-5.2` in its HTTP examples; Coding Plan routes 5.2/5.1
 /// requests to 5.3.
-pub const ZHIPU_DEFAULT_MODEL: &str = "glm-5.2";
+pub const ZHIPU_DEFAULT_MODEL: &str = "glm-5.3";
 pub const ZHIPU_CODING_DEFAULT_MODEL: &str = "glm-5.3";
 
 /// Rewrite the retired DeepSeek aliases.
@@ -412,8 +413,8 @@ pub const ZHIPU_CODING_DEFAULT_MODEL: &str = "glm-5.3";
 /// reasoning depth through its own effort setting, not the model id.
 /// Rewrite Meta Model API ids that the current catalog no longer serves.
 ///
-/// Official lineup is Muse Spark (`muse-spark-1.1`, `muse-spark-1.2`,
-/// `muse-spark-1.2-contributor`). The former Llama 4 stock default 404s.
+/// Official lineup is Muse Spark (`muse-spark-1.3` default, `1.3-contributor`,
+/// `1.2`, `1.2-contributor`, `1.1`). The former Llama 4 stock default 404s.
 pub fn normalize_meta_model_id(model: &str) -> String {
     let m = model.trim();
     if m.is_empty() {
@@ -678,6 +679,8 @@ pub const EFFORT_MENU: &[&str] = &["low", "medium", "high", "xhigh", "max", "ult
 /// OpenAI-shaped `reasoning.effort` rungs, also assumed for unknown routes.
 const EFFORT_OPENAI: &[&str] = &["minimal", "low", "medium", "high", "xhigh"];
 const EFFORT_OPENAI_MAX: &[&str] = &["none", "low", "medium", "high", "xhigh", "max"];
+/// GPT-6 family (Astra, Sol, Luna): `none` and `minimal` are rejected.
+const EFFORT_OPENAI_GPT6: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 /// Nous Portal's own effort ladder (Portal catalog `supported_efforts`):
 /// `stealth/ox-alpha` and most reasoning routes take `max`/`high`/`low`.
 pub const EFFORT_NOUS: &[&str] = &["low", "high", "max"];
@@ -716,6 +719,7 @@ pub fn effort_levels(provider_id: &str, model: &str) -> &'static [&'static str] 
         "openai" | "openai-cc" if model == "gpt-5.6" || model.starts_with("gpt-5.6-") => {
             EFFORT_OPENAI_MAX
         }
+        "openai" | "openai-cc" if model.starts_with("gpt-6") => EFFORT_OPENAI_GPT6,
         "nous" => EFFORT_NOUS,
         _ => EFFORT_OPENAI,
     }
@@ -902,7 +906,7 @@ pub const PROVIDERS: &[Provider] = &[
         id: "openai",
         name: "OpenAI",
         base_url: "https://api.openai.com/v1",
-        default_model: "gpt-5.5",
+        default_model: "gpt-6.1-sol",
         env_key: "OPENAI_API_KEY",
         style: R,
         note: "GPT · API key or ChatGPT OAuth",
@@ -913,7 +917,7 @@ pub const PROVIDERS: &[Provider] = &[
         id: "openai-cc",
         name: "OpenAI (Chat Completions)",
         base_url: "https://api.openai.com/v1",
-        default_model: "gpt-5.5",
+        default_model: "gpt-6.1-sol",
         env_key: "OPENAI_API_KEY",
         style: CC,
         note: "GPT · legacy chat endpoint",
@@ -924,7 +928,7 @@ pub const PROVIDERS: &[Provider] = &[
         id: "anthropic",
         name: "Anthropic",
         base_url: "https://api.anthropic.com/v1",
-        default_model: "claude-sonnet-5",
+        default_model: "claude-sonnet-5-5",
         env_key: "ANTHROPIC_API_KEY",
         style: AM,
         note: "Claude Messages API · key or browser OAuth",
@@ -1327,7 +1331,7 @@ pub const PROVIDERS: &[Provider] = &[
         id: "moonshot",
         name: "Moonshot AI",
         base_url: "https://api.moonshot.ai/v1",
-        default_model: "kimi-k2.7-code",
+        default_model: "kimi-k3",
         env_key: "MOONSHOT_API_KEY",
         style: CC,
         note: "Kimi · platform API",
@@ -2961,7 +2965,7 @@ mod tests {
     fn xai_default_model_is_current_and_shared_by_both_auth_paths() {
         let p = by_id("xai").expect("xai");
         assert_eq!(p.default_model, XAI_DEFAULT_MODEL);
-        assert_eq!(XAI_DEFAULT_MODEL, "grok-4.5");
+        assert_eq!(XAI_DEFAULT_MODEL, "grok-4.7");
         assert_eq!(
             normalize_xai_model_id(p.default_model),
             p.default_model,
@@ -3098,8 +3102,9 @@ mod tests {
             META_DEFAULT_MODEL
         );
         assert_eq!(normalize_meta_model_id("muse-spark-1.1"), "muse-spark-1.1");
+        assert_eq!(normalize_meta_model_id("muse-spark-1.2"), "muse-spark-1.2");
         assert_eq!(
-            normalize_meta_model_id("muse-spark-1.2"),
+            normalize_meta_model_id(META_DEFAULT_MODEL),
             META_DEFAULT_MODEL
         );
         assert_eq!(resolve_provider_alias("muse").map(|p| p.id), Some("meta"));

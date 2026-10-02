@@ -37,7 +37,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     const INPUT_VIEW_MAX: usize = 8;
     let input_body =
         vcount.clamp(1, INPUT_VIEW_MAX) as u16 + u16::from(!app.draft_image_indices().is_empty());
-    let busy_h = if app.busy || app.startup_pending() {
+    let busy_h = if app.busy || app.startup_line_shown() {
         1
     } else {
         0
@@ -119,7 +119,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         app.sidegraph_max_scroll = 0;
         draw_transcript(f, app, chunks[0]);
     }
-    if app.startup_pending() && !app.busy {
+    if app.startup_line_shown() && !app.busy {
         draw_busy_line(f, app, chunks[1]);
     } else if app.busy {
         // Provider logo sits left of the spinner: split the busy row into a
@@ -982,7 +982,14 @@ fn draw_theme_picker(f: &mut Frame, app: &mut App, area: Rect) {
             width: inner.width.saturating_sub(2),
             height: preview_rows,
         };
+        // Clear drops stale graphics, but leaves the terminal's default
+        // background: repaint the modal surface, or the band beside the ramp
+        // shows as a dark stripe (glaring on the light themes).
         f.render_widget(Clear, preview);
+        f.render_widget(
+            Block::default().style(Style::default().bg(theme::SURFACE_2())),
+            preview,
+        );
         let sel_id = app
             .theme_picker
             .as_ref()
@@ -6043,7 +6050,13 @@ fn banner_lines(app: &App, out: &mut Vec<Line<'static>>) {
 // ── busy line ──────────────────────────────────────────────────────────────
 fn draw_busy_line(f: &mut Frame, app: &App, area: Rect) {
     let tick = app.spinner_epoch.elapsed();
-    let elapsed = app.turn_started.elapsed();
+    // Idle startup work (skill indexing, a reconnect after /model or /login)
+    // is timed from when it began; the last turn's clock would be stale.
+    let elapsed = if app.startup_pending() && !app.busy {
+        app.startup_elapsed()
+    } else {
+        app.turn_started.elapsed()
+    };
     let live = theme::fmt_elapsed_live(elapsed);
     let mut spans = vec![Span::raw(" ".to_string())];
 

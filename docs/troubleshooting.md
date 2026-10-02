@@ -63,10 +63,10 @@ repair or upgrade ecosystem components.
 **All green:**
 
 ```text
-nur doctor · v0.39.0
+nur doctor · v0.43.0
 
 binary  C:\Users\you\.local\bin\nur.exe
-config  model=muse-spark-1.2 effort=high max_turns=∞ budget=∞$/∞tok  (C:\Users\you\.nur\config.toml)
+config  model=muse-spark-1.3 effort=high max_turns=∞ budget=∞$/∞tok  (C:\Users\you\.nur\config.toml)
 auth    key set (…abcd)
 typesafe Jev judgments active on this machine (local engine · http://127.0.0.1:8788 · no key needed)
 home    C:\Users\you\.nur

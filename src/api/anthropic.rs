@@ -31,7 +31,7 @@ pub const CLAUDE_CODE_SYSTEM_IDENTITY: &str =
 /// Default Sonnet on the Claude API (platform.claude.com, mid-2026).
 /// **Not** `claude-sonnet-4-20250514` — Sonnet 4 is retired on the first-party
 /// Claude API (still on some Bedrock/GCP endpoints only).
-pub const DEFAULT_SONNET: &str = "claude-sonnet-5";
+pub const DEFAULT_SONNET: &str = "claude-sonnet-5-5";
 
 /// Map retired / short / product names → a Claude API id that still works.
 ///

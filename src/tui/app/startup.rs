@@ -53,6 +53,9 @@ pub(super) struct StartupState {
     skills_rx: Option<mpsc::UnboundedReceiver<SkillEvent>>,
     last_check: Instant,
     started: Instant,
+    /// When the current stretch of startup work began. The busy line times
+    /// a reconnect from here, not from the last turn.
+    pending_since: Instant,
     announced_ready: bool,
     maintenance_started: bool,
     pub(super) list_skills: bool,
@@ -76,6 +79,7 @@ impl StartupState {
             skills_rx: None,
             last_check: Instant::now(),
             started: Instant::now(),
+            pending_since: Instant::now(),
             announced_ready: false,
             maintenance_started: false,
             list_skills: false,
@@ -84,11 +88,32 @@ impl StartupState {
     pub(super) fn pending(&self) -> bool {
         !self.provider_ready || !self.skills_ready
     }
+
+    /// Call before marking a phase not ready. Work that overlaps work already
+    /// in progress keeps the earlier start, so the timer never jumps back.
+    fn begin_phase(&mut self) {
+        if !self.pending() {
+            self.pending_since = Instant::now();
+        }
+    }
 }
 
 impl App {
     pub fn startup_pending(&self) -> bool {
         self.startup.pending()
+    }
+
+    pub fn startup_elapsed(&self) -> Duration {
+        self.startup.pending_since.elapsed()
+    }
+
+    /// Idle startup work shows the busy line. After launch, a reconnect only
+    /// shows it once it has run long enough to notice, so a quick /model
+    /// switch does not flash a row in and out of the layout.
+    pub fn startup_line_shown(&self) -> bool {
+        self.startup_pending()
+            && (!self.startup.announced_ready
+                || self.startup_elapsed() >= Duration::from_millis(350))
     }
 
     pub(super) fn launch_startup(&mut self) {
@@ -121,6 +146,7 @@ impl App {
         let selection = Selection::from_config(&cfg);
         let (tx, rx) = mpsc::unbounded_channel();
         self.startup.provider_rx = Some(rx);
+        self.startup.begin_phase();
         self.startup.provider_ready = false;
         let failure = tx.clone();
         if let Err(error) = std::thread::Builder::new()
@@ -178,6 +204,7 @@ impl App {
         if self.startup.skills_rx.is_some() {
             return;
         }
+        self.startup.begin_phase();
         self.startup.skills_ready = false;
         let cwd = self.cwd.clone();
         let failed_cwd = cwd.clone();
@@ -277,6 +304,7 @@ impl App {
         self.startup.account_pending += 1;
         if affects_provider {
             self.startup.provider_rx = None;
+            self.startup.begin_phase();
             self.startup.provider_ready = false;
             self.startup.provider_phase = "updating account";
         }
@@ -586,5 +614,37 @@ impl App {
         } else {
             self.start_attached_turn(&next.text, next.images);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A reconnect long after launch must be timed from its own start: the
+    // busy line used to show the age of the previous turn.
+    #[test]
+    fn a_phase_after_ready_restarts_the_clock() {
+        let mut state = StartupState::new();
+        state.provider_ready = true;
+        state.skills_ready = true;
+        let launched = state.pending_since;
+        std::thread::sleep(Duration::from_millis(5));
+        state.begin_phase();
+        state.provider_ready = false;
+        assert!(state.pending_since > launched);
+    }
+
+    // Work that overlaps work already running keeps the first start, so the
+    // visible timer never jumps backwards.
+    #[test]
+    fn overlapping_phases_keep_the_first_start() {
+        let mut state = StartupState::new();
+        state.skills_ready = true;
+        let first = state.pending_since;
+        std::thread::sleep(Duration::from_millis(5));
+        state.begin_phase();
+        state.skills_ready = false;
+        assert_eq!(state.pending_since, first);
     }
 }

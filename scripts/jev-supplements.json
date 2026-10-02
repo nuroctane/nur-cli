@@ -1,0 +1,39 @@
+{
+  "reviewed": "2026-10-01",
+  "note": "Jev-class decision models released after the pinned JevBench roster. Vendor-documented, unranked until JevBench measures them.",
+  "engines": [
+    {
+      "id": "glide",
+      "name": "GLiDE (Fastino Labs, thinking decision model)",
+      "source": "https://fastino.ai/blog/introducing-glide-the-first-thinking-decision-model",
+      "protocol": "systemone",
+      "adapter": "",
+      "license": "Fastino API terms",
+      "open": "no",
+      "hardware": "hosted (Fastino API)",
+      "support": {"choice": "native"},
+      "status": {"status": "released 2026-09-30; not yet measured by JevBench"},
+      "rank": null,
+      "model": "fastino/glide",
+      "endpoint": "https://api.fastino.ai/v1/systemone",
+      "evidence": "https://fastino.ai/blog/introducing-glide-the-first-thinking-decision-model",
+      "notes": "Fastino documents the GLiDE API as conforming to the System One schema. Key: nur jev login glide, or --key-env FASTINO_API_KEY."
+    },
+    {
+      "id": "pplx-decider-v1-27b",
+      "name": "Perplexity Decider v1 27B (Qwen3.8-27B fine-tune)",
+      "source": "https://huggingface.co/perplexity-ai/pplx-decider-v1-27b",
+      "protocol": "adapter",
+      "adapter": "",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "see the model card",
+      "support": {"choice": "native", "noul": "native", "score": "native"},
+      "status": {"status": "released 2026-10-01; not yet measured by JevBench"},
+      "rank": null,
+      "model": "perplexity-ai/pplx-decider-v1-27b",
+      "evidence": "https://huggingface.co/perplexity-ai/pplx-decider-v1-27b",
+      "notes": "Open weights with typed choice, yes/no and score decisions. Run the model card's inference script behind a TypeSafe-compatible server, or connect a Python adapter."
+    }
+  ]
+}

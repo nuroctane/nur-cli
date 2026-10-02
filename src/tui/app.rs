@@ -9301,7 +9301,7 @@ impl App {
                 } => {
                     in_turn = true;
                     nodes.push(SgNode::Thinking {
-                        excerpt: first_line(text, 120),
+                        excerpt: plain_excerpt(&first_line(text, 120)),
                         live: *active,
                         started: *started,
                         duration: *duration,
@@ -9346,7 +9346,7 @@ impl App {
                     // empty - poolside sometimes emits a streaming Assistant cell
                     // with only whitespace/newlines before the first real token
                     // arrives, which left the node blank and unregistered.
-                    let excerpt = first_line(text, 80);
+                    let excerpt = plain_excerpt(&first_line(text, 80));
                     let excerpt = if excerpt.is_empty() {
                         "…".to_string()
                     } else {
@@ -11295,9 +11295,48 @@ pub fn fmt_num(n: u64) -> String {
     }
 }
 
+/// A one-line excerpt of model markdown for a sidegraph box: the words
+/// without block markers (`## `, `> `, bullets), bold or code fences. Single
+/// `_` and `*` stay, since identifiers and arithmetic use them.
+fn plain_excerpt(line: &str) -> String {
+    let mut s = line.trim_start();
+    let hashes = s.chars().take_while(|c| *c == '#').count();
+    // A streaming answer's first line can be the bare marker ("##") before
+    // the heading text arrives.
+    if (1..=6).contains(&hashes) && (s.len() == hashes || s[hashes..].starts_with(' ')) {
+        s = s[hashes..].trim_start();
+    } else if let Some(rest) = ["> ", "- ", "* ", "+ "]
+        .iter()
+        .find_map(|marker| s.strip_prefix(marker))
+    {
+        s = rest;
+    }
+    s.replace("**", "").replace("~~", "").replace('`', "")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Graph boxes showed the answer's raw markdown ("## Fixed ...",
+    // "**7 tests**", backticks); identifiers and arithmetic must survive.
+    #[test]
+    fn sidegraph_excerpts_drop_markdown_but_keep_identifiers() {
+        assert_eq!(
+            plain_excerpt("## Fixed operator precedence"),
+            "Fixed operator precedence"
+        );
+        assert_eq!(
+            plain_excerpt("Added `test_chained_division`: `8 / 4 / 2` evaluates to **1**."),
+            "Added test_chained_division: 8 / 4 / 2 evaluates to 1."
+        );
+        assert_eq!(
+            plain_excerpt("- `__init__.py` re-exports 2 * 3"),
+            "__init__.py re-exports 2 * 3"
+        );
+        assert_eq!(plain_excerpt("#hashtag stays"), "#hashtag stays");
+        assert_eq!(plain_excerpt("##"), "");
+    }
     use crate::tui::input::InputState;
 
     #[test]

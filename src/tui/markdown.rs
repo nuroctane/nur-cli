@@ -116,6 +116,12 @@ impl<'a> Composer<'a> {
     }
 
     fn event(&mut self, event: Event<'_>, range: Range<usize>) {
+        // A fenced block is emitted whole from its source range when it ends;
+        // its text events must not also become an inline run, or a block that
+        // ends the message renders a second, flattened copy.
+        if self.code.is_some() && !matches!(event, Event::End(TagEnd::CodeBlock)) {
+            return;
+        }
         match &event {
             // Inline runs (text, code, emphasis, links, breaks): accumulate the
             // covered source range; the block events below flush it.
@@ -637,6 +643,29 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    // Failure mode: a fenced block's text also lingers as a pending inline run,
+    // so a block that ends the message (or precedes a list) renders twice,
+    // the second time flattened onto one line.
+    #[test]
+    fn fenced_code_renders_once_wherever_it_sits() {
+        for source in [
+            "Result:\n\n```text\n2 + 3 * 4   ->  14\n10 - 6 / 2  ->  7\n```\n",
+            "Result:\n\n```text\n2 + 3 * 4   ->  14\n10 - 6 / 2  ->  7\n```\n\n- next item\n",
+            "```text\n2 + 3 * 4   ->  14\n10 - 6 / 2  ->  7\n```",
+        ] {
+            let text = flat(&render_markdown(source, Style::default()));
+            assert_eq!(
+                text.matches("->  14").count(),
+                1,
+                "{source:?} rendered {text:?}"
+            );
+            assert!(
+                !text.contains("14 10"),
+                "{source:?} flattened the block into a line: {text:?}"
+            );
+        }
     }
 
     #[test]
