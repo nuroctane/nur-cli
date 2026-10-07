@@ -21,7 +21,7 @@
   Skip Orca agent-hook install.
 
 .PARAMETER RepoDir
-  Where to clone/build (default: %USERPROFILE%\laboratory\nur-cli).
+  Where to clone/build (default: $env:NUR_CLI_DIR, else %USERPROFILE%\laboratory\nur-cli).
 #>
 param(
     [switch]$SkipHook,
@@ -57,7 +57,8 @@ if ($scriptRoot -and (Test-Path (Join-Path $scriptRoot "Cargo.toml"))) {
 }
 
 if (-not $RepoDir) {
-    $RepoDir = Join-Path $env:USERPROFILE "laboratory\nur-cli"
+    # Same override as install.sh: the irm | iex one-liner cannot pass -RepoDir.
+    $RepoDir = if ($env:NUR_CLI_DIR) { $env:NUR_CLI_DIR } else { Join-Path $env:USERPROFILE "laboratory\nur-cli" }
 }
 
 if (-not $inRepo) {

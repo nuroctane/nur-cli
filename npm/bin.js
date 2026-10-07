@@ -17,11 +17,13 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const crypto = require("crypto");
 const { spawnSync } = require("child_process");
 
 const REPO = "nuroctane/nur-cli";
-// Falls back to this pinned version when `latest/download` is unreachable.
-const FALLBACK_VERSION = "0.40.1";
+// Falls back to this package's own release when `latest/download` is
+// unreachable. publish-npm.yml stamps the release tag into package.json.
+const FALLBACK_VERSION = require("./package.json").version;
 
 function fail(msg) {
   process.stderr.write(`nur-cli: ${msg}\n`);
@@ -65,7 +67,9 @@ function fetchBuffer(url, redirects) {
         }
         if (status !== 200) {
           res.resume();
-          return reject(new Error(`HTTP ${status} for ${url}`));
+          const err = new Error(`HTTP ${status} for ${url}`);
+          err.status = status;
+          return reject(err);
         }
         const chunks = [];
         res.on("data", (c) => chunks.push(c));
@@ -123,12 +127,45 @@ async function downloadAndInstall() {
   if (buf.length < 1000000) {
     fail(`downloaded asset too small (${buf.length} bytes) - aborting`);
   }
+  await verifyChecksum(picked, buf);
 
+  // Write beside the target, then rename: an interrupted download never leaves
+  // a truncated `nur` behind.
   const dest = installedBinaryPath();
-  fs.writeFileSync(dest, buf);
-  if (asset.execBit) fs.chmodSync(dest, 0o755);
+  const tmp = `${dest}.tmp-${process.pid}`;
+  fs.writeFileSync(tmp, buf);
+  if (asset.execBit) fs.chmodSync(tmp, 0o755);
+  try {
+    fs.renameSync(tmp, dest);
+  } catch (e) {
+    fs.rmSync(tmp, { force: true });
+    if (e.code === "EPERM" || e.code === "EBUSY") {
+      fail(`${dest} is in use - close every running nur, then run this again`);
+    }
+    throw e;
+  }
   process.stdout.write(`nur-cli: installed ${dest}\n`);
   return dest;
+}
+
+/** Check `buf` against the `<asset>.sha256` the release publishes beside it. */
+async function verifyChecksum(url, buf) {
+  const name = url.split("/").pop();
+  let record;
+  try {
+    record = (await fetchBuffer(`${url}.sha256`)).toString("utf8");
+  } catch (e) {
+    if (e.status === 404) return; // a release from before checksums were published
+    fail(`could not fetch the checksum for ${name} (${e.message})`);
+  }
+  const expected = (record.trim().split(/\s+/)[0] || "").toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(expected)) {
+    fail(`${name}.sha256 is not a sha256 record - aborting`);
+  }
+  const actual = crypto.createHash("sha256").update(buf).digest("hex");
+  if (actual !== expected) {
+    fail(`${name} does not match its published sha256 (${actual} != ${expected}) - aborting`);
+  }
 }
 
 function runNurInstall(bin) {

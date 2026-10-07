@@ -178,7 +178,7 @@ pub fn run_full_install() -> Result<()> {
             use std::os::unix::fs::PermissionsExt;
             let _ = fs::set_permissions(&dest, fs::Permissions::from_mode(0o755));
         }
-        if let Some(hash) = file_sha256(&dest) {
+        if let Ok(hash) = file_sha256(&dest) {
             let record = format!(
                 "{hash}  {}",
                 dest.file_name().and_then(|s| s.to_str()).unwrap_or("nur")
@@ -864,6 +864,37 @@ fn release_assets(rel: &serde_json::Value) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
+/// The digest a release publishes beside `name` as `<name>.sha256`
+/// (`sha256sum` format). `None` when the release carries no checksum asset; an
+/// unreadable one is an error, so a truncated or swapped checksum never waves a
+/// download through.
+fn published_sha256(
+    http: &reqwest::blocking::Client,
+    assets: &[(String, String)],
+    name: &str,
+) -> Result<Option<String>> {
+    let want = format!("{name}.sha256");
+    let Some((_, url)) = assets.iter().find(|(n, _)| n.eq_ignore_ascii_case(&want)) else {
+        return Ok(None);
+    };
+    let text = http
+        .get(url)
+        .send()
+        .and_then(|r| r.error_for_status())
+        .and_then(|r| r.text())
+        .map_err(|e| NurError::Other(format!("checksum download: {e}")))?;
+    parse_sha256_record(&text)
+        .map(Some)
+        .ok_or_else(|| NurError::Other(format!("{want} is not a sha256 record - aborting")))
+}
+
+/// First token of a `sha256sum` line, when it is 64 hex digits.
+fn parse_sha256_record(text: &str) -> Option<String> {
+    let token = text.split_whitespace().next()?;
+    (token.len() == 64 && token.chars().all(|c| c.is_ascii_hexdigit()))
+        .then(|| token.to_ascii_lowercase())
+}
+
 /// Query GitHub Releases and install a newer binary when available.
 /// `force_verbose` prints status lines (used by `nur update`); the launch path
 /// passes `false` and stays **completely silent** — it runs on a background
@@ -938,6 +969,15 @@ fn try_install_from_github(force_verbose: bool) -> Result<UpdateOutcome> {
             "downloaded asset is not a native executable — aborting".into(),
         ));
     }
+    if let Some(expected) = published_sha256(&http, &assets, &name)? {
+        let actual = sha256_hex(&bytes);
+        if actual != expected {
+            return Err(NurError::Other(format!(
+                "downloaded {name} does not match its published sha256 \
+                 ({actual} != {expected}) - aborting"
+            )));
+        }
+    }
     fs::write(&tmp, &bytes).map_err(NurError::Io)?;
     // A short write (disk full) would leave a truncated image that passes the
     // guards above purely because they ran on the in-memory buffer.
@@ -965,7 +1005,7 @@ fn try_install_from_github(force_verbose: bool) -> Result<UpdateOutcome> {
     let _ = fs::remove_file(&tmp);
     installed?;
     scrub_impostor_bins(&dest_dir, &dest);
-    if let Some(hash) = file_sha256(&dest) {
+    if let Ok(hash) = file_sha256(&dest) {
         let record = format!(
             "{hash}  {}",
             dest.file_name().and_then(|s| s.to_str()).unwrap_or("nur")
@@ -998,12 +1038,10 @@ fn looks_like_native_executable(bytes: &[u8]) -> bool {
             [0xcf, 0xfa, 0xed, 0xfe],
         ];
         const FAT: [[u8; 4]; 2] = [[0xca, 0xfe, 0xba, 0xbe], [0xbe, 0xba, 0xfe, 0xca]];
-        // Release pipeline may also ship .tar.gz for macOS — gzip magic passes.
-        return MACHO.iter().chain(FAT.iter()).any(|m| &bytes[..4] == m)
-            || bytes[..2] == [0x1f, 0x8b];
+        return MACHO.iter().chain(FAT.iter()).any(|m| &bytes[..4] == m);
     }
-    // Linux: ELF, or a gzip tarball of one.
-    &bytes[..4] == b"\x7fELF" || bytes[..2] == [0x1f, 0x8b]
+    // Nothing unpacks an archive: a gzip body would be installed as `nur`.
+    &bytes[..4] == b"\x7fELF"
 }
 
 fn strip_v_prefix(tag: &str) -> &str {
@@ -1053,16 +1091,9 @@ fn pick_nur_release_asset(assets: &[(String, String)]) -> Option<(String, String
             "nur-windows-x86_64.exe".into(),
         ]
     } else if cfg!(target_os = "macos") {
-        vec![
-            format!("nur-macos-{arch}"),
-            format!("nur-darwin-{arch}"),
-            format!("nur-macos-{arch}.tar.gz"),
-        ]
+        vec![format!("nur-macos-{arch}"), format!("nur-darwin-{arch}")]
     } else {
-        vec![
-            format!("nur-linux-{arch}"),
-            format!("nur-linux-{arch}.tar.gz"),
-        ]
+        vec![format!("nur-linux-{arch}")]
     };
 
     for want in &preferred {
@@ -1075,7 +1106,13 @@ fn pick_nur_release_asset(assets: &[(String, String)]) -> Option<(String, String
         .iter()
         .find(|(n, _)| {
             let l = n.to_ascii_lowercase();
-            l.contains("nur")
+            // The installer writes the body straight to `nur`: archives and
+            // checksum files are never the binary.
+            let packaged = [".sha256", ".tar.gz", ".tgz", ".zip"]
+                .iter()
+                .any(|ext| l.ends_with(ext));
+            !packaged
+                && l.contains("nur")
                 && (l.contains(os) || (os == "macos" && l.contains("darwin")))
                 && l.contains(arch)
         })
@@ -1155,7 +1192,7 @@ fn same_file(a: &Path, b: &Path) -> bool {
 /// binary under a foreign agent name - only identical copies: `muse` is Meta's
 /// own Muse Code CLI, which the Meta sign-in looks for on PATH.
 fn scrub_impostor_bins(dest_dir: &Path, nur_bin: &Path) {
-    let Some(our_hash) = file_sha256(nur_bin) else {
+    let Ok(our_hash) = file_sha256(nur_bin) else {
         return;
     };
     // Well-known foreign agent names that must never be our product binary.
@@ -1180,7 +1217,7 @@ fn scrub_impostor_bins(dest_dir: &Path, nur_bin: &Path) {
             let _ = fs::remove_file(&p);
             continue;
         }
-        if let Some(h) = file_sha256(&p) {
+        if let Ok(h) = file_sha256(&p) {
             if h == our_hash {
                 let _ = fs::remove_file(&p);
                 theme::print_info(&format!(
@@ -1248,46 +1285,18 @@ fn install_binary_safe(src: &Path, target: &Path) -> Result<()> {
     }
 }
 
-fn file_sha256(path: &Path) -> Option<String> {
-    #[cfg(windows)]
-    {
-        let out = Command::new("certutil")
-            .args(["-hashfile", &path.display().to_string(), "SHA256"])
-            .output()
-            .ok()?;
-        if !out.status.success() {
-            return None;
-        }
-        let text = String::from_utf8_lossy(&out.stdout);
-        // certutil prints: "SHA256 hash of …:" / hex line / "CertUtil: …"
-        for line in text.lines() {
-            let t = line.trim();
-            if t.len() == 64 && t.chars().all(|c| c.is_ascii_hexdigit()) {
-                return Some(t.to_ascii_lowercase());
-            }
-        }
-        None
-    }
-    #[cfg(not(windows))]
-    {
-        let out = Command::new("sha256sum")
-            .arg(path)
-            .output()
-            .or_else(|_| {
-                Command::new("shasum")
-                    .args(["-a", "256"])
-                    .arg(path)
-                    .output()
-            })
-            .ok()?;
-        if !out.status.success() {
-            return None;
-        }
-        let text = String::from_utf8_lossy(&out.stdout);
-        text.split_whitespace()
-            .next()
-            .map(|s| s.to_ascii_lowercase())
-    }
+/// Lowercase hex SHA-256 of `bytes`.
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// SHA-256 of a file, hashed in process (no `certutil` / `shasum` launch).
+pub fn file_sha256(path: &Path) -> std::io::Result<String> {
+    fs::read(path).map(|bytes| sha256_hex(&bytes))
 }
 
 #[cfg(not(windows))]
@@ -1700,6 +1709,44 @@ mod auto_update_tests {
         let exe = std::env::current_exe().unwrap();
         let head = fs::read(&exe).unwrap();
         assert!(looks_like_native_executable(&head[..64.min(head.len())]));
+    }
+
+    // Failure modes: the picker hands a checksum file or an archive to an
+    // installer that writes the body straight to `nur`; a gzip body passes the
+    // executable guard; a checksum record that is not a digest is trusted.
+    #[test]
+    fn checksum_and_archive_assets_are_never_installed() {
+        let os = if cfg!(windows) {
+            "windows"
+        } else if cfg!(target_os = "macos") {
+            "macos"
+        } else {
+            "linux"
+        };
+        let arch = std::env::consts::ARCH;
+        let assets: Vec<(String, String)> = vec![
+            (format!("nur-{os}-{arch}.sha256"), "http://sum".into()),
+            (format!("nur-{os}-{arch}.tar.gz"), "http://tgz".into()),
+            (format!("nur-{os}-{arch}.zip"), "http://zip".into()),
+        ];
+        assert_eq!(pick_nur_release_asset(&assets), None);
+        assert!(!looks_like_native_executable(&[0x1f, 0x8b, 0x08, 0x00]));
+    }
+
+    #[test]
+    fn checksum_records_must_be_a_digest() {
+        let digest = "AB".repeat(32);
+        assert_eq!(
+            parse_sha256_record(&format!("{digest}  nur-linux-x86_64\n")),
+            Some(digest.to_ascii_lowercase())
+        );
+        assert_eq!(parse_sha256_record("<html>Not Found</html>"), None);
+        assert_eq!(parse_sha256_record(&"a".repeat(63)), None);
+        assert_eq!(parse_sha256_record(""), None);
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
     }
 
     #[test]

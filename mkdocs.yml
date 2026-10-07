@@ -36,6 +36,20 @@ theme:
 extra_css:
   - stylesheets/extra.css
 
+# Kept in the repo, never published: verbatim third-party page and paper
+# captures used as research input, and internal agent plans.
+exclude_docs: |
+  research/_extracts/
+  superpowers/
+
+# Reachable by link or search, deliberately outside the nav.
+not_in_nav: |
+  provider-signin-review.md
+  research/agent-harness-bible.md
+  research/integration-cli-and-three-sources.md
+  research/integration-gaps.md
+  research/integration-report.md
+
 markdown_extensions:
   - admonition
   - pymdownx.details

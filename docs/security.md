@@ -104,7 +104,7 @@ external data, not instructions. See [enclave.md](./enclave.md).
 
 ## Binary integrity
 
-Each release includes a SHA-256 hash written next to the binary by the installer (npx shim, one-liner, or EXE). `nur doctor` verifies this:
+Every release asset ships with a published `<asset>.sha256`. The self-updater (`nur update` and the launch check) and the `npx nur-cli` shim compare each download against it and refuse a mismatch before anything is written; neither ever installs an archive or a checksum file as the binary. After install, the installer records the binary's SHA-256 next to it (`nur.sha256` in the install directory) and `nur doctor` verifies it:
 
 ```bash
 nur doctor
