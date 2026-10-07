@@ -290,6 +290,16 @@ allow = ["bash:git status*", "bash:cargo test*"]
 | **ask** | Force an approval prompt (even in auto) |
 | **allow** | Skip approval in manual (plan structural blocks still win) |
 
+`bash` rules see every command in a chain. The command is split at `;`, `&`,
+`&&`, `|`, `||`, newlines and subshell parentheses (quoted text stays whole), so
+a `deny` or `ask` rule fires when **any** command in it matches:
+`cd . && rm -rf /` is denied by `bash:rm -rf *`, and so is `echo "$(rm -rf /)"`.
+An `allow` rule approves only when **every** command is allowed on its own:
+`bash:git *` covers `git status && git diff`, not `git status && curl … | sh`.
+A command substitution (`$(…)`, backticks, `<(…)`) or a redirect into a file
+(`> out.txt`; `2>&1` and `>/dev/null` are fine) is never approved by pattern
+and falls back to the mode default.
+
 Reload without restart: `/permissions reload`. `/cd` reloads them for the new directory.
 
 ---

@@ -156,7 +156,7 @@ pub enum Commands {
         /// Bot token (else $TELEGRAM_BOT_TOKEN)
         #[arg(long)]
         token: Option<String>,
-        /// Restrict to a single chat id (else $TELEGRAM_CHAT_ID; unset = allow anyone)
+        /// The one chat the bot answers (else $TELEGRAM_CHAT_ID). Unset: pairing only, nothing runs
         #[arg(long)]
         chat: Option<i64>,
     },

@@ -1245,6 +1245,16 @@ pub fn apply_base_url_env(cfg: &mut Config) {
 }
 
 pub fn atomic_write(path: &std::path::Path, content: &[u8]) -> std::io::Result<()> {
+    write_atomically(path, content, false)
+}
+
+/// [`atomic_write`] for secrets: on Unix the file is created owner-only
+/// (0600) before a byte is written, never widened and narrowed afterwards.
+pub fn private_atomic_write(path: &std::path::Path, content: &[u8]) -> std::io::Result<()> {
+    write_atomically(path, content, true)
+}
+
+fn write_atomically(path: &std::path::Path, content: &[u8], private: bool) -> std::io::Result<()> {
     use std::io::Write;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -1260,12 +1270,18 @@ pub fn atomic_write(path: &std::path::Path, content: &[u8]) -> std::io::Result<(
     }
     let _cleanup = TemporaryFile(tmp.clone());
     {
-        let mut f = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp)?;
-        if let Ok(metadata) = fs::metadata(path) {
-            f.set_permissions(metadata.permissions())?;
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        if private {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut f = options.open(&tmp)?;
+        if !private {
+            if let Ok(metadata) = fs::metadata(path) {
+                f.set_permissions(metadata.permissions())?;
+            }
         }
         f.write_all(content)?;
         f.sync_all()?;
@@ -1461,6 +1477,32 @@ mod tests {
             1,
             "temporary files leaked"
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    // Failure modes: a secret store readable by others (a widened existing
+    // file, or the window before a chmod), and a replace that leaves the old
+    // contents or a temporary file behind.
+    #[test]
+    fn private_writes_replace_and_stay_owner_only() {
+        let root = std::env::temp_dir().join(format!("nur-private-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("auth.json");
+        fs::write(&path, b"old").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        private_atomic_write(&path, b"{\"key\":\"new\"}").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"{\"key\":\"new\"}");
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1, "temporary file leaked");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
         fs::remove_dir_all(root).unwrap();
     }
 

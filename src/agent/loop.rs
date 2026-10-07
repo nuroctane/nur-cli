@@ -4347,6 +4347,8 @@ mod tests {
             "git diff HEAD~1",
             "git log --oneline",
             "git fetch origin",
+            "git -C ../other log --oneline",
+            "git --no-pager diff",
         ] {
             assert!(plan_blocks_shell(ok).is_none(), "should allow: {ok}");
         }
@@ -4370,6 +4372,15 @@ mod tests {
             "cargo add serde",
             "cargo install ripgrep",
             "cargo update",
+            // Spacing and git's global options must not hide the subcommand.
+            "git  commit -m x",
+            "git\tpush",
+            "git -C . commit -am x",
+            "git -c user.name=x commit -m y",
+            "git --git-dir=.git --work-tree . push",
+            "git --no-pager stash",
+            "/usr/bin/git add .",
+            "npm  install",
         ] {
             assert!(plan_blocks_shell(bad).is_some(), "should block: {bad}");
         }
@@ -4790,10 +4801,7 @@ fn normalize_tool_preamble(text: &str) -> String {
 /// install dependencies — i.e. "no submitting changes / no code input", while
 /// non-mutating compute stays free. Returns a short reason when blocked.
 pub fn plan_blocks_shell(command: &str) -> Option<&'static str> {
-    let c = format!(
-        " {} ",
-        command.to_ascii_lowercase().replace(['\t', '\n'], " ")
-    );
+    let c = format!(" {} ", plan_shell_words(command));
     // Git working-tree / index / publish mutations (fetch is read-only, allowed).
     const GIT_MUT: &[&str] = &[
         "git commit",
@@ -4883,6 +4891,36 @@ pub fn plan_blocks_shell(command: &str) -> Option<&'static str> {
         return Some("dependency install/mutation is blocked in plan mode");
     }
     None
+}
+
+/// The command as plan mode's phrase lists read it: lowercase, one space
+/// between words, and git's global options (`-C <dir>`, `-c k=v`,
+/// `--git-dir=…`, `--no-pager`, …) dropped, so `git  commit` and
+/// `git -C . commit` read as `git commit`.
+fn plan_shell_words(command: &str) -> String {
+    let lower = command.to_ascii_lowercase();
+    let mut words = lower.split_whitespace().peekable();
+    let mut out: Vec<&str> = Vec::new();
+    while let Some(word) = words.next() {
+        out.push(word);
+        if word != "git" && !word.ends_with("/git") && !word.ends_with("\\git.exe") {
+            continue;
+        }
+        while let Some(&option) = words.peek() {
+            if !option.starts_with('-') {
+                break;
+            }
+            words.next();
+            // `-C`/`-c` (one spelling once lowercased) and the long forms
+            // without `=` take the next word as their value.
+            if matches!(option, "-c" | "--git-dir" | "--work-tree" | "--namespace") {
+                words.next();
+            }
+        }
+        out.pop();
+        out.push("git");
+    }
+    out.join(" ")
 }
 
 /// Attach any media queued by `look` / `extract_frames` as a multimodal user item.

@@ -78,11 +78,23 @@ pub fn next_offset(updates: &[Update], current: i64) -> i64 {
         .unwrap_or(current)
 }
 
-/// Whether `chat_id` may use the bot given an optional single-chat allow-list.
+/// Whether `chat_id` may use the bot. Fail closed: every turn runs with tools
+/// auto-approved, `bash` included, so a bot without an allowed chat runs
+/// nothing for anyone who finds it.
 pub fn authorized(chat_id: i64, allow: Option<i64>) -> bool {
+    allow == Some(chat_id)
+}
+
+/// What an unauthorized sender is told. Before any chat is allowed it names
+/// the sender's own chat id, so pairing is one restart away.
+pub fn refusal(chat_id: i64, allow: Option<i64>) -> String {
     match allow {
-        Some(a) => a == chat_id,
-        None => true,
+        Some(_) => "not authorized".to_string(),
+        None => format!(
+            "this gateway has no allowed chat yet, so it runs nothing. Your chat id is \
+             {chat_id}: restart it with `nur gateway --chat {chat_id}` (or \
+             TELEGRAM_CHAT_ID={chat_id})."
+        ),
     }
 }
 
@@ -215,9 +227,12 @@ pub async fn run_gateway(
 
     theme::print_ok("telegram gateway online — message your bot (Ctrl+C to stop)");
     if let Some(c) = allow_chat {
-        theme::print_info(&format!("restricted to chat id {c}"));
+        theme::print_info(&format!("answering chat id {c} only"));
     } else {
-        theme::print_info("open to any chat — set --chat / TELEGRAM_CHAT_ID to restrict");
+        theme::print_info(
+            "pairing only: no chat is allowed yet, so nothing runs. Message the bot; it \
+             replies with your chat id. Then restart with --chat <id> (or TELEGRAM_CHAT_ID)",
+        );
     }
 
     let mut offset: i64 = 0;
@@ -243,7 +258,10 @@ pub async fn run_gateway(
                 break;
             }
             if !authorized(up.chat_id, allow_chat) {
-                send(&http, &token, up.chat_id, "not authorized").await;
+                if allow_chat.is_none() {
+                    theme::print_info(&format!("chat {} asked to connect", up.chat_id));
+                }
+                send(&http, &token, up.chat_id, &refusal(up.chat_id, allow_chat)).await;
                 continue;
             }
             theme::print_info(&format!("‹{}› {}", up.chat_id, truncate(&up.text, 80)));
@@ -337,11 +355,15 @@ mod tests {
         assert_eq!(next_offset(&[], 3), 3); // no updates → unchanged
     }
 
+    // Failure mode: a bot started without an allow-list runs auto-approved
+    // turns (bash included) for anyone on Telegram who finds it.
     #[test]
-    fn authorized_respects_allow_list() {
-        assert!(authorized(5, None)); // open
+    fn only_the_allowed_chat_runs_anything() {
+        assert!(!authorized(5, None));
         assert!(authorized(5, Some(5)));
         assert!(!authorized(5, Some(6)));
+        assert!(refusal(42, None).contains("--chat 42"));
+        assert_eq!(refusal(42, Some(7)), "not authorized");
     }
 
     #[test]

@@ -302,19 +302,14 @@ pub fn export_to_penecho_env(
 /// Default HTTP port used by penecho (`cli.js` DEFAULT_PORT).
 pub const DEFAULT_PORT: u16 = 3888;
 
-/// Write penecho config.env atomically (mirrors t3code atomicWrite).
+/// Write penecho config.env atomically.
 /// Callers that write real secrets must never return those contents to the model.
 pub fn write_config_env(contents: &str) -> Result<PathBuf> {
     let dir = penecho_state_dir();
     let file = dir.join("config.env");
-    crate::t3code::atomic_write(&file, contents.as_bytes())
+    // Owner-only from creation on Unix (penecho docs recommend it).
+    crate::config::private_atomic_write(&file, contents.as_bytes())
         .map_err(|e| NurError::Other(format!("atomic write penecho config: {e}")))?;
-    // Best-effort owner-only perms on Unix (penecho docs recommend this).
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&file, fs::Permissions::from_mode(0o600));
-    }
     Ok(file)
 }
 

@@ -9,6 +9,10 @@
 #[derive(Default)]
 pub struct SseParser {
     buf: Vec<u8>,
+    /// Bytes of `buf` already searched for a boundary. A large event (a
+    /// base64 image) arriving in small chunks would otherwise be rescanned
+    /// from its start on every chunk.
+    scanned: usize,
 }
 
 impl SseParser {
@@ -21,8 +25,11 @@ impl SseParser {
     pub fn push(&mut self, chunk: &[u8]) -> Vec<String> {
         self.buf.extend_from_slice(chunk);
         let mut out = Vec::new();
-        while let Some((end, sep_len)) = find_boundary(&self.buf) {
+        // A separator is at most 3 bytes, so one may straddle the old end.
+        while let Some((end, sep_len)) = find_boundary(&self.buf, self.scanned.saturating_sub(2))
+        {
             let event: Vec<u8> = self.buf.drain(..end + sep_len).collect();
+            self.scanned = 0;
             let event = &event[..end];
             // The event is whole, so this decode never splits a character.
             let text = String::from_utf8_lossy(event);
@@ -30,6 +37,7 @@ impl SseParser {
                 out.push(data);
             }
         }
+        self.scanned = self.buf.len();
         out
     }
 
@@ -51,16 +59,17 @@ impl SseParser {
             return None;
         }
         let rest: Vec<u8> = std::mem::take(&mut self.buf);
+        self.scanned = 0;
         // Whatever is left is all we will ever get, so decoding it now cannot
         // split a character that a later chunk would have completed.
         extract_data(&String::from_utf8_lossy(&rest))
     }
 }
 
-/// Locate the end of the first event: a blank line (`\n\n` or `\r\n\r\n`).
-/// Returns (offset of the boundary, length of the separator).
-fn find_boundary(buf: &[u8]) -> Option<(usize, usize)> {
-    let mut i = 0;
+/// Locate the end of the first event at or after `from`: a blank line (`\n\n`
+/// or `\r\n\r\n`). Returns (offset of the boundary, length of the separator).
+fn find_boundary(buf: &[u8], from: usize) -> Option<(usize, usize)> {
+    let mut i = from;
     while i < buf.len() {
         if buf[i] == b'\n' {
             // \n\n
@@ -87,7 +96,9 @@ fn extract_data(raw: &str) -> Option<String> {
             if !out.is_empty() {
                 out.push('\n');
             }
-            out.push_str(rest.trim_start());
+            // The spec strips exactly one space: a text stream's own leading
+            // spaces are content.
+            out.push_str(rest.strip_prefix(' ').unwrap_or(rest));
         }
     }
     if out.is_empty() {
@@ -184,6 +195,40 @@ mod tests {
         let last = p.finish().expect("trailing event");
         assert!(last.contains("héllo 日本 🚀"), "corrupted: {last}");
         assert!(!last.contains('\u{FFFD}'), "replacement char leaked");
+    }
+
+    // Failure modes: a text stream loses its own leading spaces, and a large
+    // event fed in small chunks is rescanned from its start every time (or a
+    // separator split across chunks is missed once scanning resumes).
+    #[test]
+    fn only_one_space_after_data_is_framing() {
+        let mut p = SseParser::new();
+        assert_eq!(
+            p.push(b"data:  world\ndata:x\n\n"),
+            vec![" world\nx".to_string()]
+        );
+    }
+
+    #[test]
+    fn large_events_in_small_chunks_stay_linear() {
+        let mut p = SseParser::new();
+        let body = format!("data: {}\r\n\r\ndata: tail\n\n", "x".repeat(8 << 20));
+        let started = std::time::Instant::now();
+        let mut events = Vec::new();
+        for chunk in body.as_bytes().chunks(1024) {
+            events.extend(p.push(chunk));
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].len(), 8 << 20);
+        assert_eq!(events[1], "tail");
+        for split in 1..4 {
+            let mut p = SseParser::new();
+            let (a, b) = b"data: a\r\n\r\ndata: b\n\n".split_at(7 + split);
+            let mut got = p.push(a);
+            got.extend(p.push(b));
+            assert_eq!(got, vec!["a".to_string(), "b".to_string()], "split {split}");
+        }
     }
 
     #[test]

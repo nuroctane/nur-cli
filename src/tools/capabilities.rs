@@ -19,9 +19,6 @@ pub struct ToolCaps {
     pub destructive: bool,
 }
 
-impl ToolCaps {
-}
-
 /// Classify a tool invocation by name + raw JSON args string.
 pub fn classify(name: &str, args_json: &str) -> ToolCaps {
     let args: Value =

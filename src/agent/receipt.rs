@@ -541,7 +541,7 @@ pub fn export_spans(session_id: &str, out_path: Option<&std::path::Path>) -> usi
             buf.push('\n');
         }
     }
-    let _ = atomic_write_compat(&sink, buf.as_bytes());
+    let _ = crate::config::atomic_write(&sink, buf.as_bytes());
     spans.len()
 }
 
@@ -549,15 +549,6 @@ fn export_spans_default_path(session_id: &str) -> PathBuf {
     let mut p = path(session_id);
     p.set_extension("spans.jsonl");
     p
-}
-
-fn atomic_write_compat(p: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-    let tmp = p.with_extension("tmp");
-    let mut f = std::fs::File::create(&tmp)?;
-    f.write_all(bytes)?;
-    f.sync_all()?;
-    std::fs::rename(&tmp, p)
 }
 
 /// Human-readable receipt with an integrity check line.

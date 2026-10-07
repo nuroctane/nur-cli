@@ -226,7 +226,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 - **`--continuous`** — sovereign/autonomous mode: loop headless turns toward a goal until `DONE` or Ctrl+C
 - **`/local`** — run a model locally with **bundled llama.cpp** (auto-fetch `llama-server` + a GGUF sized to your RAM); no API key
 - **`/bench`** — benchmark models on your own tasks, replayed in isolated git worktrees and scored
-- **`nur gateway`** — run headless as a Telegram bot; each message is an agent turn in your project
+- **`nur gateway --chat <id>`** — run headless as a Telegram bot answering one chat; each message is an agent turn in your project (without `--chat` it only pairs: it replies with your chat id and runs nothing)
 
 ### Tools (native)
 

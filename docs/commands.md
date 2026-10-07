@@ -413,7 +413,7 @@ nur gateway [--token <TOKEN>] [--chat <CHAT_ID>]
 | Flag | Description |
 |------|-------------|
 | `--token` | Bot token (else `$TELEGRAM_BOT_TOKEN`) |
-| `--chat` | Restrict to a single chat id (else `$TELEGRAM_CHAT_ID`; unset = anyone) |
+| `--chat` | The one chat the bot answers (else `$TELEGRAM_CHAT_ID`). Required to run anything: without it the bot only pairs, replying to each sender with their chat id and running nothing, because every turn auto-approves tools, `bash` included |
 
 ---
 

@@ -15,7 +15,6 @@
 
 use crate::error::{NurError, Result};
 use std::collections::HashMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -381,31 +380,6 @@ pub fn probe_all() -> Vec<ProbeStatus> {
     .iter()
     .map(|d| probe_driver(*d))
     .collect()
-}
-
-/// Atomic write — mirrors t3code's `atomicWrite.ts` to avoid corruption on crash.
-///
-/// Writes to `<path>.tmp.<rand>` then renames. Uses std::fs::write + rename which
-/// is atomic on most platforms when same filesystem.
-pub fn atomic_write(path: &Path, contents: &[u8]) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    let tmp = path.with_extension(format!(
-        "tmp.{}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    fs::write(&tmp, contents)?;
-    // On Windows rename fails if dest exists — remove first, then rename.
-    #[cfg(windows)]
-    {
-        let _ = fs::remove_file(path);
-    }
-    fs::rename(&tmp, path)?;
-    Ok(())
 }
 
 /// Delegate mode — verify vendor CLI auth exists without storing token.

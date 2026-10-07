@@ -1,4 +1,4 @@
-use crate::config::{auth_path, ensure_dirs};
+use crate::config::{auth_path, ensure_dirs, private_atomic_write};
 use crate::error::{NurError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -82,46 +82,6 @@ fn policy_store_guard() -> MutexGuard<'static, ()> {
         .get_or_init(|| Mutex::new(()))
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-// Atomic credential write. Windows note (accepted): std's rename cannot
-// replace an existing file, so this is remove-then-rename - a crash in that
-// window reads as signed-out rather than corrupting anything. Hardening to
-// MoveFileEx(REPLACE_EXISTING) would need a Windows-specific crate; the
-// profile-directory ACLs apply to the written file.
-fn private_atomic_write(path: &Path, content: &[u8]) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let mut tmp = path.to_path_buf();
-    tmp.set_extension(format!("tmp.{}", uuid::Uuid::new_v4().simple()));
-    let result = (|| {
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = options.open(&tmp)?;
-        file.write_all(content)?;
-        file.sync_all()?;
-        #[cfg(windows)]
-        if path.exists() {
-            fs::remove_file(path)?;
-        }
-        fs::rename(&tmp, path)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-        }
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
-    result
 }
 
 pub(crate) fn validate_manual_oauth_code(code: &str) -> Result<String> {
