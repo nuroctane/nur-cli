@@ -51,6 +51,8 @@ jobs:
         with:
           toolchain: '1.97.0'
           targets: ${{ matrix.target }}
+          # Match rust-toolchain.toml so rustup never installs mid-build.
+          components: clippy, rustfmt
 
       - name: Build release binary
         run: cargo build --release --locked --target ${{ matrix.target }}

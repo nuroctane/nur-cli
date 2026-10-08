@@ -23,7 +23,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           toolchain: '1.97.0'
-          components: clippy
+          # Exactly what rust-toolchain.toml lists: a missing one is
+          # auto-installed by the first rustc call, which collided with the
+          # runner image's cargo-fmt on ubuntu-latest.
+          components: clippy, rustfmt
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.11'
