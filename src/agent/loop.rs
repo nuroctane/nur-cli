@@ -3038,7 +3038,8 @@ impl AgentRunner {
                     return true;
                 }
                 if let Ok(set) = self.approved_tools.lock() {
-                    if set.contains(&super::permissions::session_grant_key(name, args)) {
+                    let keys = super::permissions::session_grant_keys(name, args);
+                    if keys.iter().all(|k| set.contains(k)) {
                         return true;
                     }
                 }
@@ -3073,7 +3074,7 @@ impl AgentRunner {
             Ok(ApprovalDecision::Approve) => true,
             Ok(ApprovalDecision::ApproveAlways) => {
                 if let Ok(mut set) = self.approved_tools.lock() {
-                    set.insert(super::permissions::session_grant_key(name, args));
+                    set.extend(super::permissions::session_grant_keys(name, args));
                 }
                 true
             }

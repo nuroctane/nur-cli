@@ -132,7 +132,7 @@ When the agent requests permission to run a write/shell tool:
 | Key | Action |
 |-----|--------|
 | `y` | Approve this one time |
-| `a` | Always approve this tool (for this session) |
+| `a` | Always approve what the footer names, for this session: the tool, or for `bash` the programs the command runs (`git`, `npm`, …), so approving `git` never approves `rm`. A command that hides what it runs (`$(…)`, a redirect into a file, `sudo`, `bash -c`, `env`, `xargs`, …) is approved as that exact command only |
 | `n` · `Esc` | Deny |
 
 `Enter` deliberately does **not** approve — the modal can open while you are

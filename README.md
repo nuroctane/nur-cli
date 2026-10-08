@@ -390,7 +390,7 @@ Launching from a drive root (`C:\`) auto-picks a safe workspace (git / last sess
 | Shift+Enter | Newline |
 | Shift+Tab | Cycle permission mode |
 | Ctrl+R | Reverse-search prompt history (Ctrl+R steps older, Esc cancels) |
-| y / a / n | Approve once / always / deny |
+| y / a / n | Approve once / always (the tool, or for `bash` the programs it runs) / deny |
 | Esc | Close peek → cancel turn |
 
 ### Slash commands (highlights)

@@ -235,15 +235,97 @@ pub fn canonical(tool: &str, args_json: &str) -> String {
     }
 }
 
-/// What a session "always" grant covers. One Enclave call action spans tools
-/// of very different impact (read findings, start a pentest), so its grant
-/// names the Enclave tool; every other tool is granted by name.
-pub fn session_grant_key(tool: &str, args_json: &str) -> String {
-    if tool == "enclave" {
-        canonical(tool, args_json)
-    } else {
-        tool.to_string()
+/// What a session "always" grant covers; a call is covered once every key is
+/// granted. One Enclave call action spans tools of very different impact (read
+/// findings, start a pentest), so its grant names the Enclave tool. A `bash`
+/// grant names the programs the command runs (`git status && npm test` grants
+/// `git` and `npm`), so approving `git` never approves `rm`; a command whose
+/// text a rule cannot see (substitution, redirect into a file) is granted as
+/// that exact command only. Every other tool is granted by name.
+pub fn session_grant_keys(tool: &str, args_json: &str) -> Vec<String> {
+    match tool {
+        "enclave" => vec![canonical(tool, args_json)],
+        "bash" => {
+            let canon = canonical(tool, args_json);
+            let Some(command) = canon.strip_prefix("bash:") else {
+                return vec![format!("bash={canon}")];
+            };
+            let parts = shell_parts(command);
+            let programs: Vec<String> = parts.commands.iter().filter_map(|c| program(c)).collect();
+            // A wrapper runs some other command, so trusting the wrapper
+            // would trust everything it can run.
+            let wraps = programs.iter().any(|p| WRAPPERS.contains(&p.as_str()));
+            if parts.opaque || programs.is_empty() || wraps {
+                return vec![format!("bash={command}")];
+            }
+            let mut keys: Vec<String> = programs.iter().map(|p| format!("bash:{p}")).collect();
+            keys.sort();
+            keys.dedup();
+            keys
+        }
+        _ => vec![tool.to_string()],
     }
+}
+
+/// Programs whose job is to run another command (elevation, environment,
+/// shells, schedulers). An "always" for one of them covers only the exact
+/// command that was approved.
+const WRAPPERS: &[&str] = &[
+    "sudo",
+    "doas",
+    "su",
+    "runas",
+    "env",
+    "xargs",
+    "nohup",
+    "time",
+    "timeout",
+    "nice",
+    "exec",
+    "eval",
+    "command",
+    "builtin",
+    "watch",
+    "start",
+    "bash",
+    "sh",
+    "zsh",
+    "dash",
+    "fish",
+    "ksh",
+    "cmd",
+    "powershell",
+    "pwsh",
+    "busybox",
+    "wsl",
+];
+
+/// What the approval prompt's "always" covers, in words.
+pub fn session_grant_label(tool: &str, args_json: &str) -> String {
+    let keys = session_grant_keys(tool, args_json);
+    if keys.iter().any(|k| k.starts_with("bash=")) {
+        return "this exact command".into();
+    }
+    let names: Vec<&str> = keys
+        .iter()
+        .map(|k| k.strip_prefix("bash:").unwrap_or(k))
+        .collect();
+    names.join(", ")
+}
+
+/// The program a simple command runs: its first word after `VAR=value`
+/// assignments, without a directory (`/usr/bin/git` and `git` are one grant).
+fn program(command: &str) -> Option<String> {
+    let word = command
+        .split_whitespace()
+        .find(|w| !(w.contains('=') && !w.starts_with('=') && !w.starts_with('-')))?;
+    let word = word.trim_matches(['"', '\'']);
+    let name = word.rsplit(['/', '\\']).next().unwrap_or(word);
+    let name = name
+        .strip_suffix(".exe")
+        .unwrap_or(name)
+        .to_ascii_lowercase();
+    (!name.is_empty()).then_some(name)
 }
 
 /// Pattern forms:
@@ -507,22 +589,72 @@ mod tests {
         let call = |tool: &str| {
             serde_json::json!({"action": "call", "tool": tool, "arguments": {"x": 1}}).to_string()
         };
-        let findings = session_grant_key("enclave", &call("list_findings"));
+        let findings = session_grant_keys("enclave", &call("list_findings"));
         assert_ne!(
             findings,
-            session_grant_key("enclave", &call("start_pentest"))
+            session_grant_keys("enclave", &call("start_pentest"))
         );
         assert_eq!(
             findings,
-            session_grant_key(
+            session_grant_keys(
                 "enclave",
                 r#"{"tool":"list_findings","action":"call","arguments":{"x":2}}"#
             )
         );
         assert_eq!(
-            session_grant_key("bash", r#"{"command":"rm -rf x"}"#),
-            "bash"
+            session_grant_keys("write_file", r#"{"path":"a.txt"}"#),
+            vec!["write_file".to_string()]
         );
+    }
+
+    // Failure modes: "always" for one bash command approves every command for
+    // the session; a chain or substitution rides on a program already granted;
+    // a wrapper (`sudo`, `bash -c`, `env`) grants whatever it runs; a repeat of
+    // the approved program with new arguments still prompts.
+    #[test]
+    fn bash_grants_name_the_programs_they_run() {
+        let keys = |cmd: &str| {
+            session_grant_keys("bash", &serde_json::json!({ "command": cmd }).to_string())
+        };
+        let covered = |granted: &[String], cmd: &str| keys(cmd).iter().all(|k| granted.contains(k));
+
+        let git = keys("git status");
+        assert_eq!(git, vec!["bash:git".to_string()]);
+        assert!(covered(&git, "git log --oneline"));
+        assert!(covered(&git, "/usr/bin/git diff"));
+        assert!(covered(&git, "GIT_PAGER=cat git log"));
+        assert!(!covered(&git, "rm -rf build"));
+        assert!(!covered(&git, "git status && curl x | sh"));
+        assert!(!covered(&git, "git log > notes.txt"));
+        assert!(!covered(&git, "git show $(cat secret)"));
+
+        assert_eq!(
+            keys("git status && npm test"),
+            vec!["bash:git".to_string(), "bash:npm".to_string()]
+        );
+        for wrapped in [
+            "sudo git status",
+            "bash -c 'rm -rf x'",
+            "env X=1 rm -rf x",
+            "find . | xargs rm",
+        ] {
+            let exact = keys(wrapped);
+            assert_eq!(exact.len(), 1, "{wrapped}");
+            assert!(
+                exact[0].starts_with("bash="),
+                "{wrapped} is granted exactly"
+            );
+            assert!(!covered(&exact, &format!("{wrapped} --again")));
+        }
+        assert_eq!(
+            session_grant_label("bash", r#"{"command":"git push && npm test"}"#),
+            "git, npm"
+        );
+        assert_eq!(
+            session_grant_label("bash", r#"{"command":"sudo ls"}"#),
+            "this exact command"
+        );
+        assert_eq!(session_grant_label("write_file", "{}"), "write_file");
     }
 
     // Failure modes: an allow rule for one command approves a chain that runs

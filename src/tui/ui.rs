@@ -6905,7 +6905,10 @@ fn draw_approval(f: &mut Frame, app: &App, area: Rect) {
         hue,
         &format!(" ⚠ approve · {} · {family} ", a.name),
         None,
-        "  y once   ·   a always   ·   n/esc deny  ",
+        &format!(
+            "  y once   ·   a always: {}   ·   n/esc deny  ",
+            approval_grant_label(&a.name, &a.args)
+        ),
     );
     let inner = modal_inner(rect);
 
@@ -6936,6 +6939,16 @@ fn draw_approval(f: &mut Frame, app: &App, area: Rect) {
         Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
         inner,
     );
+}
+
+/// What `a` grants for the rest of the session, short enough for the footer.
+fn approval_grant_label(tool: &str, args: &str) -> String {
+    let label = crate::agent::permissions::session_grant_label(tool, args);
+    if label.chars().count() > 28 {
+        format!("{}…", label.chars().take(27).collect::<String>())
+    } else {
+        label
+    }
 }
 
 /// Human-readable approval body: unified mini-diff for edits, command for bash.

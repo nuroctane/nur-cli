@@ -1360,7 +1360,10 @@ async fn run_headless(
                 let decision = tokio::task::spawn_blocking(move || {
                     eprintln!();
                     theme::print_tool(&name, &truncate_line(&args, 200));
-                    eprint!("  approve? [y]es / [a]lways / [N]o: ");
+                    eprint!(
+                        "  approve? [y]es / [a]lways ({}) / [N]o: ",
+                        agent::permissions::session_grant_label(&name, &args)
+                    );
                     let mut line = String::new();
                     let _ = std::io::stdin().read_line(&mut line);
                     match line.trim().to_lowercase().as_str() {
