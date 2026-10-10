@@ -1,5 +1,6 @@
 pub(crate) mod ansi;
 mod app;
+mod cards;
 mod grid;
 mod input;
 mod inspector;

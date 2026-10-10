@@ -25,6 +25,7 @@ from run_e2e import isolated_env, find_binary
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / 'target' / 'startup-e2e'
+FRAME_GLYPHS = str.maketrans('', '', '│╭╮╰╯─')
 
 
 class BuilderLease:
@@ -105,8 +106,17 @@ class Terminal:
         self.stream.feed(chunk)
         return True
 
+    def flowed(self):
+        """Screen text as one line: card-frame glyphs dropped and every run of
+        whitespace, row breaks included, collapsed. A phrase the transcript
+        wrapped across rows (how far depends on the workspace path's length)
+        still matches."""
+        text = ' '.join(self.screen.display).translate(FRAME_GLYPHS)
+        return ' '.join(text.split())
+
     def until(self, text, timeout=10, found=None):
-        found = found or (lambda: text in '\n'.join(self.screen.display))
+        found = found or (lambda: text in '\n'.join(self.screen.display)
+                          or ' '.join(text.split()) in self.flowed())
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if found():
@@ -479,6 +489,143 @@ def banner_animates(binary):
             term.close()
 
 
+def frame_rgb(char):
+    """A pyte cell's truecolor foreground as (r, g, b), or None when unset."""
+    fg = char.fg
+    if isinstance(fg, str) and len(fg) == 6:
+        try:
+            return tuple(int(fg[i:i + 2], 16) for i in (0, 2, 4))
+        except ValueError:
+            return None
+    return None
+
+
+def contrast(a, b):
+    def lum(rgb):
+        def ch(c):
+            c /= 255.0
+            return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+        r, g, b = (ch(c) for c in rgb)
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    hi, lo = sorted((lum(a), lum(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def transcript_frames(binary):
+    """Every transcript piece sits in a theme-coloured frame drawn around its
+    content. The prompt, the tool run and the answer are each boxed with their
+    text inside the frame columns, frames take their kind's colour at a quiet
+    contrast, the banner stays unframed, and clicks still land on the words
+    they point at even though the content moved right to make room."""
+    scenario = 'transcript-frames'
+    work = OUT / f'{scenario}-{time.time_ns()}'
+    work.mkdir(parents=True)
+    home, workspace = work/'home', work/'workspace'
+    workspace.mkdir()
+    (workspace/'notes.txt').write_text('FRAME_FIXTURE_LINE\n', encoding='utf-8')
+    log = work/'requests.jsonl'
+    state = State([
+        {'tool_calls': [{'name': 'read_file', 'arguments': json.dumps({'path': 'notes.txt'})}]},
+        {'text': 'FRAMED_ANSWER_5531 the notes hold one line.'},
+    ], log)
+    server = ThreadingHTTPServer(('127.0.0.1', 0), make_handler(state))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    env = isolated_env(home, server.server_port, warm_skills=False)
+    env.pop('NO_COLOR', None)
+    env['TERM'] = 'xterm-256color'
+    env['COLORTERM'] = 'truecolor'
+    (home/'.nur/config.toml').write_text(
+        f'provider = "vllm"\nmodel = "e2e-model"\nbase_url = "http://127.0.0.1:{server.server_port}/v1"\n'
+        'theme = "gold"\necosystem_auto_ensure = false\nauto_update = false\nnative_memory = false\n'
+        '[typesafe]\nenabled = false\n', encoding='utf-8')
+    term = None
+    try:
+        term = Terminal(binary, workspace, env)
+        term.until('F6 inspect', timeout=5)
+        term.type_text('FRAME_PROMPT_2207')
+        term.write('\r')
+        term.until('FRAMED_ANSWER_5531', timeout=45)
+        term.until('turn', timeout=10, found=lambda: any(
+            r.lstrip('│ ').startswith('✓ turn') for r in term.screen.display))
+        term.pump(.5)
+        rows = term.screen.display
+        width = term.screen.columns
+        right = width - 3  # the 2-column scrollbar rail sits right of the frame
+
+        def row_of(text):
+            hits = [y for y, r in enumerate(rows) if text in r]
+            assert hits, f'{text!r} not on screen:\n' + '\n'.join(rows)
+            return hits[-1]
+
+        def framed(y, what):
+            r = rows[y]
+            assert r[0] == '│' and r[right] == '│', f'{what} row is not inside a frame: {r!r}'
+            assert r[1] == ' ' and r[right - 1] == ' ', f'{what} touches its frame: {r!r}'
+
+        def box(y, what):
+            """Walk up and down from a framed row to its card's edges."""
+            top = y
+            while rows[top][0] == '│':
+                top -= 1
+            bottom = y
+            while rows[bottom][0] == '│':
+                bottom += 1
+            assert rows[top][0] == '╭' and rows[top][right] == '╮', f'{what} has no top edge: {rows[top]!r}'
+            assert set(rows[top][1:right]) == {'─'}, f'{what} top edge is broken: {rows[top]!r}'
+            assert rows[bottom][0] == '╰' and rows[bottom][right] == '╯', f'{what} has no bottom edge: {rows[bottom]!r}'
+            return top, bottom
+
+        answer = row_of('FRAMED_ANSWER_5531')
+        framed(answer, 'answer')
+        assert rows[answer][2] == '●', f'answer text does not start at the content column: {rows[answer]!r}'
+        answer_box = box(answer, 'answer')
+        tool = row_of('read_file')
+        framed(tool, 'tool')
+        tool_box = box(tool, 'tool')
+        assert tool_box != answer_box, 'the tool and the answer share one frame'
+        if any('FRAME_PROMPT_2207' in r for r in rows):
+            prompt = row_of('FRAME_PROMPT_2207')
+            framed(prompt, 'prompt')
+            box(prompt, 'prompt')
+        logo = [y for y, r in enumerate(rows) if '███' in r]
+        assert all(rows[y][0] == ' ' for y in logo), 'the locked banner got a frame'
+
+        # Colour: each frame is the theme's role for its kind, so the answer
+        # and the tool differ, and every frame stays under the 3:1 text floor.
+        canvas = (11, 14, 18)  # the gold theme's canvas
+        hues = {}
+        for name, y in [('answer', answer), ('tool', tool)]:
+            left, edge = term.screen.buffer[y][0], term.screen.buffer[y][right]
+            rgb = frame_rgb(left)
+            assert rgb, f'{name} frame has no truecolor foreground: {left.fg!r}'
+            assert frame_rgb(edge) == rgb, f'{name} frame sides disagree'
+            ratio = contrast(rgb, canvas)
+            assert 1.6 <= ratio <= 3.1, f'{name} frame contrast {ratio:.2f} is out of the quiet band'
+            hues[name] = rgb
+        assert hues['answer'] != hues['tool'], f'answer and tool frames share a colour: {hues}'
+
+        # The hitbox moved with the text, not with the frame: a click one
+        # column before "click to peek" does nothing, and one on its first
+        # letter opens the peek. Together they fail on a shift either way.
+        col = rows[tool].index('click to peek')
+        click = lambda x: term.write(f'\x1b[<0;{x + 1};{tool + 1}M\x1b[<0;{x + 1};{tool + 1}m')
+        click(col - 1)
+        term.pump(.8)
+        assert not any('FRAME_FIXTURE_LINE' in r for r in term.screen.display), \
+            'a click left of "click to peek" opened the peek: hitboxes are shifted right of the text'
+        click(col)
+        term.until('FRAME_FIXTURE_LINE', timeout=5)
+        print(f'PASS {scenario}: prompt, tool and answer framed in their own colours {hues}; peek hit aligned', flush=True)
+        return {'scenario':scenario,'passed':True}
+    finally:
+        if term:
+            (work/'terminal.txt').write_text(term.output, encoding='utf-8')
+            (work/'screen.txt').write_text('\n'.join(term.screen.display), encoding='utf-8')
+            term.close()
+        server.shutdown()
+        server.server_close()
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--bin')
@@ -495,6 +642,7 @@ if __name__ == '__main__':
              'controls-during-models':lambda:blocked_models(binary, controls=True),
              'compact-during-indexing':lambda:blocked_models(binary, compact=True),
              'commands-during-indexing':lambda:commands_during_indexing(binary),
-             'banner-animates':lambda:banner_animates(binary)}
+             'banner-animates':lambda:banner_animates(binary),
+             'transcript-frames':lambda:transcript_frames(binary)}
     result = [cases[name]() for name in (args.scenarios or cases)]
     (OUT/'report.json').write_text(json.dumps(result,indent=2),encoding='utf-8')

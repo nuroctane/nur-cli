@@ -1,7 +1,7 @@
 //! Rendering for the NurCLI TUI — Nur-gold surfaces, motion, cursors.
 
 use super::app::{fmt_num, line_to_plain, App, Cell, TextRange};
-use super::{ansi, grid, markdown, scrollbar::ScrollMetrics, wrap};
+use super::{ansi, cards, grid, markdown, scrollbar::ScrollMetrics, wrap};
 use crate::theme;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect, Size};
 use ratatui::style::{Color, Modifier, Style};
@@ -2191,9 +2191,10 @@ fn compact_tool_line(
 fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     // Wide scrollbar rail (2 cols) so drag is easy to grab.
     let sb_w: u16 = 2;
-    // Wrap to the exact width lines render at (1 col left margin, 1 col gap,
-    // then the rail) — otherwise the last columns clip under the scrollbar.
-    let inner_w = area.width.saturating_sub(2 + sb_w).max(10);
+    // Every card's frame takes an edge and a padding column on each side, then
+    // the rail. Rows wrap to exactly the content width between the frames;
+    // the frames are painted around it afterwards (`cards`).
+    let inner_w = area.width.saturating_sub(sb_w + 2 * cards::SIDE).max(10);
     // Spinner frame bucket so animated cells re-wrap only when the glyph changes.
     let spin_i = (app.spinner_epoch.elapsed().as_millis() / theme::SPINNER_MS) as u64;
     // Per-cell wrap cache: finished rows are stable; live thinking/tools/stream
@@ -2204,6 +2205,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
         app.wrap_cache_keys.clear();
         app.wrap_cache_parts.clear();
         app.wrap_cache_links.clear();
+        app.wrap_cache_frames.clear();
         app.prose_cache_keys.clear();
         app.prose_cache_parts.clear();
     }
@@ -2216,6 +2218,8 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     );
 
     app.wrap_cache_links.resize_with(app.cells.len(), Vec::new);
+    app.wrap_cache_frames
+        .resize(app.cells.len(), cards::CardFrame::default());
     app.prose_cache_keys.resize(app.cells.len(), 0);
     app.prose_cache_parts.resize_with(app.cells.len(), Vec::new);
     // Cache finished cell layout, then index rows without cloning styled text.
@@ -2282,7 +2286,12 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
         let latex_refresh = latex_changed
             && matches!(cell, Cell::Assistant { text, .. }
             if text.contains("$$") || text.contains("\\["));
+        // A tool joining or leaving a tool run moves its frame edges without
+        // changing its content.
+        let (top, bottom) = cards::edges(&app.cells, cell_idx);
+        let cached = app.wrap_cache_frames[cell_idx];
         let need = latex_refresh
+            || (cached.top, cached.bottom) != (top, bottom)
             || app.wrap_cache_keys.get(cell_idx).copied() != Some(key)
             || app
                 .wrap_cache_parts
@@ -2291,7 +2300,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
                 .unwrap_or(true);
         if need {
             let old_rows = app.wrap_cache_parts[cell_idx].len();
-            let (w, links) = if matches!(
+            let (mut w, mut links) = if matches!(
                 cell,
                 Cell::Assistant {
                     streaming: false,
@@ -2311,6 +2320,16 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
                 app.prose_cache_keys[cell_idx] = 0;
                 app.prose_cache_parts[cell_idx].clear();
                 wrap::wrap_lines_with_links(&cell_out, inner_w)
+            };
+            app.wrap_cache_frames[cell_idx] = if cards::is_framed(cell) {
+                cards::fit_rows(&mut w, &mut links, top, bottom);
+                cards::CardFrame {
+                    hue: cards::frame_hue(cell),
+                    top,
+                    bottom,
+                }
+            } else {
+                cards::CardFrame::default()
             };
             app.wrap_cache_links[cell_idx] = links;
             if old_rows != w.len() || first_row + w.len() > app.plain_lines.len() {
@@ -2413,9 +2432,14 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     app.hit_paths.resize_with(total_rows, Vec::new);
     app.hit_swarm_panes.resize_with(total_rows, Vec::new);
     let mut visible = Vec::with_capacity(body_h as usize);
+    let mut visible_edges = Vec::with_capacity(body_h as usize);
     let elapsed = app.spinner_epoch.elapsed();
     for abs_i in visible_rows(top, body_h as usize, total_rows) {
         let (cell_idx, i) = row_index.row(abs_i);
+        visible_edges.push(cell_idx.and_then(|c| {
+            let card = app.wrap_cache_frames[c];
+            Some((card.edge(i, app.wrap_cache_parts[c].len())?, card.hue?))
+        }));
         let Some(cell_idx) = cell_idx else {
             app.hit_headers[abs_i] = None;
             app.line_cells[abs_i] = None;
@@ -2553,9 +2577,12 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
             line
         });
     }
+    app.transcript_rows = row_index;
 
+    // The body is the content rect inside the frames: hitboxes, selection and
+    // copy all work in its columns, untouched by the chrome around it.
     let body_rect = Rect {
-        x: area.x + 1,
+        x: area.x + cards::SIDE,
         y: body_y,
         width: text_w,
         height: body_h,
@@ -2565,6 +2592,13 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
         Paragraph::new(visible).style(theme::style_canvas()),
         body_rect,
     );
+    let frame_w = text_w + 2 * cards::SIDE;
+    for (row, frame) in visible_edges.into_iter().enumerate() {
+        if let Some((edge, hue)) = frame {
+            let outer = Rect::new(area.x, body_y + row as u16, frame_w, 1);
+            cards::paint_row(f.buffer_mut(), outer, edge, hue);
+        }
+    }
 
     // User attachments are compact rows; pixels are rendered only in the explicit peek.
 
@@ -7705,6 +7739,137 @@ mod tests {
             .unwrap_or_else(|| app.cwd.join("draw-report.json"));
         std::fs::write(&path, serde_json::to_string_pretty(&report).unwrap()).unwrap();
         eprintln!("{}", serde_json::to_string_pretty(&report).unwrap());
+    }
+
+    /// Dev harness: the real `draw()` over a transcript holding every card kind,
+    /// dumped per theme as TSV (same format as `typography_preview`) so the
+    /// frames can be reviewed as images and contrast-audited.
+    ///
+    /// ```text
+    /// NUR_HOME=<temp> NUR_FRAME_DUMP=.nur/frames cargo test --bin nur transcript_frames_preview -- --ignored
+    /// py scripts/render_typo_preview.py .nur/frames .nur/frames-png
+    /// ```
+    #[test]
+    #[ignore]
+    fn transcript_frames_preview() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let Ok(dir) = std::env::var("NUR_FRAME_DUMP") else {
+            return;
+        };
+        let home = std::env::var_os("NUR_HOME").expect("preview requires an isolated NUR_HOME");
+        std::fs::create_dir_all(&dir).expect("dump dir");
+        let cwd = std::path::PathBuf::from(home).join("frames-workspace");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let cfg = crate::config::Config {
+            native_memory: false,
+            theme: Some("gold".into()),
+            ..Default::default()
+        };
+        let session = crate::agent::Session::new_for_provider(
+            "e2e-model",
+            "vllm",
+            &cwd.display().to_string(),
+        );
+        let usage =
+            crate::usage::UsageTracker::new(session.id.clone(), "e2e-model".into(), cwd.clone());
+        let client =
+            crate::api::ApiClient::for_provider("http://127.0.0.1:1/v1", "", "vllm").unwrap();
+        let mode = crate::agent::SharedMode::new(crate::agent::PermissionMode::Manual);
+        let mut app = super::super::app::new_app(client, cfg, cwd, mode, session, usage, None);
+        let now = std::time::Instant::now();
+        let tool =
+            |name: &str, args: &str, result: &str, ok: Option<bool>, expanded: bool| Cell::Tool {
+                name: name.into(),
+                args: args.into(),
+                result: Some(result.into()),
+                ok,
+                started: now,
+                duration: ok.map(|_| Duration::from_millis(42)),
+                expanded,
+            };
+        app.cells.extend([
+            Cell::User("Give every transcript piece a theme-aligned frame.".into()),
+            Cell::Thinking {
+                text: "Frames go around the content rect.\nHitboxes stay put.".into(),
+                active: false,
+                started: now,
+                duration: Some(Duration::from_millis(2300)),
+                expanded: false,
+            },
+            tool("read_file", r#"{"path":"src/tui/ui.rs"}"#, "fn draw()", Some(true), false),
+            tool("grep", r#"{"pattern":"draw_transcript"}"#, "ui.rs:2191", Some(true), false),
+            tool("git_status", "{}", "clean", Some(true), false),
+            tool(
+                "bash",
+                r#"{"command":"cargo test cards"}"#,
+                "running 7 tests\ntest result: ok. 7 passed",
+                Some(true),
+                true,
+            ),
+            tool("web_fetch", r#"{"url":"https://example.test"}"#, "", None, false),
+            tool("edit_file", r#"{"path":"src/x.rs","old_string":"a","new_string":"b"}"#, "error: old_string not found", Some(false), false),
+            Cell::Assistant {
+                text: "Every piece now sits in its own **frame**.\n\n- prompts are gold\n- answers take the `seafoam` role\n\n```rust\nlet frame = cards::frame_hue(cell);\n```\n".into(),
+                streaming: false,
+            },
+            Cell::TurnDone {
+                duration: Duration::from_secs(14),
+                thought: Duration::from_millis(2300),
+                interrupted: false,
+            },
+            Cell::Info {
+                text: "plan mode · writes blocked".into(),
+                tone: theme::Tone::Plan,
+            },
+            Cell::User("And the errors?".into()),
+            Cell::Thinking {
+                text: "Checking".into(),
+                active: true,
+                started: now,
+                duration: None,
+                expanded: true,
+            },
+            Cell::Error("provider error: 429 too many requests".into()),
+            Cell::Queued {
+                id: uuid::Uuid::new_v4(),
+                text: "then ship it".into(),
+            },
+            Cell::Assistant {
+                text: "Streaming the answer".into(),
+                streaming: true,
+            },
+        ]);
+        let hex = |c: Color| match c {
+            Color::Rgb(r, g, b) => format!("#{r:02X}{g:02X}{b:02X}"),
+            _ => "reset".into(),
+        };
+        for theme_id in theme::theme_ids() {
+            assert!(theme::set_theme(theme_id));
+            app.transcript_revision += 1;
+            let (width, height) = (100u16, 96u16);
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+            let mut out = format!(
+                "# theme={theme_id} width={width} rows={height} bg={} fg={}\n",
+                hex(theme::BG()),
+                hex(theme::FG())
+            );
+            let buf = terminal.backend().buffer();
+            for y in 0..height {
+                for x in 0..width {
+                    let c = &buf[(x, y)];
+                    out.push_str(&format!(
+                        "{y}\t{x}\t{}\t{}\t{}\t{}\n",
+                        hex(c.fg),
+                        hex(c.bg),
+                        c.modifier.bits(),
+                        c.symbol()
+                    ));
+                }
+            }
+            std::fs::write(format!("{dir}/{theme_id}.tsv"), out).unwrap();
+        }
+        theme::set_theme("gold");
     }
 
     #[test]

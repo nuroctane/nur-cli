@@ -987,6 +987,45 @@ pub struct TextPos {
     pub col: usize,
 }
 
+/// Text of transcript rows `a..=b` (columns clipped on the end rows), one
+/// line per row. Rows `skip` names are left out: a card's bottom edge sits
+/// right above the next card's top edge, and copying both would double the
+/// blank line between two pieces.
+fn selection_text(
+    lines: &[String],
+    a: TextPos,
+    b: TextPos,
+    skip: impl Fn(usize) -> bool,
+) -> String {
+    let mut rows: Vec<String> = Vec::new();
+    let selected = lines
+        .iter()
+        .enumerate()
+        .take(b.line.saturating_add(1))
+        .skip(a.line);
+    for (li, line) in selected {
+        if skip(li) {
+            continue;
+        }
+        let chars: Vec<char> = line.chars().collect();
+        let (from, to) = if a.line == b.line {
+            (a.col.min(chars.len()), b.col.min(chars.len()))
+        } else if li == a.line {
+            (a.col.min(chars.len()), chars.len())
+        } else if li == b.line {
+            (0, b.col.min(chars.len()))
+        } else {
+            (0, chars.len())
+        };
+        rows.push(if from < to {
+            chars[from..to].iter().collect()
+        } else {
+            String::new()
+        });
+    }
+    rows.join("\n")
+}
+
 /// Ordered selection range in the transcript.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TextRange {
@@ -2138,6 +2177,12 @@ pub struct App {
     pub wrap_cache_keys: Vec<u64>,
     pub wrap_cache_parts: Vec<Vec<ratatui::text::Line<'static>>>,
     pub wrap_cache_links: Vec<Vec<Vec<super::wrap::LinkSpan>>>,
+    /// Per-cell card frame (edge colour + which edges the cell owns), resolved
+    /// with its wrapped rows.
+    pub wrap_cache_frames: Vec<super::cards::CardFrame>,
+    /// Row -> (cell, row within cell) for the last drawn transcript, so copy
+    /// can tell frame edges from content rows anywhere in a selection.
+    pub transcript_rows: super::row_index::RowIndex,
     pub prose_cache_keys: Vec<u64>,
     pub prose_cache_parts: Vec<Vec<ratatui::text::Line<'static>>>,
     #[cfg(feature = "image-peek")]
@@ -2694,6 +2739,8 @@ pub(super) fn new_app(
         wrap_cache_keys: Vec::new(),
         wrap_cache_parts: Vec::new(),
         wrap_cache_links: Vec::new(),
+        wrap_cache_frames: Vec::new(),
+        transcript_rows: Default::default(),
         prose_cache_keys: Vec::new(),
         prose_cache_parts: Vec::new(),
         #[cfg(feature = "image-peek")]
@@ -5391,34 +5438,19 @@ impl App {
     /// Selected transcript text (normalized range), if any.
     pub fn selected_transcript_text(&self) -> Option<String> {
         let sel = self.selection?;
-        if sel.is_empty() {
+        if sel.is_empty() || self.plain_lines.is_empty() {
             return None;
         }
         let (a, b) = sel.normalized();
-        if self.plain_lines.is_empty() {
-            return None;
-        }
-        let mut out = String::new();
-        for li in a.line..=b.line.min(self.plain_lines.len().saturating_sub(1)) {
-            let line = &self.plain_lines[li];
-            let chars: Vec<char> = line.chars().collect();
-            let (from, to) = if a.line == b.line {
-                (a.col.min(chars.len()), b.col.min(chars.len()))
-            } else if li == a.line {
-                (a.col.min(chars.len()), chars.len())
-            } else if li == b.line {
-                (0, b.col.min(chars.len()))
-            } else {
-                (0, chars.len())
-            };
-            if from < to {
-                out.extend(chars[from..to].iter());
-            }
-            if li < b.line {
-                out.push('\n');
-            }
-        }
-        Some(out)
+        let height = |cell: usize| self.wrap_cache_parts.get(cell).map_or(0, Vec::len);
+        Some(selection_text(&self.plain_lines, a, b, |row| {
+            super::cards::is_bottom_edge(
+                &self.transcript_rows,
+                &self.wrap_cache_frames,
+                height,
+                row,
+            )
+        }))
     }
 
     /// Hover peeks removed - keep mouse tracking for other UI only.
@@ -5474,7 +5506,8 @@ impl App {
         }
         let local_y = row.saturating_sub(body.y) as usize;
         let line_idx = self.transcript_top + local_y;
-        // body.x includes the 1-col left margin; pane columns are relative to it.
+        // body.x is the content column inside the card frames; pane columns are
+        // relative to it.
         let local_x = col.saturating_sub(body.x) as usize;
         let panes = self.hit_swarm_panes.get(line_idx)?;
         for (run_id, lo, hi) in panes {
@@ -10283,7 +10316,7 @@ impl App {
             return;
         }
         let local_y = row.saturating_sub(body.y) as usize;
-        // body.x already includes the 1-col left margin from draw_transcript.
+        // body.x is the content column inside the card frames (draw_transcript).
         let local_x = col.saturating_sub(body.x) as usize;
         let line_idx = self.transcript_top + local_y;
 
@@ -11363,6 +11396,39 @@ mod tests {
         let queue = VecDeque::from([first, second]);
         let index = queued_position(&cells, &queue, 0).unwrap();
         assert_eq!(queue[index].images[0].0, "second.png");
+    }
+
+    /// Copying across framed cards reads as it did before frames: one blank
+    /// line between two pieces (not one per edge), nothing dropped inside a
+    /// tool run, and the end rows clipped to the selected columns.
+    #[test]
+    fn copy_across_card_frames_keeps_one_blank_line_between_pieces() {
+        use super::super::cards::{is_bottom_edge, CardFrame};
+        let hue = Some(ratatui::style::Color::Rgb(1, 2, 3));
+        let card = |top, bottom| CardFrame { hue, top, bottom };
+        // Answer [top, A1, A2, bottom], a tool run [top, T1] + [T2, bottom],
+        // then an error [top, E, bottom].
+        let heights = [4usize, 2, 2, 3];
+        let frames = [
+            card(true, true),
+            card(true, false),
+            card(false, true),
+            card(true, true),
+        ];
+        let mut rows = super::super::row_index::RowIndex::default();
+        for (cell, h) in heights.iter().enumerate() {
+            rows.push(Some(cell), *h, None, 0);
+        }
+        let lines: Vec<String> = ["", "A1", "A2", "", "", "T1", "T2", "", "", "E", ""]
+            .map(String::from)
+            .to_vec();
+        let skip = |row| is_bottom_edge(&rows, &frames, |c| heights[c], row);
+        let at = |line, col| TextPos { line, col };
+        assert_eq!(
+            selection_text(&lines, at(0, 0), at(10, 0), skip),
+            "\nA1\nA2\n\nT1\nT2\n\nE"
+        );
+        assert_eq!(selection_text(&lines, at(2, 1), at(5, 1), skip), "2\n\nT");
     }
 
     #[test]

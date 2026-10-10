@@ -40,8 +40,12 @@ impl RowIndex {
             .get(self.spans.partition_point(|span| span.end <= row))
     }
     pub fn row(&self, row: usize) -> (Option<usize>, usize) {
-        let span = self.span_at(row).expect("row inside viewport");
-        (span.cell, row - span.start)
+        self.get(row).expect("row inside viewport")
+    }
+    /// `(cell, row within cell)`, or `None` past the end.
+    pub fn get(&self, row: usize) -> Option<(Option<usize>, usize)> {
+        let span = self.span_at(row)?;
+        Some((span.cell, row - span.start))
     }
     pub fn sticky_owner(&self, lo: usize, hi: usize) -> Option<usize> {
         let owner = self.span_at(lo)?.owner?;

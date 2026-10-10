@@ -35,10 +35,11 @@ Context shows the provider, model, cumulative session token usage, queued
 messages, and draft attachment count. `/context` still provides detailed
 context inspection.
 
-Completed successful tools occupy a compact summary row; running operations
-and errors retain their details. Click the chevron to expand or **click to peek**
-for the full result. Prompts use a simple text gutter, and the pinned prompt
-uses two rows. The composer stays visually still while idle.
+Completed successful tools occupy a compact summary row; consecutive ones share
+one frame. Running operations and errors retain their details. Click the chevron
+to expand or **click to peek** for the full result. Every transcript piece sits
+in a theme-coloured frame (see [Card frames](#card-frames)), and the pinned
+prompt uses two rows. The composer stays visually still while idle.
 
 Transcript rendering indexes cached cell heights, builds styled rows and
 interaction metadata only for the visible viewport, and caches link detection.
@@ -542,6 +543,37 @@ Tool cards are colour-coded by family:
 | web | teal | `web_fetch` `web_search` |
 | git | cyan | `git_status` `git_diff` |
 | knowledge | indigo / orange | `graphify` `plur` `ruflo` `skill` `memory` |
+
+### Card frames
+
+Every piece of transcript output sits in its own rounded frame, coloured from
+the active theme's role for that kind of piece. Frames are static: no shimmer,
+no motion. The NUR banner is the one exception and stays unframed.
+
+| Piece | Frame role | Weight |
+|-------|-----------|--------|
+| Your prompt | `nur_gold` (the theme's spine) | strong |
+| Answer | `seafoam` (matches the `●` bullet) | normal |
+| Thought | `violet` | normal while thinking, quiet when done |
+| Tool | the tool's family hue (table above) | normal while running or expanded, quiet when done |
+| Failed tool, error | `error` | normal / strong |
+| Turn strip | `success` (`warn` when cancelled) | quiet |
+| Notice | its tone's colour (plan, mode, todos, usage...) | quiet |
+| Queued follow-up | `warn` | normal |
+| `/graph`, `/swarm`, attachment | `nur_gold` | normal |
+
+Weights are contrast ratios against the canvas (quiet 2.1, normal 2.5, strong
+3.0), all at or under the 3:1 text floor so the words inside still lead. Each
+frame keeps its role's hue and only moves its lightness to reach the weight:
+toward the canvas when the role is bright, toward the ink when it is too faint
+on that ground. The same rule serves every theme, dark or light, with no
+per-theme table (`theme::card_frame`).
+
+Consecutive one-line finished tools share a single frame, and each row's sides
+keep that tool's own family hue. Frames are drawn around the content, not into
+it: text, click targets, links and selection keep their exact columns, and
+copying a selection never includes frame glyphs or an extra blank line per
+frame (`src/tui/cards.rs`).
 
 ### Display math
 

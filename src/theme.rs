@@ -2126,6 +2126,104 @@ impl Tone {
     }
 }
 
+// ── Transcript card frames ─────────────────────────────────────────────────
+
+/// WCAG relative luminance (non-RGB colours read as the canvas fallback).
+pub fn relative_luminance(c: Color) -> f64 {
+    let (r, g, b) = rgb(c);
+    let lin = |v: f64| {
+        let v = v / 255.0;
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+}
+
+/// WCAG contrast ratio between two colours (1.0 ..= 21.0).
+pub fn contrast_ratio(a: Color, b: Color) -> f64 {
+    let (x, y) = (relative_luminance(a), relative_luminance(b));
+    let (hi, lo) = if x > y { (x, y) } else { (y, x) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+/// How strongly a transcript card's frame stands off the canvas. Text keeps
+/// the 3:1 floor, so frames sit at or under it: they group and colour-code
+/// the transcript while the words inside still lead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameWeight {
+    /// Settled history: finished thoughts and tools, turn strips, notices.
+    Quiet,
+    /// Work in progress and answers.
+    Normal,
+    /// What must never be missed: your own prompts and errors.
+    Strong,
+}
+
+impl FrameWeight {
+    /// Target contrast ratio of the frame against the canvas.
+    pub fn contrast(self) -> f64 {
+        match self {
+            FrameWeight::Quiet => 2.1,
+            FrameWeight::Normal => 2.5,
+            FrameWeight::Strong => 3.0,
+        }
+    }
+}
+
+/// Colour of a transcript card frame. `hue` is the palette role for the
+/// card's kind, so the frame is the theme's own colour; only its lightness
+/// moves, toward the canvas (or toward the ink when the role is too faint on
+/// that ground) until it sits at `weight`'s contrast. One rule then serves
+/// every preset: a blazing accent on black calms down, a pale one on paper
+/// firms up, and frames land at the same strength in all themes.
+///
+/// Measured against the palette's real canvas even in transparent mode, which
+/// is the best estimate of what shows through.
+pub fn card_frame(hue: Color, weight: FrameWeight) -> Color {
+    frame_on(&current(), hue, weight)
+}
+
+fn frame_on(p: &Palette, hue: Color, weight: FrameWeight) -> Color {
+    let canvas = p.bg;
+    let target = weight.contrast();
+    let hue = match hue {
+        Color::Rgb(..) => hue,
+        _ => p.border,
+    };
+    if contrast_ratio(hue, canvas) >= target {
+        // Largest blend toward the canvas that still reaches the target.
+        let (mut lo, mut hi) = (0.0, 1.0);
+        for _ in 0..14 {
+            let mid = (lo + hi) / 2.0;
+            if contrast_ratio(lerp(hue, canvas, mid), canvas) >= target {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        lerp(hue, canvas, lo)
+    } else {
+        // Smallest blend toward the ink that reaches it.
+        let ink = p.fg;
+        if contrast_ratio(ink, canvas) < target {
+            return ink;
+        }
+        let (mut lo, mut hi) = (0.0, 1.0);
+        for _ in 0..14 {
+            let mid = (lo + hi) / 2.0;
+            if contrast_ratio(lerp(hue, ink, mid), canvas) >= target {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        lerp(hue, ink, hi)
+    }
+}
+
 // ── Motion ─────────────────────────────────────────────────────────────────
 // Motion taste (Emil Kowalski / design-eng):
 //   · Fast spinner → perceived speed (same wait, feels snappier)
@@ -2238,11 +2336,27 @@ pub fn style_duration_chip(live: bool) -> Style {
     // running card outranks a finished one. Violet is deliberately absent: it
     // means model thought and nothing else, and a running `bash` is not a
     // thought. See `style_thought_chip`.
-    let bg = if live { NUR_GOLD() } else { NUR_GOLD_SKY() };
+    let p = current();
+    let fill = if live { p.nur_gold } else { p.nur_gold_sky };
     Style::default()
-        .fg(BG())
-        .bg(bg)
+        .fg(chip_ink(&p, fill))
+        .bg(fill)
         .add_modifier(Modifier::BOLD)
+}
+
+/// The palette ink that reads best on a chip of `fill`: the canvas colour on
+/// dark palettes, deep ink (`on_accent_fg` or `fg`) on light ones, whose
+/// near-white canvas vanished on a pale gold chip. The palette's real canvas
+/// is used even in transparent mode, where `BG()` is `Reset` and would leave
+/// the chip text in the terminal's default colour.
+fn chip_ink(p: &Palette, fill: Color) -> Color {
+    [p.on_accent_fg, p.fg].into_iter().fold(p.bg, |best, ink| {
+        if contrast_ratio(ink, fill) > contrast_ratio(best, fill) {
+            ink
+        } else {
+            best
+        }
+    })
 }
 
 /// Chip for the model's thinking time - the one duration that is violet.
@@ -2561,6 +2675,62 @@ mod tests {
                     r >= 3.0,
                     "{id}: dir spans are only {r:.2}:1 on the {what} - \
                      directory paths must stay readable in every theme"
+                );
+            }
+        }
+    }
+
+    /// Transcript card frames land at their weight in every preset: a role too
+    /// bright for its ground calms down, one too faint firms up, and none
+    /// outshouts the text floor or vanishes into the canvas.
+    #[test]
+    fn card_frames_land_at_their_weight_in_every_theme() {
+        for (id, _) in super::THEMES {
+            let p = super::preset(id).unwrap();
+            let roles = [
+                p.nur_gold,
+                p.seafoam,
+                p.violet,
+                p.error,
+                p.warn,
+                p.success,
+                p.blue_300,
+                p.blue_200,
+                p.blue_400,
+                p.amber,
+                p.teal,
+                p.pink,
+                p.cyan,
+                p.orange,
+                p.indigo,
+                p.periwinkle,
+            ];
+            for weight in [FrameWeight::Quiet, FrameWeight::Normal, FrameWeight::Strong] {
+                let target = weight.contrast();
+                for role in roles {
+                    let frame = super::frame_on(&p, role, weight);
+                    let ratio = contrast(frame, p.bg);
+                    assert!(
+                        (target..target + 0.15).contains(&ratio),
+                        "{id}: {role:?} at {weight:?} framed as {frame:?}, {ratio:.2}:1 (target {target})"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Duration chips sit on every tool and thought card. Their text was the
+    /// canvas colour, which on light themes is near-white on a pale gold chip
+    /// (Pearl measured 1.31:1).
+    #[test]
+    fn duration_chip_text_is_legible_in_every_theme() {
+        for (id, _) in super::THEMES {
+            let p = super::preset(id).unwrap();
+            for (what, fill) in [("live", p.nur_gold), ("settled", p.nur_gold_sky)] {
+                let ratio = contrast(super::chip_ink(&p, fill), fill);
+                assert!(
+                    ratio >= 4.5,
+                    "{id}: {what} duration chip text is {ratio:.2}:1"
                 );
             }
         }
