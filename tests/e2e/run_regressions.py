@@ -254,8 +254,12 @@ def cancelled_judgment(binary, provider_name='vllm', model='e2e-model'):
         # Drain cancellation completion before asking for a new session.
         end = time.monotonic() + 1
         while time.monotonic() < end: term.pump(.05)
-        term.type_text('/new'); term.write('\r'); term.until('new session', 3)
-        assert 'STALE_QUESTION_8512' not in '\n'.join(term.screen.display)
+        term.type_text('/new'); term.write('\r')
+        # /new swaps the cells in one step, but the redraw can arrive across
+        # several reads: wait for a settled frame rather than the first chunk.
+        term.until('new session without the stale question', 3, found=lambda: (
+            'new session' in '\n'.join(term.screen.display)
+            and 'STALE_QUESTION_8512' not in '\n'.join(term.screen.display)))
         requests_at_cancel = len(counts)
         release.set()
         end = time.monotonic() + .8
