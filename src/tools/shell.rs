@@ -309,7 +309,9 @@ impl Default for ShellOptions {
 }
 
 /// Default-supervision wrapper (kill on timeout, default output budget).
-#[cfg(test)]
+/// Only the cmd-backend regression tests call this, and those are
+/// Windows-only, so gate it the same way or Linux clippy flags it dead.
+#[cfg(all(test, windows))]
 pub fn run_in_shell(
     backend: &ShellBackend,
     command: &str,
