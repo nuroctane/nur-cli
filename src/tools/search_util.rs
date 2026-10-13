@@ -257,7 +257,7 @@ pub fn rg_grep(cwd: &Path, pattern: &str, search_path: &Path, opts: &GrepOptions
     let mut lines: Vec<String> = text.lines().map(normalize_rg_line).collect();
     let truncated = if opts.context == 0 {
         // Deterministic order without `--sort path`: by file, then line.
-        lines.sort_by(|a, b| rg_sort_key(a).cmp(&rg_sort_key(b)));
+        lines.sort_by_key(|line| rg_sort_key(line));
         let truncated = lines.len() > max_matches;
         lines.truncate(max_matches);
         truncated
@@ -321,7 +321,7 @@ fn split_rg_line(line: &str) -> Option<(&str, char, &str)> {
     };
     // Match lines (`:`) first: file names contain `-digits-` far more often
     // than `:digits:`, so a hyphenated name must not be split as context.
-    for sep in [b':', b'-'] {
+    for &sep in b":-" {
         let mut i = start;
         while i < bytes.len() {
             if bytes[i] == sep {
@@ -535,7 +535,7 @@ mod tests {
     #[test]
     fn sort_key_orders_by_path_then_numeric_line() {
         let mut v = vec!["b.rs:2:x", "a.rs:10:x", "a.rs:9:x"];
-        v.sort_by(|a, b| rg_sort_key(a).cmp(&rg_sort_key(b)));
+        v.sort_by_key(|line| rg_sort_key(line));
         assert_eq!(v, vec!["a.rs:9:x", "a.rs:10:x", "b.rs:2:x"]);
     }
 

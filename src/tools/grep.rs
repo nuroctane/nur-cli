@@ -207,9 +207,9 @@ fn search_file(
                     matches.push("--".into());
                 }
             }
-            for j in from..i {
-                if last_emitted.map_or(true, |p| j > p) {
-                    matches.push(format!("{shown}-{}-{}", j + 1, lines[j]));
+            for (j, before) in lines.iter().enumerate().take(i).skip(from) {
+                if last_emitted.is_none_or(|p| j > p) {
+                    matches.push(format!("{shown}-{}-{before}", j + 1));
                 }
             }
         }
@@ -217,11 +217,11 @@ fn search_file(
         last_emitted = Some(i);
         if context > 0 {
             let to = (i + context + 1).min(lines.len());
-            for j in (i + 1)..to {
-                if re.is_match(lines[j]) {
+            for (j, after) in lines.iter().enumerate().take(to).skip(i + 1) {
+                if re.is_match(after) {
                     break;
                 }
-                matches.push(format!("{shown}-{}-{}", j + 1, lines[j]));
+                matches.push(format!("{shown}-{}-{after}", j + 1));
                 last_emitted = Some(j);
             }
         }

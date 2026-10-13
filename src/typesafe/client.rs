@@ -488,7 +488,7 @@ fn resolve_fallback_engine() -> Option<FallbackEngine> {
     }
     hosted_fallback_engine(
         |var| std::env::var(var).ok(),
-        |slot| crate::auth::load_provider_key(slot),
+        crate::auth::load_provider_key,
     )
 }
 

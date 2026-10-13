@@ -206,16 +206,14 @@ fn run_exec(
             }
             None => flatten_prompt_with(req, tools_wire(req), "Factory Droid"),
         };
-        match run_exec_once(
-            &bin,
-            &prompt,
-            req,
-            attempt_resume.as_deref(),
-            &mut on_event,
-            cancel,
-            total_timeout,
+        let launch = Launch {
+            bin: &bin,
+            prompt: &prompt,
+            resume_id: attempt_resume.as_deref(),
             api_key,
-        ) {
+            total_timeout,
+        };
+        match run_exec_once(&launch, req, &mut on_event, cancel) {
             Ok((text, model, usage, session)) => {
                 if let Some(chat) = chat {
                     if let Ok(mut st) = chat.lock() {
@@ -244,16 +242,28 @@ fn run_exec(
     }
 }
 
+/// Everything one `droid exec` launch needs besides the request itself.
+struct Launch<'a> {
+    bin: &'a PathBuf,
+    prompt: &'a str,
+    resume_id: Option<&'a str>,
+    api_key: Option<&'a str>,
+    total_timeout: Duration,
+}
+
 fn run_exec_once(
-    bin: &PathBuf,
-    prompt: &str,
+    launch: &Launch<'_>,
     req: &ResponseRequest,
-    resume_id: Option<&str>,
     on_event: &mut Option<&mut dyn FnMut(StreamEvent)>,
     cancel: &tokio_util::sync::CancellationToken,
-    total_timeout: Duration,
-    api_key: Option<&str>,
 ) -> Result<(String, String, Option<ApiUsage>, Option<String>)> {
+    let Launch {
+        bin,
+        prompt,
+        resume_id,
+        api_key,
+        total_timeout,
+    } = *launch;
     let model = Some(req.model.trim())
         .filter(|m| !m.is_empty() && *m != "auto")
         .map(str::to_string);

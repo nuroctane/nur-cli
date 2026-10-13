@@ -215,8 +215,10 @@ fn sniff_mime(bytes: &[u8]) -> Option<(&'static str, MediaKind)> {
 
 /// Longest edge providers keep before downscaling on their side; sending more
 /// pixels only costs upload time and base64 bytes in context.
+#[cfg(feature = "image-peek")]
 const MAX_IMAGE_EDGE_PX: u32 = 2_000;
 /// Above this size a still image is re-encoded even when its dimensions fit.
+#[cfg(feature = "image-peek")]
 const REENCODE_ABOVE_BYTES: usize = 1_536 * 1024;
 
 /// Shrink oversized stills (dimensions or bytes) before attaching. PNG stays
