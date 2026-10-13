@@ -46,11 +46,13 @@ List directory contents.
 
 ### `grep`
 
-Search file contents using regular expressions. Uses ripgrep when available, falls back to native implementation.
+Search file contents with a regex. Uses ripgrep when available (`NUR_RG_BIN`, PATH, then the usual cargo/scoop/winget/Homebrew locations, probed once per process), otherwise a native walk with the same semantics. Both paths respect `.gitignore`, include hidden files, and skip `node_modules`, `target`, `.git`, `dist`, … at any depth.
+
+Arguments: `pattern`, `path`, `case_insensitive`, `fixed_strings` (literal text, nothing to escape), `glob` (`*.rs`, `src/**/*.ts`, `!*.test.js`), `type` (ripgrep file type), `context` (lines around each match, max 10), `multiline` (ripgrep only), `max_matches` (default 50, max 500). Output is `path:line:text` sorted by path with forward slashes; a `[truncated at N matches …]` trailer means more exist. ripgrep's own errors (bad regex, unknown type) come back as the tool error instead of an empty result.
 
 ### `glob`
 
-Find files matching a pattern (e.g. `**/*.rs`). Uses ripgrep when available.
+Find files by name or glob. Uses `rg --files` when available, with the same excludes and hidden-file policy as `grep`. Loose patterns are made precise: `src/` lists everything under a `src` directory, `mod.rs` finds that file anywhere, `.env` matches `*.env`, `*.rs` / `**/*.test.ts` are used as given. Paths are sorted, forward-slashed, capped by `max_results` (default 200, max 1000) with a `[truncated …]` trailer.
 
 ---
 
@@ -81,8 +83,10 @@ Apply a unified diff patch to a file.
 Execute shell commands in the workspace cwd (cwd-scoped, not a full OS sandbox). Hardened with:
 
 - **Denylist** — blocks dangerous commands (e.g. `rm -rf /`, fork bombs) and hang-prone patterns (dev servers, `watch`, interactive prompts)
-- **Timeout** — default **60s**, hard max **180s**; idle (no output ~90s after grace) kills the process tree
-- **Failure lockout** — identical timed-out/hung commands in the same cwd are refused for 15 minutes
+- **Timeout with handoff** — default **60s**, hard max **180s**. A command that is still producing output at the deadline is **not killed**: it moves to a `bg` job and the model gets a "still running" placeholder with the job id and the output so far, so the turn carries on and the result is fetched later with `bg(action=result, id=N)`. `background=true` hands off almost at once (long builds, test suites). Handed-off jobs still end after 30 minutes. `shell_timeout_handoff = false` in `config.toml` restores kill-on-timeout.
+- **Idle kill** — no output for ~90s after a grace period kills the process tree (a prompt waiting on stdin never finishes on its own)
+- **Bounded output** — stdout keeps `max_output_length` bytes (default 80000, stderr half) as **head + tail** with the full text spilled under `~/.nur/tool-results/`
+- **Failure lockout** — identical timed-out/hung commands in the same cwd are refused for 15 minutes (a bg handoff does not count)
 - **Non-interactive env** — `CI=1`, `GIT_TERMINAL_PROMPT=0`, stdin null
 
 !!! note "Shell backend"

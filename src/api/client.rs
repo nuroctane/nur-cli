@@ -554,6 +554,12 @@ impl ApiClient {
                 .map_err(|error| format!("model discovery task failed: {error}"))?
                 .map_err(|e| e.to_string());
         }
+        if self.uses_droid_cli() {
+            return Ok(super::droid_cli::FACTORY_MODELS
+                .iter()
+                .map(|m| m.to_string())
+                .collect());
+        }
         let base_url = self.base_url.clone();
         let api_key = self.api_key_for_request();
         let provider_id = self.provider_id.clone();
@@ -569,6 +575,17 @@ impl ApiClient {
         self.provider_id == "cursor"
             && (super::cursor_cli::is_cli_session_token(&self.api_key)
                 || crate::providers::cursor_endpoint_is_agent_rpc(&self.base_url))
+    }
+
+    /// Factory has no HTTP chat endpoint; every request runs `droid exec`.
+    pub(crate) fn uses_droid_cli(&self) -> bool {
+        self.provider_id == "factory"
+    }
+
+    /// Any provider served by a local agent CLI rather than HTTP. These must
+    /// always take the streaming path so the cancel token reaches the child.
+    pub(crate) fn uses_agent_cli(&self) -> bool {
+        self.uses_cursor_cli() || self.uses_droid_cli()
     }
 
     /// Whether this request should persist/resume the Cursor CLI chat chain.
@@ -933,9 +950,65 @@ impl ApiClient {
         }
     }
 
+    async fn create_droid_cli(&self, req: &ResponseRequest) -> Result<ApiResponse> {
+        let estimate_req = req.clone();
+        let req = req.clone();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let chat = Self::cursor_chat_chain(&self.cursor_chat, &req, false);
+        let key = self.api_key.clone();
+        let response = tokio::task::spawn_blocking(move || {
+            super::droid_cli::complete(&req, &cancel, chat.as_ref(), Some(&key))
+        })
+        .await
+        .map_err(|e| NurError::Other(format!("droid task failed: {e}")))?;
+        Ok(response?.with_local_usage_estimate(&estimate_req))
+    }
+
+    async fn create_droid_cli_stream(
+        &self,
+        req: &ResponseRequest,
+        mut on_event: impl FnMut(StreamEvent),
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<ApiResponse> {
+        let estimate_req = req.clone();
+        let req = req.clone();
+        let cancel = cancel.clone();
+        let chat = Self::cursor_chat_chain(&self.cursor_chat, &req, true);
+        let key = self.api_key.clone();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<StreamEvent>();
+        let handle = tokio::task::spawn_blocking(move || {
+            super::droid_cli::complete_stream(
+                &req,
+                |ev| {
+                    let _ = tx.send(ev);
+                },
+                &cancel,
+                chat.as_ref(),
+                Some(&key),
+            )
+        });
+        let mut final_resp: Option<ApiResponse> = None;
+        while let Some(ev) = rx.recv().await {
+            if let StreamEvent::Completed(r) = &ev {
+                final_resp = Some(r.clone());
+            }
+            on_event(ev);
+        }
+        match handle.await {
+            Ok(Ok(resp)) => Ok(final_resp
+                .unwrap_or(resp)
+                .with_local_usage_estimate(&estimate_req)),
+            Ok(Err(e)) => Err(e),
+            Err(e) => Err(NurError::Other(format!("droid task failed: {e}"))),
+        }
+    }
+
     pub async fn create_response(&self, req: &ResponseRequest) -> Result<ApiResponse> {
         if self.uses_cursor_cli() {
             return self.create_cursor_cli(req).await;
+        }
+        if self.uses_droid_cli() {
+            return self.create_droid_cli(req).await;
         }
         if is_opencode_gemini_model(&self.provider_id, &req.model) {
             return self.create_opencode_gemini(req).await;
@@ -1113,6 +1186,9 @@ impl ApiClient {
     ) -> Result<ApiResponse> {
         if self.uses_cursor_cli() {
             return self.create_cursor_cli_stream(req, on_event, cancel).await;
+        }
+        if self.uses_droid_cli() {
+            return self.create_droid_cli_stream(req, on_event, cancel).await;
         }
         if is_opencode_gemini_model(&self.provider_id, &req.model) {
             return self

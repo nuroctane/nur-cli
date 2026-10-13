@@ -1,0 +1,22 @@
+{
+  "description": "A shell command handed off at its deadline keeps running; once it finishes, the model is told exactly once, with the output, before its next request - no polling needed.",
+  "prompt": "Run the slow step, then run the quick step, then summarize.",
+  "script": [
+    {"tool_calls": [{"name": "bash", "arguments": {"command": "python -c \"import time; print('phase-one'); time.sleep(3); print('phase-two-done')\"", "timeout_ms": 1500}}]},
+    {"tool_calls": [{"name": "bash", "arguments": {"command": "python -c \"import time; time.sleep(4); print('quick-step')\"", "timeout_ms": 20000}}]},
+    {"tool_calls": [{"name": "bash", "arguments": {"command": "python -c \"print('third')\"", "timeout_ms": 20000}}]},
+    {"text": "Slow step finished in the background; quick step done."}
+  ],
+  "expect": {
+    "stdout_contains": ["Slow step finished in the background; quick step done."],
+    "requests": 4,
+    "tool_results": [
+      {"request": 2, "contains": ["still running after 1500ms", "handed off to bg job #"]},
+      {"request": 3, "contains": ["quick-step"]}
+    ],
+    "request_contains": [
+      {"request": 3, "contains": ["[bg] background job(s) finished", "#1 completed"]},
+      {"request": 4, "count_once": ["[bg] background job(s) finished"]}
+    ]
+  }
+}

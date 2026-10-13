@@ -207,8 +207,9 @@ fn pick_action(bin: &str, args: &Value, ctx: &crate::tools::ToolContext) -> Resu
         }
     }
     let refs: Vec<&str> = argv.iter().map(|s| s.as_str()).collect();
-    let snapshot = ecosystem::run_capture(bin, &refs, Some(&ctx.cwd), 60_000)
-        .map_err(|e| NurError::Tool(format!("snapshot failed: {e}")))?;
+    let snapshot =
+        ecosystem::run_capture_cancelled(bin, &refs, Some(&ctx.cwd), 60_000, &ctx.cancel)
+            .map_err(|e| NurError::Tool(format!("snapshot failed: {e}")))?;
 
     let limit = args
         .get("max_candidates")
@@ -491,8 +492,14 @@ impl Tool for BrowserTool {
                 // Fold in the local setup state (default browser + extension
                 // staging) so the model can self-diagnose a disconnected bridge.
                 let setup = crate::ecosystem::browser_setup::setup_summary();
-                let live = ecosystem::run_capture(&bin, &["status"], Some(&ctx.cwd), 30_000)
-                    .unwrap_or_else(|e| format!("(bridge status unavailable: {e})"));
+                let live = ecosystem::run_capture_cancelled(
+                    &bin,
+                    &["status"],
+                    Some(&ctx.cwd),
+                    30_000,
+                    &ctx.cancel,
+                )
+                .unwrap_or_else(|e| format!("(bridge status unavailable: {e})"));
                 return Ok(format!("{setup}\n\nbridge:\n{live}"));
             }
             "doctor" => vec!["doctor".into()],
@@ -538,7 +545,8 @@ impl Tool for BrowserTool {
         }
 
         let refs: Vec<&str> = argv.iter().map(|s| s.as_str()).collect();
-        ecosystem::run_capture(&bin, &refs, Some(&ctx.cwd), 120_000).map_err(NurError::Tool)
+        ecosystem::run_capture_cancelled(&bin, &refs, Some(&ctx.cwd), 120_000, &ctx.cancel)
+            .map_err(NurError::Tool)
     }
 }
 

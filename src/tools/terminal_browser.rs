@@ -324,7 +324,13 @@ fn resolve_open_target(cwd: &Path, url: &str) -> Result<String> {
         }
         return Ok(trimmed.to_string());
     }
-    if trimmed.starts_with("localhost") || trimmed.starts_with("127.0.0.1") {
+    // Loopback hosts only: `localhost.example.com` must not ride this branch.
+    let is_loopback = ["localhost", "127.0.0.1"].iter().any(|h| {
+        trimmed
+            .strip_prefix(h)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(':') || rest.starts_with('/'))
+    });
+    if is_loopback {
         return Ok(trimmed.to_string());
     }
     // host:port (digits only after ':') vs bare schemes like `javascript:alert(1)`.

@@ -240,6 +240,9 @@ pub const POOLSIDE_BASE_URL: &str = "https://inference.poolside.ai/v1";
 /// surface - not OpenAI Chat Completions. See [`cursor_endpoint_is_agent_rpc`].
 pub const CURSOR_AGENT_ENDPOINT: &str = "https://api2.cursor.sh";
 
+/// Liquid Inference's OpenAI-format base. Keys look like `sk-liquid-…`.
+pub const LIQUID_INFERENCE_BASE_URL: &str = "https://router.inference.ai.exchange/v1";
+
 /// True when `base_url` is Cursor's Agent RPC host (cannot serve nur CC chat).
 pub fn cursor_endpoint_is_agent_rpc(base_url: &str) -> bool {
     let b = base_url.trim().trim_end_matches('/').to_ascii_lowercase();
@@ -1153,6 +1156,22 @@ pub const PROVIDERS: &[Provider] = &[
         browser_auth: false,
     },
     Provider {
+        id: "liquidinference",
+        name: "Liquid Inference",
+        // Auction exchange: every provider quoting the model bids, the winning
+        // quote caps the price before the first token. OpenAI-format base;
+        // the same host also serves Anthropic Messages at `/v1/messages`.
+        // `liquid.auto:balanced` lets the exchange pick by score and charge;
+        // `:smartest` / `:fastest` / `:cheapest` suffixes re-rank any model.
+        base_url: LIQUID_INFERENCE_BASE_URL,
+        default_model: "liquid.auto:balanced",
+        env_key: "LIQUID_API_KEY",
+        style: CC,
+        note: "inference auction · price cap per request",
+        key_optional: false,
+        browser_auth: false,
+    },
+    Provider {
         id: "cerebras",
         name: "Cerebras",
         base_url: "https://api.cerebras.ai/v1",
@@ -1631,6 +1650,21 @@ pub const PROVIDERS: &[Provider] = &[
         browser_auth: true,
     },
     Provider {
+        id: "factory",
+        name: "Factory Droid",
+        // Catalog placeholder = Factory's app host. Nur never calls it over
+        // HTTP: chat runs through `droid exec --output-format json` with the
+        // CLI's own sign-in (`droid`) or FACTORY_API_KEY. Model ids are the
+        // Factory-managed catalog (`docs.factory.ai/docs/models`).
+        base_url: crate::api::droid_cli::FACTORY_APP_URL,
+        default_model: "claude-sonnet-5-5",
+        env_key: "FACTORY_API_KEY",
+        style: CC,
+        note: "droid exec · CLI sign-in or FACTORY_API_KEY",
+        key_optional: true,
+        browser_auth: false,
+    },
+    Provider {
         id: "helicone",
         name: "Helicone AI Gateway",
         base_url: "https://ai-gateway.helicone.ai/v1",
@@ -1865,6 +1899,10 @@ fn resolve_provider_token(q: &str) -> Option<&'static Provider> {
         "cline" | "cline-bot" | "clinebot" | "cline.ai" | "cline.bot" => "cline",
         "opencode" | "zen" => "opencode",
         "cursor" | "cursor-agent" | "cursoragent" => "cursor",
+        "factory" | "droid" | "factory-droid" | "factory.ai" | "droid-exec" => "factory",
+        "liquidinference" | "liquid-inference" | "liquid" | "inference.ai.exchange" => {
+            "liquidinference"
+        }
         "groq" => "groq",
         "cerebras" => "cerebras",
         "together" | "together-ai" | "togetherai" => "together",
@@ -2609,7 +2647,7 @@ mod tests {
         // `PROVIDER_COUNT_DOC_SITES` below too.
         assert_eq!(
             PROVIDERS.len(),
-            65,
+            67,
             "provider count changed — update the docs that quote it: {}",
             PROVIDER_COUNT_DOC_SITES.join(", ")
         );

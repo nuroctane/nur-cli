@@ -1,6 +1,6 @@
 # Provider setup and conformance matrix
 
-This is the user-facing mirror of the 65-entry `PROVIDERS` catalog in
+This is the user-facing mirror of the 67-entry `PROVIDERS` catalog in
 [`src/providers.rs`](https://github.com/nuroctane/nur-cli/blob/main/src/providers.rs). The base URL, request style, default
 model, and environment variable below are the exact current catalog values, not
 recommendations inferred from a vendor's marketing page.
@@ -53,6 +53,7 @@ capability for this exact Nur route/model, so Nur must treat it as unverified.
 | `azure` - Azure OpenAI | `AZURE_OPENAI_API_KEY`; `https://YOUR_RESOURCE.openai.azure.com/openai/v1`; CC; `gpt-5.5` | [Azure OpenAI REST](https://learn.microsoft.com/azure/ai-services/openai/reference) | Deployment, API version, tools, and usage are resource/model-specific. | Replace `YOUR_RESOURCE`; API key or supported `az login` flow. |
 | `bedrock` - Amazon Bedrock | `AWS_BEARER_TOKEN_BEDROCK`; `https://bedrock-runtime.YOUR_REGION.amazonaws.com/openai/v1`; CC; `us.amazon.nova-lite-v1:0` | [Bedrock OpenAI compatibility](https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-runtime-openai-api.html) | Compatibility and tool/usage support are model and region-specific. | Replace `YOUR_REGION`; use `/model` for models entitled in that region. |
 | `groq` - Groq | `GROQ_API_KEY`; `https://api.groq.com/openai/v1`; CC; `llama-3.3-70b-versatile` | [Groq API](https://console.groq.com/docs/overview) | Verify tools and reported usage for the selected model. | Create a Groq API key. |
+| `liquidinference` - Liquid Inference | `LIQUID_API_KEY`; `https://router.inference.ai.exchange/v1`; CC; `liquid.auto:balanced` | [Liquid Inference](https://inference.ai.exchange/docs) | Auction exchange: each request is quoted across providers and capped before the first token (`x-liquid-cap-usd`); the settled charge is in the `exchange` block of the response. Tool support is per model; `GET /v1/models` lists models that accept tools. `:smartest` / `:fastest` / `:cheapest` suffixes re-rank. | Create a `spend`-scope key (`sk-liquid-…`). |
 | `cerebras` - Cerebras | `CEREBRAS_API_KEY`; `https://api.cerebras.ai/v1`; CC; `gpt-oss-120b` | [Cerebras Inference](https://inference-docs.cerebras.ai/) | Verify compatibility features by model tier. | Create a Cerebras API key. |
 | `together` - Together AI | `TOGETHER_API_KEY`; `https://api.together.xyz/v1`; CC; `meta-llama/Llama-3.3-70B-Instruct-Turbo` | [Together API](https://docs.together.ai/docs/introduction) | Tool and usage support varies by served model. | Create a Together API key. |
 | `fireworks` - Fireworks AI | `FIREWORKS_API_KEY`; `https://api.fireworks.ai/inference/v1`; CC; `accounts/fireworks/models/llama-v3p3-70b-instruct` | [Fireworks API](https://docs.fireworks.ai/) | Verify tool calling and usage on this model. | Create a Fireworks key. |
@@ -90,6 +91,7 @@ capability for this exact Nur route/model, so Nur must treat it as unverified.
 | `github-models` - GitHub Models | `GITHUB_TOKEN`; `https://models.github.ai/inference`; CC; `openai/gpt-5` | [GitHub Models](https://docs.github.com/github-models) | Model availability and usage limits are account-specific. | Use `gh` auth or a PAT with GitHub Models access. |
 | `github-copilot` - GitHub Copilot | `COPILOT_GITHUB_TOKEN`; `https://api.githubcopilot.com`; CC; `gpt-5.5` | [Copilot API](https://docs.github.com/copilot) | Subscription APIs and model/tool availability are entitlement-specific. | Use supported `gh` OAuth or a fine-grained PAT. |
 | `cursor` - Cursor | `CURSOR_API_KEY`; `https://api2.cursor.sh`; CC catalog placeholder; `auto` | [Cursor CLI](https://docs.cursor.com/cli) | **Not CC:** Nur uses `cursor-agent -p`; public docs do not establish API tools/stream/usage receipts. | Run `cursor-agent login`; no pasted key is required for CLI chat. |
+| `factory` - Factory Droid | `FACTORY_API_KEY` (optional); `https://app.factory.ai` CC catalog placeholder; `claude-sonnet-5-5` | [Droid Exec](https://docs.factory.ai/cli/droid-exec/overview) | **Not HTTP:** every round is `droid exec --output-format json` in read-only spec mode with nur's tools offered through the nur-tools fence; `--session-id` is reused so later rounds ship only the delta. Usage is reported only when the CLI returns it. `NUR_DROID_NATIVE=1` delegates the task to Droid itself with `--auto` (`NUR_DROID_AUTO`, default `medium`). Model ids: the [Factory-managed catalog](https://docs.factory.ai/docs/models). | Install the CLI (`curl -fsSL https://app.factory.ai/cli \| sh` or `npm i -g @factory/cli`), then sign in once with `droid`, or paste a `fk-…` key. |
 | `helicone` - Helicone AI Gateway | `HELICONE_API_KEY`; `https://ai-gateway.helicone.ai/v1`; CC; `gpt-5.4` | [Helicone Gateway](https://docs.helicone.ai/features/ai-gateway) | Gateway observability is not authoritative upstream usage unless its docs/provider response expose it. | Create a Helicone key; this gateway currently uses bare model ids. |
 | `aimlapi` - AI/ML API | `AIMLAPI_KEY`; `https://api.aimlapi.com/v1`; CC; `openai/gpt-5.6-terra` | [AI/ML API docs](https://docs.aimlapi.com/) | Router conformance is model-specific. | Create an AI/ML API key. |
 | `ollama` - Ollama (local) | `OLLAMA_API_KEY` optional; `http://localhost:11434/v1`; CC; `local-model` (resolved from `/models`) | [Ollama OpenAI compatibility](https://docs.ollama.com/api/openai-compatibility) | Local server/model determines tools, streaming, and usage; no remote billing receipt. | Run Ollama and pull a model; Nur selects an installed model instead of assuming `llama3.3`. |
@@ -100,7 +102,7 @@ capability for this exact Nur route/model, so Nur must treat it as unverified.
 
 ## Catalog conformance check
 
-The matrix must have exactly 65 data rows, matching `PROVIDERS.len()`. A row
+The matrix must have exactly 67 data rows, matching `PROVIDERS.len()`. A row
 is a catalog contract, not a promise that a remote model is available to every
 account. The primary expected catalog mismatches are intentional placeholders:
 

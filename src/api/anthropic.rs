@@ -346,20 +346,19 @@ fn push_item(item: &Value, messages: &mut Vec<Value>, system: &mut Option<String
             if let Some(b64) = url.strip_prefix("data:") {
                 // data:image/png;base64,XXXX
                 if let Some((meta, data)) = b64.split_once(',') {
-                    let media = meta
-                        .split(';')
-                        .next()
-                        .unwrap_or("image/png")
-                        .strip_prefix("image/")
-                        .map(|t| format!("image/{t}"))
-                        .unwrap_or_else(|| "image/png".into());
-                    // Anthropic wants media_type like image/png
-                    let media_type = if meta.starts_with("image/") {
-                        meta.split(';').next().unwrap_or("image/png")
-                    } else {
-                        "image/png"
-                    };
-                    let _ = media;
+                    let media_type = meta.split(';').next().unwrap_or("");
+                    // Anthropic accepts exactly these four; anything else
+                    // (x-icon, bmp) is a 400, so it becomes a note instead.
+                    if !matches!(
+                        media_type,
+                        "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+                    ) {
+                        parts.push(json!({
+                            "type": "text",
+                            "text": format!("[image omitted: {media_type} is not accepted by this provider - convert to png/jpeg]")
+                        }));
+                        continue;
+                    }
                     parts.push(json!({
                         "type": "image",
                         "source": {

@@ -67,7 +67,7 @@ What happens:
 1. **Nothing is cleared.** Opening the picker — and backing out of it with `Esc`
    — leaves your current credential exactly as it was. Credentials are replaced
    only at the moment a new one is committed.
-2. A **scrollable, type-to-filter** picker lists **65 providers** (frontier APIs,
+2. A **scrollable, type-to-filter** picker lists **67 providers** (frontier APIs,
    inference clouds, Chinese labs, OpenAI-compatible routers, local servers).
    Providers with browser sign-in show a 🌐 hint.
 3. If the provider supports browser auth, choose:
@@ -92,6 +92,22 @@ row. It can also run with **no key at all** against a local engine -
 `nur jev start`, or `NUR_JEV_LOCAL_URL=http://127.0.0.1:8788/v1/systemone`, where
 a loopback endpoint needs no credential. See [typesafe.md](./typesafe.md) and
 [jev-local.md](./jev-local.md).
+
+The pinned row reports live state rather than a static note: the engine the
+judgment layer resolves to and where its key sits (`TypeSafe hosted · saved
+key`, `Local bridge · loopback :8788`, `SubQ Snap · env SUBQ_API_KEY`, or
+`no engine · add a key or nur jev start`). Selecting it opens the **Jev
+engines** panel: one row per Jev-class slot (TypeSafe hosted, local bridge, SubQ
+Snap, OpenRouter Decisions, plus any catalog engine selected with `nur jev use
+--engine`), `●` on the one in use, the key's residence (`env`, `saved key`,
+`config.toml`, `file`, `loopback`), and a `[✕]` button wherever Nur owns that
+credential. `↵` adds or replaces the key under that slot's own store id (SubQ
+and OpenRouter keys never land on `typesafe`); `Del`, `Ctrl+D` or the `✕`
+removes every Nur-owned copy for the slot (store entry, `~/.nur/typesafe.key`,
+inline `[typesafe] api_key`). Keys that come from the environment and a running
+bridge are reported, not removed: the row tells you to `unset` the variable or
+run `nur jev stop`. The OpenRouter slot is the same key the OpenRouter chat
+provider uses, and the row says so.
 
 **Enclave · security agents** (id `enclave`) is the second pinned sidecar.
 Enclave exposes an MCP server rather than a chat endpoint, so its key

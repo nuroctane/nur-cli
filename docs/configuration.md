@@ -85,7 +85,8 @@ auto_update = true
 | `request_output_reserve_tokens` | integer | `8192` | Conservative per-request completion ceiling/reservation. Nur preflights estimated input + this reserve against context and session budgets, then sends the matching provider output-limit field where supported. `0` uses the provider default and is intentionally less safe. |
 | `stream` | bool | `true` | Stream API responses |
 | `context_window` | integer | `1000000` | Fallback context window in tokens (range: 1000–2000000). The models.dev catalog is authoritative when it knows the active provider/model; this value is used only when it does not. Auto-compaction keeps an OMP-style response/tool reserve: the larger of 15% or 16,384 tokens on large windows, with a proportional safety clamp on small windows. A local stored-context estimate is used when provider usage is absent or under-reported. |
-| `tool_result_max_chars` | integer | `12000` | Max inline tool output chars; larger results spill to disk (`0` = unlimited) |
+| `tool_result_max_chars` | integer | `12000` | Max inline tool output chars; larger results spill to disk with a head+tail preview (`0` = unlimited) |
+| `shell_timeout_handoff` | bool | `true` | A `bash` command still producing output at its timeout moves to a `bg` job (the model gets a "still running" placeholder with the job id) instead of being killed. `false` restores kill-on-timeout |
 | `compact_keep_user_turns` | integer | `4` | Recent user turns kept after compaction |
 | `compact_tool_body_max_chars` | integer | `800` | When compacting, truncate older tool bodies to this many chars (`0` = leave intact) |
 | `kv_stable_compact` | bool | `true` | `true` preserves the recent working edge verbatim after a stable summary for provider prompt-cache reuse. `false` uses a classic reconstructed working-tail order. Compaction status reports the active strategy. |

@@ -455,6 +455,18 @@ fn tools_wire(req: &ResponseRequest) -> bool {
 
 /// Flatten a Responses-shaped request into a text prompt for the Agent CLI.
 pub fn flatten_prompt(req: &ResponseRequest) -> String {
+    flatten_prompt_with(req, tools_wire(req), "Cursor Agent")
+}
+
+/// [`flatten_prompt`] for any agent CLI that nur drives through the nur-tools
+/// fence: `harness_tools` says whether nur owns the tools this round (fence
+/// protocol) or the CLI runs as a native delegate; `agent_label` names the CLI
+/// in the delegate note.
+pub(crate) fn flatten_prompt_with(
+    req: &ResponseRequest,
+    harness_tools: bool,
+    agent_label: &str,
+) -> String {
     let mut parts: Vec<String> = Vec::new();
     if let Some(instr) = &req.instructions {
         let t = instr.trim();
@@ -462,16 +474,15 @@ pub fn flatten_prompt(req: &ResponseRequest) -> String {
             parts.push(format!("System:\n{t}"));
         }
     }
-    if tools_wire(req) {
+    if harness_tools {
         parts.push(nur_tools_protocol_block(req));
     } else if req.tools.as_ref().is_some_and(|t| !t.is_empty()) {
-        // Native Cursor Agent delegate (NUR_CURSOR_NATIVE): Cursor owns tools.
-        parts.push(
-            "Note: You are running as Cursor Agent with your own tools. \
+        // Native delegate: the CLI owns tools and completes the task itself.
+        parts.push(format!(
+            "Note: You are running as {agent_label} with your own tools. \
              Complete the user's task end-to-end (read, edit, shell as needed). \
              Reply with a clear final summary of what you did."
-                .into(),
-        );
+        ));
     }
     if let Value::Array(items) = &req.input {
         for item in items {
@@ -736,17 +747,26 @@ fn message_text(item: &Value) -> String {
     }
     if let Some(arr) = item.get("content").and_then(|c| c.as_array()) {
         let mut out = String::new();
+        let mut push = |t: &str| {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(t);
+        };
         for part in arr {
             if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
-                if !out.is_empty() {
-                    out.push('\n');
-                }
-                out.push_str(t);
+                push(t);
             } else if let Some(t) = part.as_str() {
-                if !out.is_empty() {
-                    out.push('\n');
+                push(t);
+            } else if let Some(ty) = part.get("type").and_then(Value::as_str) {
+                // A text-only CLI transport cannot carry attachments; say so
+                // instead of silently answering as if nothing was attached.
+                if matches!(
+                    ty,
+                    "input_image" | "input_video" | "input_file" | "input_audio"
+                ) {
+                    push(MEDIA_DROPPED_NOTE);
                 }
-                out.push_str(t);
             }
         }
         return out;
@@ -754,13 +774,31 @@ fn message_text(item: &Value) -> String {
     String::new()
 }
 
+/// Note left where an attachment was: this transport is text-only.
+pub(crate) const MEDIA_DROPPED_NOTE: &str =
+    "[attachment omitted: this agent-CLI route is text-only - describe it or use a vision provider]";
+
 fn response_from_cli_text(
     model: &str,
     text: &str,
     parse_tools: bool,
     usage: Option<ApiUsage>,
 ) -> ApiResponse {
-    let id = format!("cursor-cli-{}", uuid_simple());
+    response_from_agent_cli_text("cursor", model, text, parse_tools, usage)
+}
+
+/// Turn an agent CLI's final text into an [`ApiResponse`]: the nur-tools fence
+/// (when nur owns tools) becomes `function_call` items, the rest is the
+/// assistant message. `provider` labels the response id and the accounting
+/// upstream; subscription-billed CLIs report unknown cost, never zero.
+pub(crate) fn response_from_agent_cli_text(
+    provider: &str,
+    model: &str,
+    text: &str,
+    parse_tools: bool,
+    usage: Option<ApiUsage>,
+) -> ApiResponse {
+    let id = format!("{provider}-cli-{}", uuid_simple());
     if parse_tools {
         if let Some((commentary, calls)) = split_nur_tools(text) {
             let mut output = Vec::new();
@@ -797,13 +835,13 @@ fn response_from_cli_text(
                 accounting: Some(ResponseAccounting {
                     // The actual input estimate is attached by ApiClient where
                     // the full request is available. This placeholder means
-                    // Cursor's subscription usage is unavailable, never zero.
+                    // the subscription usage is unavailable, never zero.
                     estimated_usage: TokenUsage {
                         cost_provenance: CostProvenance::SubscriptionUnknown,
                         ..TokenUsage::unknown()
                     },
                     native_cost_usd: None,
-                    upstream_provider: Some("cursor".into()),
+                    upstream_provider: Some(provider.into()),
                 }),
             };
         }
@@ -831,12 +869,12 @@ fn response_from_cli_text(
                 ..TokenUsage::unknown()
             },
             native_cost_usd: None,
-            upstream_provider: Some("cursor".into()),
+            upstream_provider: Some(provider.into()),
         }),
     }
 }
 
-fn uuid_simple() -> String {
+pub(crate) fn uuid_simple() -> String {
     format!(
         "{:x}",
         std::time::SystemTime::now()

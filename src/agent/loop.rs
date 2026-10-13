@@ -328,9 +328,10 @@ impl AgentRunner {
         let delta_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let turn_cancel = cancel.child_token();
         let timeout = provider_turn_timeout();
-        // Cursor Agent CLI must honor Esc cancel; always take the streaming path
-        // so the CancellationToken reaches `cursor-agent` (even for subagents).
-        if req.stream == Some(true) || client.uses_cursor_cli() {
+        // Agent CLIs (cursor-agent, droid) must honor Esc cancel; always take
+        // the streaming path so the CancellationToken reaches the child
+        // process (even for subagents).
+        if req.stream == Some(true) || client.uses_agent_cli() {
             let streamed_count = delta_count.clone();
             let request = client.create_response_stream(
                 req,
@@ -844,6 +845,21 @@ impl AgentRunner {
                     self.persist_session(session);
                     let _ = tx.send(AgentEvent::Status(
                         "peer message · injected mid-turn from another session".into(),
+                    ));
+                }
+            }
+
+            // Background jobs (shell handoffs, bg run) that finished since the
+            // last round are announced once here, so the model learns about
+            // them without polling and can pull the full result when it wants.
+            // Subagents leave the drain to the parent so a completion is not
+            // consumed by a child that never asked for the job.
+            if !self.is_subagent {
+                if let Some(note) = crate::bg_jobs::completion_note() {
+                    session.input_items.push(user_text_item(&note));
+                    self.persist_session(session);
+                    let _ = tx.send(AgentEvent::Status(
+                        "bg · job completion injected mid-turn".into(),
                     ));
                 }
             }
@@ -5150,35 +5166,35 @@ fn compaction_threshold_tokens(context_window: u64) -> u64 {
 /// a bounded image allowance rather than charging their base64 byte length as
 /// text tokens.
 fn estimate_context_tokens(items: &[Value]) -> u64 {
-    fn chars(value: &Value, key: Option<&str>) -> u64 {
-        match value {
-            Value::Null => 4,
-            Value::Bool(_) => 5,
-            Value::Number(number) => number.to_string().len() as u64,
-            Value::String(text)
-                if matches!(key, Some("image_url" | "image" | "data"))
-                    && text.starts_with("data:") =>
-            {
-                4_096
-            }
-            Value::String(text) => text.chars().count() as u64,
-            Value::Array(values) => values
-                .iter()
-                .map(|value| chars(value, None).saturating_add(1))
-                .sum(),
-            Value::Object(values) => values
-                .iter()
-                .map(|(key, value)| {
-                    (key.len() as u64)
-                        .saturating_add(chars(value, Some(key)))
-                        .saturating_add(2)
-                })
-                .sum(),
+    items
+        .iter()
+        .map(crate::agent::prompt::estimate_item_tokens)
+        .fold(0u64, u64::saturating_add)
+}
+
+/// Placeholder left where an inline image used to be.
+pub(crate) const MEDIA_DROPPED_NOTE: &str =
+    "[image omitted to fit the context window - re-attach it if it is still needed]";
+
+/// Replace every inline `input_image` part (data URL) in a message item with a
+/// text note. Returns how many were dropped. Items without images are untouched.
+pub(crate) fn strip_inline_images(item: &mut Value) -> usize {
+    let Some(parts) = item.get_mut("content").and_then(Value::as_array_mut) else {
+        return 0;
+    };
+    let mut dropped = 0usize;
+    for part in parts.iter_mut() {
+        let is_inline_image = part.get("type").and_then(Value::as_str) == Some("input_image")
+            && part
+                .get("image_url")
+                .and_then(Value::as_str)
+                .is_some_and(|u| u.starts_with("data:"));
+        if is_inline_image {
+            *part = serde_json::json!({"type": "input_text", "text": MEDIA_DROPPED_NOTE});
+            dropped += 1;
         }
     }
-
-    let estimated_chars: u64 = items.iter().map(|item| chars(item, None)).sum();
-    estimated_chars.saturating_add(3) / 4
+    dropped
 }
 
 fn should_auto_compact(usage: &UsageTracker, cfg: &Config, items: &[Value]) -> bool {
@@ -6669,6 +6685,12 @@ async fn compact_session_inner(
         }
     }
 
+    // The summary is text: inline screenshots add nothing to it, cost a tile
+    // budget each, and break the request on a text-only summarizer. `items` is
+    // the summarizer's copy, so the live session keeps its images.
+    for item in items.iter_mut() {
+        strip_inline_images(item);
+    }
     // Thin old tool bodies for the summarizer so we don't re-pay huge dumps.
     let thinned = thin_tool_bodies_for_compact(
         &mut items,
@@ -6981,10 +7003,21 @@ fn fit_recovery_request(
     let individual = available_chars / session.input_items.len().max(1);
     let mut omitted_calls = std::collections::HashSet::new();
     for (index, item) in session.input_items.iter_mut().enumerate() {
-        let encoded = serde_json::to_string(item).unwrap_or_default();
-        if encoded.len() <= individual.max(256) {
+        // Inline images are priced as media (see `estimate_item_tokens`), so a
+        // normal screenshot never counts as oversized text here.
+        let measured = crate::agent::prompt::estimate_item_tokens(item).saturating_mul(4) as usize;
+        if measured <= individual.max(256) {
             continue;
         }
+        // An item that is still too large with its images drops them to a
+        // placeholder; the base64 must never be excerpted as text.
+        if strip_inline_images(item) > 0 {
+            let again = crate::agent::prompt::estimate_item_tokens(item).saturating_mul(4) as usize;
+            if again <= individual.max(256) {
+                continue;
+            }
+        }
+        let encoded = serde_json::to_string(item).unwrap_or_default();
         if kind(item) == "function_call" {
             omitted_calls.insert(call_id(item).to_string());
             continue;

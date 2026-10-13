@@ -710,7 +710,9 @@ fn run_permissions_cli(action: Option<&cli::PermissionsCmd>, cwd: &std::path::Pa
         Some(PermissionsCmd::Trust) => {
             let allow = trust_project(cwd)?;
             if allow.is_empty() {
-                theme::print_info("this project's .nur/permissions.toml has no allow rules to trust");
+                theme::print_info(
+                    "this project's .nur/permissions.toml has no allow rules to trust",
+                );
             } else {
                 theme::print_ok(&format!(
                     "trusted {} allow rule(s) for {}: {}",
@@ -996,6 +998,20 @@ fn run_jev(action: cli::JevCmd) -> Result<()> {
                 if let Some(slot) = &key_env {
                     typesafe::client::validate_key_env(slot).map_err(error::NurError::Other)?;
                 }
+                // A gateway-hosted engine (OpenRouter, SubQ) is paid for with the
+                // gateway's own key: default to its env slot when that is set, and
+                // otherwise to the credential slot its chat provider already uses.
+                let catalog_env = selected
+                    .and_then(|e| e.key_env.clone())
+                    .filter(|env| std::env::var(env).is_ok_and(|v| !v.trim().is_empty()));
+                let key_env = key_env.or(catalog_env);
+                let credential_provider = selected
+                    .map(|e| {
+                        e.credential_provider
+                            .clone()
+                            .unwrap_or_else(|| format!("jev:{}", e.id))
+                    })
+                    .unwrap_or_default();
                 let mut cfg = load_config()?;
                 jev_local::preserve_inline_credential(&mut cfg.typesafe)?;
                 cfg.typesafe.base_url = url.clone();
@@ -1003,12 +1019,16 @@ fn run_jev(action: cli::JevCmd) -> Result<()> {
                 cfg.typesafe.model = model
                     .or_else(|| selected.and_then(|e| e.model.clone()))
                     .unwrap_or_default();
-                cfg.typesafe.key_env = key_env.unwrap_or_default();
-                cfg.typesafe.credential_provider = selected
-                    .map(|e| format!("jev:{}", e.id))
-                    .unwrap_or_default();
+                cfg.typesafe.key_env = key_env.clone().unwrap_or_default();
+                cfg.typesafe.credential_provider = credential_provider.clone();
                 config::save_config(&cfg)?;
-                format!("Jev endpoint set to {url}; selected credentials are isolated from the TypeSafe hosted key")
+                typesafe::client::invalidate_fallback_probe();
+                let credential = match (&key_env, credential_provider.as_str()) {
+                    (Some(env), _) => format!("key from ${env}"),
+                    (None, "") => "no key (loopback or key-optional endpoint)".to_string(),
+                    (None, slot) => format!("key from credential slot `{slot}`"),
+                };
+                format!("Jev endpoint set to {url}; {credential}; isolated from the TypeSafe hosted key")
             } else {
                 jev_local::use_port(port)?
             };

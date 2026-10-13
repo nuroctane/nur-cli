@@ -114,6 +114,11 @@ pub struct Config {
     /// `0` = unlimited (legacy behavior).
     #[serde(default = "default_tool_result_max_chars")]
     pub tool_result_max_chars: u64,
+    /// When a `bash` command is still producing output at its timeout, hand it
+    /// to a `bg` job and return a "still running" placeholder instead of
+    /// killing it. `false` restores kill-on-timeout.
+    #[serde(default = "default_true")]
+    pub shell_timeout_handoff: bool,
     /// Hard stop when session estimated cost reaches this USD amount.
     /// `None` / omitted = unlimited.
     #[serde(default)]
@@ -932,6 +937,7 @@ impl Default for Config {
             stream: true,
             context_window: default_context_window(),
             tool_result_max_chars: default_tool_result_max_chars(),
+            shell_timeout_handoff: true,
             max_session_cost_usd: None,
             max_session_tokens: None,
             request_output_reserve_tokens: default_request_output_reserve_tokens(),
@@ -1496,7 +1502,11 @@ mod tests {
         }
         private_atomic_write(&path, b"{\"key\":\"new\"}").unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"{\"key\":\"new\"}");
-        assert_eq!(fs::read_dir(&root).unwrap().count(), 1, "temporary file leaked");
+        assert_eq!(
+            fs::read_dir(&root).unwrap().count(),
+            1,
+            "temporary file leaked"
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

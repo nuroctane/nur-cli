@@ -115,8 +115,8 @@ mod provenance_tests {
         let dir = std::env::temp_dir().join(format!("nur-media-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let img = dir.join("p.png");
-        std::fs::write(&img, "not really png").unwrap();
-        // load_media decodes nothing here; mime by extension.
+        // Content is sniffed, so the fixture needs a real PNG signature.
+        std::fs::write(&img, b"\x89PNG\r\n\x1a\nnot really a full png").unwrap();
         drop(user);
         queue_user_images(std::slice::from_ref(&img)).unwrap();
         let left = take_pending_media();
@@ -186,6 +186,94 @@ fn mime_for(path: &Path) -> Result<(&'static str, MediaKind)> {
             "unsupported media extension '.{ext}' — images png/jpg/webp/gif/ico, or mp4 video"
         ))),
     }
+}
+
+/// MIME from magic bytes for everything `mime_for` can attach. `None` for
+/// unknown content (or video containers other than mp4, which `mime_for`
+/// already rejected by extension).
+fn sniff_mime(bytes: &[u8]) -> Option<(&'static str, MediaKind)> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Some(("image/png", MediaKind::Image));
+    }
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return Some(("image/jpeg", MediaKind::Image));
+    }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return Some(("image/gif", MediaKind::Image));
+    }
+    if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        return Some(("image/webp", MediaKind::Image));
+    }
+    if bytes.starts_with(&[0x00, 0x00, 0x01, 0x00]) {
+        return Some(("image/x-icon", MediaKind::Image));
+    }
+    if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" {
+        return Some(("video/mp4", MediaKind::Video));
+    }
+    None
+}
+
+/// Longest edge providers keep before downscaling on their side; sending more
+/// pixels only costs upload time and base64 bytes in context.
+const MAX_IMAGE_EDGE_PX: u32 = 2_000;
+/// Above this size a still image is re-encoded even when its dimensions fit.
+const REENCODE_ABOVE_BYTES: usize = 1_536 * 1024;
+
+/// Shrink oversized stills (dimensions or bytes) before attaching. PNG stays
+/// PNG (alpha, crisp UI text); JPEG/WebP become JPEG. GIF and ICO pass
+/// through: re-encoding would drop frames or icon sizes. Unchanged when the
+/// image already fits, cannot be decoded, or the image stack is compiled out.
+#[cfg(feature = "image-peek")]
+fn fit_image_for_vision(bytes: Vec<u8>, mime: &'static str) -> (Vec<u8>, &'static str) {
+    use image::ImageFormat;
+    if !matches!(mime, "image/png" | "image/jpeg" | "image/webp") {
+        return (bytes, mime);
+    }
+    let Ok(img) = image::load_from_memory(&bytes) else {
+        return (bytes, mime);
+    };
+    let (w, h) = (img.width(), img.height());
+    let too_big = w.max(h) > MAX_IMAGE_EDGE_PX;
+    if !too_big && bytes.len() <= REENCODE_ABOVE_BYTES {
+        return (bytes, mime);
+    }
+    let img = if too_big {
+        img.resize(
+            MAX_IMAGE_EDGE_PX,
+            MAX_IMAGE_EDGE_PX,
+            image::imageops::FilterType::Triangle,
+        )
+    } else {
+        img
+    };
+    let mut out = std::io::Cursor::new(Vec::new());
+    let (format, out_mime) = if mime == "image/png" {
+        (ImageFormat::Png, "image/png")
+    } else {
+        (ImageFormat::Jpeg, "image/jpeg")
+    };
+    let encoded = if format == ImageFormat::Jpeg {
+        let rgb = img.to_rgb8();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 85)
+            .encode_image(&rgb)
+            .is_ok()
+    } else {
+        img.write_to(&mut out, format).is_ok()
+    };
+    if !encoded {
+        return (bytes, mime);
+    }
+    let shrunk = out.into_inner();
+    // Keep the original when re-encoding did not actually help.
+    if shrunk.len() >= bytes.len() && !too_big {
+        return (bytes, mime);
+    }
+    (shrunk, out_mime)
+}
+
+#[cfg(not(feature = "image-peek"))]
+fn fit_image_for_vision(bytes: Vec<u8>, mime: &'static str) -> (Vec<u8>, &'static str) {
+    (bytes, mime)
 }
 
 /// True for any video container ffmpeg can decode — the input set for
@@ -276,13 +364,30 @@ pub fn load_media(path: &Path, push: bool) -> Result<MediaAttach> {
         )));
     }
     let bytes = fs::read(path).map_err(|e| NurError::Tool(format!("read media: {e}")))?;
+    // The extension is a hint; the bytes decide. A `.png` that is really a
+    // JPEG would otherwise go out with the wrong MIME and be rejected.
+    let (mime, kind) = match sniff_mime(&bytes) {
+        Some((sniffed, sniffed_kind)) => (sniffed, sniffed_kind),
+        None if kind == MediaKind::Video => (mime, kind),
+        None => {
+            return Err(NurError::Tool(format!(
+                "{} does not look like a supported image (extension says {mime}, content does not match)",
+                path.display()
+            )))
+        }
+    };
+    let (bytes, mime) = match kind {
+        MediaKind::Image => fit_image_for_vision(bytes, mime),
+        MediaKind::Video => (bytes, mime),
+    };
+    let sent_bytes = bytes.len() as u64;
     let b64 = base64_encode(&bytes);
     let data_url = format!("data:{mime};base64,{b64}");
     let item = MediaAttach {
         kind,
         path: path.display().to_string(),
         data_url,
-        bytes: meta.len(),
+        bytes: sent_bytes,
         user_pasted: false,
     };
     if push {
@@ -713,6 +818,51 @@ mod tests {
             assert!(is_extractable_video(Path::new(v)), "{v}");
         }
         assert!(!is_extractable_video(Path::new("photo.png")));
+    }
+
+    // Failure modes: a mislabeled file goes out with the extension's MIME, a
+    // text file named .png is attached, mp4 sniff misses the ftyp box.
+    #[test]
+    fn content_sniff_overrides_extension() {
+        assert_eq!(
+            sniff_mime(&[0xFF, 0xD8, 0xFF, 0xE0, 0, 0]),
+            Some(("image/jpeg", MediaKind::Image))
+        );
+        assert_eq!(
+            sniff_mime(b"RIFF\x00\x00\x00\x00WEBPVP8 "),
+            Some(("image/webp", MediaKind::Image))
+        );
+        assert_eq!(
+            sniff_mime(b"\x00\x00\x00\x18ftypmp42"),
+            Some(("video/mp4", MediaKind::Video))
+        );
+        assert_eq!(sniff_mime(b"hello, not an image"), None);
+        let dir = std::env::temp_dir().join(format!("nur-media-sniff-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("fake.png");
+        fs::write(&fake, "plain text").unwrap();
+        assert!(load_media(&fake, false).is_err());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[cfg(feature = "image-peek")]
+    #[test]
+    fn oversized_still_is_downscaled_to_the_edge_cap() {
+        let big = image::DynamicImage::new_rgb8(MAX_IMAGE_EDGE_PX * 2, 300);
+        let mut buf = std::io::Cursor::new(Vec::new());
+        big.write_to(&mut buf, image::ImageFormat::Png).unwrap();
+        let (out, mime) = fit_image_for_vision(buf.into_inner(), "image/png");
+        assert_eq!(mime, "image/png");
+        let shrunk = image::load_from_memory(&out).unwrap();
+        assert_eq!(shrunk.width(), MAX_IMAGE_EDGE_PX);
+        assert_eq!(shrunk.height(), 150);
+        // Small images pass through byte-for-byte.
+        let small = image::DynamicImage::new_rgb8(10, 10);
+        let mut sb = std::io::Cursor::new(Vec::new());
+        small.write_to(&mut sb, image::ImageFormat::Png).unwrap();
+        let orig = sb.into_inner();
+        let (same, _) = fit_image_for_vision(orig.clone(), "image/png");
+        assert_eq!(same, orig);
     }
 
     #[test]

@@ -4,7 +4,7 @@ title: Local engines (Jev contract, no key)
 
 ## Full Jev model library
 
-The pinned [JevBench v1.5.4 roster](jev-models.md) includes all 112 published systems, including variants and unmeasured entries. `nur jev models --search <text>` and `/jev models <text>` search it offline. `nur jev info <id>` and `/jev info <id>` show source, interface, model, hardware, deployment notes, and connection commands.
+The pinned [JevBench v1.5.4 roster](jev-models.md) includes all 112 published systems, including variants and unmeasured entries, plus reviewed newer engines from [S1Bench](https://bench.jakecuth.com/) (SubQ Snap, the OpenRouter Decisions models, Cloudflare Clef, the Decision-Nox family, and others; 133 entries in all). `nur jev models --search <text>` and `/jev models <text>` search it offline. `nur jev info <id>` and `/jev info <id>` show source, interface, model, hardware, deployment notes, and connection commands.
 
 ```bash
 nur jev models --search mica
@@ -14,6 +14,11 @@ nur jev use --engine mica-v01-4b --url http://127.0.0.1:8010
 # A hosted native API uses its own credential slot:
 nur jev login instinct
 nur jev use --engine instinct
+# Gateway-hosted engines share the gateway's key (OPENROUTER_API_KEY / SUBQ_API_KEY):
+nur jev use --engine mercury-decide     # or span-01, liquid-d1, solar-decide, tev1-4b
+nur jev use --engine subq-snap
+# With no selection at all, a running bridge, SUBQ_API_KEY or OPENROUTER_API_KEY is
+# picked up automatically (see typesafe.md, "Automatic engine selection").
 # Translate another API shape through the local bridge:
 nur jev login djev
 nur jev start --engine djev

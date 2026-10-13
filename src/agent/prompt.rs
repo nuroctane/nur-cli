@@ -33,6 +33,38 @@ fn estimate_tokens(text: &str) -> u64 {
     ((text.chars().count() as u64).saturating_add(3)) / 4
 }
 
+/// Chars a provider effectively bills for one inline image: vision models
+/// tokenize by tiles (~1k tokens for a screenshot), not by the base64 text.
+/// Counting the data URL as text made a single 380 KB screenshot look like
+/// ~95k tokens and triggered compaction before the first request.
+pub const IMAGE_CHARS_ALLOWANCE: u64 = 4_096;
+
+/// Token estimate for one input item with inline media priced as media.
+pub fn estimate_item_tokens(item: &Value) -> u64 {
+    fn chars(value: &Value, key: Option<&str>) -> u64 {
+        match value {
+            Value::Null => 4,
+            Value::Bool(_) => 5,
+            Value::Number(n) => n.to_string().len() as u64,
+            Value::String(text)
+                if matches!(key, Some("image_url" | "image" | "data"))
+                    && text.starts_with("data:") =>
+            {
+                IMAGE_CHARS_ALLOWANCE.min(text.len() as u64)
+            }
+            Value::String(text) => text.chars().count() as u64 + 2,
+            Value::Array(values) => values.iter().map(|v| chars(v, None) + 1).sum::<u64>() + 2,
+            Value::Object(map) => {
+                map.iter()
+                    .map(|(k, v)| k.len() as u64 + 3 + chars(v, Some(k)) + 1)
+                    .sum::<u64>()
+                    + 2
+            }
+        }
+    }
+    chars(item, None).saturating_add(3) / 4
+}
+
 fn stable_fingerprint(parts: &[&str]) -> String {
     // FNV-1a is deterministic across processes and is only a telemetry label,
     // not a security primitive. Do not expose prompt material in status text.
@@ -62,8 +94,7 @@ pub fn attribute_request(
         ..Default::default()
     };
     for item in input_items {
-        let serialized = serde_json::to_string(item).unwrap_or_default();
-        let tokens = estimate_tokens(&serialized);
+        let tokens = estimate_item_tokens(item);
         let is_tool_output = item
             .get("type")
             .and_then(Value::as_str)

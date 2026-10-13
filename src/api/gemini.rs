@@ -133,10 +133,46 @@ fn message_content(item: &Value) -> Option<Value> {
         _ => "user",
     };
     let text = collect_text(item.get("content"));
-    if text.is_empty() {
+    let mut parts: Vec<Value> = Vec::new();
+    if !text.is_empty() {
+        parts.push(json!({ "text": text }));
+    }
+    // Inline images ride as `inlineData`; anything else that is not text
+    // (remote URLs, video) leaves a note so the model knows a part is missing.
+    if let Some(Value::Array(content)) = item.get("content") {
+        for p in content {
+            match p.get("type").and_then(Value::as_str).unwrap_or("") {
+                "input_image" => match inline_data_part(p.get("image_url")) {
+                    Some(part) => parts.push(part),
+                    None => parts.push(json!({ "text": MEDIA_DROPPED })),
+                },
+                "input_video" | "input_file" | "input_audio" => {
+                    parts.push(json!({ "text": MEDIA_DROPPED }))
+                }
+                _ => {}
+            }
+        }
+    }
+    if parts.is_empty() {
         return None;
     }
-    Some(json!({ "role": role, "parts": [{ "text": text }] }))
+    Some(json!({ "role": role, "parts": parts }))
+}
+
+/// Note sent in place of an attachment this transport cannot carry.
+const MEDIA_DROPPED: &str = "[attachment omitted: this provider route cannot carry it]";
+
+/// `data:<mime>;base64,<payload>` → Gemini `inlineData`. Remote URLs are not
+/// fetched here, so they return `None`.
+fn inline_data_part(url: Option<&Value>) -> Option<Value> {
+    let url = url.and_then(Value::as_str)?;
+    let rest = url.strip_prefix("data:")?;
+    let (meta, data) = rest.split_once(',')?;
+    let mime = meta.strip_suffix(";base64")?;
+    if mime.is_empty() || data.is_empty() {
+        return None;
+    }
+    Some(json!({ "inlineData": { "mimeType": mime, "data": data } }))
 }
 
 /// Concatenate the text of a Responses content array (input_text / output_text
@@ -382,6 +418,27 @@ mod tests {
             body["request"]["tools"][0]["functionDeclarations"][0]["name"],
             "get_time"
         );
+    }
+
+    // Failure modes: image silently dropped, base64 sent as text, a remote
+    // URL faked as inline data.
+    #[test]
+    fn inline_images_become_inline_data_and_remote_urls_leave_a_note() {
+        let mut req = sample_request();
+        req.input = json!([
+            { "role": "user", "content": [
+                { "type": "input_text", "text": "what is this" },
+                { "type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgo=" },
+                { "type": "input_image", "image_url": "https://example.com/a.png" }
+            ] },
+        ]);
+        let body = build_body(&req, "p", "gemini-2.5-flash");
+        let parts = &body["request"]["contents"][0]["parts"];
+        assert_eq!(parts[0]["text"], "what is this");
+        assert_eq!(parts[1]["inlineData"]["mimeType"], "image/png");
+        assert_eq!(parts[1]["inlineData"]["data"], "iVBORw0KGgo=");
+        assert_eq!(parts[2]["text"], MEDIA_DROPPED);
+        assert!(!body.to_string().contains("base64,iVBOR"));
     }
 
     #[test]

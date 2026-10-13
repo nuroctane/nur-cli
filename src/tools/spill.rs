@@ -106,16 +106,35 @@ pub fn maybe_spill(_session_id: &str, _tool: &str, body: String, max_chars: usiz
     };
 
     let total = body.chars().count();
-    let preview: String = body.chars().take(PREVIEW_CHARS).collect();
+    let (head, tail) = head_tail_preview(&body, PREVIEW_CHARS);
     format!(
         "[tool result truncated - {total} chars, spilled to disk]\n\
          full path: {}\n\
          use read_file on that absolute path (nur tool-results are readable) if you need more than the preview below.\n\
-         --- preview (first {PREVIEW_CHARS} chars) ---\n\
-         {preview}\n\
-         --- end preview ---",
-        path.display()
+         --- preview (first {} chars) ---\n\
+         {head}\n\
+         --- … {} chars omitted … ---\n\
+         {tail}\n\
+         --- end preview (last {} chars) ---",
+        path.display(),
+        head.chars().count(),
+        total.saturating_sub(head.chars().count() + tail.chars().count()),
+        tail.chars().count()
     )
+}
+
+/// Split a `budget`-char preview into ~70% head and ~30% tail, so the start
+/// (what ran) and the end (how it ended) both survive.
+fn head_tail_preview(body: &str, budget: usize) -> (String, String) {
+    let head_n = budget * 7 / 10;
+    let tail_n = budget - head_n;
+    let chars: Vec<char> = body.chars().collect();
+    if chars.len() <= budget {
+        return (body.to_string(), String::new());
+    }
+    let head: String = chars[..head_n].iter().collect();
+    let tail: String = chars[chars.len() - tail_n..].iter().collect();
+    (head, tail)
 }
 
 fn truncate_only(body: &str, max_chars: usize) -> String {
@@ -168,6 +187,14 @@ mod tests {
             })
             .unwrap_or(false);
         assert!(!leaked, "sensitive spill must not create a new file");
+    }
+
+    #[test]
+    fn spill_preview_keeps_the_tail() {
+        let body = format!("{}\nERROR: last line", "x".repeat(20_000));
+        let out = maybe_spill("s", "bash", body, 1000);
+        assert!(out.contains("ERROR: last line"), "{out}");
+        assert!(out.contains("chars omitted"));
     }
 
     #[test]

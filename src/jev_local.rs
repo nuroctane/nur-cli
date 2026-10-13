@@ -241,7 +241,23 @@ pub fn state() -> Option<BridgeState> {
     serde_json::from_str(&raw).ok()
 }
 
+/// The loopback endpoint of a bridge that is recorded *and answering*.
+///
+/// `nur jev start` without `nur jev use` used to leave the harness keyless and
+/// inert; the running engine is reason enough to use it. A stale state file
+/// (bridge exited) yields `None`, so judgments never route to a dead port.
+pub fn running_bridge_endpoint() -> Option<String> {
+    let state = state()?;
+    if !state.endpoint.starts_with("http://127.0.0.1")
+        && !state.endpoint.starts_with("http://localhost")
+    {
+        return None;
+    }
+    probe_port(state.port).map(|_| state.endpoint)
+}
+
 fn write_state(state: &BridgeState) -> Result<()> {
+    client::invalidate_fallback_probe();
     let dir = home();
     std::fs::create_dir_all(&dir)
         .map_err(|e| NurError::Other(format!("cannot create {}: {e}", dir.display())))?;
@@ -742,6 +758,7 @@ pub fn stop() -> Result<String> {
         && process_identity(state.pid).as_deref() == Some(&state.process_identity);
     if !owned {
         let _ = std::fs::remove_file(state_path());
+        client::invalidate_fallback_probe();
         return Ok("cleared stale bridge record; no owned process remains".into());
     }
     let graceful = shutdown_instance(&state);
@@ -761,6 +778,7 @@ pub fn stop() -> Result<String> {
         ));
     }
     let _ = std::fs::remove_file(state_path());
+    client::invalidate_fallback_probe();
     Ok(format!(
         "bridge pid {} on port {} stopped",
         state.pid, state.port
@@ -809,6 +827,7 @@ pub fn use_port(port: u16) -> Result<String> {
     cfg.typesafe.key_env.clear();
     cfg.typesafe.credential_provider.clear();
     crate::config::save_config(&cfg)?;
+    client::invalidate_fallback_probe();
     let mut out = format!(
         "typesafe base_url set to {endpoint}\n  previous: {}\n  a loopback endpoint needs no key, \
          so local judgments now run with no credential and nothing leaving the machine.\n  \
@@ -847,7 +866,12 @@ pub fn use_hosted() -> Result<String> {
     cfg.typesafe.credential_provider.clear();
     cfg.typesafe.model.clear();
     crate::config::save_config(&cfg)?;
-    Ok("typesafe base_url cleared - back to the hosted endpoint (a key is required again)".into())
+    client::invalidate_fallback_probe();
+    Ok(
+        "typesafe base_url cleared - back to the hosted endpoint (a key is required again, or a \
+        running local bridge / SUBQ_API_KEY / OPENROUTER_API_KEY is picked up automatically)"
+            .into(),
+    )
 }
 
 /// Is the configured endpoint local, and does it answer?
@@ -855,14 +879,20 @@ pub fn status_lines(cfg: &TypesafeConfig) -> Vec<String> {
     let mut lines = Vec::new();
     let effective = client::effective_base_url(cfg);
     let local = client::is_loopback_endpoint(&effective);
+    let fallback = client::fallback_engine(cfg);
     lines.push(format!(
         "endpoint: {effective}{}",
-        if local {
-            "  (local engine)"
+        if let Some(engine) = &fallback {
+            format!("  (auto: {})", engine.source)
+        } else if local {
+            "  (local engine)".to_string()
         } else {
-            "  (hosted)"
+            "  (hosted)".to_string()
         }
     ));
+    if let Some(engine) = &fallback {
+        lines.push(format!("model: {}  (auto)", engine.model));
+    }
     if let Some(key) = client::key_provenance(cfg) {
         lines.push(format!("credential: {key}"));
     } else if !cfg.key_env.trim().is_empty() {

@@ -21,6 +21,26 @@ pub struct Engine {
     pub options: Option<serde_json::Value>,
     pub evidence: Option<String>,
     pub notes: Option<String>,
+    /// Environment variable the hosting gateway reads its key from
+    /// (`OPENROUTER_API_KEY` for OpenRouter-hosted engines, `SUBQ_API_KEY`).
+    #[serde(default)]
+    pub key_env: Option<String>,
+    /// Credential-store slot shared with the chat provider of the same gateway,
+    /// so one `nur auth login --provider openrouter` serves both.
+    #[serde(default)]
+    pub credential_provider: Option<String>,
+}
+
+impl Engine {
+    /// Hosted engines that speak the System One schema at a public URL and can
+    /// be selected with `nur jev use --engine <id>` without a bridge.
+    pub fn is_hosted_systemone(&self) -> bool {
+        self.protocol == "systemone"
+            && self
+                .endpoint
+                .as_deref()
+                .is_some_and(|e| e.starts_with("https://"))
+    }
 }
 
 pub fn engines() -> &'static [Engine] {
@@ -102,9 +122,16 @@ pub fn info(id: &str) -> Result<String> {
     if local_adapter(id).is_some() {
         output.push_str(&format!("\nLocal: install the source project's dependencies in your Python environment, then:\n  nur jev start --engine {id}{}\n  nur jev use\n",if e.model.is_none() {" --model <weights-or-model-id>"} else {""}));
     }
-    if e.protocol == "systemone" && e.endpoint.is_some() {
+    if e.is_hosted_systemone() {
+        let login = match (&e.credential_provider, &e.key_env) {
+            (Some(slot), Some(env)) => format!(
+                "  nur auth login --provider {slot}   (or export {env}; shared with the {slot} chat provider)"
+            ),
+            (None, Some(env)) => format!("  nur jev login {id}   (or export {env})"),
+            _ => format!("  nur jev login {id}"),
+        };
         output.push_str(&format!(
-            "\nConnect its public endpoint (catalog URL and model):\n  nur jev login {id}\n  nur jev use --engine {id}\n"
+            "\nConnect its public endpoint (catalog URL and model):\n{login}\n  nur jev use --engine {id}\n"
         ));
     } else if e.protocol == "systemone" {
         output.push_str(&format!("\nConnect the source project's native server:\n  nur jev use --engine {id} --url <https-or-loopback-systemone-url> --model <server-model-id>\n"));

@@ -68,6 +68,13 @@ pub fn fetch_model_ids(
     if pid == "cursor" || crate::api::cursor_cli::is_cli_session_token(api_key) {
         return crate::api::cursor_cli::list_models().map_err(|e| e.to_string());
     }
+    if pid == "factory" {
+        // No HTTP model list; the CLI serves Factory's documented catalog.
+        return Ok(crate::api::droid_cli::FACTORY_MODELS
+            .iter()
+            .map(|m| m.to_string())
+            .collect());
+    }
     if api_key.trim().is_empty() {
         // key_optional local servers still answer /models without auth.
         let p = crate::providers::by_id(pid);

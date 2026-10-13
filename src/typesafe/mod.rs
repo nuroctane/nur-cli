@@ -45,6 +45,7 @@ pub mod context;
 pub mod harness;
 pub mod policy;
 pub mod questions;
+pub mod residence;
 pub mod route;
 pub mod telemetry;
 

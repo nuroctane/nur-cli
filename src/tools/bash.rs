@@ -1,6 +1,7 @@
 use super::sandbox;
 use super::shell::{
-    clamp_timeout_ms, run_in_shell, shell_backend, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS,
+    clamp_max_output_bytes, clamp_timeout_ms, run_in_shell_with, shell_backend, ShellOptions,
+    DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_TIMEOUT_MS, MAX_MAX_OUTPUT_BYTES, MAX_TIMEOUT_MS,
 };
 use super::{arg_str, arg_u64, Tool, ToolContext};
 use crate::error::{NurError, Result};
@@ -31,7 +32,11 @@ impl Tool for Bash {
         // Honest description — name kept as `bash` for model familiarity.
         "Run a non-interactive shell command in the workspace cwd (not a full OS sandbox). \
          On Windows prefers Git Bash, then pwsh/PowerShell, then cmd.exe (reported in output). \
-         Default timeout 60s (max 180s). Idle commands with no output are killed. \
+         Default timeout 60s (max 180s). A command still producing output at the timeout is \
+         handed to a bg job (result says 'still running' with the job id; fetch it later with \
+         bg(action=result, id=N)); background=true hands off right away for builds/test suites. \
+         Idle commands with no output are killed. Output keeps head+tail within \
+         max_output_length (full text spilled to disk). \
          Never use for search/file-read (use grep/glob/list_dir/read_file). \
          Do not retry identical timed-out/hung commands."
     }
@@ -44,7 +49,18 @@ impl Tool for Bash {
                 "timeout_ms": {
                     "type": "integer",
                     "description": format!(
-                        "Timeout in ms (default {DEFAULT_TIMEOUT_MS}, hard max {MAX_TIMEOUT_MS})"
+                        "Timeout in ms (default {DEFAULT_TIMEOUT_MS}, hard max {MAX_TIMEOUT_MS}). \
+                         At the deadline a still-running command is handed to bg, not killed."
+                    )
+                },
+                "background": {
+                    "type": "boolean",
+                    "description": "Hand off to a bg job almost immediately (long builds, test suites, servers that log). Default false."
+                },
+                "max_output_length": {
+                    "type": "integer",
+                    "description": format!(
+                        "Max bytes of stdout kept inline (default {DEFAULT_MAX_OUTPUT_BYTES}, max {MAX_MAX_OUTPUT_BYTES}); stderr gets half. Head and tail are kept, the full text is spilled."
                     )
                 }
             },
@@ -64,6 +80,22 @@ impl Tool for Bash {
         let command = arg_str(args, "command")?;
         let timeout_ms =
             clamp_timeout_ms(arg_u64(args, "timeout_ms").unwrap_or(DEFAULT_TIMEOUT_MS));
+        let background = args
+            .get("background")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let max_output_bytes = arg_u64(args, "max_output_length")
+            .map(|n| clamp_max_output_bytes(n as usize))
+            .unwrap_or(DEFAULT_MAX_OUTPUT_BYTES);
+        let handoff_on_timeout = crate::config::load_config()
+            .map(|c| c.shell_timeout_handoff)
+            .unwrap_or(true);
+        let opts = ShellOptions {
+            timeout_ms,
+            handoff_on_timeout,
+            background,
+            max_output_bytes,
+        };
 
         if let Some(reason) = check_destructive(&command, &ctx.cwd) {
             return Err(NurError::Tool(reason));
@@ -75,7 +107,8 @@ impl Tool for Bash {
             return Err(NurError::Tool(reason));
         }
 
-        match run_in_shell(shell_backend(), &command, &ctx.cwd, timeout_ms, &ctx.cancel) {
+        match run_in_shell_with(shell_backend(), &command, &ctx.cwd, &opts, &ctx.cancel) {
+            // A bg handoff comes back as Ok and is not a failure to lock out.
             Ok(out) => Ok(out),
             Err(e) => {
                 // Only lock out hang/timeout/cancel — not ordinary tool refusals

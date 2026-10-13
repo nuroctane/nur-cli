@@ -1321,22 +1321,28 @@ pub fn choose_provider_oauth(
 }
 
 fn remove_provider_keys(provider: &str) -> Result<()> {
-    {
-        let _guard = key_store_guard();
-        let path = crate::config::provider_keys_path();
-        let mut keys = read_keys_at(&path);
-        let mut changed = false;
-        for family_id in credential_family_ids(provider) {
-            changed |= keys.remove(family_id).is_some();
-        }
-        if changed {
-            let text = serde_json::to_string_pretty(&keys)?;
-            private_atomic_write(&path, text.as_bytes()).map_err(|error| {
-                NurError::Other(format!("failed to save provider keys: {error}"))
-            })?;
-        }
+    forget_provider_key(provider).map(|_| ())
+}
+
+/// Remove only the saved API key for a slot (sessions, the active login and
+/// the T3 policy stay untouched). Returns whether an entry was removed. This
+/// is the right call for credential slots that are not chat providers, such as
+/// the Jev engine slots, where `delete_provider_credentials` would also record
+/// a meaningless T3 block.
+pub fn forget_provider_key(provider: &str) -> Result<bool> {
+    let _guard = key_store_guard();
+    let path = crate::config::provider_keys_path();
+    let mut keys = read_keys_at(&path);
+    let mut changed = false;
+    for family_id in credential_family_ids(provider) {
+        changed |= keys.remove(family_id).is_some();
     }
-    Ok(())
+    if changed {
+        let text = serde_json::to_string_pretty(&keys)?;
+        private_atomic_write(&path, text.as_bytes())
+            .map_err(|error| NurError::Other(format!("failed to save provider keys: {error}")))?;
+    }
+    Ok(changed)
 }
 
 /// Best-effort: patch `project_id` / `tier_id` into existing google-family OAuth
@@ -1493,6 +1499,17 @@ pub fn provider_credential_summaries() -> BTreeMap<String, String> {
         .iter()
         .chain(crate::providers::SIDECAR_PROVIDERS.iter())
     {
+        // The Jev row reports the engine the layer resolves to and where that
+        // key sits, because its credential can come from several slots (hosted
+        // TypeSafe, a local bridge, SubQ, OpenRouter, a selected catalog
+        // engine) and the generic per-provider sources would hide that.
+        if provider.id == crate::providers::TYPESAFE_PROVIDER.id {
+            let summary = crate::config::load_config()
+                .map(|cfg| crate::typesafe::residence::summary(&cfg.typesafe))
+                .unwrap_or_else(|error| format!("config unreadable: {error}"));
+            out.insert(provider.id.to_string(), summary);
+            continue;
+        }
         let mut sources: Vec<String> = Vec::new();
         if provider.key_optional {
             sources.push("local · no auth".into());

@@ -197,6 +197,9 @@ pub fn api_key(cfg: &TypesafeConfig) -> Option<String> {
     if is_loopback_endpoint(&endpoint) {
         return None;
     }
+    if let Some(engine) = fallback_engine(cfg) {
+        return engine.key;
+    }
     let explicit = cfg.api_key.trim();
     if !explicit.is_empty() {
         // Config is already in memory: never cached, so an edit takes effect at
@@ -263,9 +266,10 @@ fn api_key_from_env() -> Option<String> {
     None
 }
 
-fn api_key_from_files() -> Option<String> {
+/// The key files the hosted TypeSafe path reads, in precedence order.
+pub fn key_files() -> Vec<std::path::PathBuf> {
     let home = crate::config::nur_home();
-    let candidates = [
+    vec![
         home.join("typesafe.key"),
         home.join("keys").join("typesafe.key"),
         dirs::home_dir().unwrap_or_default().join(".typesafe_key"),
@@ -273,8 +277,11 @@ fn api_key_from_files() -> Option<String> {
             .unwrap_or_default()
             .join("typesafe")
             .join("key"),
-    ];
-    for path in candidates {
+    ]
+}
+
+fn api_key_from_files() -> Option<String> {
+    for path in key_files() {
         if let Ok(raw) = std::fs::read_to_string(&path) {
             let key = raw.trim();
             if !key.is_empty() {
@@ -308,9 +315,18 @@ pub fn normalize_local_bridge_url(raw: &str) -> Option<String> {
         return None;
     }
     if trimmed.ends_with("/v1/systemone") {
-        Some(trimmed.to_string())
+        return Some(trimmed.to_string());
+    }
+    // Only a bare origin (or a dangling `/v1`) gets the System One path. An
+    // engine that serves the same schema under its own path - OpenRouter's
+    // `/api/alpha/decisions`, for one - must be reachable as written.
+    let bare_origin = reqwest::Url::parse(trimmed)
+        .map(|u| matches!(u.path(), "" | "/" | "/v1"))
+        .unwrap_or(true);
+    if bare_origin {
+        Some(format!("{}/v1/systemone", trimmed.trim_end_matches("/v1")))
     } else {
-        Some(format!("{trimmed}/v1/systemone"))
+        Some(trimmed.to_string())
     }
 }
 
@@ -359,16 +375,156 @@ pub fn validate_key_env(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The effective endpoint: a local-bridge env override wins over config.
+/// The effective endpoint: a local-bridge env override wins over config, and
+/// with no selection at all, a decision engine this machine can already reach.
 pub fn effective_base_url(cfg: &TypesafeConfig) -> String {
     if let Some(local) = local_bridge_env() {
         return local;
     }
     let configured = cfg.base_url.trim();
     if configured.is_empty() {
+        if let Some(engine) = fallback_engine(cfg) {
+            return engine.base_url;
+        }
         DEFAULT_BASE_URL.to_string()
     } else {
         configured.to_string()
+    }
+}
+
+/// A System One engine chosen because it is simply *there*: the user never
+/// selected one, but a local bridge is running or a decision-model key is in the
+/// environment. The whole harness (tool gate, compaction, routing) lights up
+/// without any configuration.
+#[derive(Debug, Clone)]
+pub struct FallbackEngine {
+    pub base_url: String,
+    /// Model id the endpoint expects; empty keeps the endpoint's default.
+    pub model: String,
+    /// `None` for a loopback bridge.
+    pub key: Option<String>,
+    /// Where it came from, for `doctor` / `jev status`.
+    pub source: &'static str,
+}
+
+/// Hosted System One endpoints keyed by the credential that unlocks them, in
+/// preference order. Every one speaks the `/v1/systemone` request shape
+/// (OpenRouter's Decisions API documents itself as the same schema as Jev).
+const FALLBACK_HOSTED: &[(&[&str], &str, &str, &str, &str)] = &[
+    (
+        &["SUBQ_API_KEY"],
+        "jev:subq-snap",
+        "https://api.subq.ai/v1/systemone",
+        "subq-snap-preview",
+        "SubQ Snap (SUBQ_API_KEY)",
+    ),
+    (
+        &["OPENROUTER_API_KEY"],
+        "openrouter",
+        "https://openrouter.ai/api/alpha/decisions",
+        "inception/mercury-decide",
+        "OpenRouter Decisions · Mercury Decide (OPENROUTER_API_KEY)",
+    ),
+];
+
+/// True when `[typesafe]` names an engine, a slot or an endpoint itself.
+fn explicit_engine_selection(cfg: &TypesafeConfig) -> bool {
+    !cfg.key_env.trim().is_empty()
+        || !cfg.credential_provider.trim().is_empty()
+        || !cfg.base_url.trim().is_empty()
+        || !cfg.api_key.trim().is_empty()
+        || local_bridge_env().is_some()
+}
+
+/// Whether a TypeSafe key exists anywhere nur looks (raw sources only, so this
+/// can be called from inside `api_key` without recursing).
+fn typesafe_key_present() -> bool {
+    api_key_from_env().is_some()
+        || KEY_PROVIDER_IDS
+            .iter()
+            .any(|id| crate::auth::load_provider_key(id).is_some_and(|k| !k.trim().is_empty()))
+        || api_key_from_files().is_some()
+}
+
+/// The engine used when nothing is selected and no TypeSafe key exists.
+///
+/// Order: a bridge started with `nur jev start` (even before `nur jev use`),
+/// then hosted decision models by key presence ([`FALLBACK_HOSTED`]). The
+/// resolution reads the environment, the credential store and a state file, so
+/// the result - including "nothing" - is cached briefly like the key probe.
+pub fn fallback_engine(cfg: &TypesafeConfig) -> Option<FallbackEngine> {
+    if explicit_engine_selection(cfg) {
+        return None;
+    }
+    if let Ok(guard) = FALLBACK_PROBE.lock() {
+        if let Some((at, cached)) = guard.as_ref() {
+            if at.elapsed() < KEY_PROBE_TTL {
+                return cached.clone();
+            }
+        }
+    }
+    let resolved = if typesafe_key_present() {
+        None
+    } else {
+        resolve_fallback_engine()
+    };
+    if let Ok(mut guard) = FALLBACK_PROBE.lock() {
+        *guard = Some((Instant::now(), resolved.clone()));
+    }
+    resolved
+}
+
+static FALLBACK_PROBE: std::sync::Mutex<Option<(Instant, Option<FallbackEngine>)>> =
+    std::sync::Mutex::new(None);
+
+fn resolve_fallback_engine() -> Option<FallbackEngine> {
+    if let Some(endpoint) = crate::jev_local::running_bridge_endpoint() {
+        return Some(FallbackEngine {
+            base_url: endpoint,
+            model: String::new(),
+            key: None,
+            source: "local bridge (nur jev start)",
+        });
+    }
+    hosted_fallback_engine(
+        |var| std::env::var(var).ok(),
+        |slot| crate::auth::load_provider_key(slot),
+    )
+}
+
+/// First hosted engine whose key is present, by env var and then by stored
+/// credential; the lookups are injected so the order is testable offline.
+fn hosted_fallback_engine(
+    env: impl Fn(&str) -> Option<String>,
+    stored: impl Fn(&str) -> Option<String>,
+) -> Option<FallbackEngine> {
+    for (envs, store_id, base_url, model, source) in FALLBACK_HOSTED {
+        let key = envs
+            .iter()
+            .find_map(|var| env(var))
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .or_else(|| {
+                stored(store_id)
+                    .map(|k| k.trim().to_string())
+                    .filter(|k| !k.is_empty())
+            });
+        if let Some(key) = key {
+            return Some(FallbackEngine {
+                base_url: (*base_url).to_string(),
+                model: (*model).to_string(),
+                key: Some(key),
+                source,
+            });
+        }
+    }
+    None
+}
+
+/// Drop the cached fallback resolution (after `nur jev start|stop|use`).
+pub fn invalidate_fallback_probe() {
+    if let Ok(mut guard) = FALLBACK_PROBE.lock() {
+        *guard = None;
     }
 }
 
@@ -379,6 +535,9 @@ pub fn key_provenance(cfg: &TypesafeConfig) -> Option<&'static str> {
     }
     if !cfg.credential_provider.is_empty() {
         return api_key(cfg).map(|_| "selected engine credential store slot");
+    }
+    if let Some(engine) = fallback_engine(cfg) {
+        return Some(engine.source);
     }
     if is_loopback_endpoint(&effective_base_url(cfg)) {
         return Some("loopback engine (no key)");
@@ -453,14 +612,17 @@ pub fn client(cfg: &TypesafeConfig) -> Availability {
         Ok(c) => c,
         Err(e) => return Availability::Unavailable(format!("http client: {e}")),
     };
+    let model = if !cfg.model.trim().is_empty() {
+        cfg.model.trim().to_string()
+    } else if let Some(engine) = fallback_engine(cfg).filter(|e| !e.model.is_empty()) {
+        engine.model
+    } else {
+        DEFAULT_MODEL.to_string()
+    };
     Availability::Ready(Box::new(TypesafeClient {
         key,
         base_url,
-        model: if cfg.model.trim().is_empty() {
-            DEFAULT_MODEL.to_string()
-        } else {
-            cfg.model.trim().to_string()
-        },
+        model,
         retries: cfg.retries.min(5),
         timeout: Duration::from_millis(cfg.timeout_ms.clamp(1_000, 180_000)),
         max_questions: cfg
@@ -1549,6 +1711,53 @@ mod tests {
         }
         assert_eq!(normalize_local_bridge_url("   "), None);
         assert_eq!(normalize_local_bridge_url("/"), None);
+    }
+
+    /// Ways the auto-resolution can go wrong: a stored key beats an env var,
+    /// a blank env var counts as present, or OpenRouter wins over SubQ.
+    #[test]
+    fn hosted_fallback_prefers_subq_then_openrouter_and_ignores_blank_keys() {
+        let none = |_: &str| None;
+        assert!(hosted_fallback_engine(none, none).is_none());
+
+        let blank_subq = |var: &str| (var == "SUBQ_API_KEY").then(|| "   ".to_string());
+        let stored_openrouter =
+            |slot: &str| (slot == "openrouter").then(|| "sk-or-stored".to_string());
+        let engine = hosted_fallback_engine(blank_subq, stored_openrouter).expect("openrouter");
+        assert_eq!(engine.base_url, "https://openrouter.ai/api/alpha/decisions");
+        assert_eq!(engine.model, "inception/mercury-decide");
+        assert_eq!(engine.key.as_deref(), Some("sk-or-stored"));
+
+        let both = |var: &str| match var {
+            "SUBQ_API_KEY" => Some("subq-env".to_string()),
+            "OPENROUTER_API_KEY" => Some("sk-or-env".to_string()),
+            _ => None,
+        };
+        let engine = hosted_fallback_engine(both, none).expect("subq");
+        assert_eq!(engine.base_url, "https://api.subq.ai/v1/systemone");
+        assert_eq!(engine.key.as_deref(), Some("subq-env"));
+
+        let stored_subq = |slot: &str| (slot == "jev:subq-snap").then(|| "subq-stored".to_string());
+        let engine = hosted_fallback_engine(none, stored_subq).expect("stored subq");
+        assert_eq!(engine.model, "subq-snap-preview");
+    }
+
+    /// An engine serving the System One schema under its own path must keep
+    /// that path; appending `/v1/systemone` to it is a permanent 404.
+    #[test]
+    fn the_endpoint_path_is_kept_unless_the_url_is_a_bare_origin() {
+        assert_eq!(
+            normalize_local_bridge_url("https://openrouter.ai/api/alpha/decisions/").as_deref(),
+            Some("https://openrouter.ai/api/alpha/decisions")
+        );
+        assert_eq!(
+            normalize_local_bridge_url("https://api.zoowork.ai/v1").as_deref(),
+            Some("https://api.zoowork.ai/v1/systemone")
+        );
+        assert_eq!(
+            normalize_local_bridge_url("https://api.fastino.ai/v1/systemone").as_deref(),
+            Some("https://api.fastino.ai/v1/systemone")
+        );
     }
 
     #[test]

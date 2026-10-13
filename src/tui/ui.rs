@@ -226,6 +226,7 @@ fn draw_login(f: &mut Frame, app: &mut App, area: Rect) {
         Some(super::app::LoginStage::Key) => draw_login_key(f, app, area),
         Some(super::app::LoginStage::BaseUrl) => draw_login_baseurl(f, app, area),
         Some(super::app::LoginStage::Browser) => draw_login_browser(f, app, area),
+        Some(super::app::LoginStage::JevSlots) => draw_login_jev_slots(f, app, area),
         None => {}
     }
 }
@@ -356,6 +357,178 @@ fn draw_login_method(f: &mut Frame, app: &mut App, area: Rect) {
     );
     if let Some(login) = &mut app.login {
         login.hit = hit;
+    }
+}
+
+/// Jev engine slots: one row per engine the judgment layer can run on, the
+/// residence of its key (env / saved / config / file / loopback), a ● on the
+/// slot in use, and a ✕ button wherever Nur owns the credential.
+fn draw_login_jev_slots(f: &mut Frame, app: &mut App, area: Rect) {
+    let Some(m) = &app.login else { return };
+    let slots = m.jev_slots.clone();
+    let sel = m.jev_sel;
+    let error = m.error.clone();
+    let count = slots.len().max(1);
+    let want = (count * 3 + 6 + usize::from(error.is_some())) as u16;
+    let rect = fit_modal_rect(area, 80, want, 48, 8);
+    f.render_widget(Clear, rect);
+    f.render_widget(
+        Block::default().style(Style::default().bg(theme::SURFACE_2())),
+        rect,
+    );
+    let phase = modal_phase(app);
+    let in_use = slots.iter().find(|s| s.in_use).map(|s| s.name.clone());
+    let title = match &in_use {
+        Some(name) => format!(" ⚡ Jev engines · judging with {name} "),
+        None => " ⚡ Jev engines · no engine active ".to_string(),
+    };
+    draw_modal_frame(
+        f,
+        rect,
+        phase,
+        theme::INDIGO(),
+        &title,
+        None,
+        " ↑↓ · ↵ add/replace key · del/✕ remove · ^R refresh · esc back ",
+    );
+    let inner = modal_inner(rect);
+    let close = Rect {
+        x: rect.x + rect.width.saturating_sub(5),
+        y: rect.y,
+        width: 3,
+        height: 1,
+    };
+    let mut hit = super::app::PickerHit {
+        frame: rect,
+        close,
+        body: inner,
+        scope: Rect::default(),
+        rows: Vec::new(),
+    };
+    let mut buttons: Vec<(usize, Rect)> = Vec::new();
+    let intro_w = (inner.width as usize).saturating_sub(2);
+    let mut lines: Vec<Line> = vec![
+        Line::from(Span::styled(
+            format!(
+                "  {}",
+                truncate(
+                    "which engine judges for the harness, and where its key lives",
+                    intro_w
+                )
+            ),
+            theme::style_faint(),
+        )),
+        Line::default(),
+    ];
+    if slots.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  reading slots…".to_string(),
+            theme::style_faint(),
+        )));
+    }
+    let detailed = inner.height as usize >= slots.len() * 3 + 2;
+    let stride = if detailed { 3 } else { 1 };
+    let page = (inner.height.saturating_sub(2) as usize / stride).max(1);
+    let start = selection_window_start(slots.len(), sel, page);
+    // Fixed button column so the ✕ lines up and stays clickable.
+    const BUTTON_W: u16 = 3;
+    let button_x = inner.x + inner.width.saturating_sub(BUTTON_W + 1);
+    let text_w = (inner.width as usize).saturating_sub(BUTTON_W as usize + 3);
+    // Name column shrinks on narrow terminals so the residence stays visible.
+    let name_w = (text_w / 2).clamp(12, 24);
+    for (i, slot) in slots.iter().enumerate().skip(start).take(page) {
+        let selected = sel == i;
+        let marker = if selected { "❯ " } else { "  " };
+        let dot = if slot.in_use { "● " } else { "○ " };
+        let title_style = if selected {
+            Style::default()
+                .fg(theme::ON_ACCENT_FG())
+                .bg(theme::NUR_GOLD())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+                .fg(theme::FG())
+                .add_modifier(Modifier::BOLD)
+        };
+        let sub_style = if selected {
+            Style::default().fg(theme::BLUE_100()).bg(theme::NUR_GOLD())
+        } else {
+            theme::style_faint()
+        };
+        let row = lines.len() as u16;
+        if row < inner.height {
+            hit.rows.push((
+                i,
+                Rect {
+                    x: inner.x,
+                    y: inner.y + row,
+                    width: inner.width.saturating_sub(BUTTON_W + 1),
+                    height: if detailed { 2 } else { 1 },
+                },
+            ));
+        }
+        let removable = slot.residence.removable();
+        let button = if removable { "[✕]" } else { "   " };
+        if removable && row < inner.height {
+            buttons.push((
+                i,
+                Rect {
+                    x: button_x,
+                    y: inner.y + row,
+                    width: BUTTON_W,
+                    height: 1,
+                },
+            ));
+        }
+        let head = format!(
+            "{marker}{dot}{:<name_w$} {}",
+            truncate(&slot.name, name_w),
+            slot.residence.label()
+        );
+        let head = format!("{:<text_w$}", truncate(&head, text_w));
+        let button_style = if selected {
+            Style::default()
+                .fg(theme::ON_ACCENT_FG())
+                .bg(theme::NUR_GOLD())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            theme::style_error()
+        };
+        lines.push(Line::from(vec![
+            Span::styled(head, title_style),
+            Span::styled(" ".to_string(), title_style),
+            Span::styled(button.to_string(), button_style),
+        ]));
+        if detailed {
+            let mut sub = slot.detail.clone();
+            if let Some(shared) = slot.shared_with {
+                sub.push_str(&format!(" · same key as {shared}"));
+            }
+            if let Some(hint) = slot.residence.manual_hint() {
+                sub.push_str(&format!(" · {hint}"));
+            }
+            // The detail row has no button, so it may run under the ✕ column.
+            let sub_w = (inner.width as usize).saturating_sub(8);
+            lines.push(Line::from(Span::styled(
+                format!("      {}", truncate(&sub, sub_w)),
+                sub_style,
+            )));
+            lines.push(Line::default());
+        }
+    }
+    if let Some(e) = &error {
+        lines.push(Line::from(Span::styled(
+            format!("  {}", truncate(e, inner.width.saturating_sub(4) as usize)),
+            theme::style_error(),
+        )));
+    }
+    f.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
+        inner,
+    );
+    if let Some(login) = &mut app.login {
+        login.hit = hit;
+        login.jev_buttons = buttons;
     }
 }
 
@@ -659,7 +832,15 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
                     theme::BLUE_100()
                 })
                 .add_modifier(Modifier::BOLD);
-            let body = if manage_auth {
+            // The Jev row always shows its live state (engine in use and where
+            // its key sits): it is the only row whose credential can come from
+            // several slots, so the static note would say nothing useful.
+            let jev = p.id == crate::providers::TYPESAFE_PROVIDER.id
+                && app
+                    .login
+                    .as_ref()
+                    .is_some_and(|modal| modal.auth_summaries.contains_key(p.id));
+            let body = if manage_auth || jev {
                 format!("{name_col:<25} {auth}")
             } else {
                 format!("{name_col:<25} {}{priv_badge}", p.note)
@@ -1334,7 +1515,13 @@ fn draw_login_key(f: &mut Frame, app: &mut App, area: Rect) {
     );
     let phase = modal_phase(app);
     let sidecar = crate::providers::is_sidecar_provider(provider.id);
-    let title = if sidecar {
+    let jev_slot = m
+        .jev_slot
+        .as_ref()
+        .and_then(|id| m.jev_slots.iter().find(|s| &s.id == id));
+    let title = if let Some(slot) = jev_slot {
+        format!(" ⚡ Jev · {} key ", slot.name)
+    } else if sidecar {
         // Not an error and not the active model: a credential that lifts every
         // provider, so it gets its own framing rather than the generic key modal.
         format!(
@@ -1364,13 +1551,28 @@ fn draw_login_key(f: &mut Frame, app: &mut App, area: Rect) {
     if theme::blink_on(app.spinner_epoch.elapsed()) {
         field.push('▉');
     }
-    let key_hint = if sidecar {
+    let key_hint = if let Some(slot) = jev_slot {
+        vec![
+            format!("{} · {}", slot.name, slot.detail),
+            match &slot.residence {
+                crate::typesafe::residence::Residence::Absent => {
+                    "saved under this engine's own slot, isolated from the others".to_string()
+                }
+                other => format!("replaces the current {}", other.label()),
+            },
+        ]
+    } else if sidecar {
         vec![
             format!(
                 "{}, not your active model",
                 crate::providers::sidecar_role(provider.id).serves
             ),
             format!("or set {} instead of saving a key", provider.env_key),
+        ]
+    } else if provider.id == "factory" {
+        vec![
+            "Factory API key (fk-…)  ·  optional".into(),
+            "or sign in once with `droid` and leave this empty".into(),
         ]
     } else if provider.key_optional {
         vec![format!("{} API key  (optional for local)", provider.name)]
@@ -8475,6 +8677,94 @@ See the [token store notes](https://example.test/docs/token-store) for the stora
                     "n={n} width={width} overflowed: {row:?}"
                 );
             }
+        }
+    }
+
+    /// Dumps the Jev engine panel at several sizes to `$NUR_JEV_DUMP` for a
+    /// visual pass. Needs an isolated NUR_HOME like the other previews.
+    #[test]
+    #[ignore]
+    fn jev_slots_preview() {
+        use crate::typesafe::residence::{Residence, Slot};
+        use ratatui::{backend::TestBackend, Terminal};
+        let home = std::env::var_os("NUR_HOME").expect("preview requires an isolated NUR_HOME");
+        let dump = std::env::var_os("NUR_JEV_DUMP").expect("set NUR_JEV_DUMP to the dump dir");
+        let cwd = std::path::PathBuf::from(home).join("jev-workspace");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::create_dir_all(&dump).unwrap();
+        let cfg = crate::config::Config {
+            native_memory: false,
+            theme: Some("gold".into()),
+            ..Default::default()
+        };
+        let session = crate::agent::Session::new_for_provider(
+            "e2e-model",
+            "vllm",
+            &cwd.display().to_string(),
+        );
+        let usage =
+            crate::usage::UsageTracker::new(session.id.clone(), "e2e-model".into(), cwd.clone());
+        let client =
+            crate::api::ApiClient::for_provider("http://127.0.0.1:1/v1", "", "vllm").unwrap();
+        let mode = crate::agent::SharedMode::new(crate::agent::PermissionMode::Manual);
+        let mut app = super::super::app::new_app(client, cfg, cwd, mode, session, usage, None);
+        let mut modal = super::super::app::LoginModal::new("vllm".into());
+        modal.manage_auth = true;
+        modal.stage = super::super::app::LoginStage::JevSlots;
+        modal.jev_sel = 2;
+        modal.jev_slots = vec![
+            Slot {
+                id: "typesafe".into(),
+                name: "TypeSafe hosted".into(),
+                detail: "jev-latest · api.typesafe.ai".into(),
+                residence: Residence::Store("typesafe".into()),
+                in_use: false,
+                shared_with: None,
+            },
+            Slot {
+                id: "bridge".into(),
+                name: "Local bridge".into(),
+                detail: "verdict · answering · no key".into(),
+                residence: Residence::Loopback("http://127.0.0.1:8788/v1/systemone".into()),
+                in_use: true,
+                shared_with: None,
+            },
+            Slot {
+                id: "jev:subq-snap".into(),
+                name: "SubQ Snap".into(),
+                detail: "subq-snap-preview · api.subq.ai".into(),
+                residence: Residence::Env("SUBQ_API_KEY".into()),
+                in_use: false,
+                shared_with: None,
+            },
+            Slot {
+                id: "openrouter".into(),
+                name: "OpenRouter Decisions".into(),
+                detail: "mercury-decide · openrouter.ai".into(),
+                residence: Residence::Absent,
+                in_use: false,
+                shared_with: Some("OpenRouter chat"),
+            },
+        ];
+        app.login = Some(modal);
+        for (width, height) in [(110u16, 36u16), (80, 24), (56, 14)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+            let buffer = terminal.backend().buffer();
+            let mut text = String::new();
+            for y in 0..height {
+                for x in 0..width {
+                    text.push_str(buffer[(x, y)].symbol());
+                }
+                text.push('\n');
+            }
+            let path =
+                std::path::PathBuf::from(&dump).join(format!("jev-slots-{width}x{height}.txt"));
+            std::fs::write(&path, text).unwrap();
+            let login = app.login.as_ref().unwrap();
+            // Every removable slot got a clickable ✕; env/loopback/absent did not.
+            assert_eq!(login.jev_buttons.len(), 1, "{width}x{height}");
+            assert_eq!(login.jev_buttons[0].0, 0);
         }
     }
 

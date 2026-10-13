@@ -99,7 +99,9 @@ pub fn title_emoji(label: &str) -> &'static str {
         "nous" => "\u{1F318}",                         // 🌘
         // Cline's mark is a little agent head; the robot face reads the same
         // at tab-title size.
-        "cline" => "\u{1F916}", // 🤖
+        "cline" => "\u{1F916}",             // 🤖
+        "factory" | "droid" => "\u{1F3ED}", // 🏭
+        "liquidinference" => "\u{1F4A7}",   // 💧
         _ => "",
     }
 }

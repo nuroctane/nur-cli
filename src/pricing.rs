@@ -481,6 +481,7 @@ pub fn rates_for(provider: &str, model: &str) -> ModelRates {
             | "helicone"
             | "cloudflare"
             | "aimlapi"
+            | "liquidinference"
     ) {
         if let Some(mut r) = lookup_in_index("openrouter", model) {
             r.provider_id = provider.to_string();

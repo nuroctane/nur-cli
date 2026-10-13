@@ -287,6 +287,19 @@ def check(scenario, result, workspace, requests, mcp_requests=()):
         for needle in rule.get("contains", []):
             if not any(needle in r for r in results):
                 failures.append(f"request {n} tool results lack {needle!r}: {results!r}"[:400])
+    for rule in expect.get("request_contains", []):
+        n = rule["request"]
+        if n > len(requests):
+            failures.append(f"request {n} never happened")
+            continue
+        body = json.dumps(requests[n - 1], ensure_ascii=False)
+        for needle in rule.get("contains", []):
+            if needle not in body:
+                failures.append(f"request {n} lacks {needle!r}")
+        for needle in rule.get("count_once", []):
+            seen = body.count(needle)
+            if seen != 1:
+                failures.append(f"request {n} contains {needle!r} {seen} times, expected once")
     return failures
 
 

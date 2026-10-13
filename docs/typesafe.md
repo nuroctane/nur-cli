@@ -223,6 +223,28 @@ nur jev use --port 8788         # [typesafe] base_url = the local bridge
 
 Details, per-device support and limits: [jev-local.md](./jev-local.md).
 
+### Automatic engine selection
+
+When no engine is selected explicitly (no TypeSafe key, no `[typesafe]
+base_url`/`key_env`/`credential_provider`, no `NUR_JEV_LOCAL_URL`), the harness
+still looks for a decision model it can use, in this order:
+
+1. a bridge started by `nur jev start` that is answering on its loopback port;
+2. `SUBQ_API_KEY` or a key stored by `nur jev login subq-snap`: SubQ Snap
+   (`https://api.subq.ai/v1/systemone`, model `subq-snap-preview`);
+3. `OPENROUTER_API_KEY` or the `openrouter` credential slot: Mercury Decide via
+   OpenRouter's Decisions API (`https://openrouter.ai/api/alpha/decisions`,
+   model `inception/mercury-decide`).
+
+So a running local engine or an OpenRouter login is enough for autocompaction,
+tool gating and result judging to run on a Jev-class model; nothing has to be
+configured. `nur jev status` prints `(auto: …)` beside the endpoint when this
+path is active. Any explicit selection turns it off, and it re-probes within a
+few seconds of a bridge start/stop or a key change. The hosted engines above are
+in the catalog (`nur jev info subq-snap`, `mercury-decide`, `span-01`,
+`liquid-d1`, `solar-decide`, `tev1-4b`) and can be pinned with
+`nur jev use --engine <id>`.
+
 ### Key
 
 Any of these, in order of precedence:
@@ -241,6 +263,19 @@ you use. Picking it never changes your active provider - the same is true of
 `typesafe`. Setting `provider = "typesafe"` in `config.toml` is rejected at
 startup with an explanation, and `typesafe` is refused as a failover target and
 as a subagent route.
+
+The row itself shows the engine currently judging and where its key lives, and
+selecting it opens the **Jev engines** panel (`src/typesafe/residence.rs`): every
+Jev-class slot - TypeSafe hosted, the local bridge, SubQ Snap, OpenRouter
+Decisions, and a catalog engine selected with `nur jev use --engine` - with `●`
+on the slot in use, the key's residence (`env NAME`, `saved key`, `config.toml`,
+`file ~/.nur/typesafe.key`, `loopback :port`) and a `[✕]` on each slot Nur can
+clear. `↵` saves a key under that slot's own id, so a SubQ or OpenRouter key is
+never confused with the hosted TypeSafe key; `Del` / `Ctrl+D` / `✕` removes every
+Nur-owned copy for the slot and tells you what to do by hand when the key is an
+environment variable or a running bridge. See
+[authentication.md](./authentication.md#log-in-from-the-tui-recommended) for the
+key bindings.
 
 ### Tool
 
@@ -337,9 +372,10 @@ moment every other strategy rewrites the prefix too.
 
 ### Without a key
 
-Nothing is required and nothing changes. No key means no client, every policy
-returns "no judgment", and each call site keeps its previous behavior. There is
-no path that invents a judgment, and no path that blocks on a missing key.
+Nothing is required and nothing changes. No key, no running bridge and no
+SubQ/OpenRouter credential means no client, every policy returns "no judgment",
+and each call site keeps its previous behavior. There is no path that invents a
+judgment, and no path that blocks on a missing key.
 
 ## Verify with a real key
 

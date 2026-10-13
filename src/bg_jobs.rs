@@ -68,6 +68,8 @@ struct JobRecord {
     /// Full result kept in memory (also written to disk when done).
     result: Option<String>,
     cancel: Arc<std::sync::atomic::AtomicBool>,
+    /// Set once the agent loop has told the model this job finished.
+    reported: bool,
 }
 
 fn now_secs() -> u64 {
@@ -127,6 +129,7 @@ where
                 },
                 result: None,
                 cancel,
+                reported: false,
             },
         );
         id
@@ -233,6 +236,61 @@ pub fn list_jobs() -> Vec<JobInfo> {
     let mut v: Vec<_> = g.jobs.values().map(|r| r.info.clone()).collect();
     v.sort_by_key(|j| std::cmp::Reverse(j.id));
     v
+}
+
+/// Jobs that finished since the last call, oldest first. Each is returned
+/// once, so the agent loop can tell the model about completions exactly once.
+pub fn take_unreported_completions() -> Vec<JobInfo> {
+    let reg = registry();
+    let mut g = reg.lock().unwrap_or_else(|e| e.into_inner());
+    let mut done: Vec<JobInfo> = g
+        .jobs
+        .values_mut()
+        .filter(|r| !r.reported && r.info.state != JobState::Running)
+        .map(|r| {
+            r.reported = true;
+            r.info.clone()
+        })
+        .collect();
+    done.sort_by_key(|j| j.id);
+    done
+}
+
+/// One compact note for the model about finished background jobs, or `None`
+/// when nothing new finished.
+pub fn completion_note() -> Option<String> {
+    let done = take_unreported_completions();
+    if done.is_empty() {
+        return None;
+    }
+    let mut s = String::from("[bg] background job(s) finished:\n");
+    for j in done {
+        match j.state {
+            JobState::Completed => {
+                s.push_str(&format!(
+                    "  #{} completed · {}\n    {}\n    full output: bg(action=result, id={})\n",
+                    j.id,
+                    j.label,
+                    j.result_preview.unwrap_or_default().replace('\n', " ⏎ "),
+                    j.id
+                ));
+            }
+            JobState::Failed => {
+                s.push_str(&format!(
+                    "  #{} FAILED · {}\n    {}\n    details: bg(action=result, id={})\n",
+                    j.id,
+                    j.label,
+                    j.error.unwrap_or_default().replace('\n', " ⏎ "),
+                    j.id
+                ));
+            }
+            JobState::Cancelled => {
+                s.push_str(&format!("  #{} cancelled · {}\n", j.id, j.label));
+            }
+            JobState::Running => {}
+        }
+    }
+    Some(s)
 }
 
 pub fn get(id: u64) -> Option<JobInfo> {

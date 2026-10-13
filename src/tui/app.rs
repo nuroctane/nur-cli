@@ -1172,6 +1172,9 @@ pub enum LoginStage {
     BaseUrl,
     /// Device-code / SSO wait (URL + short code like `hf auth login`).
     Browser,
+    /// Jev engine slots: which engine judges, where each key sits, and
+    /// per-slot removal. Opened from the pinned `TypeSafe · Jev` row.
+    JevSlots,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1253,9 +1256,62 @@ pub struct LoginModal {
     /// The Key stage is capturing a per-provider failover key (saved to the
     /// provider-key store), not an active-provider login.
     pub fallback_key: bool,
+    /// Jev engine slots for the `JevSlots` stage (refreshed off-thread after
+    /// every mutation, like `auth_summaries`).
+    pub jev_slots: Vec<crate::typesafe::residence::Slot>,
+    pub jev_sel: usize,
+    /// Per-row remove buttons from the last draw: slot index → screen rect.
+    pub jev_buttons: Vec<(usize, ratatui::layout::Rect)>,
+    /// When the Key stage was entered from a Jev slot, the slot id the key is
+    /// saved under (not the sidecar provider id).
+    pub jev_slot: Option<String>,
 }
 
 impl LoginModal {
+    pub fn new(provider_id: String) -> Self {
+        LoginModal {
+            form_scroll: 0,
+            form_rows: 0,
+            stage: LoginStage::Provider,
+            filter: String::new(),
+            sel: 0,
+            scroll: 0,
+            vis_page: 8,
+            hit: PickerHit::default(),
+            last_step_at: Instant::now()
+                .checked_sub(Duration::from_secs(1))
+                .unwrap_or_else(Instant::now),
+            provider_id,
+            method_sel: 0,
+            can_import: false,
+            buf: String::new(),
+            error: None,
+            browser_status: String::new(),
+            browser_url: String::new(),
+            browser_user_code: String::new(),
+            oauth_rx: None,
+            oauth_cancel: None,
+            manage_failover: false,
+            manage_auth: false,
+            auth_summaries: Default::default(),
+            fallback_key: false,
+            jev_slots: Vec::new(),
+            jev_sel: 0,
+            jev_buttons: Vec::new(),
+            jev_slot: None,
+        }
+    }
+
+    /// Move the Jev slot selection by one.
+    pub fn step_jev(&mut self, dir: i32) {
+        let n = self.jev_slots.len();
+        if n == 0 {
+            self.jev_sel = 0;
+            return;
+        }
+        let next = (self.jev_sel as i32 + dir.signum()).clamp(0, n as i32 - 1);
+        self.jev_sel = next as usize;
+    }
     /// Providers matching the current filter (name / id / note, case-insensitive).
     ///
     /// Sidecar entries (TypeSafe · Jev) are pinned first: they carry a
@@ -6330,33 +6386,7 @@ impl App {
         // subagent may run on a different provider than the parent. Clearing on
         // open threw away the credential those runs depend on.
         self.cancel_oauth();
-        self.login = Some(LoginModal {
-            form_scroll: 0,
-            form_rows: 0,
-            stage: LoginStage::Provider,
-            filter: String::new(),
-            sel: 0,
-            scroll: 0,
-            vis_page: 8,
-            hit: PickerHit::default(),
-            last_step_at: Instant::now()
-                .checked_sub(Duration::from_secs(1))
-                .unwrap_or_else(Instant::now),
-            provider_id: self.cfg.provider.clone(),
-            method_sel: 0,
-            can_import: false,
-            buf: String::new(),
-            error: None,
-            browser_status: String::new(),
-            browser_url: String::new(),
-            browser_user_code: String::new(),
-            oauth_rx: None,
-            oauth_cancel: None,
-            manage_failover: false,
-            manage_auth: false,
-            auth_summaries: Default::default(),
-            fallback_key: false,
-        });
+        self.login = Some(LoginModal::new(self.cfg.provider.clone()));
         self.refresh_auth_summaries();
     }
 
@@ -6366,34 +6396,142 @@ impl App {
     /// until the user explicitly chooses CLI/OMP again.
     fn open_auth_manager(&mut self) {
         self.cancel_oauth();
-        self.login = Some(LoginModal {
-            form_scroll: 0,
-            form_rows: 0,
-            stage: LoginStage::Provider,
-            filter: String::new(),
-            sel: 0,
-            scroll: 0,
-            vis_page: 8,
-            hit: PickerHit::default(),
-            last_step_at: Instant::now()
-                .checked_sub(Duration::from_secs(1))
-                .unwrap_or_else(Instant::now),
-            provider_id: self.cfg.provider.clone(),
-            method_sel: 0,
-            can_import: true,
-            buf: String::new(),
-            error: None,
-            browser_status: String::new(),
-            browser_url: String::new(),
-            browser_user_code: String::new(),
-            oauth_rx: None,
-            oauth_cancel: None,
-            manage_failover: false,
-            manage_auth: true,
-            auth_summaries: Default::default(),
-            fallback_key: false,
-        });
+        let mut modal = LoginModal::new(self.cfg.provider.clone());
+        modal.can_import = true;
+        modal.manage_auth = true;
+        self.login = Some(modal);
         self.refresh_auth_summaries();
+    }
+
+    /// Re-read the Jev engine slots off-thread (the bridge check probes a
+    /// loopback port) and apply them unless the modal was reopened meanwhile.
+    fn refresh_jev_slots(&mut self) {
+        let epoch = self.startup.login_epoch;
+        let cfg = self.cfg.typesafe.clone();
+        self.background_ui(
+            move || {
+                // The on-disk config wins over the in-memory copy: `nur jev use`
+                // in another terminal edits it, and the slots must say so.
+                let cfg = crate::config::load_config()
+                    .map(|c| c.typesafe)
+                    .unwrap_or(cfg);
+                crate::typesafe::residence::slots(&cfg)
+            },
+            move |app, slots| {
+                if epoch != app.startup.login_epoch {
+                    return;
+                }
+                if let Some(login) = &mut app.login {
+                    login.jev_slots = slots;
+                    let n = login.jev_slots.len();
+                    login.jev_sel = login.jev_sel.min(n.saturating_sub(1));
+                }
+            },
+        );
+    }
+
+    /// Enter the Jev slot panel from the pinned sidecar row.
+    fn open_jev_slots(&mut self) {
+        if let Some(m) = &mut self.login {
+            m.stage = LoginStage::JevSlots;
+            m.jev_slot = None;
+            m.form_scroll = 0;
+            m.error = None;
+            m.buf.clear();
+            if m.jev_slots.is_empty() {
+                m.jev_sel = 0;
+            }
+        }
+        self.refresh_jev_slots();
+    }
+
+    /// Remove the Nur-owned credential behind the selected Jev slot.
+    fn remove_jev_selected(&mut self) {
+        let slot = {
+            let Some(modal) = &self.login else { return };
+            if modal.stage != LoginStage::JevSlots {
+                return;
+            }
+            match modal.jev_slots.get(modal.jev_sel) {
+                Some(slot) => slot.clone(),
+                None => return,
+            }
+        };
+        let name = slot.name.clone();
+        self.account_work(
+            false,
+            move || crate::typesafe::residence::remove(&slot),
+            move |app, result| {
+                use crate::typesafe::residence::Removal;
+                match result {
+                    Ok(Removal::Removed(residence)) => {
+                        app.push_note(
+                            Tone::Mode,
+                            format!("jev - {name} - removed {}", residence.label()),
+                        );
+                    }
+                    Ok(Removal::Manual(hint)) => {
+                        app.push_info(format!("jev - {name} - not Nur-managed: {hint}"));
+                    }
+                    Ok(Removal::Nothing) => {
+                        app.push_info(format!("jev - {name} - nothing to remove"));
+                    }
+                    Err(error) => app.push_error(format!("could not remove {name}: {error}")),
+                }
+                app.refresh_jev_slots();
+                app.refresh_auth_summaries();
+            },
+        );
+    }
+
+    fn on_login_jev_key(&mut self, key: event::KeyEvent, ctrl: bool) {
+        let Some(m) = &mut self.login else { return };
+        match key.code {
+            KeyCode::Esc => {
+                m.fallback_key = false;
+                m.jev_slot = None;
+                m.form_scroll = 0;
+                m.stage = LoginStage::Provider;
+                m.error = None;
+            }
+            KeyCode::Up => m.step_jev(-1),
+            KeyCode::Down => m.step_jev(1),
+            KeyCode::Home => m.jev_sel = 0,
+            KeyCode::End => m.jev_sel = m.jev_slots.len().saturating_sub(1),
+            KeyCode::Enter => self.jev_slot_confirm(),
+            KeyCode::Delete => self.remove_jev_selected(),
+            KeyCode::Char('d') if ctrl => self.remove_jev_selected(),
+            KeyCode::Char('r') if ctrl => self.refresh_jev_slots(),
+            _ => {}
+        }
+    }
+
+    /// Enter on a hosted slot opens key entry saving into that slot; the
+    /// bridge has no key, so Enter explains how it is started instead.
+    fn jev_slot_confirm(&mut self) {
+        let Some(m) = &mut self.login else { return };
+        let Some(slot) = m.jev_slots.get(m.jev_sel) else {
+            return;
+        };
+        if !slot.accepts_key() {
+            m.error =
+                Some("the local bridge needs no key: `nur jev start`, then `nur jev use`".into());
+            return;
+        }
+        if slot.id.starts_with("env:") {
+            m.error = Some(format!(
+                "this engine is keyed by {} only",
+                slot.residence.label()
+            ));
+            return;
+        }
+        m.jev_slot = Some(slot.id.clone());
+        m.provider_id = crate::providers::TYPESAFE_PROVIDER.id.to_string();
+        m.fallback_key = true;
+        m.buf.clear();
+        m.error = None;
+        m.form_scroll = 0;
+        m.stage = LoginStage::Key;
     }
 
     fn refresh_auth_summaries(&mut self) {
@@ -6451,6 +6589,11 @@ impl App {
                 } else {
                     LoginStage::Method
                 };
+                if p.id == crate::providers::TYPESAFE_PROVIDER.id {
+                    // The Jev row has several engine slots; land on the panel
+                    // that shows them rather than on a single key field.
+                    self.open_jev_slots();
+                }
             }
             None => {
                 // Unknown alias: leave the picker open, filtered by the raw text.
@@ -6465,33 +6608,9 @@ impl App {
     /// chain (`fallback_providers`) and per-provider keys.
     fn open_failover(&mut self) {
         self.cancel_oauth();
-        self.login = Some(LoginModal {
-            form_scroll: 0,
-            form_rows: 0,
-            stage: LoginStage::Provider,
-            filter: String::new(),
-            sel: 0,
-            scroll: 0,
-            vis_page: 8,
-            hit: PickerHit::default(),
-            last_step_at: Instant::now()
-                .checked_sub(Duration::from_secs(1))
-                .unwrap_or_else(Instant::now),
-            provider_id: self.cfg.provider.clone(),
-            method_sel: 0,
-            can_import: false,
-            buf: String::new(),
-            error: None,
-            browser_status: String::new(),
-            browser_url: String::new(),
-            browser_user_code: String::new(),
-            oauth_rx: None,
-            oauth_cancel: None,
-            manage_failover: true,
-            manage_auth: false,
-            auth_summaries: Default::default(),
-            fallback_key: false,
-        });
+        let mut modal = LoginModal::new(self.cfg.provider.clone());
+        modal.manage_failover = true;
+        self.login = Some(modal);
         self.refresh_auth_summaries();
     }
 
@@ -7336,6 +7455,7 @@ impl App {
             Some(LoginStage::Key) => self.on_login_key_entry(key, ctrl),
             Some(LoginStage::BaseUrl) => self.on_login_baseurl_key(key, ctrl),
             Some(LoginStage::Browser) => self.on_login_browser_key(key),
+            Some(LoginStage::JevSlots) => self.on_login_jev_key(key, ctrl),
             None => {}
         }
     }
@@ -7374,6 +7494,9 @@ impl App {
             // No error note here: the key modal frames a sidecar as a
             // "boost layer key" with its own hint line, so the error slot
             // stays free for real problems (a too-short key, a bad paste).
+            if p.id == crate::providers::TYPESAFE_PROVIDER.id {
+                self.open_jev_slots();
+            }
         }
     }
 
@@ -7838,6 +7961,59 @@ impl App {
         self.mouse_row = m.row;
         let stage = self.login.as_ref().map(|l| l.stage);
 
+        // Jev slot panel: wheel steps, a row click selects (second click
+        // confirms), and the per-row ✕ removes that slot's credential.
+        if stage == Some(LoginStage::JevSlots) {
+            match m.kind {
+                MouseEventKind::ScrollUp => {
+                    if let Some(l) = &mut self.login {
+                        l.step_jev(-1);
+                    }
+                }
+                MouseEventKind::ScrollDown => {
+                    if let Some(l) = &mut self.login {
+                        l.step_jev(1);
+                    }
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    let Some(l) = &self.login else { return };
+                    let hit = l.hit.clone();
+                    let buttons = l.jev_buttons.clone();
+                    if rect_contains(hit.close, m.column, m.row) {
+                        self.on_login_key(event::KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+                        return;
+                    }
+                    for (i, r) in &buttons {
+                        if rect_contains(*r, m.column, m.row) {
+                            if let Some(l) = &mut self.login {
+                                l.jev_sel = *i;
+                            }
+                            self.remove_jev_selected();
+                            return;
+                        }
+                    }
+                    for (i, r) in &hit.rows {
+                        if rect_contains(*r, m.column, m.row) {
+                            let same = self
+                                .login
+                                .as_ref()
+                                .map(|l| l.jev_sel == *i)
+                                .unwrap_or(false);
+                            if let Some(l) = &mut self.login {
+                                l.jev_sel = *i;
+                            }
+                            if same {
+                                self.jev_slot_confirm();
+                            }
+                            return;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
         if let Some(l) = &mut self.login {
             if !matches!(l.stage, LoginStage::Provider | LoginStage::Method) {
                 let max = l.form_rows.saturating_sub(l.hit.body.height as usize);
@@ -8047,6 +8223,15 @@ impl App {
                 let browser = crate::providers::by_id(&m.provider_id)
                     .map(|p| p.browser_auth)
                     .unwrap_or(false);
+                if m.jev_slot.take().is_some() {
+                    // Back to the slot panel the key field was opened from.
+                    m.buf.clear();
+                    m.error = None;
+                    m.form_scroll = 0;
+                    m.stage = LoginStage::JevSlots;
+                    self.refresh_jev_slots();
+                    return;
+                }
                 if browser {
                     // Keep fallback_key so Method still knows this is failover capture.
                     m.form_scroll = 0;
@@ -8078,14 +8263,19 @@ impl App {
     }
 
     fn submit_login(&mut self) {
-        let (provider_id, key, is_fallback) = match &self.login {
+        let (provider_id, key, is_fallback, jev_slot) = match &self.login {
             Some(m) => (
                 m.provider_id.clone(),
                 m.buf.trim().to_string(),
                 m.fallback_key,
+                m.jev_slot.clone(),
             ),
             None => return,
         };
+        if let Some(slot) = jev_slot {
+            self.submit_jev_slot_key(slot, key);
+            return;
+        }
         let provider = crate::providers::by_id(&provider_id)
             .copied()
             .unwrap_or(*crate::providers::default_provider());
@@ -8118,6 +8308,41 @@ impl App {
                     }
                     app.push_error(format!("credential save failed: {error}"));
                 }
+            },
+        );
+    }
+
+    /// Save a key under a Jev engine slot and return to the slot panel. The
+    /// slot id, not the sidecar provider id, is the store key: SubQ and
+    /// OpenRouter slots must never land on `typesafe`.
+    fn submit_jev_slot_key(&mut self, slot: String, key: String) {
+        if key.is_empty() {
+            if let Some(m) = &mut self.login {
+                m.error = Some("paste the engine's API key first".into());
+            }
+            return;
+        }
+        let label = slot.trim_start_matches("jev:").to_string();
+        self.account_work(
+            false,
+            move || crate::auth::save_provider_key(&slot, &key),
+            move |app, result| {
+                match result {
+                    Ok(()) => {
+                        crate::typesafe::client::invalidate_fallback_probe();
+                        app.push_note(Tone::Mode, format!("jev - {label} - key saved"));
+                    }
+                    Err(error) => app.push_error(format!("credential save failed: {error}")),
+                }
+                if let Some(m) = &mut app.login {
+                    m.jev_slot = None;
+                    m.buf.clear();
+                    m.error = None;
+                    m.form_scroll = 0;
+                    m.stage = LoginStage::JevSlots;
+                }
+                app.refresh_jev_slots();
+                app.refresh_auth_summaries();
             },
         );
     }
@@ -10702,7 +10927,7 @@ impl App {
                 m.sel = 0;
                 m.scroll = 0;
                 m.clamp_scroll();
-            } else if m.stage != LoginStage::Method {
+            } else if !matches!(m.stage, LoginStage::Method | LoginStage::JevSlots) {
                 m.buf.push_str(&field_text);
             }
             return;
