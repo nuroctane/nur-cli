@@ -109,10 +109,8 @@ fn run_capture(
     if let Some(d) = cwd {
         cmd.current_dir(d);
     }
-    let mut child = cmd
-        .spawn()
+    let (mut child, process_tree) = crate::process_tree::ProcessTree::spawn(&mut cmd)
         .map_err(|e| format!("failed to spawn fractal: {e}"))?;
-    let process_tree = crate::process_tree::ProcessTree::attach(&child);
 
     // Drain both pipes on threads so a chatty child can't deadlock on a full pipe.
     let out_pipe = child.stdout.take();

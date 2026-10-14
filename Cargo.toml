@@ -65,7 +65,11 @@ anydoc = { version = "0.2.4", optional = true }
 boa_engine = { version = "0.22", default-features = false, optional = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_Registry", "Win32_Storage_FileSystem", "Win32_Security"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_Registry", "Win32_Storage_FileSystem", "Win32_Security", "Win32_System_Diagnostics_ToolHelp"] }
+
+[target.'cfg(unix)'.dependencies]
+# killpg for shell process groups (std has no group kill).
+libc = "0.2"
 
 [features]
 default = ["image-peek", "anydoc", "codemode"]

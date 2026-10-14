@@ -2654,6 +2654,7 @@ dependencies = [
  "helix-ast",
  "ignore",
  "image",
+ "libc",
  "pulldown-cmark",
  "ratatui",
  "ratatui-image",

@@ -1,0 +1,21 @@
+{
+  "description": "A command that hit its deadline may be retried with a larger timeout_ms; the identical retry with the same budget is refused with a message that says how to retry. Idle/cancel lockouts are unit-tested; this is the model-facing contract.",
+  "prompt": "Run the slow check; if it times out, retry it with more time.",
+  "script": [
+    {"tool_calls": [{"name": "bash", "arguments": {"command": "python -c \"import time; time.sleep(120)\"", "timeout_ms": 1000}}]},
+    {"tool_calls": [{"name": "bash", "arguments": {"command": "python -c \"import time; time.sleep(120)\"", "timeout_ms": 1000}}]},
+    {"tool_calls": [{"name": "bash", "arguments": {"command": "python -c \"import time; time.sleep(120)\"", "timeout_ms": 2500}}]},
+    {"text": "The retry with a larger budget ran and timed out again."}
+  ],
+  "expect": {
+    "stdout_contains": ["The retry with a larger budget ran and timed out again."],
+    "requests": 4,
+    "max_request_gap_seconds": 15,
+    "tool_results": [
+      {"request": 2, "last_result": {"contains": ["timed out after 1000ms", "larger timeout_ms"]}},
+      {"request": 3, "last_result": {"contains": ["refused", "already timed out after 1000ms", "larger timeout_ms"]}},
+      {"request": 4, "last_result": {"contains": ["timed out after 2500ms"], "lacks": ["refused"]}}
+    ],
+    "requests_lack": ["handed off to bg job #"]
+  }
+}

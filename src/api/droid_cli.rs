@@ -757,18 +757,13 @@ fn run_exec_once(
     {
         cmd.env("FACTORY_API_KEY", key);
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| NurError::Other(format!("failed to launch droid: {e}{}", auth_hint())))?;
     // Owning the tree matters here: the launcher is usually a shim, so killing
     // the direct child would leave the real agent running (and billing).
-    let tree = crate::process_tree::ProcessTree::attach(&child);
+    let (mut child, tree) = crate::process_tree::ProcessTree::spawn_with_flags(
+        &mut cmd,
+        crate::process_tree::CREATE_NO_WINDOW,
+    )
+    .map_err(|e| NurError::Other(format!("failed to launch droid: {e}{}", auth_hint())))?;
     let stdin = child.stdin.take();
     let stdout = child
         .stdout

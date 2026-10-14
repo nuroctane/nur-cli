@@ -11,9 +11,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Default when the model omits `timeout_ms`.
 pub const DEFAULT_TIMEOUT_MS: u64 = 60_000;
-/// Hard ceiling — models (especially Claude) often request huge timeouts that
-/// just make hung commands feel immortal.
-pub const MAX_TIMEOUT_MS: u64 = 180_000;
+/// Hard ceiling. Builds and test suites routinely run past three minutes;
+/// hung commands are caught by the idle kill, not by this cap, so it can be
+/// generous (Claude Code allows ten minutes).
+pub const MAX_TIMEOUT_MS: u64 = 600_000;
 /// Default byte budget for stdout that re-enters the model context; stderr
 /// gets half. Overrun keeps head and tail with the full text spilled to disk.
 pub const DEFAULT_MAX_OUTPUT_BYTES: usize = 80_000;
@@ -383,8 +384,12 @@ struct Supervised {
 impl Supervised {
     fn kill(mut self) {
         self.process_tree.terminate(&mut self.child);
-        join_with_timeout(self.out_h, JOIN_AFTER_KILL_MS);
+        // The tree is dead, so the pipes close on their own; the bounded joins
+        // run together so a wedged reader costs one window, not two.
+        let out_h = self.out_h;
+        let out_join = thread::spawn(move || join_with_timeout(out_h, JOIN_AFTER_KILL_MS));
         join_with_timeout(self.err_h, JOIN_AFTER_KILL_MS);
+        let _ = out_join.join();
     }
 
     fn idle_for_ms(&self) -> Option<u64> {
@@ -478,7 +483,10 @@ pub fn run_in_shell_with(
         .env("PYTHONUNBUFFERED", "1");
     match kind {
         ShellKind::Bash => {
-            cmd.args(["-lc", command]);
+            // Non-login: sourcing ~/.bash_profile on every call is slow and
+            // lets profile output leak into results. PATH comes from nur's
+            // own environment, which the user's login shell already set.
+            cmd.args(["-c", command]);
         }
         ShellKind::Pwsh | ShellKind::PowerShell => {
             cmd.args(["-NoProfile", "-NonInteractive", "-Command", command]);
@@ -497,10 +505,8 @@ pub fn run_in_shell_with(
         }
     }
 
-    let mut child = cmd
-        .spawn()
+    let (mut child, process_tree) = crate::process_tree::ProcessTree::spawn(&mut cmd)
         .map_err(|e| NurError::Tool(format!("command failed to start: {e}")))?;
-    let process_tree = crate::process_tree::ProcessTree::attach(&child);
 
     // Drain pipes on threads so a chatty child can't deadlock on a full pipe.
     let progress = Arc::new(AtomicU64::new(now_ms()));
@@ -564,8 +570,9 @@ pub fn run_in_shell_with(
                     sup.kill();
                     return Err(NurError::Tool(format!(
                         "command timed out after {timeout_ms}ms (process tree killed). \
-                         Do not retry the same command with a longer timeout - use \
-                         list_dir/read_file/grep/glob, or a narrower non-interactive command."
+                         If it simply needs longer, retry with a larger timeout_ms (max \
+                         {MAX_TIMEOUT_MS}) or background=true; otherwise use a narrower \
+                         non-interactive command."
                     )));
                 }
                 thread::sleep(Duration::from_millis(30));

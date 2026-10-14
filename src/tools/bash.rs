@@ -11,11 +11,28 @@ use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+/// Why a command was locked out. A deadline timeout is retryable with a longer
+/// `timeout_ms`; an idle kill or a user cancel is not helped by more time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FailureKind {
+    Timeout,
+    Idle,
+    Cancelled,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Failure {
+    at: Instant,
+    kind: FailureKind,
+    /// The `timeout_ms` the failed attempt ran with.
+    timeout_ms: u64,
+}
+
 /// Recent failing bash fingerprints (cwd + normalized command). Only timeout /
 /// idle / cancel / hang-kill are tracked — ordinary non-zero exits can be retried
 /// with a different approach without a 15-minute lockout.
-fn recent_failures() -> &'static Mutex<HashMap<String, Instant>> {
-    static RECENT_FAILURES: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
+fn recent_failures() -> &'static Mutex<HashMap<String, Failure>> {
+    static RECENT_FAILURES: OnceLock<Mutex<HashMap<String, Failure>>> = OnceLock::new();
     RECENT_FAILURES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 const FAILURE_TTL: Duration = Duration::from_secs(15 * 60);
@@ -30,15 +47,17 @@ impl Tool for Bash {
 
     fn description(&self) -> &str {
         // Honest description — name kept as `bash` for model familiarity.
-        "Run a non-interactive shell command in the workspace cwd (not a full OS sandbox). \
+        "Run a non-interactive shell command in the workspace cwd (not a full OS sandbox; \
+         non-login shell, pipelines and && chains allowed). \
          On Windows prefers Git Bash, then pwsh/PowerShell, then cmd.exe (reported in output). \
-         Default timeout 60s (max 180s). A command still producing output at the timeout is \
+         Default timeout 60s (max 600s). A command still producing output at the timeout is \
          handed to a bg job (result says 'still running' with the job id; fetch it later with \
          bg(action=result, id=N)); background=true hands off right away for builds/test suites. \
-         Idle commands with no output are killed. Output keeps head+tail within \
-         max_output_length (full text spilled to disk). \
+         Idle commands with no output are killed; the whole process tree dies with the command. \
+         Output keeps head+tail within max_output_length (full text spilled to disk). \
          Never use for search/file-read (use grep/glob/list_dir/read_file). \
-         Do not retry identical timed-out/hung commands."
+         A command that hit its deadline may be retried once with a larger timeout_ms or \
+         background=true; identical idle/cancelled commands are refused for 15 minutes."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -108,7 +127,7 @@ impl Tool for Bash {
         if let Some(reason) = check_hang_prone(&command) {
             return Err(NurError::Tool(reason));
         }
-        if let Some(reason) = refuse_recent_failure(&ctx.cwd, &command) {
+        if let Some(reason) = refuse_recent_failure(&ctx.cwd, &command, timeout_ms, background) {
             return Err(NurError::Tool(reason));
         }
 
@@ -118,12 +137,8 @@ impl Tool for Bash {
             Err(e) => {
                 // Only lock out hang/timeout/cancel — not ordinary tool refusals
                 // from this Err path that are already terminal.
-                let msg = e.to_string();
-                if msg.contains("timed out")
-                    || msg.contains("idle for")
-                    || msg.contains("cancelled")
-                {
-                    note_failure(&ctx.cwd, &command);
+                if let Some(kind) = failure_kind(&e.to_string()) {
+                    note_failure(&ctx.cwd, &command, kind, timeout_ms);
                 }
                 Err(e)
             }
@@ -152,40 +167,81 @@ fn fingerprint(cwd: &Path, cmd: &str) -> String {
     format!("{cwd_key}\0{cmd_key}")
 }
 
-fn note_failure(cwd: &Path, cmd: &str) {
+/// Classify a shell error by the message `run_in_shell_with` produced; other
+/// errors (refusals, spawn failures, non-zero exits) are not locked out.
+fn failure_kind(msg: &str) -> Option<FailureKind> {
+    if msg.contains("timed out") {
+        Some(FailureKind::Timeout)
+    } else if msg.contains("idle for") {
+        Some(FailureKind::Idle)
+    } else if msg.contains("cancelled") {
+        Some(FailureKind::Cancelled)
+    } else {
+        None
+    }
+}
+
+fn note_failure(cwd: &Path, cmd: &str, kind: FailureKind, timeout_ms: u64) {
     let key = fingerprint(cwd, cmd);
     if key.ends_with('\0') {
         return;
     }
     if let Ok(mut map) = recent_failures().lock() {
-        map.retain(|_, at| at.elapsed() < FAILURE_TTL);
+        map.retain(|_, f| f.at.elapsed() < FAILURE_TTL);
         if map.len() >= MAX_TRACKED_FAILURES {
-            if let Some(old) = map
-                .iter()
-                .min_by_key(|(_, at)| **at)
-                .map(|(k, _)| k.clone())
-            {
+            if let Some(old) = map.iter().min_by_key(|(_, f)| f.at).map(|(k, _)| k.clone()) {
                 map.remove(&old);
             }
         }
-        map.insert(key, Instant::now());
+        // A retry that fails again must not lower the recorded timeout.
+        let timeout_ms = map
+            .get(&key)
+            .map_or(timeout_ms, |prev| prev.timeout_ms.max(timeout_ms));
+        map.insert(
+            key,
+            Failure {
+                at: Instant::now(),
+                kind,
+                timeout_ms,
+            },
+        );
     }
 }
 
-fn refuse_recent_failure(cwd: &Path, cmd: &str) -> Option<String> {
+/// `None` when the command may run. A deadline timeout is retryable with a
+/// strictly larger `timeout_ms` or as a background job, because the first
+/// run proved only that the budget was too small; idle kills and cancels are
+/// refused until the TTL passes.
+fn refuse_recent_failure(
+    cwd: &Path,
+    cmd: &str,
+    timeout_ms: u64,
+    background: bool,
+) -> Option<String> {
     let key = fingerprint(cwd, cmd);
     let Ok(mut map) = recent_failures().lock() else {
         return None;
     };
-    map.retain(|_, at| at.elapsed() < FAILURE_TTL);
-    if map.contains_key(&key) {
-        let shown = cmd.split_whitespace().collect::<Vec<_>>().join(" ");
-        Some(format!(
-            "refused: identical bash command already timed out/hung in this cwd: `{shown}`. \
-             Do not retry it. Use list_dir/read_file/grep/glob, change the command, or explain the blocker."
-        ))
-    } else {
-        None
+    map.retain(|_, f| f.at.elapsed() < FAILURE_TTL);
+    let prev = *map.get(&key)?;
+    let shown = cmd.split_whitespace().collect::<Vec<_>>().join(" ");
+    match prev.kind {
+        FailureKind::Timeout if background || timeout_ms > prev.timeout_ms => None,
+        FailureKind::Timeout => Some(format!(
+            "refused: identical bash command already timed out after {}ms in this cwd: `{shown}`. \
+             Retry only with a larger timeout_ms (max {MAX_TIMEOUT_MS}) or background=true, \
+             or change the command.",
+            prev.timeout_ms
+        )),
+        FailureKind::Idle => Some(format!(
+            "refused: identical bash command already hung with no output in this cwd: `{shown}`. \
+             More time will not help. Use list_dir/read_file/grep/glob, change the command, \
+             or explain the blocker."
+        )),
+        FailureKind::Cancelled => Some(format!(
+            "refused: identical bash command was cancelled by the user in this cwd: `{shown}`. \
+             Do not retry it; ask before running it again or change the command."
+        )),
     }
 }
 
@@ -453,9 +509,64 @@ mod tests {
         let a = PathBuf::from("C:/proj-a");
         let b = PathBuf::from("C:/proj-b");
         let cmd = "unique-nur-bash-fail-test-abc";
-        // Clear via TTL retain by inserting then checking different cwd.
-        note_failure(&a, cmd);
-        assert!(refuse_recent_failure(&a, cmd).is_some());
-        assert!(refuse_recent_failure(&b, cmd).is_none());
+        note_failure(&a, cmd, FailureKind::Idle, 60_000);
+        assert!(refuse_recent_failure(&a, cmd, 60_000, false).is_some());
+        assert!(refuse_recent_failure(&b, cmd, 60_000, false).is_none());
+    }
+
+    /// Failure modes: a timed-out command is refused even when the model asks
+    /// for more time (the old behaviour onno hit), or an identical retry with
+    /// the same budget slips through and burns another full timeout.
+    #[test]
+    fn timeout_lockout_lifts_for_a_larger_budget_or_background() {
+        let cwd = PathBuf::from("C:/proj-timeout");
+        let cmd = "unique-nur-bash-timeout-test-xyz";
+        note_failure(&cwd, cmd, FailureKind::Timeout, 60_000);
+        let same = refuse_recent_failure(&cwd, cmd, 60_000, false).expect("same budget refused");
+        assert!(
+            same.contains("60000ms") && same.contains("timeout_ms"),
+            "{same}"
+        );
+        assert!(refuse_recent_failure(&cwd, cmd, 59_000, false).is_some());
+        assert!(refuse_recent_failure(&cwd, cmd, 120_000, false).is_none());
+        assert!(refuse_recent_failure(&cwd, cmd, 60_000, true).is_none());
+
+        // The retry fails too: the recorded budget rises, a third attempt at
+        // 120s is refused, 180s is allowed.
+        note_failure(&cwd, cmd, FailureKind::Timeout, 120_000);
+        assert!(refuse_recent_failure(&cwd, cmd, 120_000, false).is_some());
+        assert!(refuse_recent_failure(&cwd, cmd, 180_000, false).is_none());
+    }
+
+    #[test]
+    fn idle_and_cancel_lockouts_ignore_the_budget() {
+        let cwd = PathBuf::from("C:/proj-idle");
+        let idle = "unique-nur-bash-idle-test-xyz";
+        note_failure(&cwd, idle, FailureKind::Idle, 60_000);
+        let msg = refuse_recent_failure(&cwd, idle, 600_000, true).expect("idle refused");
+        assert!(msg.contains("no output"), "{msg}");
+
+        let cancelled = "unique-nur-bash-cancel-test-xyz";
+        note_failure(&cwd, cancelled, FailureKind::Cancelled, 60_000);
+        let msg = refuse_recent_failure(&cwd, cancelled, 600_000, true).expect("cancel refused");
+        assert!(msg.contains("cancelled by the user"), "{msg}");
+    }
+
+    #[test]
+    fn only_hang_class_errors_are_locked_out() {
+        assert_eq!(
+            failure_kind("command timed out after 60000ms (process tree killed)."),
+            Some(FailureKind::Timeout)
+        );
+        assert_eq!(
+            failure_kind("command idle for 30000ms with no output"),
+            Some(FailureKind::Idle)
+        );
+        assert_eq!(
+            failure_kind("command cancelled by user"),
+            Some(FailureKind::Cancelled)
+        );
+        assert_eq!(failure_kind("exit code 1\nstderr: boom"), None);
+        assert_eq!(failure_kind("failed to spawn shell: not found"), None);
     }
 }
