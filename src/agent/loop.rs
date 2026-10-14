@@ -894,7 +894,11 @@ impl AgentRunner {
             }
 
             let mode_now = self.permission_mode.get();
-            let rendered = prompt_ctx.render(mode_now, &self.tools.todos_snapshot().render());
+            let rendered = prompt_ctx.render(
+                mode_now,
+                &self.tools.todos_snapshot().render(),
+                &session.id,
+            );
             let turn_state_item = rendered.turn_state_item();
             let mut instructions = rendered.system;
 
@@ -1754,6 +1758,7 @@ impl AgentRunner {
                         }));
                         continue;
                     }
+                    let sid = session.id.clone();
                     handles.push(crate::typesafe::context::spawn_blocking(move || {
                         let res = host.dispatch(
                             &name,
@@ -1761,6 +1766,7 @@ impl AgentRunner {
                             &ToolContext {
                                 cwd,
                                 cancel: cancel_t,
+                                session_id: sid,
                             },
                         );
                         (call_id, name, res)
@@ -2036,6 +2042,7 @@ impl AgentRunner {
                 let name = call.name.clone();
                 let args = call.arguments.clone();
                 let cancel_t = cancel.clone();
+                let sid = session.id.clone();
                 let exec = crate::typesafe::context::spawn_blocking(move || {
                     host.dispatch(
                         &name,
@@ -2043,6 +2050,7 @@ impl AgentRunner {
                         &ToolContext {
                             cwd,
                             cancel: cancel_t,
+                            session_id: sid,
                         },
                     )
                 });

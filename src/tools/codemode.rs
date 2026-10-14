@@ -72,8 +72,9 @@ thread_local! {
 }
 
 struct Bridge {
-    cwd: PathBuf,
-    cancel: tokio_util::sync::CancellationToken,
+    /// Workspace, cancellation and session of the call that started the
+    /// script; every nested call runs with the same three.
+    ctx: ToolContext,
     deadline: Instant,
     printed: String,
     calls: usize,
@@ -82,7 +83,7 @@ struct Bridge {
 
 impl Bridge {
     fn check_budget(&self) -> std::result::Result<(), String> {
-        if self.cancel.is_cancelled() {
+        if self.ctx.cancel.is_cancelled() {
             return Err("script cancelled".into());
         }
         if Instant::now() >= self.deadline {
@@ -148,6 +149,7 @@ impl Tool for CodeMode {
         );
         let cwd = ctx.cwd.clone();
         let cancel = ctx.cancel.clone();
+        let session_id = ctx.session_id.clone();
 
         // A Boa `Context` is not `Send`, so the script owns a thread for its
         // whole life. The thread is joined on the happy path; on a timeout it
@@ -157,7 +159,11 @@ impl Tool for CodeMode {
             .name("nur-codemode".into())
             .stack_size(4 * 1024 * 1024)
             .spawn(move || {
-                let outcome = run_script(&code, cwd, cancel, Instant::now() + timeout);
+                let outcome = run_script(
+                    &code,
+                    ToolContext::new(cwd, cancel, &session_id),
+                    Instant::now() + timeout,
+                );
                 let _ = tx.send(outcome);
             })
             .map_err(|e| NurError::Tool(format!("codemode: could not start sandbox: {e}")))?;
@@ -177,16 +183,10 @@ impl Tool for CodeMode {
 }
 
 /// Everything the script can reach, installed before its first line runs.
-fn run_script(
-    code: &str,
-    cwd: PathBuf,
-    cancel: tokio_util::sync::CancellationToken,
-    deadline: Instant,
-) -> Result<String> {
+fn run_script(code: &str, ctx: ToolContext, deadline: Instant) -> Result<String> {
     BRIDGE.with(|b| {
         *b.borrow_mut() = Some(Bridge {
-            cwd,
-            cancel,
+            ctx,
             deadline,
             printed: String::new(),
             calls: 0,
@@ -197,8 +197,11 @@ fn run_script(
     let bridge = BRIDGE
         .with(|b| b.borrow_mut().take())
         .unwrap_or_else(|| Bridge {
-            cwd: PathBuf::new(),
-            cancel: tokio_util::sync::CancellationToken::new(),
+            ctx: ToolContext::new(
+                PathBuf::new(),
+                tokio_util::sync::CancellationToken::new(),
+                "",
+            ),
             deadline,
             printed: String::new(),
             calls: 0,
@@ -409,7 +412,7 @@ fn install_bridge(context: &mut Context) -> std::result::Result<(), String> {
     let cwd = BRIDGE.with(|b| {
         b.borrow()
             .as_ref()
-            .map(|bridge| bridge.cwd.display().to_string())
+            .map(|bridge| bridge.ctx.cwd.display().to_string())
             .unwrap_or_default()
     });
     context
@@ -432,11 +435,15 @@ fn string_arg(value: Option<&JsValue>, context: &mut Context) -> String {
 /// One nested call: same classification, same workspace, same cancellation as
 /// a call the model makes directly.
 fn call_tool(name: &str, args_json: &str) -> std::result::Result<String, String> {
-    let (cwd, cancel) = BRIDGE.with(|b| {
+    let ctx = BRIDGE.with(|b| {
         let borrowed = b.borrow();
         let bridge = borrowed.as_ref().ok_or("codemode: no sandbox")?;
         bridge.check_budget()?;
-        Ok::<_, String>((bridge.cwd.clone(), bridge.cancel.clone()))
+        Ok::<_, String>(ToolContext::new(
+            bridge.ctx.cwd.clone(),
+            bridge.ctx.cancel.clone(),
+            &bridge.ctx.session_id,
+        ))
     })?;
 
     let args: Value = serde_json::from_str(args_json).unwrap_or_else(|_| serde_json::json!({}));
@@ -450,7 +457,6 @@ fn call_tool(name: &str, args_json: &str) -> std::result::Result<String, String>
     });
 
     let host = ToolHost::default();
-    let ctx = ToolContext { cwd, cancel };
     host.dispatch(name, args_json, &ctx)
         .map_err(|e| format!("{name}: {e}"))
 }
@@ -543,7 +549,14 @@ fn describe_tool(name: &str) -> String {
 }
 
 fn store_key(key: &str) -> String {
-    let session = std::env::var("NUR_SESSION_ID").unwrap_or_else(|_| "default".into());
+    // The running script's session, from the bridge: scripts in a `/new`
+    // session or a subagent must not see another session's keys.
+    let session = BRIDGE.with(|b| {
+        b.borrow()
+            .as_ref()
+            .map(|bridge| bridge.ctx.session_id.clone())
+            .unwrap_or_else(|| "default".into())
+    });
     format!("{session}\u{0}{key}")
 }
 

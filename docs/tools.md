@@ -255,6 +255,15 @@ Plan mode blocks) rather than riding the read-only shortcut. `anydoc` splits the
 same way: `convert`/`read`/`status` are perception, anything that registers a
 converted document is not.
 
+The store is bound to the calling session (the one that registered the
+variables, also after `/new`, `/resume`, a fork or inside a subagent); there is
+no `session_id` argument. Tool results are auto-registered only when they are
+over `tool_result_max_chars` and will therefore reach the model as a preview;
+smaller results arrive whole and are not registered, and the store's own reads
+are never registered. `peek`/`slice` honour `max_chars` up to the inline limit
+(`tool_result_max_chars` minus a small header), so a window of that size arrives
+intact; the header ends with `next_offset=N` or `(end)`.
+
 
 ### `anydoc`
 
@@ -586,8 +595,8 @@ Retained-output proposals (Shepherd pattern): when the config key `proposal_mode
 is on, write tools stage changes under `~/.nur/proposals/<session>/` instead of
 the workspace until you review them. Actions: `list` (free) · `apply` (copies the
 staged files into the current working directory) · `discard`. Review staged files
-before apply. The session key is `session_id` or `NUR_SESSION_ID` (default
-`default`).
+before apply. Proposals belong to the session that staged them; there is no
+`session_id` argument.
 
 <!-- src/tools/proposal_tool.rs:46 actions: list|apply|discard -->
 

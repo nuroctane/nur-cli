@@ -63,7 +63,9 @@ impl Tool for AnydocTool {
             .and_then(|v| v.as_u64())
             .unwrap_or(12_000) as usize;
 
-        let session_id = std::env::var("NUR_SESSION_ID").unwrap_or_else(|_| "default".into());
+        // Same id the `context` tool reads with, or the registered variable is
+        // invisible to the session that asked for it.
+        let session_id = ctx.session_id.clone();
         let mut header = format!(
             "anydoc converted {} → {} markdown chars\n",
             resolved.display(),

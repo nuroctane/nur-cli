@@ -416,6 +416,15 @@ pub fn compress_text_with_provenance(
     })
 }
 
+/// Whether `maybe_spill` will replace this body with a preview. Tools that
+/// bound their own output (bash) already hand the model a spill path, and a
+/// cap of 0 means nothing is ever cut.
+fn will_be_cut(tool: &str, body: &str, spill_max_chars: usize) -> bool {
+    spill_max_chars > 0
+        && !crate::tools::spill::tool_bounds_own_output(tool)
+        && body.chars().count() > spill_max_chars
+}
+
 /// Compress then spill - shared by all agent-loop tool-result sites.
 ///
 /// RLM: large successful tool bodies are also registered in the session
@@ -430,9 +439,12 @@ pub fn prepare_tool_body(
     spill_max_chars: usize,
     session_model: &str,
 ) -> String {
-    // Register the full body *before* compress/spill so the variable keeps the original.
+    // Register the full body *before* compress/spill so the variable keeps
+    // the original - but only when the model will not see it whole anyway.
+    // A body under the inline cap arrives in full; registering it too just
+    // invites a redundant `context` read of text already in the window.
     let mut prefix = String::new();
-    if ok {
+    if ok && will_be_cut(tool, &body, spill_max_chars) {
         let min = crate::config::load_config()
             .map(|c| c.context_register_min_chars as usize)
             .unwrap_or(8_000);
@@ -469,6 +481,20 @@ pub fn prepare_tool_body(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Outputs between the register threshold and the inline cap used to be
+    /// registered *and* sent whole, inviting a redundant `context` read.
+    #[test]
+    fn only_bodies_the_model_will_not_see_whole_are_registered() {
+        let under = "x".repeat(9_000);
+        let over = "x".repeat(13_000);
+        assert!(!will_be_cut("read_file", &under, 12_000));
+        assert!(will_be_cut("read_file", &over, 12_000));
+        // bash bounds itself and already hands over a spill path
+        assert!(!will_be_cut("bash", &over, 12_000));
+        // no cap: nothing is ever cut
+        assert!(!will_be_cut("read_file", &over, 0));
+    }
 
     #[test]
     fn uv_tool_interpreter_takes_precedence_and_late_install_is_detected() {

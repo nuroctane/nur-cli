@@ -813,6 +813,7 @@ impl App {
         self.push_info(format!("{working}..."));
         let (tx, rx) = std::sync::mpsc::channel();
         let cwd = self.cwd.clone();
+        let session_id = self.session_id.clone();
         let json = args.to_string();
         let spawned = std::thread::Builder::new()
             .name(format!("nur-slash-{name}"))
@@ -820,6 +821,7 @@ impl App {
                 let ctx = crate::tools::ToolContext {
                     cwd,
                     cancel: CancellationToken::new(),
+                    session_id,
                 };
                 let result = ToolHost::default()
                     .dispatch(name, &json, &ctx)
@@ -869,6 +871,7 @@ impl App {
         let ctx = crate::tools::ToolContext {
             cwd: self.cwd.clone(),
             cancel: CancellationToken::new(),
+            session_id: self.session_id.clone(),
         };
         match host.dispatch(name, json, &ctx) {
             Ok(s) => self.push_note(Tone::Skill, s),
@@ -922,6 +925,7 @@ impl App {
         let ctx = crate::tools::ToolContext {
             cwd: self.cwd.clone(),
             cancel: CancellationToken::new(),
+            session_id: self.session_id.clone(),
         };
         match host.dispatch("ruflo", &json, &ctx) {
             Ok(s) => self.push_note(Tone::Skill, s),
@@ -965,6 +969,7 @@ impl App {
         let ctx = crate::tools::ToolContext {
             cwd: self.cwd.clone(),
             cancel: CancellationToken::new(),
+            session_id: self.session_id.clone(),
         };
         match host.dispatch("akarso", &json, &ctx) {
             Ok(s) => self.push_note(Tone::Skill, s),
@@ -1054,6 +1059,7 @@ impl App {
         let ctx = crate::tools::ToolContext {
             cwd: self.cwd.clone(),
             cancel: CancellationToken::new(),
+            session_id: self.session_id.clone(),
         };
         match host.dispatch("graphjin", &json, &ctx) {
             Ok(s) => self.push_note(Tone::Skill, s),
@@ -1070,6 +1076,7 @@ impl App {
             let ctx = crate::tools::ToolContext {
                 cwd: self.cwd.clone(),
                 cancel: CancellationToken::new(),
+                session_id: self.session_id.clone(),
             };
             match host.dispatch("graphify", r#"{"action":"status"}"#, &ctx) {
                 Ok(s) => {
@@ -1154,6 +1161,7 @@ impl App {
         let ctx = crate::tools::ToolContext {
             cwd: self.cwd.clone(),
             cancel: CancellationToken::new(),
+            session_id: self.session_id.clone(),
         };
         match host.dispatch("graphify", &json, &ctx) {
             Ok(s) => self.push_note(Tone::Skill, s),
@@ -3056,6 +3064,7 @@ impl App {
         let ctx = crate::tools::ToolContext {
             cwd: self.cwd.clone(),
             cancel: CancellationToken::new(),
+            session_id: self.session_id.clone(),
         };
         let json = serde_json::json!({"action": action, "session_id": sid}).to_string();
         let host = ToolHost::default();
@@ -3564,6 +3573,7 @@ impl App {
         let ctx = crate::tools::ToolContext {
             cwd: self.cwd.clone(),
             cancel: CancellationToken::new(),
+            session_id: self.session_id.clone(),
         };
         let args = serde_json::json!({ "pattern": arg }).to_string();
         match host.dispatch("grep", &args, &ctx) {

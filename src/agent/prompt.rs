@@ -369,7 +369,15 @@ impl PromptContext {
     /// that can change inside a session is allowed in `system`. The live state
     /// rides as the final input item instead, where it costs its own few
     /// hundred tokens and nothing else.
-    pub fn render(&self, mode: PermissionMode, todos_render: &str) -> RenderedPrompt {
+    /// `session_id` is the live session (not `NUR_SESSION_ID`, which is set once
+    /// at startup and goes stale after `/new`, `/resume` and forks): the
+    /// per-session blocks below must describe the store the tools will read.
+    pub fn render(
+        &self,
+        mode: PermissionMode,
+        todos_render: &str,
+        session_id: &str,
+    ) -> RenderedPrompt {
         // Product identity is always Nur. Backend provider/model are facts only.
         let role = if self.is_subagent {
             format!(
@@ -665,11 +673,11 @@ reflects the moment the request was sent; follow it over anything earlier.
         }
 
         // Prime / RLM / Continual Harness / Connectome session state (outside the chat window).
-        let sid = std::env::var("NUR_SESSION_ID").unwrap_or_default();
+        let sid = session_id;
         if !sid.is_empty() {
-            t.push_str(&super::goal::prompt_block(&sid));
-            t.push_str(&super::harness::prompt_block(&sid));
-            let inv = super::context_store::prompt_inventory(&sid);
+            t.push_str(&super::goal::prompt_block(sid));
+            t.push_str(&super::harness::prompt_block(sid));
+            let inv = super::context_store::prompt_inventory(sid);
             if !inv.is_empty() {
                 t.push('\n');
                 t.push_str(&inv);
@@ -768,7 +776,7 @@ mod tests {
             None,
             "high",
         )
-        .render(PermissionMode::Auto, "(no todos)");
+        .render(PermissionMode::Auto, "(no todos)", "");
         let prompt = rendered.system;
         assert!(rendered.turn_state.is_empty());
         assert!(prompt.contains("read_file"));
@@ -794,8 +802,12 @@ mod tests {
             None,
             "high",
         );
-        let auto = ctx.render(PermissionMode::Auto, "(no todos)");
-        let plan = ctx.render(PermissionMode::Plan, "- [ ] write the test\n- [x] read it");
+        let auto = ctx.render(PermissionMode::Auto, "(no todos)", "");
+        let plan = ctx.render(
+            PermissionMode::Plan,
+            "- [ ] write the test\n- [x] read it",
+            "",
+        );
         assert_eq!(auto.system, plan.system);
         assert!(auto.turn_state.starts_with(TURN_STATE_MARKER));
         assert!(auto.turn_state.contains("AUTO"));

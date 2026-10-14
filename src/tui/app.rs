@@ -9677,6 +9677,7 @@ impl App {
             let ctx = crate::tools::ToolContext {
                 cwd: self.cwd.clone(),
                 cancel: tokio_util::sync::CancellationToken::new(),
+                session_id: self.session_id.clone(),
             };
             let args = serde_json::json!({ "action": "node list" }).to_string();
             match host.dispatch("fractal", &args, &ctx) {
@@ -9812,6 +9813,7 @@ impl App {
             let ctx = crate::tools::ToolContext {
                 cwd: self.cwd.clone(),
                 cancel: tokio_util::sync::CancellationToken::new(),
+                session_id: self.session_id.clone(),
             };
             let json_args = if node_arg.is_empty() {
                 serde_json::json!({ "action": action }).to_string()

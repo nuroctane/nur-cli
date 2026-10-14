@@ -105,6 +105,7 @@ mod tests {
         let ctx = ToolContext {
             cwd: dir.clone(),
             cancel: CancellationToken::new(),
+            session_id: "test".into(),
         };
         let out = tool
             .execute(&args, &ctx)
@@ -128,6 +129,7 @@ mod tests {
         let ctx = ToolContext {
             cwd: dir.clone(),
             cancel: CancellationToken::new(),
+            session_id: "test".into(),
         };
         let out = tool.execute(&args, &ctx).unwrap();
         assert!(out.contains("line-40"), "{out}");

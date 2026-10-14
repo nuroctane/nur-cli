@@ -33,6 +33,8 @@ const DEFAULT_GLOBAL_BYTES: u64 = 512 * 1024 * 1024;
 const DEFAULT_RETENTION_DAYS: u64 = 30;
 /// Default peek window (chars).
 pub const DEFAULT_PEEK: usize = 2_000;
+/// Largest single read (peek/slice) the store serves.
+pub const MAX_READ_CHARS: usize = 100_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextVar {
@@ -331,6 +333,13 @@ pub fn register(
     Ok(var)
 }
 
+/// Tools whose output is itself a read of the store (or already a pointer
+/// into it). Registering those would turn every large `context` read into a
+/// new variable and a preview, so the model loops on reading its own reads.
+pub fn tool_output_is_store_read(tool: &str) -> bool {
+    matches!(tool, "context" | "anydoc")
+}
+
 /// Auto-register a large tool result. Returns a short pointer line for the model
 /// when registration succeeds; `None` if the body is small or rejected.
 pub fn maybe_register_tool_result(
@@ -339,7 +348,10 @@ pub fn maybe_register_tool_result(
     body: &str,
     min_chars: usize,
 ) -> Option<String> {
-    if session_id.is_empty() || body.chars().count() < min_chars {
+    if session_id.is_empty() || tool_output_is_store_read(tool) {
+        return None;
+    }
+    if body.chars().count() < min_chars {
         return None;
     }
     if body_looks_sensitive(body) {
@@ -441,14 +453,15 @@ pub fn peek(
 ) -> Result<String, String> {
     let var = get(session_id, name).ok_or_else(|| format!("unknown context var `{name}`"))?;
     let body = load_body(&var)?;
-    let max = max_chars.clamp(1, 100_000);
+    let max = max_chars.clamp(1, MAX_READ_CHARS);
     let total = body.chars().count();
     let start = offset.min(total);
     let slice: String = body.chars().skip(start).take(max).collect();
+    let shown = slice.chars().count();
     Ok(format!(
-        "var=`{}` chars={total} offset={start} showing={}\n---\n{slice}",
+        "var=`{}` chars={total} offset={start} showing={shown}{}\n---\n{slice}",
         var.name,
-        slice.chars().count()
+        continuation(start + shown, total)
     ))
 }
 
@@ -458,14 +471,27 @@ pub fn slice(session_id: &str, name: &str, start: usize, end: usize) -> Result<S
     let total = body.chars().count();
     let start = start.min(total);
     let end = end.min(total).max(start);
-    if end - start > 100_000 {
-        return Err("slice too large (max 100000 chars); use a smaller window".into());
+    if end - start > MAX_READ_CHARS {
+        return Err(format!(
+            "slice too large (max {MAX_READ_CHARS} chars); use a smaller window"
+        ));
     }
     let slice: String = body.chars().skip(start).take(end - start).collect();
     Ok(format!(
-        "var=`{}` slice=[{start},{end}) of {total}\n---\n{slice}",
-        var.name
+        "var=`{}` slice=[{start},{end}) of {total}{}\n---\n{slice}",
+        var.name,
+        continuation(end, total)
     ))
+}
+
+/// Tells the model where the next window starts, so a capped read is a
+/// stepping stone rather than a dead end.
+fn continuation(next: usize, total: usize) -> String {
+    if next < total {
+        format!(" next_offset={next}")
+    } else {
+        " (end)".to_string()
+    }
 }
 
 /// Reorder search hits by how well each answers `query`, in place.
@@ -504,9 +530,7 @@ fn rank_hits_by_relevance(query: &str, hits: &mut Vec<String>) -> bool {
 /// Passing the raw score through for unplaced hits contradicted both; it looked
 /// harmless because the ordering test fed `(false, None)` and never production's
 /// `(false, Some(x))`.
-fn placement_scores(
-    judged: &[crate::typesafe::policy::Judgment<f64>],
-) -> Vec<(bool, Option<f64>)> {
+fn placement_scores(judged: &[crate::typesafe::policy::Judgment<f64>]) -> Vec<(bool, Option<f64>)> {
     judged
         .iter()
         .map(|j| {
@@ -566,14 +590,14 @@ pub fn search(
     // the header says the order came from a judgment rather than from the file.
     let reranked = rank_hits_by_relevance(pattern, &mut hits);
     Ok(format!(
-        "var=`{}` pattern={pattern:?} hits={}/{max_hits} (line-limited){})\n{}",
+        "var=`{}` pattern={pattern:?} hits={}/{max_hits} (line-limited{})\n{}",
+        var.name,
+        hits.len(),
         if reranked {
             ", ordered by relevance"
         } else {
             ""
         },
-        var.name,
-        hits.len(),
         hits.join("\n")
     ))
 }
@@ -844,7 +868,7 @@ mod rerank_tests {
         let judged = vec![
             Judgment::<f64>::from_answer("r0", Some(9.9), Some(0.2), &t), // unplaced, high score
             Judgment::<f64>::from_answer("r1", Some(2.5), Some(0.95), &t), // placed
-            Judgment::<f64>::unavailable("r2", "no key"),                  // nothing at all
+            Judgment::<f64>::unavailable("r2", "no key"),                 // nothing at all
         ];
         assert_eq!(judged[0].action, GateAction::Escalate, "test premise");
         let scores = placement_scores(&judged);
@@ -853,7 +877,11 @@ mod rerank_tests {
             (false, None),
             "an unacted hit carries no score, however high its raw value"
         );
-        assert_eq!(scores[1], (true, Some(2.5)), "an acted hit carries its score");
+        assert_eq!(
+            scores[1],
+            (true, Some(2.5)),
+            "an acted hit carries its score"
+        );
         assert_eq!(scores[2], (false, None));
         // ... and ordering with those tuples keeps every unplaced hit in place.
         let h = hits(3);
@@ -934,6 +962,58 @@ mod tests {
         let big = "y".repeat(150);
         let msg = maybe_register_tool_result(&s, "bash", &big, 100).unwrap();
         assert!(msg.contains("context_store"));
+        clear_session(&s);
+    }
+
+    /// A large `context` read used to be registered as a new variable (and
+    /// cut to a preview), so the model re-read its own reads in a loop.
+    #[test]
+    fn the_stores_own_reads_are_never_registered() {
+        let s = sid();
+        let big = "y".repeat(150);
+        assert!(maybe_register_tool_result(&s, "context", &big, 100).is_none());
+        assert!(maybe_register_tool_result(&s, "anydoc", &big, 100).is_none());
+        assert!(list(&s).is_empty());
+        clear_session(&s);
+    }
+
+    /// The search header had its format arguments in the wrong order, so it
+    /// read like `var=`, ordered by relevance` hits=doc/3`.
+    #[test]
+    fn search_header_names_the_var_then_the_counts() {
+        let s = sid();
+        register(&s, "doc", "a needle\nb\nc needle\n", "t", "u").unwrap();
+        let out = search(&s, "doc", "needle", 5).unwrap();
+        let header = out.lines().next().unwrap();
+        assert!(
+            header.starts_with("var=`doc` pattern=\"needle\" hits=2/5 (line-limited"),
+            "{header}"
+        );
+        assert!(header.ends_with(')'), "{header}");
+        clear_session(&s);
+    }
+
+    /// A capped window must say where the rest starts, so the model can walk
+    /// a variable instead of retrying with ever larger sizes.
+    #[test]
+    fn capped_reads_point_at_the_next_offset() {
+        let s = sid();
+        register(&s, "doc", &"z".repeat(50), "t", "u").unwrap();
+        let first = peek(&s, "doc", 0, 20).unwrap();
+        assert!(
+            first.starts_with("var=`doc` chars=50 offset=0 showing=20 next_offset=20\n"),
+            "{first}"
+        );
+        let last = peek(&s, "doc", 40, 20).unwrap();
+        assert!(
+            last.starts_with("var=`doc` chars=50 offset=40 showing=10 (end)\n"),
+            "{last}"
+        );
+        let sl = slice(&s, "doc", 10, 30).unwrap();
+        assert!(
+            sl.starts_with("var=`doc` slice=[10,30) of 50 next_offset=30\n"),
+            "{sl}"
+        );
         clear_session(&s);
     }
 

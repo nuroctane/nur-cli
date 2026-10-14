@@ -25,8 +25,7 @@ impl Tool for ProposalTool {
                 "action": {
                     "type": "string",
                     "enum": ["list", "apply", "discard"],
-                },
-                "session_id": {"type": "string"}
+                }
             },
             "required": ["action"]
         })
@@ -34,19 +33,15 @@ impl Tool for ProposalTool {
 
     fn execute(&self, args: &Value, ctx: &ToolContext) -> Result<String> {
         let action = arg_str(args, "action")?;
-        let session_id = args
-            .get("session_id")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-            .or_else(|| std::env::var("NUR_SESSION_ID").ok())
-            .unwrap_or_else(|| "default".into());
+        // Proposals are staged under the calling session's id (see
+        // `commit_file_write`); applying another session's staged writes
+        // from here was never intended.
+        let session_id = ctx.session_id.as_str();
 
         match action.as_str() {
-            "list" => Ok(proposal::format_list(&session_id)),
-            "apply" => proposal::apply_all(&session_id, &ctx.cwd).map_err(NurError::Tool),
-            "discard" => proposal::discard_all(&session_id).map_err(NurError::Tool),
+            "list" => Ok(proposal::format_list(session_id)),
+            "apply" => proposal::apply_all(session_id, &ctx.cwd).map_err(NurError::Tool),
+            "discard" => proposal::discard_all(session_id).map_err(NurError::Tool),
             other => Err(NurError::Tool(format!("unknown proposal action `{other}`"))),
         }
     }

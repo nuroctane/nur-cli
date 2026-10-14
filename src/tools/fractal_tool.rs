@@ -450,6 +450,7 @@ mod tests {
         ToolContext {
             cwd: std::env::current_dir().unwrap(),
             cancel: tokio_util::sync::CancellationToken::new(),
+            session_id: "test".into(),
         }
     }
 

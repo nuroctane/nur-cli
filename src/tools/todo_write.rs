@@ -78,4 +78,3 @@ impl Tool for TodoWrite {
         Ok(format!("todos updated\n{}", g.render()))
     }
 }
-

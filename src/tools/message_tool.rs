@@ -82,11 +82,7 @@ impl Tool for MessageTool {
                 if items.is_empty() {
                     Ok("no messages for you in this scope".into())
                 } else {
-                    let mut s = format!(
-                        "{} message(s) - {}",
-                        items.len(),
-                        mailbox::BOUNDARY
-                    );
+                    let mut s = format!("{} message(s) - {}", items.len(), mailbox::BOUNDARY);
                     for m in items {
                         s.push_str(&format!("\n{}", mailbox::render(&m)));
                     }

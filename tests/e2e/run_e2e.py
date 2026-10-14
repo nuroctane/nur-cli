@@ -345,6 +345,20 @@ def check(scenario, result, workspace, requests, mcp_requests=()):
         for needle in rule.get("contains", []):
             if not any(needle in r for r in results):
                 failures.append(f"request {n} tool results lack {needle!r}: {results!r}"[:400])
+        # `last_result` looks only at the newest tool result in the request
+        # (the one answering the previous turn's call); earlier results are
+        # still in the transcript, so "lacks" would be meaningless over all.
+        last = rule.get("last_result")
+        if last is not None:
+            newest = results[-1] if results else ""
+            for needle in last.get("contains", []):
+                if needle not in newest:
+                    failures.append(f"request {n} newest tool result lacks {needle!r}: {newest!r}"[:400])
+            for needle in last.get("lacks", []):
+                if needle in newest:
+                    failures.append(f"request {n} newest tool result contains {needle!r}")
+            if "min_chars" in last and len(newest) < last["min_chars"]:
+                failures.append(f"request {n} newest tool result is {len(newest)} chars, expected at least {last['min_chars']}")
     for rule in expect.get("request_contains", []):
         n = rule["request"]
         if n > len(requests):

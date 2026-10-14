@@ -3,9 +3,9 @@ pub mod anydoc_tool;
 mod apply_patch;
 mod bash;
 pub mod browser;
-pub mod file_ledger;
 pub mod egaki_tool;
 pub mod enclave_tool;
+pub mod file_ledger;
 pub mod terminal_browser;
 pub use terminal_browser::is_read_only_action as terminal_browser_is_read_only;
 mod admission_tool;
@@ -174,19 +174,37 @@ pub struct ToolContext {
     /// Cooperative cancellation — long-running tools (shell) poll this and
     /// kill their child processes when the user hits Esc.
     pub cancel: tokio_util::sync::CancellationToken,
+    /// The session this call belongs to. Per-session state (context store,
+    /// undo, receipts) must key on this, never on the process-wide
+    /// `NUR_SESSION_ID`: that variable is set once at startup and goes stale
+    /// after `/new`, `/resume` and forks, and subagents share the process.
+    pub session_id: String,
 }
 
 /// Tool contract. Capability methods are **fail-closed** by default
 /// (not free, not parallel, not destructive). Override or rely on the
 /// central classifier in [`capabilities`] via the default impls.
 impl ToolContext {
+    pub fn new(
+        cwd: PathBuf,
+        cancel: tokio_util::sync::CancellationToken,
+        session_id: &str,
+    ) -> Self {
+        Self {
+            cwd,
+            cancel,
+            session_id: session_id.to_string(),
+        }
+    }
+
     /// A context with no cancellation, for tests that exercise a tool directly.
     #[cfg(test)]
     pub fn default_for_test(cwd: &std::path::Path) -> Self {
-        Self {
-            cwd: cwd.to_path_buf(),
-            cancel: tokio_util::sync::CancellationToken::new(),
-        }
+        Self::new(
+            cwd.to_path_buf(),
+            tokio_util::sync::CancellationToken::new(),
+            "test-session",
+        )
     }
 }
 
@@ -543,9 +561,8 @@ pub(crate) fn commit_file_write(
         .map(|c| c.proposal_mode)
         .unwrap_or(false)
     {
-        let sid = std::env::var("NUR_SESSION_ID").unwrap_or_else(|_| "default".into());
         let entry =
-            crate::agent::proposal::stage_write(&sid, &ctx.cwd, path_arg, updated, tool)
+            crate::agent::proposal::stage_write(&ctx.session_id, &ctx.cwd, path_arg, updated, tool)
                 .map_err(NurError::Tool)?;
         return Ok(Some(format!(
             "proposal staged `{}` ({} bytes) - not written to workspace. \
@@ -685,6 +702,7 @@ mod tests {
         let ctx = ToolContext {
             cwd: std::env::temp_dir(),
             cancel: tokio_util::sync::CancellationToken::new(),
+            session_id: "test".into(),
         };
         let err = host
             .dispatch("definitely_not_a_real_tool", "{}", &ctx)
