@@ -752,6 +752,8 @@ impl AgentRunner {
         let mut recovered_default_model: Option<String> = None;
         // OMP contextPromotion: try a larger-window sibling once before compact.
         let mut context_promoted = false;
+        // A text-only model rejecting replayed images must not end the turn.
+        let mut media_stripped = false;
 
         loop {
             if cancel.is_cancelled() {
@@ -1205,6 +1207,30 @@ impl AgentRunner {
                             return Err(error);
                         }
                     }
+                }
+                // Vision rejection is transport-agnostic: only the Chat
+                // Completions adapter retries on its own, so the Responses,
+                // Anthropic and Gemini routes would end the turn here. History
+                // carries the images, so dropping them once and retrying costs
+                // one round trip and keeps the turn alive.
+                Err(error)
+                    if !media_stripped
+                        && crate::api::chat::is_media_unsupported_error(&error.to_string()) =>
+                {
+                    media_stripped = true;
+                    let dropped: usize = session
+                        .input_items
+                        .iter_mut()
+                        .map(strip_inline_images)
+                        .sum();
+                    if dropped == 0 {
+                        return Err(error);
+                    }
+                    let _ = tx.send(AgentEvent::Status(format!(
+                        "model has no vision - retrying this turn with {dropped} inline image(s) \
+                         replaced by a text note"
+                    )));
+                    continue;
                 }
                 Err(error) => return Err(error),
             };

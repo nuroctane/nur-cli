@@ -68,8 +68,17 @@ struct JobRecord {
     /// Full result kept in memory (also written to disk when done).
     result: Option<String>,
     cancel: Arc<std::sync::atomic::AtomicBool>,
+    /// Whether the model should hear about this job finishing. Only jobs the
+    /// model launched itself report back; TUI-side work (heartbeat, installs)
+    /// would otherwise inject "#N completed" noise into its turn.
+    notify_model: bool,
     /// Set once the agent loop has told the model this job finished.
     reported: bool,
+}
+
+/// Job kinds started by the model (shell handoff, `bg(action=run)`).
+fn kind_reports_to_model(kind: &str) -> bool {
+    matches!(kind, "shell" | "command")
 }
 
 fn now_secs() -> u64 {
@@ -94,6 +103,30 @@ fn truncate_preview(s: &str, max: usize) -> String {
     }
     let head: String = t.chars().take(max.saturating_sub(1)).collect();
     format!("{head}…")
+}
+
+/// Preview for a failed job: the first line (an exit/status line for command
+/// jobs) plus the tail, where a build or test run states its reason.
+fn failure_preview(s: &str, max: usize) -> String {
+    let t = s.trim();
+    if t.chars().count() <= max {
+        return t.to_string();
+    }
+    let first: String = t
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .take(max / 4)
+        .collect();
+    let tail_chars = max.saturating_sub(first.chars().count() + 1).max(1);
+    let tail_start = t
+        .char_indices()
+        .rev()
+        .nth(tail_chars - 1)
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    format!("{first}…{}", &t[tail_start..])
 }
 
 /// Spawn a named background job that runs `work` on a detached thread.
@@ -129,6 +162,7 @@ where
                 },
                 result: None,
                 cancel,
+                notify_model: kind_reports_to_model(&kind),
                 reported: false,
             },
         );
@@ -137,48 +171,85 @@ where
 
     let _ = fs::create_dir_all(jobs_dir());
 
-    thread::Builder::new()
+    let spawned = thread::Builder::new()
         .name(format!("nur-bg-{id}"))
         .spawn(move || {
             let started = Instant::now();
             let outcome = work(cancel_worker.clone());
-            let elapsed = started.elapsed();
-            let reg = registry();
-            let mut g = reg.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(rec) = g.jobs.get_mut(&id) {
-                if cancel_worker.load(std::sync::atomic::Ordering::SeqCst)
-                    && matches!(rec.info.state, JobState::Running)
-                {
-                    rec.info.state = JobState::Cancelled;
-                    rec.info.finished_at = Some(now_secs());
-                    rec.info.error = Some("cancelled".into());
-                    return;
-                }
-                match outcome {
-                    Ok(result) => {
-                        rec.info.state = JobState::Completed;
-                        rec.info.finished_at = Some(now_secs());
-                        rec.info.result_preview = Some(truncate_preview(&result, 240));
-                        rec.result = Some(result.clone());
-                        let header = format!(
-                            "# bg job {id} · {} · {} · {:?}\n\n",
-                            rec.info.label, rec.info.kind, elapsed
-                        );
-                        let _ = fs::write(job_result_path(id), format!("{header}{result}"));
-                    }
-                    Err(err) => {
-                        rec.info.state = JobState::Failed;
-                        rec.info.finished_at = Some(now_secs());
-                        rec.info.error = Some(truncate_preview(&err, 400));
-                        rec.result = Some(err.clone());
-                        let _ = fs::write(job_result_path(id), format!("# failed\n\n{err}"));
-                    }
-                }
-            }
-        })
-        .ok();
+            let cancelled = cancel_worker.load(std::sync::atomic::Ordering::SeqCst);
+            finish(id, &label, &kind, outcome, started.elapsed(), cancelled);
+        });
+    if let Err(e) = spawned {
+        let reg = registry();
+        let mut g = reg.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(rec) = g.jobs.get_mut(&id) {
+            rec.info.state = JobState::Failed;
+            rec.info.finished_at = Some(now_secs());
+            rec.info.error = Some(format!("could not start worker thread: {e}"));
+        }
+    }
 
     id
+}
+
+/// Record a finished job. The preview and the on-disk copy are produced
+/// before the registry lock is taken: `list_jobs` runs on every TUI frame
+/// and must not wait behind a multi-megabyte write.
+fn finish(
+    id: u64,
+    label: &str,
+    kind: &str,
+    outcome: std::result::Result<String, String>,
+    elapsed: Duration,
+    cancelled: bool,
+) {
+    let (ok, text) = match outcome {
+        Ok(t) => (true, t),
+        Err(t) => (false, t),
+    };
+    let (preview, header) = if cancelled {
+        (None, None)
+    } else if ok {
+        (
+            Some(truncate_preview(&text, 240)),
+            Some(format!(
+                "# bg job {id} · {label} · {kind} · {elapsed:?}\n\n"
+            )),
+        )
+    } else {
+        (
+            Some(failure_preview(&text, 400)),
+            Some(format!(
+                "# bg job {id} · {label} · {kind} · FAILED after {elapsed:?}\n\n"
+            )),
+        )
+    };
+    if let Some(header) = header {
+        let _ = fs::write(job_result_path(id), format!("{header}{text}"));
+    }
+
+    let reg = registry();
+    let mut g = reg.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(rec) = g.jobs.get_mut(&id) else {
+        return;
+    };
+    rec.info.finished_at = Some(now_secs());
+    // `cancel()` already flipped the state so `/bg list` shows it at once;
+    // the worker's late return must not turn that into "failed".
+    if cancelled || rec.info.state == JobState::Cancelled {
+        rec.info.state = JobState::Cancelled;
+        rec.info.error = Some("cancelled".into());
+        rec.result = Some(text);
+        return;
+    }
+    if ok {
+        rec.info.state = JobState::Completed;
+        rec.info.result_preview = preview;
+    } else {
+        rec.info.state = JobState::Failed;
+        rec.info.error = preview;
+    }
+    rec.result = Some(text);
 }
 
 /// Spawn a detached OS command as a background job (stdout/stderr captured).
@@ -246,7 +317,7 @@ pub fn take_unreported_completions() -> Vec<JobInfo> {
     let mut done: Vec<JobInfo> = g
         .jobs
         .values_mut()
-        .filter(|r| !r.reported && r.info.state != JobState::Running)
+        .filter(|r| r.notify_model && !r.reported && r.info.state != JobState::Running)
         .map(|r| {
             r.reported = true;
             r.info.clone()
@@ -312,11 +383,20 @@ pub fn result(id: u64) -> Result<String> {
             rec.info.label
         )),
         JobState::Cancelled => Ok(format!("job {id} cancelled · {}", rec.info.label)),
-        JobState::Failed => Ok(format!(
-            "job {id} failed · {}\n{}",
-            rec.info.label,
-            rec.info.error.clone().unwrap_or_default()
-        )),
+        JobState::Failed => {
+            // A failing build or test run is the common case: the full output
+            // is the result, not the 400-char preview in `error`.
+            let header = format!("job {id} failed · {}\n", rec.info.label);
+            if let Some(r) = &rec.result {
+                return Ok(format!("{header}{r}"));
+            }
+            let preview = rec.info.error.clone().unwrap_or_default();
+            drop(g);
+            match fs::read_to_string(job_result_path(id)) {
+                Ok(text) => Ok(format!("{header}{text}")),
+                Err(_) => Ok(format!("{header}{preview}")),
+            }
+        }
         JobState::Completed => {
             if let Some(r) = &rec.result {
                 return Ok(r.clone());
@@ -403,24 +483,145 @@ pub fn report() -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn spawn_and_complete() {
-        let id = spawn("unit-test", "test", |_c| {
-            thread::sleep(Duration::from_millis(50));
-            Ok("hello-bg".into())
-        });
-        // Wait up to 2s.
-        for _ in 0..40 {
+    /// Jobs write result files under the nur home, so each test re-runs
+    /// itself in a child process with a throwaway `NUR_HOME` and only asserts
+    /// there. Returns `true` inside the child.
+    fn in_throwaway_home(test: &str) -> bool {
+        const CHILD: &str = "NUR_TEST_BG_JOBS_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            return true;
+        }
+        let short = test.rsplit("::").next().unwrap_or(test);
+        let home = std::env::temp_dir().join(format!("nur-bg-{}-{short}", std::process::id()));
+        fs::create_dir_all(&home).unwrap();
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test, "--nocapture"])
+            .env(CHILD, "1")
+            .env("NUR_HOME", &home)
+            .output()
+            .unwrap();
+        let _ = fs::remove_dir_all(&home);
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        false
+    }
+
+    fn wait_done(id: u64) -> JobInfo {
+        for _ in 0..100 {
             if let Some(j) = get(id) {
                 if j.state != JobState::Running {
-                    break;
+                    return j;
                 }
             }
             thread::sleep(Duration::from_millis(50));
         }
-        let j = get(id).expect("job");
+        panic!("job {id} did not finish");
+    }
+
+    #[test]
+    fn spawn_and_complete() {
+        if !in_throwaway_home("bg_jobs::tests::spawn_and_complete") {
+            return;
+        }
+        let id = spawn("unit-test", "test", |_c| {
+            thread::sleep(Duration::from_millis(50));
+            Ok("hello-bg".into())
+        });
+        let j = wait_done(id);
         assert_eq!(j.state, JobState::Completed);
         let r = result(id).unwrap();
         assert!(r.contains("hello-bg"));
+    }
+
+    // Failure modes: a failed job's output collapses to the 400-char preview,
+    // or the preview keeps the head and loses the reason at the tail.
+    #[test]
+    fn failed_job_keeps_its_full_output() {
+        if !in_throwaway_home("bg_jobs::tests::failed_job_keeps_its_full_output") {
+            return;
+        }
+        let body = format!(
+            "exit status: 101\n{}\nerror: could not compile `nur`\nExit code: 101",
+            "   Compiling line\n".repeat(200)
+        );
+        let expected = body.clone();
+        let id = spawn("cargo build", "shell", move |_c| Err(body));
+        let j = wait_done(id);
+        assert_eq!(j.state, JobState::Failed);
+        let preview = j.error.unwrap();
+        assert!(preview.starts_with("exit status: 101…"), "{preview}");
+        assert!(preview.ends_with("Exit code: 101"), "{preview}");
+        assert!(preview.chars().count() <= 400);
+        let r = result(id).unwrap();
+        assert!(
+            r.starts_with(&format!("job {id} failed · cargo build\n")),
+            "{r}"
+        );
+        assert!(
+            r.ends_with(&expected),
+            "full output missing: len {} vs {}; tail {:?}",
+            r.len(),
+            expected.len(),
+            &r[r.len().saturating_sub(120)..]
+        );
+        // The on-disk copy serves the same text once memory is gone.
+        let disk = fs::read_to_string(job_result_path(id)).unwrap();
+        assert!(disk.ends_with(&expected));
+    }
+
+    // Failure mode: `cancel()` flips the state first, so the worker's late
+    // return used to overwrite it with "failed · cancelled".
+    #[test]
+    fn cancelled_job_reports_as_cancelled() {
+        if !in_throwaway_home("bg_jobs::tests::cancelled_job_reports_as_cancelled") {
+            return;
+        }
+        let id = spawn("sleepy", "shell", |cancel| {
+            while !cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err("cancelled".into())
+        });
+        cancel(id).unwrap();
+        let note = completion_note().expect("cancellation is reported");
+        assert!(
+            note.contains(&format!("#{id} cancelled · sleepy")),
+            "{note}"
+        );
+        // Wait for the worker to observe the flag and finish.
+        for _ in 0..100 {
+            if get(id).and_then(|j| j.error) == Some("cancelled".into()) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        let j = get(id).unwrap();
+        assert_eq!(j.state, JobState::Cancelled);
+        assert!(
+            report().contains(&format!("#{id:<4} cancelled")),
+            "{}",
+            report()
+        );
+        assert!(completion_note().is_none(), "reported exactly once");
+    }
+
+    // Failure mode: TUI-side jobs (heartbeat, installs) announce themselves
+    // to the model as "#N completed".
+    #[test]
+    fn only_model_launched_kinds_report_completion() {
+        if !in_throwaway_home("bg_jobs::tests::only_model_launched_kinds_report_completion") {
+            return;
+        }
+        let quiet = spawn("heartbeat", "heartbeat", |_c| Ok("tick".into()));
+        let loud = spawn("echo hi", "shell", |_c| Ok("hi".into()));
+        wait_done(quiet);
+        wait_done(loud);
+        let done = take_unreported_completions();
+        assert_eq!(done.iter().map(|j| j.id).collect::<Vec<_>>(), vec![loud]);
+        assert!(take_unreported_completions().is_empty());
     }
 }

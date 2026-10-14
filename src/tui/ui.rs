@@ -367,9 +367,22 @@ fn draw_login_jev_slots(f: &mut Frame, app: &mut App, area: Rect) {
     let Some(m) = &app.login else { return };
     let slots = m.jev_slots.clone();
     let sel = m.jev_sel;
-    let error = m.error.clone();
+    // One status row under the list: a pending shared-slot removal asks for
+    // confirmation there; otherwise it carries the last error.
+    let armed = slots
+        .get(sel)
+        .filter(|slot| m.jev_remove_armed.as_deref() == Some(slot.id.as_str()))
+        .and_then(|slot| slot.shared_with)
+        .map(|provider| {
+            format!("also removes {provider}'s saved key - press Delete or ✕ again to confirm")
+        });
+    let status = match (&armed, &m.error) {
+        (Some(text), _) => Some((text.clone(), theme::style_warn())),
+        (None, Some(error)) => Some((error.clone(), theme::style_error())),
+        (None, None) => None,
+    };
     let count = slots.len().max(1);
-    let want = (count * 3 + 6 + usize::from(error.is_some())) as u16;
+    let want = (count * 3 + 6 + usize::from(status.is_some())) as u16;
     let rect = fit_modal_rect(area, 80, want, 48, 8);
     f.render_widget(Clear, rect);
     f.render_widget(
@@ -426,14 +439,21 @@ fn draw_login_jev_slots(f: &mut Frame, app: &mut App, area: Rect) {
             theme::style_faint(),
         )));
     }
+    // The detailed layout ends in a spacer row that the status line can take
+    // over; the compact one has no spare row, so one is held back for it.
+    let status_rows = usize::from(status.is_some());
     let detailed = inner.height as usize >= slots.len() * 3 + 2;
     let stride = if detailed { 3 } else { 1 };
-    let page = (inner.height.saturating_sub(2) as usize / stride).max(1);
+    let list_rows =
+        (inner.height as usize).saturating_sub(2 + if detailed { 0 } else { status_rows });
+    let page = (list_rows / stride).max(1);
     let start = selection_window_start(slots.len(), sel, page);
     // Fixed button column so the ✕ lines up and stays clickable.
     const BUTTON_W: u16 = 3;
-    let button_x = inner.x + inner.width.saturating_sub(BUTTON_W + 1);
     let text_w = (inner.width as usize).saturating_sub(BUTTON_W as usize + 3);
+    // The head is padded to `text_w`, then one gap column, then the button:
+    // the hit rect has to start exactly where the glyph is drawn.
+    let button_x = inner.x + text_w as u16 + 1;
     // Name column shrinks on narrow terminals so the residence stays visible.
     let name_w = (text_w / 2).clamp(12, 24);
     for (i, slot) in slots.iter().enumerate().skip(start).take(page) {
@@ -462,7 +482,7 @@ fn draw_login_jev_slots(f: &mut Frame, app: &mut App, area: Rect) {
                 Rect {
                     x: inner.x,
                     y: inner.y + row,
-                    width: inner.width.saturating_sub(BUTTON_W + 1),
+                    width: text_w as u16 + 1,
                     height: if detailed { 2 } else { 1 },
                 },
             ));
@@ -480,10 +500,17 @@ fn draw_login_jev_slots(f: &mut Frame, app: &mut App, area: Rect) {
                 },
             ));
         }
+        let mut residence = slot.residence.label();
+        if let (Some(provider), crate::typesafe::residence::Residence::Store(_)) =
+            (slot.shared_with, &slot.residence)
+        {
+            // Deleting this entry signs that provider out too; say so on the
+            // row itself, since compact layouts drop the detail line.
+            residence.push_str(&format!(" · shared with {provider}"));
+        }
         let head = format!(
-            "{marker}{dot}{:<name_w$} {}",
+            "{marker}{dot}{:<name_w$} {residence}",
             truncate(&slot.name, name_w),
-            slot.residence.label()
         );
         let head = format!("{:<text_w$}", truncate(&head, text_w));
         let button_style = if selected {
@@ -516,10 +543,17 @@ fn draw_login_jev_slots(f: &mut Frame, app: &mut App, area: Rect) {
             lines.push(Line::default());
         }
     }
-    if let Some(e) = &error {
+    if let Some((text, style)) = &status {
+        if detailed && lines.len() >= inner.height as usize {
+            // Take over the trailing spacer rather than fall off the frame.
+            lines.pop();
+        }
         lines.push(Line::from(Span::styled(
-            format!("  {}", truncate(e, inner.width.saturating_sub(4) as usize)),
-            theme::style_error(),
+            format!(
+                "  {}",
+                truncate(text, inner.width.saturating_sub(4) as usize)
+            ),
+            *style,
         )));
     }
     f.render_widget(
@@ -529,6 +563,7 @@ fn draw_login_jev_slots(f: &mut Frame, app: &mut App, area: Rect) {
     if let Some(login) = &mut app.login {
         login.hit = hit;
         login.jev_buttons = buttons;
+        login.vis_page = page;
     }
 }
 
@@ -1552,13 +1587,21 @@ fn draw_login_key(f: &mut Frame, app: &mut App, area: Rect) {
         field.push('▉');
     }
     let key_hint = if let Some(slot) = jev_slot {
+        use crate::typesafe::residence::Residence;
+        // Must agree with `client::api_key`: config and env are read before
+        // the store, so a saved key only replaces a saved key.
+        let read_first = slot.store_key_is_read(&app.cfg.typesafe);
         vec![
             format!("{} · {}", slot.name, slot.detail),
             match &slot.residence {
-                crate::typesafe::residence::Residence::Absent => {
+                Residence::Absent => {
                     "saved under this engine's own slot, isolated from the others".to_string()
                 }
-                other => format!("replaces the current {}", other.label()),
+                other if read_first => format!("replaces the current {}", other.label()),
+                other => format!(
+                    "saved as a fallback - the current {} is read first and keeps winning",
+                    other.label()
+                ),
             },
         ]
     } else if sidecar {
@@ -8747,7 +8790,17 @@ See the [token store notes](https://example.test/docs/token-store) for the stora
             },
         ];
         app.login = Some(modal);
-        for (width, height) in [(110u16, 36u16), (80, 24), (56, 14)] {
+        for (width, height, error) in [
+            (110u16, 36u16, None),
+            (80, 24, None),
+            (56, 14, None),
+            (
+                56,
+                14,
+                Some("this engine is keyed by env SUBQ_API_KEY only"),
+            ),
+        ] {
+            app.login.as_mut().unwrap().error = error.map(str::to_string);
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             terminal.draw(|frame| draw(frame, &mut app)).unwrap();
             let buffer = terminal.backend().buffer();
@@ -8758,13 +8811,31 @@ See the [token store notes](https://example.test/docs/token-store) for the stora
                 }
                 text.push('\n');
             }
-            let path =
-                std::path::PathBuf::from(&dump).join(format!("jev-slots-{width}x{height}.txt"));
-            std::fs::write(&path, text).unwrap();
+            let suffix = if error.is_some() { "-error" } else { "" };
+            let path = std::path::PathBuf::from(&dump)
+                .join(format!("jev-slots-{width}x{height}{suffix}.txt"));
+            std::fs::write(&path, &text).unwrap();
             let login = app.login.as_ref().unwrap();
             // Every removable slot got a clickable ✕; env/loopback/absent did not.
             assert_eq!(login.jev_buttons.len(), 1, "{width}x{height}");
-            assert_eq!(login.jev_buttons[0].0, 0);
+            let (index, rect) = login.jev_buttons[0];
+            assert_eq!(index, 0);
+            // The hit rect must sit on the drawn glyph, or clicking `[` selects
+            // the row and clicking past `]` deletes.
+            assert_eq!(buffer[(rect.x, rect.y)].symbol(), "[", "{width}x{height}");
+            assert_eq!(
+                buffer[(rect.x + 2, rect.y)].symbol(),
+                "]",
+                "{width}x{height}"
+            );
+            let row = login.hit.rows.iter().find(|(i, _)| *i == 0).unwrap().1;
+            assert!(row.right() <= rect.x, "row hit must stop before the button");
+            if let Some(error) = error {
+                assert!(
+                    text.contains(error),
+                    "the error row must stay inside the compact modal:\n{text}"
+                );
+            }
         }
     }
 

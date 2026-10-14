@@ -1,0 +1,15 @@
+{
+  "description": "A shell command that has printed nothing by its deadline is killed with the timeout error, not parked in a bg job: a silent command is more likely wedged or waiting on a prompt.",
+  "prompt": "Run the silent check and report what happened.",
+  "script": [
+    {"tool_calls": [{"name": "bash", "arguments": {"command": "python -c \"import time; time.sleep(120)\"", "timeout_ms": 1000}}]},
+    {"text": "The silent command timed out and was killed."}
+  ],
+  "expect": {
+    "stdout_contains": ["The silent command timed out and was killed."],
+    "requests": 2,
+    "max_request_gap_seconds": 10,
+    "tool_results": [{"request": 2, "contains": ["timed out after 1000ms"]}],
+    "requests_lack": ["handed off to bg job #"]
+  }
+}

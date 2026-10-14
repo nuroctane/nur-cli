@@ -26,6 +26,13 @@ const HANDOFF_MAX_MS: u64 = 30 * 60 * 1_000;
 const BACKGROUND_GRACE_MS: u64 = 750;
 /// Snapshot of partial output included in the "still running" placeholder.
 const HANDOFF_PREVIEW_BYTES: usize = 4_000;
+/// A command is handed off at its deadline only if it wrote something this
+/// recently; a silent one is more likely wedged or waiting on a prompt and
+/// would just sit in bg until the idle kill.
+const HANDOFF_RECENT_OUTPUT_MS: u64 = 15_000;
+/// Per-stream capture cap: anything past it is drained (so the child never
+/// blocks on a full pipe) but counted instead of kept.
+const CAPTURE_CAP: usize = 2_000_000;
 /// No stdout/stderr bytes for this long → treat as hung (waiting on stdin, etc.).
 /// Kept long enough that quiet compilers/linkers are not killed mid-build.
 const IDLE_TIMEOUT_MS: u64 = 90_000;
@@ -50,15 +57,51 @@ fn now_ms() -> u64 {
 /// Bytes read from one pipe so far. Shared with the reader thread so a
 /// still-running command can report partial output and a bounded drain can
 /// return what did arrive instead of nothing.
-type Sink = Arc<Mutex<Vec<u8>>>;
+#[derive(Default)]
+struct Capture {
+    bytes: Vec<u8>,
+    /// Bytes that arrived after `bytes` reached `CAPTURE_CAP`.
+    dropped: usize,
+}
 
-fn sink_snapshot(sink: &Sink) -> Vec<u8> {
-    sink.lock().map(|b| b.clone()).unwrap_or_default()
+type Sink = Arc<Mutex<Capture>>;
+
+/// Lossy UTF-8 conversion that reuses the buffer when it is already valid.
+fn bytes_to_string(bytes: Vec<u8>) -> String {
+    String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
+}
+
+/// Move the captured bytes out of the sink (no clone under the lock).
+fn take_sink(sink: &Sink) -> (String, usize) {
+    let cap = sink
+        .lock()
+        .map(|mut c| std::mem::take(&mut *c))
+        .unwrap_or_default();
+    (bytes_to_string(cap.bytes), cap.dropped)
+}
+
+/// Head/tail preview of a still-filling sink; only the preview bytes are
+/// copied out, never the whole buffer. `None` when nothing arrived yet.
+fn sink_preview(sink: &Sink, max_bytes: usize) -> Option<String> {
+    let g = sink.lock().ok()?;
+    let b = &g.bytes;
+    if b.is_empty() {
+        return None;
+    }
+    if b.len() <= max_bytes {
+        return Some(String::from_utf8_lossy(b).into_owned());
+    }
+    let head = max_bytes * 3 / 5;
+    let tail = max_bytes - head;
+    Some(format!(
+        "{}...{} bytes truncated...{}",
+        String::from_utf8_lossy(&b[..head]),
+        b.len() - head - tail,
+        String::from_utf8_lossy(&b[b.len() - tail..])
+    ))
 }
 
 fn read_all(pipe: Option<impl Read>, sink: Sink, progress_ms: Arc<AtomicU64>) {
-    // Cap at 2MB per stream to prevent memory blow-up from cat largefile etc
-    const CAP: usize = 2_000_000;
     let mut tmp = [0u8; 8192];
     let Some(mut p) = pipe else {
         return;
@@ -68,13 +111,11 @@ fn read_all(pipe: Option<impl Read>, sink: Sink, progress_ms: Arc<AtomicU64>) {
             Ok(0) => break,
             Ok(n) => {
                 progress_ms.store(now_ms(), Ordering::Relaxed);
-                if let Ok(mut buf) = sink.lock() {
-                    if buf.len() < CAP {
-                        let take = n.min(CAP - buf.len());
-                        buf.extend_from_slice(&tmp[..take]);
-                    }
+                if let Ok(mut cap) = sink.lock() {
+                    let take = n.min(CAPTURE_CAP.saturating_sub(cap.bytes.len()));
+                    cap.bytes.extend_from_slice(&tmp[..take]);
+                    cap.dropped += n - take;
                 }
-                // Past CAP: keep draining so the child does not block on a full pipe.
             }
             Err(_) => break,
         }
@@ -354,12 +395,24 @@ impl Supervised {
         (idle >= IDLE_TIMEOUT_MS).then_some(idle)
     }
 
+    /// True when at least one byte arrived on either stream and the most
+    /// recent one is no older than `window_ms`. `progress` alone cannot tell:
+    /// it starts at launch time, so a silent child looks "recent" early on.
+    fn output_within_ms(&self, window_ms: u64) -> bool {
+        let saw_output = [&self.out_sink, &self.err_sink].iter().any(|s| {
+            s.lock()
+                .map(|c| !c.bytes.is_empty() || c.dropped > 0)
+                .unwrap_or(false)
+        });
+        saw_output && now_ms().saturating_sub(self.progress.load(Ordering::Relaxed)) <= window_ms
+    }
+
     /// Child exited normally - but a grandchild may still hold the pipes open.
     /// Drain both streams with an idle/cap bound (a chatty grandchild keeps the
     /// shared progress stamp moving, which would defeat the idle cutoff, so the
     /// cap is the real backstop). Run the two joins concurrently so the whole
     /// drain is bounded by ONE cap window, not one per stream.
-    fn drain(self) -> (String, String) {
+    fn drain(self) -> Drained {
         let drain_progress = Arc::clone(&self.progress);
         let out_h = self.out_h;
         let out_drain = thread::spawn(move || {
@@ -367,11 +420,25 @@ impl Supervised {
         });
         join_drain_bounded(self.err_h, &self.progress, DRAIN_IDLE_MS, DRAIN_CAP_MS);
         let _ = out_drain.join();
-        (
-            String::from_utf8_lossy(&sink_snapshot(&self.out_sink)).into_owned(),
-            String::from_utf8_lossy(&sink_snapshot(&self.err_sink)).into_owned(),
-        )
+        let (stdout, stdout_dropped) = take_sink(&self.out_sink);
+        let (stderr, stderr_dropped) = take_sink(&self.err_sink);
+        Drained {
+            stdout,
+            stderr,
+            stdout_dropped,
+            stderr_dropped,
+        }
     }
+}
+
+/// What reached the sinks by the time the command ended, plus the bytes per
+/// stream that overflowed `CAPTURE_CAP` and were discarded.
+#[derive(Debug, Default)]
+struct Drained {
+    stdout: String,
+    stderr: String,
+    stdout_dropped: usize,
+    stderr_dropped: usize,
 }
 
 pub fn run_in_shell_with(
@@ -479,7 +546,12 @@ pub fn run_in_shell_with(
                     )));
                 }
                 if Instant::now() >= deadline {
-                    if handoff {
+                    // `background=true` is an explicit request to hand off, so
+                    // it does not wait for output; the plain timeout only hands
+                    // off a command that is visibly still working.
+                    let still_working =
+                        opts.background || sup.output_within_ms(HANDOFF_RECENT_OUTPUT_MS);
+                    if handoff && still_working {
                         return Ok(hand_off_to_bg(
                             sup,
                             command,
@@ -505,10 +577,8 @@ pub fn run_in_shell_with(
         }
     };
 
-    let (stdout, stderr) = sup.drain();
-    Ok(format_result(
-        &label, kind, status, &stdout, &stderr, max_output,
-    ))
+    let drained = sup.drain();
+    Ok(format_result(&label, kind, status, &drained, max_output))
 }
 
 /// Move a still-running command to the bg job registry. The returned text is
@@ -522,23 +592,15 @@ fn hand_off_to_bg(
     max_output: usize,
 ) -> String {
     let preview = {
-        let out = sink_snapshot(&sup.out_sink);
-        let err = sink_snapshot(&sup.err_sink);
         let mut p = String::new();
-        if !out.is_empty() {
-            p.push_str("stdout so far:\n");
-            p.push_str(&bound_output(
-                &String::from_utf8_lossy(&out),
-                HANDOFF_PREVIEW_BYTES,
-            ));
+        if let Some(out) = sink_preview(&sup.out_sink, HANDOFF_PREVIEW_BYTES) {
+            p.push_str("Stdout so far:\n");
+            p.push_str(out.trim_end_matches('\n'));
             p.push('\n');
         }
-        if !err.is_empty() {
-            p.push_str("stderr so far:\n");
-            p.push_str(&bound_output(
-                &String::from_utf8_lossy(&err),
-                HANDOFF_PREVIEW_BYTES / 2,
-            ));
+        if let Some(err) = sink_preview(&sup.err_sink, HANDOFF_PREVIEW_BYTES / 2) {
+            p.push_str("Stderr so far:\n");
+            p.push_str(err.trim_end_matches('\n'));
             p.push('\n');
         }
         if p.is_empty() {
@@ -588,8 +650,8 @@ fn hand_off_to_bg(
                 }
             }
         };
-        let (stdout, stderr) = sup.drain();
-        let text = format_result(&label_owned, kind, status, &stdout, &stderr, max_output);
+        let drained = sup.drain();
+        let text = format_result(&label_owned, kind, status, &drained, max_output);
         if status.success() {
             Ok(text)
         } else {
@@ -597,50 +659,67 @@ fn hand_off_to_bg(
         }
     });
     format!(
-        "shell: {label}\nstatus: still running after {waited_ms}ms - handed off to bg job #{id}\n\
+        "Command still running after {waited_ms}ms - handed off to bg job #{id}.\n\
          {preview}\
-         note: the command was NOT killed and is NOT a failure. Keep working on other steps; \
-         when you need the result call bg(action=result, id={id}) (or bg(action=status, id={id}) \
-         to peek). Do not re-run this command.\n"
+         Not killed, not a failure. Its result arrives on its own in a later \
+         turn: continue with independent work, or end the turn if nothing else \
+         is left. Do not poll it and do not re-run this command; \
+         bg(action=result, id={id}) only when you need it before then."
     )
 }
 
+/// Model-facing result. Plain stdout when that is all there is; `Stderr:`,
+/// `Exit code: N` and the shell name are added only when they carry
+/// information (stderr present, non-zero exit, a non-bash backend), so a
+/// routine call costs a handful of tokens of framing instead of a header.
 fn format_result(
     label: &str,
     kind: ShellKind,
     status: ExitStatus,
-    stdout: &str,
-    stderr: &str,
+    drained: &Drained,
     max_output: usize,
 ) -> String {
     let code = status.code().unwrap_or(-1);
-    let mut out = format!("shell: {label}\nexit_code: {code}\n");
-    if !stdout.is_empty() {
-        out.push_str("stdout:\n");
-        out.push_str(&bound_and_spill(stdout, max_output));
-        out.push('\n');
+    let mut parts: Vec<String> = Vec::new();
+    if kind != ShellKind::Bash {
+        parts.push(format!("Shell: {label}"));
     }
-    if !stderr.is_empty() {
-        out.push_str("stderr:\n");
-        out.push_str(&bound_and_spill(stderr, max_output / 2));
-        out.push('\n');
+    if !drained.stdout.is_empty() {
+        parts.push(bound_and_spill(&drained.stdout, max_output));
     }
-    if stdout.is_empty() && stderr.is_empty() {
-        out.push_str("(no output)\n");
+    if drained.stdout_dropped > 0 {
+        parts.push(dropped_note("stdout", drained.stdout_dropped));
+    }
+    if !drained.stderr.is_empty() {
+        parts.push(format!(
+            "Stderr:\n{}",
+            bound_and_spill(&drained.stderr, max_output / 2)
+        ));
+    }
+    if drained.stderr_dropped > 0 {
+        parts.push(dropped_note("stderr", drained.stderr_dropped));
     }
     if code != 0 {
-        out.push_str(
-            "note: non-zero exit - do NOT retry this identical command. \
-             Read stderr, then switch approach (dedicated tool or different flags).\n",
-        );
+        parts.push(format!("Exit code: {code}"));
     }
     if kind == ShellKind::Cmd {
-        out.push_str(
-            "note: shell is cmd.exe — use Windows syntax (dir, type, findstr). \
-             Install Git Bash or set NUR_SHELL for real bash.\n",
+        parts.push(
+            "note: shell is cmd.exe - use Windows syntax (dir, type, findstr). \
+             Install Git Bash or set NUR_SHELL for real bash."
+                .into(),
         );
     }
-    out
+    if drained.stdout.is_empty() && drained.stderr.is_empty() && code == 0 {
+        parts.push("(no output)".into());
+    }
+    parts.join("\n")
+}
+
+fn dropped_note(stream: &str, dropped: usize) -> String {
+    format!(
+        "[{stream}: {dropped} bytes past the {CAPTURE_CAP}-byte capture cap were discarded; \
+         the capture file is incomplete too]"
+    )
 }
 
 /// Head+tail bound, with the full text spilled to the shared tool-results
@@ -650,13 +729,12 @@ fn bound_and_spill(s: &str, max_bytes: usize) -> String {
     if s.len() <= max_bytes {
         return s.to_string();
     }
-    let mut text = bound_output(s, max_bytes);
-    if !crate::tools::sensitive::body_looks_sensitive(s) {
-        if let Ok(path) = crate::tools::spill::write_content_addressed_blob(s) {
-            text.push_str(&format!("\n[full output: {}]", path.display()));
-        }
-    }
-    text
+    let path = if crate::tools::sensitive::body_looks_sensitive(s) {
+        None
+    } else {
+        crate::tools::spill::write_content_addressed_blob(s).ok()
+    };
+    bound_output_marked(s, max_bytes, path.as_deref())
 }
 
 fn floor_char_boundary(s: &str, mut i: usize) -> usize {
@@ -676,20 +754,25 @@ fn ceil_char_boundary(s: &str, mut i: usize) -> usize {
 }
 
 /// Keep roughly 60% head and 40% tail of `s` within `max_bytes`, marking the
-/// cut. Pure: no disk access.
-pub fn bound_output(s: &str, max_bytes: usize) -> String {
+/// cut as `head...N bytes truncated; complete output in <path>...tail` (the
+/// path clause is dropped when nothing was spilled). Cuts land on char
+/// boundaries. Pure: no disk access.
+fn bound_output_marked(s: &str, max_bytes: usize, path: Option<&Path>) -> String {
     if s.len() <= max_bytes {
         return s.to_string();
     }
     let head_len = floor_char_boundary(s, max_bytes * 3 / 5);
     let tail_start = ceil_char_boundary(s, s.len() - (max_bytes - head_len));
     let omitted = tail_start.saturating_sub(head_len);
-    format!(
-        "{}\n… [{omitted} of {} bytes omitted here - head and tail kept] …\n{}",
-        &s[..head_len],
-        s.len(),
-        &s[tail_start..]
-    )
+    let mut out = String::with_capacity(max_bytes + 96);
+    out.push_str(&s[..head_len]);
+    out.push_str(&format!("...{omitted} bytes truncated"));
+    if let Some(p) = path {
+        out.push_str(&format!("; complete output in {}", p.display()));
+    }
+    out.push_str("...");
+    out.push_str(&s[tail_start..]);
+    out
 }
 
 #[cfg(test)]
@@ -708,12 +791,83 @@ mod tests {
     #[test]
     fn bound_output_keeps_head_and_tail_on_char_boundaries() {
         let body = format!("{}HEAD{}TAIL", "é".repeat(500), "ü".repeat(500));
-        let out = bound_output(&body, 600);
+        let out = bound_output_marked(&body, 600, None);
         assert!(out.starts_with("éé"));
         assert!(out.ends_with("üTAIL"), "{out}");
-        assert!(out.contains("bytes omitted here"));
+        assert!(out.contains("...1408 bytes truncated..."), "{out}");
         assert!(out.len() < body.len());
-        assert_eq!(bound_output("short", 600), "short");
+        assert_eq!(bound_output_marked("short", 600, None), "short");
+        let marked = bound_output_marked(&body, 600, Some(Path::new("/cap/out")));
+        assert!(
+            marked.contains("...1408 bytes truncated; complete output in /cap/out..."),
+            "{marked}"
+        );
+    }
+
+    fn exit(code: i32) -> ExitStatus {
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::ExitStatusExt;
+            ExitStatus::from_raw(code as u32)
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            ExitStatus::from_raw(code << 8)
+        }
+    }
+
+    fn drained(stdout: &str, stderr: &str) -> Drained {
+        Drained {
+            stdout: stdout.into(),
+            stderr: stderr.into(),
+            ..Drained::default()
+        }
+    }
+
+    // Failure modes: a header the model pays for on every call, a lost exit
+    // code, stderr folded into stdout, or an empty result with no marker.
+    #[test]
+    fn format_result_adds_framing_only_when_it_carries_information() {
+        let f = |d: &Drained, code: i32| {
+            format_result("git-bash", ShellKind::Bash, exit(code), d, 1_000)
+        };
+        assert_eq!(f(&drained("ok\n", ""), 0), "ok\n");
+        assert_eq!(f(&drained("", ""), 0), "(no output)");
+        assert_eq!(f(&drained("", ""), 1), "Exit code: 1");
+        assert_eq!(f(&drained("", "warning\n"), 0), "Stderr:\nwarning\n");
+        assert_eq!(
+            f(&drained("out\n", "err\n"), 7),
+            "out\n\nStderr:\nerr\n\nExit code: 7"
+        );
+        let pwsh = format_result("pwsh", ShellKind::Pwsh, exit(0), &drained("hi", ""), 1_000);
+        assert_eq!(pwsh, "Shell: pwsh\nhi");
+    }
+
+    // Failure mode: bytes past the capture cap vanish while the result still
+    // reads like a complete capture.
+    #[test]
+    fn format_result_states_discarded_bytes() {
+        let d = Drained {
+            stdout: "kept".into(),
+            stdout_dropped: 1_234,
+            ..Drained::default()
+        };
+        let out = format_result("git-bash", ShellKind::Bash, exit(0), &d, 1_000);
+        assert!(out.starts_with("kept\n[stdout: 1234 bytes past"), "{out}");
+        assert!(out.contains("capture file is incomplete"), "{out}");
+    }
+
+    // Failure modes: the cap accounting miscounts, or the sink keeps growing.
+    #[test]
+    fn read_all_counts_bytes_past_the_cap_instead_of_keeping_them() {
+        let sink: Sink = Arc::default();
+        let total = CAPTURE_CAP + 10_000;
+        let data = std::io::repeat(b'z').take(total as u64);
+        read_all(Some(data), Arc::clone(&sink), Arc::new(AtomicU64::new(0)));
+        let (text, dropped) = take_sink(&sink);
+        assert_eq!(text.len(), CAPTURE_CAP);
+        assert_eq!(dropped, 10_000);
     }
 
     /// A command that keeps producing output past the budget is handed to a bg
@@ -782,8 +936,37 @@ mod tests {
         }
         assert_eq!(state, Some(crate::bg_jobs::JobState::Completed));
         let result = crate::bg_jobs::result(id).unwrap();
-        assert!(result.contains("exit_code: 0"), "{result}");
+        assert!(!result.contains("Exit code:"), "{result}");
         assert!(result.contains("second"), "{result}");
+    }
+
+    /// A command that has printed nothing by its deadline is killed with the
+    /// timeout error, not parked in bg (where it would only hit the idle kill).
+    #[test]
+    fn silent_command_at_deadline_is_killed_not_handed_off() {
+        let backend = shell_backend().clone();
+        let cmd = if backend.kind == ShellKind::Bash {
+            "sleep 20"
+        } else if backend.kind == ShellKind::Cmd {
+            "ping -n 21 127.0.0.1 >nul"
+        } else {
+            "Start-Sleep -Seconds 20"
+        };
+        let opts = ShellOptions {
+            timeout_ms: 2_000,
+            handoff_on_timeout: true,
+            ..ShellOptions::default()
+        };
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let started = Instant::now();
+        let err = run_in_shell_with(&backend, cmd, Path::new("."), &opts, &cancel)
+            .expect_err("silent command must time out");
+        assert!(err.to_string().contains("timed out after 2000ms"), "{err}");
+        assert!(
+            started.elapsed() < Duration::from_secs(15),
+            "{:?}",
+            started.elapsed()
+        );
     }
 
     /// Regression: after the child exits, a grandchild holding the inherited

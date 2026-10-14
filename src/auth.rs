@@ -548,8 +548,11 @@ pub fn load_auth() -> Result<Option<Auth>> {
 /// Return OAuth request metadata when `access_token` belongs to a stored OAuth
 /// session for `provider_id`. API keys deliberately return `None`.
 pub fn oauth_request_context(provider_id: &str, access_token: &str) -> Option<OAuthRequestContext> {
-    // Cursor CLI session sentinel is not a Bearer token for HTTP headers.
-    if crate::api::cursor_cli::is_cli_session_token(access_token) {
+    // CLI session sentinels (Cursor, Factory Droid) are not Bearer tokens for
+    // HTTP headers; those providers are driven through their own CLI.
+    if crate::api::cursor_cli::is_cli_session_token(access_token)
+        || crate::api::droid_cli::is_cli_session_token(access_token)
+    {
         return None;
     }
     // The google family (google / antigravity / google-oauth) shares one login;
@@ -1008,6 +1011,38 @@ pub fn load_provider_key(provider_id: &str) -> Option<String> {
     None
 }
 
+/// Every provider id `load_provider_key` would answer for, from both stores
+/// read once. A caller checking many ids (the Jev slot panel) uses this
+/// instead of one `load_provider_key` per id; it never carries the keys.
+pub fn saved_key_ids() -> std::collections::BTreeSet<String> {
+    saved_key_ids_in(
+        &read_keys_at(&crate::config::provider_keys_path()),
+        &read_sessions_at(&crate::config::provider_sessions_path()),
+    )
+}
+
+/// The ids with a non-empty saved key in `keys`, plus the API keys older
+/// builds persisted in the session store (the same entries
+/// `load_provider_key` falls back to).
+pub(crate) fn saved_key_ids_in(
+    keys: &BTreeMap<String, String>,
+    sessions: &BTreeMap<String, Auth>,
+) -> std::collections::BTreeSet<String> {
+    keys.iter()
+        .filter(|(_, key)| !key.trim().is_empty())
+        .map(|(id, _)| id.clone())
+        .chain(
+            sessions
+                .iter()
+                .filter(|(_, auth)| {
+                    matches!(auth.auth_method, AuthMethod::ApiKey)
+                        && !auth.api_key.trim().is_empty()
+                })
+                .map(|(id, _)| id.clone()),
+        )
+        .collect()
+}
+
 /// Save a per-provider failover key (validated like a normal API key).
 pub fn save_provider_key(provider_id: &str, key: &str) -> Result<()> {
     ensure_dirs()?;
@@ -1321,28 +1356,76 @@ pub fn choose_provider_oauth(
 }
 
 fn remove_provider_keys(provider: &str) -> Result<()> {
-    forget_provider_key(provider).map(|_| ())
+    // Caller holds the OAuth guard; always take locks in OAuth -> API-key order.
+    let _guard = key_store_guard();
+    forget_saved_key_at(
+        &crate::config::provider_keys_path(),
+        &crate::config::provider_sessions_path(),
+        provider,
+    )
+    .map(|_| ())
 }
 
-/// Remove only the saved API key for a slot (sessions, the active login and
-/// the T3 policy stay untouched). Returns whether an entry was removed. This
-/// is the right call for credential slots that are not chat providers, such as
-/// the Jev engine slots, where `delete_provider_credentials` would also record
-/// a meaningless T3 block.
+/// Remove only the saved API key for a slot (OAuth sessions, the active login
+/// and the T3 policy stay untouched). Returns whether an entry was removed.
+/// This is the right call for credential slots that are not chat providers,
+/// such as the Jev engine slots, where `delete_provider_credentials` would
+/// also record a meaningless T3 block.
 pub fn forget_provider_key(provider: &str) -> Result<bool> {
-    let _guard = key_store_guard();
-    let path = crate::config::provider_keys_path();
-    let mut keys = read_keys_at(&path);
+    let _oauth = oauth_store_guard()?;
+    let _keys = key_store_guard();
+    forget_saved_key_at(
+        &crate::config::provider_keys_path(),
+        &crate::config::provider_sessions_path(),
+        provider,
+    )
+}
+
+/// Clear every copy of a saved API key that `load_provider_key` reads: the
+/// key map, and the API-key entries older builds persisted in the session
+/// store. Leaving the latter made "removed" a lie - the panel kept showing a
+/// saved key that Delete reported nothing to remove for. OAuth sessions are
+/// not keys and stay.
+fn forget_saved_key_at(keys_path: &Path, sessions_path: &Path, provider: &str) -> Result<bool> {
+    let ids = credential_family_ids(provider.trim());
+    // Never turn a parse error into an empty map and overwrite the user's
+    // remaining credentials while trying to remove one entry.
+    for path in [keys_path, sessions_path] {
+        if path.exists() {
+            let text = fs::read_to_string(path)?;
+            serde_json::from_str::<serde_json::Value>(&text).map_err(|error| {
+                NurError::Other(format!(
+                    "refusing to edit malformed credential store {}: {error}",
+                    path.display()
+                ))
+            })?;
+        }
+    }
+    let mut keys = read_keys_at(keys_path);
     let mut changed = false;
-    for family_id in credential_family_ids(provider) {
-        changed |= keys.remove(family_id).is_some();
+    for id in &ids {
+        changed |= keys.remove(*id).is_some();
     }
     if changed {
         let text = serde_json::to_string_pretty(&keys)?;
-        private_atomic_write(&path, text.as_bytes())
+        private_atomic_write(keys_path, text.as_bytes())
             .map_err(|error| NurError::Other(format!("failed to save provider keys: {error}")))?;
     }
-    Ok(changed)
+    let mut sessions = read_sessions_at(sessions_path);
+    let mut session_changed = false;
+    for id in &ids {
+        if sessions
+            .get(*id)
+            .is_some_and(|auth| matches!(auth.auth_method, AuthMethod::ApiKey))
+        {
+            sessions.remove(*id);
+            session_changed = true;
+        }
+    }
+    if session_changed {
+        write_sessions_at(sessions_path, &sessions)?;
+    }
+    Ok(changed || session_changed)
 }
 
 /// Best-effort: patch `project_id` / `tier_id` into existing google-family OAuth
@@ -1505,7 +1588,13 @@ pub fn provider_credential_summaries() -> BTreeMap<String, String> {
         // engine) and the generic per-provider sources would hide that.
         if provider.id == crate::providers::TYPESAFE_PROVIDER.id {
             let summary = crate::config::load_config()
-                .map(|cfg| crate::typesafe::residence::summary(&cfg.typesafe))
+                .map(|cfg| {
+                    let probe = crate::typesafe::residence::Probe::read_with_store(
+                        &cfg.typesafe,
+                        saved_key_ids_in(&keys, &sessions),
+                    );
+                    crate::typesafe::residence::summary(&cfg.typesafe, &probe)
+                })
                 .unwrap_or_else(|error| format!("config unreadable: {error}"));
             out.insert(provider.id.to_string(), summary);
             continue;
@@ -2649,6 +2738,65 @@ mod tests {
         assert!(!forget_provider_at(&keys, &sessions, "groq"));
         assert!(!forget_provider_at(&keys, &sessions, "   "));
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A key that only lives in the session store (older builds persisted OMP
+    /// API keys there) is still what `load_provider_key` answers with, so
+    /// forgetting the key must clear it too - while an OAuth session for the
+    /// same provider is not a key and must survive.
+    #[test]
+    fn forgetting_a_saved_key_clears_the_session_store_copy_but_keeps_oauth() {
+        let dir = std::env::temp_dir().join(format!("nur_forget_key_{}", now_unix()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let keys = dir.join("provider_keys.json");
+        let sessions = dir.join("provider_sessions.json");
+        save_key_at(&keys, "jev:subq-snap", "subq-key-value").unwrap();
+        let mut map = BTreeMap::new();
+        map.insert(
+            "openrouter".to_string(),
+            Auth {
+                api_key: "sk-or-legacy-session-key".into(),
+                source: "api_key".into(),
+                auth_method: AuthMethod::ApiKey,
+                provider: "openrouter".into(),
+                refresh_token: None,
+                expires_at: None,
+                oauth_meta: None,
+            },
+        );
+        map.insert(
+            "anthropic".to_string(),
+            oauth_auth("anthropic", "anthropic-oauth-token", None, None, None).unwrap(),
+        );
+        write_sessions_at(&sessions, &map).unwrap();
+
+        let ids = saved_key_ids_in(&read_keys_at(&keys), &read_sessions_at(&sessions));
+        assert!(
+            ids.contains("openrouter"),
+            "session-store keys count as saved"
+        );
+        assert!(ids.contains("jev:subq-snap"));
+        assert!(
+            !ids.contains("anthropic"),
+            "an OAuth session is not a saved key"
+        );
+
+        assert!(forget_saved_key_at(&keys, &sessions, "openrouter").unwrap());
+        assert!(!read_sessions_at(&sessions).contains_key("openrouter"));
+        assert!(
+            read_sessions_at(&sessions).contains_key("anthropic"),
+            "forgetting a key must not sign another provider out"
+        );
+        assert!(
+            !forget_saved_key_at(&keys, &sessions, "openrouter").unwrap(),
+            "a second removal has nothing left to report"
+        );
+        assert!(!forget_saved_key_at(&keys, &sessions, "anthropic").unwrap());
+        assert!(read_sessions_at(&sessions).contains_key("anthropic"));
+
+        assert!(forget_saved_key_at(&keys, &sessions, "jev:subq-snap").unwrap());
+        assert!(!read_keys_at(&keys).contains_key("jev:subq-snap"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

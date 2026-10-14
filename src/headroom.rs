@@ -452,7 +452,13 @@ pub fn prepare_tool_body(
     } else {
         body
     };
-    let out = crate::tools::spill::maybe_spill(session_id, tool, body, spill_max_chars);
+    // bash already bounded its result to the budget the model asked for;
+    // a second spill here would replace that with a short preview.
+    let out = if crate::tools::spill::tool_bounds_own_output(tool) {
+        body
+    } else {
+        crate::tools::spill::maybe_spill(session_id, tool, body, spill_max_chars)
+    };
     if prefix.is_empty() {
         out
     } else {

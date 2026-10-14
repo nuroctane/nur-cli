@@ -40,6 +40,7 @@ regression checks, and remaining vendor-specific limitations.
 | **Antigravity** | `GEMINI_API_KEY` (fallback) | Google Cloud ADC / Antigravity CLI session (`gcloud auth login --update-adc`) |
 | **GitHub Copilot** | `COPILOT_GITHUB_TOKEN` (fine-grained PAT with Copilot Requests) | `gh auth login` (subscription token) |
 | **Cursor** | `CURSOR_API_KEY` (optional) | `cursor-agent login` → nur chat via Agent CLI (no key required) |
+| **Factory Droid** | `FACTORY_API_KEY` (optional) | `droid` sign-in → nur chat via `droid exec` (no key required; `NUR_DROID_BIN` points at a launcher outside `PATH`) |
 | **OpenCode** | `OPENCODE_API_KEY` | `opencode auth login` (imports `~/.local/share/opencode/auth.json` → `opencode` / `opencode-go`) |
 | **Cline** | `CLINE_API_KEY` (app.cline.bot → Settings → API Keys) | `cline auth cline` (imports `~/.cline/data/settings/providers.json`; nur also refreshes the account token itself) |
 | **DeepSeek** | `DEEPSEEK_API_KEY` | DeepSeek Harness (`$DSH_HOME/.credentials.yaml`); no official OAuth |
@@ -171,6 +172,21 @@ lands as normal transcript text after the fence is stripped.
 **Native Agent (optional):** set `NUR_CURSOR_NATIVE=1` to use Cursor's own tools
 with `--force` instead (t3code-style full delegate; nur's tool loop is skipped).
 
+#### Factory Droid details (CLI, no pasted key)
+
+Factory's chat is driven through `droid exec --output-format json`, so the sign-in
+that counts is the CLI's own. Run `droid` once and complete the browser login; nur
+then detects the sealed `~/.factory/auth.v2.keyring` (or `FACTORY_HOME`) and
+`/login` → Factory Droid → browser stores a `factory-cli-session` marker. The
+keyring itself is never read or copied - the CLI keeps its secret - and a pasted
+`fk-…` key remains the fallback (`FACTORY_API_KEY`).
+
+A missing launcher is reported separately from a missing sign-in. Nur probes
+`~/.factory/bin`, `~/.local/bin`, `~/bin`, `%LOCALAPPDATA%\Programs\factory`,
+`/usr/local/bin`, `/opt/factory/bin` and `PATH`; `NUR_DROID_BIN` names the binary
+when it lives elsewhere. Esc cancel and timeouts terminate the whole `droid`
+process tree, not just the shim.
+
 In `/login`, pick the provider → **Sign in with browser**, or **Use existing CLI
 session** when a local first-party login is detected. API keys remain available as a
 fallback for every one of them.
@@ -191,7 +207,7 @@ Credential resolution order for a catalog provider:
 2. **Already saved in nur** - a matching active `/login` session (`auth.json`),
    then per-provider keys/sessions (`provider_keys.json` / `provider_sessions.json`),
    followed by the global `NUR_API_KEY` fallback.
-3. **Vendor CLI session** (Claude Code, Codex, Grok, Kimi, Cursor, OpenCode,
+3. **Vendor CLI session** (Claude Code, Codex, Grok, Kimi, Cursor, Factory Droid, OpenCode,
    Antigravity / gcloud, Muse Code, DeepSeek Harness, ZCode, Nous Portal / Hermes
    Agent, Command Code, Cline, Qwen Code settings, MiniMax CLI, Hugging Face
    token) when that provider has a first-party importer.

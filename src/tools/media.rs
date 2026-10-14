@@ -208,7 +208,18 @@ fn sniff_mime(bytes: &[u8]) -> Option<(&'static str, MediaKind)> {
         return Some(("image/x-icon", MediaKind::Image));
     }
     if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" {
-        return Some(("video/mp4", MediaKind::Video));
+        // `ftyp` is shared by every ISO-BMFF container; the major brand tells
+        // MP4/M4V apart from QuickTime (`qt  `) and HEIF (`heic`, `mif1`),
+        // which the API would reject as video/mp4.
+        let brand = &bytes[8..12];
+        return match brand {
+            b"isom" | b"iso2" | b"iso4" | b"iso5" | b"iso6" | b"mp41" | b"mp42" | b"M4V "
+            | b"M4A " | b"avc1" | b"dash" | b"MSNV" | b"NDSC" | b"NDSH" | b"NDSM" | b"NDSP"
+            | b"NDSS" | b"NDXC" | b"NDXH" | b"NDXM" | b"NDXP" | b"NDXS" => {
+                Some(("video/mp4", MediaKind::Video))
+            }
+            _ => None,
+        };
     }
     None
 }
@@ -839,6 +850,9 @@ mod tests {
             Some(("video/mp4", MediaKind::Video))
         );
         assert_eq!(sniff_mime(b"hello, not an image"), None);
+        // QuickTime and HEIF share the ftyp box but are not attachable mp4.
+        assert_eq!(sniff_mime(b"\x00\x00\x00\x14ftypqt  "), None);
+        assert_eq!(sniff_mime(b"\x00\x00\x00\x18ftypheic"), None);
         let dir = std::env::temp_dir().join(format!("nur-media-sniff-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let fake = dir.join("fake.png");

@@ -71,6 +71,7 @@ pub fn login_browser(provider_id: &str, tx: ProgressTx, cancel: CancelFlag) {
         "azure" => azure::login(&tx, &cancel),
         "github-models" | "github-copilot" => github::login(provider_id, &tx, &cancel),
         "cursor" => cursor::login(&tx, &cancel),
+        "factory" => factory::login(&tx, &cancel),
         "opencode" => opencode::login(&tx, &cancel),
         "nous" => nous::login(&tx, &cancel),
         "commandcode" => commandcode::login(&tx, &cancel),
@@ -160,6 +161,7 @@ pub fn import_existing_session(provider_id: &str) -> Result<Option<OAuthTokens>>
         "anthropic" => claude::import_claude_cli(),
         "huggingface" => Ok(huggingface::import_hf_token()),
         "cursor" => cursor::import_cursor_cli(),
+        "factory" => factory::import_factory_cli(),
         "opencode" => opencode::import_opencode_cli(),
         "nous" => nous::import_hermes_cli(),
         "commandcode" => commandcode::import_commandcode_cli(),
@@ -520,6 +522,91 @@ pub mod cursor {
             let bare = serde_json::json!({"token": "crsr_bare_token_value_1"});
             assert_eq!(token_from_json(&bare), None);
         }
+    }
+}
+
+/// Factory Droid. The CLI owns the browser sign-in and seals the tokens in
+/// `~/.factory/auth.v2.keyring` with a secret only it can unseal, so nur
+/// records that the session exists rather than copying a credential it cannot
+/// read: `droid exec` then runs under the user's own OAuth identity.
+pub mod factory {
+    use super::*;
+
+    /// `FACTORY_API_KEY`, then a legacy plaintext `auth.json`, then the CLI's
+    /// sealed keyring.
+    pub fn import_factory_cli() -> Result<Option<OAuthTokens>> {
+        if let Ok(key) = std::env::var("FACTORY_API_KEY") {
+            let key = key.trim().to_string();
+            if !key.is_empty() {
+                return Ok(Some(key_tokens(key, "FACTORY_API_KEY")));
+            }
+        }
+        if let Some(home) = crate::api::droid_cli::factory_home() {
+            let path = home.join("auth.json");
+            if let Some(key) = std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                .and_then(|v| {
+                    ["api_key", "apiKey", "access_token", "accessToken"]
+                        .iter()
+                        .find_map(|k| v.get(*k).and_then(|x| x.as_str()).map(str::to_string))
+                })
+                .filter(|k| k.trim().len() >= 20)
+            {
+                return Ok(Some(key_tokens(key.trim().to_string(), "factory-cli")));
+            }
+        }
+        Ok(crate::api::droid_cli::session_tokens_from_cli())
+    }
+
+    fn key_tokens(access: String, via: &str) -> OAuthTokens {
+        OAuthTokens {
+            access_token: access,
+            // Marker so a refresh re-reads the env / CLI instead of rotating.
+            refresh_token: Some("droid".into()),
+            expires_at: None,
+            meta: Some(OauthMeta {
+                issuer: "factory".into(),
+                client_id: "droid".into(),
+                extra: serde_json::json!({
+                    "credential_kind": "api_key",
+                    "imported_from": via,
+                }),
+            }),
+        }
+    }
+
+    pub fn refresh(_auth: &Auth, _refresh: &str) -> Result<OAuthTokens> {
+        import_factory_cli()?.ok_or_else(|| {
+            NurError::Other(
+                "Factory session missing. Run `droid` and sign in again, or set FACTORY_API_KEY."
+                    .into(),
+            )
+        })
+    }
+
+    /// `droid` has no headless login verb - its sign-in lives in the
+    /// interactive TUI - so importing the finished session is the whole flow.
+    pub fn login(tx: &ProgressTx, _cancel: &CancelFlag) -> Result<OAuthTokens> {
+        if let Ok(Some(tokens)) = import_factory_cli() {
+            send(
+                tx,
+                BrowserLoginProgress::Status("using the existing droid sign-in".into()),
+            );
+            return Ok(tokens);
+        }
+        Err(NurError::Other(
+            if crate::api::droid_cli::resolve_bin().is_some() {
+                "droid is installed but not signed in. Run `droid` in a terminal, finish the \
+                 browser sign-in, then retry /login - nur imports the session."
+                    .into()
+            } else {
+                "droid not found. Install Factory's CLI (`curl -fsSL https://app.factory.ai/cli | sh` \
+                 or `npm i -g @factory/cli`), run `droid` once to sign in, then retry /login - or \
+                 paste a FACTORY_API_KEY."
+                    .to_string()
+            },
+        ))
     }
 }
 

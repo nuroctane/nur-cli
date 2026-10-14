@@ -29,7 +29,7 @@ All of the above are **first-class** in the tool schema every turn (nothing is h
 
 ### Tool results and context
 
-- Results larger than `tool_result_max_chars` (default **12000**) are written under `~/.nur/tool-results/` and the model gets a short preview + path (use `read_file` for more).
+- Results larger than `tool_result_max_chars` (default **12000**) are written under `~/.nur/tool-results/` and the model gets head + tail around a `...N bytes truncated; complete output in <path>...` marker (use `read_file` for the middle). `bash` bounds its own output once (see below) and is not re-spilled, so a result is never previewed twice.
 - Set `tool_result_max_chars = 0` for unlimited inline results (legacy behaviour).
 
 ---
@@ -83,9 +83,10 @@ Apply a unified diff patch to a file.
 Execute shell commands in the workspace cwd (cwd-scoped, not a full OS sandbox). Hardened with:
 
 - **Denylist** — blocks dangerous commands (e.g. `rm -rf /`, fork bombs) and hang-prone patterns (dev servers, `watch`, interactive prompts)
-- **Timeout with handoff** — default **60s**, hard max **180s**. A command that is still producing output at the deadline is **not killed**: it moves to a `bg` job and the model gets a "still running" placeholder with the job id and the output so far, so the turn carries on and the result is fetched later with `bg(action=result, id=N)`. `background=true` hands off almost at once (long builds, test suites). Handed-off jobs still end after 30 minutes. `shell_timeout_handoff = false` in `config.toml` restores kill-on-timeout.
+- **Timeout with handoff** — default **60s**, hard max **180s**. A command that has produced output in the last 15 s at the deadline is **not killed**: it moves to a `bg` job and the model gets a "still running" placeholder with the job id and the output so far, so the turn carries on and the result arrives as a completion note in a later turn (or on demand via `bg(action=result, id=N)`). A command that has been silent is killed and reported as timed out. `background=true` hands off almost at once (long builds, test suites). Handed-off jobs still end after 30 minutes. `shell_timeout_handoff = false` in `config.toml` restores kill-on-timeout.
 - **Idle kill** — no output for ~90s after a grace period kills the process tree (a prompt waiting on stdin never finishes on its own)
-- **Bounded output** — stdout keeps `max_output_length` bytes (default 80000, stderr half) as **head + tail** with the full text spilled under `~/.nur/tool-results/`
+- **Lean result** — the model receives the stdout alone; `Stderr:` and `Exit code: N` sections are added only when non-empty / non-zero, `(no output)` when nothing was printed. No per-call header, so a typical result costs a few tokens.
+- **Bounded output** — stdout keeps `max_output_length` bytes (default `min(80000, tool_result_max_chars)`, max 400000) as **head + tail** around a `...N bytes truncated; complete output in <path>...` marker, with the full text under `~/.nur/tool-results/`. Output past a 2 MB capture cap is discarded and the result says so.
 - **Failure lockout** — identical timed-out/hung commands in the same cwd are refused for 15 minutes (a bg handoff does not count)
 - **Non-interactive env** — `CI=1`, `GIT_TERMINAL_PROMPT=0`, stdin null
 

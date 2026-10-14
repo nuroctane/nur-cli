@@ -63,7 +63,7 @@ repair or upgrade ecosystem components.
 **All green:**
 
 ```text
-nur doctor · v0.45.2
+nur doctor · v0.46.0
 
 binary  C:\Users\you\.local\bin\nur.exe
 config  model=muse-spark-1.3 effort=high max_turns=∞ budget=∞$/∞tok  (C:\Users\you\.nur\config.toml)
@@ -152,6 +152,24 @@ nur auth login
 export NUR_API_KEY="your-key-here"
 # Meta Model API accepts META_API_KEY
 ```
+
+### `droid not found` with the Factory provider
+
+Factory chat runs through the `droid` CLI, so a `FACTORY_API_KEY` alone is not
+enough: the launcher has to be on disk. Nur probes `~/.factory/bin`,
+`~/.local/bin`, `~/bin`, `%LOCALAPPDATA%\Programs\factory`, `/usr/local/bin`,
+`/opt/factory/bin` and `PATH`.
+
+**Fix:** install it (`curl -fsSL https://app.factory.ai/cli | sh` or
+`npm i -g @factory/cli`) and sign in once with `droid`. If it lives somewhere
+else, point nur at it:
+
+```bash
+export NUR_DROID_BIN=/path/to/droid
+```
+
+The message says "signed in, launcher missing" when a Factory session exists but
+the binary could not be found, so you know which half to fix.
 
 ### Missing session in `/sessions`
 

@@ -60,7 +60,7 @@ impl Tool for Bash {
                 "max_output_length": {
                     "type": "integer",
                     "description": format!(
-                        "Max bytes of stdout kept inline (default {DEFAULT_MAX_OUTPUT_BYTES}, max {MAX_MAX_OUTPUT_BYTES}); stderr gets half. Head and tail are kept, the full text is spilled."
+                        "Max bytes of stdout kept inline (default {DEFAULT_MAX_OUTPUT_BYTES} or the configured tool_result_max_chars if lower, max {MAX_MAX_OUTPUT_BYTES}); stderr gets half. Head and tail are kept, the full text is spilled."
                     )
                 }
             },
@@ -84,10 +84,15 @@ impl Tool for Bash {
             .get("background")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let max_output_bytes = arg_u64(args, "max_output_length")
-            .map(|n| clamp_max_output_bytes(n as usize))
-            .unwrap_or(DEFAULT_MAX_OUTPUT_BYTES);
-        let handoff_on_timeout = crate::config::load_config()
+        let config = crate::config::load_config().ok();
+        let max_output_bytes = match arg_u64(args, "max_output_length") {
+            Some(n) => clamp_max_output_bytes(n as usize),
+            None => {
+                default_max_output_bytes(config.as_ref().map(|c| c.tool_result_max_chars as usize))
+            }
+        };
+        let handoff_on_timeout = config
+            .as_ref()
             .map(|c| c.shell_timeout_handoff)
             .unwrap_or(true);
         let opts = ShellOptions {
@@ -123,6 +128,17 @@ impl Tool for Bash {
                 Err(e)
             }
         }
+    }
+}
+
+/// Inline budget when the model does not ask for one. The shell result is the
+/// only bounding a bash result gets (the generic tool-result spill skips it),
+/// so the default must honor the user's `tool_result_max_chars` cap; an
+/// explicit `max_output_length` is the model's own choice and is honored.
+fn default_max_output_bytes(inline_cap: Option<usize>) -> usize {
+    match inline_cap {
+        Some(cap) if cap > 0 => clamp_max_output_bytes(cap.min(DEFAULT_MAX_OUTPUT_BYTES)),
+        _ => DEFAULT_MAX_OUTPUT_BYTES,
     }
 }
 

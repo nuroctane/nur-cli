@@ -1,6 +1,6 @@
 use super::search_util::{
-    fallback_file_filter, is_hard_excluded, rg_grep, walk_builder, GrepOptions, RgOutcome,
-    SEARCH_BUDGET,
+    clip_line, display_path, fallback_file_filter, normalize_user_glob, rg_grep, walk_builder,
+    GrepOptions, RgOutcome, MAX_FILE_BYTES, SEARCH_BUDGET,
 };
 use super::{arg_str, arg_u64, resolve_path, Tool, ToolContext};
 use crate::error::{NurError, Result};
@@ -37,7 +37,7 @@ impl Tool for Grep {
                 "path": {"type": "string", "description": "Directory or file to search (default cwd)"},
                 "case_insensitive": {"type": "boolean", "default": false},
                 "fixed_strings": {"type": "boolean", "default": false, "description": "Match the pattern literally (for code with ( ) [ ] . * etc.)"},
-                "glob": {"type": "string", "description": "Only files matching this glob, e.g. *.rs, src/**/*.ts, !*.test.js"},
+                "glob": {"type": "string", "description": "Only files matching this glob, relative to path, e.g. *.rs, src/**/*.ts, !*.test.js"},
                 "type": {"type": "string", "description": "ripgrep file type: rust, py, js, ts, go, md, json, …"},
                 "context": {"type": "integer", "default": 0, "description": format!("Lines of context before and after each match (max {MAX_CONTEXT})")},
                 "multiline": {"type": "boolean", "default": false, "description": "Let the pattern span lines (ripgrep only)"},
@@ -61,7 +61,7 @@ impl Tool for Grep {
         let opts = GrepOptions {
             case_insensitive: flag("case_insensitive"),
             fixed_strings: flag("fixed_strings"),
-            glob: opt_str("glob"),
+            glob: opt_str("glob").map(|g| normalize_user_glob(&g)),
             file_type: opt_str("type"),
             context: (arg_u64(args, "context").unwrap_or(0) as usize).min(MAX_CONTEXT),
             multiline: flag("multiline"),
@@ -73,12 +73,17 @@ impl Tool for Grep {
         let root = resolve_path(&ctx.cwd, path)?;
 
         // Fast path: system ripgrep (what Claude Code / Cursor / Codex rely on).
-        match rg_grep(&ctx.cwd, &pattern, &root, &opts) {
-            RgOutcome::Hits { text, truncated } => {
+        match rg_grep(ctx, &pattern, &root, &opts) {
+            RgOutcome::Hits {
+                text,
+                truncated,
+                note,
+            } => {
+                let notes: Vec<String> = note.into_iter().collect();
                 if text.is_empty() {
-                    return Ok("no matches".into());
+                    return Ok(finish("no matches".into(), false, 0, Some(notes)));
                 }
-                return Ok(finish(text, truncated, opts.max_matches, None));
+                return Ok(finish(text, truncated, opts.max_matches, Some(notes)));
             }
             RgOutcome::Error(msg) => {
                 return Err(NurError::Tool(format!("grep: {msg}")));
@@ -100,6 +105,7 @@ impl Tool for Grep {
 
         let start = Instant::now();
         let mut matches = Vec::new();
+        let mut count = 0usize;
         let mut truncated = false;
         let mut notes: Vec<String> = Vec::new();
         if opts.multiline {
@@ -107,13 +113,26 @@ impl Tool for Grep {
         }
 
         if root.is_file() {
-            truncated = search_file(&root, &re, opts.context, &mut matches, opts.max_matches);
+            let shown = display_path(&ctx.cwd, &root);
+            truncated = search_file(
+                &root,
+                &shown,
+                &re,
+                opts.context,
+                &mut matches,
+                &mut count,
+                opts.max_matches,
+            );
         } else {
-            let mut b = walk_builder(&root);
+            let mut b = walk_builder(&root, Some(MAX_FILE_BYTES));
             if let Some(ov) = filter {
                 b.overrides(ov);
             }
             for entry in b.build().flatten() {
+                if ctx.cancel.is_cancelled() {
+                    notes.push("search cancelled".into());
+                    break;
+                }
                 if start.elapsed() > SEARCH_BUDGET {
                     notes.push(format!(
                         "search stopped after {}ms budget - narrow path or install ripgrep",
@@ -124,20 +143,25 @@ impl Tool for Grep {
                 if truncated {
                     break;
                 }
-                let p = entry.path();
-                if !p.is_file() || is_hard_excluded(p) {
+                if !entry.file_type().is_some_and(|t| t.is_file()) {
                     continue;
                 }
-                truncated |= search_file(p, &re, opts.context, &mut matches, opts.max_matches);
+                let p = entry.path();
+                let shown = display_path(&ctx.cwd, p);
+                truncated |= search_file(
+                    p,
+                    &shown,
+                    &re,
+                    opts.context,
+                    &mut matches,
+                    &mut count,
+                    opts.max_matches,
+                );
             }
         }
 
         if matches.is_empty() {
-            let mut out = String::from("no matches");
-            for n in notes {
-                out.push_str(&format!("\n[{n}]"));
-            }
-            return Ok(out);
+            return Ok(finish("no matches".into(), false, 0, Some(notes)));
         }
         Ok(finish(
             matches.join("\n"),
@@ -161,18 +185,22 @@ fn finish(text: String, truncated: bool, max: usize, notes: Option<Vec<String>>)
     out
 }
 
-/// Scan one file. Returns `true` when the match cap stopped the scan with
-/// matches still unreported.
+/// Scan one file, printing it as `shown`. `count` is the running number of
+/// match lines across files (context lines and separators do not count).
+/// Returns `true` when the match cap stopped the scan with matches still
+/// unreported.
 fn search_file(
     path: &Path,
+    shown: &str,
     re: &regex::Regex,
     context: usize,
     matches: &mut Vec<String>,
+    count: &mut usize,
     max: usize,
 ) -> bool {
     // Skip huge / binary-ish files quickly
     if let Ok(meta) = fs::metadata(path) {
-        if meta.len() > super::search_util::MAX_FILE_BYTES {
+        if meta.len() > MAX_FILE_BYTES {
             return false;
         }
     }
@@ -188,18 +216,16 @@ fn search_file(
         Ok(s) => s,
         Err(_) => return false,
     };
-    let shown = path.to_string_lossy().replace('\\', "/");
     let lines: Vec<&str> = content.lines().collect();
-    let mut total = matches_count(matches);
     let mut last_emitted: Option<usize> = None;
     for (i, line) in lines.iter().enumerate() {
         if !re.is_match(line) {
             continue;
         }
-        if total >= max {
+        if *count >= max {
             return true;
         }
-        total += 1;
+        *count += 1;
         if context > 0 {
             let from = i.saturating_sub(context);
             if let Some(prev) = last_emitted {
@@ -209,11 +235,11 @@ fn search_file(
             }
             for (j, before) in lines.iter().enumerate().take(i).skip(from) {
                 if last_emitted.is_none_or(|p| j > p) {
-                    matches.push(format!("{shown}-{}-{before}", j + 1));
+                    matches.push(format!("{shown}-{}-{}", j + 1, clip_line(before)));
                 }
             }
         }
-        matches.push(format!("{shown}:{}:{line}", i + 1));
+        matches.push(format!("{shown}:{}:{}", i + 1, clip_line(line)));
         last_emitted = Some(i);
         if context > 0 {
             let to = (i + context + 1).min(lines.len());
@@ -221,20 +247,12 @@ fn search_file(
                 if re.is_match(after) {
                     break;
                 }
-                matches.push(format!("{shown}-{}-{after}", j + 1));
+                matches.push(format!("{shown}-{}-{}", j + 1, clip_line(after)));
                 last_emitted = Some(j);
             }
         }
     }
     false
-}
-
-/// Matching lines only (context lines and separators do not count toward the cap).
-fn matches_count(lines: &[String]) -> usize {
-    lines
-        .iter()
-        .filter(|l| super::search_util::is_rg_match_line(l))
-        .count()
 }
 
 #[cfg(test)]
@@ -250,23 +268,31 @@ mod tests {
     }
 
     // Failure modes: the cap silently drops matches with no signal, context
-    // lines count as matches, two adjacent blocks get a stray separator.
+    // lines count as matches (a `12:30:45` in a context line used to), two
+    // adjacent blocks get a stray separator, a long line is emitted whole.
     #[test]
     fn fallback_scan_caps_matches_and_keeps_context_blocks() {
-        let p = tmp_file("ctx.txt", "a\nhit1\nb\nc\nd\nhit2\ne\nhit3\n");
+        let long = "x".repeat(2000);
+        let p = tmp_file(
+            "ctx.txt",
+            &format!("at 12:30:45\nhit1\nb\nc\nd\nhit2 {long}\ne\nhit3\n"),
+        );
         let re = regex::Regex::new("hit").unwrap();
         let mut out = Vec::new();
-        let truncated = search_file(&p, &re, 1, &mut out, 2);
+        let mut count = 0;
+        let truncated = search_file(&p, "ctx.txt", &re, 1, &mut out, &mut count, 2);
         assert!(truncated, "third match must flag truncation");
-        assert_eq!(matches_count(&out), 2);
+        assert_eq!(count, 2);
         let joined = out.join("\n");
-        assert!(joined.contains("-1-a"), "{joined}");
-        assert!(joined.contains(":2:hit1"), "{joined}");
+        assert!(joined.contains("ctx.txt-1-at 12:30:45"), "{joined}");
+        assert!(joined.contains("ctx.txt:2:hit1"), "{joined}");
         assert!(
             joined.contains("--"),
             "blocks 1-3 and 5-7 are separate: {joined}"
         );
         assert!(!joined.contains("hit3"));
+        assert!(joined.contains("more bytes]"), "{joined}");
+        assert!(out.iter().all(|l| l.len() < 600), "{joined}");
         let _ = std::fs::remove_file(p);
     }
 }

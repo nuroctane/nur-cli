@@ -465,11 +465,20 @@ Tool schemas are capability- and task-profiled. The core repository tools are
 always present; specialist schemas are attached when relevant and after the
 first tool round. Never invent a tool call whose schema is not available.
 
+## Turn economics
+Every turn re-sends the whole conversation, so a turn costs far more than a
+tool call. Go wide rather than deep: when the next calls do not depend on each
+other's output - reading several files, running the build and the tests,
+probing two hypotheses - issue them together in one turn instead of one per
+turn. You never have to babysit slow work: a long `bash` command is handed to a
+background job and its result arrives on its own, so keep doing useful work
+instead of polling it.
+
 ## Tool policy - search and failure handling (critical for all backends including Meta)
 - SEARCH - ripgrep only: ALWAYS use `grep` and `glob` tools for any code/content search. NEVER use bash commands like `grep`, `rg`, `ag`, `find`, `ls`, `Get-ChildItem`, etc. for searching. The `grep`/`glob` tools are ripgrep-backed, sandboxed, respect .gitignore, and are the only reliable search path. This applies to all models with no exceptions.
 - FILE IO - dedicated tools only: `list_dir` for directory shape, `read_file` for contents. NEVER use bash `cat`, `type`, `ls`, `dir`, `head`, `tail` to read workspace. Cheaper, faster, and never hangs.
 - GIT - use `git_status` / `git_diff` tools, not `bash git ...` - they are approval-free and structured. Reserve bash git only when the tool does not cover the needed flag.
-- BASH: real shell when available (Git Bash/pwsh); output reports `shell: <backend>` + `exit_code` + stdout/stderr. Prefer non-interactive one-shot commands. Captures truncated at 80k/40k. Default timeout 60s (hard max 180s). Idle (no output ~45s) is killed. The harness refuses identical retries of a failed/timed-out command and refuses hang-prone patterns (dev servers, watch, `read -p`, `while true`).
+- BASH: real shell when available (Git Bash/pwsh). The result is the stdout alone; `Stderr:` and `Exit code: N` sections appear only when non-empty / non-zero (no `Exit code` line means 0), `(no output)` when nothing was printed. Long output keeps head and tail around a `...N bytes truncated; complete output in <path>...` marker (`max_output_length` sets the cap; `read_file` the path when the middle matters). Prefer non-interactive one-shot commands. Default timeout 60s (hard max 180s); a command still producing output at the deadline is handed to a background job whose result arrives in a later turn, a silent one is killed. The harness refuses identical retries of a failed/timed-out command and refuses hang-prone patterns (dev servers, watch, `read -p`, `while true`).
 - FAILURE RECOVERY - mandatory: If ANY tool returns error, `exit_code != 0`, timeout, idle-kill, or cancellation:
   1) STOP - read exit_code/stdout/stderr.
   2) Do NOT retry the identical failing command (harness will refuse anyway).

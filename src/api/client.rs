@@ -901,7 +901,7 @@ impl ApiClient {
     }
 
     async fn create_cursor_cli(&self, req: &ResponseRequest) -> Result<ApiResponse> {
-        let estimate_req = req.clone();
+        let input_estimate = super::types::estimate_request_input_tokens(req);
         let req = req.clone();
         let cancel = tokio_util::sync::CancellationToken::new();
         let chat = Self::cursor_chat_chain(&self.cursor_chat, &req, false);
@@ -910,7 +910,7 @@ impl ApiClient {
         })
         .await
         .map_err(|e| NurError::Other(format!("cursor-agent task failed: {e}")))?;
-        Ok(response?.with_local_usage_estimate(&estimate_req))
+        Ok(response?.with_local_input_estimate(input_estimate))
     }
 
     async fn create_cursor_cli_stream(
@@ -919,7 +919,7 @@ impl ApiClient {
         mut on_event: impl FnMut(StreamEvent),
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<ApiResponse> {
-        let estimate_req = req.clone();
+        let input_estimate = super::types::estimate_request_input_tokens(req);
         let req = req.clone();
         let cancel = cancel.clone();
         let chat = Self::cursor_chat_chain(&self.cursor_chat, &req, true);
@@ -944,14 +944,14 @@ impl ApiClient {
         match handle.await {
             Ok(Ok(resp)) => Ok(final_resp
                 .unwrap_or(resp)
-                .with_local_usage_estimate(&estimate_req)),
+                .with_local_input_estimate(input_estimate)),
             Ok(Err(e)) => Err(e),
             Err(e) => Err(NurError::Other(format!("cursor-agent task failed: {e}"))),
         }
     }
 
     async fn create_droid_cli(&self, req: &ResponseRequest) -> Result<ApiResponse> {
-        let estimate_req = req.clone();
+        let input_estimate = super::types::estimate_request_input_tokens(req);
         let req = req.clone();
         let cancel = tokio_util::sync::CancellationToken::new();
         let chat = Self::cursor_chat_chain(&self.cursor_chat, &req, false);
@@ -961,7 +961,7 @@ impl ApiClient {
         })
         .await
         .map_err(|e| NurError::Other(format!("droid task failed: {e}")))?;
-        Ok(response?.with_local_usage_estimate(&estimate_req))
+        Ok(response?.with_local_input_estimate(input_estimate))
     }
 
     async fn create_droid_cli_stream(
@@ -970,7 +970,7 @@ impl ApiClient {
         mut on_event: impl FnMut(StreamEvent),
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<ApiResponse> {
-        let estimate_req = req.clone();
+        let input_estimate = super::types::estimate_request_input_tokens(req);
         let req = req.clone();
         let cancel = cancel.clone();
         let chat = Self::cursor_chat_chain(&self.cursor_chat, &req, true);
@@ -997,7 +997,7 @@ impl ApiClient {
         match handle.await {
             Ok(Ok(resp)) => Ok(final_resp
                 .unwrap_or(resp)
-                .with_local_usage_estimate(&estimate_req)),
+                .with_local_input_estimate(input_estimate)),
             Ok(Err(e)) => Err(e),
             Err(e) => Err(NurError::Other(format!("droid task failed: {e}"))),
         }

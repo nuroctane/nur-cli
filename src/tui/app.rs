@@ -1265,6 +1265,10 @@ pub struct LoginModal {
     /// When the Key stage was entered from a Jev slot, the slot id the key is
     /// saved under (not the sidecar provider id).
     pub jev_slot: Option<String>,
+    /// Slot id whose removal was requested once and awaits a second Delete /
+    /// ✕: deleting a slot shared with a chat provider also signs that
+    /// provider out, so it is never done on a single press.
+    pub jev_remove_armed: Option<String>,
 }
 
 impl LoginModal {
@@ -1299,18 +1303,44 @@ impl LoginModal {
             jev_sel: 0,
             jev_buttons: Vec::new(),
             jev_slot: None,
+            jev_remove_armed: None,
         }
     }
 
     /// Move the Jev slot selection by one.
     pub fn step_jev(&mut self, dir: i32) {
+        self.step_jev_by(dir.signum() as isize);
+    }
+
+    /// Move the Jev slot selection by `delta` rows, clamped to the list. Any
+    /// move disarms a pending shared-slot removal.
+    pub fn step_jev_by(&mut self, delta: isize) {
         let n = self.jev_slots.len();
         if n == 0 {
             self.jev_sel = 0;
+            self.jev_remove_armed = None;
             return;
         }
-        let next = (self.jev_sel as i32 + dir.signum()).clamp(0, n as i32 - 1);
-        self.jev_sel = next as usize;
+        let next = (self.jev_sel as isize + delta).clamp(0, n as isize - 1) as usize;
+        if next != self.jev_sel {
+            self.jev_remove_armed = None;
+        }
+        self.jev_sel = next;
+    }
+
+    /// Select a Jev slot row outright (Home / End / click).
+    pub fn select_jev(&mut self, index: usize) {
+        let n = self.jev_slots.len();
+        let next = index.min(n.saturating_sub(1));
+        if next != self.jev_sel {
+            self.jev_remove_armed = None;
+        }
+        self.jev_sel = next;
+    }
+
+    /// The Jev slot the selection points at, if the list still has it.
+    pub fn selected_jev_slot(&self) -> Option<&crate::typesafe::residence::Slot> {
+        self.jev_slots.get(self.jev_sel)
     }
     /// Providers matching the current filter (name / id / note, case-insensitive).
     ///
@@ -6415,14 +6445,21 @@ impl App {
                 let cfg = crate::config::load_config()
                     .map(|c| c.typesafe)
                     .unwrap_or(cfg);
-                crate::typesafe::residence::slots(&cfg)
+                let probe = crate::typesafe::residence::Probe::read(&cfg);
+                let slots = crate::typesafe::residence::slots(&cfg, &probe);
+                (cfg, slots)
             },
-            move |app, slots| {
+            move |app, (cfg, slots)| {
                 if epoch != app.startup.login_epoch {
                     return;
                 }
+                // Judgments in this session use the in-memory section, so it
+                // adopts what the panel just described; otherwise the ● marker
+                // would show one engine while the loop used another.
+                app.cfg.typesafe = cfg;
                 if let Some(login) = &mut app.login {
                     login.jev_slots = slots;
+                    login.jev_remove_armed = None;
                     let n = login.jev_slots.len();
                     login.jev_sel = login.jev_sel.min(n.saturating_sub(1));
                 }
@@ -6435,6 +6472,7 @@ impl App {
         if let Some(m) = &mut self.login {
             m.stage = LoginStage::JevSlots;
             m.jev_slot = None;
+            m.jev_remove_armed = None;
             m.form_scroll = 0;
             m.error = None;
             m.buf.clear();
@@ -6445,30 +6483,51 @@ impl App {
         self.refresh_jev_slots();
     }
 
-    /// Remove the Nur-owned credential behind the selected Jev slot.
+    /// Remove the Nur-owned credential behind the selected Jev slot. A slot
+    /// whose saved key also serves a chat provider arms on the first press
+    /// and removes on the second, so the provider is never signed out by a
+    /// stray Delete.
     fn remove_jev_selected(&mut self) {
         let slot = {
-            let Some(modal) = &self.login else { return };
+            let Some(modal) = &mut self.login else { return };
             if modal.stage != LoginStage::JevSlots {
                 return;
             }
-            match modal.jev_slots.get(modal.jev_sel) {
-                Some(slot) => slot.clone(),
-                None => return,
+            let Some(slot) = modal.selected_jev_slot().cloned() else {
+                return;
+            };
+            if slot.shared_with.is_some()
+                && slot.residence.removable()
+                && modal.jev_remove_armed.as_deref() != Some(slot.id.as_str())
+            {
+                modal.jev_remove_armed = Some(slot.id.clone());
+                modal.error = None;
+                return;
             }
+            modal.jev_remove_armed = None;
+            slot
         };
         let name = slot.name.clone();
+        let id = slot.id.clone();
+        let shared = slot.shared_with;
         self.account_work(
             false,
             move || crate::typesafe::residence::remove(&slot),
             move |app, result| {
-                use crate::typesafe::residence::Removal;
+                use crate::typesafe::residence::{Removal, TYPESAFE_SLOT};
                 match result {
                     Ok(Removal::Removed(residence)) => {
-                        app.push_note(
-                            Tone::Mode,
-                            format!("jev - {name} - removed {}", residence.label()),
-                        );
+                        if id == TYPESAFE_SLOT {
+                            // The on-disk `[typesafe] api_key` is gone; the
+                            // in-memory copy would keep judging with it and
+                            // the next `save_config` would write it back.
+                            app.cfg.typesafe.api_key.clear();
+                        }
+                        let mut text = format!("jev - {name} - removed {}", residence.label());
+                        if let Some(provider) = shared {
+                            text.push_str(&format!(" - {provider} has no saved key now"));
+                        }
+                        app.push_note(Tone::Mode, text);
                     }
                     Ok(Removal::Manual(hint)) => {
                         app.push_info(format!("jev - {name} - not Nur-managed: {hint}"));
@@ -6490,14 +6549,23 @@ impl App {
             KeyCode::Esc => {
                 m.fallback_key = false;
                 m.jev_slot = None;
+                m.jev_remove_armed = None;
                 m.form_scroll = 0;
                 m.stage = LoginStage::Provider;
                 m.error = None;
             }
             KeyCode::Up => m.step_jev(-1),
             KeyCode::Down => m.step_jev(1),
-            KeyCode::Home => m.jev_sel = 0,
-            KeyCode::End => m.jev_sel = m.jev_slots.len().saturating_sub(1),
+            KeyCode::PageUp => {
+                let page = m.vis_page.max(1) as isize;
+                m.step_jev_by(-page);
+            }
+            KeyCode::PageDown => {
+                let page = m.vis_page.max(1) as isize;
+                m.step_jev_by(page);
+            }
+            KeyCode::Home => m.select_jev(0),
+            KeyCode::End => m.select_jev(usize::MAX),
             KeyCode::Enter => self.jev_slot_confirm(),
             KeyCode::Delete => self.remove_jev_selected(),
             KeyCode::Char('d') if ctrl => self.remove_jev_selected(),
@@ -6507,10 +6575,13 @@ impl App {
     }
 
     /// Enter on a hosted slot opens key entry saving into that slot; the
-    /// bridge has no key, so Enter explains how it is started instead.
+    /// bridge has no key, so Enter explains how it is started instead, and
+    /// an engine keyed by `--key-env` never reads the store, so it refuses.
     fn jev_slot_confirm(&mut self) {
+        let key_env = self.cfg.typesafe.key_env.trim().to_string();
+        let selected_engine = self.cfg.typesafe.credential_provider.trim().to_string();
         let Some(m) = &mut self.login else { return };
-        let Some(slot) = m.jev_slots.get(m.jev_sel) else {
+        let Some(slot) = m.selected_jev_slot().cloned() else {
             return;
         };
         if !slot.accepts_key() {
@@ -6525,7 +6596,14 @@ impl App {
             ));
             return;
         }
-        m.jev_slot = Some(slot.id.clone());
+        if !key_env.is_empty() && slot.id == selected_engine {
+            m.error = Some(format!(
+                "this engine reads env {key_env} only ([typesafe] key_env) - a saved key would never be used"
+            ));
+            return;
+        }
+        m.jev_remove_armed = None;
+        m.jev_slot = Some(slot.id);
         m.provider_id = crate::providers::TYPESAFE_PROVIDER.id.to_string();
         m.fallback_key = true;
         m.buf.clear();
@@ -7431,7 +7509,12 @@ impl App {
             return;
         }
         if let Some(m) = &mut self.login {
-            if !matches!(m.stage, LoginStage::Provider | LoginStage::Method) {
+            // The slot panel is a list, not a scrolled form: its PageUp/Down
+            // move the selection (see `on_login_jev_key`).
+            if !matches!(
+                m.stage,
+                LoginStage::Provider | LoginStage::Method | LoginStage::JevSlots
+            ) {
                 let page = m.hit.body.height.max(1) as usize;
                 let max = m.form_rows.saturating_sub(page);
                 match key.code {
@@ -7986,7 +8069,7 @@ impl App {
                     for (i, r) in &buttons {
                         if rect_contains(*r, m.column, m.row) {
                             if let Some(l) = &mut self.login {
-                                l.jev_sel = *i;
+                                l.select_jev(*i);
                             }
                             self.remove_jev_selected();
                             return;
@@ -8000,7 +8083,7 @@ impl App {
                                 .map(|l| l.jev_sel == *i)
                                 .unwrap_or(false);
                             if let Some(l) = &mut self.login {
-                                l.jev_sel = *i;
+                                l.select_jev(*i);
                             }
                             if same {
                                 self.jev_slot_confirm();
@@ -8323,14 +8406,32 @@ impl App {
             return;
         }
         let label = slot.trim_start_matches("jev:").to_string();
+        let shared = self
+            .login
+            .as_ref()
+            .and_then(|m| m.jev_slots.iter().find(|s| s.id == slot))
+            .and_then(|s| s.shared_with);
         self.account_work(
             false,
-            move || crate::auth::save_provider_key(&slot, &key),
+            move || {
+                // Saving re-allows automatic CLI/OMP import for the id; when
+                // the user had blocked it for the chat provider sharing this
+                // slot, the note must say so rather than undo it silently.
+                let was_blocked = !crate::auth::t3_fallback_allowed(&slot);
+                crate::auth::save_provider_key(&slot, &key).map(|()| was_blocked)
+            },
             move |app, result| {
                 match result {
-                    Ok(()) => {
+                    Ok(was_blocked) => {
                         crate::typesafe::client::invalidate_fallback_probe();
-                        app.push_note(Tone::Mode, format!("jev - {label} - key saved"));
+                        let mut text = format!("jev - {label} - key saved");
+                        if let Some(provider) = shared {
+                            text.push_str(&format!(" - also {provider}'s saved key"));
+                            if was_blocked {
+                                text.push_str(" - its automatic CLI/OMP import is allowed again");
+                            }
+                        }
+                        app.push_note(Tone::Mode, text);
                     }
                     Err(error) => app.push_error(format!("credential save failed: {error}")),
                 }

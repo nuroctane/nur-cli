@@ -1,5 +1,5 @@
 use super::search_util::{
-    fallback_file_filter, glob_for_pattern, is_hard_excluded, rg_files, walk_builder, RgOutcome,
+    display_path, fallback_file_filter, glob_for_pattern, rg_files, walk_builder, RgOutcome,
     SEARCH_BUDGET,
 };
 use super::{arg_str, arg_u64, resolve_path, Tool, ToolContext};
@@ -29,7 +29,7 @@ impl Tool for GlobTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "pattern": {"type": "string", "description": "e.g. *.rs, **/mod.rs, src/, Cargo.toml"},
+                "pattern": {"type": "string", "description": "e.g. *.rs, **/mod.rs, src/, Cargo.toml (relative to path)"},
                 "path": {"type": "string", "description": "Root directory (default cwd)"},
                 "max_results": {"type": "integer", "default": DEFAULT_MAX_RESULTS, "description": format!("Cap on paths returned (max {MAX_MAX_RESULTS})")}
             },
@@ -44,12 +44,16 @@ impl Tool for GlobTool {
             .clamp(1, MAX_MAX_RESULTS);
         let root = resolve_path(&ctx.cwd, path)?;
 
-        match rg_files(&ctx.cwd, &pattern, &root, max) {
-            RgOutcome::Hits { text, truncated } => {
+        match rg_files(ctx, &pattern, &root, max) {
+            RgOutcome::Hits {
+                text,
+                truncated,
+                note,
+            } => {
                 if text.is_empty() {
-                    return Ok("no files matched".into());
+                    return Ok(finish("no files matched".into(), false, 0, note));
                 }
-                return Ok(finish(text, truncated, max));
+                return Ok(finish(text, truncated, max, note));
             }
             RgOutcome::Error(msg) => return Err(NurError::Tool(format!("glob: {msg}"))),
             RgOutcome::Unavailable => {}
@@ -57,17 +61,21 @@ impl Tool for GlobTool {
 
         // Fallback walk with the same glob the rg path would have used, so the
         // two agree on what `src/` or `mod.rs` means.
-        let glob = glob_for_pattern(&pattern);
+        let glob = glob_for_pattern(&root, &pattern);
         let filter = fallback_file_filter(&root, Some(&glob), None).map_err(NurError::Tool)?;
         let start = Instant::now();
         let mut hits = Vec::new();
         let mut note: Option<String> = None;
         let mut truncated = false;
-        let mut b = walk_builder(&root);
+        let mut b = walk_builder(&root, None);
         if let Some(ov) = filter {
             b.overrides(ov);
         }
         for entry in b.build().flatten() {
+            if ctx.cancel.is_cancelled() {
+                note = Some("search cancelled".into());
+                break;
+            }
             if start.elapsed() > SEARCH_BUDGET {
                 note = Some(format!(
                     "search stopped after {}ms budget - install ripgrep for speed",
@@ -75,36 +83,33 @@ impl Tool for GlobTool {
                 ));
                 break;
             }
-            let p = entry.path();
-            if !p.is_file() || is_hard_excluded(p) {
+            if !entry.file_type().is_some_and(|t| t.is_file()) {
                 continue;
             }
             if hits.len() >= max {
                 truncated = true;
                 break;
             }
-            hits.push(p.to_string_lossy().replace('\\', "/"));
+            hits.push(display_path(&ctx.cwd, entry.path()));
         }
 
         if hits.is_empty() {
-            return Ok(match note {
-                Some(n) => format!("no files matched\n[{n}]"),
-                None => "no files matched".into(),
-            });
+            return Ok(finish("no files matched".into(), false, 0, note));
         }
         hits.sort();
-        let mut out = finish(hits.join("\n"), truncated, max);
-        if let Some(n) = note {
-            out.push_str(&format!("\n[{n}]"));
-        }
-        Ok(out)
+        Ok(finish(hits.join("\n"), truncated, max, note))
     }
 }
 
-fn finish(text: String, truncated: bool, max: usize) -> String {
+fn finish(text: String, truncated: bool, max: usize, note: Option<String>) -> String {
+    let mut out = text;
     if truncated {
-        format!("{text}\n[truncated at {max} files - narrow the pattern/path or raise max_results]")
-    } else {
-        text
+        out.push_str(&format!(
+            "\n[truncated at {max} files - narrow the pattern/path or raise max_results]"
+        ));
     }
+    if let Some(n) = note {
+        out.push_str(&format!("\n[{n}]"));
+    }
+    out
 }

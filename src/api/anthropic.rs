@@ -346,7 +346,10 @@ fn push_item(item: &Value, messages: &mut Vec<Value>, system: &mut Option<String
             if let Some(b64) = url.strip_prefix("data:") {
                 // data:image/png;base64,XXXX
                 if let Some((meta, data)) = b64.split_once(',') {
-                    let media_type = meta.split(';').next().unwrap_or("");
+                    let media_type = match meta.split(';').next().unwrap_or("").trim() {
+                        "image/jpg" | "image/pjpeg" => "image/jpeg",
+                        other => other,
+                    };
                     // Anthropic accepts exactly these four; anything else
                     // (x-icon, bmp) is a 400, so it becomes a note instead.
                     if !matches!(
@@ -877,6 +880,26 @@ mod tests {
     /// Same fixture as [`req`] but with a caller-supplied Responses transcript.
     fn req_with(input: Value) -> ResponseRequest {
         ResponseRequest { input, ..req() }
+    }
+
+    // Failure modes: a legacy `image/jpg` label reaches the API as-is (400),
+    // or an unsupported type rides along and fails the whole request.
+    #[test]
+    fn inline_image_media_types_are_normalized_or_replaced_by_a_note() {
+        let request = req_with(json!([
+            {"role":"user","content":[
+                {"type":"input_image","image_url":"data:image/jpg;base64,/9j/4AAQ"},
+                {"type":"input_image","image_url":"data:image/x-icon;base64,AAABAAEA"}
+            ]}
+        ]));
+        let body = build_body_with_oauth(&request, false, false);
+        let parts = &body["messages"][0]["content"];
+        assert_eq!(parts[0]["source"]["media_type"], "image/jpeg");
+        assert_eq!(parts[1]["type"], "text");
+        assert!(parts[1]["text"]
+            .as_str()
+            .unwrap()
+            .contains("image/x-icon is not accepted"));
     }
 
     #[test]

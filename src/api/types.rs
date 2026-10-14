@@ -233,8 +233,14 @@ impl ApiResponse {
     /// Attach a conservative local estimate for a completed response. This is
     /// not a tokenizer and never claims invoice accuracy; it prevents a route
     /// that omits terminal usage from disappearing from token/budget telemetry.
-    pub fn with_local_usage_estimate(mut self, req: &ResponseRequest) -> Self {
-        let input_tokens = estimate_request_input_tokens(req);
+    pub fn with_local_usage_estimate(self, req: &ResponseRequest) -> Self {
+        self.with_local_input_estimate(estimate_request_input_tokens(req))
+    }
+
+    /// Same as [`Self::with_local_usage_estimate`] with the input side already
+    /// measured, so callers that hand the request to another thread can
+    /// estimate first instead of keeping a second copy alive.
+    pub fn with_local_input_estimate(mut self, input_tokens: u64) -> Self {
         let output_tokens = estimate_output_tokens(&self.output);
         let prior = self.accounting.take().unwrap_or_default();
         let mut estimated_usage = TokenUsage::estimated(input_tokens, output_tokens);
@@ -373,10 +379,25 @@ fn estimate_value_tokens(value: &Value) -> u64 {
         .unwrap_or(0)
 }
 
+/// Input estimate that prices inline media as media. Serializing a data URL
+/// and dividing by three turns one 380 KB screenshot into ~130k "tokens",
+/// which the ledger then feeds to auto-compaction whenever the provider
+/// reports no usage of its own (CLI transports, local servers without
+/// `include_usage`).
+fn estimate_input_items_tokens(input: &Value) -> u64 {
+    match input.as_array() {
+        Some(items) => items
+            .iter()
+            .map(crate::agent::prompt::estimate_item_tokens)
+            .fold(0u64, u64::saturating_add),
+        None => estimate_value_tokens(input),
+    }
+}
+
 /// Conservative input estimate used before transport dispatch. Exposed for the
 /// attempt ledger and budget preflight, not as a replacement for tokenizers.
 pub fn estimate_request_input_tokens(req: &ResponseRequest) -> u64 {
-    estimate_value_tokens(&req.input)
+    estimate_input_items_tokens(&req.input)
         .saturating_add(
             req.instructions
                 .as_deref()

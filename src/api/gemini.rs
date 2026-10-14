@@ -168,8 +168,18 @@ fn inline_data_part(url: Option<&Value>) -> Option<Value> {
     let url = url.and_then(Value::as_str)?;
     let rest = url.strip_prefix("data:")?;
     let (meta, data) = rest.split_once(',')?;
-    let mime = meta.strip_suffix(";base64")?;
-    if mime.is_empty() || data.is_empty() {
+    let mime = match meta.strip_suffix(";base64")?.trim() {
+        "image/jpg" | "image/pjpeg" => "image/jpeg",
+        other => other,
+    };
+    // generateContent rejects the whole request for an unsupported image
+    // type (x-icon, bmp, gif), so those fall back to the omission note.
+    if data.is_empty()
+        || !matches!(
+            mime,
+            "image/png" | "image/jpeg" | "image/webp" | "image/heic" | "image/heif"
+        )
+    {
         return None;
     }
     Some(json!({ "inlineData": { "mimeType": mime, "data": data } }))
@@ -429,7 +439,9 @@ mod tests {
             { "role": "user", "content": [
                 { "type": "input_text", "text": "what is this" },
                 { "type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgo=" },
-                { "type": "input_image", "image_url": "https://example.com/a.png" }
+                { "type": "input_image", "image_url": "https://example.com/a.png" },
+                { "type": "input_image", "image_url": "data:image/jpg;base64,/9j/4AAQ" },
+                { "type": "input_image", "image_url": "data:image/x-icon;base64,AAABAAEA" }
             ] },
         ]);
         let body = build_body(&req, "p", "gemini-2.5-flash");
@@ -438,6 +450,8 @@ mod tests {
         assert_eq!(parts[1]["inlineData"]["mimeType"], "image/png");
         assert_eq!(parts[1]["inlineData"]["data"], "iVBORw0KGgo=");
         assert_eq!(parts[2]["text"], MEDIA_DROPPED);
+        assert_eq!(parts[3]["inlineData"]["mimeType"], "image/jpeg");
+        assert_eq!(parts[4]["text"], MEDIA_DROPPED);
         assert!(!body.to_string().contains("base64,iVBOR"));
     }
 

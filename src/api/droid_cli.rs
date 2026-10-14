@@ -73,19 +73,112 @@ fn tools_wire(req: &ResponseRequest) -> bool {
     req.tools.as_ref().is_some_and(|t| !t.is_empty()) && !native_delegate_enabled()
 }
 
-/// Locate the `droid` launcher: the official installer's `~/.factory/bin`,
-/// then the shared fixed-path/PATH/npm probe.
+/// Token nur stores for the `factory` provider when the user is signed in
+/// through the CLI itself (`droid`). Not a Bearer token: it only records that
+/// the Factory session exists, so `droid exec` runs with its own OAuth
+/// credentials and nothing secret is copied into nur.
+pub const FACTORY_CLI_SESSION_TOKEN: &str = "factory-cli-session";
+
+pub fn is_cli_session_token(token: &str) -> bool {
+    let t = token.trim();
+    t == FACTORY_CLI_SESSION_TOKEN || t.starts_with("factory-cli:")
+}
+
+/// `FACTORY_HOME` when set, else `~/.factory` - where the CLI keeps its
+/// settings, sessions and the encrypted OAuth keyring.
+pub fn factory_home() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("FACTORY_HOME") {
+        let p = PathBuf::from(dir);
+        if p.is_dir() {
+            return Some(p);
+        }
+    }
+    dirs::home_dir().map(|h| h.join(".factory"))
+}
+
+/// True when `droid` holds a browser sign-in. The keyring is encrypted with a
+/// secret only the CLI can unseal, so nur checks for its presence and lets the
+/// CLI do the talking instead of trying to read the token.
+pub fn oauth_session_present() -> bool {
+    let Some(home) = factory_home() else {
+        return false;
+    };
+    ["auth.v2.keyring", "auth.keyring", "auth.json"]
+        .iter()
+        .any(|name| std::fs::metadata(home.join(name)).is_ok_and(|m| m.is_file() && m.len() > 0))
+}
+
+/// Credentials nur records for a live `droid` sign-in (no secret copied).
+pub fn session_tokens_from_cli() -> Option<crate::oauth::OAuthTokens> {
+    if !oauth_session_present() {
+        return None;
+    }
+    Some(crate::oauth::OAuthTokens {
+        access_token: FACTORY_CLI_SESSION_TOKEN.into(),
+        refresh_token: Some("droid".into()),
+        expires_at: None,
+        meta: Some(crate::auth::OauthMeta {
+            issuer: "factory".into(),
+            client_id: "droid".into(),
+            extra: serde_json::json!({
+                "imported_from": "factory-cli-keyring",
+                "cli_session": true,
+            }),
+        }),
+    })
+}
+
+/// Locate the `droid` launcher. The official installer and the npm package
+/// disagree about where it lands, and neither guarantees it is on `PATH` for
+/// the shell nur inherits, so probe every documented location before giving up.
 pub fn resolve_bin() -> Option<PathBuf> {
+    // A fresh install mid-session must be picked up, so the miss is only
+    // cached briefly; a hit is re-validated the same way.
+    static CACHE: std::sync::Mutex<Option<(Instant, Option<PathBuf>)>> =
+        std::sync::Mutex::new(None);
+    const TTL: Duration = Duration::from_secs(60);
+    if let Ok(guard) = CACHE.lock() {
+        if let Some((at, found)) = guard.as_ref() {
+            if at.elapsed() < TTL && found.as_ref().is_none_or(|p| p.is_file()) {
+                return found.clone();
+            }
+        }
+    }
+    let found = probe_bin();
+    if let Ok(mut guard) = CACHE.lock() {
+        *guard = Some((Instant::now(), found.clone()));
+    }
+    found
+}
+
+fn probe_bin() -> Option<PathBuf> {
+    const NAMES: [&str; 3] = ["droid.exe", "droid.cmd", "droid"];
     if let Ok(explicit) = std::env::var("NUR_DROID_BIN") {
         let p = PathBuf::from(explicit.trim());
         if p.is_file() {
             return Some(p);
         }
     }
+    let mut dirs_to_try: Vec<PathBuf> = Vec::new();
     if let Some(home) = dirs::home_dir() {
-        let bin = home.join(".factory").join("bin");
-        for name in ["droid.exe", "droid.cmd", "droid"] {
-            let p = bin.join(name);
+        // `curl … | sh` installs under ~/.factory/bin; older builds and the
+        // Windows installer drop the launcher in ~/bin or ~/.local/bin.
+        dirs_to_try.push(home.join(".factory").join("bin"));
+        dirs_to_try.push(home.join(".local").join("bin"));
+        dirs_to_try.push(home.join("bin"));
+    }
+    if let Some(local) = dirs::data_local_dir() {
+        dirs_to_try.push(local.join("Programs").join("factory"));
+        dirs_to_try.push(local.join("factory").join("bin"));
+    }
+    #[cfg(not(windows))]
+    {
+        dirs_to_try.push(PathBuf::from("/usr/local/bin"));
+        dirs_to_try.push(PathBuf::from("/opt/factory/bin"));
+    }
+    for dir in dirs_to_try {
+        for name in NAMES {
+            let p = dir.join(name);
             if p.is_file() {
                 return Some(p);
             }
@@ -94,10 +187,25 @@ pub fn resolve_bin() -> Option<PathBuf> {
     crate::ecosystem::find_bin("droid").map(PathBuf::from)
 }
 
-fn has_api_key() -> bool {
-    std::env::var("FACTORY_API_KEY")
-        .ok()
-        .is_some_and(|k| !k.trim().is_empty())
+/// True when a Factory key is available for this call: the one nur holds for
+/// the provider, or the CLI's own environment variable.
+fn has_api_key(passed: Option<&str>) -> bool {
+    passed
+        .map(str::trim)
+        .is_some_and(|k| !k.is_empty() && !is_cli_session_token(k))
+        || std::env::var("FACTORY_API_KEY")
+            .ok()
+            .is_some_and(|k| !k.trim().is_empty())
+}
+
+/// What the user should do when `droid exec` cannot run.
+fn auth_hint() -> &'static str {
+    if oauth_session_present() {
+        " The Factory CLI is signed in, so this is a launcher problem: set NUR_DROID_BIN to the \
+         full path of your `droid` binary."
+    } else {
+        " Sign in with `droid` (interactive, browser OAuth) or set FACTORY_API_KEY."
+    }
 }
 
 fn provider_turn_timeout() -> Duration {
@@ -111,13 +219,17 @@ fn provider_turn_timeout() -> Duration {
 
 /// No stdout/stderr line for this long means the CLI is wedged (most often a
 /// permission prompt that has no console in exec mode).
-fn idle_timeout() -> Duration {
+///
+/// `--output-format json` prints nothing until the run is over, so silence is
+/// normal: the default is the whole turn budget and only an explicit
+/// `NUR_DROID_IDLE_TIMEOUT_SECS` cuts a quiet run short.
+fn idle_timeout(total: Duration) -> Duration {
     std::env::var("NUR_DROID_IDLE_TIMEOUT_SECS")
         .ok()
         .and_then(|v| v.trim().parse::<u64>().ok())
         .filter(|s| *s > 0)
         .map(Duration::from_secs)
-        .unwrap_or_else(|| Duration::from_secs(180))
+        .unwrap_or(total)
 }
 
 /// Run a non-streaming Droid completion. `api_key` is a key nur holds for the
@@ -181,12 +293,17 @@ fn run_exec(
     api_key: Option<&str>,
 ) -> Result<(String, String, Option<ApiUsage>)> {
     let Some(bin) = resolve_bin() else {
-        return Err(NurError::Other(
-            "droid not found. Install Factory's CLI (https://docs.factory.ai/cli/getting-started/quickstart: \
-             `curl -fsSL https://app.factory.ai/cli | sh`, or `npm i -g @factory/cli`) and run `droid` once to sign in, \
-             or set FACTORY_API_KEY."
-                .into(),
-        ));
+        let base = if oauth_session_present() {
+            "droid is signed in on this machine but its launcher was not found. Point nur at it \
+             with NUR_DROID_BIN=<path to droid>, or add the binary's directory to PATH"
+        } else {
+            "droid not found. Install Factory's CLI (https://docs.factory.ai/droid-cli/quickstart: \
+             `curl -fsSL https://app.factory.ai/cli | sh`, or `npm i -g @factory/cli`), run `droid` \
+             once to sign in, and set NUR_DROID_BIN if it lands outside PATH"
+        };
+        return Err(NurError::Other(format!(
+            "{base}. Factory has no HTTP chat endpoint, so FACTORY_API_KEY alone cannot replace the CLI."
+        )));
     };
     let items_len = req.input.as_array().map(|a| a.len()).unwrap_or(0);
     let (resume_id, resume_from): (Option<String>, usize) = match chat.and_then(|c| c.lock().ok()) {
@@ -231,8 +348,10 @@ fn run_exec(
                     }
                 }
                 // A session the CLI no longer has (pruned, other machine) is
-                // reported as an error; retry once from a fresh session.
-                if attempt_resume.is_some() && !retried && !matches!(e, NurError::Interrupted) {
+                // reported as an error; retry once from a fresh session. A real
+                // model, auth or quota failure repeats on retry, so it is not
+                // worth paying for the whole prompt twice.
+                if attempt_resume.is_some() && !retried && is_retryable_resume_failure(&e) {
                     retried = true;
                     continue;
                 }
@@ -240,6 +359,20 @@ fn run_exec(
             }
         }
     }
+}
+
+/// Failures that mean the resumed session, not the request, was the problem:
+/// a session id the CLI no longer has produces no result object, no assistant
+/// text, or silence until a cap.
+fn is_retryable_resume_failure(err: &NurError) -> bool {
+    if matches!(err, NurError::Interrupted) {
+        return false;
+    }
+    let msg = err.to_string();
+    msg.contains("idle timeout")
+        || msg.contains("provider turn timeout")
+        || msg.contains("produced no assistant text")
+        || msg.contains("produced no result object")
 }
 
 /// Everything one `droid exec` launch needs besides the request itself.
@@ -300,8 +433,15 @@ fn run_exec_once(
     }
     // Windows CreateProcess caps the command line near 8k chars; the prompt
     // goes through stdin (documented `echo … | droid exec`) unless it is short.
+    // A `.cmd`/`.bat` launcher is routed through cmd.exe, which rejects
+    // arguments containing newlines and expands `%VAR%`, so those never take
+    // the prompt on argv.
     const ARG_BUDGET: usize = 4_000;
-    let pass_as_arg = prompt.len() <= ARG_BUDGET && !prompt.starts_with('-');
+    let shim = bin
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"));
+    let pass_as_arg = !shim && prompt.len() <= ARG_BUDGET && !prompt.starts_with('-');
     if pass_as_arg {
         args.push(prompt.to_string());
     }
@@ -312,7 +452,10 @@ fn run_exec_once(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("NO_COLOR", "1");
-    if let Some(key) = api_key.map(str::trim).filter(|k| !k.is_empty()) {
+    if let Some(key) = api_key
+        .map(str::trim)
+        .filter(|k| !k.is_empty() && !is_cli_session_token(k))
+    {
         cmd.env("FACTORY_API_KEY", key);
     }
     #[cfg(windows)]
@@ -323,19 +466,27 @@ fn run_exec_once(
     }
     let mut child = cmd
         .spawn()
-        .map_err(|e| NurError::Other(format!("failed to launch droid: {e}")))?;
-    if let Some(mut stdin) = child.stdin.take() {
-        if !pass_as_arg {
-            let _ = stdin.write_all(prompt.as_bytes());
-            let _ = stdin.write_all(b"\n");
-        }
-        drop(stdin);
-    }
+        .map_err(|e| NurError::Other(format!("failed to launch droid: {e}{}", auth_hint())))?;
+    // Owning the tree matters here: the launcher is usually a shim, so killing
+    // the direct child would leave the real agent running (and billing).
+    let tree = crate::process_tree::ProcessTree::attach(&child);
+    let stdin = child.stdin.take();
     let stdout = child
         .stdout
         .take()
         .ok_or_else(|| NurError::Other("droid stdout missing".into()))?;
     let stderr = child.stderr.take();
+    // A prompt larger than the pipe buffer deadlocks if it is written before
+    // the output readers exist, so it goes out on its own thread.
+    let stdin_prompt = (!pass_as_arg).then(|| prompt.to_string());
+    std::thread::spawn(move || {
+        if let Some(mut stdin) = stdin {
+            if let Some(text) = stdin_prompt {
+                let _ = stdin.write_all(text.as_bytes());
+                let _ = stdin.write_all(b"\n");
+            }
+        }
+    });
     let (err_tx, err_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         if let Some(err) = stderr {
@@ -356,7 +507,7 @@ fn run_exec_once(
     });
 
     let started = Instant::now();
-    let idle = idle_timeout();
+    let idle = idle_timeout(total_timeout);
     let mut last_activity = Instant::now();
     let mut raw_out = String::new();
     let mut err_text = String::new();
@@ -371,21 +522,18 @@ fn run_exec_once(
             err_text.push_str(&line);
         }
         if cancel.is_cancelled() {
-            let _ = child.kill();
-            let _ = child.wait();
+            tree.terminate(&mut child);
             return Err(NurError::Interrupted);
         }
         if started.elapsed() >= total_timeout {
-            let _ = child.kill();
-            let _ = child.wait();
+            tree.terminate(&mut child);
             return Err(NurError::Other(format!(
                 "droid exec exceeded the provider turn timeout ({}s, NUR_PROVIDER_TURN_TIMEOUT_SECS adjusts it)",
                 total_timeout.as_secs()
             )));
         }
         if status.is_none() && last_activity.elapsed() >= idle {
-            let _ = child.kill();
-            let _ = child.wait();
+            tree.terminate(&mut child);
             return Err(NurError::Other(format!(
                 "droid exec produced no output for {}s (idle timeout, NUR_DROID_IDLE_TIMEOUT_SECS adjusts it)",
                 idle.as_secs()
@@ -404,9 +552,13 @@ fn run_exec_once(
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
         }
         if status.is_none() {
-            status = child
-                .try_wait()
-                .map_err(|e| NurError::Other(format!("droid wait: {e}")))?;
+            match child.try_wait() {
+                Ok(done) => status = done,
+                Err(e) => {
+                    tree.terminate(&mut child);
+                    return Err(NurError::Other(format!("droid wait: {e}")));
+                }
+            }
         }
         if status.is_some() && last_stdout.elapsed() >= Duration::from_millis(250) {
             break;
@@ -440,12 +592,13 @@ fn run_exec_once(
         } else {
             raw_out.trim().chars().take(600).collect::<String>()
         };
-        let hint = if detail.to_ascii_lowercase().contains("not logged in")
-            || detail.to_ascii_lowercase().contains("unauthorized")
-            || detail.to_ascii_lowercase().contains("api key")
-            || (!has_api_key() && detail.is_empty())
+        let lower = detail.to_ascii_lowercase();
+        let hint = if lower.contains("not logged in")
+            || lower.contains("unauthorized")
+            || lower.contains("api key")
+            || (!has_api_key(api_key) && !oauth_session_present())
         {
-            " Sign in with `droid` (interactive) or set FACTORY_API_KEY."
+            auth_hint()
         } else {
             ""
         };
@@ -494,7 +647,12 @@ pub(crate) fn parse_exec_output(raw: &str) -> Option<ExecResult> {
     let candidates = raw.match_indices('{').map(|(i, _)| i).collect::<Vec<_>>();
     for start in candidates.into_iter().rev() {
         let slice = raw[start..].trim_end();
-        let Ok(v) = serde_json::from_str::<Value>(slice) else {
+        // Read one document and ignore whatever the CLI printed after it
+        // (update nags, telemetry notices), which a whole-slice parse rejects.
+        let Some(Ok(v)) = serde_json::Deserializer::from_str(slice)
+            .into_iter::<Value>()
+            .next()
+        else {
             continue;
         };
         if v.get("type").and_then(|t| t.as_str()) != Some("result") {

@@ -206,12 +206,7 @@ pub fn api_key(cfg: &TypesafeConfig) -> Option<String> {
         // once.
         return Some(explicit.to_string());
     }
-    if reqwest::Url::parse(&endpoint)
-        .ok()
-        .and_then(|u| u.host_str().map(str::to_string))
-        .as_deref()
-        != Some("api.typesafe.ai")
-    {
+    if !is_hosted_typesafe_endpoint(&endpoint) {
         return None;
     }
     // The probe reads the environment, the credential store and a few files.
@@ -330,6 +325,20 @@ pub fn normalize_local_bridge_url(raw: &str) -> Option<String> {
     }
 }
 
+/// Host of TypeSafe's hosted System One API. The ambient TypeSafe key sources
+/// (env vars, credential store, key files) are sent only here; an inline
+/// `[typesafe] api_key` is the user's explicit choice and goes to any host.
+pub const HOSTED_TYPESAFE_HOST: &str = "api.typesafe.ai";
+
+/// Whether the ambient TypeSafe key sources apply to this endpoint.
+pub fn is_hosted_typesafe_endpoint(url: &str) -> bool {
+    reqwest::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))
+        .as_deref()
+        == Some(HOSTED_TYPESAFE_HOST)
+}
+
 /// Is this endpoint on this machine?
 ///
 /// A loopback engine was started and trusted by the user, so nur does not demand
@@ -405,7 +414,13 @@ pub struct FallbackEngine {
     pub key: Option<String>,
     /// Where it came from, for `doctor` / `jev status`.
     pub source: &'static str,
+    /// The engine slot this resolves to (`residence` slot ids): the hosted
+    /// store id, or [`LOCAL_BRIDGE_SLOT`] for a bridge.
+    pub slot: &'static str,
 }
+
+/// Slot id of a loopback bridge in [`FallbackEngine::slot`].
+pub const LOCAL_BRIDGE_SLOT: &str = "bridge";
 
 /// Hosted System One endpoints keyed by the credential that unlocks them, in
 /// preference order. Every one speaks the `/v1/systemone` request shape
@@ -429,11 +444,17 @@ const FALLBACK_HOSTED: &[(&[&str], &str, &str, &str, &str)] = &[
 
 /// True when `[typesafe]` names an engine, a slot or an endpoint itself.
 fn explicit_engine_selection(cfg: &TypesafeConfig) -> bool {
+    explicit_engine_selection_with(cfg, local_bridge_env().is_some())
+}
+
+/// [`explicit_engine_selection`] with the bridge env var answered by the
+/// caller, so a snapshot of the environment can be reused.
+pub(crate) fn explicit_engine_selection_with(cfg: &TypesafeConfig, local_bridge: bool) -> bool {
     !cfg.key_env.trim().is_empty()
         || !cfg.credential_provider.trim().is_empty()
         || !cfg.base_url.trim().is_empty()
         || !cfg.api_key.trim().is_empty()
-        || local_bridge_env().is_some()
+        || local_bridge
 }
 
 /// Whether a TypeSafe key exists anywhere nur looks (raw sources only, so this
@@ -478,18 +499,31 @@ static FALLBACK_PROBE: std::sync::Mutex<Option<(Instant, Option<FallbackEngine>)
     std::sync::Mutex::new(None);
 
 fn resolve_fallback_engine() -> Option<FallbackEngine> {
-    if let Some(endpoint) = crate::jev_local::running_bridge_endpoint() {
+    resolve_fallback_engine_with(
+        crate::jev_local::running_bridge_endpoint(),
+        |var| std::env::var(var).ok(),
+        crate::auth::load_provider_key,
+    )
+}
+
+/// [`resolve_fallback_engine`] over caller-supplied sources: the answering
+/// bridge endpoint (if any), the environment and the credential store. Pure,
+/// so a caller holding a snapshot of those does not probe them again.
+pub(crate) fn resolve_fallback_engine_with(
+    running_bridge: Option<String>,
+    env: impl Fn(&str) -> Option<String>,
+    stored: impl Fn(&str) -> Option<String>,
+) -> Option<FallbackEngine> {
+    if let Some(endpoint) = running_bridge {
         return Some(FallbackEngine {
             base_url: endpoint,
             model: String::new(),
             key: None,
             source: "local bridge (nur jev start)",
+            slot: LOCAL_BRIDGE_SLOT,
         });
     }
-    hosted_fallback_engine(
-        |var| std::env::var(var).ok(),
-        crate::auth::load_provider_key,
-    )
+    hosted_fallback_engine(env, stored)
 }
 
 /// First hosted engine whose key is present, by env var and then by stored
@@ -515,6 +549,7 @@ fn hosted_fallback_engine(
                 model: (*model).to_string(),
                 key: Some(key),
                 source,
+                slot: store_id,
             });
         }
     }

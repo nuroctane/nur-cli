@@ -6,8 +6,18 @@ use crate::config::{atomic_write, nur_home};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
-/// How many leading characters of the full body to show in the preview.
+/// Preview budget (chars) for a spilled body, split ~70% head / ~30% tail.
 const PREVIEW_CHARS: usize = 2_000;
+/// Room kept for the truncation marker (count, wording, spill path) so a
+/// preview under a small `max_chars` still lands under it.
+const MARKER_RESERVE: usize = 200;
+
+/// Tools whose results arrive already bounded (head/tail within the budget
+/// the model asked for, full text spilled). Bounding them again would hand
+/// the model a short preview instead of what it requested.
+pub fn tool_bounds_own_output(tool: &str) -> bool {
+    tool == "bash"
+}
 
 pub fn tool_results_dir() -> PathBuf {
     nur_home().join("tool-results")
@@ -90,58 +100,74 @@ fn path_prefix(path: &Path, root: &Path) -> bool {
 ///
 /// `max_chars == 0` disables spilling (unlimited).
 pub fn maybe_spill(_session_id: &str, _tool: &str, body: String, max_chars: usize) -> String {
-    if max_chars == 0 || body.chars().count() <= max_chars {
+    if max_chars == 0 {
         return body;
     }
+    let total_chars = body.chars().count();
+    if total_chars <= max_chars {
+        return body;
+    }
+    let budget = PREVIEW_CHARS
+        .min(max_chars.saturating_sub(MARKER_RESERVE))
+        .max(1);
     // Never spill obvious auth payloads into a world-readable spill dir.
     if body_looks_sensitive(&body) {
-        return truncate_only(&body, max_chars);
+        return truncate_only(&body, budget);
     }
-
     let path = match write_content_addressed_blob(&body) {
         Ok(path) => path,
-        Err(_) => {
-            return truncate_only(&body, max_chars);
-        }
+        Err(_) => return truncate_only(&body, budget),
     };
-
-    let total = body.chars().count();
-    let (head, tail) = head_tail_preview(&body, PREVIEW_CHARS);
+    let (head_end, tail_start) = head_tail_bounds(&body, total_chars, budget);
     format!(
-        "[tool result truncated - {total} chars, spilled to disk]\n\
-         full path: {}\n\
-         use read_file on that absolute path (nur tool-results are readable) if you need more than the preview below.\n\
-         --- preview (first {} chars) ---\n\
-         {head}\n\
-         --- … {} chars omitted … ---\n\
-         {tail}\n\
-         --- end preview (last {} chars) ---",
+        "{}...{} bytes truncated; complete output in {}...{}",
+        &body[..head_end],
+        tail_start - head_end,
         path.display(),
-        head.chars().count(),
-        total.saturating_sub(head.chars().count() + tail.chars().count()),
-        tail.chars().count()
+        &body[tail_start..]
     )
 }
 
-/// Split a `budget`-char preview into ~70% head and ~30% tail, so the start
-/// (what ran) and the end (how it ended) both survive.
-fn head_tail_preview(body: &str, budget: usize) -> (String, String) {
+/// Byte offsets `(head_end, tail_start)` of a `budget`-char preview split
+/// ~70% head / ~30% tail, so the start (what ran) and the end (how it ended)
+/// both survive. Scans only the chars it keeps; `total_chars` is counted once
+/// by the caller.
+fn head_tail_bounds(body: &str, total_chars: usize, budget: usize) -> (usize, usize) {
+    if total_chars <= budget {
+        return (body.len(), body.len());
+    }
     let head_n = budget * 7 / 10;
     let tail_n = budget - head_n;
-    let chars: Vec<char> = body.chars().collect();
-    if chars.len() <= budget {
-        return (body.to_string(), String::new());
-    }
-    let head: String = chars[..head_n].iter().collect();
-    let tail: String = chars[chars.len() - tail_n..].iter().collect();
-    (head, tail)
+    let head_end = body
+        .char_indices()
+        .nth(head_n)
+        .map(|(i, _)| i)
+        .unwrap_or(body.len());
+    let tail_start = if tail_n == 0 {
+        body.len()
+    } else {
+        body.char_indices()
+            .rev()
+            .nth(tail_n - 1)
+            .map(|(i, _)| i)
+            .unwrap_or(0)
+    };
+    (head_end, tail_start.max(head_end))
 }
 
-fn truncate_only(body: &str, max_chars: usize) -> String {
-    let total = body.chars().count();
-    let keep = max_chars.saturating_sub(80).max(1).min(max_chars.max(1));
-    let preview: String = body.chars().take(keep).collect();
-    format!("{preview}\n\n… [truncated {total} -> {keep} chars; spill failed or disabled]")
+/// Head-only cut for bodies that must not reach disk (or when the spill
+/// failed): nothing beyond `keep` chars survives, so say so.
+fn truncate_only(body: &str, keep: usize) -> String {
+    let head_end = body
+        .char_indices()
+        .nth(keep)
+        .map(|(i, _)| i)
+        .unwrap_or(body.len());
+    format!(
+        "{}...{} bytes truncated; not spilled...",
+        &body[..head_end],
+        body.len() - head_end
+    )
 }
 
 #[cfg(test)]
@@ -176,8 +202,8 @@ mod tests {
             "x".repeat(20_000)
         );
         let out = maybe_spill(&sid, "bash", big, 1000);
-        assert!(out.contains("truncated"));
-        assert!(!out.contains("spilled to disk"));
+        assert!(out.contains("truncated; not spilled"), "{out}");
+        assert!(!out.contains("complete output in"));
         // No spill file for this session prefix.
         let prefix = format!("{}_bash_", &sid[..8.min(sid.len())]);
         let leaked = std::fs::read_dir(tool_results_dir())
@@ -193,8 +219,32 @@ mod tests {
     fn spill_preview_keeps_the_tail() {
         let body = format!("{}\nERROR: last line", "x".repeat(20_000));
         let out = maybe_spill("s", "bash", body, 1000);
-        assert!(out.contains("ERROR: last line"), "{out}");
-        assert!(out.contains("chars omitted"));
+        assert!(out.ends_with("ERROR: last line"), "{out}");
+        assert!(out.contains("bytes truncated; complete output in"), "{out}");
+    }
+
+    // Failure modes: a `max_chars` below the preview budget yields a result
+    // longer than the limit, or the marker misreports what was cut (the byte
+    // count must add up to the body with multi-byte chars at both cuts).
+    #[test]
+    fn spill_preview_respects_a_small_max_and_counts_bytes() {
+        let body = format!("{}MID{}", "é".repeat(3_000), "ü".repeat(3_000));
+        let out = maybe_spill("s", "bash", body.clone(), 1000);
+        assert!(out.chars().count() <= 1000, "{} chars", out.chars().count());
+        assert!(out.starts_with("éé"));
+        assert!(out.ends_with("üü"));
+        let kept = out
+            .split("...")
+            .filter(|s| !s.contains("bytes truncated"))
+            .map(|s| s.len())
+            .sum::<usize>();
+        let cut: usize = out
+            .split("...")
+            .find(|s| s.contains("bytes truncated"))
+            .and_then(|m| m.split(" bytes").next())
+            .and_then(|n| n.parse().ok())
+            .unwrap();
+        assert_eq!(kept + cut, body.len(), "{out}");
     }
 
     #[test]

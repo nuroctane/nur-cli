@@ -1,14 +1,14 @@
 {
-  "description": "A shell command still running at its deadline returns control to the model promptly as a bg handoff (not killed, not an error) instead of stalling inside process cleanup.",
+  "description": "A shell command still producing output at its deadline returns control to the model promptly as a bg handoff (not killed, not an error) instead of stalling inside process cleanup. The 3s window leaves room for login-shell + interpreter startup on Windows before the first print.",
   "prompt": "Run the bounded shell check and report what happened.",
   "script": [
-    {"tool_calls": [{"name": "bash", "arguments": {"command": "python -c \"import time; time.sleep(120)\"", "timeout_ms": 1000}}]},
+    {"tool_calls": [{"name": "bash", "arguments": {"command": "python -c \"import time; print('started', flush=True); time.sleep(120)\"", "timeout_ms": 3000}}]},
     {"text": "The command is still running in the background and control returned."}
   ],
   "expect": {
     "stdout_contains": ["The command is still running in the background and control returned."],
     "requests": 2,
     "max_request_gap_seconds": 10,
-    "tool_results": [{"request": 2, "contains": ["still running after 1000ms", "handed off to bg job #"]}]
+    "tool_results": [{"request": 2, "contains": ["still running after 3000ms", "handed off to bg job #", "started"]}]
   }
 }
