@@ -1,0 +1,27 @@
+{
+  "description": "A subscription route (OpenCode Go, /zen/go/ in the base URL) that is down must not silently burn a paid key: the configured chatgpt fallback is skipped with a status line naming failover_allow_paid, and the run fails with the primary's provider error.",
+  "provider": "opencode-go",
+  "model": "kimi-k3",
+  "env": {
+    "OPENCODE_API_KEY": "e2e-isolated-key"
+  },
+  "setup_home_files": {
+    "config.toml": "provider = \"opencode-go\"\nbase_url = \"http://127.0.0.1:{port}/v1/zen/go\"\nmodel = \"kimi-k3\"\nfallback_providers = [\"chatgpt\"]\n"
+  },
+  "prompt": "Say hello.",
+  "global_args": ["-v"],
+  "script": [
+    { "status": 500, "error": "scripted primary outage" },
+    { "status": 500, "error": "scripted primary outage" },
+    { "status": 500, "error": "scripted primary outage" }
+  ],
+  "expect": {
+    "exit_code": 4,
+    "stdout_contains": [
+      "failover skipped",
+      "failover_allow_paid"
+    ],
+    "stderr_contains": ["scripted primary outage"],
+    "requests": 3
+  }
+}

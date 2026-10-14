@@ -1,0 +1,16 @@
+{
+  "description": "A misspelled provider in config.toml is a config error (exit 2) that names the closest catalog id and lists the valid ones, instead of silently falling back to OpenAI.",
+  "provider": "antropic",
+  "prompt": "Say hello.",
+  "script": [
+    { "text": "unreachable" }
+  ],
+  "expect": {
+    "exit_code": 2,
+    "stderr_contains": [
+      "unknown provider 'antropic'",
+      "Did you mean 'anthropic'",
+      "nur auth login --help"
+    ]
+  }
+}

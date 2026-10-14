@@ -64,6 +64,22 @@ ecosystem_auto_ensure = true
 
 # Self-update from GitHub Releases — checked on EVERY launch (60s network floor)
 auto_update = true
+
+# Allow failover from a subscription route (OAuth sign-in, OpenCode Go) to a
+# per-token fallback. Off by default: a paid fallback is skipped, not billed.
+# failover_allow_paid = false
+
+# Force the wire protocol for one provider/model route, e.g. a gateway that
+# only speaks Chat Completions. Keys are "provider/model" (or just "provider"
+# for the whole provider); values: responses | chat | anthropic | gemini.
+# [protocols]
+# "opencode/kimi-k3" = "chat"
+
+# Auth behaviour.
+# [auth]
+# fallback_import = false   # true restores silent vendor CLI / OMP import when
+                            # no credential is found (default is the explicit
+                            # `nur auth import --from <source>`)
 ```
 
 ### Settings reference
@@ -75,8 +91,11 @@ auto_update = true
 | `base_url` | string | `https://api.meta.ai/v1` | API base (no trailing path); providers use Responses or Chat Completions under this base |
 | `provider_privacy` | map | empty | Per-provider privacy you assert about your own account/endpoint (`{provider_id = "local" / "tee" / "zdr" / "standard"}`); set in the provider picker and overrides the built-in default |
 | `provider_base_urls` | map | empty | Per-provider base-URL overrides (`{provider_id = "https://…/v1"}`) so any provider - including `openai` - can point at an OpenAI-compatible endpoint (Azure, a proxy, LiteLLM, a mirror). Also honored via env `{PROVIDER}_BASE_URL` |
-| `fallback_providers` | array | empty | Opt-in cross-provider failover chain: catalog ids retried in order on 5xx/429/transport. Each fallback uses its own env-var key; empty = no failover |
+| `fallback_providers` | array | empty | Opt-in cross-provider failover chain: catalog ids or aliases, retried in order on 5xx/429/transport. Each fallback uses its own env-var key; empty = no failover |
 | `failover_allow_downgrade` | bool | `false` | Allow failover to a provider whose privacy tier is weaker than the active one. `false` means an outage never silently weakens data privacy |
+| `failover_allow_paid` | bool | `false` | Allow failover from a subscription route (OAuth sign-in, or an OpenCode Go `/zen/go/` base URL) to a per-token provider. `false` skips the paid fallback with a status line instead of silently billing it |
+| `protocols` | map | empty | Force the wire protocol per route: `{"provider/model" = "responses" \| "chat" \| "anthropic" \| "gemini"}` (a bare `provider` key covers every model). Wins over the catalog's per-model routing; use it when a gateway rejects the default protocol (the 400 error names this table). Ignored for Anthropic and Gemini providers, whose protocol is not negotiable |
+| `auth.fallback_import` | bool | `false` | When no credential is found, silently import a signed-in vendor CLI / OMP session. `false` (default) keeps imports explicit via `nur auth import --from <source>`, because rotating vendor refresh tokens sign out whichever tool refreshes second |
 | `fusion_panel` | array | empty | Opt-in `/fusion` panel: catalog ids polled alongside the active model. `/fusion <question>` asks each and the active model synthesizes one answer. Empty = off |
 | `reasoning_effort` | string | `high` | Reasoning depth: `low`, `medium`, `high`, `xhigh`, `max`, `ultracode` (also `minimal`). See [below](#reasoning-effort-levels) |
 | `max_turns` | integer | `0` | Max agent tool/model rounds per user prompt. **`0` = unlimited** (default). Set via config or `/budget turns` / `/turns` |

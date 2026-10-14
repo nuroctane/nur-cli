@@ -119,20 +119,36 @@ nur auth <SUBCOMMAND>
 
 #### `nur auth login`
 
-Save an API key, official harness session, or imported CLI credential to
-`~/.nur/auth.json` (and the per-provider store). Also writes `provider` /
-`base_url` / `model` into `~/.nur/config.toml`.
+Save an API key or official harness/browser session to `~/.nur/auth.json` (and
+the per-provider store). Also writes `provider` / `base_url` / `model` into
+`~/.nur/config.toml`. On the Claude / ChatGPT / Gemini subscription routes the
+flow first prints the client identity the provider will see
+([the table](authentication.md#client-identity-on-subscription-routes)).
 
 ```bash
-nur auth login [--provider <ID>] [--browser] [--import] [--key <KEY>]
+nur auth login [--provider <ID>] [--browser] [--import] [--key <KEY>] [--model <MODEL>] [--yes]
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--provider <ID>` | Catalog id or alias (`muse`, `zcode`, `dsh`, `openai`, …) |
+| `--provider <ID>` | Catalog id or alias (`muse`, `zcode`, `dsh`, `chatgpt`, `opencode-go`, …); a typo fails with a closest-match suggestion |
 | `--browser` | Official browser / harness sign-in when the provider has one |
-| `--import` | Import an existing vendor CLI or OMP session |
+| `--import` | Deprecated shortcut for `nur auth import --from <source>` |
 | `--key <KEY>` | API key (optional; prompts if omitted and no browser flow runs) |
+| `--model <MODEL>` | Also set the default model; without it the login ends by asking which model to make the default |
+| `--yes` | Accept the first catalog model without asking (for scripts) |
+
+#### `nur auth import`
+
+Copy an existing vendor CLI or OMP session into nur's own store. The source
+maps to the catalog provider (`claude` → `anthropic`, `codex` / `chatgpt` →
+`openai`, `omp` resolves its own provider), so there is nothing else to pick.
+Imports copy a rotating refresh token: whichever tool refreshes second is
+signed out, which is why this is an explicit step rather than the default.
+
+```bash
+nur auth import --from <codex|claude|grok|kimi|cursor|opencode|antigravity|droid|muse|dsh|zcode|cline|qwen|mmx|hf|nous|cmd|omp>
+```
 
 #### `nur auth status`
 

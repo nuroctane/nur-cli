@@ -11,9 +11,9 @@ termination through stale PID records.
 
 | Location | Contents |
 |----------|----------|
-| `~/.nur/auth.json` | Provider API key / tokens after `/login` or `nur auth login` |
+| `~/.nur/auth.json` | Provider API key / tokens after `/login` or `nur auth login`; on Windows the ACL is reset to the owning user only |
 | Env `NUR_API_KEY` / vendor keys | Optional override (never printed in logs) |
-| `~/.nur/provider_keys.json` | Scoped and sidecar keys (TypeSafe, Enclave, failover routes); private file permissions |
+| `~/.nur/provider_keys.json` | Scoped and sidecar keys (TypeSafe, Enclave, failover routes); 0600 on Unix, owner-only ACL on Windows |
 | `~/.nur/plugins/` | Marketplace skill packs (local clones; no secrets) |
 | `~/.nur/sessions/` | Session files + `.json.bak` / `.precompact.bak` (no key) |
 | `~/.nur/tool-results/` | Spilled large tool outputs (may include workspace text) |
@@ -64,6 +64,10 @@ Each provider in the picker carries a **privacy tier**, shown as a badge:
 Tiers are built in from a review of each provider's public policy, and you can override any of them for your own account/endpoint with **Alt+P** in the provider picker (saved as a `provider_privacy` override — no config file).
 
 **Failover respects privacy.** When the active provider returns a server error, nur can retry against a configured `fallback_providers` chain (set up in `/failover`). Failover **never silently downgrades** you to a weaker privacy tier than your active provider — a weaker fallback is skipped unless you set `failover_allow_downgrade`. It also only fails over *before any output has streamed*, so the transcript never duplicates. Fallback keys come from each provider's own env var or a key/OAuth session you save in `/failover` — never from the active provider's `auth.json`.
+
+**Failover respects billing.** When the active route is subscription-based (an OAuth sign-in, or OpenCode Go's `/zen/go/` endpoint) and the fallback would bill per token, the fallback is skipped with a status line instead of quietly charging you; set `failover_allow_paid = true` in `~/.nur/config.toml` to allow it.
+
+**Subscription sign-ins use the vendor's client identity.** Browser sign-in on the Claude, ChatGPT, and Gemini subscription routes presents nur as the vendor's own first-party CLI, and the login flow says so before the browser opens. The route-by-route table is in [authentication.md](authentication.md#client-identity-on-subscription-routes).
 
 ## Enclave security agents
 

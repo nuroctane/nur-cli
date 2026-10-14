@@ -53,6 +53,18 @@ use ApiStyle::{
     AnthropicMessages as AM, ChatCompletions as CC, GeminiCloudCode as GCC, Responses as R,
 };
 
+impl ApiStyle {
+    /// The wire protocol's name in errors and docs (`[protocols]` values).
+    pub fn label(&self) -> &'static str {
+        match self {
+            ApiStyle::Responses => "responses",
+            ApiStyle::ChatCompletions => "chat completions",
+            ApiStyle::AnthropicMessages => "anthropic messages",
+            ApiStyle::GeminiCloudCode => "gemini cloud code",
+        }
+    }
+}
+
 /// Google Cloud Code assist host that accepts Antigravity/gcloud OAuth tokens.
 ///
 /// The `ya29.` access token minted by the agy CLI is a Google access token, not
@@ -620,21 +632,37 @@ pub fn normalize_opencode_selection(id: &str) -> (String, &'static str) {
     (bare, base)
 }
 
+/// True while `base` is absent or an opencode.ai host - i.e. the Zen/Go host
+/// split applies. A custom proxy/mirror base opts out of host forcing, so the
+/// provider key is never sent past the endpoint the user configured.
+pub fn opencode_host_split_applies(base: &str) -> bool {
+    let b = base.trim().trim_end_matches('/').to_ascii_lowercase();
+    b.is_empty() || b.contains("opencode.ai")
+}
+
+/// True when `base` targets the OpenCode Go endpoint, whether the URL keeps
+/// the trailing `/v1` (`https://opencode.ai/zen/go/v1`) or stops at `/zen/go`.
+pub fn is_opencode_go_base(base: &str) -> bool {
+    let b = base.trim().trim_end_matches('/').to_ascii_lowercase();
+    b.contains("/zen/go/") || b.ends_with("/zen/go")
+}
+
 /// Per-request OpenCode host for `model`, honouring an already-selected Go
 /// base for overlapping ids (`grok-4.5`, `gpt-5.6-luna`) while forcing free
 /// models onto Zen even when config still points at `/zen/go/v1`.
-pub fn opencode_request_route(model: &str, current_base: &str) -> (String, &'static str) {
+pub fn opencode_request_route(model: &str, current_base: &str) -> (String, String) {
     let (bare, normalized) = normalize_opencode_selection(model);
+    let custom = current_base.trim_end_matches('/');
+    if !opencode_host_split_applies(custom) {
+        return (bare, custom.to_string());
+    }
     if is_opencode_free_model(model) {
-        return (bare, OPENCODE_ZEN_BASE_URL);
+        return (bare, OPENCODE_ZEN_BASE_URL.to_string());
     }
     if is_opencode_go_model(model) {
-        return (bare, OPENCODE_GO_BASE_URL);
+        return (bare, OPENCODE_GO_BASE_URL.to_string());
     }
-    let on_go = current_base
-        .trim_end_matches('/')
-        .to_ascii_lowercase()
-        .contains("/zen/go/");
+    let on_go = custom.to_ascii_lowercase().contains("/zen/go/");
     if on_go {
         let ml = bare.to_ascii_lowercase();
         let zen_only = ml.contains("claude")
@@ -643,11 +671,11 @@ pub fn opencode_request_route(model: &str, current_base: &str) -> (String, &'sta
             || ml.contains("haiku")
             || ml.contains("gemini");
         if zen_only {
-            return (bare, OPENCODE_ZEN_BASE_URL);
+            return (bare, OPENCODE_ZEN_BASE_URL.to_string());
         }
-        return (bare, OPENCODE_GO_BASE_URL);
+        return (bare, OPENCODE_GO_BASE_URL.to_string());
     }
-    (bare, normalized)
+    (bare, normalized.to_string())
 }
 
 /// Fallback fingerprint when `~/.grok/version.json` is absent (must be ≥ min).
@@ -1893,71 +1921,374 @@ fn resolve_provider_token(q: &str) -> Option<&'static Provider> {
     // nicknames (flash/pro/sonnet/opus/o-series/…) map to the provider that
     // serves them; the subagent then falls back to that provider's default
     // model when the exact model string doesn't exist.
-    let id = match q {
-        // xAI Grok
-        "grok" | "x" | "x.ai" | "xai" | "grok-4" | "grok4" | "grok-4.5" | "grok-code"
-        | "grok-fast" => "xai",
-        // Google Gemini (first-party API / gcloud SSO)
-        "gemini" | "google" | "google-gemini" | "google-oauth" | "bard" | "flash" | "pro"
-        | "gemini-flash" | "gemini-pro" | "gemini-3" | "gemini-3.1" | "gemini3" => "google",
-        // Antigravity is its OWN provider (agy CLI OAuth + project id). Keep it
-        // distinct from `google` so its stored credentials are used.
-        "antigravity" | "agy" | "gravity" => "antigravity",
-        // Anthropic Claude (model nicknames included)
-        "claude" | "anthropic" | "sonnet" | "opus" | "haiku" | "claude-sonnet" | "claude-opus"
-        | "claude-haiku" => "anthropic",
-        // OpenAI
-        "gpt" | "chatgpt" | "openai" | "oai" | "o1" | "o3" | "o4" | "gpt-5" | "gpt5" | "gpt-4"
-        | "gpt4" => "openai",
-        "openai-cc" | "gpt-cc" | "openai-chat" => "openai-cc",
-        // DeepSeek
-        "deepseek" | "ds" | "deep-seek" | "r1" | "deepseek-r1" | "deepseek-v3" | "deepseek-v4"
-        | "dsh" | "deepseek-harness" => "deepseek",
-        // Mistral
-        "mistral" | "lechat" | "mixtral" | "codestral" => "mistral",
-        // Kimi / Moonshot (distinct catalog ids)
-        "kimi" | "kimi-code" | "k2" | "kimi-k2" => "kimi",
-        "moonshot" | "moonshot-ai" => "moonshot",
-        // Meta (default vendor) / Muse Code
-        "llama" | "meta" | "meta-ai" | "muse" | "muse-code" | "muse-spark" => "meta",
-        // Chinese labs
-        "qwen" | "dashscope" | "alibaba" | "tongyi" => "qwen",
-        "zhipu" | "z.ai" | "zai" | "glm" | "chatglm" | "zcode" | "glm-5.3" | "glm-5.2" => "zhipu",
-        "minimax" | "abab" => "minimax",
-        "stepfun" | "step" => "stepfun",
-        "baichuan" => "baichuan",
-        // Aggregators / routers
-        "openrouter" | "or" => "openrouter",
-        "commandcode" | "command-code" | "commandcode.ai" => "commandcode",
-        // Cline the coder agent's own gateway; `cline` doubles as its CLI name.
-        "cline" | "cline-bot" | "clinebot" | "cline.ai" | "cline.bot" => "cline",
-        "opencode" | "zen" => "opencode",
-        "cursor" | "cursor-agent" | "cursoragent" => "cursor",
-        "factory" | "droid" | "factory-droid" | "factory.ai" | "droid-exec" => "factory",
-        "liquidinference" | "liquid-inference" | "liquid" | "inference.ai.exchange" => {
-            "liquidinference"
-        }
-        "groq" => "groq",
-        "cerebras" => "cerebras",
-        "together" | "together-ai" | "togetherai" => "together",
-        "fireworks" | "fireworks-ai" => "fireworks",
-        "perplexity" | "pplx" => "perplexity",
-        "cohere" => "cohere",
-        // Local servers
-        "ollama" | "local" => "ollama",
-        "lmstudio" | "lm-studio" => "lmstudio",
-        "llamacpp" | "llama.cpp" | "llama-cpp" => "llamacpp",
-        "vllm" => "vllm",
-        "jan" => "jan",
-        _ => "",
-    };
-    if !id.is_empty() {
-        if let Some(p) = by_id(id) {
-            return Some(p);
-        }
+    if let Some(p) = PROVIDER_ALIASES
+        .iter()
+        .find(|(alias, _)| *alias == q)
+        .and_then(|(_, id)| by_id(id))
+    {
+        return Some(p);
     }
     // Exact display-name match ("Anthropic", "OpenAI", "Antigravity", …).
     PROVIDERS.iter().find(|p| p.name.to_ascii_lowercase() == q)
+}
+
+/// Every spelling nur accepts for a catalog id, defined once. `auth login`,
+/// `provider =` in config, `fallback_providers`, `/login`, the `agent` tool and
+/// the import sources all resolve through this table, so a name that works in
+/// one place works in all of them. A route a vendor markets under its own
+/// name (ChatGPT/Codex, OpenCode Go, Claude Code) is an alias of the catalog
+/// id whose credential it shares: the base URL and model, not the id, pick the
+/// endpoint.
+pub const PROVIDER_ALIASES: &[(&str, &str)] = &[
+    // xAI Grok
+    ("grok", "xai"),
+    ("x", "xai"),
+    ("x.ai", "xai"),
+    ("grok-4", "xai"),
+    ("grok4", "xai"),
+    ("grok-4.5", "xai"),
+    ("grok-code", "xai"),
+    ("grok-fast", "xai"),
+    ("grok-cli", "xai"),
+    ("xai-oauth", "xai"),
+    // Google Gemini (first-party API / gcloud SSO)
+    ("gemini", "google"),
+    ("google-gemini", "google"),
+    ("google-oauth", "google"),
+    ("gemini-cli", "google"),
+    ("google-gemini-cli", "google"),
+    ("bard", "google"),
+    ("flash", "google"),
+    ("pro", "google"),
+    ("gemini-flash", "google"),
+    ("gemini-pro", "google"),
+    ("gemini-3", "google"),
+    ("gemini-3.1", "google"),
+    ("gemini3", "google"),
+    // Antigravity is its OWN provider (agy CLI OAuth + project id). Keep it
+    // distinct from `google` so its stored credentials are used.
+    ("agy", "antigravity"),
+    ("gravity", "antigravity"),
+    ("google-antigravity", "antigravity"),
+    // Anthropic Claude (model nicknames included)
+    ("claude", "anthropic"),
+    ("claude-code", "anthropic"),
+    ("sonnet", "anthropic"),
+    ("opus", "anthropic"),
+    ("haiku", "anthropic"),
+    ("claude-sonnet", "anthropic"),
+    ("claude-opus", "anthropic"),
+    ("claude-haiku", "anthropic"),
+    // OpenAI: the ChatGPT subscription and the Codex CLI are the same login.
+    ("gpt", "openai"),
+    ("chatgpt", "openai"),
+    ("codex", "openai"),
+    ("openai-codex", "openai"),
+    ("openai-codex-device", "openai"),
+    ("codex-cli", "openai"),
+    ("oai", "openai"),
+    ("o1", "openai"),
+    ("o3", "openai"),
+    ("o4", "openai"),
+    ("gpt-5", "openai"),
+    ("gpt5", "openai"),
+    ("gpt-4", "openai"),
+    ("gpt4", "openai"),
+    ("gpt-cc", "openai-cc"),
+    ("openai-chat", "openai-cc"),
+    // DeepSeek
+    ("ds", "deepseek"),
+    ("deep-seek", "deepseek"),
+    ("r1", "deepseek"),
+    ("deepseek-r1", "deepseek"),
+    ("deepseek-v3", "deepseek"),
+    ("deepseek-v4", "deepseek"),
+    ("dsh", "deepseek"),
+    ("deepseek-harness", "deepseek"),
+    // Mistral
+    ("lechat", "mistral"),
+    ("mixtral", "mistral"),
+    ("codestral", "mistral"),
+    // Kimi / Moonshot (distinct catalog ids)
+    ("kimi-code", "kimi"),
+    ("k2", "kimi"),
+    ("kimi-k2", "kimi"),
+    ("moonshot-ai", "moonshot"),
+    // Meta (default vendor) / Muse Code
+    ("llama", "meta"),
+    ("meta-ai", "meta"),
+    ("muse", "meta"),
+    ("muse-code", "meta"),
+    ("muse-spark", "meta"),
+    // Chinese labs
+    ("dashscope", "qwen"),
+    ("alibaba", "qwen"),
+    ("tongyi", "qwen"),
+    ("alibaba-coding-plan", "qwen"),
+    ("z.ai", "zhipu"),
+    ("zai", "zhipu"),
+    ("glm", "zhipu"),
+    ("chatglm", "zhipu"),
+    ("zcode", "zhipu"),
+    ("glm-5.3", "zhipu"),
+    ("glm-5.2", "zhipu"),
+    ("zai-coding-plan", "zhipu"),
+    ("abab", "minimax"),
+    ("minimax-code", "minimax"),
+    ("step", "stepfun"),
+    // Aggregators / routers
+    ("or", "openrouter"),
+    ("command-code", "commandcode"),
+    ("commandcode.ai", "commandcode"),
+    ("cmd", "commandcode"),
+    // Cline the coder agent's own gateway; `cline` doubles as its CLI name.
+    ("cline-bot", "cline"),
+    ("clinebot", "cline"),
+    ("cline.ai", "cline"),
+    ("cline.bot", "cline"),
+    // OpenCode: Zen (pay per token) and Go (subscription) share one account
+    // and one credential; the model id / base URL selects the endpoint.
+    ("zen", "opencode"),
+    ("opencode-zen", "opencode"),
+    ("opencode-go", "opencode"),
+    ("cursor-agent", "cursor"),
+    ("cursoragent", "cursor"),
+    ("droid", "factory"),
+    ("factory-droid", "factory"),
+    ("factory.ai", "factory"),
+    ("droid-exec", "factory"),
+    ("liquid-inference", "liquidinference"),
+    ("liquid", "liquidinference"),
+    ("inference.ai.exchange", "liquidinference"),
+    ("together-ai", "together"),
+    ("togetherai", "together"),
+    ("fireworks-ai", "fireworks"),
+    ("pplx", "perplexity"),
+    // Local servers
+    ("local", "ollama"),
+    ("lm-studio", "lmstudio"),
+    ("llama.cpp", "llamacpp"),
+    ("llama-cpp", "llamacpp"),
+];
+
+/// Every name `resolve_provider_alias` accepts as a whole token: catalog ids,
+/// sidecar ids and the alias table. Used for help output and "closest match".
+pub fn known_provider_names() -> Vec<&'static str> {
+    let mut names: Vec<&'static str> = PROVIDERS.iter().map(|p| p.id).collect();
+    names.extend(SIDECAR_PROVIDERS.iter().map(|p| p.id));
+    names.extend(PROVIDER_ALIASES.iter().map(|(alias, _)| *alias));
+    names
+}
+
+/// Levenshtein distance; small inputs only (provider names).
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0; b.len() + 1];
+    for (i, ca) in a.iter().enumerate() {
+        cur[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let cost = usize::from(ca != cb);
+            cur[j + 1] = (prev[j + 1] + 1).min(cur[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
+}
+
+/// The catalog id whose spelling (id or alias) is nearest to `raw`, when it is
+/// near enough to be a plausible typo. Substring hits (`opencod` → `opencode`)
+/// count as near.
+pub fn closest_provider(raw: &str) -> Option<&'static Provider> {
+    let q = raw.trim().to_ascii_lowercase();
+    if q.is_empty() {
+        return None;
+    }
+    let mut best: Option<(usize, &'static str)> = None;
+    for name in known_provider_names() {
+        // Substring hits count only for names long enough not to appear inside
+        // random input (`x`, `or`, `o3` would otherwise match everything).
+        let d =
+            if name.len() >= 4 && q.len() >= 4 && (name.contains(q.as_str()) || q.contains(name)) {
+                1
+            } else {
+                edit_distance(&q, name)
+            };
+        if best.is_none_or(|(bd, _)| d < bd) {
+            best = Some((d, name));
+        }
+    }
+    let (distance, name) = best?;
+    // One edit per four characters is a typo; more is a different word.
+    if distance > (q.chars().count() / 4).max(2) {
+        return None;
+    }
+    resolve_provider_token(name)
+}
+
+/// Error text for a provider name nothing recognises: the closest spelling,
+/// then the full list of catalog ids. Shared by `auth login`, config loading,
+/// `fallback_providers`, subagent routing and `auth import`.
+pub fn unknown_provider_message(raw: &str) -> String {
+    let mut out = format!("unknown provider '{}'.", raw.trim());
+    if let Some(p) = closest_provider(raw) {
+        out.push_str(&format!(" Did you mean '{}' ({})?", p.id, p.name));
+    }
+    let ids: Vec<&str> = PROVIDERS.iter().map(|p| p.id).collect();
+    out.push_str(&format!(
+        " Valid ids: {}. Aliases such as chatgpt, codex, claude, gemini, opencode-go also work; \
+         `nur auth login --help` lists every provider with its sign-in methods.",
+        ids.join(", ")
+    ));
+    out
+}
+
+/// Vendor CLIs whose finished sign-in `nur auth import --from <cli>` can copy,
+/// and the catalog id each one logs into. The first entry per provider is the
+/// name `auth login --help` shows.
+pub const IMPORT_SOURCES: &[(&str, &str)] = &[
+    ("codex", "openai"),
+    ("claude", "anthropic"),
+    ("claude-code", "anthropic"),
+    ("antigravity", "antigravity"),
+    ("agy", "antigravity"),
+    ("gcloud", "google"),
+    ("gemini", "google"),
+    ("grok", "xai"),
+    ("kimi", "kimi"),
+    ("cursor", "cursor"),
+    ("cursor-agent", "cursor"),
+    ("opencode", "opencode"),
+    ("cline", "cline"),
+    ("commandcode", "commandcode"),
+    ("cmd", "commandcode"),
+    ("qwen", "qwen"),
+    ("droid", "factory"),
+    ("factory", "factory"),
+    ("gh", "github-models"),
+    ("github", "github-models"),
+    ("copilot", "github-copilot"),
+    ("az", "azure"),
+    ("azure", "azure"),
+    ("hermes", "nous"),
+    ("muse", "meta"),
+    ("zcode", "zhipu"),
+    ("dsh", "deepseek"),
+];
+
+/// Resolve an `auth import --from` source name to the catalog provider it signs
+/// into. Catalog ids and aliases are accepted too, so `--from openai` works.
+pub fn import_source_provider(raw: &str) -> Option<&'static Provider> {
+    let q = raw.trim().to_ascii_lowercase();
+    IMPORT_SOURCES
+        .iter()
+        .find(|(name, _)| *name == q)
+        .and_then(|(_, id)| by_id(id))
+        .or_else(|| resolve_provider_alias(&q))
+}
+
+/// The vendor CLI names `auth import --from` accepts for a provider, in help
+/// order.
+pub fn import_source_names(provider_id: &str) -> Vec<&'static str> {
+    IMPORT_SOURCES
+        .iter()
+        .filter(|(_, id)| *id == provider_id)
+        .map(|(name, _)| *name)
+        .collect()
+}
+
+/// `nur auth login --help` tail: every provider with the ways it can sign in.
+/// Built at startup from the catalog so it cannot drift from it.
+pub fn login_help_text() -> String {
+    let mut out = String::from("Providers (id · sign-in methods; aliases in brackets):\n");
+    let width = PROVIDERS.iter().map(|p| p.id.len()).max().unwrap_or(8);
+    for p in PROVIDERS {
+        let mut methods: Vec<String> = Vec::new();
+        if p.key_optional {
+            methods.push("no key needed".into());
+        } else {
+            methods.push("--key".into());
+        }
+        if p.browser_auth {
+            methods.push("--browser".into());
+        }
+        let sources = import_source_names(p.id);
+        if !sources.is_empty() {
+            methods.push(format!("import --from {}", sources.join("|")));
+        }
+        let aliases: Vec<&str> = PROVIDER_ALIASES
+            .iter()
+            .filter(|(alias, id)| *id == p.id && !alias.contains('.') && alias.len() > 2)
+            .map(|(alias, _)| *alias)
+            .take(4)
+            .collect();
+        let alias_note = if aliases.is_empty() {
+            String::new()
+        } else {
+            format!("  [{}]", aliases.join(", "))
+        };
+        out.push_str(&format!(
+            "  {:<width$}  {}{}\n",
+            p.id,
+            methods.join(" · "),
+            alias_note,
+            width = width
+        ));
+    }
+    out.push_str(
+        "\nSubscription routes (openai --browser, anthropic --browser, antigravity, xai, \
+         github-copilot) present nur under that vendor's own client identity; see \
+         docs/authentication.md#client-identity. Importing a vendor CLI session copies its \
+         refresh token: `nur auth import --from codex`.",
+    );
+    out
+}
+
+/// How a route presents itself to the provider when it carries a first-party
+/// subscription credential. `None` for routes that send nur's own identity.
+/// Shown at login (consent) and documented in `docs/authentication.md`.
+pub fn client_identity(provider_id: &str) -> Option<&'static str> {
+    match provider_id {
+        "openai" => Some(
+            "the Codex CLI (header `originator: codex_cli_rs`, User-Agent `codex_cli_rs/<nur version>`)",
+        ),
+        "anthropic" => Some(
+            "Claude Code (User-Agent `claude-cli/<nur version>`, `x-app: cli`, Claude Code beta headers)",
+        ),
+        "google" | "antigravity" | "google-oauth" => Some(
+            "the Gemini CLI / Antigravity (User-Agent `google-api-nodejs-client`, `X-Goog-Api-Client`, `Client-Metadata`)",
+        ),
+        "xai" => Some("the Grok CLI (`X-XAI-Token-Auth: xai-grok-cli`, User-Agent `xai-grok-workspace`)"),
+        "github-copilot" => Some(
+            "VS Code Copilot Chat (`Editor-Version`, `Copilot-Integration-Id`, User-Agent `GitHubCopilotChat`)",
+        ),
+        _ => None,
+    }
+}
+
+/// One line about who pays for `model` on this route, shown after login so a
+/// user with a subscription does not run defaults on a per-token endpoint.
+pub fn billing_note(provider_id: &str, via_oauth: bool, base_url: &str, model: &str) -> String {
+    let name = by_id(provider_id).map(|p| p.name).unwrap_or(provider_id);
+    if by_id(provider_id).is_some_and(|p| p.key_optional) && !via_oauth {
+        return format!("{name}: local or keyless, no per-token charge");
+    }
+    if provider_id == "opencode" {
+        if is_opencode_free_model(model) {
+            return "OpenCode Zen free tier, no charge".into();
+        }
+        if is_opencode_go_base(base_url) || is_opencode_go_model(model) {
+            return "OpenCode Go subscription (monthly quota, no per-token charge)".into();
+        }
+        return "OpenCode Zen, billed per token to your OpenCode balance - a Go subscriber \
+                should pick a Go model (opencode-go/<id>) instead"
+            .into();
+    }
+    if via_oauth {
+        return format!("{name} subscription, no per-token charge");
+    }
+    format!("{name} API key, billed per token")
 }
 
 /// High-signal provider aliases scanned in free-text user turns / mid-turn steers.
@@ -2343,6 +2674,96 @@ mod tests {
         assert!(
             !nudge.is_empty(),
             "the sidecar must not break real delegation"
+        );
+    }
+
+    /// Ways the name tables can rot: an alias pointing at an id that left the
+    /// catalog, an alias that shadows a real id, an import source that names
+    /// nothing, or the route names from the OMP bridge and vendor CLIs
+    /// (`chatgpt`, `codex`, `opencode-go`) failing to reach the shared login.
+    #[test]
+    fn every_alias_and_import_source_resolves_to_one_catalog_id() {
+        for (alias, id) in PROVIDER_ALIASES {
+            assert!(
+                by_id(id).is_some(),
+                "alias {alias} points at unknown id {id}"
+            );
+            assert!(
+                PROVIDERS.iter().all(|p| p.id != *alias),
+                "alias {alias} shadows a catalog id"
+            );
+            assert_eq!(
+                resolve_provider_alias(alias).map(|p| p.id),
+                Some(*id),
+                "alias {alias}"
+            );
+        }
+        for (source, id) in IMPORT_SOURCES {
+            assert_eq!(
+                import_source_provider(source).map(|p| p.id),
+                Some(*id),
+                "import source {source}"
+            );
+        }
+        for p in PROVIDERS {
+            assert_eq!(resolve_provider_alias(p.id).map(|x| x.id), Some(p.id));
+            assert_eq!(import_source_provider(p.id).map(|x| x.id), Some(p.id));
+        }
+        // The spellings the first-run report tried, all one account each.
+        for raw in ["chatgpt", "codex", "openai-codex", "openai-codex-device"] {
+            assert_eq!(resolve_provider_alias(raw).map(|p| p.id), Some("openai"));
+        }
+        for raw in ["opencode-go", "opencode-zen", "zen"] {
+            assert_eq!(resolve_provider_alias(raw).map(|p| p.id), Some("opencode"));
+        }
+    }
+
+    #[test]
+    fn unknown_provider_names_the_closest_spelling_and_lists_ids() {
+        let msg = unknown_provider_message("opencod-go");
+        assert!(msg.contains("Did you mean 'opencode'"), "{msg}");
+        assert!(msg.contains("Valid ids: "), "{msg}");
+        assert!(msg.contains("openai"), "{msg}");
+        let msg = unknown_provider_message("antropic");
+        assert!(msg.contains("'anthropic'"), "{msg}");
+        // Far from everything: no guess, still the list.
+        let msg = unknown_provider_message("zzqqxx");
+        assert!(!msg.contains("Did you mean"), "{msg}");
+        assert!(msg.contains("Valid ids"), "{msg}");
+        let help = login_help_text();
+        for p in PROVIDERS {
+            assert!(help.contains(p.id), "help lacks {}", p.id);
+        }
+        assert!(help.contains("import --from codex"), "{help}");
+    }
+
+    #[test]
+    fn billing_note_separates_subscription_from_per_token_routes() {
+        assert!(
+            billing_note("opencode", false, OPENCODE_ZEN_BASE_URL, "claude-sonnet-5")
+                .contains("per token")
+        );
+        assert!(
+            billing_note("opencode", false, OPENCODE_GO_BASE_URL, "kimi-k3")
+                .contains("subscription")
+        );
+        assert!(billing_note(
+            "opencode",
+            false,
+            OPENCODE_ZEN_BASE_URL,
+            "opencode-go/kimi-k3"
+        )
+        .contains("subscription"));
+        assert!(
+            billing_note("openai", true, OPENAI_OAUTH_BASE_URL, "gpt-5.5").contains("subscription")
+        );
+        assert!(
+            billing_note("openai", false, "https://api.openai.com/v1", "gpt-5.5")
+                .contains("per token")
+        );
+        assert!(
+            billing_note("ollama", false, "http://localhost:11434/v1", "llama3")
+                .contains("no per-token")
         );
     }
 
@@ -3017,6 +3438,19 @@ mod tests {
             opencode_request_route("grok-4.5", OPENCODE_GO_BASE_URL).1,
             OPENCODE_GO_BASE_URL
         );
+    }
+
+    /// A proxy/mirror base replaces the Zen/Go host split entirely - the
+    /// forced vendor hosts would route the key past the configured endpoint.
+    #[test]
+    fn opencode_request_route_keeps_a_custom_base() {
+        for model in ["kimi-k3", "claude-sonnet-5", "ox-alpha-free", "gpt-5.6"] {
+            assert_eq!(
+                opencode_request_route(model, "http://127.0.0.1:8787/v1/").1,
+                "http://127.0.0.1:8787/v1",
+                "{model} must not escape a custom base"
+            );
+        }
     }
 
     #[test]

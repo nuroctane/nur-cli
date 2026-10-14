@@ -425,20 +425,39 @@ pub enum EcosystemCmd {
 
 #[derive(Subcommand, Debug)]
 pub enum AuthCmd {
-    /// Sign in (API key, official harness/browser, or import a vendor CLI session)
+    /// Sign in (API key, or a fresh browser / harness sign-in)
+    #[command(after_help = crate::providers::login_help_text())]
     Login {
         /// API key (optional; prompts if omitted)
         #[arg(long)]
         key: Option<String>,
-        /// Catalog provider (or alias: muse, zcode, dsh, …). Default: current config.
+        /// Catalog provider id or alias (chatgpt, codex, claude, opencode-go, …). Default: current config.
         #[arg(long, short = 'p')]
         provider: Option<String>,
-        /// Official browser / harness sign-in (Muse Code, ZCode, DeepSeek Harness, …)
+        /// Fresh browser / device-code / harness sign-in. Never copies another CLI's session.
         #[arg(long)]
         browser: bool,
-        /// Import an existing vendor CLI / OMP session
+        /// Same as `nur auth import --from <provider>`: copy an existing vendor CLI / OMP session
         #[arg(long)]
         import: bool,
+        /// Model to select after signing in (skips the model question)
+        #[arg(long)]
+        model: Option<String>,
+        /// Accept the client-identity notice and keep the default model without asking
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
+    /// Copy a vendor CLI's finished sign-in (Codex, Claude Code, Cursor, OpenCode, gcloud, …) into nur
+    Import {
+        /// Source CLI or provider: codex, claude, antigravity, gcloud, grok, kimi, cursor, opencode, cline, cmd, qwen, droid, gh, az, omp:<provider>, …
+        #[arg(long)]
+        from: String,
+        /// Model to select after importing (skips the model question)
+        #[arg(long)]
+        model: Option<String>,
+        /// Accept the shared-refresh-token warning and keep the default model without asking
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
     /// Show auth status (never prints full key)
     Status,

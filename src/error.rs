@@ -61,7 +61,7 @@ fn api_status_label(status: u16) -> String {
 
 #[derive(Error, Debug)]
 pub enum NurError {
-    #[error("not authenticated: set NUR_API_KEY or the provider's own key variable, or run `nur auth login`")]
+    #[error("not authenticated: set NUR_API_KEY or the provider's own key variable, run `nur auth login`, or copy a vendor CLI sign-in with `nur auth import --from <codex|claude|...>`")]
     NotAuthenticated,
 
     #[error("API error ({}): {}", api_status_label(*status), api_message(*status, message))]

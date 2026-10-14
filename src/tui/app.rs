@@ -7941,7 +7941,9 @@ impl App {
             m.form_scroll = 0;
             m.stage = LoginStage::Browser;
             m.fallback_key = is_fallback;
-            m.browser_status = "checking vendor CLI and OMP credentials...".into();
+            m.browser_status = "copying the vendor CLI / OMP session (refresh token included - \
+                                whichever tool refreshes second is signed out)…"
+                .into();
             m.browser_url.clear();
             m.browser_user_code.clear();
             m.error = None;
@@ -7968,7 +7970,14 @@ impl App {
         if let Some(m) = &mut self.login {
             m.form_scroll = 0;
             m.stage = LoginStage::Browser;
-            m.browser_status = "starting browser sign-in…".into();
+            // Subscription routes answer as the vendor's own client; the user
+            // choosing this sign-in should see that while it happens.
+            m.browser_status = match crate::providers::client_identity(provider_id) {
+                Some(identity) => {
+                    format!("this route presents nur as {identity} - starting browser sign-in…")
+                }
+                None => "starting browser sign-in…".into(),
+            };
             m.browser_url.clear();
             m.browser_user_code.clear();
             m.error = None;

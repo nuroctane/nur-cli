@@ -524,8 +524,27 @@ impl AgentRunner {
             return Err(primary_err);
         }
 
+        // Billing guard: a subscription route must not fail over to a
+        // per-token billed route unless the user opted in - an outage would
+        // otherwise quietly start spending money on a meter the user never
+        // picked (the mirror of the privacy floor above).
+        let primary_is_subscription =
+            crate::api::failover::active_route_is_subscription(&self.config);
+
         let mut last = primary_err;
         for t in targets {
+            if primary_is_subscription
+                && !t.via_oauth
+                && !self.config.failover_allow_paid
+                && !crate::providers::by_id(&t.provider_id).is_some_and(|p| p.key_optional)
+            {
+                let _ = tx.send(AgentEvent::Status(format!(
+                    "failover skipped {} - it bills per token while this session runs on a \
+                     subscription; set failover_allow_paid = true to allow",
+                    t.provider_id
+                )));
+                continue;
+            }
             let preflight =
                 match crate::api::failover::preflight_target(&t, req, &self.config, usage) {
                     Ok(summary) => summary,

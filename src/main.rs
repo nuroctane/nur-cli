@@ -131,7 +131,21 @@ async fn real_main() -> Result<()> {
                     provider,
                     browser,
                     import,
-                } => login_interactive(key.clone(), provider.clone(), *browser, *import)?,
+                    model,
+                    yes,
+                } => login_interactive(
+                    key.clone(),
+                    provider.clone(),
+                    auth::LoginOptions {
+                        browser: *browser,
+                        import: *import,
+                        model: model.clone(),
+                        yes: *yes,
+                    },
+                )?,
+                AuthCmd::Import { from, model, yes } => {
+                    auth::import_from_cli(from, model.clone(), *yes)?
+                }
                 AuthCmd::Status => auth_status()?,
                 AuthCmd::Logout { revoke } => {
                     logout(*revoke)?;
@@ -312,7 +326,8 @@ async fn real_main() -> Result<()> {
     }
     // CLI `--model opencode-go/<id>` or bare Go id like `kimi-k3` must also
     // correct the endpoint; same logic as the TUI picker and config migration.
-    if cfg.provider == "opencode" {
+    // A custom base (proxy/mirror) opts out of the Zen/Go host split entirely.
+    if cfg.provider == "opencode" && crate::providers::opencode_host_split_applies(&cfg.base_url) {
         let (bare, base) = crate::providers::normalize_opencode_selection(&cfg.model);
         // Free models always snap to Zen, even if config still has the Go host
         // leftover from a previous metered model.

@@ -295,8 +295,30 @@ pub enum StreamEvent {
 /// survives a `/model` switch, a `/resume` and a failover - all three rebuild
 /// the client, and a fresh random id there would send the next request to a
 /// backend that has never seen the prefix.
-fn session_affinity_id() -> String {
+pub(crate) fn session_affinity_id() -> String {
     affinity_from(std::env::var("NUR_SESSION_ID").ok().as_deref())
+}
+
+/// The `[protocols]` override for this request, read from the config file
+/// once per process. The client has no `Config` in hand (subagents, failover
+/// and one-shot CLI calls build it directly), so the raw table is parsed here
+/// instead of plumbing the struct through every construction site.
+fn configured_protocol_override(
+    provider_id: &str,
+    model: &str,
+) -> Option<crate::providers::ApiStyle> {
+    static PROTOCOLS: std::sync::OnceLock<Option<std::collections::HashMap<String, String>>> =
+        std::sync::OnceLock::new();
+    let table = PROTOCOLS.get_or_init(|| {
+        let text = std::fs::read_to_string(crate::config::config_path()).ok()?;
+        toml::from_str::<toml::Value>(&text)
+            .ok()?
+            .get("protocols")?
+            .clone()
+            .try_into()
+            .ok()
+    });
+    crate::config::protocol_override(table.as_ref()?, provider_id, model)
 }
 
 /// Pure half of [`session_affinity_id`], so the fallback is testable without
@@ -734,6 +756,12 @@ impl ApiClient {
             // Same host for every model — only the request shape flips.
             routed.style = commandcode_style_for_model(model);
         }
+        // A `[protocols]` entry settles the wire format when the family table
+        // guesses wrong ("400 Model does not support this protocol"); it works
+        // for every provider, including a custom id pointed at a gateway.
+        if let Some(style) = configured_protocol_override(&self.provider_id, model) {
+            routed.style = style;
+        }
         routed
     }
 
@@ -1037,7 +1065,46 @@ impl ApiClient {
         }
     }
 
+    /// When a route rejects the wire format (`400 Model does not support this
+    /// protocol`), the bare provider message does not say which shape nur
+    /// picked or how to change it. Name both.
+    fn explain_protocol_400(&self, model: &str, err: NurError) -> NurError {
+        let NurError::Api {
+            status: 400,
+            ref message,
+        } = err
+        else {
+            return err;
+        };
+        let m = message.to_ascii_lowercase();
+        let looks_like_protocol = m.contains("protocol")
+            || (m.contains("model") && m.contains("does not support"))
+            || (m.contains("model") && m.contains("unsupported") && m.contains("endpoint"));
+        // A routed retry wraps the error too; annotate exactly once.
+        if !looks_like_protocol || message.contains("[protocols]") {
+            return err;
+        }
+        let used = self.routed_for_model(model).style;
+        NurError::Api {
+            status: 400,
+            message: format!(
+                "{message}\n\nnur sent `{model}` over the {} protocol. If the model wants another \
+                 one, pin it in {}:\n  [protocols]\n  \"{}/{model}\" = \"responses\" | \"chat\" | \"anthropic\"",
+                used.label(),
+                crate::config::config_path().display(),
+                self.provider_id
+            ),
+        }
+    }
+
     pub async fn create_response(&self, req: &ResponseRequest) -> Result<ApiResponse> {
+        let model = req.model.clone();
+        self.create_response_inner(req)
+            .await
+            .map_err(|e| self.explain_protocol_400(&model, e))
+    }
+
+    async fn create_response_inner(&self, req: &ResponseRequest) -> Result<ApiResponse> {
         if self.uses_cursor_cli() {
             return self.create_cursor_cli(req).await;
         }
@@ -1213,6 +1280,18 @@ impl ApiClient {
     /// the final `ApiResponse` is returned. Falls back to non-streaming
     /// parsing if the server replies with plain JSON.
     pub async fn create_response_stream(
+        &self,
+        req: &ResponseRequest,
+        on_event: impl FnMut(StreamEvent),
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<ApiResponse> {
+        let model = req.model.clone();
+        self.create_response_stream_inner(req, on_event, cancel)
+            .await
+            .map_err(|e| self.explain_protocol_400(&model, e))
+    }
+
+    async fn create_response_stream_inner(
         &self,
         req: &ResponseRequest,
         mut on_event: impl FnMut(StreamEvent),
@@ -4187,6 +4266,81 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
         let routed = client.with_style(ApiStyle::GeminiCloudCode);
         assert_eq!(routed.style, ApiStyle::GeminiCloudCode);
         assert_eq!(routed.base_url, "https://cloudcode-pa.googleapis.com");
+    }
+
+    /// The 400 a gateway returns for the wrong wire format must say which
+    /// protocol nur chose and where to override it - and only for that shape
+    /// of error, once.
+    #[test]
+    fn protocol_400_names_the_protocol_and_the_override() {
+        let client =
+            ApiClient::for_provider(crate::providers::OPENCODE_GO_BASE_URL, "oc-key", "opencode")
+                .unwrap()
+                .with_style(ApiStyle::ChatCompletions);
+        let err = client.explain_protocol_400(
+            "kimi-k3",
+            NurError::Api {
+                status: 400,
+                message: "Model does not support this protocol".into(),
+            },
+        );
+        let NurError::Api { message, .. } = err else {
+            panic!("expected Api");
+        };
+        assert!(message.contains("chat completions"), "{message}");
+        assert!(message.contains("[protocols]"), "{message}");
+        assert!(message.contains("\"opencode/kimi-k3\""), "{message}");
+
+        // The hint must not be appended twice on a routed retry.
+        let err = client.explain_protocol_400(
+            "kimi-k3",
+            NurError::Api {
+                status: 400,
+                message: format!("Model does not support this protocol\n\n{message}"),
+            },
+        );
+        let NurError::Api { message: twice, .. } = err else {
+            panic!("expected Api");
+        };
+        assert_eq!(twice.matches("[protocols]").count(), 1, "{twice}");
+
+        // A plain bad request stays the provider's message.
+        let err = client.explain_protocol_400(
+            "kimi-k3",
+            NurError::Api {
+                status: 400,
+                message: "max_tokens must be positive".into(),
+            },
+        );
+        assert!(
+            !err.to_string().contains("[protocols]"),
+            "unrelated 400 must not grow a protocol hint: {err}"
+        );
+        // And a 429 is never a protocol hint.
+        let err = client.explain_protocol_400(
+            "kimi-k3",
+            NurError::Api {
+                status: 429,
+                message: "Model does not support this protocol".into(),
+            },
+        );
+        assert!(!err.to_string().contains("[protocols]"));
+    }
+
+    /// A custom provider id pointed at a gateway does not inherit OpenCode's
+    /// model-family table - the `[protocols]` override is its steering wheel.
+    #[test]
+    fn custom_provider_keeps_catalog_style_until_overridden() {
+        let custom = ApiClient::for_provider(
+            crate::providers::OPENCODE_GO_BASE_URL,
+            "oc-key",
+            "my-gateway",
+        )
+        .unwrap()
+        .with_style(ApiStyle::ChatCompletions);
+        let routed = custom.routed_for_model("claude-sonnet-5");
+        assert_eq!(routed.style, ApiStyle::ChatCompletions);
+        assert_eq!(routed.base_url, crate::providers::OPENCODE_GO_BASE_URL);
     }
 
     /// OpenCode Go 400s without `x-opencode-session`. The header must be

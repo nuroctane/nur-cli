@@ -29,6 +29,9 @@ pub struct FailoverTarget {
     /// Wire format from the provider catalog (Responses / Chat / Anthropic Messages).
     pub style: ApiStyle,
     pub model: String,
+    /// True when the credential is a first-party OAuth session (subscription
+    /// quota) rather than a per-token billed API key.
+    pub via_oauth: bool,
 }
 
 /// Per-route request facts used before replaying a failed request elsewhere.
@@ -313,6 +316,21 @@ pub fn privacy_allowed(active_rank: u8, target_rank: u8, allow_downgrade: bool) 
     allow_downgrade || target_rank >= active_rank
 }
 
+/// Is the *active* route billed by subscription rather than per token? True
+/// for a browser-signed-in (OAuth) session and for OpenCode Go, whose monthly
+/// quota is tied to the `/zen/go/` endpoint. Used to keep an outage from
+/// silently failing over to a per-token route the user never opted into
+/// (`failover_allow_paid`).
+pub fn active_route_is_subscription(cfg: &Config) -> bool {
+    if cfg.provider == "opencode" && crate::providers::is_opencode_go_base(&cfg.base_url) {
+        return true;
+    }
+    crate::auth::load_auth().ok().flatten().is_some_and(|a| {
+        !crate::auth::provider_mismatch(&a, &cfg.provider)
+            && matches!(a.auth_method, crate::auth::AuthMethod::Oauth)
+    })
+}
+
 /// Build the ordered failover chain from configured fallback provider ids.
 /// Skips ids that are empty, unknown to the catalog, equal to the primary, or
 /// already seen, plus any provider for which `resolve_key` yields `None`
@@ -344,6 +362,7 @@ pub fn plan_targets(
             api_key: key,
             style,
             model: model.to_string(),
+            via_oauth: is_oauth,
         });
     }
     out
@@ -778,6 +797,7 @@ mod tests {
             api_key: String::new(),
             style: ApiStyle::ChatCompletions,
             model: "test".into(),
+            via_oauth: false,
         };
         let req = ResponseRequest {
             model: "test".into(),

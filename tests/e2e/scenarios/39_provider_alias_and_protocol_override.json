@@ -1,0 +1,22 @@
+{
+  "description": "A config that says 'opencode-go' keeps working: the alias resolves to the opencode catalog id, the [protocols] table overrides the family-routed wire protocol for one model, and every request still carries the opencode session-affinity header.",
+  "provider": "opencode-go",
+  "model": "gpt-5.6",
+  "env": {
+    "OPENCODE_API_KEY": "e2e-isolated-key"
+  },
+  "setup_home_files": {
+    "config.toml": "provider = \"opencode-go\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"gpt-5.6\"\n\n[protocols]\n\"opencode/gpt-5.6\" = \"chat\"\n"
+  },
+  "prompt": "Reply with exactly PROTOCOL_OK.",
+  "script": [
+    { "text": "PROTOCOL_OK" }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "stdout_contains": ["PROTOCOL_OK"],
+    "protocol": "chat/completions",
+    "headers": { "present": ["x-opencode-session"] },
+    "requests": 1
+  }
+}

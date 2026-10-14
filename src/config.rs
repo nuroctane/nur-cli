@@ -164,6 +164,21 @@ pub struct Config {
     /// tier. Default `false` — an outage never silently weakens data privacy.
     #[serde(default)]
     pub failover_allow_downgrade: bool,
+    /// When the active route is a subscription (browser sign-in, OpenCode Go),
+    /// fail over to a per-token billed route only if this is `true`. Default
+    /// `false`: an outage never silently starts spending money.
+    #[serde(default)]
+    pub failover_allow_paid: bool,
+    /// Wire-protocol overrides, most specific key wins: `"<provider>/<model>"`
+    /// then `"<provider>"`. Values: `responses`, `chat`, `anthropic`. For
+    /// gateways that serve several protocols (OpenCode) nur picks one from the
+    /// model family; this corrects it when a model answers
+    /// `400 Model does not support this protocol`.
+    #[serde(default)]
+    pub protocols: std::collections::HashMap<String, String>,
+    /// `[auth]` - credential discovery policy.
+    #[serde(default)]
+    pub auth: AuthConfig,
     /// Per-provider privacy you assert about your own account/endpoint
     /// (`{provider_id: "local"|"tee"|"zdr"|"standard"}`). Set in the provider
     /// picker; overrides the built-in default.
@@ -274,6 +289,80 @@ pub struct Config {
     /// (drop inbound mail). See `~/.nur/peers` and the `message` tool.
     #[serde(default = "default_message_inbound")]
     pub message_inbound: String,
+}
+
+/// `[auth]` - where nur may look for credentials it was not given.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AuthConfig {
+    /// When no saved nur credential, env key or explicit import covers a
+    /// provider, read another tool's sign-in (Codex CLI, Claude Code, Cursor,
+    /// OpenCode, gcloud, OMP, ...) and use it. Default **false**: those
+    /// sessions carry rotating refresh tokens, and two tools refreshing one
+    /// token sign each other out. Import deliberately with
+    /// `nur auth import --from <cli>` instead.
+    #[serde(default)]
+    pub import_fallback: bool,
+}
+
+/// Parse a `[protocols]` value. Accepts the documented names and the obvious
+/// synonyms; `None` for anything else so a typo cannot silently pick a shape.
+pub fn parse_protocol(value: &str) -> Option<crate::providers::ApiStyle> {
+    use crate::providers::ApiStyle;
+    match value.trim().to_ascii_lowercase().as_str() {
+        "responses" | "response" => Some(ApiStyle::Responses),
+        "chat" | "chat_completions" | "chat-completions" | "completions" => {
+            Some(ApiStyle::ChatCompletions)
+        }
+        "anthropic" | "messages" | "anthropic_messages" => Some(ApiStyle::AnthropicMessages),
+        "gemini" | "cloudcode" | "gemini_cloudcode" => Some(ApiStyle::GeminiCloudCode),
+        _ => None,
+    }
+}
+
+/// The `[protocols]` override for a request, most specific key first:
+/// `provider/model`, then `provider`. Model ids are matched with and without
+/// the `opencode-go/` route prefix so either spelling in config works.
+pub fn protocol_override(
+    protocols: &std::collections::HashMap<String, String>,
+    provider_id: &str,
+    model: &str,
+) -> Option<crate::providers::ApiStyle> {
+    if protocols.is_empty() {
+        return None;
+    }
+    let bare = model.strip_prefix("opencode-go/").unwrap_or(model).trim();
+    let model = model.trim();
+    let keys = [
+        format!("{provider_id}/{model}"),
+        format!("{provider_id}/{bare}"),
+        provider_id.to_string(),
+    ];
+    for key in keys {
+        if let Some(value) = protocols
+            .iter()
+            .find(|(k, _)| k.trim().eq_ignore_ascii_case(&key))
+            .map(|(_, v)| v)
+        {
+            return parse_protocol(value);
+        }
+    }
+    None
+}
+
+/// `[auth] import_fallback` as the running process sees it, read from the
+/// config file so credential resolution (which has no `Config` in hand) can
+/// ask. `NUR_AUTH_IMPORT_FALLBACK=1|0` overrides for one run.
+pub fn import_fallback_enabled() -> bool {
+    if let Ok(v) = std::env::var("NUR_AUTH_IMPORT_FALLBACK") {
+        return matches!(v.trim(), "1" | "true" | "yes" | "on");
+    }
+    let Ok(text) = fs::read_to_string(config_path()) else {
+        return false;
+    };
+    toml::from_str::<toml::Value>(&text)
+        .ok()
+        .and_then(|v| v.get("auth")?.get("import_fallback")?.as_bool())
+        .unwrap_or(false)
 }
 
 /// `[prewalk]` — plan on the active model, implement on a cheap/smol model.
@@ -948,6 +1037,9 @@ impl Default for Config {
             auto_update: true,
             fallback_providers: Vec::new(),
             failover_allow_downgrade: false,
+            failover_allow_paid: false,
+            protocols: std::collections::HashMap::new(),
+            auth: AuthConfig::default(),
             provider_privacy: std::collections::HashMap::new(),
             fusion_panel: Vec::new(),
             provider_base_urls: std::collections::HashMap::new(),
@@ -1047,7 +1139,10 @@ pub fn migrate_config(cfg: &mut Config) -> bool {
             if lower.starts_with("opencode-go/") {
                 let (bare, base) = crate::providers::normalize_opencode_selection(&trimmed);
                 cfg.model = bare;
-                cfg.base_url = base.to_string();
+                // A custom base (proxy/mirror) opts out of the Zen/Go split.
+                if crate::providers::opencode_host_split_applies(&cfg.base_url) {
+                    cfg.base_url = base.to_string();
+                }
             } else if crate::providers::is_opencode_go_model(&trimmed) {
                 // Bare Go model but base still points at Zen — fix the route.
                 let zen = crate::providers::OPENCODE_ZEN_BASE_URL;
@@ -1246,6 +1341,7 @@ pub fn load_config() -> Result<Config> {
     if migrate_config(&mut cfg) {
         let _ = save_config(&cfg);
     }
+    canonicalize_provider_ids(&mut cfg)?;
     // Always normalize a stray `opencode-go/` prefix that might have been
     // persisted by an older picker or manual edit — the canonical stored id is
     // bare, with the base URL carrying the route. Free models (including Go's
@@ -1259,7 +1355,10 @@ pub fn load_config() -> Result<Config> {
         {
             let (bare, base) = crate::providers::normalize_opencode_selection(&trimmed);
             cfg.model = bare;
-            cfg.base_url = base.to_string();
+            // A custom base (proxy/mirror) opts out of the Zen/Go host split.
+            if crate::providers::opencode_host_split_applies(&cfg.base_url) {
+                cfg.base_url = base.to_string();
+            }
         }
     }
     // Self-hosted OpenAI-compat (Ollama, vLLM, LiteLLM, custom gateways).
@@ -1276,6 +1375,43 @@ pub fn load_config() -> Result<Config> {
     cfg.reasoning_effort = crate::providers::canonical_effort(&cfg.reasoning_effort);
     cfg.validate()?;
     Ok(cfg)
+}
+
+/// Read every provider name in the config through the one alias table, so
+/// `provider = "opencode-go"` or `fallback_providers = ["chatgpt"]` mean the
+/// same account as the canonical id and find its saved credential. A spelling
+/// nothing recognises is a config error that names the closest id, rather than
+/// a silent route to an unknown provider with whatever key is lying around.
+fn canonicalize_provider_ids(cfg: &mut Config) -> Result<()> {
+    let active = cfg.provider.trim();
+    if !active.is_empty() && crate::providers::by_id(active).is_none() {
+        let Some(p) = crate::providers::resolve_provider_alias(active) else {
+            return Err(NurError::Config(format!(
+                "config.toml provider: {}",
+                crate::providers::unknown_provider_message(active)
+            )));
+        };
+        // `opencode-go` names the Go endpoint as well as the account; a
+        // stock Zen base_url written next to it would send Go models to Zen.
+        if active.eq_ignore_ascii_case("opencode-go")
+            && cfg.base_url.trim_end_matches('/') == crate::providers::OPENCODE_ZEN_BASE_URL
+        {
+            cfg.base_url = crate::providers::OPENCODE_GO_BASE_URL.to_string();
+        }
+        cfg.provider = p.id.to_string();
+    }
+    for list in [&mut cfg.fallback_providers, &mut cfg.fusion_panel] {
+        for id in list.iter_mut() {
+            let raw = id.trim();
+            if raw.is_empty() || crate::providers::by_id(raw).is_some() {
+                continue;
+            }
+            if let Some(p) = crate::providers::resolve_provider_alias(raw) {
+                *id = p.id.to_string();
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Apply `NUR_BASE_URL` onto a config.
@@ -1329,6 +1465,12 @@ fn write_atomically(path: &std::path::Path, content: &[u8], private: bool) -> st
         }
         f.write_all(content)?;
         f.sync_all()?;
+    }
+    // The rename keeps the file's own DACL, so restricting the temporary file
+    // means the secret is never readable through inherited directory rights.
+    #[cfg(windows)]
+    if private {
+        restrict_to_owner(&tmp)?;
     }
     #[cfg(windows)]
     let result = {
@@ -1386,6 +1528,38 @@ fn write_atomically(path: &std::path::Path, content: &[u8], private: bool) -> st
     #[cfg(not(windows))]
     let result = fs::rename(&tmp, path);
     result
+}
+
+/// Windows counterpart of mode 0600: drop inherited ACEs and leave one full-
+/// control entry for the account running nur. Without this `auth.json` and
+/// the per-provider stores inherit whatever `%USERPROFILE%` grants, which on
+/// shared or misconfigured machines includes other users. Falls back to the
+/// OWNER RIGHTS SID when the account name is not in the environment.
+#[cfg(windows)]
+fn restrict_to_owner(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    let user = match (std::env::var("USERDOMAIN"), std::env::var("USERNAME")) {
+        (Ok(domain), Ok(user)) if !domain.trim().is_empty() && !user.trim().is_empty() => {
+            format!("{}\\{}", domain.trim(), user.trim())
+        }
+        (_, Ok(user)) if !user.trim().is_empty() => user.trim().to_string(),
+        _ => "*S-1-3-4".to_string(),
+    };
+    let output = std::process::Command::new("icacls")
+        .arg(path)
+        .arg("/inheritance:r")
+        .arg("/grant:r")
+        .arg(format!("{user}:F"))
+        .creation_flags(crate::process_tree::CREATE_NO_WINDOW)
+        .output()?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(std::io::Error::other(format!(
+        "could not restrict {} to the current user: {}",
+        path.display(),
+        String::from_utf8_lossy(&output.stderr).trim()
+    )))
 }
 
 pub fn save_config(cfg: &Config) -> Result<()> {
@@ -1512,6 +1686,117 @@ mod tests {
             assert_eq!(got, Some(p(want)), "{nur_home:?} {home:?} {userprofile:?}");
         }
         assert_eq!(resolve_home(None, None, None, || None), None);
+    }
+
+    /// Ways the override can misfire: a provider-wide key beating a model key,
+    /// the `opencode-go/` spelling missing its bare twin, a typo'd value
+    /// silently picking a shape, or an unrelated provider inheriting a key.
+    #[test]
+    fn protocol_override_prefers_model_key_and_rejects_unknown_values() {
+        use crate::providers::ApiStyle;
+        let mut map = std::collections::HashMap::new();
+        map.insert("opencode".to_string(), "chat".to_string());
+        map.insert("opencode/kimi-k3".to_string(), "responses".to_string());
+        map.insert("opencode/glm-5.2".to_string(), "anthropik".to_string());
+        assert_eq!(
+            protocol_override(&map, "opencode", "kimi-k3"),
+            Some(ApiStyle::Responses)
+        );
+        assert_eq!(
+            protocol_override(&map, "opencode", "opencode-go/kimi-k3"),
+            Some(ApiStyle::Responses)
+        );
+        assert_eq!(
+            protocol_override(&map, "opencode", "claude-sonnet-5"),
+            Some(ApiStyle::ChatCompletions)
+        );
+        assert_eq!(protocol_override(&map, "opencode", "glm-5.2"), None);
+        assert_eq!(protocol_override(&map, "openai", "gpt-5.5"), None);
+        assert_eq!(
+            parse_protocol("Anthropic"),
+            Some(ApiStyle::AnthropicMessages)
+        );
+    }
+
+    /// `opencode-go` is the Go account and endpoint; `chatgpt` is the openai
+    /// login; a misspelling is an error that names the nearest id.
+    #[test]
+    fn provider_names_in_config_are_canonicalized_or_rejected() {
+        let mut cfg = Config {
+            provider: "opencode-go".into(),
+            base_url: crate::providers::OPENCODE_ZEN_BASE_URL.into(),
+            fallback_providers: vec!["chatgpt".into(), "bogus-provider".into()],
+            ..Default::default()
+        };
+        canonicalize_provider_ids(&mut cfg).unwrap();
+        assert_eq!(cfg.provider, "opencode");
+        assert_eq!(cfg.base_url, crate::providers::OPENCODE_GO_BASE_URL);
+        assert_eq!(cfg.fallback_providers[0], "openai");
+        assert_eq!(cfg.fallback_providers[1], "bogus-provider");
+
+        let mut cfg = Config {
+            provider: "opencode-go".into(),
+            base_url: "https://proxy.example/v1".into(),
+            ..Default::default()
+        };
+        canonicalize_provider_ids(&mut cfg).unwrap();
+        assert_eq!(
+            cfg.base_url, "https://proxy.example/v1",
+            "explicit base kept"
+        );
+
+        let mut cfg = Config {
+            provider: "antropic".into(),
+            ..Default::default()
+        };
+        let err = canonicalize_provider_ids(&mut cfg).unwrap_err().to_string();
+        assert!(err.contains("Did you mean 'anthropic'"), "{err}");
+    }
+
+    /// The secret files must not inherit the profile directory's ACL.
+    #[cfg(windows)]
+    #[test]
+    fn private_atomic_write_leaves_only_the_owner_on_windows() {
+        let root = std::env::temp_dir().join(format!("nur-acl-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let secret = root.join("auth.json");
+        private_atomic_write(&secret, b"{}").unwrap();
+        let listing = std::process::Command::new("icacls")
+            .arg(&secret)
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&listing.stdout).to_string();
+        let aces: Vec<&str> = text
+            .lines()
+            .filter(|l| l.contains("(F)") || l.contains("(R") || l.contains("(M)"))
+            .collect();
+        assert_eq!(aces.len(), 1, "exactly one ACE expected: {text}");
+        assert!(!text.contains("(I)"), "inherited ACE survived: {text}");
+        assert!(
+            !text.contains("BUILTIN\\Users") && !text.contains("Authenticated Users"),
+            "{text}"
+        );
+        // Still writable by us (the owner), and the replacement keeps the ACL.
+        private_atomic_write(&secret, b"{\"k\":1}").unwrap();
+        let again = std::process::Command::new("icacls")
+            .arg(&secret)
+            .output()
+            .unwrap();
+        assert!(
+            !String::from_utf8_lossy(&again.stdout).contains("(I)"),
+            "ACL lost on replace"
+        );
+        let plain = root.join("config.toml");
+        atomic_write(&plain, b"x = 1").unwrap();
+        let plain_acl = std::process::Command::new("icacls")
+            .arg(&plain)
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&plain_acl.stdout).contains("(I)"),
+            "non-secret files keep inheriting"
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

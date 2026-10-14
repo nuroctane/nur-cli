@@ -885,7 +885,16 @@ fn write_credential_policy(policy: &CredentialPolicy) -> Result<()> {
 
 /// Whether automatic vendor-CLI / OMP discovery is allowed for this provider.
 /// Explicitly saved credentials and environment variables are unaffected.
+///
+/// Off unless `[auth] import_fallback = true`: reading another tool's session
+/// behind the user's back copies its rotating refresh token, and whichever
+/// tool refreshes second is signed out. `nur auth import --from <cli>` is the
+/// deliberate path. A provider the user cleared in `/auth` stays blocked even
+/// when the fallback is on.
 pub fn t3_fallback_allowed(provider_id: &str) -> bool {
+    if !crate::config::import_fallback_enabled() {
+        return false;
+    }
     let id = provider_id.trim();
     let policy = read_credential_policy();
     !credential_family_ids(id)
@@ -1649,7 +1658,11 @@ pub fn provider_credential_summaries() -> BTreeMap<String, String> {
         if policy.blocked_t3.contains(provider.id) {
             sources.push("T3 blocked".into());
         } else if !provider.key_optional {
-            sources.push("CLI/OMP fallback".into());
+            if crate::config::import_fallback_enabled() {
+                sources.push("CLI/OMP fallback".into());
+            } else {
+                sources.push("import --from <cli>".into());
+            }
         }
         if sources.is_empty() {
             sources.push("add credential".into());
@@ -1920,33 +1933,207 @@ pub fn auth_status() -> Result<()> {
             println!("authenticated: no");
             println!("run: nur auth login");
             println!("or set NUR_API_KEY (or a vendor key env for your provider)");
+            println!("or copy a vendor CLI sign-in: nur auth import --from <codex|claude|...>");
             println!("or /login in the TUI (browser sign-in for Grok, Claude, …)");
             Ok(())
         }
     }
 }
 
-pub fn login_interactive(
-    key_arg: Option<String>,
-    provider_arg: Option<String>,
-    browser: bool,
-    import: bool,
-) -> Result<()> {
-    // Refuse to proceed on an unreadable config: the value is written back by
-    // every persist path below, so `unwrap_or_default()` here would replace a
-    // user's file (theme, fallbacks, budgets, overrides) with stock defaults
-    // because of a typo in it.
-    let mut cfg = crate::config::load_config().map_err(|e| {
+/// Flags of `nur auth login` that shape the flow.
+#[derive(Debug, Default, Clone)]
+pub struct LoginOptions {
+    /// Fresh browser / device-code / harness sign-in; never an import.
+    pub browser: bool,
+    /// Copy an existing vendor CLI / OMP session (same as `nur auth import`).
+    pub import: bool,
+    /// Model to select afterwards; skips the question.
+    pub model: Option<String>,
+    /// Answer yes to the consent and model questions.
+    pub yes: bool,
+}
+
+/// What `auth login` and `auth import` print and save once a credential is in
+/// hand: the billing line for the default model, and the chance to pick
+/// another one before the first turn spends anything.
+#[derive(Debug, Clone)]
+pub struct LoginOutcome {
+    pub provider: String,
+    pub via_oauth: bool,
+}
+
+/// Read the config, refusing to proceed when it does not parse: every persist
+/// path writes it back, so `unwrap_or_default()` would replace a user's file
+/// (theme, fallbacks, budgets, overrides) with stock defaults over a typo.
+fn load_config_for_login() -> Result<crate::config::Config> {
+    crate::config::load_config().map_err(|e| {
         NurError::Other(format!(
             "cannot read {}: {e}\nFix the file (or move it aside) before logging in - nur will \
              not overwrite a config it could not parse.",
             crate::config::config_path().display()
         ))
-    })?;
+    })
+}
+
+/// `nur auth import --from <cli>`: copy a vendor CLI's finished sign-in. The
+/// only path that reads another tool's credential store, and it says what
+/// that means before it does so.
+pub fn import_from_cli(from: &str, model: Option<String>, yes: bool) -> Result<()> {
+    let mut cfg = load_config_for_login()?;
+    let source = from.trim();
+    let via_omp = source.to_ascii_lowercase().starts_with("omp:");
+    let lookup = source.strip_prefix("omp:").unwrap_or(source);
+    let provider = crate::providers::import_source_provider(lookup)
+        .map(|p| p.id.to_string())
+        .ok_or_else(|| {
+            let sources: Vec<&str> = crate::providers::IMPORT_SOURCES
+                .iter()
+                .map(|(name, _)| *name)
+                .collect();
+            NurError::Other(format!(
+                "unknown import source '{source}'. Sources: {} (or omp:<provider>, or any \
+                 catalog id).",
+                sources.join(", ")
+            ))
+        })?;
+    if crate::providers::is_sidecar_provider(&provider) {
+        return Err(NurError::Other(format!(
+            "'{provider}' has no vendor CLI session to import - pass its key to `nur auth login \
+             --provider {provider} --key`"
+        )));
+    }
+    if !yes && atty_stdin() {
+        println!(
+            "This copies the {} sign-in{} into {} - refresh token included. Providers rotate \
+             refresh tokens, so whichever tool refreshes second is signed out; expect to sign \
+             in again in one of them. A fresh login (`nur auth login --provider {provider} \
+             --browser`) avoids that.",
+            source_label(lookup, &provider),
+            if via_omp { " held by OMP" } else { "" },
+            auth_path().display()
+        );
+        if !confirm("Import it anyway? [y/N] ")? {
+            return Err(NurError::Other("import cancelled".into()));
+        }
+    }
+    let outcome = persist_cli_import(&provider, &mut cfg)?;
+    finish_login(&outcome, &mut cfg, model, yes)
+}
+
+fn source_label(source: &str, provider: &str) -> String {
+    let name = crate::providers::by_id(provider)
+        .map(|p| p.name)
+        .unwrap_or(provider);
+    if source.eq_ignore_ascii_case(provider) {
+        format!("{name} CLI")
+    } else {
+        format!("{source} CLI ({name})")
+    }
+}
+
+/// Yes/no question on stdin; `Enter` is no.
+fn confirm(prompt: &str) -> Result<bool> {
+    print!("{prompt}");
+    io::stdout().flush()?;
+    let mut line = String::new();
+    io::stdin().read_line(&mut line)?;
+    Ok(matches!(
+        line.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
+}
+
+/// The client-identity notice for subscription routes (issue: providers may
+/// treat third-party use of their first-party client as a terms violation
+/// and act on the user's account). Asked once per login, before any browser
+/// opens; `--yes` or a non-interactive stdin accepts after printing it.
+fn consent_to_client_identity(provider: &str, yes: bool) -> Result<()> {
+    let Some(identity) = crate::providers::client_identity(provider) else {
+        return Ok(());
+    };
+    println!(
+        "note: on this route nur presents itself to {} as {identity}. Your subscription \
+         account is used under that client identity; the provider's terms may not allow it. \
+         Details: docs/authentication.md#client-identity-on-subscription-routes",
+        crate::providers::by_id(provider)
+            .map(|p| p.name)
+            .unwrap_or(provider)
+    );
+    if yes || !atty_stdin() {
+        return Ok(());
+    }
+    if !confirm("Continue? [y/N] ")? {
+        return Err(NurError::Other(
+            "sign-in cancelled - pass --key to use an API key under nur's own identity instead"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+/// After a credential is saved: say what the default model costs on this
+/// route and let the user pick another before the first turn. `--model`
+/// answers without asking; `--yes` or a non-interactive stdin keeps the
+/// default. The chosen model is normalised the way `/model` would.
+fn finish_login(
+    outcome: &LoginOutcome,
+    cfg: &mut crate::config::Config,
+    model: Option<String>,
+    yes: bool,
+) -> Result<()> {
+    let provider = outcome.provider.as_str();
+    let note = |cfg: &crate::config::Config| {
+        crate::providers::billing_note(provider, outcome.via_oauth, &cfg.base_url, &cfg.model)
+    };
+    let chosen = match model {
+        Some(m) if !m.trim().is_empty() => Some(m.trim().to_string()),
+        _ if yes || !atty_stdin() => None,
+        _ => {
+            println!("model: {} - {}", cfg.model, note(cfg));
+            let hint = if provider == "opencode" {
+                " (Go subscription ids: opencode-go/<id>, e.g. opencode-go/kimi-k3; /model in the \
+                 TUI lists both catalogs)"
+            } else {
+                " (/model in the TUI lists what your credential can use)"
+            };
+            print!("model id to use, or Enter to keep {}{hint}: ", cfg.model);
+            io::stdout().flush()?;
+            let mut line = String::new();
+            io::stdin().read_line(&mut line)?;
+            let typed = line.trim();
+            (!typed.is_empty()).then(|| typed.to_string())
+        }
+    };
+    if let Some(m) = chosen {
+        if provider == "opencode" {
+            let (bare, base) = crate::providers::normalize_opencode_selection(&m);
+            cfg.model = bare;
+            cfg.base_url = base.to_string();
+        } else {
+            cfg.model = m;
+        }
+        crate::config::save_config(cfg)?;
+    }
+    println!("model: {} - {}", cfg.model, note(cfg));
+    Ok(())
+}
+
+pub fn login_interactive(
+    key_arg: Option<String>,
+    provider_arg: Option<String>,
+    opts: LoginOptions,
+) -> Result<()> {
+    let LoginOptions {
+        browser,
+        import,
+        model,
+        yes,
+    } = opts;
+    let mut cfg = load_config_for_login()?;
     let provider = if let Some(raw) = provider_arg.as_deref() {
         crate::providers::resolve_provider_alias(raw)
             .map(|p| p.id.to_string())
-            .ok_or_else(|| NurError::Other(format!("unknown provider '{raw}'")))?
+            .ok_or_else(|| NurError::Other(crate::providers::unknown_provider_message(raw)))?
     } else if !cfg.provider.trim().is_empty() {
         cfg.provider.clone()
     } else {
@@ -1984,36 +2171,34 @@ pub fn login_interactive(
     }
 
     if import {
-        return persist_cli_import(&provider, &mut cfg);
+        return import_from_cli(&provider, model, yes);
     }
     if let Some(k) = key_arg {
-        return persist_cli_api_key(&provider, k.trim(), &mut cfg);
+        let outcome = persist_cli_api_key(&provider, k.trim(), &mut cfg)?;
+        return finish_login(&outcome, &mut cfg, model, yes);
     }
     if browser {
         if !browser_ok {
             return Err(NurError::Other(format!(
                 "provider '{provider}' has no official browser / harness sign-in. \
-                 Pass --key, or run `nur auth login --import` if a vendor CLI session exists."
+                 Pass --key, or `nur auth import --from <cli>` if a vendor CLI session exists."
             )));
         }
-        return persist_cli_browser(&provider, &mut cfg);
+        consent_to_client_identity(&provider, yes)?;
+        let outcome = persist_cli_browser(&provider, &mut cfg)?;
+        return finish_login(&outcome, &mut cfg, model, yes);
     }
     if browser_ok && atty_stdin() {
-        if let Ok(Some(tokens)) =
-            crate::oauth::run_blocking(|| crate::oauth::import_existing_session(&provider))
-        {
-            return persist_imported_tokens(
-                &provider,
-                tokens,
-                &mut cfg,
-                "imported existing CLI / OMP session",
-            );
-        }
+        // A fresh sign-in, never a copy of another CLI's session: that is
+        // `nur auth import --from <cli>`, and it says what sharing a rotating
+        // refresh token costs before it does it.
         println!(
-            "starting official sign-in for {provider} (pass --key to paste an API key instead)"
+            "starting official sign-in for {provider} (pass --key to paste an API key instead; \
+             `nur auth import --from <cli>` reuses a vendor CLI session)"
         );
+        consent_to_client_identity(&provider, yes)?;
         match persist_cli_browser(&provider, &mut cfg) {
-            Ok(()) => return Ok(()),
+            Ok(outcome) => return finish_login(&outcome, &mut cfg, model, yes),
             Err(e) => {
                 // A manual Claude paste reader may still own stdin. Exit this
                 // command instead of racing it with an API-key prompt.
@@ -2037,7 +2222,8 @@ pub fn login_interactive(
             line
         }
     };
-    persist_cli_api_key(&provider, typed.trim(), &mut cfg)
+    let outcome = persist_cli_api_key(&provider, typed.trim(), &mut cfg)?;
+    finish_login(&outcome, &mut cfg, model, yes)
 }
 
 fn atty_stdin() -> bool {
@@ -2045,7 +2231,11 @@ fn atty_stdin() -> bool {
     std::io::stdin().is_terminal()
 }
 
-fn persist_cli_api_key(provider: &str, key: &str, cfg: &mut crate::config::Config) -> Result<()> {
+fn persist_cli_api_key(
+    provider: &str,
+    key: &str,
+    cfg: &mut crate::config::Config,
+) -> Result<LoginOutcome> {
     if key.is_empty() {
         return Err(NurError::Other("empty API key".into()));
     }
@@ -2057,7 +2247,10 @@ fn persist_cli_api_key(provider: &str, key: &str, cfg: &mut crate::config::Confi
     println!("saved to {}", auth_path().display());
     println!("provider: {provider}");
     println!("key: {}", key_fingerprint(key));
-    Ok(())
+    Ok(LoginOutcome {
+        provider: provider.to_string(),
+        via_oauth: false,
+    })
 }
 
 /// Store a credential for a provider nur must *not* route turns to (sidecars
@@ -2089,7 +2282,7 @@ fn persist_imported_tokens(
     tokens: crate::oauth::OAuthTokens,
     cfg: &mut crate::config::Config,
     via: &str,
-) -> Result<()> {
+) -> Result<LoginOutcome> {
     let oauth = crate::oauth::imported_as_oauth_session(&tokens);
     let fingerprint = key_fingerprint(&tokens.access_token);
     if oauth {
@@ -2115,18 +2308,21 @@ fn persist_imported_tokens(
         if oauth { "oauth / harness" } else { "api_key" }
     );
     println!("key: {fingerprint}");
-    Ok(())
+    Ok(LoginOutcome {
+        provider: provider.to_string(),
+        via_oauth: oauth,
+    })
 }
 
-fn persist_cli_import(provider: &str, cfg: &mut crate::config::Config) -> Result<()> {
+fn persist_cli_import(provider: &str, cfg: &mut crate::config::Config) -> Result<LoginOutcome> {
     let tokens = crate::oauth::run_blocking(|| crate::oauth::import_existing_session(provider))?
         .ok_or_else(|| {
             if provider == "anthropic" {
                 return NurError::Other(
                     "no live Claude session to import: Claude Code (~/.claude/.credentials.json) is \
                      signed out or its refresh token expired, and `omp token anthropic` has no \
-                     credential. Run `claude` then /login (or sign in to Anthropic in omp), then \
-                     retry --import - or use --browser."
+                     credential. Run `claude` then retry `nur auth import --from claude` - or \
+                     sign in fresh with --browser."
                         .into(),
                 );
             }
@@ -2138,7 +2334,7 @@ fn persist_cli_import(provider: &str, cfg: &mut crate::config::Config) -> Result
     persist_imported_tokens(provider, tokens, cfg, "imported existing CLI / OMP session")
 }
 
-fn persist_cli_browser(provider: &str, cfg: &mut crate::config::Config) -> Result<()> {
+fn persist_cli_browser(provider: &str, cfg: &mut crate::config::Config) -> Result<LoginOutcome> {
     use crate::oauth::{BrowserLoginProgress, CancelFlag};
     use std::sync::mpsc;
     use std::thread;

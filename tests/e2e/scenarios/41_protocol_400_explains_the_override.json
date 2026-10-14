@@ -1,0 +1,21 @@
+{
+  "description": "A provider 400 that says the model does not support the protocol fails with the provider exit code (4) and an error that names the wire protocol nur used plus the [protocols] override that changes it.",
+  "provider": "opencode",
+  "model": "kimi-k3",
+  "env": {
+    "OPENCODE_API_KEY": "e2e-isolated-key"
+  },
+  "prompt": "Say hello.",
+  "script": [
+    { "status": 400, "error": "Model does not support this protocol" }
+  ],
+  "expect": {
+    "exit_code": 4,
+    "stderr_contains": [
+      "chat completions",
+      "[protocols]",
+      "opencode/kimi-k3"
+    ],
+    "requests": 1
+  }
+}

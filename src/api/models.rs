@@ -267,11 +267,17 @@ fn model_list_urls(base_url: &str, provider_id: &str, is_oauth: bool) -> Vec<Str
             // IS the Go endpoint, and using it here listed Go twice and hid Zen
             // entirely — plus the second, unprefixed copy of the Go ids routed
             // back to Zen on selection and 404'd.
-            let zen = crate::providers::by_id("opencode")
-                .map(|p| p.base_url)
-                .unwrap_or(crate::providers::OPENCODE_ZEN_BASE_URL);
-            urls.push(format!("{}/models", zen.trim_end_matches('/')));
-            urls.push(format!("{}/models", crate::providers::OPENCODE_GO_BASE_URL));
+            // A custom base (proxy, mirror, test double) replaces that split;
+            // asking the vendor hosts would leak the proxy's key to them.
+            if !crate::providers::opencode_host_split_applies(&base) {
+                urls.push(format!("{base}/models"));
+            } else {
+                let zen = crate::providers::by_id("opencode")
+                    .map(|p| p.base_url)
+                    .unwrap_or(crate::providers::OPENCODE_ZEN_BASE_URL);
+                urls.push(format!("{}/models", zen.trim_end_matches('/')));
+                urls.push(format!("{}/models", crate::providers::OPENCODE_GO_BASE_URL));
+            }
         }
         "anthropic" => {
             urls.push(format!("{base}/models"));
@@ -418,6 +424,14 @@ fn fetch_once(
                 req = req.bearer_auth(api_key);
             }
         }
+    }
+    // Go gates its catalog on the session header too, and affinity only works
+    // if the id the listing carries is the one the requests will use.
+    if url.contains("opencode.ai") {
+        req = req.header(
+            "x-opencode-session",
+            crate::api::client::session_affinity_id(),
+        );
     }
 
     let res = req
@@ -655,6 +669,14 @@ mod tests {
                 format!("{}/models", crate::providers::OPENCODE_GO_BASE_URL),
             ]
         );
+    }
+
+    /// With a proxy/mirror base the vendor hosts must not be probed at all -
+    /// the listing request carries the key.
+    #[test]
+    fn opencode_custom_base_skips_the_vendor_catalog_hosts() {
+        let urls = model_list_urls("http://127.0.0.1:8787/v1", "opencode", false);
+        assert_eq!(urls, vec!["http://127.0.0.1:8787/v1/models".to_string()]);
     }
 
     #[test]

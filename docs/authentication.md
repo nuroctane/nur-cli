@@ -198,39 +198,40 @@ Other first-party CLIs that do **not** have a browser OAuth nur can copy:
 - **MiniMax CLI (`mmx`)** — `mmx auth login --api-key` only. Nur imports a stored
   key from `~/.mmx` / `~/.minimax` when present.
 
-### Signed into the vendor CLI = signed into nur
+### Importing a vendor CLI or OMP session
 
-Credential resolution order for a catalog provider:
+Already signed into the vendor's own CLI (Claude Code, Codex, Grok, Kimi,
+Cursor, Factory Droid, OpenCode, Antigravity / gcloud, Muse Code, DeepSeek
+Harness, ZCode, Nous Portal / Hermes Agent, Command Code, Cline, Qwen Code
+settings, MiniMax CLI, Hugging Face) or into [Oh My Pi](https://github.com/can1357/oh-my-pi)?
+Copy that session into nur explicitly instead of signing in again:
 
-1. **Explicit provider environment** - the selected provider's own variable
-   (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and so on) wins for that provider only.
-2. **Already saved in nur** - a matching active `/login` session (`auth.json`),
-   then per-provider keys/sessions (`provider_keys.json` / `provider_sessions.json`),
-   followed by the global `NUR_API_KEY` fallback.
-3. **Vendor CLI session** (Claude Code, Codex, Grok, Kimi, Cursor, Factory Droid, OpenCode,
-   Antigravity / gcloud, Muse Code, DeepSeek Harness, ZCode, Nous Portal / Hermes
-   Agent, Command Code, Cline, Qwen Code settings, MiniMax CLI, Hugging Face
-   token) when that provider has a first-party importer.
-4. **Oh My Pi (OMP)** for every catalog provider - `omp token <provider>` reads
-   `~/.omp/agent/agent.db` (see [Oh My Pi](https://github.com/can1357/oh-my-pi)).
-   Nur maps ids (`openai` → `openai-codex`, `google` → `google-gemini-cli`, …).
-   A successful OMP import is written into the per-provider store so the next
-   resolve hits step 1 instead of shelling out again. The same bridge feeds
-   `/failover`, cross-provider subagents, and doctor probes.
+```bash
+nur auth import --from claude     # or codex, grok, kimi, cursor, droid, opencode, ...
+nur auth import --from omp        # Oh My Pi (~/.omp/agent/agent.db)
+nur auth import --from dsh        # also picks the route when it is unambiguous
+```
 
-OMP imports preserve the credential type exported by OMP. An API key is saved
-as an API key and uses the catalog provider's normal API endpoint and headers;
-an OAuth subscription session uses that provider's OAuth endpoint and metadata.
-Legacy OMP imports are classified and migrated on read so an old API key cannot
-accidentally take an OAuth-only route. Alias attempts share one bounded deadline.
+Imports are **deliberate, not automatic**: a plain `nur auth login` always
+starts a fresh browser or key flow and never silently reuses another tool's
+session, because most vendor CLIs rotate a *shared* refresh token - whichever
+tool refreshes second is signed out. The import prints exactly that warning so
+the trade-off is yours to make. Set `fallback_import = true` under `[auth]` in
+`~/.nur/config.toml` to restore the old behaviour (a missing credential quietly
+falls back to a vendor CLI / OMP session) for every provider at once.
 
-Nothing to paste when nur, the vendor CLI, or OMP already has a login.
+An import copies the tokens into nur's own per-provider store
+(`provider_sessions.json` / `provider_keys.json`); after that, resolution hits
+nur's store and never touches the vendor CLI again. OMP imports preserve the
+credential type exported by OMP: an API key is saved as an API key and uses the
+catalog provider's normal API endpoint and headers; an OAuth subscription
+session uses that provider's OAuth endpoint and metadata. Legacy OMP imports
+are classified and migrated on read so an old API key cannot accidentally take
+an OAuth-only route.
 
-First-party CLI imports are refreshed from the vendor's local session and saved
-under the selected provider when activated. If the imported session has gone
-stale, nur mints a fresh access token from the same refresh token the CLI stores,
-exactly as the CLI would have on its next use - a session merely being a few
-minutes old no longer sends you to `/login`.
+If the imported session has gone stale, nur mints a fresh access token from the
+same refresh token the CLI stores, exactly as the CLI would have on its next
+use - a session merely being a few minutes old no longer sends you to `/login`.
 
 Nur respects the official CLI isolation variables when locating those sessions:
 `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `XAI_CONFIG_DIR`, `CURSOR_AGENT_HOME`,
@@ -241,6 +242,29 @@ directory is not treated as signed out.
 
 Kimi Code API keys work against `https://api.kimi.com/coding/v1`. The separate Moonshot
 AI catalog entry remains available for `https://api.moonshot.ai/v1` keys.
+
+### Client identity on subscription routes
+
+Browser sign-in on a subscription route presents nur **as the vendor's own
+first-party client**, because that is what the subscription covers. nur shows
+which identity before opening the browser, and the table is the contract:
+
+| Route | The provider's logs show | Billing |
+|-------|--------------------------|---------|
+| `anthropic` browser sign-in | Anthropic Messages API with the Claude Code client identity | Claude subscription |
+| `openai` browser sign-in | Responses API with the Codex client identity and ChatGPT account headers | ChatGPT subscription |
+| `google` browser sign-in | Gemini Cloud Code endpoint with the Gemini CLI client metadata | Gemini Code Assist |
+| `opencode` / `opencode-go` | OpenCode Zen with an `x-opencode-session` session-affinity header | per token (Zen) or Go subscription |
+
+Every other route sends nur's own requests with your API key. The
+session-affinity header pins a session to the same Zen upstream so prompt-cache
+prefixes actually hit; it carries a random per-install id, not an account
+identifier.
+
+When a subscription route is down and `fallback_providers` names a per-token
+provider, nur **skips that fallback** rather than silently billing you, and
+says so. Set `failover_allow_paid = true` in `~/.nur/config.toml` to allow the
+paid fallback explicitly.
 
 ### Keys are kept per provider
 
@@ -282,15 +306,19 @@ No key on launch → the login modal opens automatically.
 ```bash
 nur auth login
 nur auth login --provider muse --browser
-nur auth login --provider deepseek --import
 nur auth login --provider zcode --browser
+nur auth login --provider openai --model gpt-5.6-codex  # also sets the default model
+nur auth import --from claude   # copy an existing vendor CLI / OMP session
 nur auth login --key YOUR_KEY   # avoid on shared machines
 ```
 
-`--provider` accepts catalog ids and aliases (`muse`, `zcode`, `dsh`, `glm`).
-`--browser` runs that vendor's official harness / CLI sign-in (Muse Code, ZCode,
-DeepSeek Harness `dsh web`, plus the existing Codex / Claude / Grok / … flows).
-`--import` reads an already-signed-in vendor CLI or OMP session.
+`--provider` accepts catalog ids and aliases (`muse`, `zcode`, `dsh`, `glm`,
+`opencode-go`, `chatgpt`). A typo is a hard error that names the closest match
+rather than a silent fallback to OpenAI. `--browser` runs that vendor's
+official harness / CLI sign-in (Muse Code, ZCode, DeepSeek Harness `dsh web`,
+plus the existing Codex / Claude / Grok / … flows). `--import` is a deprecated
+shortcut for `nur auth import --from <source>`, which copies an
+already-signed-in vendor CLI or OMP session into nur's own store.
 
 On a TTY, `nur auth login` without `--key` starts the official sign-in when the
 active (or `--provider`) catalog row has one. Pass `--key` to paste an API key
@@ -454,9 +482,11 @@ Credential resolution order:
 
 1. The selected provider's environment variable, such as `OPENAI_API_KEY`
 2. A matching active API-key or OAuth session in `~/.nur/auth.json`
-3. That provider's saved key, then saved OAuth session
+3. That provider's saved key, then saved OAuth session (imports land here)
 4. The global `NUR_API_KEY` fallback
-5. A supported vendor CLI session, then an OMP credential
+5. A supported vendor CLI session, then an OMP credential - **only** when
+   `[auth] fallback_import = true` opts in; otherwise `nur auth import --from`
+   is the explicit path
 6. Interactive TUI prompt (opens `/login` when no credential is found)
 
 `NUR_API_KEY` is the only global override. Provider-specific environment

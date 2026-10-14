@@ -1877,16 +1877,11 @@ pub mod openai {
     /// Unknown values (e.g. `nur_cli`) make authorize return missing_required_parameter.
     pub const ORIGINATOR: &str = "codex_cli_rs";
 
+    /// A fresh ChatGPT sign-in, always: the import of a Codex CLI session
+    /// lives in `nur auth import --from codex`. Browser login must not quietly
+    /// reuse another tool's rotating refresh token - whichever tool refreshes
+    /// second is then signed out of both.
     pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
-        // Prefer an existing Codex CLI session — no browser round-trip.
-        if let Ok(Some(imported)) = import_codex_cli() {
-            send(
-                tx,
-                BrowserLoginProgress::Status("using existing Codex CLI session".into()),
-            );
-            return Ok(imported);
-        }
-
         let (listener, port) = CALLBACK_PORTS
             .iter()
             .find_map(|port| {
@@ -4149,28 +4144,11 @@ pub mod claude {
         )))
     }
 
+    /// A fresh Claude sign-in, always: copying a Claude Code session lives in
+    /// `nur auth import --from claude`. Browser login must not quietly reuse
+    /// another tool's rotating refresh token - whichever tool refreshes second
+    /// is then signed out of both.
     pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
-        // Prefer an already-signed-in Claude Code session (no browser needed) —
-        // but only a live one. Importing an expired session made /login
-        // "succeed" and left the user in a refresh-failure loop; falling
-        // through to the browser flow actually recovers. Same gate as
-        // antigravity: None = never expires, Some = must be > now + 5 min.
-        if let Ok(Some(imported)) = import_claude_cli() {
-            if !crate::auth::oauth_expired(imported.expires_at) {
-                send(
-                    tx,
-                    BrowserLoginProgress::Status("using existing Claude Code session".into()),
-                );
-                return Ok(imported);
-            }
-            send(
-                tx,
-                BrowserLoginProgress::Status(
-                    "Claude Code session is expired — starting browser sign-in…".into(),
-                ),
-            );
-        }
-
         let verifier = random_urlsafe(32);
         let challenge = pkce_challenge(&verifier);
         // 32 bytes like Claude Code; a 16-byte state is rejected after
@@ -4655,7 +4633,7 @@ pub mod antigravity {
         !client_id().is_empty() && !client_secret().is_empty()
     }
 
-    const OAUTH_APP_UNSET: &str = "Google browser sign-in needs an OAuth app: set NUR_GOOGLE_CLIENT_ID and NUR_GOOGLE_CLIENT_SECRET. Or sign in with the Antigravity/gcloud CLI (nur imports that session automatically), or paste a Gemini API key.";
+    const OAUTH_APP_UNSET: &str = "Google browser sign-in needs an OAuth app: set NUR_GOOGLE_CLIENT_ID and NUR_GOOGLE_CLIENT_SECRET. Or sign in with the Antigravity/gcloud CLI and copy that session with `nur auth import --from antigravity`, or paste a Gemini API key.";
     const AUTHORIZE_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
     const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
     const LOAD_ASSIST_URL: &str = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
@@ -4992,31 +4970,12 @@ foreach ($t in $targets) {
 
     // ── Browser OAuth login ──────────────────────────────────────────────────
 
+    /// A fresh Google sign-in for Antigravity, always: reusing the agy CLI
+    /// session lives in `nur auth import --from antigravity`. That import
+    /// needs no OAuth app while the browser flow does, so the error below
+    /// points at it explicitly.
     pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
-        // If agy already logged in, reuse
-        if let Ok(Some(existing)) = import_existing() {
-            // Check not expired
-            if let Some(exp) = existing.expires_at {
-                if exp > crate::oauth::now_unix() + 300 {
-                    send(
-                        tx,
-                        BrowserLoginProgress::Status(
-                            "using existing Antigravity CLI session".into(),
-                        ),
-                    );
-                    return Ok(existing);
-                }
-            } else {
-                send(
-                    tx,
-                    BrowserLoginProgress::Status("using existing Antigravity CLI session".into()),
-                );
-                return Ok(existing);
-            }
-        }
-
-        // Importing a CLI session above needs no OAuth app; the browser flow
-        // does. Fail here with something actionable rather than after the user
+        // Fail here with something actionable rather than after the user
         // has already been sent through a consent screen.
         if !oauth_app_configured() {
             return Err(NurError::Other(OAUTH_APP_UNSET.into()));
