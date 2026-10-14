@@ -276,6 +276,7 @@ fn draw_login_method(f: &mut Frame, app: &mut App, area: Rect) {
         body: inner,
         scope: Rect::default(),
         rows: Vec::new(),
+        rail: Rect::default(),
     };
     let options: Vec<(&str, String)> = super::app::login_method_choices(&provider, m.can_import)
         .into_iter()
@@ -417,6 +418,7 @@ fn draw_login_jev_slots(f: &mut Frame, app: &mut App, area: Rect) {
         body: inner,
         scope: Rect::default(),
         rows: Vec::new(),
+        rail: Rect::default(),
     };
     let mut buttons: Vec<(usize, Rect)> = Vec::new();
     let intro_w = (inner.width as usize).saturating_sub(2);
@@ -694,7 +696,7 @@ fn draw_login_form(f: &mut Frame, app: &mut App, rect: Rect, lines: Vec<Line<'st
         login.hit.rows = vec![(0, inner)];
         draw_picker_scrollbar(
             f,
-            &login.hit,
+            &mut login.hit,
             login.form_rows,
             login.form_scroll,
             inner.height as usize,
@@ -754,6 +756,7 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
         body: inner,
         scope: Rect::default(),
         rows: Vec::new(),
+        rail: Rect::default(),
     };
 
     // Filter line (2 rows) + provider list below — same one-step scroll as sessions.
@@ -909,7 +912,7 @@ fn draw_login_picker(f: &mut Frame, app: &mut App, area: Rect) {
         Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
         inner,
     );
-    draw_picker_scrollbar(f, &hit, total, start, vis_rows);
+    draw_picker_scrollbar(f, &mut hit, total, start, vis_rows);
     if let Some(m) = &mut app.login {
         m.hit = hit;
     }
@@ -962,6 +965,7 @@ fn draw_model_picker(f: &mut Frame, app: &mut App, area: Rect) {
         body: inner,
         scope: Rect::default(),
         rows: Vec::new(),
+        rail: Rect::default(),
     };
 
     // Filter line (2 rows) + list below — one screen row per model.
@@ -1014,7 +1018,10 @@ fn draw_model_picker(f: &mut Frame, app: &mut App, area: Rect) {
 
     // Empty states: loading, fetch error, or no filter match.
     if picks.is_empty() {
-        let msg = if loading {
+        let msg = if loading && provider_id == "factory" {
+            // Cold start only: once captured, the catalog is cached per binary.
+            "  asking droid for its catalog… (first run of a new build takes ~15 s)".to_string()
+        } else if loading {
             "  fetching models from provider…".to_string()
         } else if let Some(e) = &error {
             format!("  couldn't list models · {e}")
@@ -1103,7 +1110,7 @@ fn draw_model_picker(f: &mut Frame, app: &mut App, area: Rect) {
         Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
         inner,
     );
-    draw_picker_scrollbar(f, &hit, total, start, vis_rows);
+    draw_picker_scrollbar(f, &mut hit, total, start, vis_rows);
     if let Some(m) = &mut app.model_picker {
         m.hit = hit;
     }
@@ -1151,6 +1158,7 @@ fn draw_theme_picker(f: &mut Frame, app: &mut App, area: Rect) {
         body: inner,
         scope: Rect::default(),
         rows: Vec::new(),
+        rail: Rect::default(),
     };
 
     // Graphics-protocol gradient preview of the highlighted theme (kitty /
@@ -1346,7 +1354,7 @@ fn draw_theme_choices(
         Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
         inner,
     );
-    draw_picker_scrollbar(f, &hit, picker.count(), start, vis_rows);
+    draw_picker_scrollbar(f, &mut hit, picker.count(), start, vis_rows);
     picker.hit = hit;
 }
 
@@ -1401,6 +1409,7 @@ fn draw_plugin_picker(f: &mut Frame, app: &mut App, area: Rect) {
         body: inner,
         scope: Rect::default(),
         rows: Vec::new(),
+        rail: Rect::default(),
     };
 
     const FILTER_ROWS: usize = 2;
@@ -1522,7 +1531,7 @@ fn draw_plugin_picker(f: &mut Frame, app: &mut App, area: Rect) {
         Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
         inner,
     );
-    draw_picker_scrollbar(f, &hit, total, start, vis_rows);
+    draw_picker_scrollbar(f, &mut hit, total, start, vis_rows);
     if let Some(m) = &mut app.plugin_picker {
         m.hit = hit;
     }
@@ -1824,6 +1833,7 @@ fn draw_session_picker(f: &mut Frame, app: &mut App, area: Rect) {
         body: inner,
         scope,
         rows: Vec::new(),
+        rail: Rect::default(),
     };
 
     if total == 0 {
@@ -1989,7 +1999,7 @@ fn draw_session_picker(f: &mut Frame, app: &mut App, area: Rect) {
         inner,
     );
 
-    draw_picker_scrollbar(f, &hit, total, start, vis_rows);
+    draw_picker_scrollbar(f, &mut hit, total, start, vis_rows);
     if let Some(p) = &mut app.picker {
         p.hit = hit;
     }
@@ -2286,14 +2296,52 @@ fn picker_rect(area: Rect, width: u16, count: usize, stride: usize, extra: usize
     fit_modal_rect(area, width, height, 36, 8)
 }
 
-/// A proportional position cue in the inner frame, outside row click targets.
+/// Colours for one scrollbar rail: thumb, track and the cell background.
+struct RailPalette {
+    thumb: Color,
+    track: Color,
+    bg: Color,
+}
+
+/// Paint one rail cell from its subcell coverage. The thumb's bottom edge is
+/// an inverted cell (background glyph over thumb colour) so both edges land
+/// on exact eighths; see [`ScrollMetrics::glyph`].
+fn paint_rail_cell(
+    buf: &mut ratatui::buffer::Buffer,
+    x: u16,
+    y: u16,
+    glyph: Option<super::scrollbar::Glyph>,
+    p: &RailPalette,
+) {
+    let cell = &mut buf[(x, y)];
+    match glyph {
+        Some(g) if g.inverted => {
+            cell.set_char(g.ch)
+                .set_style(Style::default().fg(p.bg).bg(p.thumb));
+        }
+        Some(g) => {
+            cell.set_char(g.ch)
+                .set_style(Style::default().fg(p.thumb).bg(p.bg));
+        }
+        None => {
+            cell.set_char('│')
+                .set_style(Style::default().fg(p.track).bg(p.bg));
+        }
+    }
+}
+
+/// Proportional rail in a modal's inner frame, outside the row click targets.
+/// Same fractional thumb as the transcript so every scrollbar in the TUI reads
+/// the same; publishes `hit.rail` so a press or drag on it scrolls the list
+/// (see `App::modal_rail_mouse`).
 fn draw_picker_scrollbar(
     f: &mut Frame,
-    hit: &super::app::PickerHit,
+    hit: &mut super::app::PickerHit,
     total: usize,
     start: usize,
     page: usize,
 ) {
+    hit.rail = Rect::default();
     if total <= page || hit.rows.is_empty() || hit.frame.width < 6 {
         return;
     }
@@ -2306,23 +2354,25 @@ fn draw_picker_scrollbar(
         .bottom()
         .min(hit.frame.bottom().saturating_sub(2));
     let height = last.saturating_sub(first);
+    if height == 0 {
+        return;
+    }
+    let x = hit.frame.right() - 2;
+    hit.rail = Rect::new(x, first, 1, height);
     let metrics = ScrollMetrics::new(total, page, start, height);
+    let palette = RailPalette {
+        thumb: theme::dim(theme::NUR_GOLD(), 0.2),
+        track: theme::dim(theme::BORDER(), 0.3),
+        bg: theme::SURFACE_2(),
+    };
     for row in 0..height {
-        let filled = !matches!(
-            metrics.cell_fill(row as usize),
-            super::scrollbar::CellFill::Empty
+        paint_rail_cell(
+            f.buffer_mut(),
+            x,
+            first + row,
+            metrics.glyph(row as usize),
+            &palette,
         );
-        f.buffer_mut()[(hit.frame.right() - 2, first + row)]
-            .set_char(if filled { '┃' } else { '│' })
-            .set_style(
-                Style::default()
-                    .fg(if filled {
-                        theme::NUR_GOLD()
-                    } else {
-                        theme::BORDER()
-                    })
-                    .bg(theme::SURFACE_2()),
-            );
     }
 }
 
@@ -2614,27 +2664,16 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     let total = row_index.len();
     let viewport = area.height;
 
-    // Sticky banner takes rows off the body — max_scroll must use body height
-    // or the thumb/drag math fights the sticky and feels janky.
+    // The body always fills the viewport; the sticky prompt banner is a pure
+    // overlay on its first STICKY_H rows. Scroll range, line↔row mapping and
+    // scrollbar geometry therefore never change as the banner comes and goes,
+    // which is what kept the thumb jumping two rows mid-drag when the body
+    // used to shrink to make room for it.
     const STICKY_H: u16 = 2;
-    // The sticky behaves as an overlay on the first STICKY_H rows of the full
-    // viewport: it shows whenever the owning prompt's header is above the
-    // rows the body can display *with* the sticky in place. Deciding from the
-    // uncovered viewport instead let the header sit visible on the top two
-    // rows, then the next one-line scroll both hid it and removed two body
-    // rows - a three-row jump for a one-line wheel step.
-    let max_scroll_full = total.saturating_sub(viewport as usize);
-    let top_full = max_scroll_full.saturating_sub(app.scroll_from_bottom.min(max_scroll_full));
-    let sticky_guess: bool = row_index
-        .sticky_owner(
-            (top_full + STICKY_H as usize).min(row_index.len()),
-            (top_full + viewport as usize).min(row_index.len()),
-        )
-        .is_some();
-    let sticky_h = if sticky_guess { STICKY_H } else { 0 };
-    let body_h = viewport.saturating_sub(sticky_h);
+    let body_y = area.y;
+    let body_h = viewport;
 
-    // Publish metrics for PageUp/Home + scrollbar drag (body, not full viewport).
+    // Publish metrics for PageUp/Home + scrollbar drag.
     app.view_h = body_h;
     app.view_total = total;
 
@@ -2645,29 +2684,22 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     let top = max_scroll.saturating_sub(app.scroll_from_bottom);
     app.transcript_top = top;
 
-    let vis_lo = top;
-    let vis_hi = (vis_lo + body_h as usize).min(row_index.len());
+    // The banner shows when the prompt owning the first *uncovered* row has
+    // its header above that row (it may sit under the banner itself: the
+    // header then hands over to its sticky copy without the content moving).
+    let vis_lo = (top + STICKY_H as usize).min(row_index.len());
+    let vis_hi = (top + body_h as usize).min(row_index.len());
     let sticky_oi = row_index.sticky_owner(vis_lo, vis_hi);
     let sticky: Option<String> = sticky_oi.map(|oi| prompts[oi].to_string());
     let sticky_cell = sticky_oi.and_then(|oi| prompt_cells.get(oi).copied());
-    // Freeze sticky while drag-selecting: sticky appearing/disappearing mid-drag
-    // changes body height and makes the highlight jump under the pointer.
+    // Hide the banner while drag-selecting so the rows under it stay readable
+    // and the pointer never flips between "on text" and "over the banner".
     let sticky_h = if sticky.is_some() && app.select_anchor.is_none() && !app.selecting {
         STICKY_H
     } else {
         0
     };
     let sticky = if sticky_h > 0 { sticky } else { None };
-    let body_y = area.y + sticky_h;
-    let body_h = viewport.saturating_sub(sticky_h);
-    // Re-sync if sticky appearance changed body height.
-    app.view_h = body_h;
-    let max_scroll = total.saturating_sub(body_h as usize);
-    if app.scroll_from_bottom > max_scroll {
-        app.scroll_from_bottom = max_scroll;
-    }
-    let top = max_scroll.saturating_sub(app.scroll_from_bottom);
-    app.transcript_top = top;
 
     let text_w = inner_w;
 
@@ -2857,10 +2889,11 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
             x: area.x,
             y: area.y,
             width: area.width.saturating_sub(sb_w),
-            height: sticky_h,
+            height: sticky_h.min(body_h),
         };
         draw_sticky_banner(f, &prompt, banner);
-        // Publish so right/double-click on the header opens that prompt's menu.
+        // Publish so right/double-click on the header opens that prompt's
+        // menu and transcript hit-tests ignore the rows it covers.
         app.sticky_banner = banner;
         app.sticky_cell = sticky_cell;
     } else {
@@ -2868,7 +2901,8 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
         app.sticky_cell = None;
     }
 
-    // Draggable scrollbar on the right edge of the transcript.
+    // Draggable scrollbar on the right edge of the transcript, spanning the
+    // whole viewport so its geometry is independent of the banner.
     let track = Rect {
         x: area.right().saturating_sub(sb_w),
         y: body_y,
@@ -2958,51 +2992,41 @@ fn draw_scrollbar(f: &mut Frame, app: &App, track: Rect, top: usize, total: usiz
     }
     let m = ScrollMetrics::new(total, viewport as usize, top, track.height);
     let scrollable = m.max_offset() > 0;
+    let active = app.scrollbar_hover || app.scrollbar_drag;
 
-    // Thumb hue steps up as you interact: idle → hover → drag.
-    let thumb_fg = if app.scrollbar_drag {
-        theme::NUR_GOLD_SKY()
-    } else if app.scrollbar_hover {
-        theme::BLUE_250()
-    } else {
-        theme::NUR_GOLD()
-    };
-    let track_fg = if !scrollable {
-        theme::dim(theme::BORDER(), 0.4)
-    } else if app.scrollbar_hover || app.scrollbar_drag {
-        theme::BLUE_500()
-    } else {
-        theme::BORDER()
+    // One quiet lane: a muted thumb at rest so the rail reads as chrome, not
+    // content; it lights up on hover and again while dragging. The rail keeps
+    // one width in every state - the old hover-widening made the thumb pop
+    // between one and two columns under the pointer.
+    let palette = RailPalette {
+        thumb: if app.scrollbar_drag {
+            theme::NUR_GOLD_SKY()
+        } else if app.scrollbar_hover {
+            theme::NUR_GOLD()
+        } else {
+            theme::dim(theme::NUR_GOLD(), 0.35)
+        },
+        track: if !scrollable {
+            theme::dim(theme::BORDER(), 0.6)
+        } else if active {
+            theme::BORDER()
+        } else {
+            theme::dim(theme::BORDER(), 0.4)
+        },
+        bg: theme::BG(),
     };
 
     let buf = f.buffer_mut();
-    let lane_x = track.x + track.width.saturating_sub(1); // thumb lane (right col)
-    let edge_x = track.x; // hover-expansion lane (left col)
+    let lane_x = track.x + track.width.saturating_sub(1); // rail (right col)
+    let gap_x = track.x; // breathing space between the cards and the rail
     for row in 0..track.height {
         let y = track.y + row;
-        match m.glyph(row as usize) {
-            Some(g) => {
-                buf[(lane_x, y)]
-                    .set_char(g)
-                    .set_style(Style::default().fg(thumb_fg).bg(theme::BG()));
-                // Hover/drag: thumb grows to both columns — chunky, grabbable.
-                if (app.scrollbar_hover || app.scrollbar_drag) && track.width >= 2 {
-                    buf[(edge_x, y)]
-                        .set_char(g)
-                        .set_style(Style::default().fg(thumb_fg).bg(theme::BG()));
-                }
-            }
-            None => {
-                buf[(lane_x, y)]
-                    .set_char('│')
-                    .set_style(Style::default().fg(track_fg).bg(theme::BG()));
-                if track.width >= 2 {
-                    buf[(edge_x, y)]
-                        .set_char(' ')
-                        .set_style(Style::default().bg(theme::BG()));
-                }
-            }
+        if track.width >= 2 {
+            buf[(gap_x, y)]
+                .set_char(' ')
+                .set_style(Style::default().bg(palette.bg));
         }
+        paint_rail_cell(buf, lane_x, y, m.glyph(row as usize), &palette);
     }
 }
 
@@ -5769,13 +5793,18 @@ fn draw_hover_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
     if total_rows <= inner.height {
         // Fits — plain paragraph, no scroll state to keep.
         app.peek_scroll = 0;
+        app.peek_scroll_target = 0;
+        app.peek_max_scroll = 0;
         f.render_widget(Paragraph::new(lines).style(bg), inner);
     } else {
         // Overflows — tui-scrollview: content renders into an offscreen buffer
         // and the wheel (over the box) drives the offset; it draws its own
         // scrollbar on the right edge.
         use ratatui::widgets::StatefulWidget;
-        let scroll = app.peek_scroll.min(total_rows.saturating_sub(inner.height));
+        let max_scroll = total_rows.saturating_sub(inner.height);
+        app.peek_max_scroll = max_scroll;
+        app.peek_scroll_target = app.peek_scroll_target.min(max_scroll);
+        let scroll = app.peek_scroll.min(max_scroll);
         app.peek_scroll = scroll;
         let size = Size::new(inner.width.saturating_sub(1).max(1), total_rows);
         let mut sv = tui_scrollview::ScrollView::new(size);
@@ -6141,11 +6170,14 @@ fn draw_swarm_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
     app.peek_trace_hits.clear();
     let scroll = if total_rows <= content_area.height {
         app.peek_scroll = 0;
+        app.peek_scroll_target = 0;
+        app.peek_max_scroll = 0;
         0
     } else {
-        let s = app
-            .peek_scroll
-            .min(total_rows.saturating_sub(content_area.height));
+        let max_scroll = total_rows.saturating_sub(content_area.height);
+        app.peek_max_scroll = max_scroll;
+        app.peek_scroll_target = app.peek_scroll_target.min(max_scroll);
+        let s = app.peek_scroll.min(max_scroll);
         app.peek_scroll = s;
         s
     };
@@ -7003,7 +7035,7 @@ fn draw_palette(f: &mut Frame, app: &mut App, input_area: Rect) {
         Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
         inner,
     );
-    draw_picker_scrollbar(f, &app.palette_hit, matches.len(), start, vis);
+    draw_picker_scrollbar(f, &mut app.palette_hit, matches.len(), start, vis);
 }
 
 // ── question modal ─────────────────────────────────────────────────────────

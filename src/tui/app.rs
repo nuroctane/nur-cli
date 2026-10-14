@@ -1949,6 +1949,8 @@ pub struct PickerHit {
     pub scope: ratatui::layout::Rect,
     /// Visible row index → screen rect (for click-to-select).
     pub rows: Vec<(usize, ratatui::layout::Rect)>,
+    /// Scrollbar rail (1 column); empty when the list fits.
+    pub rail: ratatui::layout::Rect,
 }
 
 impl SessionPicker {
@@ -2227,8 +2229,15 @@ pub struct App {
     /// Subcell offset between the grab point and the thumb's top edge, so
     /// dragging keeps the exact spot under the pointer (no jump-to-centre).
     pub scrollbar_grab: usize,
+    /// True while a modal list's rail is being dragged (`modal_rail_mouse`).
+    pub modal_rail_drag: bool,
     /// Scroll offset (rows) inside the pinned peek dialogue.
     pub peek_scroll: u16,
+    /// Where the peek body is gliding to (wheel/keys move this; the offset
+    /// eases toward it like the transcript).
+    pub peek_scroll_target: u16,
+    /// Largest valid peek offset for the current body (set at draw).
+    pub peek_max_scroll: u16,
     /// Total content rows of the current peek body (set at draw; drives clamping).
     pub peek_rows: u16,
     /// Peek cell the scroll offset belongs to - reset when the target changes.
@@ -2816,7 +2825,10 @@ pub(super) fn new_app(
         scrollbar_drag: false,
         scrollbar_hover: false,
         scrollbar_grab: 0,
+        modal_rail_drag: false,
         peek_scroll: 0,
+        peek_scroll_target: 0,
+        peek_max_scroll: 0,
         peek_rows: 0,
         peek_scroll_cell: None,
         peek_expanded: false,
@@ -3182,17 +3194,25 @@ pub async fn run_tui(
                     }
                     Event::Paste(s) => kb_events.push(Event::Paste(s)),
                     // Drop pure hover motion while a modal is open - bulk of
-                    // Windows mouse floods; no modal use.
+                    // Windows mouse floods; no modal use. A scrollbar drag
+                    // that started before (or under) an approval/question
+                    // modal keeps its motion: on_mouse continues it there.
                     Event::Mouse(m)
                         if modal_open
+                            && !app.scrollbar_drag
+                            && !app.modal_rail_drag
                             && matches!(
                                 m.kind,
                                 MouseEventKind::Moved | MouseEventKind::Drag(_)
                             ) => {}
                     other => other_events.push(other),
                 }
-                // Hard cap on mouse/other so a flood cannot keep us draining forever.
+                // Hard cap on mouse/other so a flood cannot keep us draining
+                // forever. Button transitions and the newest pointer position
+                // survive the cut: dropping an Up left drags stuck, dropping
+                // the last Drag left the thumb short of the pointer.
                 if kb_events.len() + other_events.len() > 512 {
+                    let mut last_motion: Option<Event> = None;
                     while event::poll(Duration::ZERO)? {
                         match event::read()? {
                             Event::Key(key)
@@ -3202,12 +3222,25 @@ pub async fn run_tui(
                                 kb_events.push(Event::Key(key));
                             }
                             Event::Paste(s) => kb_events.push(Event::Paste(s)),
+                            Event::Mouse(m)
+                                if matches!(
+                                    m.kind,
+                                    MouseEventKind::Moved | MouseEventKind::Drag(_)
+                                ) =>
+                            {
+                                last_motion = Some(Event::Mouse(m));
+                            }
+                            other @ (Event::Mouse(_)
+                            | Event::FocusLost
+                            | Event::FocusGained
+                            | Event::Resize(_, _)) => other_events.push(other),
                             _ => {}
                         }
                         if kb_events.len() > 256 {
                             break;
                         }
                     }
+                    other_events.extend(last_motion);
                     break;
                 }
             }
@@ -3452,7 +3485,9 @@ pub async fn run_tui(
             crate::ade::tick_running_title(app.spinner_epoch.elapsed());
         }
         // Mouse capture can be clobbered by title OSC / host quirks mid-session.
-        if last_mouse_rearm.elapsed().as_secs() >= 2 {
+        // Never while a button is held: re-asserting the tracking modes makes
+        // some hosts forget the pressed button, which ends a drag with no Up.
+        if last_mouse_rearm.elapsed().as_secs() >= 2 && !app.mouse_left_down {
             enable_mouse();
             last_mouse_rearm = Instant::now();
         }
@@ -3695,19 +3730,34 @@ impl App {
         self.scroll_target = self.scroll_from_bottom;
     }
 
-    /// True while the viewport has not reached its target.
+    /// Move the open peek's scroll target by `delta` rows, clamped to the
+    /// body; the offset glides there on the next ticks.
+    pub fn peek_scroll_by(&mut self, delta: i32) {
+        let next = (self.peek_scroll_target as i64 + delta as i64)
+            .clamp(0, self.peek_max_scroll as i64) as u16;
+        self.peek_scroll_target = next;
+    }
+
+    /// True while the transcript or the peek body has not reached its target.
     pub fn scroll_animating(&self) -> bool {
         self.scroll_target.min(self.max_scroll()) != self.scroll_from_bottom
+            || (self.peek_is_open() && self.peek_scroll_target != self.peek_scroll)
     }
 
     /// One easing step toward the target (a third of the remaining distance,
     /// at least one line), at most every `SCROLL_STEP_MS`. Returns true when
-    /// the viewport moved and needs a repaint.
+    /// a viewport moved and needs a repaint. The transcript and the peek body
+    /// share the cadence so both glide the same way.
     pub fn tick_scroll_animation(&mut self) -> bool {
         const SCROLL_STEP_MS: u64 = 16;
         let target = self.scroll_target.min(self.max_scroll());
         self.scroll_target = target;
-        if target == self.scroll_from_bottom {
+        let peek_target = if self.peek_is_open() {
+            self.peek_scroll_target.min(self.peek_max_scroll)
+        } else {
+            self.peek_scroll
+        };
+        if target == self.scroll_from_bottom && peek_target == self.peek_scroll {
             return false;
         }
         let now = Instant::now();
@@ -3715,13 +3765,8 @@ impl App {
             return false;
         }
         self.scroll_anim_at = now;
-        let diff = target.abs_diff(self.scroll_from_bottom);
-        let step = diff.div_ceil(3).max(1);
-        if target > self.scroll_from_bottom {
-            self.scroll_from_bottom += step;
-        } else {
-            self.scroll_from_bottom -= step;
-        }
+        self.scroll_from_bottom = ease_toward(self.scroll_from_bottom, target);
+        self.peek_scroll = ease_toward(self.peek_scroll as usize, peek_target as usize) as u16;
         true
     }
 
@@ -4007,6 +4052,7 @@ impl App {
         self.peek_box = ratatui::layout::Rect::default();
         self.peek_close = ratatui::layout::Rect::default();
         self.peek_scroll = 0;
+        self.peek_scroll_target = 0;
         self.peek_scroll_cell = None;
         self.peek_expanded = false;
         self.peek_trace_expanded.clear();
@@ -4027,6 +4073,7 @@ impl App {
         self.peek_swarm = None;
         self.peek_frozen = None;
         self.peek_scroll = 0;
+        self.peek_scroll_target = 0;
         self.peek_scroll_cell = Some(idx);
         self.peek_expanded = false;
         self.peek_trace_expanded.clear();
@@ -4042,6 +4089,7 @@ impl App {
         self.peek_swarm = Some(run_id);
         self.peek_frozen = None;
         self.peek_scroll = 0;
+        self.peek_scroll_target = 0;
         self.peek_scroll_cell = None;
         self.peek_expanded = false;
         self.peek_trace_expanded.clear();
@@ -4057,6 +4105,7 @@ impl App {
         }
         self.peek_expanded = !self.peek_expanded;
         self.peek_scroll = 0;
+        self.peek_scroll_target = 0;
         // Drop frozen geometry so the next draw re-fits (expanded ≈ 90% frame,
         // collapsed ≈ 70%×60%). Without this, expand only changed the row cap
         // while the box stayed the same size - felt broken.
@@ -4168,12 +4217,8 @@ impl App {
         // below. Compare against the smallest visible entry index.
         let min_visible = self.peek_trace_hits.iter().map(|(_, i)| *i).min();
         match min_visible {
-            Some(v) if idx < v => {
-                self.peek_scroll = self.peek_scroll.saturating_sub(6);
-            }
-            _ => {
-                self.peek_scroll = self.peek_scroll.saturating_add(6);
-            }
+            Some(v) if idx < v => self.peek_scroll_by(-6),
+            _ => self.peek_scroll_by(6),
         }
     }
     /// Remove a transcript cell and keep `tool_cells` pointing at the right rows.
@@ -4291,11 +4336,11 @@ impl App {
             let page = self.peek_box.height.saturating_sub(6).max(1) as usize;
             if let Some(next) = navigation_target(
                 key.code,
-                self.peek_scroll as usize,
+                self.peek_scroll_target as usize,
                 self.peek_rows as usize,
                 page,
             ) {
-                self.peek_scroll = next.min(u16::MAX as usize) as u16;
+                self.peek_scroll_target = next.min(self.peek_max_scroll as usize) as u16;
                 return;
             }
             // A read-only peek must not submit or edit the composer behind it.
@@ -4833,6 +4878,9 @@ impl App {
             self.selecting = false;
             self.select_anchor = None;
             self.mouse_left_down = false;
+            if self.modal_rail_mouse(focus, m) {
+                return;
+            }
             match focus {
                 ModalFocus::Theme => self.on_theme_picker_mouse(m),
                 ModalFocus::Login => self.on_login_mouse(m),
@@ -4932,7 +4980,7 @@ impl App {
                     self.palette_wheel_step(-1);
                 } else if self.wheel_over_open_peek(m.column, m.row) {
                     // Wheel inside a pinned peek scrolls its body, not the page.
-                    self.peek_scroll = self.peek_scroll.saturating_sub(3);
+                    self.peek_scroll_by(-3);
                 } else if self.wheel_over_sidegraph(m.column, m.row) {
                     if m.modifiers.contains(KeyModifiers::CONTROL) {
                         // Ctrl+wheel zooms the graph in (toward detail). Purely a
@@ -4969,10 +5017,7 @@ impl App {
                 } else if self.palette_visible() && !self.peek_is_open() && !approval_open {
                     self.palette_wheel_step(1);
                 } else if self.wheel_over_open_peek(m.column, m.row) {
-                    self.peek_scroll = self
-                        .peek_scroll
-                        .saturating_add(3)
-                        .min(self.peek_rows.saturating_sub(1));
+                    self.peek_scroll_by(3);
                 } else if self.wheel_over_sidegraph(m.column, m.row) {
                     if m.modifiers.contains(KeyModifiers::CONTROL) {
                         // Ctrl+wheel down zooms the graph out (toward minimap).
@@ -5503,6 +5548,8 @@ impl App {
         // Pre-threshold: leave selection collapsed so clicks don't flash.
     }
 
+    /// Inside the transcript body and not under the sticky prompt banner,
+    /// which overlays the body's top rows and owns the pointer there.
     fn in_transcript(&self, col: u16, row: u16) -> bool {
         let body = self.transcript_body;
         body.width > 0
@@ -5510,6 +5557,7 @@ impl App {
             && col < body.right()
             && row >= body.y
             && row < body.bottom()
+            && !rect_contains(self.sticky_banner, col, row)
     }
 
     /// Map screen coords → absolute wrapped-line TextPos (strict: inside body only).
@@ -5607,13 +5655,7 @@ impl App {
 
     fn cell_at_mouse_any(&self) -> Option<usize> {
         let body = self.transcript_body;
-        if body.width == 0
-            || body.height == 0
-            || self.mouse_col < body.x
-            || self.mouse_col >= body.right()
-            || self.mouse_row < body.y
-            || self.mouse_row >= body.bottom()
-        {
+        if !self.in_transcript(self.mouse_col, self.mouse_row) {
             return None;
         }
         let local_y = self.mouse_row.saturating_sub(body.y) as usize;
@@ -5642,13 +5684,7 @@ impl App {
     /// any - for double-click-to-peek parity with the sidegraph kid boxes.
     fn swarm_pane_at_mouse(&self, col: u16, row: u16) -> Option<u64> {
         let body = self.transcript_body;
-        if body.width == 0
-            || body.height == 0
-            || col < body.x
-            || col >= body.right()
-            || row < body.y
-            || row >= body.bottom()
-        {
+        if !self.in_transcript(col, row) {
             return None;
         }
         let local_y = row.saturating_sub(body.y) as usize;
@@ -5745,6 +5781,7 @@ impl App {
         self.mouse_left_down = false;
         self.scrollbar_drag = false;
         self.scrollbar_hover = false;
+        self.modal_rail_drag = false;
         self.selecting = false;
         self.select_anchor = None;
         // Keep a finished selection for copy; only drop empty/in-progress ranges.
@@ -5967,6 +6004,136 @@ impl App {
         let offset = m.offset_for_thumb_start(thumb_start);
         let max = m.max_offset();
         self.set_scroll_from_bottom(max.saturating_sub(offset));
+    }
+
+    /// Rail geometry of the focused modal: (rail, total rows, page, offset).
+    /// `None` when the modal has no scrollable list on screen.
+    fn modal_rail_state(
+        &self,
+        focus: ModalFocus,
+    ) -> Option<(ratatui::layout::Rect, usize, usize, usize)> {
+        let (hit, total, page, offset) = match focus {
+            ModalFocus::Model => {
+                let p = self.model_picker.as_ref()?;
+                (&p.hit, p.count(), p.vis_page, p.scroll)
+            }
+            ModalFocus::Theme => {
+                let p = self.theme_picker.as_ref()?;
+                (&p.hit, p.count(), p.vis_page, p.scroll)
+            }
+            ModalFocus::Plugin => {
+                let p = self.plugin_picker.as_ref()?;
+                (&p.hit, p.count(), p.vis_page, p.scroll)
+            }
+            ModalFocus::Sessions => {
+                let p = self.picker.as_ref()?;
+                (&p.hit, p.count(), p.vis_page, p.scroll)
+            }
+            ModalFocus::Login => {
+                let l = self.login.as_ref()?;
+                match l.stage {
+                    LoginStage::Provider => (&l.hit, l.count(), l.vis_page, l.scroll),
+                    LoginStage::Method | LoginStage::JevSlots => return None,
+                    _ => (
+                        &l.hit,
+                        l.form_rows,
+                        l.hit.body.height as usize,
+                        l.form_scroll,
+                    ),
+                }
+            }
+            _ => return None,
+        };
+        (hit.rail.height > 0).then_some((hit.rail, total, page, offset))
+    }
+
+    /// Scroll the focused modal's list to `offset`, pulling the selection
+    /// into the visible window so the next arrow key continues from what is
+    /// on screen.
+    fn modal_set_scroll(&mut self, focus: ModalFocus, offset: usize) {
+        fn place(scroll: &mut usize, sel: &mut usize, count: usize, page: usize, offset: usize) {
+            let page = page.max(1);
+            *scroll = offset.min(count.saturating_sub(page));
+            let last = (*scroll + page).saturating_sub(1);
+            *sel = (*sel).clamp(*scroll, last.min(count.saturating_sub(1)));
+        }
+        match focus {
+            ModalFocus::Model => {
+                if let Some(p) = self.model_picker.as_mut() {
+                    let count = p.count();
+                    place(&mut p.scroll, &mut p.sel, count, p.vis_page, offset);
+                }
+            }
+            ModalFocus::Theme => {
+                let idx = self.theme_picker.as_mut().map(|p| {
+                    let count = p.count();
+                    place(&mut p.scroll, &mut p.sel, count, p.vis_page, offset);
+                    p.sel
+                });
+                if let Some(idx) = idx {
+                    self.preview_theme_at(idx);
+                }
+            }
+            ModalFocus::Plugin => {
+                if let Some(p) = self.plugin_picker.as_mut() {
+                    let count = p.count();
+                    place(&mut p.scroll, &mut p.sel, count, p.vis_page, offset);
+                }
+            }
+            ModalFocus::Sessions => {
+                if let Some(p) = self.picker.as_mut() {
+                    let count = p.count();
+                    place(&mut p.scroll, &mut p.idx, count, p.vis_page, offset);
+                }
+            }
+            ModalFocus::Login => {
+                if let Some(l) = self.login.as_mut() {
+                    if l.stage == LoginStage::Provider {
+                        let count = l.count();
+                        place(&mut l.scroll, &mut l.sel, count, l.vis_page, offset);
+                    } else {
+                        let page = l.hit.body.height as usize;
+                        l.form_scroll = offset.min(l.form_rows.saturating_sub(page));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Press or drag on a modal list's rail: the thumb centres on the pointer
+    /// ("jump to here") and follows it until release. Returns true when the
+    /// event was consumed so the modal's own handler does not see it.
+    fn modal_rail_mouse(&mut self, focus: ModalFocus, m: event::MouseEvent) -> bool {
+        let Some((rail, total, page, _)) = self.modal_rail_state(focus) else {
+            self.modal_rail_drag = false;
+            return false;
+        };
+        let apply = |app: &mut Self, row: u16| {
+            let rel = row
+                .clamp(rail.y, rail.bottom().saturating_sub(1))
+                .saturating_sub(rail.y);
+            let metrics = ScrollMetrics::new(total, page, 0, rail.height);
+            app.modal_set_scroll(focus, metrics.offset_centred_on_row(rel));
+        };
+        match m.kind {
+            MouseEventKind::Down(MouseButton::Left) if rect_contains(rail, m.column, m.row) => {
+                self.modal_rail_drag = true;
+                apply(self, m.row);
+                true
+            }
+            MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Moved
+                if self.modal_rail_drag =>
+            {
+                apply(self, m.row);
+                true
+            }
+            MouseEventKind::Up(MouseButton::Left) if self.modal_rail_drag => {
+                self.modal_rail_drag = false;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// True when the pointer is over the full input box (border + body).
@@ -10704,10 +10871,7 @@ impl App {
     /// - Closing the dialogue is **never** done here - only Esc / outside / ✕.
     fn click_transcript(&mut self, col: u16, row: u16) {
         let body = self.transcript_body;
-        if body.width == 0 || body.height == 0 {
-            return;
-        }
-        if col < body.x || col >= body.right() || row < body.y || row >= body.bottom() {
+        if body.height == 0 || !self.in_transcript(col, row) {
             return;
         }
         // While a stable peek is open, transcript clicks do nothing (outside
@@ -11025,6 +11189,21 @@ pub fn swarm_peek_full_copy(run: &crate::agent::swarm::AgentRun) -> String {
     s.push_str("\n── tool output ──\n");
     s.push_str(&swarm_peek_tool_content(run));
     s
+}
+
+/// One easing step from `cur` toward `target`: a third of the remaining
+/// distance, never less than one, so a glide finishes in a handful of ticks
+/// and always lands exactly on the target.
+fn ease_toward(cur: usize, target: usize) -> usize {
+    if cur == target {
+        return cur;
+    }
+    let step = cur.abs_diff(target).div_ceil(3).max(1);
+    if target > cur {
+        cur + step
+    } else {
+        cur - step
+    }
 }
 
 fn rect_contains(r: ratatui::layout::Rect, col: u16, row: u16) -> bool {

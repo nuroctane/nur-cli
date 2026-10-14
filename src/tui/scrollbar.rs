@@ -12,6 +12,14 @@
 /// Number of subcells (vertical eighths) in one terminal cell.
 pub const SUBCELL: usize = 8;
 
+/// Smallest thumb on a track with room for it (two cells).
+const MIN_THUMB: usize = SUBCELL * 2;
+
+/// `a / b` rounded to nearest; 0 when `b` is 0.
+fn div_round(a: usize, b: usize) -> usize {
+    a.saturating_add(b / 2).checked_div(b).unwrap_or(0)
+}
+
 /// How much of one track cell the thumb covers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CellFill {
@@ -61,15 +69,19 @@ impl ScrollMetrics {
             };
         }
 
-        // Thumb is proportional to the visible fraction, never under one cell.
+        // Thumb is proportional to the visible fraction. Floor: two cells when
+        // the track has room (a one-cell thumb on a long transcript is too
+        // small a target), one cell otherwise.
+        let min_thumb = if track_len >= MIN_THUMB * 3 {
+            MIN_THUMB
+        } else {
+            SUBCELL
+        };
         let thumb_len = (track_len.saturating_mul(viewport_len) / content_len)
-            .max(SUBCELL)
+            .max(min_thumb)
             .min(track_len);
         let travel = track_len.saturating_sub(thumb_len);
-        let thumb_start = travel
-            .saturating_mul(offset)
-            .checked_div(max_offset)
-            .unwrap_or(0);
+        let thumb_start = div_round(travel.saturating_mul(offset), max_offset);
 
         Self {
             content_len,
@@ -90,6 +102,14 @@ impl ScrollMetrics {
 
     pub fn thumb_travel(&self) -> usize {
         self.track_len.saturating_sub(self.thumb_len)
+    }
+
+    /// Content offset that centres the thumb on track cell `row_in_track` -
+    /// the "jump to here" mapping for a press or drag on a rail with no grab
+    /// point (list pickers).
+    pub fn offset_centred_on_row(&self, row_in_track: u16) -> usize {
+        let pos = Self::subcell_at_row(row_in_track);
+        self.offset_for_thumb_start(pos.saturating_sub(self.thumb_len / 2))
     }
 
     pub fn viewport_len(&self) -> usize {
@@ -119,10 +139,7 @@ impl ScrollMetrics {
     pub fn offset_for_thumb_start(&self, thumb_start: usize) -> usize {
         let travel = self.thumb_travel();
         let thumb_start = thumb_start.min(travel);
-        self.max_offset()
-            .saturating_mul(thumb_start)
-            .checked_div(travel)
-            .unwrap_or(0)
+        div_round(self.max_offset().saturating_mul(thumb_start), travel)
     }
 
     /// Thumb coverage of track cell `cell_index` — drives glyph choice.
@@ -147,28 +164,48 @@ impl ScrollMetrics {
         }
     }
 
-    /// Glyph for a vertical track cell. Bottom-anchored partials (thumb's top
-    /// edge) get exact eighth blocks; top-anchored partials (thumb's bottom
-    /// edge) approximate with standard blocks so no legacy-computing font
-    /// support is required.
-    pub fn glyph(&self, cell_index: usize) -> Option<char> {
+    /// How to paint a vertical track cell. Both thumb edges land on exact
+    /// eighths using only the standard lower-block glyphs: the thumb's top
+    /// edge is a lower block in the thumb colour; its bottom edge is the
+    /// *gap* drawn as a lower block in the track's background over a cell
+    /// filled with the thumb colour ([`Glyph::inverted`]). No legacy-computing
+    /// font support needed.
+    pub fn glyph(&self, cell_index: usize) -> Option<Glyph> {
         const LOWER: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-        const UPPER: [char; 8] = ['▔', '▔', '▀', '▀', '▀', '▀', '█', '█'];
         match self.cell_fill(cell_index) {
             CellFill::Empty => None,
-            CellFill::Full => Some('█'),
+            CellFill::Full => Some(Glyph {
+                ch: '█',
+                inverted: false,
+            }),
             CellFill::Partial { start, len } => {
-                let i = (len.saturating_sub(1) as usize).min(7);
                 if start == 0 {
-                    // Fill begins at the cell's top → thumb's bottom edge.
-                    Some(UPPER[i])
+                    // Fill begins at the cell's top → thumb's bottom edge:
+                    // paint the uncovered remainder in background colour.
+                    let gap = (SUBCELL as u8).saturating_sub(len).clamp(1, 8) as usize;
+                    Some(Glyph {
+                        ch: LOWER[gap - 1],
+                        inverted: true,
+                    })
                 } else {
                     // Fill hangs from the cell's bottom → thumb's top edge.
-                    Some(LOWER[i])
+                    let i = (len.saturating_sub(1) as usize).min(7);
+                    Some(Glyph {
+                        ch: LOWER[i],
+                        inverted: false,
+                    })
                 }
             }
         }
     }
+}
+
+/// One thumb cell: the character and whether its colours swap (background
+/// in the thumb colour, glyph in the track background).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Glyph {
+    pub ch: char,
+    pub inverted: bool,
 }
 
 #[cfg(test)]
@@ -219,12 +256,34 @@ mod tests {
         let m = ScrollMetrics::new(997, 41, 313, 17);
         let mut partial = 0;
         for c in 0..17 {
-            if let CellFill::Partial { .. } = m.cell_fill(c) {
+            if let CellFill::Partial { start, len } = m.cell_fill(c) {
                 partial += 1;
-                assert!(m.glyph(c).is_some());
+                let g = m.glyph(c).expect("partial cell paints");
+                // Bottom edge (fill from the cell top) is drawn as the gap in
+                // background colour; top edge as the fill in thumb colour.
+                assert_eq!(g.inverted, start == 0, "cell {c}: {start}+{len}");
+                assert_ne!(g.ch, '█', "a partial cell is never a full block");
             }
         }
         assert!(partial <= 2, "at most the two edge cells are partial");
+    }
+
+    #[test]
+    fn centred_mapping_pins_both_ends() {
+        let m = ScrollMetrics::new(69, 12, 0, 12);
+        assert_eq!(m.offset_centred_on_row(0), 0);
+        assert_eq!(m.offset_centred_on_row(11), m.max_offset());
+        let mid = m.offset_centred_on_row(6);
+        assert!(mid > 0 && mid < m.max_offset(), "got {mid}");
+    }
+
+    #[test]
+    fn thumb_floor_is_two_cells_when_the_track_has_room() {
+        let long = ScrollMetrics::new(100_000, 10, 0, 30);
+        assert_eq!(long.thumb_len, MIN_THUMB);
+        // A five-row track cannot spare two cells for the thumb.
+        let short = ScrollMetrics::new(100_000, 10, 0, 5);
+        assert_eq!(short.thumb_len, SUBCELL);
     }
 
     #[test]

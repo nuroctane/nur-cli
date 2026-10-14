@@ -162,6 +162,12 @@ impl App {
                             Err(error) => (String::new(), Some(error.to_string())),
                         };
                     crate::startup::mark("credentials_ready");
+                    if cfg.provider == "factory" {
+                        // Detached: `/model` must not wait 12 s for the droid
+                        // catalog when the binary has not changed since the
+                        // last session.
+                        crate::api::droid_cli::warm_models_cache();
+                    }
                     let provider = crate::providers::by_id(&cfg.provider)
                         .copied()
                         .unwrap_or(*crate::providers::default_provider());

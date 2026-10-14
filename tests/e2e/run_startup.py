@@ -331,16 +331,23 @@ def blocked_auth(binary, fail=False):
         assert not gate.exists(), 'authentication gate was released before typing worked'
         gate.write_text('release')
         end = time.monotonic()+10
+        saved = {}
         while time.monotonic()<end:
-            saved = json.loads((home/'.nur/auth.json').read_text())
+            try:
+                saved = json.loads((home/'.nur/auth.json').read_text())
+            except (PermissionError, json.JSONDecodeError):
+                # The binary replaces the file atomically; on Windows the
+                # rename briefly locks it against readers. Poll again.
+                time.sleep(.05)
+                continue
             trace = (work/'startup.jsonl').read_text()
-            if (fail and 'session_saved' in trace) or (not fail and saved['api_key'] == 'synthetic-refreshed-token'): break
+            if (fail and 'session_saved' in trace) or (not fail and saved.get('api_key') == 'synthetic-refreshed-token'): break
             time.sleep(.05)
         if fail:
             assert 'session_saved' in trace, 'failed refresh never reached the API-key fallback'
             assert len(entered.read_text().splitlines()) == 1, 'failed active OAuth was refreshed more than once'
         else:
-            assert saved['api_key'] == 'synthetic-refreshed-token', 'refreshed credentials were not saved'
+            assert saved.get('api_key') == 'synthetic-refreshed-token', 'refreshed credentials were not saved'
         term.until('AUTH_WAIT_DRAFT_8257')
         print(f'PASS {scenario}: typing remained live and credential preparation completed', flush=True)
         return {'scenario':scenario,'passed':True}

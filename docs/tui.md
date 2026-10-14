@@ -85,7 +85,8 @@ Mouse/keyboard interaction tips that used to live under the art are behind
 
 | Key | Action |
 |-----|--------|
-| `↑` `↓` · mouse wheel · drag scrollbar | Scroll transcript |
+| `↑` `↓` · mouse wheel · drag scrollbar | Scroll transcript (wheel and keys glide; the thumb stays under the pointer while dragging, a click on the open track pages toward it) |
+| **Rail in any list dialogue** (`/model`, `/login`, `/plugins`, `/theme`, sessions) | Click or drag the right-hand rail to jump through the list; the selection follows the window |
 | **Drag on chat text** | Select + auto-copy (keeps range while you scroll; works on expanded thought/tool bodies) |
 | **Click `↓ N · End`** | Jump to latest message |
 | Click the exact **click to peek** text | Opens stable dialogue (frozen position; Esc · outside · ✕ only) |
@@ -677,7 +678,7 @@ The same modal has a second window for foreign sessions. Press **`c`** (or `i`) 
 
 ### Sticky prompt
 
-The PROMPT banner stays visible at the top as you scroll, so you always see the context of the conversation.
+The PROMPT banner stays visible at the top as you scroll, so you always see the context of the conversation. It is an overlay on the top two rows: the transcript underneath never shifts when it appears or disappears, so the scrollbar and a drag stay steady as you pass prompts.
 
 ### Splash screen
 

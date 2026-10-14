@@ -88,39 +88,165 @@ pub const FACTORY_MODELS: &[&str] = &[
 /// `droid exec --help` prints an "Available Models:" table (every tier the
 /// account can select, Droid Core and standard alike), and its "Invalid
 /// model" error repeats the same ids as one comma-separated line; both forms
-/// are parsed. Cached briefly because the launcher is a Node runtime. Falls
-/// back to [`FACTORY_MODELS`] when the CLI is missing or prints no table.
+/// are parsed.
+///
+/// `droid exec` boots the whole agent before printing help (about 12 s on a
+/// warm machine), so the answer is kept on disk keyed by the binary's
+/// identity: the catalog is compiled into each release, so it only changes
+/// when the binary does. [`warm_models_cache`] fills it off the hot path; a
+/// cold `/model` waits once. Falls back to [`FACTORY_MODELS`] only when the
+/// CLI is missing or prints no table.
 pub fn list_models() -> Result<Vec<String>> {
-    static CACHE: Mutex<Option<(Instant, Vec<String>)>> = Mutex::new(None);
-    const TTL: Duration = Duration::from_secs(600);
-    if let Ok(guard) = CACHE.lock() {
-        if let Some((at, ids)) = guard.as_ref() {
-            if at.elapsed() < TTL {
-                return Ok(ids.clone());
-            }
-        }
-    }
-    let ids = match resolve_bin() {
-        Some(bin) => {
-            let text = run_help_capture(&bin)?;
-            let parsed = parse_model_list(&text);
-            if parsed.is_empty() {
-                tracing::warn!("droid exec --help listed no models; using the built-in catalog");
-                static_models()
-            } else {
-                parsed
-            }
-        }
-        None => static_models(),
+    let Some(bin) = resolve_bin() else {
+        return Ok(static_models());
     };
-    if let Ok(mut guard) = CACHE.lock() {
-        *guard = Some((Instant::now(), ids.clone()));
+    let identity = bin_identity(&bin);
+    if let Some(ids) = cached_models(&identity) {
+        return Ok(ids);
     }
+    if let Some(ids) = await_warm(&identity) {
+        return Ok(ids);
+    }
+    let ids = capture_models(&bin)?;
+    if ids.is_empty() {
+        tracing::warn!("droid exec --help listed no models; using the built-in catalog");
+        return Ok(static_models());
+    }
+    store_models(&identity, &ids);
     Ok(ids)
+}
+
+/// Set while a background capture runs so a cold `/model` joins it instead
+/// of launching a second 12 s `droid` process.
+static WARMING: Mutex<bool> = Mutex::new(false);
+
+fn warming() -> bool {
+    WARMING.lock().map(|b| *b).unwrap_or(false)
+}
+
+/// Wait for an in-flight warm to land, polling the cache; `None` when no
+/// warm is running or it finished without a catalog.
+fn await_warm(identity: &str) -> Option<Vec<String>> {
+    if !warming() {
+        return None;
+    }
+    let deadline = Instant::now() + CAPTURE_TIMEOUT;
+    while warming() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    cached_models(identity)
+}
+
+/// Fill the on-disk catalog for the installed binary in the background when
+/// it is missing or belongs to an older build. Returns at once; concurrent
+/// callers share one capture.
+pub fn warm_models_cache() {
+    let Some(bin) = resolve_bin() else { return };
+    let identity = bin_identity(&bin);
+    if cached_models(&identity).is_some() {
+        return;
+    }
+    if let Ok(mut busy) = WARMING.lock() {
+        if *busy {
+            return;
+        }
+        *busy = true;
+    }
+    let spawned = std::thread::Builder::new()
+        .name("nur-droid-models".into())
+        .spawn(move || {
+            match capture_models(&bin) {
+                Ok(ids) if !ids.is_empty() => store_models(&identity, &ids),
+                Ok(_) => tracing::warn!("droid exec --help listed no models"),
+                Err(e) => tracing::warn!("droid model catalog warm failed: {e}"),
+            }
+            if let Ok(mut busy) = WARMING.lock() {
+                *busy = false;
+            }
+        });
+    if spawned.is_err() {
+        if let Ok(mut busy) = WARMING.lock() {
+            *busy = false;
+        }
+    }
+}
+
+/// `droid exec` loads settings, plugins and MCP servers before it prints
+/// help; 12 s is normal on a warm machine and a busy one takes longer.
+const CAPTURE_TIMEOUT: Duration = Duration::from_secs(60);
+
+fn capture_models(bin: &PathBuf) -> Result<Vec<String>> {
+    let text = run_help_capture(bin)?;
+    Ok(parse_model_list(&text))
 }
 
 fn static_models() -> Vec<String> {
     FACTORY_MODELS.iter().map(|m| m.to_string()).collect()
+}
+
+/// Path, size and mtime: a new droid release changes at least the latter two.
+fn bin_identity(bin: &std::path::Path) -> String {
+    let meta = std::fs::metadata(bin).ok();
+    let len = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+    let mtime = meta
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("{}|{len}|{mtime}", bin.display())
+}
+
+fn models_cache_path() -> PathBuf {
+    crate::config::nur_home()
+        .join("cache")
+        .join("droid-models.json")
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ModelsCache {
+    bin: String,
+    ids: Vec<String>,
+}
+
+/// Process-wide copy so a picker reopened in the same session does not re-read
+/// the file; the file makes the next session instant too.
+static MEM_CACHE: Mutex<Option<ModelsCache>> = Mutex::new(None);
+
+fn cached_models(identity: &str) -> Option<Vec<String>> {
+    if let Ok(guard) = MEM_CACHE.lock() {
+        if let Some(c) = guard.as_ref() {
+            if c.bin == identity && !c.ids.is_empty() {
+                return Some(c.ids.clone());
+            }
+        }
+    }
+    let text = std::fs::read_to_string(models_cache_path()).ok()?;
+    let cache: ModelsCache = serde_json::from_str(&text).ok()?;
+    if cache.bin != identity || cache.ids.is_empty() {
+        return None;
+    }
+    let ids = cache.ids.clone();
+    if let Ok(mut guard) = MEM_CACHE.lock() {
+        *guard = Some(cache);
+    }
+    Some(ids)
+}
+
+fn store_models(identity: &str, ids: &[String]) {
+    let cache = ModelsCache {
+        bin: identity.to_string(),
+        ids: ids.to_vec(),
+    };
+    if let Ok(text) = serde_json::to_string(&cache) {
+        let path = models_cache_path();
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = crate::config::atomic_write(&path, text.as_bytes());
+    }
+    if let Ok(mut guard) = MEM_CACHE.lock() {
+        *guard = Some(cache);
+    }
 }
 
 /// `droid exec --help`, stdout and stderr together (the launcher may print its
@@ -153,7 +279,6 @@ fn run_help_capture(bin: &PathBuf) -> Result<String> {
         })
     }
     let readers = [drain(child.stdout.take()), drain(child.stderr.take())];
-    const CAPTURE_TIMEOUT: Duration = Duration::from_secs(20);
     let deadline = Instant::now() + CAPTURE_TIMEOUT;
     loop {
         match child.try_wait() {
@@ -162,7 +287,7 @@ fn run_help_capture(bin: &PathBuf) -> Result<String> {
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(NurError::Other(
-                    "droid exec --help timed out after 20s".into(),
+                    "droid exec --help took over 60s; retry /model once the machine is idle".into(),
                 ));
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(50)),

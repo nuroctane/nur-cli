@@ -1686,10 +1686,12 @@ pub const PROVIDERS: &[Provider] = &[
         name: "Factory Droid",
         // Catalog placeholder = Factory's app host. Nur never calls it over
         // HTTP: chat runs through `droid exec --output-format json` with the
-        // CLI's own sign-in (`droid`) or FACTORY_API_KEY. Model ids are the
-        // Factory-managed catalog (`docs.factory.ai/docs/models`).
+        // CLI's own sign-in (`droid`) or FACTORY_API_KEY. Model ids come from
+        // the installed CLI (`droid_cli::list_models`); the default is one
+        // every recent build serves (the docs catalog runs ahead of the CLI,
+        // so `claude-sonnet-5-5` was rejected by droid 0.196).
         base_url: crate::api::droid_cli::FACTORY_APP_URL,
-        default_model: "claude-sonnet-5-5",
+        default_model: "claude-sonnet-5",
         env_key: "FACTORY_API_KEY",
         style: CC,
         note: "droid sign-in (OAuth) · CLI chat, no API key required",
