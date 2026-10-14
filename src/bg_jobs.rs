@@ -364,6 +364,38 @@ pub fn completion_note() -> Option<String> {
     Some(s)
 }
 
+/// Model-launched jobs still running, oldest first, as one note that survives
+/// compaction: the summary may drop the `bg` call that started a job, but the
+/// model must still know what is in flight so it can wait or poll for it (the
+/// finished result still arrives through `completion_note`).
+pub fn running_note() -> Option<String> {
+    let reg = registry();
+    let g = reg.lock().unwrap_or_else(|e| e.into_inner());
+    let mut running: Vec<&JobInfo> = g
+        .jobs
+        .values()
+        .filter(|r| r.notify_model && r.info.state == JobState::Running)
+        .map(|r| &r.info)
+        .collect();
+    if running.is_empty() {
+        return None;
+    }
+    running.sort_by_key(|j| j.id);
+    let now = now_secs();
+    let mut s = String::from("[bg] background job(s) still running - results arrive when done:\n");
+    for j in running {
+        s.push_str(&format!(
+            "  #{} running {}s · {}\n    status: bg(action=status, id={}) · output: bg(action=result, id={})\n",
+            j.id,
+            now.saturating_sub(j.created_at),
+            truncate_preview(&j.label, 100),
+            j.id,
+            j.id
+        ));
+    }
+    Some(s)
+}
+
 pub fn get(id: u64) -> Option<JobInfo> {
     let reg = registry();
     let g = reg.lock().unwrap_or_else(|e| e.into_inner());

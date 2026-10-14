@@ -2617,13 +2617,18 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     // Sticky banner takes rows off the body — max_scroll must use body height
     // or the thumb/drag math fights the sticky and feels janky.
     const STICKY_H: u16 = 2;
-    // Pre-pass sticky using full viewport estimate, then refine.
+    // The sticky behaves as an overlay on the first STICKY_H rows of the full
+    // viewport: it shows whenever the owning prompt's header is above the
+    // rows the body can display *with* the sticky in place. Deciding from the
+    // uncovered viewport instead let the header sit visible on the top two
+    // rows, then the next one-line scroll both hid it and removed two body
+    // rows - a three-row jump for a one-line wheel step.
     let max_scroll_full = total.saturating_sub(viewport as usize);
-    let top_guess = max_scroll_full.saturating_sub(app.scroll_from_bottom.min(max_scroll_full));
+    let top_full = max_scroll_full.saturating_sub(app.scroll_from_bottom.min(max_scroll_full));
     let sticky_guess: bool = row_index
         .sticky_owner(
-            top_guess,
-            (top_guess + viewport as usize).min(row_index.len()),
+            (top_full + STICKY_H as usize).min(row_index.len()),
+            (top_full + viewport as usize).min(row_index.len()),
         )
         .is_some();
     let sticky_h = if sticky_guess { STICKY_H } else { 0 };

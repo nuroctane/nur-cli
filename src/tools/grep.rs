@@ -22,8 +22,11 @@ impl Tool for Grep {
     }
 
     fn description(&self) -> &str {
-        "Search file contents with a regex (ripgrep when available; respects .gitignore; skips \
-         node_modules/target/etc. at any depth; hidden files included). Output is path:line:text, \
+        "Exact search: file contents by regex, for an identifier, string or pattern you already \
+         know. When you know what the code does but not what it is called, or you are orienting \
+         in unfamiliar code, call sgrep first (semantic, plain-English, ranked chunks). Ripgrep \
+         when available; respects .gitignore; skips \
+         node_modules/target/etc. at any depth; hidden files included. Output is path:line:text, \
          sorted by path. fixed_strings=true for literal text (no escaping needed), glob/type to \
          narrow files, context for surrounding lines. A '[truncated …]' trailer means more matches \
          exist - narrow the pattern or path, or raise max_matches."

@@ -555,10 +555,10 @@ impl ApiClient {
                 .map_err(|e| e.to_string());
         }
         if self.uses_droid_cli() {
-            return Ok(super::droid_cli::FACTORY_MODELS
-                .iter()
-                .map(|m| m.to_string())
-                .collect());
+            return tokio::task::spawn_blocking(super::droid_cli::list_models)
+                .await
+                .map_err(|error| format!("model discovery task failed: {error}"))?
+                .map_err(|e| e.to_string());
         }
         let base_url = self.base_url.clone();
         let api_key = self.api_key_for_request();

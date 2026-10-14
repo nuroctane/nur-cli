@@ -29,24 +29,198 @@ use std::time::{Duration, Instant};
 /// Catalog placeholder base URL. Never called over HTTP.
 pub const FACTORY_APP_URL: &str = "https://app.factory.ai";
 
-/// Model ids Factory-managed inference serves (`docs.factory.ai/docs/models`).
-/// The CLI has no model-list command, so this is what `/model` offers; any id
-/// the CLI accepts still works when typed.
+/// Model ids Factory-managed inference serves (`docs.factory.ai/docs/models`
+/// as of this build). Only the fallback when the installed CLI cannot be
+/// asked: each `droid` release ships its own catalog (see [`list_models`]),
+/// and the two drift apart within weeks.
 pub const FACTORY_MODELS: &[&str] = &[
+    "claude-fable-5.1",
+    "claude-fable-5",
     "claude-opus-5-5",
+    "claude-opus-5-5-fast",
+    "claude-opus-5",
+    "claude-opus-5-fast",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
     "claude-sonnet-5-5",
+    "claude-sonnet-5",
+    "claude-sonnet-4-6",
     "claude-haiku-5-5",
+    "claude-haiku-4-5-20251001",
     "gpt-6.1-sol",
+    "gpt-6-astra",
+    "gpt-6-sol",
     "gpt-6-luna",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.5",
+    "gpt-5.5-pro",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.3-codex",
+    "gpt-5.2",
     "gemini-3.1-pro-preview",
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3-flash-preview",
     "grok-4.7",
+    "grok-4.6",
+    "grok-4.5",
     "inkling",
+    "mistral-large-4",
+    "mistral-medium-3.5",
+    "glm-5.3-flash",
     "glm-5.3",
+    "glm-5.2",
     "kimi-k3",
     "qwen3.8-max",
+    "nemotron-3-ultra",
     "deepseek-v4.1-flash",
+    "deepseek-v4-pro",
     "minimax-m3",
 ];
+
+/// Model ids the installed `droid` accepts. The CLI has no list command, but
+/// `droid exec --help` prints an "Available Models:" table (every tier the
+/// account can select, Droid Core and standard alike), and its "Invalid
+/// model" error repeats the same ids as one comma-separated line; both forms
+/// are parsed. Cached briefly because the launcher is a Node runtime. Falls
+/// back to [`FACTORY_MODELS`] when the CLI is missing or prints no table.
+pub fn list_models() -> Result<Vec<String>> {
+    static CACHE: Mutex<Option<(Instant, Vec<String>)>> = Mutex::new(None);
+    const TTL: Duration = Duration::from_secs(600);
+    if let Ok(guard) = CACHE.lock() {
+        if let Some((at, ids)) = guard.as_ref() {
+            if at.elapsed() < TTL {
+                return Ok(ids.clone());
+            }
+        }
+    }
+    let ids = match resolve_bin() {
+        Some(bin) => {
+            let text = run_help_capture(&bin)?;
+            let parsed = parse_model_list(&text);
+            if parsed.is_empty() {
+                tracing::warn!("droid exec --help listed no models; using the built-in catalog");
+                static_models()
+            } else {
+                parsed
+            }
+        }
+        None => static_models(),
+    };
+    if let Ok(mut guard) = CACHE.lock() {
+        *guard = Some((Instant::now(), ids.clone()));
+    }
+    Ok(ids)
+}
+
+fn static_models() -> Vec<String> {
+    FACTORY_MODELS.iter().map(|m| m.to_string()).collect()
+}
+
+/// `droid exec --help`, stdout and stderr together (the launcher may print its
+/// certificate warnings on stderr and some builds send help there too).
+fn run_help_capture(bin: &PathBuf) -> Result<String> {
+    let mut cmd = Command::new(bin);
+    cmd.args(["exec", "--help"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env("NO_COLOR", "1");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| NurError::Other(format!("failed to launch droid: {e}{}", auth_hint())))?;
+    fn drain<R: std::io::Read + Send + 'static>(
+        pipe: Option<R>,
+    ) -> Option<std::thread::JoinHandle<Vec<u8>>> {
+        pipe.map(|mut pipe| {
+            std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                let _ = pipe.read_to_end(&mut buf);
+                buf
+            })
+        })
+    }
+    let readers = [drain(child.stdout.take()), drain(child.stderr.take())];
+    const CAPTURE_TIMEOUT: Duration = Duration::from_secs(20);
+    let deadline = Instant::now() + CAPTURE_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(NurError::Other(
+                    "droid exec --help timed out after 20s".into(),
+                ));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(e) => return Err(NurError::Other(format!("droid wait: {e}"))),
+        }
+    }
+    let mut text = String::new();
+    for handle in readers.into_iter().flatten() {
+        if let Ok(bytes) = handle.join() {
+            text.push_str(&String::from_utf8_lossy(&bytes));
+            text.push('\n');
+        }
+    }
+    Ok(text)
+}
+
+/// Ids from the help table (`  <id>   <label>` rows under "Available
+/// Models:") or the error form (`Available built-in models:` followed by a
+/// comma list). Stops at the first blank line or next section header.
+pub(crate) fn parse_model_list(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut lines = text.lines().peekable();
+    while let Some(line) = lines.next() {
+        let header = line.trim();
+        let table = header.eq_ignore_ascii_case("available models:");
+        let inline = header
+            .to_ascii_lowercase()
+            .starts_with("available built-in models");
+        if !table && !inline {
+            continue;
+        }
+        for row in lines.by_ref() {
+            let trimmed = row.trim();
+            if trimmed.is_empty() || (trimmed.ends_with(':') && !trimmed.contains(',')) {
+                break;
+            }
+            let ids: Vec<&str> = if trimmed.contains(',') {
+                trimmed.split(',').map(str::trim).collect()
+            } else if inline && trimmed.contains(' ') {
+                // Prose after the comma list ("No custom models configured…").
+                break;
+            } else {
+                trimmed.split_whitespace().take(1).collect()
+            };
+            for id in ids {
+                let id = id.trim_end_matches(',');
+                if id.is_empty() || id.contains(' ') || out.iter().any(|x| x == id) {
+                    continue;
+                }
+                out.push(id.to_string());
+            }
+        }
+        if !out.is_empty() {
+            break;
+        }
+    }
+    out
+}
 
 /// Session chain for `--session-id`; same shape as Cursor's resume chain.
 pub(crate) type DroidChatState = CursorChatState;
@@ -725,6 +899,39 @@ mod tests {
         assert_eq!(err.text, "Not logged in");
         assert!(parse_exec_output("Factory Droid v1.2.3\nnothing here").is_none());
         assert!(parse_exec_output(r#"{"type":"system","subtype":"init"}"#).is_none());
+    }
+
+    /// Ways the model list can fail: the help table with labels and a
+    /// "(default)" marker, the error form's comma list wrapped over lines,
+    /// warnings before the section, and output with no section at all.
+    #[test]
+    fn model_list_is_read_from_help_table_or_error_list() {
+        let help = "warn: ignoring extra certs\nUsage: droid exec [options]\n\nTool Controls:\n  --list-tools   Print tools\n\nAvailable Models:\n  auto                         Auto Model\n  claude-opus-5                Opus 5 (default)\n  claude-sonnet-5              Sonnet 5\n  gpt-5.6-sol                  GPT-5.6 Sol\n  inkling                      Inkling (Droid Core)\n\nModel details:\n  - Auto Model: supports reasoning: No\n";
+        assert_eq!(
+            parse_model_list(help),
+            [
+                "auto",
+                "claude-opus-5",
+                "claude-sonnet-5",
+                "gpt-5.6-sol",
+                "inkling"
+            ]
+        );
+        let error = "Invalid model: nope\n\nAvailable built-in models:\n  auto, claude-opus-5, claude-sonnet-5,\n  gpt-5.6-sol, inkling\n\nNo custom models configured. Add them to ~/.factory/settings.json\n";
+        assert_eq!(
+            parse_model_list(error),
+            [
+                "auto",
+                "claude-opus-5",
+                "claude-sonnet-5",
+                "gpt-5.6-sol",
+                "inkling"
+            ]
+        );
+        assert!(parse_model_list(
+            "Usage: droid exec [options]\n\nOptions:\n  -m, --model <id>  Model ID\n"
+        )
+        .is_empty());
     }
 
     #[test]

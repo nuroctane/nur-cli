@@ -128,7 +128,7 @@ impl App {
             "/help" | "/commands" => self.cmd_help(),
             "/clear" => {
                 self.cells.retain(|c| matches!(c, Cell::Banner));
-                self.scroll_from_bottom = 0;
+                self.scroll_to_bottom();
                 // Say what this did NOT do: the model still has the full
                 // conversation, and the session's replay log is untouched.
                 self.push_note(

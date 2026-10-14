@@ -5092,6 +5092,8 @@ fn is_model_unavailable_error(error: &NurError) -> bool {
             "not available",
             "unsupported model",
             "unknown model",
+            // `droid exec` rejects ids outside its catalog this way.
+            "invalid model",
             "retired",
             "deprecated",
         ]
@@ -6857,6 +6859,13 @@ async fn compact_session_inner(
         }
         if !mem_inv.is_empty() {
             parts.push(mem_inv);
+        }
+        // Running tools are preserved across the summary: the jobs keep
+        // running while it is written, and their results land afterwards.
+        if !runner.is_subagent {
+            if let Some(running) = crate::bg_jobs::running_note() {
+                parts.push(running);
+            }
         }
         if parts.is_empty() {
             String::new()

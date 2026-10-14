@@ -405,7 +405,7 @@ The note is appended to your persistent memory file and recalled automatically i
 /login
 ```
 
-Scrollable, **type-to-filter** catalog of 68 providers → browser / official
+Scrollable, **type-to-filter** catalog of 69 providers → browser / official
 harness sign-in when available (including Muse Code, DeepSeek Harness, ZCode,
 Cline) or a masked key → writes `provider` / `base_url` / `model` to config and
 hot-swaps the HTTP client.

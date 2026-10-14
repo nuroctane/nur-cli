@@ -119,6 +119,14 @@ pub fn budget_sensitive() -> bool {
 }
 
 fn configured_mode() -> String {
+    // The test binary never embeds over the network: `cargo test` runs with
+    // the developer's real config and key, and a live gateway's answer is
+    // not something a unit test may depend on.
+    #[cfg(test)]
+    {
+        return "local".to_string();
+    }
+    #[allow(unreachable_code)]
     crate::config::load_config()
         .map(|c| c.memory_embed_mode.trim().to_ascii_lowercase())
         .unwrap_or_else(|_| "auto".to_string())
@@ -293,6 +301,25 @@ pub fn embed_api(text: &str) -> Result<Vec<f32>> {
         .collect::<Vec<f32>>();
     if vec.is_empty() {
         return Err(NurError::Other("empty embedding".into()));
+    }
+    // Only the first EMBED_DIM components are kept; a gateway that answers
+    // 200 with zeros (or NaN) there would otherwise be stored as a silent
+    // all-zero vector that matches nothing.
+    let kept_norm = vec
+        .iter()
+        .take(EMBED_DIM)
+        .map(|x| x * x)
+        .sum::<f32>()
+        .sqrt();
+    if !kept_norm.is_finite() || kept_norm <= 1e-8 {
+        record_remote_failure(
+            &details,
+            text,
+            started.elapsed().as_millis() as u64,
+            "degenerate-embedding",
+            false,
+        );
+        return Err(NurError::Other("degenerate embedding".into()));
     }
     let input_tokens = reported_tokens.unwrap_or_else(|| estimate_tokens(text));
     let cost = embedding_cost(&details.model, input_tokens);

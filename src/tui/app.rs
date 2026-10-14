@@ -1312,6 +1312,17 @@ impl LoginModal {
         self.step_jev_by(dir.signum() as isize);
     }
 
+    /// Wheel on the Jev slot list: coalesced to one step per 45ms like the
+    /// provider stage's `wheel_step`.
+    pub fn wheel_jev(&mut self, dir: i32) {
+        let now = Instant::now();
+        if now.duration_since(self.last_step_at) < Duration::from_millis(45) {
+            return;
+        }
+        self.last_step_at = now;
+        self.step_jev(dir);
+    }
+
     /// Move the Jev slot selection by `delta` rows, clamped to the list. Any
     /// move disarms a pending shared-slot removal.
     pub fn step_jev_by(&mut self, delta: isize) {
@@ -2142,6 +2153,10 @@ pub struct App {
     tool_cells: HashMap<u64, usize>,
     /// Lines scrolled back from the newest line (0 = following the bottom).
     pub scroll_from_bottom: usize,
+    /// Where the wheel and page keys want the viewport; `scroll_from_bottom`
+    /// eases toward it one frame at a time (`tick_scroll_animation`).
+    pub scroll_target: usize,
+    scroll_anim_at: Instant,
     /// Transcript viewport height + wrapped line count, refreshed each draw so
     /// PageUp/Home can scroll in real pages instead of guessing.
     pub view_h: u16,
@@ -2767,6 +2782,8 @@ pub(super) fn new_app(
         cells: vec![Cell::Banner],
         tool_cells: HashMap::new(),
         scroll_from_bottom: 0,
+        scroll_target: 0,
+        scroll_anim_at: Instant::now(),
         view_h: 20,
         view_total: 0,
         input_area: ratatui::layout::Rect::default(),
@@ -3125,6 +3142,9 @@ pub async fn run_tui(
         //    relative to mouse changes, not the paste algorithm.
         let wait = if dirty {
             Duration::ZERO
+        } else if app.scroll_animating() {
+            // Wake often enough for the transcript glide to step every ~16ms.
+            Duration::from_millis(8)
         } else {
             Duration::from_millis(frame_ms)
         };
@@ -3404,6 +3424,9 @@ pub async fn run_tui(
         }
 
         // 3) Ambient / animation dirty flags.
+        if app.tick_scroll_animation() {
+            dirty = true;
+        }
         //
         // Locked design: the NUR banner's gradient shimmer (and the other
         // ambient animation) repaints every frame, idle included. Never
@@ -3642,26 +3665,64 @@ impl App {
         total.saturating_sub(h)
     }
 
+    /// Wheel, arrows and page keys move the target; the viewport glides there
+    /// over a few frames, so a flick that lands twenty events in one tick is
+    /// one smooth motion instead of one jump.
     pub fn scroll_up(&mut self, n: u16) {
         let max = self.max_scroll();
-        self.scroll_from_bottom = self.scroll_from_bottom.saturating_add(n as usize).min(max);
+        self.scroll_target = self.scroll_target.saturating_add(n as usize).min(max);
     }
 
     pub fn scroll_down(&mut self, n: u16) {
-        self.scroll_from_bottom = self.scroll_from_bottom.saturating_sub(n as usize);
+        self.scroll_target = self.scroll_target.saturating_sub(n as usize);
     }
 
     fn scroll_to_top(&mut self) {
-        self.scroll_from_bottom = self.max_scroll();
+        self.scroll_target = self.max_scroll();
     }
 
+    /// Following the newest line is immediate: a reply that arrives while the
+    /// user is at the bottom must not animate the viewport.
     fn scroll_to_bottom(&mut self) {
         self.scroll_from_bottom = 0;
+        self.scroll_target = 0;
     }
 
     /// Absolute jump used by scrollbar thumb drag (0 = latest, max = oldest).
+    /// Immediate: the thumb must stay under the pointer.
     pub fn set_scroll_from_bottom(&mut self, v: usize) {
         self.scroll_from_bottom = v.min(self.max_scroll());
+        self.scroll_target = self.scroll_from_bottom;
+    }
+
+    /// True while the viewport has not reached its target.
+    pub fn scroll_animating(&self) -> bool {
+        self.scroll_target.min(self.max_scroll()) != self.scroll_from_bottom
+    }
+
+    /// One easing step toward the target (a third of the remaining distance,
+    /// at least one line), at most every `SCROLL_STEP_MS`. Returns true when
+    /// the viewport moved and needs a repaint.
+    pub fn tick_scroll_animation(&mut self) -> bool {
+        const SCROLL_STEP_MS: u64 = 16;
+        let target = self.scroll_target.min(self.max_scroll());
+        self.scroll_target = target;
+        if target == self.scroll_from_bottom {
+            return false;
+        }
+        let now = Instant::now();
+        if now.duration_since(self.scroll_anim_at) < Duration::from_millis(SCROLL_STEP_MS) {
+            return false;
+        }
+        self.scroll_anim_at = now;
+        let diff = target.abs_diff(self.scroll_from_bottom);
+        let step = diff.div_ceil(3).max(1);
+        if target > self.scroll_from_bottom {
+            self.scroll_from_bottom += step;
+        } else {
+            self.scroll_from_bottom -= step;
+        }
+        true
     }
 
     // ── prompt context menu (right-click / double-click a User prompt) ───
@@ -4637,7 +4698,7 @@ impl App {
                 self.transcript_revision = self.transcript_revision.wrapping_add(1);
                 self.cells.retain(|c| matches!(c, Cell::Banner));
                 self.tool_cells.clear();
-                self.scroll_from_bottom = 0;
+                self.scroll_to_bottom();
             }
             KeyCode::Char('r') if ctrl => self.input.search_begin(),
             // Ctrl+A: select all input text; if input empty, select whole transcript.
@@ -7597,8 +7658,8 @@ impl App {
         login_method_choices(&provider, m.can_import).len()
     }
 
-    /// One-step move for the auth-options list (wheel + PageUp/PageDown share
-    /// this) - same contract as the theme/provider pickers' .
+    /// One-step move for the auth-options list (PageUp/PageDown repeat it) -
+    /// same contract as the theme/provider pickers' `step`.
     fn step_login_method(&mut self, dir: i32) {
         let Some(m) = &mut self.login else { return };
         let n = Self::method_option_count(m);
@@ -7608,6 +7669,19 @@ impl App {
         let sel = m.method_sel as i32;
         let next = (sel + dir.signum()).clamp(0, n as i32 - 1);
         m.method_sel = next as usize;
+    }
+
+    /// Wheel on the auth-options list: one step per 45ms like every other
+    /// picker, so a single flick (several events on Windows terminals) cannot
+    /// jump from the first option to the last.
+    fn wheel_login_method(&mut self, dir: i32) {
+        let Some(m) = &mut self.login else { return };
+        let now = Instant::now();
+        if now.duration_since(m.last_step_at) < Duration::from_millis(45) {
+            return;
+        }
+        m.last_step_at = now;
+        self.step_login_method(dir);
     }
 
     fn on_login_method_key(&mut self, key: event::KeyEvent, _ctrl: bool) {
@@ -8050,12 +8124,12 @@ impl App {
             match m.kind {
                 MouseEventKind::ScrollUp => {
                     if let Some(l) = &mut self.login {
-                        l.step_jev(-1);
+                        l.wheel_jev(-1);
                     }
                 }
                 MouseEventKind::ScrollDown => {
                     if let Some(l) = &mut self.login {
-                        l.step_jev(1);
+                        l.wheel_jev(1);
                     }
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
@@ -8120,8 +8194,8 @@ impl App {
         // every other picker.
         if stage == Some(LoginStage::Method) {
             match m.kind {
-                MouseEventKind::ScrollUp => self.step_login_method(-1),
-                MouseEventKind::ScrollDown => self.step_login_method(1),
+                MouseEventKind::ScrollUp => self.wheel_login_method(-1),
+                MouseEventKind::ScrollDown => self.wheel_login_method(1),
                 MouseEventKind::Down(MouseButton::Left) => {
                     let Some(l) = &self.login else { return };
                     let hit = l.hit.clone();
@@ -12071,6 +12145,35 @@ mod tests {
         // Viewport moves by at most 1 per step when vis_page is 2.
         assert!(picker.scroll <= picker.sel);
         assert!(picker.sel - picker.scroll < picker.vis_page.max(1));
+    }
+
+    #[test]
+    fn jev_slot_wheel_coalesces_to_one_step() {
+        use crate::typesafe::residence::{Residence, Slot};
+        let slot = |id: &str| Slot {
+            id: id.into(),
+            name: id.into(),
+            detail: String::new(),
+            residence: Residence::Absent,
+            in_use: false,
+            shared_with: None,
+        };
+        let mut m = LoginModal::new("typesafe".into());
+        m.stage = LoginStage::JevSlots;
+        m.jev_slots = vec![slot("a"), slot("b"), slot("c"), slot("d")];
+        m.last_step_at = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        // One physical flick arrives as several events inside 45ms.
+        m.wheel_jev(1);
+        m.wheel_jev(1);
+        m.wheel_jev(1);
+        assert_eq!(m.jev_sel, 1, "a flick must not jump to the last slot");
+        // Keyboard steps are never throttled.
+        m.step_jev(1);
+        m.step_jev(1);
+        m.step_jev(1);
+        assert_eq!(m.jev_sel, 3);
     }
 
     #[test]

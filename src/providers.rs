@@ -1450,6 +1450,24 @@ pub const PROVIDERS: &[Provider] = &[
         browser_auth: false,
     },
     Provider {
+        id: "opendesign",
+        name: "OpenDesign",
+        // The console's "Connection setup" derives this from the site host
+        // (`amr-link.open-design.ai` + `/v1` for the OpenAI formats); the
+        // `api.amr.dev` host quoted on the public docs page does not resolve.
+        // Keys come from https://open-design.ai/cloud/api-keys and spend the
+        // same plan credits as the desktop app.
+        base_url: "https://amr-link.open-design.ai/v1",
+        // Design Plan model included on every tier (Go upward) with a doubled
+        // allowance; dotted versions are how the gateway spells its ids.
+        default_model: "deepseek-v4.1-flash",
+        env_key: "OPENDESIGN_API_KEY",
+        style: CC,
+        note: "open-design.ai plan credits · Chat Completions / Responses / Messages",
+        key_optional: false,
+        browser_auth: false,
+    },
+    Provider {
         id: "commandcode",
         name: "Command Code",
         base_url: COMMANDCODE_BASE_URL,
@@ -2662,7 +2680,7 @@ mod tests {
         // `PROVIDER_COUNT_DOC_SITES` below too.
         assert_eq!(
             PROVIDERS.len(),
-            68,
+            69,
             "provider count changed — update the docs that quote it: {}",
             PROVIDER_COUNT_DOC_SITES.join(", ")
         );
