@@ -693,7 +693,7 @@ NurCLI writes live status files for host panels:
 | Path | Contents |
 |------|----------|
 | `~/.nur/status.json` | Live tokens, cost, model, state |
-| `~/.nur/usage.jsonl` | Per-request log |
+| `~/.nur/usage.jsonl` | Per-request log; `purpose` says what each request was for (`chat`, `compaction`, `compaction-remote`, `fusion`, `subagent`) |
 | `~/.nur/ade.json` | Discovery manifest |
 
 ```bash

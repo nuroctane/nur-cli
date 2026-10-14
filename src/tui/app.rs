@@ -10686,6 +10686,7 @@ impl App {
                 usage,
                 result,
                 interrupted,
+                ..
             } => {
                 self.finish_thinking();
                 self.finish_streaming();

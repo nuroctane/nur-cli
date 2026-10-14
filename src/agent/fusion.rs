@@ -43,6 +43,13 @@ pub fn spawn_fusion(
         usage.set_state("idle");
         let _ = session.save();
         let interrupted = cancel.is_cancelled();
+        let exit_code = if interrupted {
+            crate::error::exit::CANCELLED
+        } else if result.is_err() {
+            crate::error::exit::PROVIDER
+        } else {
+            crate::error::exit::OK
+        };
         let _ = tx.send(AgentEvent::Usage {
             session: usage.session_usage().clone(),
             last: usage.last_usage().clone(),
@@ -52,6 +59,7 @@ pub fn spawn_fusion(
             usage,
             result,
             interrupted,
+            exit_code,
         });
     })
 }
@@ -223,7 +231,13 @@ fn meter(
 ) {
     if let Some(u) = &resp.usage {
         let tu: TokenUsage = u.into();
-        usage.record_request_for_route(provider, model, tu, resp.id.clone());
+        usage.record_request_as(
+            provider,
+            model,
+            tu,
+            resp.id.clone(),
+            crate::usage::PURPOSE_FUSION,
+        );
         session.usage.add(usage.last_usage());
     }
 }

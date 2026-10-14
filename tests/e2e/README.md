@@ -45,7 +45,8 @@ One JSON file per scenario in `scenarios/`:
 | `setup_files` | files created in the workspace first |
 | `setup_home_files` | files created in the nur home (`hooks.toml`, …); `{home}` and `{workspace}` expand |
 | `setup_commands` | `nur` subcommands run in the workspace before the prompt, e.g. `[["permissions", "trust"]]` |
-| `expect` | `exit_code`, `stdout_contains`/`stdout_lacks`, `stderr_contains`, `files` (exact text or `contains`/`lacks`), `absent_files`, `requests`, `tool_results` (per request), `requests_lack`, `max_tool_result_chars`, `absent_request_fields` (dotted paths such as `reasoning.summary`), `input_item_types` and `content_part_types` (the only types any request may send) |
+| `global_args`, `run_args` | extra arguments before the subcommand (`["-v"]`) and after `run` (`["--output-format", "json"]`) |
+| `expect` | `exit_code`, `stdout_contains`/`stdout_lacks`, `stdout_count` (`needle` with `min`/`max`), `stderr_contains`, `files` (exact text or `contains`/`lacks`), `absent_files`, `requests`, `tool_results` (per request: `contains` over all results, `last_result` with `contains`/`lacks`/`min_chars` over the newest), `requests_lack`, `max_tool_result_chars`, `absent_request_fields` (dotted paths such as `reasoning.summary`), `input_item_types` and `content_part_types` (the only types any request may send), `stdout_json` (stdout is one JSON object: `equals`, `contains`, `keys`, `non_null`) and `stdout_jsonl` (every stdout line is JSON; `types` must appear, `last` checks the final object) |
 | `skip` | the reason a scenario is parked, for open product decisions |
 
 A run also fails if a process nur started is still holding files in the

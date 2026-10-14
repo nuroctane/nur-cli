@@ -1342,11 +1342,15 @@ impl App {
                 r = crate::typesafe::context::scope(session.id.clone(), cancel.clone(), agent::compact_session(&runner, &mut session, &mut usage)) => r,
             };
             let interrupted = matches!(res, Err(crate::error::NurError::Interrupted));
+            let exit_code = res
+                .as_ref()
+                .map_or_else(|e| e.exit_code(), |_| crate::error::exit::OK);
             let _ = tx.send(AgentEvent::Done {
                 session: Box::new(session),
                 usage: Box::new(usage),
                 result: res.map_err(|e| e.to_string()),
                 interrupted,
+                exit_code,
             });
         });
     }

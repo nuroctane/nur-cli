@@ -1,0 +1,19 @@
+{
+  "description": "`--output-format stream-json` writes one JSON object per line: tool_start/tool_end/text events, the layers line, and the same final result object. A standing notice (the provider capability profile) appears once, not before every request.",
+  "prompt": "Run the two marker commands and report.",
+  "run_args": ["--output-format", "stream-json"],
+  "script": [
+    {"tool_calls": [{"name": "bash", "arguments": {"command": "echo e2e-marker-1"}}]},
+    {"tool_calls": [{"name": "bash", "arguments": {"command": "echo e2e-marker-2"}}]},
+    {"text": "Both markers printed."}
+  ],
+  "expect": {
+    "requests": 3,
+    "stdout_jsonl": {
+      "types": ["tool_start", "tool_end", "text", "layers", "result"],
+      "last": {"equals": {"type": "result", "ok": true, "exit_code": 0, "tool_calls": 2, "result": "Both markers printed."}}
+    },
+    "stdout_count": [{"needle": "provider capability profile", "max": 1}],
+    "stdout_lacks": ["\u001b]0;"]
+  }
+}

@@ -59,13 +59,24 @@ nur run <PROMPT...> [OPTIONS]
 |------------|-------------|
 | `PROMPT` | Prompt text (required, multiple words joined) |
 | `-y`, `--yes` | Auto-approve all tools |
+| `--output-format text\|json\|stream-json` | What stdout carries (default `text`). `json`: nothing until the end, then one `{"type":"result", ...}` object. `stream-json`: one JSON object per line (`layers`, `status`, `tool_start`, `tool_end`, `text`, `assistant`) ending in that same result object. In both JSON formats every diagnostic goes to stderr, so stdout parses. |
 
 **Example:**
 
 ```bash
 nur run "write a hello world in Rust" -y
 nur run "explain what this repo does" -v
+nur run "run the tests and summarise" -y --output-format json | jq .result
 ```
+
+**Headless contract.** `nur run` is built to be driven by scripts, CI and other agents:
+
+- **stdout is the answer.** No terminal-title escapes are ever written by `run` (the TUI writes them only when stdout is a terminal). Status lines appear on stdout only with `-v` in text mode; in the JSON formats they go to stderr or become `status` events.
+- **Exit codes** tell failures apart without scraping text: `0` ok · `1` unexpected error · `2` configuration · `3` authentication (no key, or the provider rejected it with 401/403) · `4` provider (other HTTP errors, network) · `5` budget or turn limit · `6` the model declared `BLOCKED: <what it needs>` (the answer is still printed) · `130` cancelled. `nur "<goal>" --continuous` uses the same codes (`5` for `--max-iters`, `6` for a declared blocker). Also in `nur --help`.
+- **The result object** (`json`, and the last line of `stream-json`): `ok`, `exit_code`, `result` (the answer, or `null` on error), `error`, `blocked` (the text after `BLOCKED:`), `session_id`, `model`, `provider`, `tool_calls`, `duration_ms`, `usage` (`input_tokens`, `output_tokens`, `total_tokens`, `estimated_cost_usd`) and `layers`.
+- **Layers line.** Every headless run reports once which side layers are live and why not when they are not: `layers · typesafe: off (no key: ...) · headroom: active (inline compress)`. On stderr in text mode, a `layers` event in `stream-json`, the `layers` field of the `json` result. The probe runs on a background thread, never in front of the first request.
+- **Notices print once.** A standing condition (the provider capability profile, for example) is said the first time, not before every request.
+- **Side-model spend is visible.** Every row in `~/.nur/usage.jsonl` carries `purpose`: `chat` for the turn itself, `compaction` / `compaction-remote` for summaries, `fusion` for panel members, `subagent` for child sessions.
 
 ---
 

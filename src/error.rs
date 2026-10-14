@@ -95,11 +95,66 @@ pub enum NurError {
     Other(String),
 }
 
+/// Process exit codes for headless use (`nur run`, gateway, scripts). Documented
+/// in `nur --help`; a caller can branch on them without scraping stderr.
+pub mod exit {
+    pub const OK: i32 = 0;
+    pub const GENERAL: i32 = 1;
+    pub const CONFIG: i32 = 2;
+    pub const AUTH: i32 = 3;
+    pub const PROVIDER: i32 = 4;
+    pub const BUDGET: i32 = 5;
+    pub const BLOCKED: i32 = 6;
+    pub const CANCELLED: i32 = 130;
+}
+
+impl NurError {
+    /// The exit code this failure maps to (see [`exit`]).
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            NurError::NotAuthenticated => exit::AUTH,
+            NurError::Api {
+                status: 401 | 403, ..
+            } => exit::AUTH,
+            NurError::Api { .. } | NurError::Request(_) => exit::PROVIDER,
+            NurError::Config(_) => exit::CONFIG,
+            NurError::MaxTurns(_) | NurError::Budget(_) => exit::BUDGET,
+            NurError::Interrupted => exit::CANCELLED,
+            NurError::Io(_) | NurError::Json(_) | NurError::Tool(_) | NurError::Other(_) => {
+                exit::GENERAL
+            }
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, NurError>;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Failure modes: a rejected key reads as a generic provider failure, or a
+    /// budget stop and a cancel both come out as 1 and a script cannot tell
+    /// "retry later" from "the user stopped it".
+    #[test]
+    fn exit_codes_separate_the_failures_a_script_must_tell_apart() {
+        let rejected = NurError::Api {
+            status: 401,
+            message: String::new(),
+        };
+        let outage = NurError::Api {
+            status: 503,
+            message: String::new(),
+        };
+        assert_eq!(NurError::NotAuthenticated.exit_code(), exit::AUTH);
+        assert_eq!(rejected.exit_code(), exit::AUTH);
+        assert_eq!(outage.exit_code(), exit::PROVIDER);
+        assert_eq!(NurError::Config("x".into()).exit_code(), exit::CONFIG);
+        assert_eq!(NurError::MaxTurns(3).exit_code(), exit::BUDGET);
+        assert_eq!(NurError::Budget("x".into()).exit_code(), exit::BUDGET);
+        assert_eq!(NurError::Interrupted.exit_code(), exit::CANCELLED);
+        assert_eq!(NurError::Other("x".into()).exit_code(), exit::GENERAL);
+    }
 
     /// A parsed provider message must survive untouched — the fallback only
     /// fills a hole, it never rewrites what the provider actually said.

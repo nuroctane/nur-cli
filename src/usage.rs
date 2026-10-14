@@ -248,7 +248,22 @@ pub struct UsageLogLine {
     pub cost_provenance: CostProvenance,
     #[serde(default)]
     pub usage_state: UsageState,
+    /// What the request was for: `chat` (the turn itself), `compaction`,
+    /// `compaction-remote`, `fusion`, `subagent`. Side-model spend used to be
+    /// indistinguishable from the conversation in this log.
+    #[serde(default = "default_purpose")]
+    pub purpose: String,
 }
+
+fn default_purpose() -> String {
+    PURPOSE_CHAT.to_string()
+}
+
+pub const PURPOSE_CHAT: &str = "chat";
+pub const PURPOSE_SUBAGENT: &str = "subagent";
+pub const PURPOSE_COMPACTION: &str = "compaction";
+pub const PURPOSE_COMPACTION_REMOTE: &str = "compaction-remote";
+pub const PURPOSE_FUSION: &str = "fusion";
 
 /// Append-only evidence for requests that may have reached a provider but did
 /// not yield a normal completed response. It intentionally lives beside, not
@@ -319,20 +334,29 @@ pub struct UsageTracker {
     /// only the session-scoped status file is written. Keeps the Orca display
     /// pinned to the top-level session.
     global: bool,
+    /// Default `purpose` for rows this tracker writes (`chat`, or `subagent`
+    /// for a scoped tracker); side requests pass their own.
+    purpose: &'static str,
     lock: Mutex<()>,
 }
 
 impl UsageTracker {
     pub fn new(session_id: String, model: String, cwd: PathBuf) -> Self {
-        Self::with_scope(session_id, model, cwd, true)
+        Self::with_scope(session_id, model, cwd, true, PURPOSE_CHAT)
     }
 
     /// Session-scoped tracker for subagents: no global status/ADE writes.
     pub fn scoped(session_id: String, model: String, cwd: PathBuf) -> Self {
-        Self::with_scope(session_id, model, cwd, false)
+        Self::with_scope(session_id, model, cwd, false, PURPOSE_SUBAGENT)
     }
 
-    fn with_scope(session_id: String, model: String, cwd: PathBuf, global: bool) -> Self {
+    fn with_scope(
+        session_id: String,
+        model: String,
+        cwd: PathBuf,
+        global: bool,
+        purpose: &'static str,
+    ) -> Self {
         let t = Self {
             session_id,
             model,
@@ -343,6 +367,7 @@ impl UsageTracker {
             last: TokenUsage::default(),
             state: "idle".into(),
             global,
+            purpose,
             lock: Mutex::new(()),
         };
         let _ = t.write_status();
@@ -425,12 +450,6 @@ impl UsageTracker {
         let _ = self.write_status();
     }
 
-    pub fn record_request(&mut self, usage: TokenUsage, response_id: Option<String>) {
-        let provider = self.provider.clone();
-        let model = self.model.clone();
-        self.record_request_for_route(&provider, &model, usage, response_id);
-    }
-
     /// Record a request served by a different failover route without changing
     /// the session's configured primary provider/model. Pricing, the append-only
     /// usage row, and the live hook payload must describe where tokens were
@@ -442,11 +461,36 @@ impl UsageTracker {
         usage: TokenUsage,
         response_id: Option<String>,
     ) {
+        let purpose = self.purpose;
+        self.record_request_as(provider, model, usage, response_id, purpose);
+    }
+
+    /// A request made on the session's behalf but not as the conversation
+    /// (compaction summary, fusion panel): same totals, its own `purpose`.
+    pub fn record_side_request(
+        &mut self,
+        usage: TokenUsage,
+        response_id: Option<String>,
+        purpose: &str,
+    ) {
+        let provider = self.provider.clone();
+        let model = self.model.clone();
+        self.record_request_as(&provider, &model, usage, response_id, purpose);
+    }
+
+    pub fn record_request_as(
+        &mut self,
+        provider: &str,
+        model: &str,
+        usage: TokenUsage,
+        response_id: Option<String>,
+        purpose: &str,
+    ) {
         self.turn += 1;
         let (usage, rates) = stamp_for_route(provider, model, usage);
         self.last = usage.clone();
         self.session.add(&usage);
-        let _ = self.append_log(&usage, response_id, &rates, provider, model);
+        let _ = self.append_log(&usage, response_id, &rates, provider, model, purpose);
         let _ = self.write_status();
         if !self.global {
             return;
@@ -551,6 +595,7 @@ impl UsageTracker {
         rates: &ModelRates,
         provider: &str,
         model: &str,
+        purpose: &str,
     ) -> Result<()> {
         ensure_dirs()?;
         let line = UsageLogLine {
@@ -565,6 +610,7 @@ impl UsageTracker {
             pricing_source: rates.source.clone(),
             cost_provenance: usage.cost_provenance,
             usage_state: usage.usage_state,
+            purpose: purpose.to_string(),
         };
         let mut f = OpenOptions::new()
             .create(true)

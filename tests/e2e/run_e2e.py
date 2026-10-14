@@ -255,6 +255,32 @@ def check_stable_prefix(requests):
     ]
 
 
+def check_json_object(text, rule, label):
+    """`equals` compares listed keys exactly; `contains` wants a substring in
+    a string field; `keys` must be present (any value, including null)."""
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError as e:
+        return [f"{label} is not one JSON object ({e}): {text[:200]!r}"]
+    if not isinstance(obj, dict):
+        return [f"{label} is not a JSON object: {text[:200]!r}"]
+    failures = []
+    for key, want in rule.get("equals", {}).items():
+        if obj.get(key) != want:
+            failures.append(f"{label} {key}={obj.get(key)!r}, expected {want!r}")
+    for key, needle in rule.get("contains", {}).items():
+        value = obj.get(key)
+        if not isinstance(value, str) or needle not in value:
+            failures.append(f"{label} {key} lacks {needle!r}: {value!r}")
+    for key in rule.get("keys", []):
+        if key not in obj:
+            failures.append(f"{label} lacks key {key!r}")
+    for key in rule.get("non_null", []):
+        if obj.get(key) is None:
+            failures.append(f"{label} {key} is null")
+    return failures
+
+
 def check(scenario, result, workspace, requests, mcp_requests=()):
     expect = scenario.get("expect", {})
     failures = check_mcp(expect["mcp"], list(mcp_requests)) if "mcp" in expect else []
@@ -275,6 +301,32 @@ def check(scenario, result, workspace, requests, mcp_requests=()):
     for needle in expect.get("stderr_contains", []):
         if needle not in result.stderr:
             failures.append(f"stderr lacks {needle!r}")
+    for rule in expect.get("stdout_count", []):
+        seen = result.stdout.count(rule["needle"])
+        if "max" in rule and seen > rule["max"]:
+            failures.append(f"stdout contains {rule['needle']!r} {seen} times, allowed {rule['max']}")
+        if "min" in rule and seen < rule["min"]:
+            failures.append(f"stdout contains {rule['needle']!r} {seen} times, expected at least {rule['min']}")
+    # `--output-format json`: stdout is exactly one JSON object.
+    if "stdout_json" in expect:
+        failures += check_json_object(result.stdout.strip(), expect["stdout_json"], "stdout")
+    # `--output-format stream-json`: every line is a JSON object; the rule
+    # names the event types that must appear and checks the final object.
+    if "stdout_jsonl" in expect:
+        rule = expect["stdout_jsonl"]
+        lines = [line for line in result.stdout.splitlines() if line.strip()]
+        objects = []
+        for line in lines:
+            try:
+                objects.append(json.loads(line))
+            except json.JSONDecodeError:
+                failures.append(f"stdout line is not JSON: {line[:120]!r}")
+        types = [o.get("type") for o in objects if isinstance(o, dict)]
+        for wanted in rule.get("types", []):
+            if wanted not in types:
+                failures.append(f"stdout events lack type {wanted!r}: {types}")
+        if objects and "last" in rule:
+            failures += check_json_object(lines[-1], rule["last"], "last stdout line")
     protocol = expect.get("protocol")
     if protocol and any(not r.get("_path", "").endswith("/" + protocol) for r in requests):
         failures.append(f"requests used the wrong wire protocol, expected {protocol}")
@@ -464,9 +516,12 @@ def run_scenario(binary, scenario_path):
             if done.returncode != 0:
                 setup_failures.append(f"setup `nur {' '.join(command)}` exited {done.returncode}: {done.stderr.strip()[:300]}")
         try:
-            args = [str(binary), "--cwd", str(workspace), "run"]
+            # `global_args` go before the subcommand (`-v`), `run_args` after
+            # it (`--output-format json`).
+            args = [str(binary), *scenario.get("global_args", []), "--cwd", str(workspace), "run"]
             mode = scenario.get("mode", "auto")
             args += ["--yes"] if mode == "auto" else ["--mode", mode]
+            args += scenario.get("run_args", [])
             args.append(scenario["prompt"])
             started = time.time()
             child = spawn_process(

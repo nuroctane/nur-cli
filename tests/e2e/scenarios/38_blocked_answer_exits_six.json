@@ -1,0 +1,12 @@
+{
+  "description": "A model that declares `BLOCKED: <need>` ends the headless run with exit code 6 and the answer still printed, so an orchestrator can route the blocker to a human without parsing the text.",
+  "prompt": "Deploy to production.",
+  "script": [
+    {"text": "I checked the pipeline.\nBLOCKED: I need the production deploy token to continue."}
+  ],
+  "expect": {
+    "requests": 1,
+    "exit_code": 6,
+    "stdout_contains": ["BLOCKED: I need the production deploy token to continue."]
+  }
+}

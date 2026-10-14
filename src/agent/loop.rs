@@ -94,6 +94,9 @@ pub enum AgentEvent {
         usage: Box<UsageTracker>,
         result: std::result::Result<String, String>,
         interrupted: bool,
+        /// Process exit code for headless callers (`crate::error::exit`);
+        /// `result` is a string by then, so the class travels separately.
+        exit_code: i32,
     },
 }
 
@@ -159,6 +162,17 @@ impl QuestionAnswer {
 // Tool capability classification (read-only / parallel / destructive) lives in
 // `crate::tools::capabilities` — single source of truth for the agent loop.
 
+/// True the first time this exact notice is seen in the process. For status
+/// lines that describe a standing condition (a route's capabilities, a missing
+/// layer) rather than an event: say it once, not before every request.
+pub fn first_time(notice: &str) -> bool {
+    static SEEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    SEEN.get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+        .map(|mut seen| seen.insert(notice.to_string()))
+        .unwrap_or(true)
+}
+
 pub struct AgentRunner {
     pub client: ApiClient,
     pub config: Config,
@@ -199,12 +213,16 @@ pub fn spawn_turn(
             let _ = session.save();
         }
         let interrupted = matches!(res, Err(NurError::Interrupted));
+        let exit_code = res
+            .as_ref()
+            .map_or_else(NurError::exit_code, |_| crate::error::exit::OK);
         let result = res.map_err(|e| e.to_string());
         let _ = tx.send(AgentEvent::Done {
             session: Box::new(session),
             usage: Box::new(usage),
             result,
             interrupted,
+            exit_code,
         });
     })
 }
@@ -894,11 +912,8 @@ impl AgentRunner {
             }
 
             let mode_now = self.permission_mode.get();
-            let rendered = prompt_ctx.render(
-                mode_now,
-                &self.tools.todos_snapshot().render(),
-                &session.id,
-            );
+            let rendered =
+                prompt_ctx.render(mode_now, &self.tools.todos_snapshot().render(), &session.id);
             let turn_state_item = rendered.turn_state_item();
             let mut instructions = rendered.system;
 
@@ -1067,10 +1082,12 @@ impl AgentRunner {
                 if !primary_output_limit {
                     limits.push("provider output limit unavailable");
                 }
-                let _ = tx.send(AgentEvent::Status(format!(
-                    "provider capability profile · {}",
-                    limits.join(" · ")
-                )));
+                let notice = format!("provider capability profile · {}", limits.join(" · "));
+                // The profile is a property of the route, not the request: a
+                // headless log was getting it before every call.
+                if first_time(&notice) {
+                    let _ = tx.send(AgentEvent::Status(notice));
+                }
             }
 
             // Effort rungs differ per provider (and, for Claude, per model) and
@@ -6818,11 +6835,12 @@ async fn compact_session_inner(
         // The endpoint is an explicit remote boundary, not the active route.
         // Pricing is necessarily an estimate unless the endpoint reports a
         // native cost, but tokens still count toward session safeguards.
-        usage.record_request_for_route(
+        usage.record_request_as(
             "remote-compaction",
             &remote.endpoint_origin,
             remote_usage,
             None,
+            crate::usage::PURPOSE_COMPACTION_REMOTE,
         );
         session.usage.add(usage.last_usage());
         receipt::record(
@@ -6856,7 +6874,7 @@ async fn compact_session_inner(
         };
         let resp = runner.client.create_response(&req).await?;
         let raw = resp.accounting_usage();
-        usage.record_request(raw, resp.id.clone());
+        usage.record_side_request(raw, resp.id.clone(), crate::usage::PURPOSE_COMPACTION);
         session.usage.add(usage.last_usage());
         let summary = resp.output_text();
         if summary.is_empty() {

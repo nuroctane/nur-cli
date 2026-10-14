@@ -16,11 +16,13 @@ mod error;
 mod fractal;
 mod gateway;
 mod gepa;
+mod headless;
 mod headroom;
 mod jev_catalog;
 mod jev_eval;
 mod jev_local;
 mod jev_resources;
+mod layers;
 mod ledger;
 mod local;
 mod mcp_http;
@@ -66,7 +68,7 @@ async fn main() {
 
     if let Err(e) = real_main().await {
         theme::print_err(&e.to_string());
-        std::process::exit(1);
+        std::process::exit(e.exit_code());
     }
 }
 
@@ -582,12 +584,16 @@ async fn real_main() -> Result<()> {
                     .into(),
             ));
         }
-        Some(Commands::Run { prompt, yes }) => {
+        Some(Commands::Run {
+            prompt,
+            yes,
+            output_format,
+        }) => {
             let prompt = prompt.join(" ");
             if *yes {
                 permission_mode.set(PermissionMode::Auto);
             }
-            run_headless(
+            let code = run_headless(
                 client,
                 cfg,
                 cwd,
@@ -596,8 +602,12 @@ async fn real_main() -> Result<()> {
                 &prompt,
                 permission_mode,
                 cli.verbose,
+                *output_format,
             )
             .await?;
+            if code != error::exit::OK {
+                std::process::exit(code);
+            }
         }
         None if cli.continuous => {
             let goal = cli
@@ -612,7 +622,7 @@ async fn real_main() -> Result<()> {
                         .into(),
                 ));
             };
-            run_continuous(
+            let code = run_continuous(
                 client,
                 cfg,
                 cwd,
@@ -624,6 +634,9 @@ async fn real_main() -> Result<()> {
                 cli.max_iters,
             )
             .await?;
+            if code != error::exit::OK {
+                std::process::exit(code);
+            }
         }
         None => {
             // Compact host tab title from first prompt (implementation detail, not marketing).
@@ -1332,14 +1345,27 @@ async fn run_headless(
     prompt: &str,
     permission_mode: SharedMode,
     verbose: bool,
-) -> Result<()> {
+    output_format: cli::OutputFormat,
+) -> Result<i32> {
+    use headless::{Emitter, Outcome};
+    ade::disable_terminal_title();
     ade::set_title_prompt(prompt);
+    let mut out = Emitter::new(output_format, verbose);
     let peer_session_id = std::env::var("NUR_SESSION_ID").unwrap_or_else(|_| session.id.clone());
     let peer_cwd = cwd.to_string_lossy().into_owned();
+    let session_id = session.id.clone();
+    let model = cfg.model.clone();
+    let provider = cfg.provider.clone();
     let permissions = agent::SharedPermissions::load(&cwd);
     if let Some(note) = permissions.held_notice() {
         eprintln!("note: {note}");
     }
+    // The probe may launch Python; it reports through its own channel so the
+    // event loop below prints it whenever it lands, never before the request.
+    let (layers_tx, mut layers_rx) = tokio::sync::mpsc::unbounded_channel();
+    layers::announce(&cfg, move |layers| {
+        let _ = layers_tx.send(layers);
+    });
     agent::prompt::prefetch_slow_sources(&cwd, &cfg);
     let runner = Arc::new(AgentRunner {
         client,
@@ -1366,57 +1392,40 @@ async fn run_headless(
         cancel.clone(),
     );
 
-    let mut streamed = false;
-    let mut midline = false;
     let mut final_result: std::result::Result<String, String> = Ok(String::new());
     let mut final_usage: Option<Box<UsageTracker>> = None;
+    let mut final_code = error::exit::OK;
 
-    while let Some(ev) = rx.recv().await {
-        // Streamed deltas leave the cursor mid-line; break before other output.
-        if midline && !matches!(ev, AgentEvent::TextDelta(_)) {
-            println!();
-            midline = false;
-        }
+    loop {
+        let ev = tokio::select! {
+            ev = rx.recv() => match ev {
+                Some(ev) => ev,
+                None => break,
+            },
+            Some(layers) = layers_rx.recv() => {
+                out.layers(&layers);
+                continue;
+            }
+        };
         match ev {
-            AgentEvent::TextDelta(d) => {
-                streamed = true;
-                midline = !d.ends_with('\n');
-                print!("{d}");
-                let _ = std::io::stdout().flush();
-            }
-            AgentEvent::AssistantMessage(m) => {
-                if verbose {
-                    println!("{m}");
-                }
-            }
+            AgentEvent::TextDelta(d) => out.text_delta(&d),
+            AgentEvent::AssistantMessage(m) => out.assistant_message(&m),
             AgentEvent::ReasoningDelta(_) => {}
-            AgentEvent::Status(s) => {
-                if verbose {
-                    theme::print_info(&s);
-                }
-            }
-            AgentEvent::ToolStart { name, args, .. } => {
-                if verbose {
-                    theme::print_tool(&name, &truncate_line(&args, 120));
-                }
-            }
+            AgentEvent::Status(s) => out.status(&s),
+            AgentEvent::ToolStart { name, args, .. } => out.tool_start(&name, &args),
             AgentEvent::ToolEnd {
                 name, result, ok, ..
-            } => {
-                if verbose {
-                    let tag = if ok { "done" } else { "failed" };
-                    theme::print_info(&format!("{name} {tag}: {}", truncate_line(&result, 160)));
-                }
-            }
+            } => out.tool_end(&name, ok, &result),
             AgentEvent::ApprovalRequest {
                 name,
                 args,
                 respond,
             } => {
-                // Interactive terminal prompt (headless without -y).
+                // Interactive terminal prompt (headless without -y), on stderr
+                // so a captured stdout stays the answer.
                 let decision = tokio::task::spawn_blocking(move || {
                     eprintln!();
-                    theme::print_tool(&name, &truncate_line(&args, 200));
+                    eprintln!("  {name} {}", truncate_line(&args, 200));
                     eprint!(
                         "  approve? [y]es / [a]lways ({}) / [N]o: ",
                         agent::permissions::session_grant_label(&name, &args)
@@ -1434,11 +1443,7 @@ async fn run_headless(
                 let _ = respond.send(decision);
             }
             AgentEvent::Usage { .. } => {}
-            AgentEvent::TodosChanged(text) => {
-                if verbose {
-                    theme::print_info(&format!("todos\n{text}"));
-                }
-            }
+            AgentEvent::TodosChanged(text) => out.status(&format!("todos\n{text}")),
             // Same channel as the TUI modal, over stdin: numbered options.
             AgentEvent::QuestionRequest {
                 question,
@@ -1492,7 +1497,7 @@ async fn run_headless(
             } => {
                 // Headless: no TUI modal — print how to auth. Spawn is already
                 // blocked (no silent parent fallback); user must re-run after login.
-                theme::print_info(&format!(
+                out.notice(&format!(
                     "not signed in to {provider_name} — spawn blocked. Run `nur` then `/login {provider_id}` (or export its API key), then re-deploy the subagent there"
                 ));
             }
@@ -1501,18 +1506,20 @@ async fn run_headless(
                 provider_name,
                 ..
             } => {
-                theme::print_info(&format!(
+                out.notice(&format!(
                     "not signed in to {provider_name} - fusion blocked. Run `nur` then `/auth` or `/provider {provider_id}`, then retry"
                 ));
             }
-            AgentEvent::PlanSubmitted(text) => {
-                if verbose {
-                    theme::print_info(&format!("plan\n{text}"));
-                }
-            }
-            AgentEvent::Done { usage, result, .. } => {
+            AgentEvent::PlanSubmitted(text) => out.status(&format!("plan\n{text}")),
+            AgentEvent::Done {
+                usage,
+                result,
+                exit_code,
+                ..
+            } => {
                 final_usage = Some(usage);
                 final_result = result;
+                final_code = exit_code;
                 break;
             }
         }
@@ -1520,29 +1527,36 @@ async fn run_headless(
 
     crate::agent::mailbox::stop_live_watch(&peer_cwd, &peer_session_id);
 
-    match final_result {
-        Ok(text) => {
-            if !streamed && !text.is_empty() {
-                println!("{text}");
-            }
+    // The probe usually lands during the first request; a run that ended
+    // first still reports it rather than dropping the line.
+    if out.layers_pending() {
+        if let Ok(Some(layers)) =
+            tokio::time::timeout(std::time::Duration::from_secs(6), layers_rx.recv()).await
+        {
+            out.layers(&layers);
         }
-        Err(e) => return Err(error::NurError::Other(e)),
     }
 
-    if let Some(usage) = final_usage {
-        let u = usage.session_usage();
-        if verbose {
-            eprintln!(
-                "\n--- usage: in={} out={} total={} ~${:.6} ---",
-                u.input_tokens,
-                u.output_tokens,
-                u.total_tokens,
-                u.estimated_cost_usd()
-            );
-            eprintln!("status: {}", config::status_path().display());
-        }
+    // A declared blocker is a legal ending with its own exit code, so a
+    // caller can route it to a human without parsing the answer.
+    let blocked = final_result
+        .as_ref()
+        .ok()
+        .and_then(|text| agent::goal::find_blocker(text));
+    if blocked.is_some() && final_code == error::exit::OK {
+        final_code = error::exit::BLOCKED;
     }
-    Ok(())
+
+    let code = out.finish(Outcome {
+        result: final_result,
+        exit_code: final_code,
+        blocked,
+        session_id: &session_id,
+        model: &model,
+        provider: &provider,
+        usage: final_usage.as_ref().map(|u| u.session_usage()),
+    });
+    Ok(code)
 }
 
 /// Continuous / sovereign mode: loop headless turns on one session toward a
@@ -1560,9 +1574,12 @@ async fn run_continuous(
     permission_mode: SharedMode,
     verbose: bool,
     max_iters: u32,
-) -> Result<()> {
+) -> Result<i32> {
+    use error::exit;
     permission_mode.set(PermissionMode::Auto);
+    ade::disable_terminal_title();
     ade::set_title_prompt(goal);
+    layers::announce(&cfg, |layers| eprintln!("{}", layers::status_line(&layers)));
     let quality_gate = cfg.quality_gate.clone();
     let ts_cfg = cfg.typesafe.clone();
 
@@ -1606,15 +1623,21 @@ async fn run_continuous(
     // without declaring `BLOCKED:` would otherwise burn `max_iters` doing
     // nothing. Three idle steps in a row stops the run with the stall shown.
     let mut idle_in_a_row = 0u32;
+    // Exit code of the step that ended the run; the loop's own stops (Ctrl+C,
+    // max steps, BLOCKED, stall) set it explicitly.
+    let mut last_exit_code = exit::OK;
+    let mut final_code = exit::OK;
 
     loop {
         if cancel.is_cancelled() {
             theme::print_info("continuous · stopped (Ctrl+C)");
+            final_code = exit::CANCELLED;
             break;
         }
         iter += 1;
         if max_iters > 0 && iter > max_iters {
             theme::print_info(&format!("continuous · reached max {max_iters} steps"));
+            final_code = exit::BUDGET;
             break;
         }
         theme::print_info(&format!("── step {iter} ──"));
@@ -1673,7 +1696,9 @@ async fn run_continuous(
                     usage: u,
                     result,
                     interrupted,
+                    exit_code: code,
                 } => {
+                    last_exit_code = code;
                     done = Some((s, u, result, interrupted));
                     break;
                 }
@@ -1697,6 +1722,7 @@ async fn run_continuous(
                 errors_in_a_row = 0;
                 if interrupted {
                     theme::print_info("continuous · interrupted");
+                    final_code = exit::CANCELLED;
                     break;
                 }
                 match agent::continuous::accept_done(&text, &cwd, &quality_gate) {
@@ -1788,6 +1814,7 @@ async fn run_continuous(
                         if let Some(blocker) = crate::agent::goal::find_blocker(&text) {
                             theme::print_info("continuous · goal BLOCKED - needs you; stopping");
                             theme::print_info(&format!("blocked: {blocker}"));
+                            final_code = exit::BLOCKED;
                             break;
                         }
                         if tools_this_step == 0 {
@@ -1798,6 +1825,7 @@ async fn run_continuous(
                                      DONE/BLOCKED - stopping (model stalled; re-run with \
                                      a smaller-scoped goal)",
                                 );
+                                final_code = exit::GENERAL;
                                 break;
                             }
                         } else {
@@ -1823,6 +1851,11 @@ async fn run_continuous(
                 theme::print_info(&format!("continuous · step error: {e}"));
                 if errors_in_a_row >= 3 {
                     theme::print_info("continuous · 3 errors in a row — stopping");
+                    final_code = if last_exit_code == exit::OK {
+                        exit::GENERAL
+                    } else {
+                        last_exit_code
+                    };
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_secs(2 * errors_in_a_row as u64))
@@ -1834,18 +1867,10 @@ async fn run_continuous(
     if let Some(s) = session {
         let _ = s.save();
     }
-    Ok(())
+    Ok(final_code)
 }
 
-fn truncate_line(s: &str, max: usize) -> String {
-    let s = s.replace('\n', " ");
-    if s.chars().count() <= max {
-        s
-    } else {
-        let t: String = s.chars().take(max).collect();
-        format!("{t}…")
-    }
-}
+use headless::truncate_line;
 
 #[cfg(test)]
 mod child_env_tests {

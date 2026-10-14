@@ -9,13 +9,27 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+/// Headless runs never paint a title: their stdout is an answer or a log, and
+/// an OSC sequence carrying the prompt's first words in front of every status
+/// line is noise in both.
+static TITLE_DISABLED: AtomicBool = AtomicBool::new(false);
+
+pub fn disable_terminal_title() {
+    TITLE_DISABLED.store(true, Ordering::Relaxed);
+}
+
 /// Set terminal title (OSC 0/2). Keep the word `nur` in the title so Orca/ADEs
-/// can still recognize the agent process.
+/// can still recognize the agent process. Written only when stdout is a
+/// terminal; a redirected stdout gets no escape bytes.
 ///
 /// Mutex-guarded: the TUI thread (110ms animation) and the agent thread
 /// (post-tool re-asserts) both write here concurrently, and two interleaved OSC
 /// sequences can corrupt the title mid-frame.
 pub fn set_terminal_title(title: &str) {
+    use std::io::IsTerminal;
+    if TITLE_DISABLED.load(Ordering::Relaxed) || !std::io::stdout().is_terminal() {
+        return;
+    }
     static WRITE_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
     let _guard = WRITE_LOCK
         .get_or_init(|| std::sync::Mutex::new(()))

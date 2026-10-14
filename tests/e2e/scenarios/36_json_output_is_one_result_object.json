@@ -1,0 +1,18 @@
+{
+  "description": "`nur run --output-format json` puts exactly one JSON result object on stdout: no streamed text, no status lines, no title escapes. The object carries the answer, exit code, tool count, usage and which side layers were active (and why not).",
+  "prompt": "Run the marker command and report.",
+  "run_args": ["--output-format", "json"],
+  "global_args": ["-v"],
+  "script": [
+    {"tool_calls": [{"name": "bash", "arguments": {"command": "echo e2e-marker-42"}}]},
+    {"text": "The marker printed."}
+  ],
+  "expect": {
+    "requests": 2,
+    "stdout_json": {
+      "equals": {"type": "result", "ok": true, "exit_code": 0, "result": "The marker printed.", "tool_calls": 1, "error": null, "blocked": null},
+      "non_null": ["session_id", "usage", "layers", "duration_ms"]
+    },
+    "stdout_lacks": ["\u001b]0;", "e2e-marker-42", "provider capability profile"]
+  }
+}

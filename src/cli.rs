@@ -1,6 +1,19 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 // Re-export for main.rs match arms.
+
+/// Shape of `nur run` stdout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum OutputFormat {
+    /// The streamed answer, as before.
+    Text,
+    /// Nothing until the end, then one `{"type":"result", ...}` object.
+    Json,
+    /// One JSON object per line (`text`, `tool_start`, `tool_end`, `status`,
+    /// `layers`), ending in the same `result` object.
+    #[value(name = "stream-json")]
+    StreamJson,
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -99,6 +112,11 @@ pub enum Commands {
         /// Auto-approve tools
         #[arg(long, short = 'y')]
         yes: bool,
+        /// What stdout carries: the answer as text, one JSON result object, or
+        /// one JSON event per line ending in that result object. Diagnostics
+        /// go to stderr in the JSON formats.
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        output_format: OutputFormat,
     },
     /// Authentication (API key / status / logout)
     Auth {
