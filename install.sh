@@ -71,6 +71,7 @@ elif command -v dnf >/dev/null 2>&1; then PKG="dnf"
 elif command -v pacman >/dev/null 2>&1; then PKG="pacman"
 fi
 pkg_install() { # pkg_install <package-name…>
+  [[ -n "${1:-}" ]] || return 1
   case "${PKG}" in
     brew)   brew install "$@" ;;
     apt)    sudo apt-get install -y "$@" 2>/dev/null || apt-get install -y "$@" 2>/dev/null ;;
@@ -102,6 +103,10 @@ ensure_prereq bun    "oven-sh/bun/bun" "omp coding-agent backend" bun_official
 ensure_prereq uv     "uv"          "graphify" uv_official
 ensure_prereq rg     "ripgrep"     "fast grep / glob"
 ensure_prereq ffmpeg "ffmpeg"      "extract_frames / design-from-video"
+# sgrep: local semantic code search, the model's first search tool. Not in
+# any package index yet, so it is a plain cargo build (ensure retries later).
+sgrep_cargo() { cargo install --git https://github.com/context-dot-dev/sgrep --locked; }
+ensure_prereq sgrep  ""            "sgrep semantic search" sgrep_cargo
 export PATH="${HOME}/.bun/bin:${HOME}/.local/bin:${PATH}"
 
 step "Building release (first time can take a few minutes)…"

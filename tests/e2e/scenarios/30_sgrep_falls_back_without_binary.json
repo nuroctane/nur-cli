@@ -1,0 +1,25 @@
+{
+  "description": "sgrep with the binary absent (NUR_SGREP_BIN empty) answers through grep: the result leads with the install note and still carries the matching lines, in both discover and rerank mode.",
+  "prompt": "Find the retry logic.",
+  "env": {"NUR_SGREP_BIN": ""},
+  "setup_files": {
+    "src/net.rs": "fn retry_with_backoff() {\n    sleep_then_retry();\n}\n\nfn unrelated_helper() {}\n",
+    "src/other.rs": "fn parse_header() {}\n"
+  },
+  "script": [
+    {"tool_calls": [
+      {"name": "sgrep", "arguments": {"query": "retry with exponential backoff"}},
+      {"name": "sgrep", "arguments": {"query": "where the connection is retried", "pattern": "retry", "path": "src"}}
+    ]},
+    {"text": "Found it."}
+  ],
+  "expect": {
+    "tool_results": [{"request": 2, "contains": [
+      "[sgrep not installed - searched with grep instead. Install: cargo install --git https://github.com/context-dot-dev/sgrep --locked",
+      "src/net.rs:1:fn retry_with_backoff() {",
+      "src/net.rs:2:    sleep_then_retry();",
+      "src/net.rs-5-fn unrelated_helper() {}"
+    ]}],
+    "requests": 2
+  }
+}

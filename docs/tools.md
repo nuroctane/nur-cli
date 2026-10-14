@@ -6,7 +6,7 @@ All native tools available to the NurCLI agent.
 
 | Family | Tools | Colour |
 |--------|-------|--------|
-| **read** | `read_file` `list_dir` `grep` `glob` | sky |
+| **read** | `read_file` `list_dir` `sgrep` `grep` `glob` | sky |
 | **edit** | `write_file` `edit_file` `multi_edit` `apply_patch` | violet |
 | **shell** | `bash` | amber |
 | **vision** | `look` `extract_frames` | pink |
@@ -43,6 +43,21 @@ Read the contents of a file.
 ### `list_dir`
 
 List directory contents.
+
+### `sgrep`
+
+Semantic code search, the first tool the agent reaches for when it knows what the code *does* but not what it is called. Backed by [sgrep](https://github.com/context-dot-dev/sgrep) from Context.dev (MIT): ripgrep lists the files, static embeddings (`potion-code-16M-v2`, 32 MB, CPU only) plus BM25 rank every chunk, exact identifier hits sort first, and the index is cached under `~/.cache/sgrep`. Nothing leaves the machine; the only network traffic is the one-time model download.
+
+Two modes:
+
+- **discover** - `query` alone: `sgrep "where are retries with backoff"` over `path` (default cwd), the top `count` chunks (default 5, max 25) as `path:start-end` followed by the chunk text.
+- **rerank** - `query` + `pattern`: ripgrep finds every line matching the regex (three lines of context, optional `glob`), sgrep ranks only those passages by the query. A broad grep comes back as the few blocks that matter.
+
+Arguments: `query` (required), `path`, `pattern`, `glob`, `count`, `model` (`auto` | `code` | `text`; `text` for prose corpora). Chunks longer than 4000 bytes are cut with a `[... N more bytes - read_file for the rest]` marker. One run is bounded at 120 s and killed on cancel; the first run on a repository embeds it, later runs hit the index.
+
+When the binary is missing the tool answers through `grep` (the regex, or the query's identifiers as alternatives) and leads with `[sgrep not installed - searched with grep instead. Install: …]`, so a model that leads with `sgrep` never wastes the call. The system prompt tells every model to lead with `sgrep` for intent queries and unfamiliar code, `grep` for an exact identifier or regex, `glob` for file names.
+
+Install: `nur ecosystem ensure` builds it with `cargo install --git https://github.com/context-dot-dev/sgrep --locked` and warms the model; the installer scripts do the same. `nur doctor` shows the resolved path. `NUR_SGREP_BIN=<path>` pins the binary; `NUR_SGREP_BIN=` (empty) disables it.
 
 ### `grep`
 
@@ -91,7 +106,7 @@ Execute shell commands in the workspace cwd (cwd-scoped, not a full OS sandbox).
 - **Non-interactive env** — `CI=1`, `GIT_TERMINAL_PROMPT=0`, stdin null
 
 !!! note "Shell backend"
-    NurCLI uses Git Bash on Windows when available, otherwise falls back to PowerShell. On macOS/Linux it uses Bash. Check with `nur doctor`. Prefer `list_dir` / `read_file` / `grep` / `glob` over shell for file IO and search.
+    NurCLI uses Git Bash on Windows when available, otherwise falls back to PowerShell. On macOS/Linux it uses Bash. Check with `nur doctor`. Prefer `list_dir` / `read_file` / `sgrep` / `grep` / `glob` over shell for file IO and search.
 
 ---
 

@@ -4463,8 +4463,8 @@ enum SgCat {
 fn sg_cat_for_tool(name: &str) -> SgCat {
     match name {
         // search / read
-        "read_file" | "list_dir" | "grep" | "glob" | "git_status" | "git_diff" | "web_fetch"
-        | "web_search" | "look" | "browser" | "terminal_browser" => SgCat::Search,
+        "read_file" | "list_dir" | "sgrep" | "grep" | "glob" | "git_status" | "git_diff"
+        | "web_fetch" | "web_search" | "look" | "browser" | "terminal_browser" => SgCat::Search,
         // editing
         "write_file" | "edit_file" | "multi_edit" | "apply_patch" => SgCat::Edit,
         // execution
@@ -7698,7 +7698,7 @@ fn summarize_args(tool: &str, args: &str) -> String {
             | "list_dir" => "path",
             "grep" | "glob" => "pattern",
             "web_fetch" => "url",
-            "web_search" => "query",
+            "sgrep" | "web_search" => "query",
             "git_diff" => "mode",
             "agent" => "description",
             "memory" => "action",

@@ -3333,6 +3333,167 @@
       "model": "kaivoss/system-one-270m",
       "evidence": "https://bench.jakecuth.com/",
       "notes": "Smallest open System One fine-tune; up to 26 options. Accuracy is far below Jev."
+    },
+    {
+      "id": "amos-1-large",
+      "name": "AMOS 1 Large 27B (Scira, keyless hosted System One)",
+      "source": "https://amos.scira.ai/",
+      "protocol": "systemone",
+      "adapter": "",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "hosted (api.amos.scira.ai); open weights, 27B",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native",
+        "multi": "native",
+        "span": "native",
+        "region": "native",
+        "images": "native"
+      },
+      "status": {
+        "status": "released; not yet measured by JevBench"
+      },
+      "rank": null,
+      "model": "amos-1-large",
+      "endpoint": "https://api.amos.scira.ai/v1/systemone",
+      "key_optional": true,
+      "evidence": "https://huggingface.co/collections/mukaddamzaid/amos-1",
+      "notes": "Speaks the System One schema natively and checks no API key (60 rpm, 20 concurrent, 4 MB cap), so `nur jev use --engine amos-1-large` works with nothing stored. Reports 94.9% Decision Bench and 84.7 JevBench hard (Jev 1.13.0 scores 74.1). Self-serve the same weights: `pip install ./amos-1-large/serve && python -m amos.serve amos-1-large --port 8000`, then `nur jev use --url http://127.0.0.1:8000`."
+    },
+    {
+      "id": "amos-1-medium",
+      "name": "AMOS 1 Medium 9B (Scira, keyless hosted System One)",
+      "source": "https://amos.scira.ai/",
+      "protocol": "systemone",
+      "adapter": "",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "hosted (api.amos.scira.ai); open weights, 9B",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native",
+        "multi": "native",
+        "span": "native",
+        "region": "native",
+        "images": "native"
+      },
+      "status": {
+        "status": "released; not yet measured by JevBench"
+      },
+      "rank": null,
+      "model": "amos-1-medium",
+      "endpoint": "https://api.amos.scira.ai/v1/systemone",
+      "key_optional": true,
+      "evidence": "https://huggingface.co/collections/mukaddamzaid/amos-1",
+      "notes": "Keyless hosted System One endpoint; same serving and self-host recipe as amos-1-large."
+    },
+    {
+      "id": "amos-1-small",
+      "name": "AMOS 1 Small 2B (Scira, keyless hosted System One)",
+      "source": "https://amos.scira.ai/",
+      "protocol": "systemone",
+      "adapter": "",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "hosted (api.amos.scira.ai); open weights, 2B",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native",
+        "multi": "native",
+        "span": "native",
+        "region": "native",
+        "images": "native"
+      },
+      "status": {
+        "status": "released; not yet measured by JevBench"
+      },
+      "rank": null,
+      "model": "amos-1-small",
+      "endpoint": "https://api.amos.scira.ai/v1/systemone",
+      "key_optional": true,
+      "evidence": "https://huggingface.co/collections/mukaddamzaid/amos-1",
+      "notes": "Keyless hosted System One endpoint; same serving and self-host recipe as amos-1-large."
+    },
+    {
+      "id": "amos-1-mini",
+      "name": "AMOS 1 Mini 0.5B (Scira, keyless hosted System One)",
+      "source": "https://amos.scira.ai/",
+      "protocol": "systemone",
+      "adapter": "",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "hosted (api.amos.scira.ai); open weights, 0.5B, 9K context",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native",
+        "multi": "native",
+        "span": "native",
+        "region": "native",
+        "images": "native"
+      },
+      "status": {
+        "status": "released; not yet measured by JevBench"
+      },
+      "rank": null,
+      "model": "amos-1-mini",
+      "endpoint": "https://api.amos.scira.ai/v1/systemone",
+      "key_optional": true,
+      "evidence": "https://huggingface.co/collections/mukaddamzaid/amos-1",
+      "notes": "API default model and the cheapest AMOS tier; keyless like the larger sizes. Self-serves on CPU (`python -m amos.serve amos-1-mini --device cpu --port 8000`, ~93 ms per decision)."
+    },
+    {
+      "id": "interfaze-1-lite",
+      "name": "Interfaze 1.1 Lite (MoA dev workloads, OpenAI-compatible)",
+      "source": "https://github.com/InterfazeAI/interfaze-1-lite",
+      "protocol": "openai",
+      "adapter": "",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "hosted (api.interfaze.ai); self-host needs an 80 GB GPU",
+      "support": {
+        "choice": "via gateway",
+        "noul": "via gateway",
+        "score": "via gateway"
+      },
+      "status": {
+        "status": "released; not yet measured by JevBench"
+      },
+      "rank": null,
+      "model": "interfaze-1-lite",
+      "endpoint": "https://api.interfaze.ai/v1",
+      "key_env": "INTERFAZE_API_KEY",
+      "evidence": "https://huggingface.co/interfaze-ai/interfaze-1-lite",
+      "notes": "Mixture-of-agents model for dev workloads (document OCR, speech, grounding, structured output). `nur jev start --engine interfaze-1-lite` bridges System One onto its OpenAI chat endpoint with JSON-schema probabilities; INTERFAZE_API_KEY is read from the environment, or `nur jev login interfaze-1-lite` stores one. Self-host: the repository's Docker image serves /v1 on port 8000, and a loopback --upstream needs no key."
+    },
+    {
+      "id": "jev-via-experiential",
+      "name": "TypeSafe Jev (via Experiential Labs)",
+      "source": "https://platform.experientiallabs.ai/models",
+      "protocol": "systemone",
+      "adapter": "",
+      "license": "Experiential Labs terms",
+      "open": "no",
+      "hardware": "hosted (api.experientiallabs.ai)",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "hosted Jev (jev-latest) behind the Experiential Labs gateway"
+      },
+      "rank": null,
+      "model": "jev-latest",
+      "endpoint": "https://api.experientiallabs.ai/v1/systemone",
+      "key_env": "EXPLABS_API_KEY",
+      "credential_provider": "experiential",
+      "evidence": "https://platform.experientiallabs.ai/llms.txt",
+      "notes": "The gateway serves the System One schema with the same xpl_ key as its chat API, so one `nur auth login --provider experiential` covers both. Select with `nur jev use --engine jev-via-experiential`."
     }
   ]
 }

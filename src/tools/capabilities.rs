@@ -52,8 +52,8 @@ fn action_is(args: &Value, allowed: &[&str]) -> bool {
 /// (plan still has extra shell/browser exceptions in the agent loop).
 pub fn is_read_only(name: &str, args: &Value) -> bool {
     match name {
-        "read_file" | "list_dir" | "grep" | "glob" | "web_fetch" | "web_search" | "look"
-        | "git_status" | "git_diff" | "skill" | "todo_write" | "submit_plan" => true,
+        "read_file" | "list_dir" | "sgrep" | "grep" | "glob" | "web_fetch" | "web_search"
+        | "look" | "git_status" | "git_diff" | "skill" | "todo_write" | "submit_plan" => true,
         // These two are only *mostly* perception: `register`/`delete` write and
         // remove files under ~/.nur/context-store, so they must take the approval
         // path instead of riding the read-only shortcut (and the parallel batch,
@@ -155,6 +155,7 @@ fn is_concurrency_safe_inner(name: &str, _args: &Value) -> bool {
         name,
         "read_file"
             | "list_dir"
+            | "sgrep"
             | "grep"
             | "glob"
             | "web_fetch"
@@ -290,6 +291,7 @@ mod tests {
         for name in [
             "read_file",
             "list_dir",
+            "sgrep",
             "grep",
             "glob",
             "web_fetch",

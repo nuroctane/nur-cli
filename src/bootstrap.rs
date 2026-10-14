@@ -1439,6 +1439,7 @@ fn ensure_prereqs_best_effort() {
             "extract_frames / design-from-video",
         );
     }
+    ensure_sgrep_best_effort();
     #[cfg(not(windows))]
     {
         for (cmd, note) in [
@@ -1467,6 +1468,35 @@ fn ensure_prereqs_best_effort() {
                 .args(["-c", "curl -fsSL https://bun.sh/install | bash"])
                 .status();
         }
+    }
+}
+
+/// sgrep is the model's first search tool, so a fresh install builds it when
+/// cargo is present (ensure retries with the same weekly marker otherwise).
+fn ensure_sgrep_best_effort() {
+    if crate::sgrep::sgrep_bin().is_some() {
+        theme::print_ok("sgrep already installed");
+        return;
+    }
+    if !(which("cargo") || which("cargo.exe")) {
+        theme::print_info(&format!(
+            "sgrep missing — semantic search falls back to ripgrep: {}",
+            crate::sgrep::INSTALL_HINT
+        ));
+        return;
+    }
+    theme::print_info("installing sgrep — local semantic code search (cargo build, a few minutes)…");
+    crate::sgrep::mark_install_attempted();
+    let _ = Command::new("cargo")
+        .args(["install", "--git", crate::sgrep::SGREP_GIT, "--locked"])
+        .status();
+    if crate::sgrep::sgrep_bin().is_some() {
+        theme::print_ok("sgrep installed");
+    } else {
+        theme::print_info(&format!(
+            "sgrep could not be auto-installed — {}",
+            crate::sgrep::INSTALL_HINT
+        ));
     }
 }
 

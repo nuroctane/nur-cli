@@ -29,6 +29,10 @@ pub struct Engine {
     /// so one `nur auth login --provider openrouter` serves both.
     #[serde(default)]
     pub credential_provider: Option<String>,
+    /// The hosted endpoint accepts anonymous calls (AMOS checks no key), so a
+    /// selected engine works with nothing stored. A saved key is still sent.
+    #[serde(default)]
+    pub key_optional: bool,
 }
 
 impl Engine {
@@ -41,6 +45,12 @@ impl Engine {
                 .as_deref()
                 .is_some_and(|e| e.starts_with("https://"))
     }
+}
+
+/// The catalog engine behind a `jev:<id>` credential slot, when the slot names
+/// one. Returns `None` for gateway slots (`openrouter`) and unknown ids.
+pub fn slot_engine(slot: &str) -> Option<&'static Engine> {
+    slot.strip_prefix("jev:").and_then(|id| find(id).ok())
 }
 
 pub fn engines() -> &'static [Engine] {
@@ -123,12 +133,13 @@ pub fn info(id: &str) -> Result<String> {
         output.push_str(&format!("\nLocal: install the source project's dependencies in your Python environment, then:\n  nur jev start --engine {id}{}\n  nur jev use\n",if e.model.is_none() {" --model <weights-or-model-id>"} else {""}));
     }
     if e.is_hosted_systemone() {
-        let login = match (&e.credential_provider, &e.key_env) {
-            (Some(slot), Some(env)) => format!(
+        let login = match (e.key_optional, &e.credential_provider, &e.key_env) {
+            (true, _, _) => "  (no key needed: the endpoint checks none; a key saved with `nur jev login` would still be sent)".to_string(),
+            (false, Some(slot), Some(env)) => format!(
                 "  nur auth login --provider {slot}   (or export {env}; shared with the {slot} chat provider)"
             ),
-            (None, Some(env)) => format!("  nur jev login {id}   (or export {env})"),
-            _ => format!("  nur jev login {id}"),
+            (false, None, Some(env)) => format!("  nur jev login {id}   (or export {env})"),
+            (false, _, None) => format!("  nur jev login {id}"),
         };
         output.push_str(&format!(
             "\nConnect its public endpoint (catalog URL and model):\n{login}\n  nur jev use --engine {id}\n"
@@ -136,10 +147,25 @@ pub fn info(id: &str) -> Result<String> {
     } else if e.protocol == "systemone" {
         output.push_str(&format!("\nConnect the source project's native server:\n  nur jev use --engine {id} --url <https-or-loopback-systemone-url> --model <server-model-id>\n"));
     } else if e.protocol != "adapter" {
-        output.push_str(&format!("\nConnect its API:\n  nur jev start --engine {id} --upstream <https-or-loopback-url> --model <model-id>\n  nur jev use\n"));
+        // A catalog endpoint + model is enough for the bridge to translate
+        // the interface on its own; otherwise the user supplies both.
+        let args = if e.endpoint.is_some() && e.model.is_some() {
+            String::new()
+        } else {
+            " --upstream <https-or-loopback-url> --model <model-id>".to_string()
+        };
+        let key = match &e.key_env {
+            Some(env) => format!("  (export {env}, or `nur jev login {id}` to store a key; a loopback --upstream needs none)\n"),
+            None => String::new(),
+        };
+        output.push_str(&format!("\nConnect its API:\n{key}  nur jev start --engine {id}{args}\n  nur jev use\n"));
     } else {
         output.push_str(&format!("\nThis entry uses a model-specific local library. Its published source owns model loading.\nRun a TypeSafe-compatible server from that source, or connect its Python adapter:\n  nur jev start --engine {id} --adapter <module:Class> --adapter-dir <checkout> --model <weights>\n  nur jev use\nAdapters expose run(task) returning ok/probs over exact labels (JevBench interface).\n"));
     }
-    output.push_str(&format!("\nCredentials: nur jev login {id} (hidden input), or --key-env <ENV_NAME>.\nKeys stay in Nur's credential store or the environment; reports never print them.\nBenchmark measurements do not guarantee this machine can load the model."));
+    if e.key_optional {
+        output.push_str("\nCredentials: none required. Keys stay in Nur's credential store or the environment; reports never print them.\nBenchmark measurements do not guarantee this machine can load the model.");
+    } else {
+        output.push_str(&format!("\nCredentials: nur jev login {id} (hidden input), or --key-env <ENV_NAME>.\nKeys stay in Nur's credential store or the environment; reports never print them.\nBenchmark measurements do not guarantee this machine can load the model."));
+    }
     Ok(output)
 }

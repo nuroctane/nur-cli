@@ -33,6 +33,7 @@ mod pricing;
 mod process_tree;
 mod provider_logos;
 mod providers;
+mod sgrep;
 mod startup;
 mod t3code;
 mod terminal_browser;
@@ -857,6 +858,13 @@ fn run_jev(action: cli::JevCmd) -> Result<()> {
         cli::JevCmd::Login { engine } => {
             let selected = jev_catalog::find(&engine)?;
             let engine = &selected.id;
+            if selected.key_optional {
+                // Still save it: the endpoint checks none today, and a stored
+                // key is sent as-is, so a future paid tier needs no new path.
+                theme::print_info(&format!(
+                    "{engine} checks no API key - `nur jev use --engine {engine}` already works with nothing stored; a key saved here is still sent"
+                ));
+            }
             let key = rpassword::prompt_password(format!("API key for {engine} (hidden): "))?;
             auth::save_provider_key(&format!("jev:{engine}"), &key)?;
             theme::print_ok(&format!(
@@ -920,13 +928,26 @@ fn run_jev(action: cli::JevCmd) -> Result<()> {
                 if let Some(url) = &upstream {
                     typesafe::client::validate_endpoint(url).map_err(error::NurError::Other)?;
                 }
-                let credential = selected.map(|e| format!("jev:{}", e.id));
-                let key_env = key_env.or_else(|| {
-                    credential
-                        .as_ref()
-                        .filter(|id| auth::load_provider_key(id).is_some())
-                        .map(|_| "NUR_JEV_ENGINE_KEY".into())
+                let credential = selected.map(|e| {
+                    e.credential_provider
+                        .clone()
+                        .unwrap_or_else(|| format!("jev:{}", e.id))
                 });
+                // Mirror `nur jev use`: an explicit --key-env wins, then the
+                // catalog's own env var when it is set, then a stored key
+                // injected into the bridge as NUR_JEV_ENGINE_KEY.
+                let key_env = key_env
+                    .or_else(|| {
+                        selected
+                            .and_then(|e| e.key_env.clone())
+                            .filter(|env| std::env::var(env).is_ok_and(|v| !v.trim().is_empty()))
+                    })
+                    .or_else(|| {
+                        credential
+                            .as_ref()
+                            .filter(|id| auth::load_provider_key(id).is_some())
+                            .map(|_| "NUR_JEV_ENGINE_KEY".into())
+                    });
                 if let Some(slot) = &key_env {
                     typesafe::client::validate_key_env(slot).map_err(error::NurError::Other)?;
                 }
@@ -1026,6 +1047,13 @@ fn run_jev(action: cli::JevCmd) -> Result<()> {
                 let credential = match (&key_env, credential_provider.as_str()) {
                     (Some(env), _) => format!("key from ${env}"),
                     (None, "") => "no key (loopback or key-optional endpoint)".to_string(),
+                    (None, slot)
+                        if selected.is_some_and(|e| e.key_optional)
+                            && auth::load_provider_key(slot).is_none() =>
+                    {
+                        "no key needed (the endpoint checks none; a saved key would still be sent)"
+                            .to_string()
+                    }
                     (None, slot) => format!("key from credential slot `{slot}`"),
                 };
                 format!("Jev endpoint set to {url}; {credential}; isolated from the TypeSafe hosted key")
@@ -1207,10 +1235,19 @@ fn run_doctor() -> Result<()> {
     theme::print_ok(&format!("shell   {}", sh.label));
 
     // Optional tools on PATH
-    for name in ["rg", "git", "node", "npm", "uv", "bun", "ffmpeg"] {
-        let found = which_bin(name);
+    for name in ["rg", "sgrep", "git", "node", "npm", "uv", "bun", "ffmpeg"] {
+        let found = if name == "sgrep" {
+            sgrep::sgrep_bin()
+        } else {
+            which_bin(name)
+        };
         if let Some(p) = found {
             theme::print_ok(&format!("{name:<7} {p}"));
+        } else if name == "sgrep" {
+            theme::print_info(&format!(
+                "sgrep   not installed (semantic search falls back to ripgrep) - {}",
+                sgrep::INSTALL_HINT
+            ));
         } else if name == "ffmpeg" {
             theme::print_info(
                 "ffmpeg  not on PATH (optional — extract_frames / design-from-video)",

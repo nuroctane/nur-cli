@@ -59,7 +59,8 @@ const ECOSYSTEM_MARKER: &str = "ecosystem.json";
 /// 28: startup validation, competitors, positioning and pitch skill pack.
 /// 29: cohesive terminal/HTTP/document stack update and owned skill snapshots.
 /// 30: bundled startup workflow router and expanded Jev engine resources.
-pub(crate) const ECOSYSTEM_SCHEMA: u32 = 30;
+/// 31: sgrep local semantic search (cargo install + model warm-up).
+pub(crate) const ECOSYSTEM_SCHEMA: u32 = 31;
 /// Re-run ensure at most once per this many seconds unless forced.
 const ENSURE_TTL_SECS: u64 = 86_400;
 
@@ -109,6 +110,9 @@ pub struct EcosystemStatus {
     /// dogwood - AWS "Dogwood" runtime verification for AI agents (on-demand guardrail CLI).
     #[serde(default)]
     pub dogwood: ComponentStatus,
+    /// sgrep - local semantic code search (Context.dev), the `sgrep` tool's engine.
+    #[serde(default)]
+    pub sgrep: ComponentStatus,
     /// egaki - image/video generation CLI.
     #[serde(default)]
     pub egaki: ComponentStatus,
@@ -139,7 +143,8 @@ impl EcosystemStatus {
             }
         };
         format!(
-            "ecosystem · {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  · packs {}",
+            "ecosystem · {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  · packs {}",
+            bit(self.sgrep.available, "sgrep"),
             bit(self.graphify.available, "graphify"),
             bit(self.plur.available, "plur"),
             bit(self.ruflo.available, "ruflo"),
@@ -169,7 +174,8 @@ impl EcosystemStatus {
     pub fn report(&self) -> String {
         let mut s = String::from("Nur ecosystem (auto-provisioned on install / open)\n");
         // Fixed names so older ecosystem.json markers (pre-field) still list every slot.
-        let comps: [(&str, &ComponentStatus); 19] = [
+        let comps: [(&str, &ComponentStatus); 20] = [
+            ("sgrep", &self.sgrep),
             ("graphify", &self.graphify),
             ("plur", &self.plur),
             ("ruflo", &self.ruflo),
@@ -249,7 +255,7 @@ impl EcosystemStatus {
         }
         s.push_str(
             "\n  slash: /ecosystem /plur /ruflo /graphify /skills /akarso /openseo /tb\n\
-             tools:  graphify plur ruflo akarso executor omp browser terminal_browser excalidraw penecho tldraw skill dogwood\n\
+             tools:  sgrep graphify plur ruflo akarso executor omp browser terminal_browser excalidraw penecho tldraw skill dogwood\n\
              packs:  design · clone-website · cybersecurity · Text-to-CAD · mobile-harness · opencode catalog · DCP patterns\n",
         );
         s
@@ -356,6 +362,7 @@ pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
             let h_headroom = s.spawn(|| std::panic::catch_unwind(ensure_headroom));
             let h_optmem = s.spawn(|| std::panic::catch_unwind(ensure_optmem));
             let h_dogwood = s.spawn(|| std::panic::catch_unwind(ensure_dogwood));
+            let h_sgrep = s.spawn(|| std::panic::catch_unwind(ensure_sgrep));
             let h_egaki = s.spawn(move || std::panic::catch_unwind(|| ensure_egaki(node_ok)));
             let h_fractal = s.spawn(|| std::panic::catch_unwind(ensure_fractal));
             let h_cua = s.spawn(|| std::panic::catch_unwind(ensure_cua));
@@ -377,6 +384,7 @@ pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
                 h_headroom.join(),
                 h_optmem.join(),
                 h_dogwood.join(),
+                h_sgrep.join(),
                 h_egaki.join(),
                 h_fractal.join(),
                 h_cua.join(),
@@ -398,7 +406,7 @@ pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
                 }
             };
         }
-        let (g, p, r, sc, ak, ex, om, gj, br, tb, ed, pe, hr, op, dg, eg, fr, cu, akr) = res;
+        let (g, p, r, sc, ak, ex, om, gj, br, tb, ed, pe, hr, op, dg, sg, eg, fr, cu, akr) = res;
         set_component!(status.graphify, g, "graphify");
         set_component!(status.plur, p, "plur");
         set_component!(status.ruflo, r, "ruflo");
@@ -414,6 +422,7 @@ pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
         set_component!(status.headroom, hr, "headroom");
         set_component!(status.optmem, op, "optmem");
         set_component!(status.dogwood, dg, "dogwood");
+        set_component!(status.sgrep, sg, "sgrep");
         set_component!(status.egaki, eg, "egaki");
         set_component!(status.fractal, fr, "fractal");
         set_component!(status.cua, cu, "cua");
@@ -780,6 +789,52 @@ fn ensure_dogwood() -> ComponentStatus {
         c.detail =
             "not installed - cargo install --git https://github.com/dogwood-policy/dogwood amzn-dogwood-cli (auto-install runs when cargo is on PATH)"
                 .into();
+    }
+    c
+}
+
+// ── sgrep (Context.dev local semantic code search) ────────────────────────
+
+fn ensure_sgrep() -> ComponentStatus {
+    let mut c = ComponentStatus {
+        name: "sgrep".into(),
+        ..Default::default()
+    };
+    // Out of the box: the model's first search tool must exist on a fresh
+    // install. No package index carries sgrep yet, so this is a plain
+    // `cargo install --git` wherever a Rust toolchain is present, bounded and
+    // attempted at most once a week so a broken toolchain cannot stall ensure.
+    if crate::sgrep::sgrep_bin().is_none() {
+        let cargo_ready = which("cargo") || which("cargo.exe");
+        if cargo_ready && !crate::sgrep::install_attempted() {
+            crate::sgrep::mark_install_attempted();
+            let _ = run_quiet(
+                "cargo",
+                &["install", "--git", crate::sgrep::SGREP_GIT, "--locked"],
+                None,
+                900_000,
+            );
+        }
+    }
+    let Some(bin) = crate::sgrep::sgrep_bin() else {
+        c.detail = format!(
+            "not installed - {} (auto-install runs when cargo is on PATH; the sgrep tool falls back to ripgrep meanwhile)",
+            crate::sgrep::INSTALL_HINT
+        );
+        return c;
+    };
+    c.available = true;
+    c.path = Some(bin.clone());
+    c.version = cmd_version(&bin, &["--version"]);
+    // Pull the 32-34 MB model now rather than inside the first tool call of a
+    // turn, where the download would read as a hung search.
+    if crate::sgrep::model_warm() {
+        c.detail = "ready · model cached · semantic + rg-reranked search".into();
+    } else {
+        match crate::sgrep::warm_model(&bin) {
+            Ok(()) => c.detail = "ready · model downloaded · semantic + rg-reranked search".into(),
+            Err(e) => c.detail = format!("CLI ready · model warm-up skipped: {e}"),
+        }
     }
     c
 }
@@ -1233,6 +1288,9 @@ pub fn find_bin(name: &str) -> Option<String> {
         home.join(".bun").join("bin").join(format!("{name}.exe")),
         home.join(".bun").join("bin").join(format!("{name}.cmd")),
         home.join(".bun").join("bin").join(name),
+        // cargo installs (sgrep, dogwood, rg) when ~/.cargo/bin is not on PATH.
+        home.join(".cargo").join("bin").join(format!("{name}.exe")),
+        home.join(".cargo").join("bin").join(name),
     ];
 
     // The fixed locations cover nearly every install and cost a stat each.

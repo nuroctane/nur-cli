@@ -4265,6 +4265,7 @@ mod tests {
         for name in [
             "read_file",
             "list_dir",
+            "sgrep",
             "grep",
             "glob",
             "web_fetch",
@@ -5367,6 +5368,7 @@ fn prune_superseded_observations(items: &mut [Value]) -> usize {
     const OBSERVATION_TOOLS: &[&str] = &[
         "read_file",
         "list_dir",
+        "sgrep",
         "grep",
         "glob",
         "git_status",

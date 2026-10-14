@@ -1,6 +1,6 @@
 # Provider setup and conformance matrix
 
-This is the user-facing mirror of the 67-entry `PROVIDERS` catalog in
+This is the user-facing mirror of the 68-entry `PROVIDERS` catalog in
 [`src/providers.rs`](https://github.com/nuroctane/nur-cli/blob/main/src/providers.rs). The base URL, request style, default
 model, and environment variable below are the exact current catalog values, not
 recommendations inferred from a vendor's marketing page.
@@ -76,6 +76,7 @@ capability for this exact Nur route/model, so Nur must treat it as unverified.
 | `stepfun` - StepFun (China) | `STEPFUN_API_KEY`; `https://api.stepfun.ai/v1`; CC; `step-3.5-flash-2603` | [StepFun models](https://platform.stepfun.ai/docs/en/guides/models/overview) | Reasoning and tool behavior are model-specific; Nur uses the current documented agent model instead of the nonexistent `step-3.7-flash`. | Create a StepFun API key. |
 | `baichuan` - Baichuan | `BAICHUAN_API_KEY`; `https://api.baichuan-ai.com/v1`; CC; `Baichuan4` | [Baichuan API](https://platform.baichuan-ai.com/docs) | Not established publicly for full tools/usage conformance. | Create a Baichuan API key. |
 | `openrouter` - OpenRouter | `OPENROUTER_API_KEY`; `https://openrouter.ai/api/v1`; CC; `openai/gpt-5.5` | [OpenRouter API](https://openrouter.ai/docs/api-reference/overview) | Router features and usage vary by upstream model/provider. | Create one OpenRouter key; use namespaced model ids. |
+| `experiential` - Experiential Labs | `EXPLABS_API_KEY`; `https://api.experientiallabs.ai/v1`; CC; `claude-sonnet-5` | [Experiential Labs docs](https://platform.experientiallabs.ai/llms.txt) · [Model catalog](https://platform.experientiallabs.ai/models) | 1,100+ models behind per-model provider waterfalls; also speaks Responses, `/messages` and the System One judgment schema on the same key. Model slugs are bare (`claude-opus-5`, `kimi-k3`), not namespaced. | Create an `xpl_` key at platform.experientiallabs.ai; BYOK or credits, with free tiers. One key also unlocks `nur jev use --engine jev-via-experiential`. |
 | `cline` - Cline | `CLINE_API_KEY`; `https://api.cline.bot/api/v1`; CC; `anthropic/claude-sonnet-5` | [Cline API](https://docs.cline.bot/api/overview) · [Models](https://docs.cline.bot/api/models) | Official docs cover streaming, tool calling, `usage.cost`, and `delta.reasoning`; capability is per model (`supportsImages` / `supportsReasoning`). | Account sign-in (`cline auth cline`) or an API key from app.cline.bot. Ids are OpenRouter-style `vendor/model` and must not be rewritten. |
 | `commandcode` - Command Code | `COMMAND_CODE_API_KEY` / `CMD_API_KEY`; `https://api.commandcode.ai/provider/v1`; CC with per-model AM; `deepseek/deepseek-v4-flash` | [Command Code Provider API](https://commandcode.ai/docs/provider) | One gateway, 70+ models. Claude ids cannot use `/chat/completions` on this host; Nur routes those to `/messages` automatically. | First-party studio sign-in (same flow as `cmd login`) or a Studio key. See [authentication.md](authentication.md) for the credential map. |
 | `requesty` - Requesty | `REQUESTY_API_KEY`; `https://router.requesty.ai/v1`; CC; `openai/gpt-5.5` | [Requesty docs](https://docs.requesty.ai/) | Router compatibility does not establish upstream tools/usage. | Create a Requesty key and select a routed model. |
@@ -102,7 +103,7 @@ capability for this exact Nur route/model, so Nur must treat it as unverified.
 
 ## Catalog conformance check
 
-The matrix must have exactly 67 data rows, matching `PROVIDERS.len()`. A row
+The matrix must have exactly 68 data rows, matching `PROVIDERS.len()`. A row
 is a catalog contract, not a promise that a remote model is available to every
 account. The primary expected catalog mismatches are intentional placeholders:
 

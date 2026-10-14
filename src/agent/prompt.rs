@@ -359,7 +359,7 @@ linters to observe, ffmpeg/extract_frames to cut up a video, copying a clip to a
 temp dir, one-off analysis scripts, etc. Non-mutating compute never needs
 permission here.
 
-Free: read_file, list_dir, grep, glob, web_fetch, web_search, look, extract_frames,
+Free: read_file, list_dir, sgrep, grep, glob, web_fetch, web_search, look, extract_frames,
 git_status, git_diff, skill, memory(read), todo_write, submit_plan,
 graphify(query|path|explain|status|report|affected), excalidraw(status|reference),
 plur(recall|status|…), ruflo(memory_search|status|…), executor(search|status),
@@ -422,7 +422,8 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
             let mut prompt = format!(
                 "{role}\n\nWorkspace: {}\nOS: {} · shell: {}\nPermission mode: {permission}\n\n\
                  # Focused tools\n{}\n\n\
-                 Use grep/glob for search, read_file/list_dir for file contents, and \
+                 Use sgrep (plain-English, semantic) first for code search, grep for an exact \
+                 identifier or regex, glob for file names, read_file/list_dir for file contents, and \
                  git_status/git_diff for repository state. Prefer dedicated edit tools over \
                  shell rewrites. Never run interactive/watch commands. Keep paths inside the \
                  workspace. Read tool errors before changing approach.\n\n\
@@ -455,7 +456,7 @@ OS: {} · shell: {}
 
 {mode_block}{ultracode_block}
 # Tools
-read_file, list_dir, write_file, edit_file, multi_edit, apply_patch, bash, grep, glob,
+read_file, list_dir, write_file, edit_file, multi_edit, apply_patch, bash, sgrep, grep, glob,
 web_fetch, web_search, look, extract_frames, git_status, git_diff,
 context (RLM store), anydoc (docs→md), goal, proposal, harness (continual refine),
 connectome (agent-native memory + chronicle continuity), repl (persistent Python REPL),
@@ -475,18 +476,18 @@ background job and its result arrives on its own, so keep doing useful work
 instead of polling it.
 
 ## Tool policy - search and failure handling (critical for all backends including Meta)
-- SEARCH - ripgrep only: ALWAYS use `grep` and `glob` tools for any code/content search. NEVER use bash commands like `grep`, `rg`, `ag`, `find`, `ls`, `Get-ChildItem`, etc. for searching. The `grep`/`glob` tools are ripgrep-backed, sandboxed, respect .gitignore, and are the only reliable search path. This applies to all models with no exceptions.
+- SEARCH - `sgrep` first, then `grep`/`glob`; never the shell. `sgrep` is semantic search (Context.dev sgrep, local, ripgrep-backed): describe what the code does in plain English - "where are retries with backoff", "code that validates the session token" - and it returns the few ranked chunks that matter, exact identifier hits first. Lead with it whenever you know the behavior but not the name, when orienting in unfamiliar code, or when a grep would return more than a screen; pass `pattern` to have it rerank a regex's matches by intent instead. Use `grep` for an exact identifier, string or regex you already know, and `glob` for file names. NEVER use bash commands like `grep`, `rg`, `ag`, `find`, `ls`, `Get-ChildItem`, etc. for searching: the search tools are sandboxed, respect .gitignore, and are the only reliable search path. When sgrep is not installed it says so and answers with grep, so leading with it is never a wasted call. This applies to all models with no exceptions.
 - FILE IO - dedicated tools only: `list_dir` for directory shape, `read_file` for contents. NEVER use bash `cat`, `type`, `ls`, `dir`, `head`, `tail` to read workspace. Cheaper, faster, and never hangs.
 - GIT - use `git_status` / `git_diff` tools, not `bash git ...` - they are approval-free and structured. Reserve bash git only when the tool does not cover the needed flag.
 - BASH: real shell when available (Git Bash/pwsh). The result is the stdout alone; `Stderr:` and `Exit code: N` sections appear only when non-empty / non-zero (no `Exit code` line means 0), `(no output)` when nothing was printed. Long output keeps head and tail around a `...N bytes truncated; complete output in <path>...` marker (`max_output_length` sets the cap; `read_file` the path when the middle matters). Prefer non-interactive one-shot commands. Default timeout 60s (hard max 180s); a command still producing output at the deadline is handed to a background job whose result arrives in a later turn, a silent one is killed. The harness refuses identical retries of a failed/timed-out command and refuses hang-prone patterns (dev servers, watch, `read -p`, `while true`).
 - FAILURE RECOVERY - mandatory: If ANY tool returns error, `exit_code != 0`, timeout, idle-kill, or cancellation:
   1) STOP - read exit_code/stdout/stderr.
   2) Do NOT retry the identical failing command (harness will refuse anyway).
-  3) SWITCH to the canonical tool: failed `ls` -> `list_dir`, failed `cat` -> `read_file`, failed `grep` via bash -> `grep` tool, failed `find` -> `glob`/`grep`.
+  3) SWITCH to the canonical tool: failed `ls` -> `list_dir`, failed `cat` -> `read_file`, failed `grep` via bash -> `sgrep`/`grep` tool, failed `find` -> `glob`/`grep`.
   4) If a base command repeatedly fails (e.g. command not found on Windows), immediately use the dedicated tool and never hang the turn.
   5) On timeout/idle-kill, do not bump timeout_ms - change approach.
   Claude and other models often re-run the same failing script - that wastes the turn. Self-correct immediately.
-- HANG PREVENTION: Never run interactive, watch, or long-lived server commands. Prefer `grep`/`list_dir`/`read_file`/`glob`.
+- HANG PREVENTION: Never run interactive, watch, or long-lived server commands. Prefer `sgrep`/`grep`/`list_dir`/`read_file`/`glob`.
 - Paths are sandboxed to the workspace - never scan drive roots (`/`, `C:\`, `~`).
 - web_search -> find docs/errors; web_fetch -> read a result url (text only - not video)
 - look: attach image(s) or a short video for **vision**. Prefer look over guessing from filenames.
@@ -593,7 +594,7 @@ Fan-out: one `agent` call per target provider; set `provider` on every call the 
         s.push_str(
             r#"
 # Workflow
-1. Orient - git_status + targeted grep/read
+1. Orient - git_status + sgrep for intent, grep for names, then read
 2. Plan - todo_write for multi-step; submit_plan in plan mode
 3. Implement - smallest correct change; verify with tests/build
 4. Report - what changed, how to verify

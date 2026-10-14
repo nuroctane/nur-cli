@@ -16,6 +16,7 @@ complete snapshot was saved. It does not resolve credentials or install packages
 
 | Component | Role |
 |-----------|------|
+| **sgrep** | [Context.dev sgrep](https://github.com/context-dot-dev/sgrep) (MIT) local semantic code search behind the `sgrep` tool - static embeddings + BM25 over ripgrep's file list, exact identifiers first, piped rerank of a focused `rg` run. Built with `cargo install --git https://github.com/context-dot-dev/sgrep --locked` when cargo is present (retried at most weekly), then the 32 MB model is warmed once. `NUR_SGREP_BIN` pins or (empty) disables it. Docs: [tools.md](./tools.md#sgrep) |
 | **Graphify** | Code knowledge graph (`graphify-out/`) - query / path / explain |
 | **PLUR** | Shared engram memory across tools and sessions |
 | **Ruflo** | Vector memory + swarm / hive-mind patterns |

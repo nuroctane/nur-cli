@@ -54,7 +54,7 @@ repair or upgrade ecosystem components.
 | `ecosystem` | Graphify, PLUR, Ruflo (and related packs) readiness |
 | `typesafe` | TypeSafe (Jev) layer: ready on a local engine with no key, or inactive |
 | `shell` | Bash / PowerShell backend |
-| `rg`, `git`, `node`, `npm`, `uv`, `ffmpeg` | Whether on PATH |
+| `rg`, `sgrep`, `git`, `node`, `npm`, `uv`, `ffmpeg` | Whether on PATH (`sgrep` also looks in `~/.cargo/bin`) |
 | `vision` | look + extract_frames support |
 | `sha256` | Binary integrity check |
 
@@ -63,7 +63,7 @@ repair or upgrade ecosystem components.
 **All green:**
 
 ```text
-nur doctor · v0.46.0
+nur doctor · v0.47.0
 
 binary  C:\Users\you\.local\bin\nur.exe
 config  model=muse-spark-1.3 effort=high max_turns=∞ budget=∞$/∞tok  (C:\Users\you\.nur\config.toml)
@@ -81,6 +81,7 @@ ecosystem
 
 shell   Git Bash
 rg      C:\Program Files\Git\usr\bin\rg.exe
+sgrep   C:\Users\you\.cargo\bin\sgrep.exe
 git     C:\Program Files\Git\bin\git.exe
 node    C:\Program Files\nodejs\node.exe
 npm     C:\Program Files\nodejs\npm.cmd
@@ -243,6 +244,12 @@ ecosystem
 `extract_frames` requires ffmpeg.
 
 **Fix:** Install ffmpeg (see [Vision](vision.md#requirements)).
+
+### `[sgrep not installed - searched with grep instead …]`
+
+The `sgrep` tool fell back to ripgrep because the [Context.dev sgrep](https://github.com/context-dot-dev/sgrep) binary was not found (`nur doctor` shows `sgrep  not found`). Results are still correct, just lexical.
+
+**Fix:** `nur ecosystem ensure` builds it when `cargo` is installed (Rust 1.90+; the build takes a few minutes and is retried at most once a week), or run `cargo install --git https://github.com/context-dot-dev/sgrep --locked` yourself. The first query downloads a 32 MB model into the Hugging Face cache (`~/.cache/huggingface/hub`; `HF_HOME` / `HF_HUB_CACHE` override) - `ensure` warms it ahead of time. `NUR_SGREP_BIN=<path>` points at a binary elsewhere; set it empty to turn the tool into plain grep on purpose. sgrep needs `rg` too; nur passes its own ripgrep location through when PATH does not have one.
 
 ### `sha256 mismatch`
 

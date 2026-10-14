@@ -35,9 +35,10 @@ use std::time::{Duration, Instant};
 pub const DEFAULT_BASE_URL: &str = "https://api.typesafe.ai/v1/systemone";
 /// TypeSafe's flagship System One model.
 pub const DEFAULT_MODEL: &str = "jev-latest";
-/// Stand-in "key" for a local engine, which authenticates by being on this
-/// machine. Never a real credential: the loopback check runs before any request,
-/// so it cannot reach a hosted endpoint.
+/// Stand-in "key" when no credential is involved: a local engine authenticates
+/// by being on this machine, and a key-optional hosted engine (AMOS) checks no
+/// key at all. Never sent as a credential - the request code withholds the
+/// Authorization header for it, so nothing impersonates a real key.
 pub const LOCAL_KEY_PLACEHOLDER: &str = "local-no-key-needed";
 /// Env vars tried, in order, for the key.
 pub const KEY_ENVS: &[&str] = &["TYPESAFE_API_KEY", "TYPESAFE_KEY", "JEV_API_KEY"];
@@ -569,7 +570,13 @@ pub fn key_provenance(cfg: &TypesafeConfig) -> Option<&'static str> {
         return api_key(cfg).map(|_| "selected engine environment slot");
     }
     if !cfg.credential_provider.is_empty() {
-        return api_key(cfg).map(|_| "selected engine credential store slot");
+        if api_key(cfg).is_some() {
+            return Some("selected engine credential store slot");
+        }
+        if keyless_engine_selected(cfg) {
+            return Some("key-optional engine (no key)");
+        }
+        return None;
     }
     if let Some(engine) = fallback_engine(cfg) {
         return Some(engine.source);
@@ -603,6 +610,14 @@ pub fn key_fingerprint(key: &str) -> String {
     crate::auth::key_fingerprint(key)
 }
 
+/// The selected catalog engine checks no credential (AMOS answers anonymous
+/// calls), so an empty `jev:<id>` slot is a working selection, not a missing
+/// key. A key saved later is still read and sent.
+pub(crate) fn keyless_engine_selected(cfg: &TypesafeConfig) -> bool {
+    crate::jev_catalog::slot_engine(cfg.credential_provider.trim())
+        .is_some_and(|engine| engine.key_optional)
+}
+
 /// Build a client when a key exists. `cfg.enabled=false` is an opt-out, not an
 /// error: the caller keeps its own behaviour either way.
 pub fn client(cfg: &TypesafeConfig) -> Availability {
@@ -623,6 +638,9 @@ pub fn client(cfg: &TypesafeConfig) -> Availability {
         // A local engine needs no credential - that is the whole point of
         // running one.
         None if is_loopback_endpoint(&base_url) => LOCAL_KEY_PLACEHOLDER.to_string(),
+        // A key-optional hosted engine answers anonymous calls, so a selection
+        // with nothing stored still works.
+        None if keyless_engine_selected(cfg) => LOCAL_KEY_PLACEHOLDER.to_string(),
         None if !cfg.credential_provider.is_empty() => {
             return Availability::Unavailable("selected Jev engine has no credential; use `nur jev login <id>` or select --key-env".into());
         }
@@ -688,8 +706,10 @@ pub fn shared_client(cfg: &TypesafeConfig) -> Option<Arc<TypesafeClient>> {
     }
     let key = match api_key(cfg) {
         Some(k) => k,
-        // A local bridge needs no key; hosted endpoints still do.
+        // A local bridge needs no key; hosted endpoints still do, unless the
+        // selected engine is key-optional.
         None if is_loopback_endpoint(&base_url) => LOCAL_KEY_PLACEHOLDER.to_string(),
+        None if keyless_engine_selected(cfg) => LOCAL_KEY_PLACEHOLDER.to_string(),
         None => return None,
     };
     let fingerprint = format!(
@@ -1148,6 +1168,29 @@ mod tests {
         assert!(api_key(&config).is_none());
         assert!(!client(&config).is_ready());
         assert!(shared_client(&config).is_none());
+    }
+
+    /// AMOS checks no credential, so selecting it must resolve with nothing
+    /// stored - and the placeholder means no Authorization header is sent.
+    /// Other engines' slots must never become keyless by accident.
+    #[test]
+    fn a_keyless_hosted_engine_resolves_with_no_credential() {
+        let mut config = cfg();
+        config.base_url = "https://api.amos.scira.ai/v1/systemone".into();
+        config.model = "amos-1-mini".into();
+        config.credential_provider = "jev:amos-1-mini".into();
+        assert!(keyless_engine_selected(&config));
+        let availability = client(&config);
+        assert!(availability.is_ready());
+        assert!(shared_client(&config).is_some());
+        if crate::auth::load_provider_key("jev:amos-1-mini").is_none() {
+            assert_eq!(availability.client().unwrap().key(), LOCAL_KEY_PLACEHOLDER);
+        }
+
+        config.credential_provider = "jev:subq-snap".into();
+        assert!(!keyless_engine_selected(&config));
+        config.credential_provider = String::new();
+        assert!(!keyless_engine_selected(&config));
     }
 
     #[test]

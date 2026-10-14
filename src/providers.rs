@@ -1436,6 +1436,20 @@ pub const PROVIDERS: &[Provider] = &[
         browser_auth: false,
     },
     Provider {
+        id: "experiential",
+        name: "Experiential Labs",
+        base_url: "https://api.experientiallabs.ai/v1",
+        // Bare slugs (no vendor prefix): the gateway routes each one through
+        // its own provider waterfall. Also speaks Responses, /messages and
+        // the System One judgment schema on the same xpl_ key.
+        default_model: "claude-sonnet-5",
+        env_key: "EXPLABS_API_KEY",
+        style: CC,
+        note: "1,100+ models · BYOK or credits · serves Jev too",
+        key_optional: false,
+        browser_auth: false,
+    },
+    Provider {
         id: "commandcode",
         name: "Command Code",
         base_url: COMMANDCODE_BASE_URL,
@@ -2648,7 +2662,7 @@ mod tests {
         // `PROVIDER_COUNT_DOC_SITES` below too.
         assert_eq!(
             PROVIDERS.len(),
-            67,
+            68,
             "provider count changed — update the docs that quote it: {}",
             PROVIDER_COUNT_DOC_SITES.join(", ")
         );

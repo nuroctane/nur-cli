@@ -140,6 +140,9 @@ Install-Prereq "bun"    "Oven-sh.Bun"            { irm https://bun.sh/install.ps
 Install-Prereq "uv"     "astral-sh.uv"           { irm https://astral.sh/uv/install.ps1 | iex } "graphify"
 Install-Prereq "rg"     "BurntSushi.ripgrep.MSVC" $null                                    "fast grep / glob"
 Install-Prereq "ffmpeg" "Gyan.FFmpeg"            $null                                     "extract_frames / design-from-video"
+# sgrep (local semantic code search; the model's first search tool). A plain
+# cargo build; `nur ecosystem ensure` retries it later when this step fails.
+Install-Prereq "sgrep"  ""                        { cargo install --git https://github.com/context-dot-dev/sgrep --locked } "sgrep semantic search"
 # Make fresh installs visible to this session (winget links, node, bun, uv).
 $env:Path = "$env:USERPROFILE\.local\bin;$env:USERPROFILE\.bun\bin;" +
             "$env:LOCALAPPDATA\Microsoft\WinGet\Links;$env:ProgramFiles\nodejs;" + $env:Path

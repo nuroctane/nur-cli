@@ -27,6 +27,7 @@ pub const TYPESAFE_SLOT: &str = "typesafe";
 pub const BRIDGE_SLOT: &str = client::LOCAL_BRIDGE_SLOT;
 pub const SUBQ_SLOT: &str = "jev:subq-snap";
 pub const OPENROUTER_SLOT: &str = "openrouter";
+pub const EXPERIENTIAL_SLOT: &str = "experiential";
 
 /// One hosted decision engine with a fixed slot: id, name, detail, env vars
 /// read for the key, and the chat provider that shares the saved key.
@@ -53,6 +54,13 @@ const HOSTED: &[HostedSlot] = &[
         &["OPENROUTER_API_KEY"],
         Some("OpenRouter chat"),
     ),
+    (
+        EXPERIENTIAL_SLOT,
+        "Experiential Labs",
+        "jev-latest · api.experientiallabs.ai",
+        &["EXPLABS_API_KEY"],
+        Some("Experiential Labs chat"),
+    ),
 ];
 
 /// Where the credential for a slot sits, in the order the layer reads them.
@@ -70,6 +78,8 @@ pub enum Residence {
     File(PathBuf),
     /// Loopback engine: no key, by construction.
     Loopback(String),
+    /// Selected hosted engine that checks no credential (AMOS): works as-is.
+    Keyless,
 }
 
 impl Residence {
@@ -82,6 +92,7 @@ impl Residence {
             Residence::Store(_) => "saved key".into(),
             Residence::File(path) => format!("file {}", short_path(path)),
             Residence::Loopback(endpoint) => format!("loopback {}", port_of(endpoint)),
+            Residence::Keyless => "no key needed".into(),
         }
     }
 
@@ -90,7 +101,9 @@ impl Residence {
         match self {
             Residence::Config | Residence::Store(_) => true,
             Residence::File(path) => path.starts_with(crate::config::nur_home()),
-            Residence::Absent | Residence::Env(_) | Residence::Loopback(_) => false,
+            Residence::Absent | Residence::Env(_) | Residence::Loopback(_) | Residence::Keyless => {
+                false
+            }
         }
     }
 
@@ -102,17 +115,21 @@ impl Residence {
                 Some(format!("delete {} yourself", path.display()))
             }
             Residence::Loopback(_) => Some("`nur jev stop` to remove".into()),
+            Residence::Keyless => {
+                Some("no key is stored; `nur jev use` another engine to switch".into())
+            }
             _ => None,
         }
     }
 
     /// Whether a key saved to the store would be read before this one. The
     /// layer reads config, then env, then the store, then key files: a saved
-    /// key is read first only when nothing stronger is set.
+    /// key is read first only when nothing stronger is set. A keyless engine
+    /// still honors a saved key, so saving one is read too.
     pub fn store_would_win(&self) -> bool {
         matches!(
             self,
-            Residence::Absent | Residence::Store(_) | Residence::File(_)
+            Residence::Absent | Residence::Store(_) | Residence::File(_) | Residence::Keyless
         )
     }
 }
@@ -256,6 +273,13 @@ pub fn slots(cfg: &TypesafeConfig, probe: &Probe) -> Vec<Slot> {
                 None,
                 probe,
             ));
+            // A key-optional engine (AMOS) with nothing stored is a working
+            // selection, so its residence is Keyless rather than Absent.
+            if client::keyless_engine_selected(cfg)
+                && matches!(out.last().map(|s| &s.residence), Some(Residence::Absent))
+            {
+                out.last_mut().unwrap().residence = Residence::Keyless;
+            }
         }
     } else if !key_env.is_empty() {
         // `--key-env` without a store slot: the engine is keyed purely by env.
@@ -330,7 +354,10 @@ fn active_slot(cfg: &TypesafeConfig, probe: &Probe) -> Option<String> {
         });
     }
     if !selected.is_empty() {
-        return probe.stored(selected).then(|| selected.to_string());
+        if probe.stored(selected) || client::keyless_engine_selected(cfg) {
+            return Some(selected.to_string());
+        }
+        return None;
     }
     if client::is_loopback_endpoint(&endpoint) {
         return Some(BRIDGE_SLOT.into());
@@ -824,6 +851,30 @@ mod tests {
             Residence::Store("openrouter".into())
         );
         assert_eq!(in_use(&all), Some(OPENROUTER_SLOT));
+    }
+
+    /// A key-optional engine (AMOS) with nothing stored is a working
+    /// selection: the row reads "no key needed", is in use, and Delete has
+    /// nothing Nur owns to remove. A key saved anyway is still honored.
+    #[test]
+    fn a_keyless_selected_engine_is_in_use_without_a_key() {
+        let mut c = cfg();
+        c.credential_provider = "jev:amos-1-mini".into();
+        c.base_url = "https://api.amos.scira.ai/v1/systemone".into();
+        c.model = "amos-1-mini".into();
+        let all = slots(&c, &Probe::default());
+        let own = slot(&all, "jev:amos-1-mini");
+        assert_eq!(own.residence, Residence::Keyless);
+        assert_eq!(own.residence.label(), "no key needed");
+        assert!(!own.residence.removable());
+        assert_eq!(in_use(&all), Some("jev:amos-1-mini"));
+
+        let all = slots(&c, &with_stored(&["jev:amos-1-mini"]));
+        assert_eq!(
+            slot(&all, "jev:amos-1-mini").residence,
+            Residence::Store("jev:amos-1-mini".into())
+        );
+        assert_eq!(in_use(&all), Some("jev:amos-1-mini"));
     }
 
     /// The key field's hint must agree with the client: a saved key is read

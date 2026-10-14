@@ -99,6 +99,7 @@ const DEFAULT_POLICY: &str = r#"// NurCLI default Dogwood policy - safe-edits ex
 
 permit(principal, action == Action::"read_file", resource);
 permit(principal, action == Action::"list_dir", resource);
+permit(principal, action == Action::"sgrep", resource);
 permit(principal, action == Action::"grep", resource);
 permit(principal, action == Action::"glob", resource);
 
@@ -125,6 +126,7 @@ const EVENT_SCHEMA: &str = r#"{
   "actions": {
     "read_file": {},
     "list_dir": {},
+    "sgrep": {},
     "grep": {},
     "glob": {},
     "edit_file": {},

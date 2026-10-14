@@ -2042,7 +2042,7 @@ pub fn aurora_cell(elapsed: Duration, pos: usize, span: usize, period_ms: u128) 
 /// net (deep teal) · git (teal) · delegate (pink) · knowledge (indigo/orange).
 pub fn tool_color(name: &str) -> Color {
     match name {
-        "read_file" | "list_dir" | "grep" | "glob" => BLUE_300(),
+        "read_file" | "list_dir" | "sgrep" | "grep" | "glob" => BLUE_300(),
         "write_file" | "edit_file" | "multi_edit" | "apply_patch" => VIOLET(),
         "bash" => AMBER(),
         "web_fetch" | "web_search" | "browser" | "terminal_browser" | "enclave" => TEAL(),
@@ -2059,7 +2059,7 @@ pub fn tool_color(name: &str) -> Color {
 /// A one-word family label used in the tool card gutter.
 pub fn tool_family(name: &str) -> &'static str {
     match name {
-        "read_file" | "list_dir" | "grep" | "glob" => "read",
+        "read_file" | "list_dir" | "sgrep" | "grep" | "glob" => "read",
         "write_file" | "edit_file" | "multi_edit" | "apply_patch" => "edit",
         "bash" => "shell",
         "web_fetch" | "web_search" => "web",

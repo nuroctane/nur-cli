@@ -49,6 +49,7 @@ pub mod ruflo;
 mod sandbox;
 mod search_util;
 pub(crate) mod sensitive;
+mod sgrep;
 mod shell;
 mod skill_tool;
 pub mod spill;
@@ -72,6 +73,7 @@ pub use capabilities::{
     classify as classify_tool, is_concurrency_safe, is_read_only_call, ToolCaps,
 };
 pub use sandbox::{is_dangerous_workspace, resolve_safe_workspace};
+pub use search_util::find_rg;
 pub use shell::shell_backend;
 pub use submit_plan::{SharedPlan, SubmitPlan};
 
@@ -100,6 +102,7 @@ pub const SUBAGENT_TOOL_NAMES: &[&str] = &[
     "multi_edit",
     "apply_patch",
     "bash",
+    "sgrep",
     "grep",
     "glob",
     "web_fetch",
@@ -139,6 +142,7 @@ pub(crate) const ROOT_CORE_TOOL_NAMES: &[&str] = &[
     "multi_edit",
     "apply_patch",
     "bash",
+    "sgrep",
     "grep",
     "glob",
     "web_fetch",
@@ -219,6 +223,7 @@ impl ToolHost {
             Box::new(multi_edit::MultiEdit),
             Box::new(apply_patch::ApplyPatch),
             Box::new(bash::Bash),
+            Box::new(sgrep::Sgrep),
             Box::new(grep::Grep),
             Box::new(glob::GlobTool),
             Box::new(web_fetch::WebFetch),
@@ -418,6 +423,7 @@ impl ToolHost {
             "multi_edit" => multi_edit::MultiEdit.execute(&args, ctx),
             "apply_patch" => apply_patch::ApplyPatch.execute(&args, ctx),
             "bash" => bash::Bash.execute(&args, ctx),
+            "sgrep" => sgrep::Sgrep.execute(&args, ctx),
             "grep" => grep::Grep.execute(&args, ctx),
             "glob" => glob::GlobTool.execute(&args, ctx),
             "web_fetch" => web_fetch::WebFetch.execute(&args, ctx),
@@ -666,6 +672,7 @@ mod tests {
             "multi_edit",
             "apply_patch",
             "bash",
+            "sgrep",
             "grep",
             "glob",
             "web_fetch",

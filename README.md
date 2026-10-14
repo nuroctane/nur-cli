@@ -64,7 +64,7 @@ nur                 # open the TUI
 nur doctor          # health check
 ```
 
-Or run `nur` and use **`/provider`** in the TUI (`/login` remains an alias): pick any of **67 providers**
+Or run `nur` and use **`/provider`** in the TUI (`/login` remains an alias): pick any of **68 providers**
 (OpenAI, Anthropic, Gemini, xAI, Groq, OpenRouter, Requesty, local Ollama/LM Studio, Meta Model API, and so on).
 For **OpenAI, Anthropic, xAI, Kimi Code, Google Gemini, Azure OpenAI, GitHub Models, GitHub Copilot, Cursor, Factory Droid, Cline, Muse Code, DeepSeek Harness, and ZCode (GLM)** you can **sign in with a browser or an official CLI session** (or import an existing Codex / Claude Code / Grok / Kimi / Cursor Agent / Droid / Cline / Muse / `dsh` / ZCode session) instead of pasting an API key. `nur auth login --provider muse --browser` (and the same for `deepseek` / `zcode`) is the CLI equivalent of TUI `/login`. OAuth sessions refresh before use, retry once after an authentication rejection, and `/model` detects the models available to the active credential. Cursor uses `cursor-agent login` and runs chat through the Agent CLI (no API key required); Factory Droid works the same way through `droid exec` (`NUR_DROID_BIN` when the launcher is outside `PATH`). DeepSeek's official harness is API-key only (`$DSH_HOME/.credentials.yaml`). No credential on launch and login opens automatically.
 
@@ -142,7 +142,8 @@ Everything is **local**. Secrets never go into the git repo.
 | **Node.js 20+** | PLUR · Ruflo · Executor · skills · browser · AKM (the `npx` shim itself needs only Node 18+) |
 | **Bun** | **omp** backend |
 | **uv** | **Graphify** |
-| **ripgrep (`rg`)** | Fast `grep` / `glob` |
+| **ripgrep (`rg`)** | Fast `grep` / `glob`, and the file walk behind `sgrep` |
+| **sgrep** | Semantic code search (`sgrep` tool); built with `cargo install --git https://github.com/context-dot-dev/sgrep --locked`, model (32 MB) downloaded once |
 | **ffmpeg** | `extract_frames` |
 
 #### B. NurCLI itself
@@ -207,7 +208,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 ## Feature map
 
 ### Agent harness
-- **Multi-provider** via `/login` (67); Responses or Chat Completions adapter
+- **Multi-provider** via `/login` (68); Responses or Chat Completions adapter
 - Manual / plan / auto · Shift+Tab mid-turn
 - Tool loop, approvals, Esc cancel, subagents, todos, plan mode
 - Session budgets (`/budget`), tool-result spill, smarter auto-compact
@@ -232,7 +233,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 
 | Family | Tools |
 |--------|--------|
-| read | `read_file` `list_dir` `grep` `glob` |
+| read | `read_file` `list_dir` `sgrep` (semantic, [Context.dev sgrep](https://github.com/context-dot-dev/sgrep), first choice for "where is the code that…") `grep` `glob` |
 | edit | `write_file` `edit_file` `multi_edit` `apply_patch` |
 | shell | `bash` |
 | vision | `look` · `extract_frames` |

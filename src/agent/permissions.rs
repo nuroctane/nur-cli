@@ -205,9 +205,10 @@ pub fn canonical(tool: &str, args_json: &str) -> String {
             .and_then(|c| c.as_str())
             .unwrap_or("")
             .to_string(),
-        "read_file" | "write_file" | "edit_file" | "list_dir" | "glob" | "grep" => v
+        "read_file" | "write_file" | "edit_file" | "list_dir" | "glob" | "grep" | "sgrep" => v
             .get("path")
             .or_else(|| v.get("pattern"))
+            .or_else(|| v.get("query"))
             .and_then(|c| c.as_str())
             .unwrap_or("")
             .to_string(),
