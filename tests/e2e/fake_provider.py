@@ -184,7 +184,10 @@ def make_handler(state, mcp=None):
             if not path.endswith(("/chat/completions", "/responses", "/messages")):
                 self._json(404, {"error": {"message": f"unexpected path {self.path}"}})
                 return
-            reply = state.next_reply({**body, "_path": path})
+            # Headers are recorded so a scenario can assert on them: cache
+            # affinity and client identity are wire facts a body check misses.
+            headers = {name.lower(): value for name, value in self.headers.items()}
+            reply = state.next_reply({**body, "_path": path, "_headers": headers})
             n = state.count
             if "status" in reply:
                 # Scripted HTTP failure: {"status": 500, "error": "..."}.

@@ -102,6 +102,43 @@ capability for this exact Nur route/model, so Nur must treat it as unverified.
 | `vllm` - vLLM (local) | `VLLM_API_KEY` optional; `http://localhost:8000/v1`; CC; `local-model` | [vLLM tool calling](https://docs.vllm.ai/en/stable/features/tool_calling/) | Installed version, model, chat template, and tool parser determine agent behavior. | Start the OpenAI-compatible server; Nur resolves the served model from `/models`. Configure the model's documented tool parser for agent use. |
 | `jan` - Jan (local) | `JAN_API_KEY` optional; `http://localhost:1337/v1`; CC; `local-model` | [Jan API server](https://www.jan.ai/docs/desktop/api-server) | Local runtime/model determines tool, stream, and usage behavior. | Start Jan's API server; Nur resolves the active model from `/models`. |
 
+## Prompt caching
+
+Every provider that caches prompts does so by prefix: a request is served from
+cache up to the first byte that differs from an earlier one. Nur shapes every
+request so that prefix is as long and as stable as it can be:
+
+- **The system prompt is static for the session.** Permission mode, the todo
+  list and the session inventories (goal, harness, context variables, routed
+  memory) are not in it. They ride as the **last** input item of each request,
+  headed `[nur turn state]`, which is rebuilt per request and never persisted
+  into the history. The prompt the model reads is byte-identical from the first
+  request of a turn to the last, whatever mode you switch to in between.
+- **The full tool roster is sent on every request**, in a stable order, so the
+  schemas are cached once instead of re-read every time the offered set changes.
+- **Skill activation is a conversation item**, not a prompt edit: when a skill
+  fires, its body is appended after the user message and cached with the
+  history.
+- **Anthropic cache breakpoints** sit on the system prompt and the tool roster,
+  then roll along the conversation; the turn-state block never carries one.
+- **Session affinity.** Several backends shard their caches per session and
+  only serve a prefix from the replica that already holds it. Nur sends one
+  stable id, derived from the nur session id (so it survives `/model`,
+  `/resume` and failover), as whichever header the route understands:
+  `x-opencode-session` on the OpenCode Go route (gated on the URL, so a custom
+  provider pointed at Go gets it too), `session_id` on the Codex OAuth path, and
+  `x-session-affinity` on Fireworks. OpenAI-style routes also set
+  `prompt_cache_key` to the session id.
+- **Compaction is cache-aware**: pruning happens in the oldest part of the
+  transcript only when the window is actually full, which is the one moment the
+  prefix has to change anyway.
+
+What you see: when a provider reports cached tokens, each request posts a
+transient status line, `prompt cache · 84% of input read from cache (31k of
+37k tok)`, in the TUI footer (printed in `nur run --verbose`). Cached tokens are
+priced at the model's cache-read rate in the cost estimate. E2E scenario 31
+asserts the stable prefix across a whole turn.
+
 ## Catalog conformance check
 
 The matrix must have exactly 69 data rows, matching `PROVIDERS.len()`. A row

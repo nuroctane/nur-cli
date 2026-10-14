@@ -346,52 +346,30 @@ impl PromptContext {
         })
     }
 
-    /// Render with the live bits: permission mode and the todo list, both of
-    /// which can change between requests within a turn.
-    pub fn render(&self, mode: PermissionMode, todos_render: &str) -> String {
-        let mode_block = match mode {
-            PermissionMode::Plan => {
-                r#"
-# Permission mode: PLAN  (explore + analyze, no repo changes)
-You may read, parse, and understand the workspace freely, AND run shell for
-analysis and scratch/media work - reading files, grep/ripgrep, running tests or
-linters to observe, ffmpeg/extract_frames to cut up a video, copying a clip to a
-temp dir, one-off analysis scripts, etc. Non-mutating compute never needs
-permission here.
+    /// The skill body that natural-language activation selected this turn, as
+    /// a conversation item. It is appended to the session once per turn (right
+    /// after the user's message) instead of being rendered into the system
+    /// prompt: there it would change the cached prefix on every turn and be
+    /// re-read at full price on every round of the turn it belongs to.
+    pub fn activation_item(&self) -> Option<Value> {
+        if self.activation.is_empty() {
+            return None;
+        }
+        Some(crate::api::types::user_text_item(self.activation.trim()))
+    }
 
-Free: read_file, list_dir, sgrep, grep, glob, web_fetch, web_search, look, extract_frames,
-git_status, git_diff, skill, memory(read), todo_write, submit_plan,
-graphify(query|path|explain|status|report|affected), excalidraw(status|reference),
-plur(recall|status|…), ruflo(memory_search|status|…), executor(search|status),
-enclave(status|tools), and bash for the above.
-
-BLOCKED in plan mode (do NOT attempt - they need manual/auto via Shift+Tab):
-- Authoring code: write_file, edit_file, multi_edit, apply_patch.
-- Submitting/mutating the repo via shell: git commit/push/add/reset/checkout/
-  restore/stash/merge/rebase/pull, gh pr create/merge, and dependency installs
-  (npm/pnpm/yarn/pip/cargo/… install/add).
-- Mutating knowledge: graphify(extract|update), excalidraw(create|export),
-  plur(learn|capture), ruflo(memory_store|swarm_init), executor(call|install),
-  enclave(call), memory(append), agent.
-
-Do your investigation, then deliver the plan via submit_plan. Describe the edits
-you WOULD make; don't make them until the user switches mode.
-"#
-            }
-            PermissionMode::Manual => {
-                r#"
-# Permission mode: MANUAL
-Mutating tools need user approval. Prefer apply_patch/multi_edit for structured edits.
-"#
-            }
-            PermissionMode::Auto => {
-                r#"
-# Permission mode: AUTO
-Tools auto-approved. Prefer minimal safe diffs; avoid destructive shell.
-"#
-            }
-        };
-
+    /// Render the request prompt: a byte-stable system prompt plus the state
+    /// that changes between requests (permission mode, todo list, routed
+    /// memory and session inventories).
+    ///
+    /// Every provider nur speaks to caches by prefix (OpenAI/Gemini/DeepSeek/
+    /// vLLM automatically, Anthropic at explicit breakpoints), and the system
+    /// prompt is the first thing in that prefix. One changed byte in it
+    /// re-reads system + tools + the whole history at full price, so nothing
+    /// that can change inside a session is allowed in `system`. The live state
+    /// rides as the final input item instead, where it costs its own few
+    /// hundred tokens and nothing else.
+    pub fn render(&self, mode: PermissionMode, todos_render: &str) -> RenderedPrompt {
         // Product identity is always Nur. Backend provider/model are facts only.
         let role = if self.is_subagent {
             format!(
@@ -439,32 +417,58 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
             if let Some((name, text)) = &self.project {
                 prompt.push_str(&format!("\n# Project instructions ({name})\n{text}\n"));
             }
-            return prompt;
+            return RenderedPrompt {
+                system: prompt,
+                turn_state: String::new(),
+            };
         }
 
-        // Plan mode blocks `agent`, so there is nothing to fan out.
-        let ultracode_block = if self.ultracode && !matches!(mode, PermissionMode::Plan) {
-            ULTRACODE_BLOCK
-        } else {
-            ""
-        };
         let mut s = format!(
             r#"{role}
 
 Workspace: {}
 OS: {} · shell: {}
 
-{mode_block}{ultracode_block}
+# Permission modes
+The active mode is stated in the turn-state item at the end of the conversation
+and the user can switch it (Shift+Tab) at any time; always act on the latest.
+
+PLAN (explore + analyze, no repo changes): read, parse, and understand the
+workspace freely, AND run shell for analysis and scratch/media work - reading
+files, grep/ripgrep, running tests or linters to observe, ffmpeg/extract_frames
+to cut up a video, copying a clip to a temp dir, one-off analysis scripts, etc.
+Non-mutating compute never needs permission here.
+Free: read_file, list_dir, sgrep, grep, glob, web_fetch, web_search, look, extract_frames,
+git_status, git_diff, skill, memory(read), todo_write, submit_plan, codemode,
+graphify(query|path|explain|status|report|affected), excalidraw(status|reference),
+plur(recall|status|…), ruflo(memory_search|status|…), executor(search|status),
+enclave(status|tools), and bash for the above.
+BLOCKED in plan mode (do NOT attempt - they need manual/auto via Shift+Tab):
+- Authoring code: write_file, edit_file, multi_edit, apply_patch.
+- Submitting/mutating the repo via shell: git commit/push/add/reset/checkout/
+  restore/stash/merge/rebase/pull, gh pr create/merge, and dependency installs
+  (npm/pnpm/yarn/pip/cargo/… install/add).
+- Mutating knowledge: graphify(extract|update), excalidraw(create|export),
+  plur(learn|capture), ruflo(memory_store|swarm_init), executor(call|install),
+  enclave(call), memory(append), agent.
+Do your investigation, then deliver the plan via submit_plan. Describe the edits
+you WOULD make; don't make them until the user switches mode.
+
+MANUAL: mutating tools need user approval. Prefer apply_patch/multi_edit for
+structured edits.
+
+AUTO: tools auto-approved. Prefer minimal safe diffs; avoid destructive shell.
+
 # Tools
 read_file, list_dir, write_file, edit_file, multi_edit, apply_patch, bash, sgrep, grep, glob,
 web_fetch, web_search, look, extract_frames, git_status, git_diff,
 context (RLM store), anydoc (docs→md), goal, proposal, harness (continual refine),
 connectome (agent-native memory + chronicle continuity), repl (persistent Python REPL),
-graphify, excalidraw, plur, ruflo, skill, memory, todo_write, submit_plan, agent
+graphify, excalidraw, plur, ruflo, skill, memory, todo_write, submit_plan, agent,
+codemode (JS script that calls read-only tools in one round)
 
-Tool schemas are capability- and task-profiled. The core repository tools are
-always present; specialist schemas are attached when relevant and after the
-first tool round. Never invent a tool call whose schema is not available.
+The full tool surface is offered on every request so the schemas stay cached
+across the session. Never invent a tool call whose schema is not available.
 
 ## Turn economics
 Every turn re-sends the whole conversation, so a turn costs far more than a
@@ -473,7 +477,11 @@ other's output - reading several files, running the build and the tests,
 probing two hypotheses - issue them together in one turn instead of one per
 turn. You never have to babysit slow work: a long `bash` command is handed to a
 background job and its result arrives on its own, so keep doing useful work
-instead of polling it.
+instead of polling it. When the next step is 3+ read-only calls whose outputs
+feed each other and you only need part of the result - read these files and
+count the matches, grep then open each hit, walk a directory tree - write one
+`codemode` script instead: it calls `tools.<name>(args)` in a loop and only
+what it prints comes back. Mutating work stays in ordinary tool calls.
 
 ## Tool policy - search and failure handling (critical for all backends including Meta)
 - SEARCH - `sgrep` first, then `grep`/`glob`; never the shell. `sgrep` is semantic search (Context.dev sgrep, local, ripgrep-backed): describe what the code does in plain English - "where are retries with backoff", "code that validates the session token" - and it returns the few ranked chunks that matter, exact identifier hits first. Lead with it whenever you know the behavior but not the name, when orienting in unfamiliar code, or when a grep would return more than a screen; pass `pattern` to have it rerank a regex's matches by intent instead. Use `grep` for an exact identifier, string or regex you already know, and `glob` for file names. NEVER use bash commands like `grep`, `rg`, `ag`, `find`, `ls`, `Get-ChildItem`, etc. for searching: the search tools are sandboxed, respect .gitignore, and are the only reliable search path. When sgrep is not installed it says so and answers with grep, so leading with it is never a wasted call. This applies to all models with no exceptions.
@@ -532,7 +540,7 @@ instead of polling it.
   pre-loaded into this prompt (catalog would waste tokens). Discover with skill(list) or
   skill(read, name=…). Never load every playbook at once (e.g. cybersecurity: one by name).
 - Skills activate on demand only: natural-language intent (e.g. "think like fable") or
-  `/skill-name` slash. When a **SKILL ACTIVATED** block appears below, follow it for the turn.
+  `/skill-name` slash. When a **SKILL ACTIVATED** item appears in the conversation, follow it for the turn.
 - UI polish -> design-eng. Site clone -> clone-website-meta. Security -> cybersecurity then one playbook. Smart-contract / DeFi whitehat -> sc-research then one playbook. Paid Immunefi/X bounty -> hunting-x-linked-bounties then the Playbook column. Historical bounty/hack class -> historical-smart-contract-vulns then one reference slice. Bybit/drainer/phishing/zachxbt -> investigator-ops slice or reviewing-frontend-and-ops-surfaces.
 - agent: spawn explore (read-only) or general subagent - see **# Cross-provider subagents** below when the user names another provider
 - todo_write: maintain a live task list for multi-step work (always keep one in_progress)
@@ -582,15 +590,6 @@ Fan-out: one `agent` call per target provider; set `provider` on every call the 
             self.shell_label,
         );
 
-        // Per-turn nudge - only when the user explicitly asked to delegate to
-        // these providers this turn (bare mentions are filtered out upstream).
-        if !self.named_providers.is_empty() {
-            s.push_str(&format!(
-                "\nUser asked to delegate to: {} - pass agent.provider for each.\n",
-                self.named_providers.join(", ")
-            ));
-        }
-
         s.push_str(
             r#"
 # Workflow
@@ -606,39 +605,79 @@ commentary concise; the tool result is the evidence.
 
 # Style
 Direct technical markdown. Fence code with languages.
+
+# Turn state
+The last item of the conversation, headed `[nur turn state]`, is written by the
+harness, not the user: the active permission mode, the current todo list, and
+session inventories (goal, harness, context variables, routed memory). It
+reflects the moment the request was sent; follow it over anything earlier.
 "#,
         );
-
-        if !todos_render.is_empty() && todos_render != "(no todos)" {
-            s.push_str(&format!("\n# Current todos\n{todos_render}\n"));
-        }
 
         if let Some((name, text)) = &self.project {
             s.push_str(&format!("\n# Project instructions ({name})\n{text}\n"));
         }
 
-        // Activation first so it outranks generic workflow defaults.
-        // (No full skills catalog - only the matched skill body, if any.)
-        s.push_str(&self.activation);
+        // Memory excerpts and the PLUR/OptMem blocks are read once per user
+        // turn and change only when something was learned, so they stay in the
+        // cached prefix. (The activated skill body is a conversation item: see
+        // `activation_item`.)
         s.push_str(&self.memory);
         s.push_str(&self.plur);
         s.push_str(&self.optmem);
 
+        let cfg = crate::config::load_config().unwrap_or_default();
+        if cfg.native_memory {
+            // Central router: give the model the routing table so it stops
+            // guessing which memory resident to use (m4).
+            s.push('\n');
+            s.push_str(super::memory_router::routing_guidance());
+            s.push('\n');
+        }
+
+        // ── Turn state: everything that can change between requests ──
+        let mut t = format!("{TURN_STATE_MARKER}\n");
+        let mode_line = match mode {
+            PermissionMode::Plan => {
+                "Permission mode: PLAN - explore and analyze only; no repo changes (see # Permission modes)."
+            }
+            PermissionMode::Manual => {
+                "Permission mode: MANUAL - mutating tools need user approval."
+            }
+            PermissionMode::Auto => "Permission mode: AUTO - tools auto-approved.",
+        };
+        t.push_str(mode_line);
+        t.push('\n');
+        // Plan mode blocks `agent`, so there is nothing to fan out.
+        if self.ultracode && !matches!(mode, PermissionMode::Plan) {
+            t.push_str(ULTRACODE_BLOCK);
+        }
+        // Per-turn nudge - only when the user explicitly asked to delegate to
+        // these providers this turn (bare mentions are filtered out upstream).
+        if !self.named_providers.is_empty() {
+            t.push_str(&format!(
+                "\nUser asked to delegate to: {} - pass agent.provider for each.\n",
+                self.named_providers.join(", ")
+            ));
+        }
+        if !todos_render.is_empty() && todos_render != "(no todos)" {
+            t.push_str(&format!("\n# Current todos\n{todos_render}\n"));
+        }
+
         // Prime / RLM / Continual Harness / Connectome session state (outside the chat window).
         let sid = std::env::var("NUR_SESSION_ID").unwrap_or_default();
         if !sid.is_empty() {
-            s.push_str(&super::goal::prompt_block(&sid));
-            s.push_str(&super::harness::prompt_block(&sid));
+            t.push_str(&super::goal::prompt_block(&sid));
+            t.push_str(&super::harness::prompt_block(&sid));
             let inv = super::context_store::prompt_inventory(&sid);
             if !inv.is_empty() {
-                s.push('\n');
-                s.push_str(&inv);
-                s.push('\n');
+                t.push('\n');
+                t.push_str(&inv);
+                t.push('\n');
             }
         }
         // Agent-native memory (arXiv:2606.24775) + Connectome continuity scope.
         // Project-scoped so the same agent persists across sessions on a machine.
-        let cfg = crate::config::load_config().unwrap_or_default();
         if cfg.native_memory {
             let mem_scope = {
                 let proj = self
@@ -652,11 +691,6 @@ Direct technical markdown. Fence code with languages.
                     format!("{proj}:{sid}")
                 }
             };
-            // Central router: give the model the routing table so it stops
-            // guessing which memory resident to use (m4).
-            s.push('\n');
-            s.push_str(super::memory_router::routing_guidance());
-            s.push_str("\n\n");
             // Router snapshot (empty query → recency+confidence ranked). Inject
             // only when there is real content so the prompt doesn't bloat.
             let routed = super::memory_router::read(&mem_scope, "", 3, 2);
@@ -664,12 +698,39 @@ Direct technical markdown. Fence code with languages.
                 || routed.contains("[hierarchical]")
                 || routed.contains("[graph]");
             if has_content {
-                s.push_str("\n# Routed memory snapshot\n");
-                s.push_str(&routed);
-                s.push('\n');
+                t.push_str("\n# Routed memory snapshot\n");
+                t.push_str(&routed);
+                t.push('\n');
             }
         }
-        s
+        RenderedPrompt {
+            system: s,
+            turn_state: t,
+        }
+    }
+}
+
+/// First line of the turn-state item. Wire shapers key on it to keep cache
+/// breakpoints off the one block that is different on every request.
+pub const TURN_STATE_MARKER: &str = "[nur turn state]";
+
+/// A rendered request prompt. `system` is identical across every request of a
+/// session until something durable changes (project instructions, memory,
+/// model); `turn_state` is sent as the final input item and never persisted.
+pub struct RenderedPrompt {
+    pub system: String,
+    pub turn_state: String,
+}
+
+impl RenderedPrompt {
+    /// The turn-state item to append after the session history, or `None` for
+    /// prompts (subagents) that have no live state.
+    pub fn turn_state_item(&self) -> Option<Value> {
+        if self.turn_state.is_empty() {
+            None
+        } else {
+            Some(crate::api::types::user_text_item(&self.turn_state))
+        }
     }
 }
 
@@ -698,7 +759,7 @@ mod tests {
 
     #[test]
     fn child_prompt_matches_the_focused_non_recursive_tool_surface() {
-        let prompt = PromptContext::build_with_opts(
+        let rendered = PromptContext::build_with_opts(
             Path::new("."),
             true,
             "test-model",
@@ -708,11 +769,42 @@ mod tests {
             "high",
         )
         .render(PermissionMode::Auto, "(no todos)");
+        let prompt = rendered.system;
+        assert!(rendered.turn_state.is_empty());
         assert!(prompt.contains("read_file"));
         assert!(prompt.contains("write_file"));
         assert!(prompt.contains("Delegation tools and OMP are intentionally unavailable"));
         assert!(!prompt.contains("# Cross-provider subagents"));
         assert!(!prompt.contains("plur:"));
         assert!(!prompt.contains("ruflo:"));
+    }
+
+    /// The system prompt is the head of every provider's cache prefix. Mode
+    /// switches and todo updates happen several times a turn; if either moved
+    /// a byte of `system`, system + tools + the whole history would be re-read
+    /// at full price on the next request.
+    #[test]
+    fn root_system_prompt_is_identical_across_mode_and_todo_changes() {
+        let ctx = PromptContext::build_with_opts(
+            Path::new("."),
+            false,
+            "test-model",
+            "test-provider",
+            true,
+            None,
+            "high",
+        );
+        let auto = ctx.render(PermissionMode::Auto, "(no todos)");
+        let plan = ctx.render(PermissionMode::Plan, "- [ ] write the test\n- [x] read it");
+        assert_eq!(auto.system, plan.system);
+        assert!(auto.turn_state.starts_with(TURN_STATE_MARKER));
+        assert!(auto.turn_state.contains("AUTO"));
+        assert!(plan.turn_state.contains("PLAN"));
+        assert!(plan.turn_state.contains("write the test"));
+        assert!(!auto.turn_state.contains("write the test"));
+        let item = plan
+            .turn_state_item()
+            .expect("root prompts carry turn state");
+        assert_eq!(item["role"], "user");
     }
 }

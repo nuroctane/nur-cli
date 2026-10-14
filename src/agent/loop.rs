@@ -717,6 +717,12 @@ impl AgentRunner {
                 "{label} · activated from your wording (no slash command needed)"
             )));
         }
+        // The activated skill body joins the conversation once, right after
+        // the user's message, so it is cached with the history instead of
+        // re-read on every round as part of a changed system prompt.
+        if let Some(item) = prompt_ctx.activation_item() {
+            session.input_items.push(item);
+        }
         let mut turns = 0u32;
         let mut tool_seq: u64 = 0;
         // Compaction pressure relief. This was a single bool: one compaction per
@@ -888,8 +894,9 @@ impl AgentRunner {
             }
 
             let mode_now = self.permission_mode.get();
-            let mut instructions =
-                prompt_ctx.render(mode_now, &self.tools.todos_snapshot().render());
+            let rendered = prompt_ctx.render(mode_now, &self.tools.todos_snapshot().render());
+            let turn_state_item = rendered.turn_state_item();
+            let mut instructions = rendered.system;
 
             usage.set_state(format!("thinking (turn {turns})"));
             let _ = tx.send(AgentEvent::Status(format!(
@@ -927,10 +934,13 @@ impl AgentRunner {
                 configured_model.to_string()
             };
 
+            // The same tool roster on every request of the session: schemas
+            // sit at the head of the cached prefix, so a set that differs
+            // between two requests re-bills them and everything after them.
             let mut tools = if self.is_subagent {
                 self.tools.subagent_tool_defs()
             } else {
-                self.tools.root_tool_defs_for_task(&user_text, turns > 1)
+                self.tools.tool_defs()
             };
             // Opt-in narrowing, first round only: later rounds keep the full
             // surface, so a tool once offered is never withdrawn mid-turn.
@@ -948,7 +958,14 @@ impl AgentRunner {
             } else {
                 self.config.request_output_reserve_tokens
             };
-            let attribution = attribute_request(&instructions, &tools, &session.input_items);
+            // The live state (mode, todos, inventories) is the last input item
+            // of this request only: it is not persisted, so the next request's
+            // history is still an exact extension of this one's cached prefix.
+            let mut request_items = session.input_items.clone();
+            if let Some(item) = turn_state_item {
+                request_items.push(item);
+            }
+            let attribution = attribute_request(&instructions, &tools, &request_items);
             if let Some(block) = preflight_request_budget(
                 &self.config,
                 usage,
@@ -1062,7 +1079,7 @@ impl AgentRunner {
             );
             let req = ResponseRequest {
                 model: effective_model,
-                input: Value::Array(session.input_items.clone()),
+                input: Value::Array(request_items),
                 instructions: Some(instructions),
                 tools: Some(tools.clone()),
                 tool_choice: Some(tool_choice.into()),
@@ -1243,6 +1260,18 @@ impl AgentRunner {
             let tu = usage.last_usage().clone();
             session.usage.add(&tu);
             let (in_tok, out_tok) = (tu.input_tokens, tu.output_tokens);
+            // Make the prefix cache visible per request: this is the number
+            // that tells whether the stable system prompt + tool roster is
+            // actually paying off on this provider.
+            if in_tok > 0 && tu.cached_tokens > 0 {
+                let cached = tu.cached_tokens.min(in_tok);
+                let _ = tx.send(AgentEvent::Status(format!(
+                    "prompt cache · {}% of input read from cache ({} of {} tok)",
+                    cached.saturating_mul(100) / in_tok,
+                    cached,
+                    in_tok
+                )));
+            }
             let _ = tx.send(AgentEvent::Usage {
                 session: usage.session_usage().clone(),
                 last: tu,

@@ -266,13 +266,17 @@ pub struct ApiClient {
     /// scopes correctly. `/model` or `/provider` rebuilds the client, which
     /// resets the chain, and the next round full-flattens fresh.
     cursor_chat: std::sync::Arc<std::sync::Mutex<super::cursor_cli::CursorChatState>>,
-    /// Stable per-conversation id sent as `x-opencode-session` on OpenCode
-    /// traffic. OpenCode Go 400s without it ("Request is missing
-    /// x-opencode-session and cannot be routed efficiently") and uses it for
-    /// routing + prompt-cache affinity. Arc so `routed_for_model` clones keep
-    /// the same id within one conversation; each subagent client gets its own
-    /// (they are separate conversations).
-    opencode_session: std::sync::Arc<String>,
+    /// Stable per-conversation id, sent as whichever affinity header the route
+    /// understands (`x-opencode-session`, Codex `session_id`, Fireworks
+    /// `x-session-affinity`). Backends shard prompt caches per session, so an
+    /// id that changes on a model switch, a resume or a failover lands the next
+    /// request on a different backend and re-reads the whole prefix. It is
+    /// derived from the nur session id for exactly that reason, and falls back
+    /// to a random id when there is no session (one-shot CLI calls).
+    ///
+    /// Arc so `routed_for_model` clones keep the same id within a conversation;
+    /// each subagent client gets its own (they are separate conversations).
+    session_affinity: std::sync::Arc<String>,
 }
 
 /// Incremental events surfaced while a response streams in.
@@ -285,6 +289,24 @@ pub enum StreamEvent {
     ReasoningDelta(String),
     /// Terminal event carrying the full final response object.
     Completed(ApiResponse),
+}
+
+/// The id every affinity header carries. Prefer the nur session id so the id
+/// survives a `/model` switch, a `/resume` and a failover - all three rebuild
+/// the client, and a fresh random id there would send the next request to a
+/// backend that has never seen the prefix.
+fn session_affinity_id() -> String {
+    affinity_from(std::env::var("NUR_SESSION_ID").ok().as_deref())
+}
+
+/// Pure half of [`session_affinity_id`], so the fallback is testable without
+/// touching the process environment.
+fn affinity_from(session_id: Option<&str>) -> String {
+    session_id
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| crate::oauth::random_urlsafe(16))
 }
 
 impl ApiClient {
@@ -307,7 +329,7 @@ impl ApiClient {
             refresh_oauth: false,
             style: ApiStyle::Responses,
             cursor_chat: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
-            opencode_session: std::sync::Arc::new(crate::oauth::random_urlsafe(16)),
+            session_affinity: std::sync::Arc::new(session_affinity_id()),
         })
     }
 
@@ -799,11 +821,18 @@ impl ApiClient {
                 req.bearer_auth(&api_key)
             }
         };
-        if self.provider_id == "opencode" {
+        if self.is_opencode_route() {
             // OpenCode Go 400s without a stable session id
             // (https://opencode.ai/docs/go/#where-can-i-use-it); it keys
-            // routing and prompt-cache affinity on it.
-            req = req.header("x-opencode-session", self.opencode_session.as_str());
+            // routing and prompt-cache affinity on it. Gated on the *route*,
+            // not the provider id: a custom provider pointed at the Go base URL
+            // is the same backend and 400s the same way.
+            req = req.header("x-opencode-session", self.session_affinity.as_str());
+        }
+        if self.base_url.contains("fireworks.ai") {
+            // Fireworks pins a session to one replica, and only a replica that
+            // already holds the prefix can serve it from cache.
+            req = req.header("x-session-affinity", self.session_affinity.as_str());
         }
         if self.provider_id == "openai" {
             if let Some(oauth) = &oauth {
@@ -816,7 +845,12 @@ impl ApiClient {
                     .header(
                         "User-Agent",
                         format!("{OPENAI_ORIGINATOR}/{}", env!("CARGO_PKG_VERSION")),
-                    );
+                    )
+                    // The reference client sends this on every /responses call.
+                    // `prompt_cache_key` alone decides *what* may be reused;
+                    // this decides *where* the request lands, and without it
+                    // the same stable prefix hits a cold backend at random.
+                    .header("session_id", self.session_affinity.as_str());
                 if let Some(account_id) = &oauth.account_id {
                     req = req
                         .header("ChatGPT-Account-ID", account_id)
@@ -3878,7 +3912,7 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
             }),
             refresh_oauth: false,
             style: ApiStyle::Responses,
-            opencode_session: std::sync::Arc::new("test-session".into()),
+            session_affinity: std::sync::Arc::new("test-session".into()),
             cursor_chat: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
         };
         let request = client
@@ -3927,7 +3961,7 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
             }),
             refresh_oauth: false,
             style: ApiStyle::ChatCompletions,
-            opencode_session: std::sync::Arc::new("test-session".into()),
+            session_affinity: std::sync::Arc::new("test-session".into()),
             cursor_chat: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
         };
         let request = client
@@ -3959,7 +3993,7 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
             }),
             refresh_oauth: false,
             style: ApiStyle::GeminiCloudCode,
-            opencode_session: std::sync::Arc::new("test-session".into()),
+            session_affinity: std::sync::Arc::new("test-session".into()),
             cursor_chat: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
         };
         let request = client
@@ -4049,7 +4083,7 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
             }),
             refresh_oauth: false,
             style: ApiStyle::GeminiCloudCode,
-            opencode_session: std::sync::Arc::new("test-session".into()),
+            session_affinity: std::sync::Arc::new("test-session".into()),
             cursor_chat: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
         };
         let request = client
@@ -4194,14 +4228,23 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
             "per-model reroute must keep the conversation id"
         );
 
-        // A separately-built client is a separate conversation.
-        let other = ApiClient::for_provider(
-            crate::providers::OPENCODE_ZEN_BASE_URL,
+        // A custom provider pointed at the Go base URL is the same backend and
+        // 400s the same way, so the header follows the route, not the id.
+        let custom = ApiClient::for_provider(
+            crate::providers::OPENCODE_GO_BASE_URL,
             "oc-key",
-            "opencode",
+            "my-gateway",
         )
-        .unwrap();
-        assert_ne!(other.opencode_session.as_str(), session);
+        .unwrap()
+        .with_style(ApiStyle::ChatCompletions);
+        let request = custom
+            .auth_headers(custom.http.post("https://example.test/v1/chat/completions"))
+            .build()
+            .unwrap();
+        assert!(
+            request.headers().get("x-opencode-session").is_some(),
+            "the Go route needs the header whatever the provider is called"
+        );
 
         // Other providers must not carry the header.
         let plain = ApiClient::for_provider("https://api.example.test/v1", "k", "openai-cc")
@@ -4213,6 +4256,67 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
             .unwrap();
         assert!(request.headers().get("x-opencode-session").is_none());
     }
+
+    /// Affinity headers exist to keep one conversation on one backend. A fresh
+    /// random id per client would defeat that across `/model`, `/resume` and
+    /// failover, each of which rebuilds the client.
+    #[test]
+    fn affinity_prefers_the_session_id_and_falls_back_to_a_random_one() {
+        assert_eq!(affinity_from(Some("  sess-42  ")), "sess-42");
+        assert_eq!(
+            affinity_from(Some("sess-42")),
+            affinity_from(Some("sess-42"))
+        );
+        for empty in [None, Some(""), Some("   ")] {
+            let a = affinity_from(empty);
+            assert!(!a.is_empty(), "{empty:?} must still yield an id");
+            assert_ne!(a, affinity_from(empty), "sessionless clients differ");
+        }
+    }
+
+    /// The Codex backend shards prompt caches per session. `prompt_cache_key`
+    /// says what may be reused; this header decides which backend sees it.
+    #[test]
+    fn codex_oauth_requests_carry_a_session_id_header() {
+        let mut client = ApiClient::new("https://chatgpt.com/backend-api/codex", "oauth").unwrap();
+        client.provider_id = "openai".to_string();
+        client.oauth = Some(crate::auth::OAuthRequestContext::default());
+        client.style = ApiStyle::Responses;
+        client.session_affinity = std::sync::Arc::new("conv-7".into());
+        let request = client
+            .auth_headers(client.http.post("https://example.test/v1/responses"))
+            .build()
+            .unwrap();
+        assert_eq!(
+            request
+                .headers()
+                .get("session_id")
+                .and_then(|v| v.to_str().ok()),
+            Some("conv-7")
+        );
+    }
+
+    /// Fireworks pins a session to one replica; only the replica holding the
+    /// prefix can serve it from cache.
+    #[test]
+    fn fireworks_requests_carry_the_affinity_header() {
+        let mut client = ApiClient::new("https://api.fireworks.ai/inference/v1", "fw-key").unwrap();
+        client.provider_id = "fireworks".to_string();
+        client.style = ApiStyle::ChatCompletions;
+        client.session_affinity = std::sync::Arc::new("conv-9".into());
+        let request = client
+            .auth_headers(client.http.post("https://example.test/v1/chat/completions"))
+            .build()
+            .unwrap();
+        assert_eq!(
+            request
+                .headers()
+                .get("x-session-affinity")
+                .and_then(|v| v.to_str().ok()),
+            Some("conv-9")
+        );
+    }
+
     #[test]
     fn xai_oauth_requests_send_cli_version_fingerprint() {
         // cli-chat-proxy returns 426 with version "(none)" without these headers.

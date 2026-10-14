@@ -1,0 +1,17 @@
+{
+  "description": "codemode runs several read-only tool calls as one script: only what the script prints reaches the model, the raw file contents never do, and writing from inside the script is refused even in plan mode where the tool itself is free.",
+  "prompt": "Count how many of the notes mention the needle.",
+  "mode": "plan",
+  "setup_files": {"a.txt": "alpha needle\n", "b.txt": "beta\n", "c.txt": "gamma needle\n"},
+  "script": [
+    {"tool_calls": [{"name": "codemode", "arguments": {"code": "const names = ['a.txt', 'b.txt', 'c.txt'];\nlet hits = 0;\nfor (const n of names) {\n  if (tools.read_file({ path: n }).includes('needle')) hits++;\n}\nlet refusal = 'allowed';\ntry {\n  __nur_call('write_file', JSON.stringify({ path: 'refused.txt', contents: 'x' }));\n} catch (e) {\n  refusal = String(e);\n}\ntext('hits=' + hits);\ntext('write_file_offered=' + ('write_file' in tools));\ntext('write=' + refusal);\nreturn names.length;"}}]},
+    {"text": "Two of the three notes mention the needle."}
+  ],
+  "expect": {
+    "requests": 2,
+    "absent_files": ["refused.txt"],
+    "tool_results": [{"request": 2, "contains": ["hits=2", "write_file_offered=false", "not a read-only call", "[returned]\n3", "3 tool call(s): read_file, read_file, read_file"]}],
+    "requests_lack": ["alpha needle", "gamma needle"],
+    "stdout_contains": ["Two of the three notes mention the needle."]
+  }
+}

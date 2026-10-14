@@ -83,25 +83,6 @@ pub fn build_body_with_oauth(req: &ResponseRequest, stream: bool, oauth: bool) -
     // …and then that every tool_use is answered in the very next message.
     let messages = normalize_tool_pairs(messages);
 
-    // Lift volatile sections out of the system prompt before it is cached.
-    let (system, volatile) = match system {
-        Some(s) => {
-            let (stable, vol) = split_volatile_instructions(&s);
-            (Some(stable), vol)
-        }
-        None => (None, None),
-    };
-    // The todo list still has to reach the model — as a trailing user block,
-    // where it costs a few tokens instead of invalidating the whole prefix.
-    let mut messages = messages;
-    if let Some(vol) = volatile {
-        messages.push(json!({
-            "role": "user",
-            "content": [{ "type": "text", "text": vol }],
-        }));
-        messages = coalesce_roles(messages);
-    }
-
     let model = normalize_model_id(&req.model);
     let max_tokens = req.max_output_tokens.unwrap_or(16_384);
     let mut body = json!({
@@ -183,46 +164,25 @@ pub fn build_body_with_oauth(req: &ResponseRequest, stream: bool, oauth: bool) -
 /// token cost. This restores parity with Claude Code, which sets the same
 /// breakpoints. Max 4 breakpoints per request: system (1) + tools (1) + a rolling
 /// breakpoint on the last 2 messages (≤2).
-/// Split the rendered instructions into a byte-stable prefix and the volatile
-/// `# Current todos` section.
 ///
-/// Anthropic prompt caching is prefix-based: any byte change in `system`
-/// invalidates system + tools + the entire message history. The rendered
-/// instructions embed a todo list that changes on every `todo_write`, so the
-/// cache was discarded several times a minute — sessions logged
-/// `cached_tokens: 0` on every single turn while the same harness on other
-/// providers cached millions. Re-reading ~100k input tokens per turn tripped
-/// Anthropic's per-minute input-token limit within 10-30 turns, and (before the
-/// retry fix) the resulting 429 ended the run.
-///
-/// Only the todo section moves; project instructions and activation text stay
-/// in the cached prefix.
-fn split_volatile_instructions(instructions: &str) -> (String, Option<String>) {
-    const MARKER: &str = "\n# Current todos\n";
-    let Some(start) = instructions.find(MARKER) else {
-        return (instructions.to_string(), None);
-    };
-    let after = start + MARKER.len();
-    let end = instructions[after..]
-        .find("\n# ")
-        .map(|i| after + i)
-        .unwrap_or(instructions.len());
-    let volatile = instructions[start..end].trim().to_string();
-    let mut stable = String::with_capacity(instructions.len());
-    stable.push_str(&instructions[..start]);
-    stable.push_str(&instructions[end..]);
-    if volatile.is_empty() {
-        (stable, None)
-    } else {
-        (stable, Some(volatile))
-    }
-}
-
+/// The agent loop appends a turn-state item (mode, todos, inventories) as the
+/// last input of every request; it differs on every request and is never
+/// persisted. The rolling breakpoints skip it: a breakpoint on a block that
+/// never recurs creates a cache entry nothing can hit, and the entry that the
+/// next request *can* hit (the prefix ending at the last persisted block)
+/// would then not exist.
 fn apply_prompt_caching(body: &mut Value) {
     fn mark(block: &mut Value) {
         if let Some(obj) = block.as_object_mut() {
             obj.insert("cache_control".into(), json!({ "type": "ephemeral" }));
         }
+    }
+    fn is_turn_state(block: &Value) -> bool {
+        block.get("type").and_then(Value::as_str) == Some("text")
+            && block
+                .get("text")
+                .and_then(Value::as_str)
+                .is_some_and(|t| t.starts_with(crate::agent::prompt::TURN_STATE_MARKER))
     }
 
     // 1) System prompt — normalise a plain string to a single text block so a
@@ -251,23 +211,34 @@ fn apply_prompt_caching(body: &mut Value) {
         }
     }
 
-    // 3) Recent history — a rolling breakpoint on the last up-to-2 messages so
-    //    growing conversation context is reused across turns.
+    // 3) Recent history — a rolling breakpoint on the last up-to-2 persisted
+    //    blocks so growing conversation context is reused across requests.
+    //    Walk back from the end, skipping the turn-state block; a message
+    //    whose only block is turn state (first request of a session) gets no
+    //    breakpoint and the system/tools entries carry the cache.
     if let Some(Value::Array(messages)) = body.get_mut("messages") {
-        let start = messages.len().saturating_sub(2);
-        for msg in messages[start..].iter_mut() {
+        let mut remaining = 2;
+        for msg in messages.iter_mut().rev() {
+            if remaining == 0 {
+                break;
+            }
             match msg.get_mut("content") {
                 Some(c @ Value::String(_)) => {
                     let text = c.as_str().unwrap_or("").to_string();
+                    if text.starts_with(crate::agent::prompt::TURN_STATE_MARKER) {
+                        continue;
+                    }
                     *c = json!([{
                         "type": "text",
                         "text": text,
                         "cache_control": { "type": "ephemeral" },
                     }]);
+                    remaining -= 1;
                 }
                 Some(Value::Array(blocks)) => {
-                    if let Some(last) = blocks.last_mut() {
+                    if let Some(last) = blocks.iter_mut().rev().find(|b| !is_turn_state(b)) {
                         mark(last);
+                        remaining -= 1;
                     }
                 }
                 _ => {}
@@ -878,7 +849,7 @@ mod tests {
     }
 
     /// Same fixture as [`req`] but with a caller-supplied Responses transcript.
-    fn req_with(input: Value) -> ResponseRequest {
+    pub(super) fn req_with(input: Value) -> ResponseRequest {
         ResponseRequest { input, ..req() }
     }
 
@@ -956,7 +927,7 @@ mod tests {
             .clone()
     }
 
-    fn blocks(msg: &Value) -> Vec<Value> {
+    pub(super) fn blocks(msg: &Value) -> Vec<Value> {
         match &msg["content"] {
             Value::Array(b) => b.clone(),
             Value::String(s) => vec![json!({ "type": "text", "text": s })],
@@ -1300,6 +1271,7 @@ mod tests {
 
 #[cfg(test)]
 mod stop_and_cache_tests {
+    use super::tests::{blocks, req_with};
     use super::*;
 
     /// Anthropic reports `input_tokens` excluding cached reads. Counting only
@@ -1328,39 +1300,58 @@ mod stop_and_cache_tests {
         assert_eq!(got["prompt_tokens_details"]["cached_tokens"], 0);
     }
 
-    /// The todo list changes every `todo_write`; leaving it in `system` broke
-    /// Anthropic's prefix cache on every turn.
+    /// The turn-state item is different on every request. A breakpoint on it
+    /// would create a cache entry no later request can hit, while the entry the
+    /// next request *can* hit (the prefix ending at the last tool result) would
+    /// not exist. The rolling breakpoints must land on the persisted blocks.
     #[test]
-    fn volatile_todos_are_lifted_out_of_the_cached_prefix() {
-        let instructions = "You are nur.\n\n# Current todos\n- [ ] one\n- [x] two\n\n# Project instructions (repo)\nBe careful.\n";
-        let (stable, volatile) = split_volatile_instructions(instructions);
-        assert!(!stable.contains("Current todos"), "todos must leave system");
-        assert!(!stable.contains("[ ] one"));
+    fn rolling_breakpoints_skip_the_turn_state_block() {
+        let marker = crate::agent::prompt::TURN_STATE_MARKER;
+        let b = build_body_with_oauth(
+            &req_with(json!([
+                {"role":"user","content":[{"type":"input_text","text":"go"}]},
+                {"type":"function_call","call_id":"c1","name":"grep","arguments":"{}"},
+                {"type":"function_call_output","call_id":"c1","output":"match"},
+                {"role":"user","content":[{"type":"input_text","text":format!("{marker}\nPermission mode: AUTO\n# Current todos\n- [ ] x")}]},
+            ])),
+            false,
+            false,
+        );
+        let msgs = b["messages"].as_array().unwrap();
+        // tool_result + turn state coalesce into one trailing user message.
+        let last = blocks(msgs.last().unwrap());
+        assert_eq!(last.len(), 2, "tool result and turn state share a message");
+        assert_eq!(last[0]["type"], "tool_result");
+        assert_eq!(last[0]["cache_control"]["type"], "ephemeral");
         assert!(
-            stable.contains("# Project instructions (repo)") && stable.contains("You are nur."),
-            "stable sections must stay in the cached prefix: {stable:?}"
+            last[1].get("cache_control").is_none(),
+            "turn state must not carry a breakpoint"
         );
-        let volatile = volatile.expect("todo section should be extracted");
-        assert!(volatile.contains("[ ] one") && volatile.contains("[x] two"));
+        assert!(last[1]["text"].as_str().unwrap().starts_with(marker));
+        // The second rolling breakpoint lands on the assistant tool_use turn.
+        let prev = blocks(&msgs[msgs.len() - 2]);
+        assert_eq!(prev.last().unwrap()["cache_control"]["type"], "ephemeral");
     }
 
-    /// Two turns whose only difference is the todo list must produce a
-    /// byte-identical cached prefix — that is the whole point.
+    /// First request of a session: the only user message is the prompt plus
+    /// turn state. The prompt block is the one that recurs, so it is the one
+    /// that gets the breakpoint.
     #[test]
-    fn differing_todos_yield_an_identical_stable_prefix() {
-        let a = "Base.\n\n# Current todos\n- [ ] alpha\n\n# Style\nTerse.\n";
-        let b = "Base.\n\n# Current todos\n- [x] alpha\n- [ ] beta\n\n# Style\nTerse.\n";
-        assert_eq!(
-            split_volatile_instructions(a).0,
-            split_volatile_instructions(b).0
+    fn first_request_breakpoints_the_prompt_not_the_turn_state() {
+        let marker = crate::agent::prompt::TURN_STATE_MARKER;
+        let b = build_body_with_oauth(
+            &req_with(json!([
+                {"role":"user","content":[{"type":"input_text","text":"go"}]},
+                {"role":"user","content":[{"type":"input_text","text":format!("{marker}\nPermission mode: AUTO")}]},
+            ])),
+            false,
+            false,
         );
-    }
-
-    #[test]
-    fn instructions_without_todos_are_untouched() {
-        let s = "Just a system prompt.\n";
-        let (stable, volatile) = split_volatile_instructions(s);
-        assert_eq!(stable, s);
-        assert!(volatile.is_none());
+        let msgs = b["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 1);
+        let last = blocks(&msgs[0]);
+        assert_eq!(last[0]["text"], "go");
+        assert_eq!(last[0]["cache_control"]["type"], "ephemeral");
+        assert!(last[1].get("cache_control").is_none());
     }
 }

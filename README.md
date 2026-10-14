@@ -250,7 +250,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 | context | `context` (RLM store: register/peek/slice/search) · `anydoc` (PDF/DOCX/XLSX → markdown) |
 | background | `bg` (jobs that outlive the turn) · `admission` (async subagent handles) · `goal` · `proposal` (staged outputs) · `message` (peer mail) |
 | python | `repl` (long-lived kernel; state survives compaction) |
-| agent | `todo_write` `submit_plan` `agent` `omp` · `skill` `harness` |
+| agent | `todo_write` `submit_plan` `agent` `omp` · `skill` `harness` · `codemode` (one JS script, several read-only tool calls, one model round) |
 
 ### Vision
 

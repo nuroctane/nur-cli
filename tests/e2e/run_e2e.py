@@ -203,6 +203,59 @@ def check_mcp(expect, mcp_requests):
     return failures
 
 
+def check_headers(rules, requests):
+    """`present` / `absent` on every request, `stable` identical across them."""
+    failures = []
+    for n, request in enumerate(requests, 1):
+        headers = request.get("_headers") or {}
+        for name in rules.get("present", []):
+            if not headers.get(name.lower()):
+                failures.append(f"request {n} lacks the {name} header")
+        for name in rules.get("absent", []):
+            if name.lower() in headers:
+                failures.append(f"request {n} sends the {name} header")
+    for name in rules.get("stable", []):
+        seen = {(r.get("_headers") or {}).get(name.lower()) for r in requests}
+        if len(seen) > 1:
+            failures.append(f"{name} changed between requests: {sorted(map(str, seen))}")
+    return failures
+
+
+def cached_prefix_of(request):
+    """What a provider caches ahead of the conversation: system text + tools.
+
+    Responses sends `instructions`, Anthropic `system`, Chat Completions a
+    leading system message. The tool roster follows it in every one of them.
+    """
+    system = request.get("instructions") or request.get("system") or ""
+    if not system:
+        first = (request.get("messages") or [{}])[0]
+        if first.get("role") == "system":
+            system = first.get("content") or ""
+    return json.dumps([system, request.get("tools")], ensure_ascii=False, sort_keys=True)
+
+
+def check_stable_prefix(requests):
+    """The prefix must be byte-identical across a session.
+
+    Providers cache by prefix, so one changed byte in the system prompt or the
+    tool roster re-bills system + tools + the whole conversation after them.
+    Per-turn state belongs in the final input item, never up here.
+    """
+    prefixes = [cached_prefix_of(r) for r in requests]
+    changes = [n for n in range(1, len(prefixes)) if prefixes[n] != prefixes[n - 1]]
+    if not changes:
+        return []
+    n = changes[0]
+    before, after = prefixes[n - 1], prefixes[n]
+    at = next((i for i in range(min(len(before), len(after))) if before[i] != after[i]), 0)
+    return [
+        f"cached prefix changed at request {n + 1} ({len(changes)} times in "
+        f"{len(requests)} requests), first difference: "
+        f"{before[at:at + 120]!r} vs {after[at:at + 120]!r}"
+    ]
+
+
 def check(scenario, result, workspace, requests, mcp_requests=()):
     expect = scenario.get("expect", {})
     failures = check_mcp(expect["mcp"], list(mcp_requests)) if "mcp" in expect else []
@@ -226,7 +279,12 @@ def check(scenario, result, workspace, requests, mcp_requests=()):
     protocol = expect.get("protocol")
     if protocol and any(not r.get("_path", "").endswith("/" + protocol) for r in requests):
         failures.append(f"requests used the wrong wire protocol, expected {protocol}")
-    sent = "\n".join(json.dumps(r) for r in requests)
+    # `requests_lack` is about what the *model* sees, so the recorded headers
+    # (which carry the provider key) are not part of the haystack.
+    sent = "\n".join(json.dumps({k: v for k, v in r.items() if k != "_headers"}) for r in requests)
+    failures += check_headers(expect.get("headers", {}), requests)
+    if expect.get("stable_prefix"):
+        failures += check_stable_prefix(requests)
     if "min_requests" in expect and len(requests) < expect["min_requests"]:
         failures.append(f"only {len(requests)} requests, expected at least {expect['min_requests']}")
     if expect.get("last_request_max_envelope_chars") and requests:

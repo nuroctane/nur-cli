@@ -1,0 +1,22 @@
+{
+  "description": "Providers cache by prefix. The system prompt and the tool roster stay byte-identical across every request of a turn, and the live state (mode, todos) rides as the final input item instead of accumulating in the history.",
+  "prompt": "Track this work, then write a note and read it back.",
+  "script": [
+    {"tool_calls": [{"name": "todo_write", "arguments": {"items": [{"id": "t1", "content": "write the note", "status": "in_progress"}, {"id": "t2", "content": "read it back", "status": "pending"}]}}]},
+    {"tool_calls": [{"name": "write_file", "arguments": {"path": "note.txt", "contents": "cached\n"}}]},
+    {"tool_calls": [{"name": "todo_write", "arguments": {"items": [{"id": "t1", "content": "write the note", "status": "completed"}, {"id": "t2", "content": "read it back", "status": "in_progress"}]}}]},
+    {"tool_calls": [{"name": "read_file", "arguments": {"path": "note.txt"}}]},
+    {"text": "Note written and read back."}
+  ],
+  "expect": {
+    "stable_prefix": true,
+    "requests": 5,
+    "files": {"note.txt": {"contains": ["cached"]}},
+    "stdout_contains": ["Note written and read back."],
+    "request_contains": [
+      {"request": 1, "count_once": ["Permission mode: AUTO - tools auto-approved."]},
+      {"request": 2, "count_once": ["# Current todos"]},
+      {"request": 5, "count_once": ["Permission mode: AUTO - tools auto-approved.", "# Current todos"]}
+    ]
+  }
+}

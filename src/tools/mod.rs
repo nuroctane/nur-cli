@@ -28,6 +28,8 @@ pub mod question_tool;
 pub mod t3code_tool;
 pub use browser::is_read_only_action as browser_is_read_only;
 pub mod capabilities;
+#[cfg(feature = "codemode")]
+pub mod codemode;
 mod edit_file;
 pub mod executor_tool;
 mod git_diff;
@@ -129,11 +131,11 @@ pub const SUBAGENT_TOOL_NAMES: &[&str] = &[
     "skill",
 ];
 
-/// A safe root profile for ordinary repository work. Specialist integrations
-/// are selected from the user's task on the first round and all schemas are
-/// restored after the first tool round. This avoids re-billing unrelated
-/// ecosystem schemas on the common inspect/edit/test loop without making an
-/// enabled tool permanently unreachable.
+/// The root tools that are never withdrawn from a request. The opt-in TypeSafe
+/// tool narrowing (`[typesafe] tools.subset`) may drop specialists outside this
+/// list for a first round; the root surface itself is always the full roster,
+/// because a tool set that differs between two requests of one session throws
+/// away the provider's cached prefix (schemas and everything after them).
 pub(crate) const ROOT_CORE_TOOL_NAMES: &[&str] = &[
     "read_file",
     "list_dir",
@@ -192,7 +194,6 @@ pub trait Tool: Send + Sync {
     fn description(&self) -> &str;
     fn parameters_schema(&self) -> Value;
     fn execute(&self, args: &Value, ctx: &ToolContext) -> Result<String>;
-
 }
 
 /// Stateful tool host (todos/plan/steer share with TUI).
@@ -215,7 +216,8 @@ impl Default for ToolHost {
 
 impl ToolHost {
     fn boxed_tools(&self) -> Vec<Box<dyn Tool>> {
-        vec![
+        #[allow(unused_mut)]
+        let mut tools: Vec<Box<dyn Tool>> = vec![
             Box::new(read_file::ReadFile),
             Box::new(list_dir::ListDir),
             Box::new(write_file::WriteFile),
@@ -274,7 +276,13 @@ impl ToolHost {
             }),
             // `agent` is handled asynchronously in the agent loop (nested runner).
             Box::new(AgentStub),
-        ]
+        ];
+        // Appended rather than placed inline: the roster must be identical for
+        // every request of a session (prompt cache), and a feature-gated hole
+        // in the middle would reorder every schema after it between builds.
+        #[cfg(feature = "codemode")]
+        tools.push(Box::new(codemode::CodeMode));
+        tools
     }
 
     pub fn tool_defs(&self) -> Vec<ToolDef> {
@@ -294,92 +302,6 @@ impl ToolHost {
                     .collect()
             })
             .clone()
-    }
-
-    /// Return an initial task-shaped root profile. The second and later model
-    /// requests use the complete surface: a model can discover or invoke any
-    /// specialist after it has oriented with cheap core tools, and tool-call
-    /// replay remains valid because definitions are only added, never removed.
-    pub fn root_tool_defs_for_task(&self, task: &str, after_first_round: bool) -> Vec<ToolDef> {
-        let all = self.tool_defs();
-        if after_first_round {
-            return all;
-        }
-        let text = task.to_ascii_lowercase();
-        let mut enabled: std::collections::HashSet<&str> =
-            ROOT_CORE_TOOL_NAMES.iter().copied().collect();
-        let has = |needles: &[&str]| needles.iter().any(|n| text.contains(n));
-        if has(&[
-            "diagram",
-            "draw",
-            "canvas",
-            "excalidraw",
-            "tldraw",
-            "image",
-            "video",
-            "screenshot",
-        ]) {
-            enabled.extend(["excalidraw", "tldraw", "penecho", "egaki"]);
-        }
-        if has(&[
-            "memory",
-            "remember",
-            "recall",
-            "optmem",
-            "plur",
-            "ruflo",
-            "chronicle",
-        ]) {
-            enabled.extend(["connectome", "plur", "ruflo", "optmem"]);
-        }
-        if has(&[
-            "graph",
-            "architecture",
-            "impact",
-            "dependency",
-            "codebase map",
-        ]) {
-            enabled.extend(["graphify", "graphjin"]);
-        }
-        if has(&[
-            "background",
-            "overnight",
-            "fractal",
-            "swarm",
-            "omp",
-            "delegate many",
-        ]) {
-            enabled.extend(["admission", "bg", "fractal", "omp"]);
-        }
-        if has(&["external api", "openapi", "graphql", "mcp", "executor"]) {
-            enabled.insert("executor");
-        }
-        if has(&["enclave", "pentest", "penetration test", "security finding"]) {
-            enabled.insert("enclave");
-        }
-        // A task that is *about* judgments gets the TypeSafe tool on the first
-        // round: it is the surface for asking a typed question directly, and
-        // waiting a round to expose it just burns the round. Every other task
-        // still gets it from the second round on, and the harness uses Jev
-        // internally either way.
-        if has(&[
-            "typesafe",
-            "jev",
-            "judgment",
-            "judgement",
-            "classify",
-            "rank these",
-            "which model",
-            "is this spam",
-            "relevant",
-            "needs a human",
-            "risky",
-        ]) {
-            enabled.insert("typesafe");
-        }
-        all.into_iter()
-            .filter(|tool| enabled.contains(tool.name.as_str()))
-            .collect()
     }
 
     pub fn subagent_tool_defs(&self) -> Vec<ToolDef> {
@@ -474,6 +396,8 @@ impl ToolHost {
                 plan: self.plan.clone(),
             }
             .execute(&args, ctx),
+            #[cfg(feature = "codemode")]
+            "codemode" => codemode::CodeMode.execute(&args, ctx),
             _ => Err(NurError::Tool(format!("unknown tool: {name}"))),
         }
     }
@@ -625,36 +549,6 @@ mod tests {
     /// `dispatch` arm, and vice-versa. Because the two rosters live in separate
     /// functions (see the note on `dispatch`), this test is the guardrail: it
     /// locks the exact set so adding/removing a tool in only one place fails CI.
-    /// The task-shaped first-round profile must expose the judgment tool when
-    /// the task is a judgment, and must stay lean otherwise.
-    #[test]
-    fn a_judgment_shaped_task_gets_the_typesafe_tool_first_round() {
-        let host = ToolHost::default();
-        let names = |task: &str| -> Vec<String> {
-            host.root_tool_defs_for_task(task, false)
-                .into_iter()
-                .map(|d| d.name)
-                .collect()
-        };
-        assert!(
-            names("classify these support tickets and tell me which need a human")
-                .iter()
-                .any(|n| n == "typesafe"),
-            "a judgment task should not wait a round for the tool"
-        );
-        assert!(
-            !names("fix the failing test in src/lib.rs")
-                .iter()
-                .any(|n| n == "typesafe"),
-            "ordinary repo work keeps the lean profile"
-        );
-        // Second round and later always gets the full surface.
-        assert!(host
-            .root_tool_defs_for_task("fix the failing test", true)
-            .iter()
-            .any(|d| d.name == "typesafe"));
-    }
-
     #[test]
     fn roster_stays_in_sync() {
         let mut got: Vec<String> = ToolHost::default()
@@ -719,6 +613,8 @@ mod tests {
             "submit_plan",
             "agent",
         ];
+        #[cfg(feature = "codemode")]
+        want.push("codemode");
         want.sort();
 
         assert_eq!(
@@ -739,21 +635,6 @@ mod tests {
         assert!(!names.contains(&"agent"));
         assert!(!names.contains(&"omp"));
         assert!(defs.len() < host.tool_defs().len());
-    }
-
-    #[test]
-    fn initial_root_profile_is_task_shaped_then_expands_safely() {
-        let host = ToolHost::default();
-        let initial = host.root_tool_defs_for_task("fix the Rust tests", false);
-        assert!(initial.iter().any(|t| t.name == "read_file"));
-        assert!(!initial.iter().any(|t| t.name == "egaki"));
-        let visual = host.root_tool_defs_for_task("draw an architecture diagram", false);
-        assert!(visual.iter().any(|t| t.name == "excalidraw"));
-        assert_eq!(
-            host.root_tool_defs_for_task("fix the Rust tests", true)
-                .len(),
-            host.tool_defs().len()
-        );
     }
 
     /// The unknown-tool fallthrough must actually reject unregistered names

@@ -15,7 +15,7 @@ All native tools available to the NurCLI agent.
 | **browser** | `browser` `terminal_browser` | teal |
 | **knowledge** | `graphify` `graphjin` `plur` `ruflo` `akarso` `executor` `skill` `memory` | indigo / orange |
 | **delegate** | `omp` | - |
-| **agent** | `todo_write` `submit_plan` `agent` `harness` | - |
+| **agent** | `todo_write` `submit_plan` `agent` `harness` `codemode` | - |
 | **memory** | `optmem` `connectome` `mem` `memory` `plur` `ruflo` | indigo |
 | **judgments** | `typesafe` | violet |
 | **security** | `enclave` | teal |
@@ -479,6 +479,46 @@ Create and manage task lists.
 ### `submit_plan`
 
 Submit a plan for approval.
+
+### `codemode`
+
+Run a short JavaScript script that calls other tools, so several steps cost
+one model round instead of one each. An agent loop re-sends the whole
+conversation on every request, so five reads cost five re-sends of the
+history; a script that does the same five reads, filters them and prints one
+line costs one. The system prompt tells the model to reach for it when the
+next step is three or more read-only calls whose outputs feed each other and
+only part of the result matters.
+
+```js
+// code: the body of an async function; top-level await and return work
+const files = tools.glob({ pattern: "src/**/*.rs" }).split("\n");
+let todo = 0;
+for (const f of files) if (tools.read_file({ path: f }).includes("TODO")) todo++;
+text(`${todo} of ${files.length} files carry a TODO`);
+return todo;
+```
+
+Only what the script prints (`text(...)` / `console.log(...)`) or returns
+reaches the model, followed by a one-line account of the calls it made. Globals:
+`tools.<name>(args)` (returns the tool's text result, throws on error),
+`ALL_TOOLS`, `searchTools(q)`, `describeTool(name)`, `CWD`, `store(k, v)` /
+`load(k)` (values survive into the next script of the session), `exit(value)`.
+Parameters: `code` (required) and `timeout_ms` (default 120 s, 1 s to 10 min).
+
+**Policy.** The script runs in [Boa](https://boajs.dev), a pure-Rust engine with
+no filesystem, network, timer or process bindings, so the tool bridge is the
+only way out. The bridge admits a nested call only when the permission layer
+classifies it as read-only (the same `is_read_only` rule the approval gate and
+the parallel batch use, not a second allowlist), and never `codemode`, `agent`,
+`question`, `submit_plan`, `message`, `admission`, `bg`, `fractal` or `omp`. A
+script therefore cannot write a file, run a shell command or spawn a subagent;
+`codemode` itself is classified read-only, so it is free in plan mode and needs
+no approval in manual mode. Limits: 64 nested calls per script, 1 MB of printed
+output, 256 KB per stored value (1 MB per session), ten million loop iterations
+and a 400-deep call stack. Nested calls run one after another; `await` and
+`Promise.all` work but do not overlap. Subagents are not offered the tool.
+Cargo feature `codemode` (default on). E2E scenario 32.
 
 ### `agent`
 
