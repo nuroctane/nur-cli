@@ -500,7 +500,7 @@ fn find_ffmpeg() -> Option<PathBuf> {
         }
     }
     // Common Windows winget shim
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = crate::config::home_dir() {
         let p = home
             .join("AppData")
             .join("Local")

@@ -279,7 +279,7 @@ pub fn parse_simple_yaml_map(text: &str) -> Vec<(String, String)> {
 }
 
 pub fn home_dir() -> Option<PathBuf> {
-    dirs::home_dir()
+    crate::config::home_dir()
 }
 
 pub fn is_api_key_import(tokens: &OAuthTokens) -> bool {

@@ -125,7 +125,7 @@ impl Tool for Tldraw {
 
 /// Locate an installed tldraw offline executable / bundle for the current OS.
 pub fn app_path() -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
+    let home = crate::config::home_dir()?;
     match std::env::consts::OS {
         "windows" => {
             let mut roots = vec![
@@ -328,7 +328,7 @@ fn open_action(args: &Value, cwd: &Path) -> Result<String> {
 /// User's Desktop directory (Windows/macOS/Linux via `dirs`).
 pub fn desktop_dir() -> PathBuf {
     dirs::desktop_dir()
-        .or_else(|| dirs::home_dir().map(|h| h.join("Desktop")))
+        .or_else(|| crate::config::home_dir().map(|h| h.join("Desktop")))
         .unwrap_or_else(|| PathBuf::from("."))
 }
 

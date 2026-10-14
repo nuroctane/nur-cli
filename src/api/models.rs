@@ -304,7 +304,7 @@ fn openai_codex_client_version() -> String {
             return value.to_string();
         }
     }
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = crate::config::home_dir() {
         for (file, field) in [
             ("models_cache.json", "client_version"),
             ("version.json", "latest_version"),

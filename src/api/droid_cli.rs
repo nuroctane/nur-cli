@@ -392,7 +392,7 @@ pub fn factory_home() -> Option<PathBuf> {
             return Some(p);
         }
     }
-    dirs::home_dir().map(|h| h.join(".factory"))
+    crate::config::home_dir().map(|h| h.join(".factory"))
 }
 
 /// True when `droid` holds a browser sign-in. The keyring is encrypted with a
@@ -459,7 +459,7 @@ fn probe_bin() -> Option<PathBuf> {
         }
     }
     let mut dirs_to_try: Vec<PathBuf> = Vec::new();
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = crate::config::home_dir() {
         // `curl … | sh` installs under ~/.factory/bin; older builds and the
         // Windows installer drop the launcher in ~/bin or ~/.local/bin.
         dirs_to_try.push(home.join(".factory").join("bin"));

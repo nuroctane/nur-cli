@@ -63,6 +63,7 @@ scenario's home when it exits.
   credential stores, security classification, concurrency). List the ways it
   can fail first, then write one test per failure.
 - Tests never write to the real nur home: `cargo test` does not set `NUR_HOME`.
-- On Windows `dirs::home_dir()` ignores `HOME`/`USERPROFILE`, so a scenario
-  still sees the real `~/.agents`, `~/.claude` and `~/.optmem`. Scenarios must
-  not depend on their contents.
+- The scenario home is hermetic on every OS: `crate::config::home_dir()`
+  resolves `NUR_HOME`'s parent, then `HOME`, then `USERPROFILE` (the raw
+  `dirs::home_dir()` is banned by `clippy.toml`), so the real `~/.agents`,
+  `~/.claude` and `~/.optmem` are never visible to a scenario.

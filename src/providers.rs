@@ -875,7 +875,7 @@ pub fn xai_grok_cli_version() -> String {
             }
         }
     }
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = crate::config::home_dir() {
         let path = home.join(".grok").join("version.json");
         if let Ok(text) = std::fs::read_to_string(path) {
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {

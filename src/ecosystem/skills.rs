@@ -58,7 +58,7 @@ pub fn install_bundled_skills() -> Result<Vec<String>> {
     }
 
     // Also mirror into ~/.agents/skills for cross-framework discovery.
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = crate::config::home_dir() {
         let agents = home.join(".agents").join("skills");
         let _ = fs::create_dir_all(&agents);
         retire_stale_skills(&agents);

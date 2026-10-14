@@ -197,7 +197,7 @@ pub fn find_on_path(name: &str) -> Option<PathBuf> {
         }
     }
     // Extra common dirs (like gcloud_bin, etc.)
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = crate::config::home_dir() {
         let extra = [
             home.join(".local").join("bin"),
             home.join("bin"),
@@ -252,7 +252,7 @@ pub fn penecho_state_dir() -> PathBuf {
             return p;
         }
     }
-    dirs::home_dir()
+    crate::config::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".penecho")
 }

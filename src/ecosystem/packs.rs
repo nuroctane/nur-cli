@@ -110,7 +110,7 @@ pub fn ensure_akm(node_ok: bool) -> ComponentStatus {
 
 fn run_via_node_akm(args: &[&str]) -> Result<String, String> {
     // npm global: .../node_modules/akm-cli/dist/cli.js
-    let home = dirs::home_dir().ok_or("no home")?;
+    let home = crate::config::home_dir().ok_or("no home")?;
     let candidates = [
         home.join("AppData")
             .join("Roaming")
@@ -248,7 +248,7 @@ fn ensure_graphjin_demo_config() -> Result<Option<std::path::PathBuf>, String> {
     {
         return Ok(None);
     }
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = crate::config::home_dir() {
         if home
             .join(".config")
             .join("graphjin")
@@ -379,7 +379,7 @@ fn upgrade_omp(c: &mut ComponentStatus) {
         );
         // Stale native `%LOCALAPPDATA%\omp\omp.exe` can still win PATH over Bun.
         // Self-update it when below the feature floor.
-        if let Some(home) = dirs::home_dir() {
+        if let Some(home) = crate::config::home_dir() {
             let local = home
                 .join("AppData")
                 .join("Local")
@@ -446,7 +446,7 @@ pub(crate) fn best_omp() -> Option<(String, String)> {
         }
     };
 
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = crate::config::home_dir() {
         for p in [
             home.join(".bun").join("bin").join("omp.exe"),
             home.join(".bun").join("bin").join("omp"),
@@ -684,7 +684,7 @@ fn chrono_now() -> String {
 }
 
 fn mirror_agents_to_nur() {
-    let Some(home) = dirs::home_dir() else { return };
+    let Some(home) = crate::config::home_dir() else { return };
     let agents = home.join(".agents").join("skills");
     let nur = nur_home().join("skills");
     if !agents.is_dir() {
@@ -807,7 +807,7 @@ fn write_catalog_skills() -> Result<(), String> {
     }
 
     // Dual-write to ~/.agents/skills
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = crate::config::home_dir() {
         let agents = home.join(".agents").join("skills");
         let _ = fs::create_dir_all(&agents);
         for (name, body) in catalogs {

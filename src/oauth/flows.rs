@@ -340,7 +340,7 @@ pub mod cursor {
         }
         // No CWD-relative fallback: without a home dir, a repo-planted
         // .cursor/auth.json must not be trusted as a credential store.
-        if let Some(home) = dirs::home_dir() {
+        if let Some(home) = crate::config::home_dir() {
             dirs.push(home.join(".cursor"));
             dirs.push(home.join(".config").join("cursor"));
         }
@@ -629,7 +629,7 @@ pub mod opencode {
         }
         // No CWD-relative fallback: without a home dir, a repo-planted
         // auth.json must not be trusted as a credential store.
-        if let Some(home) = dirs::home_dir() {
+        if let Some(home) = crate::config::home_dir() {
             out.push(
                 home.join(".local")
                     .join("share")
@@ -1067,7 +1067,7 @@ fn which_cli(name: &str) -> Option<PathBuf> {
 
 fn gcloud_bin() -> Option<PathBuf> {
     let mut dirs = Vec::new();
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = crate::config::home_dir() {
         dirs.push(home.join("google-cloud-sdk").join("bin"));
         dirs.push(
             home.join("AppData")
@@ -1133,7 +1133,7 @@ fn gh_bin() -> Option<PathBuf> {
         if let Ok(pf) = std::env::var("ProgramFiles") {
             dirs.push(PathBuf::from(pf).join("GitHub CLI"));
         }
-        if let Some(local) = dirs::home_dir() {
+        if let Some(local) = crate::config::home_dir() {
             dirs.push(
                 local
                     .join("AppData")
@@ -1394,7 +1394,7 @@ pub mod cline {
     /// `~/.local/bin`.
     fn cline_bin() -> Option<PathBuf> {
         let mut extra = Vec::new();
-        if let Some(home) = dirs::home_dir() {
+        if let Some(home) = crate::config::home_dir() {
             extra.push(home.join(".local").join("bin"));
             #[cfg(windows)]
             {
@@ -1418,7 +1418,7 @@ pub mod cline {
         }
         // No CWD-relative fallback: without a home dir, a repo-planted
         // providers.json must not be trusted as a credential store.
-        if let Some(home) = dirs::home_dir() {
+        if let Some(home) = crate::config::home_dir() {
             roots.push(home.join(".cline").join("data"));
         }
         roots
@@ -2306,7 +2306,7 @@ pub mod xai {
         let mut candidates: Vec<PathBuf> =
             vec![crate::t3code::driver_config_dir(crate::t3code::DriverId::Grok).join("auth.json")];
         // No CWD-relative fallback when home is unavailable.
-        if let Some(home) = dirs::home_dir() {
+        if let Some(home) = crate::config::home_dir() {
             candidates.push(home.join(".grok").join("auth.json"));
         }
         for path in candidates {
@@ -2638,7 +2638,7 @@ pub mod nous {
     /// rotating `refresh_token` under that key; both CLIs share the same
     /// Portal client, so the credential is directly usable here.
     pub fn import_hermes_cli() -> Result<Option<OAuthTokens>> {
-        let Some(home) = dirs::home_dir() else {
+        let Some(home) = crate::config::home_dir() else {
             return Ok(None);
         };
         let path = home.join(".hermes").join("auth.json");
@@ -2915,7 +2915,7 @@ pub mod commandcode {
     }
 
     fn auth_json_paths() -> Vec<PathBuf> {
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let home = crate::config::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let mut out = Vec::new();
         if let Ok(dir) = std::env::var("COMMANDCODE_HOME") {
             out.push(PathBuf::from(dir).join("auth.json"));
@@ -3708,7 +3708,7 @@ pub mod kimi {
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
-            .or_else(|| dirs::home_dir().map(|home| home.join(".kimi")))
+            .or_else(|| crate::config::home_dir().map(|home| home.join(".kimi")))
     }
 
     fn device_id() -> Result<String> {
@@ -4318,7 +4318,7 @@ pub mod claude {
     }
 
     pub fn import_claude_cli() -> Result<Option<OAuthTokens>> {
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let home = crate::config::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let config_dir = crate::t3code::driver_config_dir(crate::t3code::DriverId::Claude);
         let candidates = [
             config_dir.join(".credentials.json"),
@@ -4898,7 +4898,7 @@ foreach ($t in $targets) {
     }
 
     fn import_from_gemini_cli_file() -> Option<OAuthTokens> {
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let home = crate::config::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let candidates = [
             home.join(".gemini").join("oauth_creds.json"),
             home.join(".config").join("gemini").join("oauth_creds.json"),
@@ -5857,7 +5857,7 @@ pub mod huggingface {
 
     /// Import token written by `huggingface-cli login` / hub cache.
     pub fn import_hf_token() -> Option<OAuthTokens> {
-        let home = dirs::home_dir()?;
+        let home = crate::config::home_dir()?;
         let candidates = [
             home.join(".cache").join("huggingface").join("token"),
             home.join(".huggingface").join("token"),

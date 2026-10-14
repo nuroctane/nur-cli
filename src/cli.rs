@@ -17,7 +17,17 @@ What you get:\n\
   · Hardened by default — sandbox, denylist, SSRF blocks, atomic ~/.nur IO\n\n\
 Providers: OpenAI, Anthropic, xAI, Gemini, Meta Model API, OpenRouter, local Ollama, …\n\
 Secrets stay in ~/.nur/ only.\n\
-Repo: github.com/nuroctane/nur-cli  ·  Invoke as: nur"
+Repo: github.com/nuroctane/nur-cli  ·  Invoke as: nur",
+    after_long_help = "Environment:\n\
+  NUR_HOME        nur's state directory (default ~/.nur). Its parent also becomes\n\
+                  the home nur reads ~/.agents, ~/.claude, ~/.codex ... from, so\n\
+                  NUR_HOME=<dir>/.nur gives a fully contained install. HOME and\n\
+                  USERPROFILE are honoured on every OS; the OS profile is the fallback.\n\
+  NUR_MODEL, NUR_PROVIDER   defaults for --model / provider (ignored in child sessions)\n\
+\n\
+Exit codes (nur run and other headless commands):\n\
+  0 ok · 1 unexpected error · 2 configuration · 3 authentication · 4 provider\n\
+  5 budget or turn limit · 6 the model declared BLOCKED · 130 cancelled"
 )]
 pub struct Cli {
     /// Initial prompt for interactive session

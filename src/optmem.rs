@@ -18,7 +18,7 @@ static WAKE_CACHE: Mutex<Option<(String, Instant, String)>> = Mutex::new(None);
 static WAKE_FETCH: Mutex<()> = Mutex::new(());
 
 pub fn optmem_home() -> PathBuf {
-    dirs::home_dir()
+    crate::config::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".optmem")
 }

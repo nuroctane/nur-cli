@@ -1,0 +1,6 @@
+# `dirs::home_dir()` ignores HOME/USERPROFILE on Windows, so contained installs
+# leaked into the real profile. `crate::config::home_dir()` is the one allowed
+# lookup; see its doc comment for the resolution order.
+disallowed-methods = [
+    { path = "dirs::home_dir", reason = "use crate::config::home_dir(), which honours NUR_HOME, HOME and USERPROFILE" },
+]

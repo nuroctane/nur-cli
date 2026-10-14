@@ -50,7 +50,7 @@ fn install_dir_from(env_override: Option<&str>) -> PathBuf {
             return PathBuf::from(t);
         }
     }
-    dirs::home_dir()
+    crate::config::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".local")
         .join("bin")
@@ -208,7 +208,7 @@ pub fn run_full_install() -> Result<()> {
     ensure_prereqs_best_effort();
     // Re-export common install locations for child processes.
     prepend_path(&dest_dir);
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = crate::config::home_dir() {
         prepend_path(&home.join(".bun").join("bin"));
         prepend_path(&home.join(".cargo").join("bin"));
     }
@@ -335,7 +335,7 @@ pub fn run_update() -> Result<()> {
     }
 
     // 2) Local source tree rebuild.
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let home = crate::config::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let mut repo = home.join("laboratory").join("nur-cli");
     if !repo.join("Cargo.toml").is_file() {
         let alt = home.join("Laboratory").join("nur-cli");
@@ -1343,7 +1343,7 @@ fn ensure_user_path(dir: &Path) -> std::result::Result<bool, String> {
     }
     #[cfg(not(windows))]
     {
-        let home = dirs::home_dir().ok_or_else(|| "no home dir".to_string())?;
+        let home = crate::config::home_dir().ok_or_else(|| "no home dir".to_string())?;
         let line = posix_user_path_export(dir);
         for name in [
             ".zprofile",

@@ -89,7 +89,7 @@ pub fn find_rg() -> Option<PathBuf> {
 
 fn rg_candidates() -> Vec<PathBuf> {
     let mut v = Vec::new();
-    let home = dirs::home_dir();
+    let home = crate::config::home_dir();
     #[cfg(windows)]
     {
         if let Some(h) = &home {

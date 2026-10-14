@@ -18,7 +18,7 @@ pub fn find_egaki() -> Option<String> {
 }
 
 pub fn credentials_path() -> PathBuf {
-    dirs::home_dir()
+    crate::config::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".config")
         .join("egaki")

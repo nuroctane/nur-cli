@@ -272,7 +272,7 @@ fn resolve_path(token: &str, base: &Path) -> std::path::PathBuf {
         .strip_prefix("~/")
         .or_else(|| token.strip_prefix("~\\"))
     {
-        if let Some(home) = dirs::home_dir() {
+        if let Some(home) = crate::config::home_dir() {
             return home.join(rest);
         }
     }

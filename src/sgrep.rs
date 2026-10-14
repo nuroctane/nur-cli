@@ -51,7 +51,7 @@ fn model_cache_dir() -> Option<PathBuf> {
     if let Ok(home) = std::env::var("HF_HOME") {
         return Some(PathBuf::from(home).join("hub"));
     }
-    dirs::home_dir().map(|h| h.join(".cache").join("huggingface").join("hub"))
+    crate::config::home_dir().map(|h| h.join(".cache").join("huggingface").join("hub"))
 }
 
 /// True once the code model is on disk, so a first query will not download.

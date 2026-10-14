@@ -163,7 +163,7 @@ fn reader_script() -> Option<PathBuf> {
         .join("skills")
         .join("resume-session")
         .join("session_reader.py")];
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = crate::config::home_dir() {
         candidates.push(
             home.join(".agents")
                 .join("skills")

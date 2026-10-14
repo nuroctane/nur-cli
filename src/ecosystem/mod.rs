@@ -1121,7 +1121,7 @@ fn ensure_plur(node_ok: bool) -> ComponentStatus {
             c.available = true;
             c.path = Some(bin.clone());
             c.version = cmd_version(&bin, &["--version"]);
-            let home = dirs::home_dir()
+            let home = crate::config::home_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join(".plur");
             c.detail = format!("store {}", home.display());
@@ -1147,7 +1147,7 @@ fn ensure_plur(node_ok: bool) -> ComponentStatus {
         c.version = cmd_version(&bin, &["--version"]);
         // Touch store (status creates ~/.plur if missing).
         let _ = run_quiet(&bin, &["status", "--json"], None, 60_000);
-        let home = dirs::home_dir()
+        let home = crate::config::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join(".plur");
         c.detail = format!("store {}", home.display());
@@ -1267,7 +1267,7 @@ fn ensure_ruflo(node_ok: bool) -> ComponentStatus {
 /// without going through `cmd /C`. Returning `…\npm.cmd` (or `where`’s path)
 /// makes spawns reliable.
 pub fn find_bin(name: &str) -> Option<String> {
-    let home = dirs::home_dir()?;
+    let home = crate::config::home_dir()?;
     let mut candidates: Vec<PathBuf> = vec![
         home.join(".local").join("bin").join(format!("{name}.exe")),
         home.join(".local").join("bin").join(format!("{name}.cmd")),
@@ -1353,7 +1353,7 @@ fn uv_tool_bin_dir() -> Option<PathBuf> {
 }
 
 fn find_file_only(name: &str) -> Option<String> {
-    let home = dirs::home_dir()?;
+    let home = crate::config::home_dir()?;
     for c in [
         home.join(".local").join("bin").join(format!("{name}.exe")),
         home.join(".cargo").join("bin").join(format!("{name}.exe")),
@@ -1522,7 +1522,7 @@ fn run_capture_inner(
         cmd.env("CLAUDE_FLOW_MEMORY_PATH", ruflo_home());
     }
     // Ensure npm global bin is on PATH for child processes.
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = crate::config::home_dir() {
         let npm_bin = home.join("AppData").join("Roaming").join("npm");
         if npm_bin.is_dir() {
             let path = std::env::var_os("PATH").unwrap_or_default();

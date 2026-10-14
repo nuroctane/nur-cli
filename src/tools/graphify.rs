@@ -393,7 +393,7 @@ fn find_graphify_bin() -> Option<String> {
         return Some("graphify".into());
     }
     // 2. Common uv / pipx / user bin locations
-    let home = dirs::home_dir()?;
+    let home = crate::config::home_dir()?;
     let candidates = [
         home.join(".local").join("bin").join("graphify.exe"),
         home.join(".local").join("bin").join("graphify"),

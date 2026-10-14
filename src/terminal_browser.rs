@@ -59,7 +59,7 @@ fn find_native_bin() -> Option<String> {
             }
         }
     }
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = crate::config::home_dir() {
         let candidates = [
             home.join(".local").join("bin").join(BIN),
             home.join(".local").join("bin").join("terminal-browser.exe"),

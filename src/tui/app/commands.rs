@@ -2124,9 +2124,9 @@ impl App {
         }
         // Expand a leading ~ / ~/… to the home directory.
         let expanded: PathBuf = if arg == "~" {
-            dirs::home_dir().unwrap_or_else(|| PathBuf::from(arg))
+            crate::config::home_dir().unwrap_or_else(|| PathBuf::from(arg))
         } else if let Some(rest) = arg.strip_prefix("~/").or_else(|| arg.strip_prefix("~\\")) {
-            dirs::home_dir()
+            crate::config::home_dir()
                 .map(|h| h.join(rest))
                 .unwrap_or_else(|| PathBuf::from(arg))
         } else {

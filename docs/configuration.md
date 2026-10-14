@@ -364,7 +364,7 @@ Non-zero **pre_tool** exit blocks the tool. Missing file = no hooks. Check statu
 
 | Variable | Purpose |
 |----------|---------|
-| `NUR_HOME` | Override data home (default `~/.nur`) |
+| `NUR_HOME` | Override data home (default `~/.nur`). Its parent directory also becomes the `~` nur reads vendor state from (`~/.agents`, `~/.claude`, `~/.codex`, `~/.optmem`, ...), so `NUR_HOME=<dir>/.nur` is a fully contained install. Without it, `HOME` then `USERPROFILE` are honoured on every OS (Windows included), then the OS profile |
 | `NUR_CWD` | Default working directory |
 
 ### Status and usage

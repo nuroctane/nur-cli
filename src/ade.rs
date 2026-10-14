@@ -339,7 +339,7 @@ fn notify_orca_hook_blocking(payload_json: &str) {
     let url = format!("http://127.0.0.1:{port}/hook/meta");
 
     // Prefer packaged hook script if present
-    let hook = dirs::home_dir()
+    let hook = crate::config::home_dir()
         .map(|h| h.join(".orca").join("agent-hooks").join("nur-hook.cmd"))
         .filter(|p| p.exists());
 
@@ -401,7 +401,7 @@ fn notify_orca_hook_blocking(payload_json: &str) {
 }
 
 pub fn install_orca_hook() -> crate::error::Result<()> {
-    let dir = dirs::home_dir()
+    let dir = crate::config::home_dir()
         .ok_or_else(|| crate::error::NurError::Other("no home dir".into()))?
         .join(".orca")
         .join("agent-hooks");

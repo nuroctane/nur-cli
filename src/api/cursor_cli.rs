@@ -976,7 +976,7 @@ impl TranscriptSnapshot {
 }
 
 fn cursor_transcript_paths() -> Vec<PathBuf> {
-    let Some(home) = dirs::home_dir() else {
+    let Some(home) = crate::config::home_dir() else {
         return Vec::new();
     };
     let root = home.join(".cursor").join("projects");

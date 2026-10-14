@@ -147,10 +147,9 @@ def isolated_env(home, port, warm_skills=True):
     env.update(
         {
             "NUR_HOME": str(home / ".nur"),
-            # Unix dirs::home_dir() reads HOME. On Windows it asks the OS for the
-            # profile folder and ignores both, so there the real ~ stays visible
-            # (vendor CLI sessions, ~/.agents/skills, ~/.optmem): scenarios must
-            # not depend on what is or is not in it.
+            # nur's home_dir() takes NUR_HOME's parent first, then HOME, then
+            # USERPROFILE, on every OS: the real ~ (vendor CLI sessions,
+            # ~/.agents/skills, ~/.optmem) is hidden from every scenario.
             "HOME": str(home),
             "USERPROFILE": str(home),
             "NUR_SKIP_BOOTSTRAP": "1",

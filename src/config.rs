@@ -1,7 +1,7 @@
 use crate::error::{NurError, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub const DEFAULT_BASE_URL: &str = "https://api.meta.ai/v1";
 /// Default model id when provider is Meta Model API (wire format). Override via
@@ -1132,15 +1132,53 @@ fn default_compact_tool_body_max() -> u64 {
 /// NurCLI data home: `~/.nur` (secrets, sessions, status, skills, memory).
 /// Override with `NUR_HOME`.
 pub fn nur_home() -> PathBuf {
-    if let Ok(h) = std::env::var("NUR_HOME") {
-        let h = h.trim();
-        if !h.is_empty() {
-            return PathBuf::from(h);
-        }
+    if let Some(h) = env_path("NUR_HOME") {
+        return h;
     }
-    dirs::home_dir()
+    home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".nur")
+}
+
+fn env_path(name: &str) -> Option<PathBuf> {
+    std::env::var(name)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+}
+
+/// The user's home directory as nur sees it. This is the only place that may
+/// ask the OS: `dirs::home_dir()` ignores `HOME` and `USERPROFILE` on Windows,
+/// so a contained install (CI, containers, trial accounts) that pointed those
+/// at a scratch directory still had its real `~/.agents`, `~/.codex` and
+/// `~/.nur` read and written. Resolution: the directory `NUR_HOME` lives in,
+/// then `HOME`, then `USERPROFILE`, then the OS lookup. Relocating nur with
+/// `NUR_HOME=<dir>/.nur` therefore relocates everything it reads from `~`.
+pub fn home_dir() -> Option<PathBuf> {
+    #[allow(clippy::disallowed_methods)]
+    let os = || dirs::home_dir();
+    resolve_home(
+        env_path("NUR_HOME").as_deref(),
+        env_path("HOME").as_deref(),
+        env_path("USERPROFILE").as_deref(),
+        os,
+    )
+}
+
+fn resolve_home(
+    nur_home: Option<&Path>,
+    home: Option<&Path>,
+    userprofile: Option<&Path>,
+    os: impl FnOnce() -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    if let Some(parent) = nur_home.and_then(Path::parent) {
+        // `NUR_HOME=.nur` (relative, no parent) falls through.
+        if !parent.as_os_str().is_empty() {
+            return Some(parent.to_path_buf());
+        }
+    }
+    home.or(userprofile).map(Path::to_path_buf).or_else(os)
 }
 
 pub fn config_path() -> PathBuf {
@@ -1441,6 +1479,40 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Ways the lookup can go wrong: the OS answer wins over an explicit
+    /// `HOME`; `USERPROFILE` is ignored; `NUR_HOME` relocates nur's state but
+    /// not what it reads from `~`; a relative `NUR_HOME` yields an empty home.
+    #[test]
+    fn home_resolution_order_is_nur_home_parent_then_home_then_userprofile_then_os() {
+        let os = || Some(PathBuf::from("/os-profile"));
+        let p = |s: &str| PathBuf::from(s);
+        type Case<'a> = (Option<&'a str>, Option<&'a str>, Option<&'a str>, &'a str);
+        let cases: &[Case] = &[
+            (
+                Some("/scratch/.nur"),
+                Some("/home/a"),
+                Some("/users/b"),
+                "/scratch",
+            ),
+            (Some("/scratch/state"), None, None, "/scratch"),
+            (None, Some("/home/a"), Some("/users/b"), "/home/a"),
+            (None, None, Some("/users/b"), "/users/b"),
+            (None, None, None, "/os-profile"),
+            // relative NUR_HOME has no usable parent: fall through
+            (Some(".nur"), Some("/home/a"), None, "/home/a"),
+        ];
+        for (nur_home, home, userprofile, want) in cases {
+            let got = resolve_home(
+                nur_home.map(Path::new),
+                home.map(Path::new),
+                userprofile.map(Path::new),
+                os,
+            );
+            assert_eq!(got, Some(p(want)), "{nur_home:?} {home:?} {userprofile:?}");
+        }
+        assert_eq!(resolve_home(None, None, None, || None), None);
+    }
 
     #[test]
     fn atomic_replacement_keeps_concurrent_readers_on_complete_snapshots() {

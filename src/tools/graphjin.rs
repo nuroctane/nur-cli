@@ -278,7 +278,7 @@ fn find_bin() -> Option<String> {
 
 /// Where `graphjin cli setup` records the server URL + token.
 fn client_config() -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
+    let home = crate::config::home_dir()?;
     Some(home.join(".config").join("graphjin").join("client.json"))
 }
 

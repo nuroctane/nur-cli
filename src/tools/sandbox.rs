@@ -275,7 +275,7 @@ pub fn resolve_safe_workspace(
     }
 
     // 4) Common project folders under home
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = crate::config::home_dir() {
         for name in [
             "laboratory",
             "Laboratory",

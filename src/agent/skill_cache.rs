@@ -86,7 +86,7 @@ fn global_roots() -> Vec<PathBuf> {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("skills"),
     ];
     roots.extend(crate::plugins::enabled_skill_roots());
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = crate::config::home_dir() {
         roots.push(home.join(".agents/skills"));
     }
     roots

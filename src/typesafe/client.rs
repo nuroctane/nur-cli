@@ -268,7 +268,7 @@ pub fn key_files() -> Vec<std::path::PathBuf> {
     vec![
         home.join("typesafe.key"),
         home.join("keys").join("typesafe.key"),
-        dirs::home_dir().unwrap_or_default().join(".typesafe_key"),
+        crate::config::home_dir().unwrap_or_default().join(".typesafe_key"),
         dirs::config_dir()
             .unwrap_or_default()
             .join("typesafe")

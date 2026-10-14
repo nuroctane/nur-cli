@@ -66,7 +66,7 @@ impl DriverId {
 /// - Cursor/OpenCode: respect `CURSOR_AGENT_HOME` / `OPENCODE_HOME` if set (future-proof).
 /// - Grok: no special dir yet, but we keep hook for `XAI_CONFIG_DIR`.
 pub fn driver_config_dir(driver: DriverId) -> PathBuf {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let home = crate::config::home_dir().unwrap_or_else(|| PathBuf::from("."));
     match driver {
         DriverId::Claude => {
             if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
@@ -310,7 +310,7 @@ fn probes_have_credentials(driver: DriverId, dir: &Path) -> bool {
         }
         DriverId::OpenCode => {
             // Real store: ~/.local/share/opencode/auth.json (map of providers).
-            let data_auth = dirs::home_dir().map(|h| {
+            let data_auth = crate::config::home_dir().map(|h| {
                 h.join(".local")
                     .join("share")
                     .join("opencode")
@@ -328,14 +328,14 @@ fn probes_have_credentials(driver: DriverId, dir: &Path) -> bool {
         }
         DriverId::Grok => {
             dir.join("auth.json").exists()
-                || dirs::home_dir()
+                || crate::config::home_dir()
                     .is_some_and(|home| home.join(".grok").join("auth.json").exists())
                 || std::env::var_os("XAI_API_KEY").is_some_and(|v| !v.is_empty())
         }
         DriverId::Antigravity => {
             dir.join("settings.json").exists()
                 || dir.join("cache").join("onboarding.json").exists()
-                || dirs::home_dir().is_some_and(|home| {
+                || crate::config::home_dir().is_some_and(|home| {
                     home.join(".gemini").join("oauth_creds.json").exists()
                         || home
                             .join(".config")
@@ -347,7 +347,7 @@ fn probes_have_credentials(driver: DriverId, dir: &Path) -> bool {
         DriverId::Cline => {
             // Real store: <data>/settings/providers.json (map of providers).
             dir.join("settings").join("providers.json").exists()
-                || dirs::home_dir().is_some_and(|home| {
+                || crate::config::home_dir().is_some_and(|home| {
                     home.join(".cline")
                         .join("data")
                         .join("settings")
