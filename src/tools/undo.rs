@@ -9,7 +9,14 @@
 //! Snapshots are raw bytes (base64 in JSON) so binary / non-UTF-8 files undo
 //! correctly. If a file existed but could not be read, undo refuses rather
 //! than deleting it.
+//!
+//! After the tool succeeds the loop seals the checkpoint with a digest of the
+//! bytes the tool left behind. `/undo` restores only while the file still has
+//! those bytes: once a formatter, a shell command or the user changed it, the
+//! snapshot no longer describes "one step back" and undo refuses rather than
+//! silently destroying the later work.
 
+use super::file_ledger;
 use crate::config::{atomic_write, nur_home};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -28,6 +35,10 @@ struct Checkpoint {
     /// Legacy UTF-8 text snapshots (pre-bytes format).
     #[serde(default)]
     prior: Option<String>,
+    /// Digest of the file as the tool left it (see [`seal`]). `None` on
+    /// checkpoints recorded before sealing existed, which restore unguarded.
+    #[serde(default)]
+    after_digest: Option<u64>,
 }
 
 fn session_dir(session_id: &str) -> PathBuf {
@@ -97,6 +108,34 @@ pub fn drop_last(session_id: &str) -> bool {
     drop_last_in(&session_dir(session_id))
 }
 
+/// Record what the tool left at `abs_path` on the newest checkpoint so undo
+/// can tell later whether the file still holds that edit. Best-effort.
+pub fn seal(session_id: &str, abs_path: &Path) {
+    seal_in(&session_dir(session_id), abs_path);
+}
+
+fn seal_in(dir: &Path, abs_path: &Path) {
+    let Some(top) = read_indices(dir).into_iter().max() else {
+        return;
+    };
+    let file = dir.join(format!("{top:06}.json"));
+    let Ok(text) = std::fs::read_to_string(&file) else {
+        return;
+    };
+    let Ok(mut cp) = serde_json::from_str::<Checkpoint>(&text) else {
+        return;
+    };
+    if cp.path != abs_path.to_string_lossy() {
+        return;
+    }
+    cp.after_digest = std::fs::read(abs_path)
+        .ok()
+        .map(|b| file_ledger::digest(&b));
+    if let Ok(json) = serde_json::to_string(&cp) {
+        let _ = atomic_write(&file, json.as_bytes());
+    }
+}
+
 fn drop_last_in(dir: &Path) -> bool {
     let Some(top) = read_indices(dir).into_iter().max() else {
         return false;
@@ -125,6 +164,7 @@ fn record_in(dir: &Path, abs_path: &Path) {
         existed,
         prior_b64,
         prior,
+        after_digest: None,
     };
     let n = read_indices(dir)
         .into_iter()
@@ -162,6 +202,16 @@ fn undo_last_in(dir: &Path) -> std::result::Result<String, String> {
     let existed = cp.existed || cp.prior.is_some() || cp.prior_b64.is_some();
     let bytes = prior_bytes(&cp)?;
 
+    if let Some(sealed) = cp.after_digest {
+        let now = std::fs::read(&path).ok().map(|b| file_ledger::digest(&b));
+        if now != Some(sealed) {
+            return Err(format!(
+                "cannot undo {label}: the file changed after that edit (formatter, command or \
+                 manual edit). Undo would discard that later work; revert it by hand or re-edit."
+            ));
+        }
+    }
+
     let msg = match (existed, bytes) {
         (false, _) => {
             let _ = std::fs::remove_file(&path);
@@ -172,6 +222,9 @@ fn undo_last_in(dir: &Path) -> std::result::Result<String, String> {
                 let _ = std::fs::create_dir_all(parent);
             }
             atomic_write(&path, &content).map_err(|e| format!("undo restore failed: {e}"))?;
+            // The model's next edit should chain from the restored bytes, not
+            // be refused as "changed since you read it".
+            file_ledger::note_written(&path, &content);
             format!("reverted {label}")
         }
         (true, None) => {
@@ -260,6 +313,7 @@ mod tests {
             existed: true,
             prior_b64: None,
             prior: None,
+            after_digest: None,
         };
         let json = serde_json::to_string(&cp).unwrap();
         std::fs::write(cp_dir.join("000001.json"), json).unwrap();
@@ -291,6 +345,48 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// The edit was followed by another change (formatter, user). Undo must
+    /// not throw that away; a legacy unsealed checkpoint still restores.
+    #[test]
+    fn sealed_undo_refuses_after_a_later_change() {
+        let base = temp_dir();
+        let cp_dir = base.join("cp");
+        let file = base.join("f.txt");
+        std::fs::write(&file, "v0").unwrap();
+        record_in(&cp_dir, &file);
+        std::fs::write(&file, "v1").unwrap();
+        seal_in(&cp_dir, &file);
+
+        std::fs::write(&file, "v1-formatted").unwrap();
+        let err = undo_last_in(&cp_dir).unwrap_err();
+        assert!(err.contains("changed after that edit"), "{err}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "v1-formatted");
+        assert_eq!(read_indices(&cp_dir).len(), 1, "checkpoint is kept");
+
+        // put the edit back: undo works again
+        std::fs::write(&file, "v1").unwrap();
+        undo_last_in(&cp_dir).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "v0");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Sealing a checkpoint for a different path must not touch the top one.
+    #[test]
+    fn seal_only_applies_to_its_own_checkpoint() {
+        let base = temp_dir();
+        let cp_dir = base.join("cp");
+        let a = base.join("a.txt");
+        std::fs::write(&a, "a0").unwrap();
+        record_in(&cp_dir, &a);
+        std::fs::write(&a, "a1").unwrap();
+        seal_in(&cp_dir, &base.join("other.txt"));
+        std::fs::write(&a, "a2").unwrap();
+        // unsealed: restores regardless
+        undo_last_in(&cp_dir).unwrap();
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "a0");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn undo_empty_errors() {
         let base = temp_dir();
@@ -310,6 +406,7 @@ mod tests {
             existed: false, // legacy often omitted; prior Some implies content
             prior_b64: None,
             prior: Some("original".into()),
+            after_digest: None,
         };
         std::fs::write(
             cp_dir.join("000001.json"),

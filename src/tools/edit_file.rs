@@ -4,25 +4,30 @@ use serde_json::Value;
 use std::fs;
 use std::path::Path;
 
-/// Write edited contents, honoring Shepherd-style proposal mode when enabled.
+/// Write edited contents through the shared commit path (proposal staging,
+/// atomic write, read ledger). Empty string means "written".
 fn commit_edit(ctx: &ToolContext, path_arg: &str, full: &Path, updated: String) -> Result<String> {
-    if crate::config::load_config()
-        .map(|c| c.proposal_mode)
-        .unwrap_or(false)
-    {
-        let sid = std::env::var("NUR_SESSION_ID").unwrap_or_else(|_| "default".into());
-        let entry =
-            crate::agent::proposal::stage_write(&sid, &ctx.cwd, path_arg, &updated, "edit_file")
-                .map_err(NurError::Tool)?;
-        return Ok(format!(
-            "proposal staged `{}` ({} bytes) — not written to workspace. \
-             Use tool `proposal` action=list|apply|discard.",
-            entry.rel_path, entry.bytes
-        ));
+    Ok(super::commit_file_write(ctx, path_arg, full, &updated, "edit_file")?.unwrap_or_default())
+}
+
+/// The trimmed fallback matched `old.trim()`, so the whitespace that was
+/// trimmed off `old` is still in the file around the match. If `new` carries
+/// that same leading/trailing whitespace (the model copied both sides the same
+/// way), drop it so it is not inserted twice; anything else in `new`'s margins
+/// - an extra blank line, a different indent - was asked for and stays.
+fn strip_matching_affixes<'a>(old: &str, new: &'a str) -> &'a str {
+    let prefix = &old[..old.len() - old.trim_start().len()];
+    let suffix = &old[old.trim_end().len()..];
+    let new = if !prefix.is_empty() {
+        new.strip_prefix(prefix).unwrap_or(new)
+    } else {
+        new
+    };
+    if !suffix.is_empty() {
+        new.strip_suffix(suffix).unwrap_or(new)
+    } else {
+        new
     }
-    fs::write(full, updated)
-        .map_err(|e| NurError::Tool(format!("write {}: {e}", full.display())))?;
-    Ok(String::new())
 }
 
 pub struct EditFile;
@@ -69,6 +74,7 @@ impl Tool for EditFile {
             .unwrap_or(false);
 
         let full = resolve_path(&ctx.cwd, &path)?;
+        super::guard_unchanged_since_read(&full)?;
         let file_content = fs::read_to_string(&full)
             .map_err(|e| NurError::Tool(format!("read {}: {e}", full.display())))?;
 
@@ -132,13 +138,11 @@ impl Tool for EditFile {
         // leading/trailing newline or spaces. If trimmed version occurs uniquely,
         // replace that exact slice.
         let old_trim = old.trim();
-        // The surrounding whitespace we trimmed off `old` is still present in
-        // the file around the match, so the replacement must be trimmed the
-        // same way. Substituting the untrimmed `new` re-inserted that
-        // whitespace a second time — a 4-space indent silently became 8, which
-        // is a semantic change in Python/YAML, and the tool still reported
-        // plain success.
-        let new_trim = new.trim();
+        // Substituting the untrimmed `new` re-inserted the margin whitespace a
+        // second time (a 4-space indent silently became 8); trimming `new`
+        // outright dropped a leading or trailing newline the model asked for.
+        // Strip exactly the margins `old` had, nothing more.
+        let new_trim = strip_matching_affixes(&old, &new);
         if !old_trim.is_empty() {
             let count_trim = file_content.matches(old_trim).count();
             if count_trim == 1 && !replace_all {
@@ -148,9 +152,9 @@ impl Tool for EditFile {
                     return Ok(staged);
                 }
                 return Ok(format!(
-                    "edited {} (1 replacement — FUZZY: matched after trimming surrounding \
-                     whitespace from old_string, and trimmed new_string to match. Verify the \
-                     indentation is what you intended, then copy exact whitespace next time)",
+                    "edited {} (1 replacement - FUZZY: matched after trimming surrounding \
+                     whitespace from old_string; the same margins were dropped from new_string. \
+                     Verify the indentation is what you intended, then copy exact whitespace next time)",
                     full.display()
                 ));
             }
@@ -238,7 +242,7 @@ fn ceil_char_boundary(s: &str, i: usize) -> usize {
 }
 
 /// Which line ending dominates `s` — used only for the text we *insert*.
-fn dominant_eol(s: &str) -> &'static str {
+pub(super) fn dominant_eol(s: &str) -> &'static str {
     let crlf = s.matches("\r\n").count();
     let lf = s.matches('\n').count() - crlf;
     if crlf > lf {
@@ -459,6 +463,23 @@ mod tests {
         // byte 3 is inside the 2-byte '·' (bytes 2..4)
         assert_eq!(floor_char_boundary(s, 3), 2);
         assert_eq!(ceil_char_boundary(s, 3), 4);
+    }
+
+    /// The margins trimmed off `old` are still in the file; only those same
+    /// margins come off `new`. A blank line the model added on purpose stays.
+    #[test]
+    fn fuzzy_fallback_drops_only_the_margins_old_had() {
+        // symmetric copy: both margins stripped, indent not doubled
+        assert_eq!(strip_matching_affixes("\n    foo\n", "\n    bar\n"), "bar");
+        // an intended extra blank line survives
+        assert_eq!(
+            strip_matching_affixes("\n    foo\n", "\n    bar\n\n"),
+            "bar\n"
+        );
+        // different margins on new: left alone
+        assert_eq!(strip_matching_affixes("\n    foo\n", "  bar"), "  bar");
+        // old had no margins: new is untouched even if it has some
+        assert_eq!(strip_matching_affixes("foo", "\nbar\n"), "\nbar\n");
     }
 
     #[test]

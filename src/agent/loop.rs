@@ -2013,7 +2013,7 @@ impl AgentRunner {
                 // `/undo` can restore it. Best-effort; never blocks the tool.
                 // If the tool fails, drop the checkpoint so `/undo` does not
                 // revert an edit that never landed.
-                let mut recorded_undo = false;
+                let mut recorded_undo: Option<std::path::PathBuf> = None;
                 if matches!(
                     call.name.as_str(),
                     "write_file" | "edit_file" | "multi_edit" | "apply_patch"
@@ -2022,7 +2022,7 @@ impl AgentRunner {
                         if let Some(p) = v.get("path").and_then(|p| p.as_str()) {
                             if let Ok(abs) = crate::tools::resolve_path(&self.cwd, p) {
                                 crate::tools::undo::record(&session.id, &abs);
-                                recorded_undo = true;
+                                recorded_undo = Some(abs);
                             }
                         }
                     }
@@ -2054,8 +2054,12 @@ impl AgentRunner {
                         Err(e) => (format!("error: tool panicked: {e}"), false),
                     },
                 };
-                if recorded_undo && !ok {
-                    let _ = crate::tools::undo::drop_last(&session.id);
+                if let Some(abs) = recorded_undo {
+                    if ok {
+                        crate::tools::undo::seal(&session.id, &abs);
+                    } else {
+                        let _ = crate::tools::undo::drop_last(&session.id);
+                    }
                 }
                 (body, ok)
             };

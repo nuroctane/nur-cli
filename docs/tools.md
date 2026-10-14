@@ -73,21 +73,23 @@ Find files by name or glob. Uses `rg --files` when available, with the same excl
 
 ## Edit tools
 
+All four share one commit path: the new contents are written to a temp file and renamed into place (never a half-written file), the file's line endings are kept (a CRLF file stays CRLF), and the bytes written are remembered so the next edit chains without a re-read. If a file the model has read was changed since (formatter, shell command, user, subagent), the edit is refused with `changed since you last read it` until the model reads it again; files the session never read are not checked, so creating files and editing on instruction keep working. `/undo` restores the pre-edit snapshot only while the file still holds that edit; once something else changed it, undo refuses rather than discard the later work.
+
 ### `write_file`
 
 Write content to a file. Creates the file if it doesn't exist, overwrites if it does.
 
 ### `edit_file`
 
-Apply targeted string replacements to a file. Requires exact string matching.
+Apply targeted string replacements to a file. Requires exact string matching, with two fallbacks: a line-ending-insensitive match, then a match after trimming the whitespace margins of `old_string` (the same margins are dropped from `new_string`, nothing more). Both fallbacks say so in the result.
 
 ### `multi_edit`
 
-Apply multiple edits to a file in a single operation.
+Apply multiple edits to a file in a single operation. Every edit is validated before anything is written: an empty or unmatched `old_string` fails the whole call and leaves the file untouched.
 
 ### `apply_patch`
 
-Apply a unified diff patch to a file.
+Apply a unified diff patch to a file. `@@ -N,0 +M,k @@` inserts after line N; hunk positions follow the original numbering, with earlier hunks' growth accounted for; context that does not match is an error, never a guess, and ambiguous context (several identical sites) is refused.
 
 ---
 

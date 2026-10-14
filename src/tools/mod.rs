@@ -3,6 +3,7 @@ pub mod anydoc_tool;
 mod apply_patch;
 mod bash;
 pub mod browser;
+pub mod file_ledger;
 pub mod egaki_tool;
 pub mod enclave_tool;
 pub mod terminal_browser;
@@ -523,6 +524,45 @@ pub(crate) fn arg_u64(args: &Value, key: &str) -> Option<u64> {
                     .map(|i| i as u64)
             })
     })
+}
+
+/// Shared commit path of every file-writing tool: refuse when the file moved
+/// since the model last read it, stage instead of writing in proposal mode,
+/// otherwise write atomically (temp file + rename, so a crash or a concurrent
+/// reader never sees a half-written file) and record the new bytes so the
+/// next edit chains without a re-read. Returns `Some(message)` when the write
+/// was staged rather than performed.
+pub(crate) fn commit_file_write(
+    ctx: &ToolContext,
+    path_arg: &str,
+    full: &Path,
+    updated: &str,
+    tool: &str,
+) -> Result<Option<String>> {
+    if crate::config::load_config()
+        .map(|c| c.proposal_mode)
+        .unwrap_or(false)
+    {
+        let sid = std::env::var("NUR_SESSION_ID").unwrap_or_else(|_| "default".into());
+        let entry =
+            crate::agent::proposal::stage_write(&sid, &ctx.cwd, path_arg, updated, tool)
+                .map_err(NurError::Tool)?;
+        return Ok(Some(format!(
+            "proposal staged `{}` ({} bytes) - not written to workspace. \
+             Use tool `proposal` action=list|apply|discard.",
+            entry.rel_path, entry.bytes
+        )));
+    }
+    crate::config::atomic_write(full, updated.as_bytes())
+        .map_err(|e| NurError::Tool(format!("write {}: {e}", full.display())))?;
+    file_ledger::note_written(full, updated.as_bytes());
+    Ok(None)
+}
+
+/// The guard half of [`commit_file_write`], run before a tool reads the file
+/// it is about to change.
+pub(crate) fn guard_unchanged_since_read(full: &Path) -> Result<()> {
+    file_ledger::check_unchanged(full).map_err(NurError::Tool)
 }
 
 #[cfg(test)]

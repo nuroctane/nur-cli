@@ -42,9 +42,12 @@ impl Tool for ReadFile {
         // Cap returned body size (chars/bytes of joined lines), not the whole file first.
         const MAX_OUT_BYTES: usize = 200_000;
 
-        let file = fs::File::open(&full)
-            .map_err(|e| NurError::Tool(format!("read {}: {e}", full.display())))?;
-        let reader = BufReader::new(file);
+        let bytes =
+            fs::read(&full).map_err(|e| NurError::Tool(format!("read {}: {e}", full.display())))?;
+        // Whatever range is returned, the model has now "seen" this version of
+        // the file; the edit tools compare against it.
+        super::file_ledger::note_read(&full, &bytes);
+        let reader = BufReader::new(std::io::Cursor::new(bytes));
 
         let start = offset.saturating_sub(1);
         let end = match limit {

@@ -48,59 +48,107 @@ impl Tool for MultiEdit {
         if edits.is_empty() {
             return Err(NurError::Tool("edits empty".into()));
         }
-        let mut content = fs::read_to_string(&full)
+        super::guard_unchanged_since_read(&full)?;
+        let original = fs::read_to_string(&full)
             .map_err(|e| NurError::Tool(format!("read {}: {e}", full.display())))?;
-        let mut total = 0usize;
-        for (i, ed) in edits.iter().enumerate() {
-            let old = ed
-                .get("old_string")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| NurError::Tool(format!("edits[{i}].old_string required")))?;
-            let new = ed
-                .get("new_string")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| NurError::Tool(format!("edits[{i}].new_string required")))?;
-            let replace_all = ed
-                .get("replace_all")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let count = content.matches(old).count();
-            if count == 0 {
-                return Err(NurError::Tool(format!("edits[{i}]: old_string not found")));
-            }
-            if count > 1 && !replace_all {
-                return Err(NurError::Tool(format!(
-                    "edits[{i}]: old_string matched {count} times; set replace_all=true or make unique"
-                )));
-            }
-            content = if replace_all {
-                content.replace(old, new)
-            } else {
-                content.replacen(old, new, 1)
-            };
-            total += if replace_all { count } else { 1 };
+        let (content, total) = apply_edits(&original, edits)?;
+        if let Some(staged) = super::commit_file_write(ctx, &path, &full, &content, "multi_edit")? {
+            return Ok(staged);
         }
-        // Shepherd proposal mode: stage, do not touch the workspace.
-        if crate::config::load_config()
-            .map(|c| c.proposal_mode)
-            .unwrap_or(false)
-        {
-            let sid = std::env::var("NUR_SESSION_ID").unwrap_or_else(|_| "default".into());
-            let entry =
-                crate::agent::proposal::stage_write(&sid, &ctx.cwd, &path, &content, "multi_edit")
-                    .map_err(NurError::Tool)?;
-            return Ok(format!(
-                "proposal staged `{}` ({} bytes) — workspace untouched. \
-                 Use tool `proposal` action=list|apply|discard.",
-                entry.rel_path, entry.bytes
-            ));
-        }
-        fs::write(&full, content)
-            .map_err(|e| NurError::Tool(format!("write {}: {e}", full.display())))?;
         Ok(format!(
-            "multi_edit {} — {total} replacement(s) in {} edit(s)",
+            "multi_edit {} - {total} replacement(s) in {} edit(s)",
             full.display(),
             edits.len()
         ))
+    }
+}
+
+/// Every edit is validated against the running text before anything is
+/// written, so a failing edit leaves the file exactly as it was.
+fn apply_edits(original: &str, edits: &[Value]) -> Result<(String, usize)> {
+    let mut content = original.to_string();
+    let mut total = 0usize;
+    for (i, ed) in edits.iter().enumerate() {
+        let old = ed
+            .get("old_string")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| NurError::Tool(format!("edits[{i}].old_string required")))?;
+        if old.is_empty() {
+            // `content.replace("", new)` inserts `new` between every character
+            // of the file; `edit_file` refuses the same call for the same reason.
+            return Err(NurError::Tool(format!(
+                "edits[{i}]: old_string must not be empty - include the text to replace \
+                 (use write_file to create a file's contents); no edits in this call were written"
+            )));
+        }
+        let new = ed
+            .get("new_string")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| NurError::Tool(format!("edits[{i}].new_string required")))?;
+        let replace_all = ed
+            .get("replace_all")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let count = content.matches(old).count();
+        if count == 0 {
+            return Err(NurError::Tool(format!(
+                "edits[{i}]: old_string not found (earlier edits in this call were not written)"
+            )));
+        }
+        if count > 1 && !replace_all {
+            return Err(NurError::Tool(format!(
+                "edits[{i}]: old_string matched {count} times; set replace_all=true or make unique"
+            )));
+        }
+        content = if replace_all {
+            content.replace(old, new)
+        } else {
+            content.replacen(old, new, 1)
+        };
+        total += if replace_all { count } else { 1 };
+    }
+    Ok((content, total))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn edits(list: &[(&str, &str, bool)]) -> Vec<Value> {
+        list.iter()
+            .map(|(old, new, all)| {
+                serde_json::json!({ "old_string": old, "new_string": new, "replace_all": all })
+            })
+            .collect()
+    }
+
+    /// `"".replace` would interleave `new` between every character.
+    #[test]
+    fn an_empty_old_string_is_refused() {
+        let err = apply_edits("abc\n", &edits(&[("", "X", true)])).unwrap_err();
+        assert!(err.to_string().contains("must not be empty"), "{err}");
+    }
+
+    #[test]
+    fn edits_apply_in_order_and_see_each_other() {
+        let (out, n) =
+            apply_edits("a b c\n", &edits(&[("a", "b", false), ("b", "z", true)])).unwrap();
+        assert_eq!(out, "z z c\n");
+        assert_eq!(n, 3);
+    }
+
+    /// A miss in the second edit must not leave the first one applied: the
+    /// caller writes nothing on `Err`.
+    #[test]
+    fn a_failing_edit_yields_no_text_at_all() {
+        let err =
+            apply_edits("a\n", &edits(&[("a", "b", false), ("nope", "c", false)])).unwrap_err();
+        assert!(err.to_string().contains("edits[1]"), "{err}");
+    }
+
+    #[test]
+    fn crlf_endings_pass_through_untouched() {
+        let (out, _) = apply_edits("one\r\ntwo\r\n", &edits(&[("two", "TWO", false)])).unwrap();
+        assert_eq!(out, "one\r\nTWO\r\n");
     }
 }

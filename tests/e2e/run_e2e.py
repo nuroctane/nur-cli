@@ -321,7 +321,7 @@ def check(scenario, result, workspace, requests, mcp_requests=()):
         if not path.exists():
             failures.append(f"missing file {rel}")
             continue
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8", newline="")
         if isinstance(want, dict):
             for needle in want.get("contains", []):
                 if needle not in text:
@@ -422,7 +422,10 @@ def run_scenario(binary, scenario_path):
         workspace.mkdir()
         for rel, text in scenario.get("setup_files", {}).items():
             (workspace / rel).parent.mkdir(parents=True, exist_ok=True)
-            (workspace / rel).write_text(text, encoding="utf-8")
+            # newline="" keeps the scenario's line endings byte for byte, so a
+            # CRLF fixture really is CRLF on every OS and `files` expectations
+            # can assert the ending the tool left behind.
+            (workspace / rel).write_text(text, encoding="utf-8", newline="")
         script = expand_workspace_paths(scenario["script"], workspace) if scenario.get("workspace_paths") else scenario["script"]
         provider, port, log = start_provider(script, tmp, scenario.get("mcp"))
         env = isolated_env(tmp / "home", port)
