@@ -40,7 +40,9 @@ impl ProcessTree {
             use windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
             cmd.creation_flags(flags | CREATE_SUSPENDED);
             let child = cmd.spawn()?;
-            let tree = Self::attach(&child);
+            let tree = Self {
+                job: win::job_for(&child),
+            };
             // Resume whether or not the job took the process: a suspended
             // child that never runs is worse than an unjoined one.
             win::resume_primary_thread(child.id());
@@ -52,28 +54,8 @@ impl ProcessTree {
             let _ = flags;
             cmd.process_group(0);
             let child = cmd.spawn()?;
-            Ok((
-                child,
-                Self {
-                    group: Some(child.id() as i32),
-                },
-            ))
-        }
-    }
-
-    /// Track an already-running child. Grandchildren spawned before this call
-    /// are not in the tree; prefer [`ProcessTree::spawn`].
-    pub fn attach(child: &Child) -> Self {
-        #[cfg(windows)]
-        {
-            Self {
-                job: win::job_for(child),
-            }
-        }
-        #[cfg(unix)]
-        {
-            let _ = child;
-            Self { group: None }
+            let group = Some(child.id() as i32);
+            Ok((child, Self { group }))
         }
     }
 

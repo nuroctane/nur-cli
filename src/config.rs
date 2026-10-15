@@ -1608,21 +1608,33 @@ fn restrict_to_owner_grant(path: &std::path::Path, grant: &str) -> std::io::Resu
         (_, Ok(user)) if !user.trim().is_empty() => user.trim().to_string(),
         _ => "*S-1-3-4".to_string(),
     };
-    let output = std::process::Command::new("icacls")
-        .arg(path)
-        .arg("/inheritance:r")
-        .arg("/grant:r")
-        .arg(format!("{user}:{grant}"))
-        .creation_flags(crate::process_tree::CREATE_NO_WINDOW)
-        .output()?;
-    if output.status.success() {
-        return Ok(());
+    // `/reset` first: it turns every ACE into an inherited one, so the
+    // `/inheritance:r` that follows strips them all. Without it, explicit
+    // ACEs already on the file (SYSTEM and Administrators on some machines)
+    // survive and the result is not owner-only.
+    let steps: [&[String]; 2] = [
+        &["/reset".to_string()],
+        &[
+            "/inheritance:r".to_string(),
+            "/grant:r".to_string(),
+            format!("{user}:{grant}"),
+        ],
+    ];
+    for args in steps {
+        let output = std::process::Command::new("icacls")
+            .arg(path)
+            .args(args)
+            .creation_flags(crate::process_tree::CREATE_NO_WINDOW)
+            .output()?;
+        if !output.status.success() {
+            return Err(std::io::Error::other(format!(
+                "could not restrict {} to the current user: {}",
+                path.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
     }
-    Err(std::io::Error::other(format!(
-        "could not restrict {} to the current user: {}",
-        path.display(),
-        String::from_utf8_lossy(&output.stderr).trim()
-    )))
+    Ok(())
 }
 
 pub fn save_config(cfg: &Config) -> Result<()> {
@@ -1859,6 +1871,40 @@ mod tests {
             String::from_utf8_lossy(&plain_acl.stdout).contains("(I)"),
             "non-secret files keep inheriting"
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Hosted runners hand new files explicit SYSTEM and Administrators ACEs
+    /// that stripping inheritance alone leaves in place (v0.51.0 CI).
+    #[cfg(windows)]
+    #[test]
+    fn restrict_to_owner_removes_explicit_aces_too() {
+        let root = std::env::temp_dir().join(format!("nur-acl-x-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let file = root.join("secret.json");
+        fs::write(&file, b"{}").unwrap();
+        let seeded = std::process::Command::new("icacls")
+            .arg(&file)
+            .args(["/grant", "*S-1-5-18:F"])
+            .output()
+            .unwrap();
+        assert!(
+            seeded.status.success(),
+            "{}",
+            String::from_utf8_lossy(&seeded.stderr)
+        );
+        restrict_to_owner(&file).unwrap();
+        let listing = std::process::Command::new("icacls")
+            .arg(&file)
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&listing.stdout).to_string();
+        let aces: Vec<&str> = text
+            .lines()
+            .filter(|l| l.contains("(F)") || l.contains("(R") || l.contains("(M)"))
+            .collect();
+        assert_eq!(aces.len(), 1, "exactly one ACE expected: {text}");
+        assert!(!text.contains("NT AUTHORITY\\SYSTEM"), "{text}");
         let _ = fs::remove_dir_all(&root);
     }
 
