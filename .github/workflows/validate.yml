@@ -10,7 +10,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        # Every platform the release matrix ships gets the same harness;
+        # macos-latest is the Apple-silicon runner the aarch64 asset builds on.
+        os: [windows-latest, ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     env:
       # Check the binary and test targets serially on hosted runner memory.
