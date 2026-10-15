@@ -2348,7 +2348,7 @@ impl App {
                 Ok(()) => self.push_note(
                     Tone::Mode,
                     if next {
-                        "reduced motion on · ambient animation slows to a crawl, idle repaints continue at ~2fps (good over web and SSH terminals)"
+                        "reduced motion on · ambient animation holds still while idle, spinners keep moving (good over web and SSH terminals)"
                             .into()
                     } else {
                         "reduced motion off · full ambient animation".into()

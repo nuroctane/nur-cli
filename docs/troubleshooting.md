@@ -63,7 +63,7 @@ repair or upgrade ecosystem components.
 **All green:**
 
 ```text
-nur doctor · v0.52.1
+nur doctor · v0.52.2
 
 binary  C:\Users\you\.local\bin\nur.exe
 config  model=muse-spark-1.3 effort=high max_turns=∞ budget=∞$/∞tok  (C:\Users\you\.nur\config.toml)

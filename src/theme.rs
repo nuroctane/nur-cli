@@ -1872,15 +1872,14 @@ pub fn transparent() -> bool {
 
 static TRANSPARENT: std::sync::RwLock<bool> = std::sync::RwLock::new(false);
 
-/// Reduced motion: ambient animation (the banner's aurora shimmer, rules,
-/// modal edges, separators) runs slow instead of freezing, and the event loop
-/// repaints idle frames at a calm cadence. Progress indicators (spinners, the
-/// moon title, streaming) always run full speed. Meant for terminals that relay
-/// every frame over a network or a web renderer (Orca panes, SSH, browser
-/// terminals), where an 11 fps shimmer across a few hundred cells is what
-/// makes typing feel late. Motion never stops entirely: a frozen frame reads
-/// as a hung session.
-pub const REDUCED_DIVISOR: u32 = 6;
+/// Reduced motion: an explicit accessibility request, never auto-detected
+/// from the terminal. Ambient animation (the banner's aurora shimmer, rules,
+/// modal edges, separators) holds one still frame; the event loop only
+/// repaints on input or agent events while idle. Progress indicators
+/// (spinners, the moon title, streaming) always keep moving so a still frame
+/// never reads as a hung session. Slowing ambient motion instead of freezing
+/// it was tried and read as lag, so stillness here is deliberate and confined
+/// to this flag.
 static REDUCED_MOTION: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub fn set_reduced_motion(on: bool) {
@@ -1893,8 +1892,10 @@ pub fn reduced_motion() -> bool {
 
 /// Resolve the `[theme] motion` setting against the environment.
 /// `NUR_REDUCED_MOTION` (`1`/`0`) wins; then an explicit `full`/`reduced`;
-/// `auto` reduces inside an Orca pane or an SSH session, where the terminal
-/// is drawn somewhere other than the machine running nur.
+/// `auto` reduces only over SSH, where the terminal is genuinely drawn
+/// somewhere other than the machine running nur. Orca panes render locally
+/// at full speed and must never auto-reduce: full motion was never a problem
+/// there, and a wrongly frozen UI reads as hung.
 pub fn resolve_reduced_motion(setting: &str, env: &dyn Fn(&str) -> Option<String>) -> bool {
     if let Some(v) = env("NUR_REDUCED_MOTION") {
         let v = v.trim().to_ascii_lowercase();
@@ -1910,16 +1911,16 @@ pub fn resolve_reduced_motion(setting: &str, env: &dyn Fn(&str) -> Option<String
         "full" | "on" => false,
         _ => {
             let set = |k: &str| env(k).is_some_and(|v| !v.trim().is_empty());
-            set("ORCA_PANE_KEY") || set("SSH_TTY") || set("SSH_CONNECTION")
+            set("SSH_TTY") || set("SSH_CONNECTION")
         }
     }
 }
 
-/// Time source for ambient animation: slowed under reduced motion so the
-/// shimmer still visibly moves, just calmly.
+/// Time source for ambient animation: frozen under reduced motion so every
+/// shimmer renders the same still frame no matter when it is drawn.
 pub fn ambient_time(elapsed: Duration) -> Duration {
     if reduced_motion() {
-        elapsed / REDUCED_DIVISOR
+        Duration::ZERO
     } else {
         elapsed
     }
@@ -2555,18 +2556,16 @@ pub fn print_tool(name: &str, detail: &str) {
 mod tests {
     use super::*;
 
-    /// Ways reduced motion can regress into a freeze: ambient time collapsing
-    /// to zero (a still frame reads as a hung session) or stopping entirely.
-    /// Reduced motion must slow ambient animation, never stop it.
+    /// Ways reduced motion can be wrong in either direction: ambient time
+    /// failing to freeze under an explicit request, running while idle, or an
+    /// Orca pane auto-reducing (Orca renders locally at full speed).
     #[test]
-    fn ambient_time_slows_but_never_freezes_under_reduced_motion() {
+    fn ambient_time_freezes_only_on_explicit_request() {
         set_reduced_motion(true);
-        let slow = ambient_time(Duration::from_secs(6));
-        let nonzero = ambient_time(Duration::from_millis(100));
+        let frozen = ambient_time(Duration::from_secs(6));
         set_reduced_motion(false);
         let full = ambient_time(Duration::from_secs(6));
-        assert_eq!(slow, Duration::from_secs(1));
-        assert!(nonzero > Duration::ZERO);
+        assert_eq!(frozen, Duration::ZERO);
         assert_eq!(full, Duration::from_secs(6));
         assert!(!reduced_motion());
     }
@@ -2590,7 +2589,10 @@ mod tests {
         assert!(!resolve_reduced_motion("full", &none));
 
         let orca = env_of(&[("ORCA_PANE_KEY", "pane-7")]);
-        assert!(resolve_reduced_motion("auto", &orca));
+        assert!(
+            !resolve_reduced_motion("auto", &orca),
+            "Orca panes render locally: never auto-reduce"
+        );
         assert!(
             !resolve_reduced_motion("full", &orca),
             "explicit full wins over auto-detect"
@@ -2607,7 +2609,7 @@ mod tests {
         );
         let force_on = env_of(&[("NUR_REDUCED_MOTION", "1")]);
         assert!(resolve_reduced_motion("full", &force_on));
-        let garbage = env_of(&[("NUR_REDUCED_MOTION", "maybe"), ("ORCA_PANE_KEY", "p")]);
+        let garbage = env_of(&[("NUR_REDUCED_MOTION", "maybe"), ("SSH_CONNECTION", "10.0.0.2 1 10.0.0.9 2")]);
         assert!(
             resolve_reduced_motion("auto", &garbage),
             "unknown env value falls through"

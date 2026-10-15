@@ -3078,11 +3078,9 @@ pub async fn run_tui(
     const FRAME_BUSY_MS: u64 = 33; // ~30fps under load
     const FRAME_IDLE_MS: u64 = 90; // ~11fps ambient shimmer
 
-    // Reduced motion (`[theme] motion`, NUR_REDUCED_MOTION, Orca/SSH auto):
-    // ambient animation runs slow instead of freezing, so the idle loop keeps
-    // painting at a calm cadence; progress spinners tick at ~10fps.
+    // Reduced motion (`[theme] motion`, NUR_REDUCED_MOTION, SSH auto):
+    // ambient animation holds a still frame; progress spinners tick at ~10fps.
     const FRAME_REDUCED_MS: u64 = 100;
-    const FRAME_IDLE_REDUCED_MS: u64 = 500; // ~2fps ambient while idle
     let mut dirty = true;
     let mut last_draw = Instant::now();
     let mut last_title = Instant::now();
@@ -3129,10 +3127,6 @@ pub async fn run_tui(
             FRAME_REDUCED_MS
         } else if animating {
             FRAME_BUSY_MS
-        } else if reduced_motion {
-            // Calm but alive: ambient motion keeps stepping while idle instead
-            // of freezing, at a cadence a relayed terminal absorbs.
-            FRAME_IDLE_REDUCED_MS
         } else {
             FRAME_IDLE_MS
         };
@@ -3454,12 +3448,13 @@ pub async fn run_tui(
             dirty = true;
         }
         //
-        // Locked design: the NUR banner's gradient shimmer (and the other
-        // ambient animation) repaints every frame, idle included. Under reduced
-        // motion it steps slowly instead of freezing — a frozen frame reads as
-        // a hung session, so idle repaints continue at FRAME_IDLE_REDUCED_MS.
-        // Spinners, modals and streaming always get their tick.
-        if last_draw.elapsed().as_millis() as u64 >= frame_ms {
+        // Locked design: ambient animation runs only while something is
+        // active (a turn, streaming, an open modal). Idle means a still
+        // frame and no ambient repaint — that is the whole perf strategy, on
+        // every terminal, with no environment sniffing. Under reduced motion
+        // the ambient frame is still even while active. Spinners, modals and
+        // streaming always get their tick.
+        if animating && last_draw.elapsed().as_millis() as u64 >= frame_ms {
             dirty = true;
         }
         if let Some((_, t)) = app.expand_flash {

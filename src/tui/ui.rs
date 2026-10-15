@@ -2091,11 +2091,7 @@ fn draw_modal_frame(
     right_label: Option<&str>,
     footer: &str,
 ) {
-    let phase = if theme::reduced_motion() {
-        phase / theme::REDUCED_DIVISOR as usize
-    } else {
-        phase
-    };
+    let phase = if theme::reduced_motion() { 0 } else { phase };
     let buf = f.buffer_mut();
     let border = Style::default().fg(hue).bg(theme::SURFACE_2());
     // Traveling accent head cycles the aurora ring so every modal edge shimmers.
