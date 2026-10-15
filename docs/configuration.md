@@ -365,6 +365,7 @@ Non-zero **pre_tool** exit blocks the tool. Missing file = no hooks. Check statu
 | `NUR_API_KEY` | API key (preferred) |
 | `META_API_KEY` | Optional key for Meta Model API provider |
 | `NUR_BASE_URL` | Override API base URL (self-hosted Ollama/vLLM/LiteLLM/gateways) |
+| `NUR_PROVIDER` | Override the provider for this process (catalog id or alias, e.g. `opencode-go`, `chatgpt`). The provider's host and default model follow; `[provider_base_urls]` and `<PROVIDER>_BASE_URL` still apply, and `NUR_MODEL` / `--model` still pick the model. An unknown id is a config error. A value inherited from a parent `nur` session is ignored |
 | `NUR_MODEL` | Override model id for the active provider. A value inherited from a parent `nur` session is ignored (nur exports `NUR_MODEL` to its own children) - pass `--model` to override explicitly |
 | `NUR_JEV_LOCAL_URL` | Point the TypeSafe layer at a local System One engine (e.g. `http://127.0.0.1:8788`). Loopback needs no key, so `TYPESAFE_API_KEY` becomes optional. See [jev-local.md](./jev-local.md) |
 | `TYPESAFE_API_KEY` | TypeSafe (Jev) key for the harness boost layer. Aliases: `TYPESAFE_KEY`, `JEV_API_KEY`; also `/auth` → `TypeSafe · Jev`, or `~/.nur/typesafe.key`. It is a judgment credential, never the active chat provider |
@@ -400,7 +401,7 @@ Set by NurCLI for host integrations:
 | `NUR_STATUS_PATH` | Path to live status file |
 | `NUR_USAGE_LOG_PATH` | Path to usage log |
 | `NUR_SESSION_ID` | Current session id |
-| `NUR_PROVIDER` | Provider id Nur exports to its own children (the active provider, e.g. `meta`) |
+| `NUR_PROVIDER` | Provider id Nur exports to its own children (the active provider, e.g. `meta`); children ignore the inherited value, see above |
 
 ### Update control
 

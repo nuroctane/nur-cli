@@ -74,7 +74,13 @@ class Terminal:
             master, slave = pty.openpty()
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 32, 120, 0, 0))
             self.fd = master
-            self.proc = subprocess.Popen([str(binary)], cwd=cwd, env=env, stdin=slave, stdout=slave, stderr=slave)
+            # The slave must be the child's *controlling* terminal: crossterm
+            # sizes the screen from /dev/tty before it looks at stdout, so a
+            # child still attached to the harness's own console (a hidden
+            # 1-column one under `wsl -e`) draws a one-cell frame forever.
+            self.proc = subprocess.Popen(
+                [str(binary)], cwd=cwd, env=env, stdin=slave, stdout=slave, stderr=slave,
+                start_new_session=True, preexec_fn=lambda: fcntl.ioctl(0, termios.TIOCSCTTY, 0))
             os.close(slave)
             decoder = codecs.getincrementaldecoder('utf-8')()
             def read_utf8():

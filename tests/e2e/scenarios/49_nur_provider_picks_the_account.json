@@ -1,0 +1,27 @@
+{
+  "description": "NUR_PROVIDER selects the provider for one process the way the help text promises: config.toml says anthropic, the environment says opencode-go, and the run goes to opencode (alias resolved, its session header on the wire, model from NUR_MODEL) with the per-provider base URL instead of the config's one.",
+  "provider": "anthropic",
+  "model": "claude-sonnet-5",
+  "env": {
+    "NUR_PROVIDER": "opencode-go",
+    "NUR_MODEL": "deepseek-v4.1-flash",
+    "OPENCODE_API_KEY": "e2e-isolated-key"
+  },
+  "setup_home_files": {
+    "config.toml": "provider = \"anthropic\"\nbase_url = \"http://127.0.0.1:{port}/anthropic\"\nmodel = \"claude-sonnet-5\"\n\n[provider_base_urls]\nopencode = \"http://127.0.0.1:{port}/v1\"\n"
+  },
+  "prompt": "Reply with exactly PROVIDER_ENV_OK.",
+  "script": [
+    { "text": "PROVIDER_ENV_OK" }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "stdout_contains": ["PROVIDER_ENV_OK"],
+    "protocol": "chat/completions",
+    "headers": { "present": ["x-opencode-session"] },
+    "request_contains": [
+      { "request": 1, "contains": ["\"model\": \"deepseek-v4.1-flash\""] }
+    ],
+    "requests": 1
+  }
+}

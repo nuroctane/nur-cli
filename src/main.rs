@@ -8,6 +8,7 @@ mod bootstrap;
 mod cache_io;
 mod cli;
 mod config;
+mod credential_seal;
 mod dogwood;
 mod ecosystem;
 mod egaki;
@@ -35,7 +36,6 @@ mod pricing;
 mod process_tree;
 mod provider_logos;
 mod providers;
-mod credential_seal;
 mod sgrep;
 mod startup;
 mod t3code;
@@ -360,6 +360,31 @@ async fn real_main() -> Result<()> {
     // "deepseek-v4.1-flash" is not supported on this endpoint`) because the
     // parent's exported, already-mangled id replaced the correct
     // `deepseek/deepseek-v4.1-flash` from config.toml.
+    //
+    // NUR_PROVIDER picks the account for this process the same way: the
+    // catalog host and default model follow it, and `--model` / NUR_MODEL below
+    // still choose the model. An id nothing recognises is a config error, not a
+    // silent run on whatever provider config.toml names.
+    if let Ok(p) = std::env::var("NUR_PROVIDER") {
+        let p = p.trim().to_string();
+        if !p.is_empty() && launched_by_a_nur_session() {
+            theme::print_info(&format!(
+                "ignoring inherited NUR_PROVIDER={p} (this process was started by a nur session)"
+            ));
+        } else if !p.is_empty() {
+            let Some(provider) =
+                providers::by_id(&p).or_else(|| providers::resolve_provider_alias(&p))
+            else {
+                return Err(error::NurError::Config(format!(
+                    "NUR_PROVIDER: {}",
+                    providers::unknown_provider_message(&p)
+                )));
+            };
+            if provider.id != cfg.provider {
+                config::apply_provider_defaults(&mut cfg, provider.id, false);
+            }
+        }
+    }
     if let Some(m) = &cli.model {
         cfg.model = m.clone();
     } else if let Ok(m) = std::env::var("NUR_MODEL") {
