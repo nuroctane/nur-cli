@@ -41,6 +41,13 @@ struct CachedSkill {
     path: PathBuf,
     #[serde(default)]
     stamp: Option<Stamp>,
+    #[serde(default)]
+    disable_model_invocation: bool,
+    #[serde(default = "default_user_invocable")]
+    user_invocable: bool,
+}
+fn default_user_invocable() -> bool {
+    true
 }
 impl CachedSkill {
     fn skill(&self) -> Skill {
@@ -49,6 +56,8 @@ impl CachedSkill {
             description: self.description.clone(),
             path: self.path.clone(),
             body: String::new(),
+            disable_model_invocation: self.disable_model_invocation,
+            user_invocable: self.user_invocable,
         }
     }
 }
@@ -81,10 +90,12 @@ fn generation(home: &Path) -> String {
     fs::read_to_string(home.join("cache/skills-generation")).unwrap_or_default()
 }
 fn global_roots() -> Vec<PathBuf> {
-    let mut roots = vec![
-        nur_home().join("skills"),
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("skills"),
-    ];
+    let mut roots = vec![nur_home().join("skills")];
+    // Dev convenience: a checkout's own skills/ is a global root in debug
+    // builds and tests only. A shipped binary must not index whatever path it
+    // happened to be compiled in (and on user machines it never exists).
+    #[cfg(any(test, debug_assertions))]
+    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("skills"));
     roots.extend(crate::plugins::enabled_skill_roots());
     if let Some(home) = crate::config::home_dir() {
         roots.push(home.join(".agents/skills"));
@@ -101,7 +112,7 @@ fn root_snapshot(roots: &[PathBuf]) -> Vec<Root> {
         .collect()
 }
 fn cwd_roots(cwd: &Path) -> Vec<PathBuf> {
-    [".nur/skills", ".claude/skills", ".agents/skills"]
+    crate::agent::skill_trust::PROJECT_ROOTS
         .iter()
         .map(|p| cwd.join(p))
         .collect()
@@ -144,6 +155,7 @@ pub fn cached_palette() -> Vec<(String, String)> {
         .map(|data| {
             data.skills
                 .iter()
+                .filter(|s| s.user_invocable)
                 .map(|s| (s.name.clone(), s.description.chars().take(72).collect()))
                 .collect()
         })
@@ -182,6 +194,8 @@ fn rebuild(home: &Path, roots: &[PathBuf], previous: Option<&SkillCacheFile>) ->
                         description: s.description,
                         path: s.path,
                         stamp: current_stamp,
+                        disable_model_invocation: s.disable_model_invocation,
+                        user_invocable: s.user_invocable,
                     })
                 });
             if let Some(entry) = entry {
@@ -258,6 +272,8 @@ fn load_global_at(home: &Path, roots: &[PathBuf]) -> Arc<SkillCacheFile> {
 }
 /// Fresh execution snapshot plus current project overrides. Interactive callers
 /// use a worker. Global metadata stays in memory across calls.
+/// Project-local skills count only while the project is trusted
+/// (`/skills trust`) - a cloned repo must not hand the model instructions.
 pub fn load_skills_cached(cwd: &Path) -> Vec<Skill> {
     let global = load_global_at(&nur_home(), &global_roots());
     let mut out: HashMap<String, Skill> = global
@@ -265,10 +281,12 @@ pub fn load_skills_cached(cwd: &Path) -> Vec<Skill> {
         .iter()
         .map(|s| (s.name.clone(), s.skill()))
         .collect();
-    for root in cwd_roots(cwd) {
-        for path in find_skill_mds_excluding(&root, SKILL_WALK_MAX_DEPTH, &[]) {
-            if let Some(skill) = parse_skill_metadata(&path) {
-                out.insert(skill.name.clone(), skill);
+    if crate::agent::skill_trust::is_trusted(cwd) {
+        for root in cwd_roots(cwd) {
+            for path in find_skill_mds_excluding(&root, SKILL_WALK_MAX_DEPTH, &[]) {
+                if let Some(skill) = parse_skill_metadata(&path) {
+                    out.insert(skill.name.clone(), skill);
+                }
             }
         }
     }

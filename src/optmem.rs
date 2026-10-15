@@ -538,12 +538,9 @@ pub fn prompt_block(enabled: bool, is_subagent: bool, poor_mode: bool) -> String
     let mut s = String::from(
         r#"
 # OptMem (permanent memory)
-Your memory is OptMem (upstream-pure under ~/.optmem):
+Long-term memory lives in OptMem (upstream-pure under ~/.optmem):
 - Tool: optmem (or ~/.optmem/memo)
 - Memories: ~/.optmem/memory (or $MEMORY_DIR)
-
-OptMem outlives every session, compaction, model and vendor change.
-Without it you do not know who you are, or what was decided and tried.
 
 ## While working
 Call optmem(action=note, text="...") whenever you learn something worth keeping
@@ -560,14 +557,16 @@ optmem(action=recall, query=...) or optmem(action=zoom, range="a-b").
 
 "#,
     );
-    if let Some(wake) = wake_capped_cached() {
-        s.push_str("## Wake (session start)\n");
-        s.push_str(&wake);
-        s.push('\n');
-    } else {
-        s.push_str(
-            "## Wake\nOptMem memo not available yet - run `nur ecosystem ensure` or install OptMem.\n",
-        );
+    match wake_capped_cached() {
+        Some(wake) => {
+            s.push_str("## Wake (session start)\n");
+            s.push_str(&wake);
+            s.push('\n');
+        }
+        None => {
+            // OptMem not installed: one pointer line, not the wake schema.
+            s.push_str("## Wake\nOptMem is not installed here; skip memory recall this session.\n");
+        }
     }
     s
 }

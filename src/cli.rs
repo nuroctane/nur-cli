@@ -204,6 +204,21 @@ pub enum Commands {
         #[command(subcommand)]
         action: Option<PermissionsCmd>,
     },
+    /// Project-local skills: trust or hold this directory's skills
+    Skills {
+        #[command(subcommand)]
+        action: SkillsCmd,
+    },
+}
+
+/// A project's own skills (`./.nur/skills`, `./.claude/skills`,
+/// `./.agents/skills`) are inert until trusted; an edit holds them again.
+#[derive(Subcommand, Debug)]
+pub enum SkillsCmd {
+    /// Trust this project's skills exactly as they stand now
+    Trust,
+    /// Hold this project's skills again (forget the trust)
+    Untrust,
 }
 
 /// A project's `.nur/permissions.toml` deny and ask rules always apply; its

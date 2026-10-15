@@ -170,13 +170,15 @@ auto_update = true
 | `quality_gate` | string | empty | Shell command run as a quality gate before accepting DONE in autonomous mode. Empty = none |
 | `context_register_min_chars` | integer | `8000` | Auto-register tool results larger than this into the RLM context store (`0` = disabled) |
 | `subagent_depth` | integer | `1` | RLM-style subagent recursion depth. `1` = children only; each extra level multiplies cost |
-| `poor_mode` | bool | `false` | Skip PLUR auto-inject and long memory (skill NL/slash activation still works) |
+| `poor_mode` | bool | `false` | Skip PLUR auto-inject and long memory (explicit skill activation - slash and the `skill` tool - still works) |
 | `theme` | string | unset | Picked theme id (`/theme`). Unset = Nur Gold until onboarding choice |
 | `theme_setup.accent` | hex string | unset | Personal accent color (`#rrggbb`) layered over **every** theme pick - recolors the accent ramp, highlights, and banner gradient. `theme_setup.accent_deep` / `theme_setup.accent_sky` optionally pin the ramp ends (derived automatically when absent) |
 | `theme_setup.protocol` | string | `auto` | Force the terminal graphics protocol for inline images: `kitty`, `sixel`, `iterm2`, `halfblocks`, or `auto` |
 | `theme_setup.inline_images` | bool | `true` | Master switch for inline pixel rendering in transcript + peeks |
 | `theme_setup.transparent` | bool | `false` | Skip painting panel/code backgrounds so a translucent terminal shows through (`/theme transparent`) |
 | `ecosystem_auto_ensure` | bool | `true` | Background TTL **repair** of packs on later TUI opens (first install is foreground via npx / one-liner / EXE / `nur install\); set `false` to skip repair |
+| `skills.auto_activate` | bool | `false` | Natural-language skill activation ("think like fable" injects the skill body). Off by default; explicit `/skill-name` and the `skill` tool always work. See [skills](./skills.md) |
+| `tools.profile` | string | `full` | `core` = minimal local editing shell (15 tools: read/list/write/edit/multi_edit/apply_patch, bash, sgrep/grep/glob, web_fetch/web_search, question, todo_write, submit_plan) with no ecosystem tools or prose. Session-fixed; restart to change. Unknown values fall back to `full` |
 | `auto_update` | bool | `true` | On **every** launch (bare TUI, `nur "prompt"`, `nur run …`, gateway), check [GitHub Releases](https://github.com/nuroctane/nur-cli/releases/latest) and install a newer binary when available; it runs on a background thread so it never delays or breaks a run, and the new binary is picked up on the next launch. A 60s floor between network checks stops a script that loops `nur` from hammering the API — tune it with `NUR_AUTO_UPDATE_TTL_SECS` (`0` = check every run). Opt out with `false` or env `NUR_SKIP_AUTO_UPDATE=1`. Verify with `nur update --check`; `nur update` always runs the full update path |
 
 ### Personal accent (theme setup)

@@ -295,7 +295,7 @@ nur plugins disable <id>
 nur plugins uninstall <id>
 ```
 
-**Skills as slash commands:** every installed skill is also `/skill-name` (sticky session mode) or `/skill-name <prompt>` (one-shot turn). Natural-language activation still works with no slash: *think like fable*, *TDD this*, *debug systematically*, *site cli*, *HAR file*, *resume from Claude* — see [Ecosystem](ecosystem.md#natural-language-skill-activation).
+**Skills as slash commands:** every installed skill is also `/skill-name` (sticky session mode) or `/skill-name <prompt>` (one-shot turn). With `[skills] auto_activate = true`, natural-language activation works with no slash: *think like fable*, *TDD this*, *debug systematically*, *site cli*, *HAR file*, *resume from Claude* — see [Ecosystem](ecosystem.md#natural-language-skill-activation).
 
 
 In the TUI, bare **`/plugins`** opens the full marketplace picker (provider-picker UX).
@@ -315,6 +315,19 @@ A project's `.nur/permissions.toml` arrives with the repository, so its `deny`
 and `ask` rules always apply but its `allow` rules stay off until you trust them.
 Trust covers the list as it is now: if a later commit edits it, nur holds it
 again and says so at startup (`nur run` prints the note to stderr).
+
+### `nur skills`
+
+Project-local skills (a repo's own `.nur/skills`, `.claude/skills`,
+`.agents/skills`) are inert until trusted, like project allow rules.
+
+```bash
+nur skills trust      # approve this project's skills exactly as they stand now
+nur skills untrust    # hold them again
+```
+
+Trust records a digest of every project `SKILL.md`, so a `git pull` that edits
+one holds the set again. The TUI equivalent is `/skills trust`.
 
 ---
 
@@ -556,7 +569,7 @@ Type these inside the `nur` TUI. Aliases are shown in the same row.
 | `/<skill>` | **Any installed skill** — sticky toggle, or `/<skill> <prompt>` one-shot |
 | `/codesearch` · `/cs` | Fast ripgrep over the workspace |
 | `/mc` · `/mcp` | Manage MCP servers via Executor |
-| `/skills` | List installed skills |
+| `/skills` | List installed skills. `/skills trust` approves this project's local skills (`.nur/skills`, `.claude/skills`, `.agents/skills`) - held inert until trusted, re-held on edit |
 | `/memory` | Show the `~/.nur` memory excerpt |
 | `/graphify` | Knowledge graph: status / query / extract |
 | `/graphjin` | Live data (`/gj`): `catalog` \| `schema` \| `help` \| `explain` \| `query` \| `security` \| `ask`. Writes go through the model so they hit the approval gate. |

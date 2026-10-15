@@ -59,6 +59,8 @@ pub(super) struct StartupState {
     announced_ready: bool,
     maintenance_started: bool,
     pub(super) list_skills: bool,
+    /// Session-once: told the user that untrusted project skills are held.
+    skills_trust_noted: bool,
 }
 impl StartupState {
     pub(super) fn new() -> Self {
@@ -83,6 +85,7 @@ impl StartupState {
             announced_ready: false,
             maintenance_started: false,
             list_skills: false,
+            skills_trust_noted: false,
         }
     }
     pub(super) fn pending(&self) -> bool {
@@ -224,6 +227,7 @@ impl App {
                 let result = std::panic::catch_unwind(|| {
                     agent::skills::load_skills(&cwd)
                         .into_iter()
+                        .filter(|sk| sk.user_invocable)
                         .map(|sk| (sk.name, sk.description.chars().take(72).collect()))
                         .collect()
                 })
@@ -418,6 +422,15 @@ impl App {
                         Ok(palette) => {
                             self.skill_palette_cache = palette;
                             self.startup.skills_ready = true;
+                            if !self.startup.skills_trust_noted {
+                                self.startup.skills_trust_noted = true;
+                                let pending = agent::skill_trust::pending_count(&self.cwd);
+                                if pending > 0 {
+                                    self.push_info(format!(
+                                        "this project ships {pending} local skill(s) - held until you run /skills trust"
+                                    ));
+                                }
+                            }
                             if self.startup.list_skills {
                                 self.startup.list_skills = false;
                                 self.show_skill_listing();

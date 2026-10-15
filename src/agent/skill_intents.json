@@ -1,5 +1,5 @@
 {
-  "total_skills": 1711,
+  "total_skills": 1708,
   "note": "Comprehensive skill intent index - 700+ skills, expanded NL triggers. Must be updated when adding skills per AGENTS.md. Run: python scripts/generate_skill_intents.py",
   "skills": [
     {
@@ -17517,24 +17517,6 @@
         "controls",
         "dials",
         "knobs"
-      ],
-      "aliases": []
-    },
-    {
-      "name": "disabled-skill",
-      "description": "A skill with model invocation disabled",
-      "path": "skills/disabled-skill/SKILL.md",
-      "triggers": [
-        "model invocation",
-        "/disabled skill",
-        "/disabled-skill",
-        "disabled skill",
-        "disabled-skill"
-      ],
-      "keywords": [
-        "disabled",
-        "model",
-        "invocation"
       ],
       "aliases": []
     },
@@ -45198,21 +45180,6 @@
       "aliases": []
     },
     {
-      "name": "skill-one",
-      "description": "Sample skill",
-      "path": "skills/skill-one/SKILL.md",
-      "triggers": [
-        "/skill one",
-        "/skill-one",
-        "skill one",
-        "skill-one"
-      ],
-      "keywords": [
-        "sample"
-      ],
-      "aliases": []
-    },
-    {
       "name": "skillify",
       "description": "Codify the most recent successful /scrape flow into a permanent browser-skill on disk. (gstack)",
       "path": "skills/gstack/skillify/SKILL.md",
@@ -46326,29 +46293,6 @@
         "structure"
       ],
       "aliases": []
-    },
-    {
-      "name": "template-skill",
-      "description": "Replace with description of the skill and when Claude should use it.",
-      "path": "skills/template/SKILL.md",
-      "triggers": [
-        "replace description",
-        "/template skill",
-        "/template-skill",
-        "template skill",
-        "template-skill",
-        "template",
-        "/template"
-      ],
-      "keywords": [
-        "template",
-        "replace",
-        "description",
-        "claude"
-      ],
-      "aliases": [
-        "template"
-      ]
     },
     {
       "name": "terminal-browser",

@@ -169,6 +169,28 @@ pub(crate) const ROOT_CORE_TOOL_NAMES: &[&str] = &[
     "agent",
 ];
 
+/// The `[tools] profile = "core"` surface: a minimal local editing shell with
+/// no ecosystem tools. Session-fixed (changing it needs a restart), because a
+/// tool set that differs between two requests of one session throws away the
+/// provider's cached prefix.
+pub const CORE_PROFILE_TOOL_NAMES: &[&str] = &[
+    "read_file",
+    "list_dir",
+    "write_file",
+    "edit_file",
+    "multi_edit",
+    "apply_patch",
+    "bash",
+    "sgrep",
+    "grep",
+    "glob",
+    "web_fetch",
+    "web_search",
+    "question",
+    "todo_write",
+    "submit_plan",
+];
+
 pub struct ToolContext {
     pub cwd: PathBuf,
     /// Cooperative cancellation — long-running tools (shell) poll this and
@@ -335,6 +357,19 @@ impl ToolHost {
             .clone()
     }
 
+    /// The `[tools] profile = "core"` surface: minimal local editing shell.
+    pub fn core_tool_defs(&self) -> Vec<ToolDef> {
+        static CACHE: std::sync::OnceLock<Vec<ToolDef>> = std::sync::OnceLock::new();
+        CACHE
+            .get_or_init(|| {
+                self.tool_defs()
+                    .into_iter()
+                    .filter(|tool| CORE_PROFILE_TOOL_NAMES.contains(&tool.name.as_str()))
+                    .collect()
+            })
+            .clone()
+    }
+
     /// Execute a tool by name. Deliberately a direct `match` (not a
     /// `Vec<Box<dyn Tool>>` lookup): `ToolHost` is a throwaway built per call
     /// from two `Arc` clones, so a stored registry would re-allocate every
@@ -346,6 +381,20 @@ impl ToolHost {
             return Err(NurError::Tool(
                 "agent tool must be executed by the runtime (internal error)".into(),
             ));
+        }
+        // Core profile: schemas are never offered, and a model that calls a
+        // specialist anyway (from training memory) gets a clear refusal.
+        // Session-fixed, so one config read is enough.
+        static CORE_PROFILE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *CORE_PROFILE.get_or_init(|| {
+            crate::config::load_config()
+                .map(|c| c.tools.is_core())
+                .unwrap_or(false)
+        }) && !CORE_PROFILE_TOOL_NAMES.contains(&name)
+        {
+            return Err(NurError::Tool(format!(
+                "tool '{name}' is not part of the core tool profile ([tools] profile = \"full\" enables it)"
+            )));
         }
         if is_dangerous_workspace(&ctx.cwd) && name != "web_fetch" && name != "memory" {
             return Err(NurError::Tool(
@@ -601,6 +650,28 @@ mod arg_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The core profile is a real subset of the full roster, fixed in shape.
+    #[test]
+    fn core_profile_is_a_fixed_minimal_subset() {
+        let host = ToolHost::default();
+        let core: Vec<String> = host
+            .core_tool_defs()
+            .iter()
+            .map(|d| d.name.clone())
+            .collect();
+        assert_eq!(core.len(), CORE_PROFILE_TOOL_NAMES.len());
+        for name in &core {
+            assert!(
+                CORE_PROFILE_TOOL_NAMES.contains(&name.as_str()),
+                "unexpected core tool: {name}"
+            );
+        }
+        // No specialists leak into the minimal surface.
+        for excluded in ["agent", "plur", "optmem", "browser", "codemode"] {
+            assert!(!core.iter().any(|n| n == excluded), "{excluded}");
+        }
+    }
 
     /// Every tool the model can see (a schema in `tool_defs`) must have a
     /// `dispatch` arm, and vice-versa. Because the two rosters live in separate

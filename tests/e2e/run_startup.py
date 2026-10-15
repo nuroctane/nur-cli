@@ -198,6 +198,11 @@ def blocked_models(binary, skill=False, cancel=False, controls=False, compact=Fa
             folder = root/'different-folder-name'
             folder.mkdir(parents=True)
             (folder/'SKILL.md').write_text('---\nname: startup-probe\ndescription: Startup fixture\n---\n'+body, encoding='utf-8')
+        # Project-local skills are inert until trusted; approve the fixture.
+        trusted = subprocess.run([str(binary), '--cwd', str(workspace), 'skills', 'trust'],
+                                 env=env, cwd=workspace, stdin=subprocess.DEVNULL,
+                                 capture_output=True, text=True, timeout=30)
+        assert trusted.returncode == 0, f'skills trust failed: {trusted.stderr[:300]}'
     (home/'.nur/config.toml').write_text(
         f'provider = "vllm"\nmodel = "local-model"\nbase_url = "http://127.0.0.1:{server.server_port}/v1"\n'
         'theme = "gold"\necosystem_auto_ensure = false\nauto_update = false\nnative_memory = false\n[typesafe]\nenabled = false\n', encoding='utf-8')

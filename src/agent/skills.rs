@@ -17,6 +17,25 @@ pub struct Skill {
     pub description: String,
     pub body: String,
     pub path: PathBuf,
+    /// `disable-model-invocation: true` — the model must never auto-activate
+    /// or tool-load this skill; only an explicit user `/name` works.
+    pub disable_model_invocation: bool,
+    /// `user-invocable: false` — hidden from the `/skills` palette and slash
+    /// resolution (engine-only skill, activated by the harness itself).
+    pub user_invocable: bool,
+}
+
+impl Default for Skill {
+    fn default() -> Self {
+        Skill {
+            name: String::new(),
+            description: String::new(),
+            body: String::new(),
+            path: PathBuf::new(),
+            disable_model_invocation: false,
+            user_invocable: true,
+        }
+    }
 }
 
 /// Result of matching the user message to an installed skill.
@@ -1082,7 +1101,10 @@ pub(crate) fn phrase_matches(haystack: &str, needle: &str) -> bool {
 
 fn find_installed<'a>(skills: &'a [Skill], names: &[&str]) -> Option<&'a Skill> {
     for n in names {
-        if let Some(sk) = skills.iter().find(|s| s.name.eq_ignore_ascii_case(n)) {
+        if let Some(sk) = skills
+            .iter()
+            .find(|s| s.name.eq_ignore_ascii_case(n) && !s.disable_model_invocation)
+        {
             return Some(sk);
         }
     }
@@ -1197,6 +1219,9 @@ fn skill_name_mentioned(user_norm: &str, skill_name: &str) -> bool {
 fn discover_by_skill_name<'a>(user_norm: &str, skills: &'a [Skill]) -> Option<&'a Skill> {
     let mut best: Option<(&'a Skill, usize)> = None;
     for sk in skills {
+        if sk.disable_model_invocation {
+            continue;
+        }
         if !skill_name_mentioned(user_norm, &sk.name) {
             continue;
         }
@@ -1240,6 +1265,9 @@ fn discover_by_description_intent<'a>(user_norm: &str, skills: &'a [Skill]) -> O
     }
     let mut scored: Vec<(&'a Skill, usize)> = Vec::new();
     for sk in skills {
+        if sk.disable_model_invocation {
+            continue;
+        }
         let desc_norm = normalize_intent_text(&sk.description);
         if desc_norm.is_empty() {
             continue;
@@ -1252,8 +1280,9 @@ fn discover_by_description_intent<'a>(user_norm: &str, skills: &'a [Skill]) -> O
             .iter()
             .filter(|t| desc_tokens.iter().any(|d| d == *t))
             .count();
-        // Need a solid multi-token overlap so casual chat does not false-fire.
-        if hits >= 3 {
+        // Need a solid multi-token overlap so casual chat does not false-fire
+        // (three shared words fired on generic phrasing too often).
+        if hits >= 4 {
             scored.push((sk, hits));
         }
     }
@@ -1442,6 +1471,9 @@ pub fn jev_skill_candidates(user_text: &str, skills: &[Skill], limit: usize) -> 
     }
     let mut scored: Vec<(&Skill, usize)> = Vec::new();
     for sk in skills {
+        if sk.disable_model_invocation {
+            continue;
+        }
         let desc_norm = normalize_intent_text(&sk.description);
         if desc_norm.is_empty() {
             continue;
@@ -1509,14 +1541,19 @@ fn read_skill_body(sk: &Skill) -> String {
 
 /// Look up an installed skill by its exact `name` (case-insensitive).
 /// Powers slash invocation of any skill: `/adhd`, `/scan`, etc.
+/// Skills flagged `user-invocable: false` are engine-only and do not resolve.
 pub fn skill_by_name(cwd: &Path, name: &str) -> Option<Skill> {
+    skill_by_name_in(&load_skills(cwd), name)
+}
+
+fn skill_by_name_in(skills: &[Skill], name: &str) -> Option<Skill> {
     let want = name.trim().trim_start_matches('/').to_ascii_lowercase();
-    let skills = load_skills(cwd);
     skills
         .iter()
+        .filter(|s| s.user_invocable)
         .find(|s| s.name.eq_ignore_ascii_case(&want))
         .or_else(|| {
-            skills.iter().find(|s| {
+            skills.iter().filter(|s| s.user_invocable).find(|s| {
                 s.path
                     .parent()
                     .and_then(|p| p.file_name())
@@ -1546,9 +1583,12 @@ pub fn slash_activation_section(sk: &Skill) -> String {
 
 /// Discover skills from (first match wins per name):
 /// - `$NUR_HOME/skills` (or `~/.nur/skills`) — primary
+/// - the repo `skills/` tree in debug builds/tests only (never shipped)
 /// - enabled marketplace plugins under `~/.nur/plugins/` (skills/ + pack roots)
 /// - `~/.agents/skills` (Agent Skills / graphify install --platform agents)
-/// - `<cwd>/.agents/skills` · `<cwd>/.nur/skills`
+/// - project roots `<cwd>/.nur/skills` · `.claude/skills` · `.agents/skills`,
+///   which override globals by name and count only while the project is
+///   trusted (`/skills trust`, see agent::skill_trust)
 ///
 /// Max directory depth when walking for nested SKILL.md (category/pack layouts).
 pub(crate) const SKILL_WALK_MAX_DEPTH: usize = 5;
@@ -1705,18 +1745,20 @@ fn parse_skill_impl(path: &Path, include_body: bool) -> Option<Skill> {
         use std::io::BufRead;
         let mut reader = std::io::BufReader::new(std::fs::File::open(path).ok()?);
         let mut text = String::new();
+        let mut lines = 0;
         loop {
             if reader.read_line(&mut text).ok()? == 0 {
                 break;
             }
+            lines += 1;
+            if lines > 512 {
+                break;
+            }
             if let Some(content) = text.strip_prefix("---") {
-                if let Some(end) = content.find("---") {
-                    let description = parse_frontmatter_scalar(&content[..end], "description");
-                    if description.is_some_and(|s| !matches!(s.as_str(), ">-" | "|" | ">" | ""))
-                        || !content[end + 3..].trim().is_empty()
-                    {
-                        break;
-                    }
+                // Stop once the whole frontmatter block is in (flags like
+                // `disable-model-invocation` may follow the description).
+                if content.find("---").is_some() {
+                    break;
                 }
             } else if !text.trim().is_empty() {
                 break;
@@ -1732,21 +1774,32 @@ fn parse_skill_impl(path: &Path, include_body: bool) -> Option<Skill> {
         .to_string();
 
     // Optional YAML frontmatter
-    let (name, description, body) = if let Some(content) = text.strip_prefix("---") {
-        if let Some(end) = content.find("---") {
-            let fm = &content[..end];
-            let body = content[end + 3..].trim();
-            let fm_name = parse_frontmatter_scalar(fm, "name").filter(|s| !s.is_empty());
-            let desc = parse_frontmatter_scalar(fm, "description")
-                .filter(|s| s != ">-" && s != "|" && s != ">" && !s.is_empty())
-                .unwrap_or_else(|| first_line(body));
-            (fm_name.unwrap_or(folder_name), desc, body)
+    let (name, description, body, disable_model_invocation, user_invocable) =
+        if let Some(content) = text.strip_prefix("---") {
+            if let Some(end) = content.find("---") {
+                let fm = &content[..end];
+                let body = content[end + 3..].trim();
+                let fm_name = parse_frontmatter_scalar(fm, "name").filter(|s| !s.is_empty());
+                let desc = parse_frontmatter_scalar(fm, "description")
+                    .filter(|s| s != ">-" && s != "|" && s != ">" && !s.is_empty())
+                    .unwrap_or_else(|| first_line(body));
+                let disable = parse_frontmatter_scalar(fm, "disable-model-invocation")
+                    .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+                let invocable = !parse_frontmatter_scalar(fm, "user-invocable")
+                    .is_some_and(|v| v.eq_ignore_ascii_case("false"));
+                (
+                    fm_name.unwrap_or(folder_name),
+                    desc,
+                    body,
+                    disable,
+                    invocable,
+                )
+            } else {
+                (folder_name, first_line(&text), text.as_str(), false, true)
+            }
         } else {
-            (folder_name, first_line(&text), text.as_str())
-        }
-    } else {
-        (folder_name, first_line(&text), text.as_str())
-    };
+            (folder_name, first_line(&text), text.as_str(), false, true)
+        };
 
     let body = if include_body {
         body.chars().take(12_000).collect()
@@ -1758,6 +1811,8 @@ fn parse_skill_impl(path: &Path, include_body: bool) -> Option<Skill> {
         description,
         body,
         path: path.to_path_buf(),
+        disable_model_invocation,
+        user_invocable,
     })
 }
 
@@ -1895,6 +1950,7 @@ Some prose about the skill.";
             description: "test".into(),
             body: "body".into(),
             path: PathBuf::from(format!("/tmp/{name}/SKILL.md")),
+            ..Default::default()
         }
     }
 
@@ -2168,6 +2224,7 @@ Some prose about the skill.";
             description: "interview the user with hard questions".into(),
             body: "ask tough questions".into(),
             path: PathBuf::from("/tmp/grill-me/SKILL.md"),
+            ..Default::default()
         }];
         let (sk, _) = detect_skill_activation("please run grill-me on this design", &skills)
             .expect("name mention should activate");
@@ -2196,12 +2253,14 @@ Some prose about the skill.";
                     .into(),
                 body: "clone".into(),
                 path: PathBuf::from("/tmp/pixel-clone/SKILL.md"),
+                ..Default::default()
             },
             Skill {
                 name: "other".into(),
                 description: "unrelated helper for database migrations".into(),
                 body: "db".into(),
                 path: PathBuf::from("/tmp/other/SKILL.md"),
+                ..Default::default()
             },
         ];
         let (sk, _) = detect_skill_activation(
@@ -2220,12 +2279,14 @@ Some prose about the skill.";
                 description: "pixel perfect website reverse engineering pipeline".into(),
                 body: "x".into(),
                 path: PathBuf::from("/tmp/a/SKILL.md"),
+                ..Default::default()
             },
             Skill {
                 name: "b".into(),
                 description: "pixel perfect website reverse engineering pipeline".into(),
                 body: "y".into(),
                 path: PathBuf::from("/tmp/b/SKILL.md"),
+                ..Default::default()
             },
         ];
         assert!(detect_skill_activation(
@@ -2291,6 +2352,87 @@ body
                 .0
                 .name,
             "startup-competitors"
+        );
+    }
+
+    #[test]
+    fn frontmatter_flags_are_parsed() {
+        let dir = std::env::temp_dir().join(format!("nur-skill-flags-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("SKILL.md");
+        std::fs::write(
+            &path,
+            "---\nname: checklist-helper\ndescription: keeps a small checklist\ndisable-model-invocation: true\nuser-invocable: false\n---\n\n# Checklist\nbody\n",
+        )
+        .unwrap();
+        let sk = parse_skill(&path).unwrap();
+        assert!(sk.disable_model_invocation);
+        assert!(!sk.user_invocable);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn disable_model_invocation_skips_every_nl_matcher_but_stays_loadable() {
+        let mut sk = fake_skill("internal-checklist");
+        sk.disable_model_invocation = true;
+        sk.description = "audit smart contract solidity reentrancy findings report".into();
+        let skills = vec![sk];
+        assert!(
+            detect_skill_activation("please use internal-checklist now", &skills).is_none(),
+            "name match"
+        );
+        assert!(
+            detect_skill_activation("use internal checklist", &skills).is_none(),
+            "spaced name"
+        );
+        assert!(
+            jev_skill_candidates(
+                "audit smart contract solidity reentrancy findings report",
+                &skills,
+                8
+            )
+            .is_empty(),
+            "jev candidates"
+        );
+        assert!(
+            crate::agent::skill_intents::find_by_expanded_triggers(
+                "please use internal checklist now",
+                &skills
+            )
+            .is_none(),
+            "expanded triggers"
+        );
+        // Explicit user load still works: the slash lookup only filters
+        // user-invocable, not disable-model-invocation.
+        assert!(skill_by_name_in(&skills, "internal-checklist").is_some());
+    }
+
+    #[test]
+    fn user_invocable_false_hides_from_slash_resolution() {
+        let mut engine_only = fake_skill("agent-only-skill");
+        engine_only.user_invocable = false;
+        let normal = fake_skill("plain-helper");
+        let skills = vec![engine_only, normal];
+        assert!(
+            skill_by_name_in(&skills, "agent-only-skill").is_none(),
+            "engine-only skills must not resolve for the user"
+        );
+        assert!(skill_by_name_in(&skills, "plain-helper").is_some());
+        assert!(skill_by_name_in(&skills, "/plain-helper").is_some());
+    }
+
+    #[test]
+    fn description_intent_needs_four_shared_words() {
+        let mut three = fake_skill("three-shared");
+        three.description = "audit smart contract handbook".into();
+        let mut four = fake_skill("four-shared");
+        four.description = "audit smart contract security checklist".into();
+        let skills = vec![three, four];
+        let found = discover_by_description_intent("audit smart contract security", &skills);
+        assert_eq!(
+            found.map(|s| s.name.as_str()),
+            Some("four-shared"),
+            "three shared words must not fire; four must"
         );
     }
 }

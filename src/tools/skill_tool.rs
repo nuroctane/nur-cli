@@ -89,29 +89,84 @@ impl Tool for SkillTool {
                             "skill '{name}' not found — action=list to see installed skills"
                         ))
                     })?;
-                // Re-read the file so large packs aren't truncated.
-                let body = std::fs::read_to_string(&skill.path)
-                    .map(|t| {
-                        // Strip YAML frontmatter if present.
-                        if let Some(content) = t.strip_prefix("---") {
-                            if let Some(end) = content.find("---") {
-                                return content[end + 3..].trim().to_string();
-                            }
-                        }
-                        t
-                    })
-                    .unwrap_or_else(|_| skill.body.clone());
-                let body: String = body.chars().take(80_000).collect();
-                Ok(format!(
-                    "# Skill: {} ({})\n\n{}",
-                    skill.name,
-                    skill.path.display(),
-                    body
-                ))
+                read_skill_body(skill)
             }
             other => Err(NurError::Tool(format!(
                 "unknown action '{other}' — use list or read"
             ))),
         }
+    }
+}
+
+/// Load a skill's full instructions for the model. `disable-model-invocation`
+/// skills are user-only: the tool refuses so the model cannot pull a body the
+/// author explicitly kept out of model reach.
+fn read_skill_body(skill: &crate::agent::skills::Skill) -> Result<String> {
+    if skill.disable_model_invocation {
+        return Err(NurError::Tool(format!(
+            "skill '{}' sets disable-model-invocation - the user can run /{} explicitly",
+            skill.name, skill.name
+        )));
+    }
+    // Re-read the file so large packs aren't truncated.
+    let body = std::fs::read_to_string(&skill.path)
+        .map(|t| {
+            // Strip YAML frontmatter if present.
+            if let Some(content) = t.strip_prefix("---") {
+                if let Some(end) = content.find("---") {
+                    return content[end + 3..].trim().to_string();
+                }
+            }
+            t
+        })
+        .unwrap_or_else(|_| skill.body.clone());
+    let body: String = body.chars().take(80_000).collect();
+    Ok(format!(
+        "# Skill: {} ({})\n\n{}",
+        skill.name,
+        skill.path.display(),
+        body
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_skill(dir: &std::path::Path, frontmatter: &str) -> std::path::PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        let path = dir.join("SKILL.md");
+        std::fs::write(
+            &path,
+            format!("---\n{frontmatter}---\n\n# Body\nstep one\n"),
+        )
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn read_refuses_a_disable_model_invocation_skill() {
+        let dir = std::env::temp_dir().join(format!("nur-skilltool-{}", std::process::id()));
+        let path = write_skill(
+            &dir,
+            "name: checklist-helper\ndescription: keeps a checklist\ndisable-model-invocation: true\n",
+        );
+        let skill = crate::agent::skills::parse_skill(&path).unwrap();
+        let err = read_skill_body(&skill).unwrap_err().to_string();
+        assert!(
+            err.contains("disable-model-invocation"),
+            "expected refusal, got: {err}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn read_loads_a_normal_skill() {
+        let dir = std::env::temp_dir().join(format!("nur-skilltool-ok-{}", std::process::id()));
+        let path = write_skill(&dir, "name: plain-helper\ndescription: helps\n");
+        let skill = crate::agent::skills::parse_skill(&path).unwrap();
+        let body = read_skill_body(&skill).unwrap();
+        assert!(body.contains("step one"), "{body}");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -138,6 +138,8 @@ pub fn find_project_instructions(cwd: &Path) -> Option<(String, String)> {
 pub struct PromptContext {
     cwd: PathBuf,
     is_subagent: bool,
+    /// `[tools] profile = "core"`: minimal tool surface, no ecosystem prose.
+    core_profile: bool,
     /// Active model id (wire format).
     model: String,
     /// Human provider name (e.g. "xAI Grok", "Meta Model API").
@@ -237,8 +239,9 @@ impl PromptContext {
     }
 
     /// `poor_mode`: skip PLUR inject and long memory excerpts to cut background
-    /// token spend (toggle via `/poor`). Does **not** disable skill activation -
-    /// NL and slash skills still fire.
+    /// token spend (toggle via `/poor`). Does **not** disable explicit skill
+    /// activation - slash and the skill tool still fire, and NL activation
+    /// follows `[skills] auto_activate` as usual.
     ///
     /// `user_text`: current user message - used for natural-language skill
     /// activation (e.g. "think like fable" → inject fable-method body).
@@ -251,31 +254,37 @@ impl PromptContext {
         user_text: Option<&str>,
         effort: &str,
     ) -> Self {
+        let cfg = crate::config::load_config().unwrap_or_default();
         // Prefetched per workspace and refreshed between turns, so the PLUR CLI
         // never runs in front of a model request (only a first turn may wait).
-        let plur = if is_subagent || poor_mode {
+        let core = cfg.tools.is_core();
+        let plur = if is_subagent || poor_mode || core {
             String::new()
         } else {
             ecosystem::plur_context(cwd)
                 .map(|s| format!("\n# PLUR shared memory (auto-injected)\n{s}\n"))
                 .unwrap_or_default()
         };
-        let cfg = crate::config::load_config().unwrap_or_default();
-        let optmem = crate::optmem::prompt_block(cfg.optmem.enabled, is_subagent, poor_mode);
+        let optmem = if core {
+            String::new()
+        } else {
+            crate::optmem::prompt_block(cfg.optmem.enabled, is_subagent, poor_mode)
+        };
         let memory = if poor_mode {
             String::new()
         } else {
             memory_prompt_excerpt(3000)
         };
-        // Skills: on-demand only. NL activation runs for every provider (not
-        // gated by poor_mode). Subagents skip - they get a focused task prompt.
+        // Skills: on-demand only. NL auto-activation is opt-in
+        // ([skills] auto_activate); slash and the skill tool always work.
+        // Subagents skip - they get a focused task prompt.
         let (
             activation,
             activation_label,
             activation_skill,
             activation_requirements,
             activation_path,
-        ) = if is_subagent {
+        ) = if is_subagent || !cfg.skills.auto_activate {
             (String::new(), None, None, Vec::new(), None)
         } else if let Some(text) = user_text {
             let loaded = load_skills(cwd);
@@ -295,8 +304,9 @@ impl PromptContext {
         // Cross-provider nudge: only when the user *explicitly asks* to delegate
         // work to another backend this turn (e.g. "spawn a grok subagent",
         // "have claude review"). A bare mention ("the claude error") must never
-        // nudge a fan-out - that wasted tokens and derailed turns.
-        let named_providers = if is_subagent {
+        // nudge a fan-out - that wasted tokens and derailed turns. The core
+        // profile has no agent tool, so it skips the nudge entirely.
+        let named_providers = if is_subagent || core {
             Vec::new()
         } else {
             user_text
@@ -306,6 +316,7 @@ impl PromptContext {
         Self {
             cwd: cwd.to_path_buf(),
             is_subagent,
+            core_profile: core,
             model: model.to_string(),
             provider: provider.to_string(),
             shell_label: shell_backend().label.clone(),
@@ -320,7 +331,9 @@ impl PromptContext {
             activation_path,
             named_providers,
             // Subagents cannot delegate, so orchestration is the root's job.
-            ultracode: !is_subagent && crate::providers::canonical_effort(effort) == "ultracode",
+            ultracode: !is_subagent
+                && !core
+                && crate::providers::canonical_effort(effort) == "ultracode",
         }
     }
 
@@ -431,82 +444,56 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
             };
         }
 
-        let mut s = format!(
-            r#"{role}
-
-Workspace: {}
-OS: {} · shell: {}
-
-# Permission modes
-The active mode is stated in the turn-state item at the end of the conversation
-and the user can switch it (Shift+Tab) at any time; always act on the latest.
-
-PLAN (explore + analyze, no repo changes): read, parse, and understand the
-workspace freely. In the shell, a known read-only command set runs directly
-(ls, cat, grep/rg/sgrep, jq, git status/log/diff/show and the other read-only
-git forms, PowerShell Get-*, …); anything else - tests, builds, scripts,
-copies - asks the user for approval first, so prefer the free readers.
-Free: read_file, list_dir, sgrep, grep, glob, web_fetch, web_search, look, extract_frames,
-git_status, git_diff, skill, memory(read), todo_write, submit_plan, codemode,
-graphify(query|path|explain|status|report|affected), excalidraw(status|reference),
-plur(recall|status|…), ruflo(memory_search|status|…), executor(search|status),
-enclave(status|tools), and bash for the read-only set above.
-BLOCKED in plan mode (do NOT attempt - they need manual/auto via Shift+Tab):
-- Authoring code: write_file, edit_file, multi_edit, apply_patch.
-- Submitting/mutating the repo via shell: git commit/push/add/reset/checkout/
-  restore/stash/merge/rebase/pull, gh pr create/merge, and dependency installs
-  (npm/pnpm/yarn/pip/cargo/… install/add).
-- Mutating knowledge: graphify(extract|update), excalidraw(create|export),
-  plur(learn|capture), ruflo(memory_store|swarm_init), executor(call|install),
-  enclave(call), memory(append), agent.
-Do your investigation, then deliver the plan via submit_plan. Describe the edits
-you WOULD make; don't make them until the user switches mode.
-
-MANUAL: mutating tools need user approval. Prefer apply_patch/multi_edit for
-structured edits.
-
-AUTO: tools auto-approved. Prefer minimal safe diffs; avoid destructive shell.
-
-# Tools
-read_file, list_dir, write_file, edit_file, multi_edit, apply_patch, bash, sgrep, grep, glob,
-web_fetch, web_search, look, extract_frames, git_status, git_diff,
-context (RLM store), anydoc (docs→md), goal, proposal, harness (continual refine),
-connectome (agent-native memory + chronicle continuity), repl (persistent Python REPL),
-graphify, excalidraw, plur, ruflo, skill, memory, todo_write, submit_plan, agent,
-codemode (JS script that calls read-only tools in one round)
-
-The full tool surface is offered on every request so the schemas stay cached
-across the session. Never invent a tool call whose schema is not available.
-
-## Turn economics
-Every turn re-sends the whole conversation, so a turn costs far more than a
-tool call. Go wide rather than deep: when the next calls do not depend on each
-other's output - reading several files, running the build and the tests,
-probing two hypotheses - issue them together in one turn instead of one per
-turn. You never have to babysit slow work: a long `bash` command is handed to a
-background job and its result arrives on its own, so keep doing useful work
-instead of polling it. When the next step is 3+ read-only calls whose outputs
-feed each other and you only need part of the result - read these files and
-count the matches, grep then open each hit, walk a directory tree - write one
-`codemode` script instead: it calls `tools.<name>(args)` in a loop and only
-what it prints comes back. Mutating work stays in ordinary tool calls.
-
-## Tool policy - search and failure handling (critical for all backends including Meta)
-- SEARCH - `sgrep` first, then `grep`/`glob`; never the shell. `sgrep` is semantic search (Context.dev sgrep, local, ripgrep-backed): describe what the code does in plain English - "where are retries with backoff", "code that validates the session token" - and it returns the few ranked chunks that matter, exact identifier hits first. Lead with it whenever you know the behavior but not the name, when orienting in unfamiliar code, or when a grep would return more than a screen; pass `pattern` to have it rerank a regex's matches by intent instead. Use `grep` for an exact identifier, string or regex you already know, and `glob` for file names. NEVER use bash commands like `grep`, `rg`, `ag`, `find`, `ls`, `Get-ChildItem`, etc. for searching: the search tools are sandboxed, respect .gitignore, and are the only reliable search path. When sgrep is not installed it says so and answers with grep, so leading with it is never a wasted call. This applies to all models with no exceptions.
-- FILE IO - dedicated tools only: `list_dir` for directory shape, `read_file` for contents. NEVER use bash `cat`, `type`, `ls`, `dir`, `head`, `tail` to read workspace. Cheaper, faster, and never hangs.
-- GIT - use `git_status` / `git_diff` tools, not `bash git ...` - they are approval-free and structured. Reserve bash git only when the tool does not cover the needed flag.
-- BASH: real shell when available (Git Bash/pwsh). The result is the stdout alone; `Stderr:` and `Exit code: N` sections appear only when non-empty / non-zero (no `Exit code` line means 0), `(no output)` when nothing was printed. Long output keeps head and tail around a `...N bytes truncated; complete output in <path>...` marker (`max_output_length` sets the cap; `read_file` the path when the middle matters). Prefer non-interactive one-shot commands; pipelines and `&&` chains are fine. Default timeout 60s (hard max 600s); a command still producing output at the deadline is handed to a background job whose result arrives in a later turn, a silent one is killed and may be retried once with a larger `timeout_ms` or `background=true`. The harness refuses identical retries of a command that hung or was cancelled, and refuses hang-prone patterns (dev servers, watch, `read -p`, `while true`).
-- FAILURE RECOVERY - mandatory: If ANY tool returns error, `exit_code != 0`, timeout, idle-kill, or cancellation:
-  1) STOP - read exit_code/stdout/stderr.
-  2) Do NOT retry the identical failing command (harness will refuse anyway).
-  3) SWITCH to the canonical tool: failed `ls` -> `list_dir`, failed `cat` -> `read_file`, failed `grep` via bash -> `sgrep`/`grep` tool, failed `find` -> `glob`/`grep`.
-  4) If a base command repeatedly fails (e.g. command not found on Windows), immediately use the dedicated tool and never hang the turn.
-  5) On timeout/idle-kill, do not bump timeout_ms - change approach.
-  Claude and other models often re-run the same failing script - that wastes the turn. Self-correct immediately.
-- HANG PREVENTION: Never run interactive, watch, or long-lived server commands. Prefer `sgrep`/`grep`/`list_dir`/`read_file`/`glob`.
-- Paths are sandboxed to the workspace - never scan drive roots (`/`, `C:\`, `~`).
-- web_search -> find docs/errors; web_fetch -> read a result url (text only - not video)
-- look: attach image(s) or a short video for **vision**. Prefer look over guessing from filenames.
+        // Sections that differ between the full and the `core` tool profile.
+        // The core profile offers ~15 local tools and none of the ecosystem
+        // prose; both variants stay fixed for the whole session so the
+        // provider's cached prefix holds.
+        let plan_lists = if self.core_profile {
+            "Free: read_file, list_dir, sgrep, grep, glob, web_fetch, web_search, question,\n\
+             todo_write, submit_plan, and bash for the read-only set above.\n\
+             BLOCKED in plan mode (do NOT attempt - they need manual/auto via Shift+Tab):\n\
+             - Authoring code: write_file, edit_file, multi_edit, apply_patch.\n\
+             - Mutating the repo via shell: git commit/push/add/reset/checkout/restore/stash/\n\
+             merge/rebase/pull, and dependency installs (npm/pip/cargo/… install/add)."
+        } else {
+            "Free: read_file, list_dir, sgrep, grep, glob, web_fetch, web_search, look, extract_frames,\n\
+             git_status, git_diff, skill, memory(read), todo_write, submit_plan, codemode,\n\
+             graphify(query|path|explain|status|report|affected), excalidraw(status|reference),\n\
+             plur(recall|status|…), ruflo(memory_search|status|…), executor(search|status),\n\
+             enclave(status|tools), and bash for the read-only set above.\n\
+             BLOCKED in plan mode (do NOT attempt - they need manual/auto via Shift+Tab):\n\
+             - Authoring code: write_file, edit_file, multi_edit, apply_patch.\n\
+             - Submitting/mutating the repo via shell: git commit/push/add/reset/checkout/\n\
+             restore/stash/merge/rebase/pull, gh pr create/merge, and dependency installs\n\
+             (npm/pnpm/yarn/pip/cargo/… install/add).\n\
+             - Mutating knowledge: graphify(extract|update), excalidraw(create|export),\n\
+             plur(learn|capture), ruflo(memory_store|swarm_init), executor(call|install),\n\
+             enclave(call), memory(append), agent."
+        };
+        let tools_catalog = if self.core_profile {
+            "read_file, list_dir, write_file, edit_file, multi_edit, apply_patch, bash,\n\
+             sgrep, grep, glob, web_fetch, web_search, todo_write, question, submit_plan"
+        } else {
+            "read_file, list_dir, write_file, edit_file, multi_edit, apply_patch, bash, sgrep, grep, glob,\n\
+             web_fetch, web_search, look, extract_frames, git_status, git_diff,\n\
+             context (RLM store), anydoc (docs→md), goal, proposal, harness (continual refine),\n\
+             connectome (agent-native memory + chronicle continuity), repl (persistent Python REPL),\n\
+             graphify, excalidraw, plur, ruflo, skill, memory, todo_write, submit_plan, agent,\n\
+             codemode (JS script that calls read-only tools in one round)"
+        };
+        let codemode_note = if self.core_profile {
+            ""
+        } else {
+            " When the next step is 3+ read-only calls whose outputs\n\
+             feed each other and you only need part of the result - read these files and\n\
+             count the matches, grep then open each hit, walk a directory tree - write one\n\
+             `codemode` script instead: it calls `tools.<name>(args)` in a loop and only\n\
+             what it prints comes back. Mutating work stays in ordinary tool calls."
+        };
+        let ecosystem_bullets = if self.core_profile {
+            ""
+        } else {
+            r#"- look: attach image(s) or a short video for **vision**. Prefer look over guessing from filenames.
 - extract_frames: sparse keyframes via ffmpeg (default ~1fps, max ~8). Writes `.nur/frames/…`
   and auto-queues look. Use for design-from-video - never frame-by-frame every pixel.
 - Design-from-short-video (efficient): extract_frames -> inspect stills -> design tokens ->
@@ -519,21 +506,19 @@ what it prints comes back. Mutating work stays in ordinary tool calls.
   NEVER OS-open a local `.excalidraw` (Start-Process / open_path / xdg-open) — that causes
   Windows "Open with". Browser share URL only. Prefer docs/ or .nur/diagrams/ (never Desktop).
   Supports elements_path= and from_mermaid=. For offline desktop boards use tldraw /draw.
-- plur: shared engram memory (~/.plur/). learn corrections/preferences; inject/recall across
-  sessions. Auto-injected at session start. Never store secrets.
+- plur: shared engram memory (~/.plur/). Auto-injected at session start. Never store secrets.
 - optmem: permanent OptMem under ~/.optmem (wake/note/nap/recall). Auto-wake for root agents;
-  subagents must not run memo. Prefer for lasting decisions; plur for style prefs.
+  subagents must not run memo.
 - headroom: context compression - large tool results are auto-compressed when enabled
   (default on; disable via [headroom] enabled=false). Tool: status|doctor|compress.
-- ruflo: vector memory + swarm harness. Global DB at ~/.nur/ruflo/. Prefer plur for preferences,
-  ruflo for pattern/embedding memory, graphify for code structure.
-        - **egaki** - image/video/speech gen (`egaki` CLI). Prefer `egaki login --provider chatgpt` or `xai-oauth`; BYOK via google/openai/fal. Then image|video|speech → `.nur/media/` → look.
-  Writes .nur/media/ - then look. Prefer over guessing pixels.
+- ruflo: vector memory + swarm harness. Global DB at ~/.nur/ruflo/.
+- egaki: image/video/speech gen (`egaki` CLI). Prefer `egaki login --provider chatgpt` or
+  `xai-oauth`; BYOK via google/openai/fal. Writes .nur/media/ - then look.
 - fractal: hierarchical agent loops in git worktrees (Unix). Unattended nodes bypass
   approvals - confirm with the user before node start. Factory overnight prefers fractal.
-- penecho: 20k canvas beyond chat (ink/MathJax/plots). `launch` auto-installs via npm,
-  writes ~/.penecho/config.env from nur auth (or codex/claude/kimi CLI), opens browser to
-  http://127.0.0.1:3888. Also stop|restart|inject|export_png. Never ask the user to diagnose.
+- penecho: 20k canvas beyond chat (ink/MathJax/plots). `launch` auto-installs via npm and,
+  on that approved launch, writes ~/.penecho/config.env from nur auth, then opens the browser
+  to http://127.0.0.1:3888. Also stop|restart|inject|export_png. Never ask the user to diagnose.
 - bg: background jobs so long work does not block the agent. action=run|list|status|result|cancel.
   Status chip in the TUI footer. /bg slash. Diagram tools accept background=true on install/launch.
 - diagram skill: router - architecture→excalidraw (browser share only), offline board→tldraw,
@@ -541,20 +526,16 @@ what it prints comes back. Mutating work stays in ordinary tool calls.
 - executor: MCP gateway (executor.sh) for external OpenAPI/GraphQL/MCP integrations - not for
   local repo edits. action=sources|search|call.
 - enclave: Enclave (enclave.ai) security agents over native MCP - pentests, code security review,
-  findings, CVE monitoring. action=tools first (names + schemas), then call tool=<name> arguments={{...}}.
+  findings, CVE monitoring. action=tools first (names + schemas), then call tool=<name> arguments={...}.
   Calls start real work on real systems: target only what the user named or Enclave already has in
   scope. No key -> tell the user `nur auth login --provider enclave`.
-- skill: action=list / action=read - load one skill by name when needed. Skills are **not**
-  pre-loaded into this prompt (catalog would waste tokens). Discover with skill(list) or
-  skill(read, name=…). Never load every playbook at once (e.g. cybersecurity: one by name).
-- Skills activate on demand only: natural-language intent (e.g. "think like fable") or
-  `/skill-name` slash. When a **SKILL ACTIVATED** item appears in the conversation, follow it for the turn.
-- UI polish -> design-eng. Site clone -> clone-website-meta. Security -> cybersecurity then one playbook. Smart-contract / DeFi whitehat -> sc-research then one playbook. Paid Immunefi/X bounty -> hunting-x-linked-bounties then the Playbook column. Historical bounty/hack class -> historical-smart-contract-vulns then one reference slice. Bybit/drainer/phishing/zachxbt -> investigator-ops slice or reviewing-frontend-and-ops-surfaces.
-- agent: spawn explore (read-only) or general subagent - see **# Cross-provider subagents** below when the user names another provider
-- todo_write: maintain a live task list for multi-step work (always keep one in_progress)
-- submit_plan: formal plan artifact in plan mode
-- memory: local markdown journal ~/.nur/memory.md (never store secrets) - complementary to plur
-- Prefer edit_file / multi_edit / apply_patch over full rewrites
+- memory: local markdown journal ~/.nur/memory.md (never store secrets)
+"#
+        };
+        let subagents_section = if self.core_profile {
+            String::new()
+        } else {
+            r#"- agent: spawn explore (read-only) or general subagent - see **# Cross-provider subagents** below when the user names another provider
 
 # Cross-provider subagents
 Only when the user **explicitly asks you to run work on another backend** - e.g. "spawn a
@@ -569,13 +550,13 @@ inheriting this session's backend.
 Concrete shapes (mirror these; aliases are fine - nur resolves them):
 
 - Claude / Anthropic:
-  agent({{"provider":"claude","subagent_type":"general","description":"claude review","prompt":"Review auth for race conditions"}})
+  agent({"provider":"claude","subagent_type":"general","description":"claude review","prompt":"Review auth for race conditions"})
 - Grok / xAI:
-  agent({{"provider":"grok","subagent_type":"general","description":"grok audit","prompt":"Audit failover paths"}})
+  agent({"provider":"grok","subagent_type":"general","description":"grok audit","prompt":"Audit failover paths"})
 - Gemini / Google API:
-  agent({{"provider":"gemini","subagent_type":"explore","description":"gemini research","prompt":"Map the graphify module"}})
+  agent({"provider":"gemini","subagent_type":"explore","description":"gemini research","prompt":"Map the graphify module"})
 - Antigravity (own OAuth - not the same as gemini/google):
-  agent({{"provider":"antigravity","subagent_type":"general","description":"agy implement","prompt":"Implement the missing test"}})
+  agent({"provider":"antigravity","subagent_type":"general","description":"agy implement","prompt":"Implement the missing test"})
 
 Alias → catalog id (pass either): claude/sonnet/opus/haiku → anthropic; grok → xai;
 gemini → google; chatgpt/gpt → openai; antigravity/agy stays **antigravity** (never collapse to google).
@@ -592,10 +573,80 @@ report the failure clearly. OMP is an explicit specialized delegation tool, neve
 recovery path for broken subagent orchestration.
 
 Fan-out: one `agent` call per target provider; set `provider` on every call the user named.
-"#,
+"#
+            .to_string()
+        };
+        let mut s = format!(
+            r#"{role}
+
+Workspace: {}
+OS: {} · shell: {}
+
+# Permission modes
+The active mode is stated in the turn-state item at the end of the conversation
+and the user can switch it (Shift+Tab) at any time; always act on the latest.
+
+PLAN (explore + analyze, no repo changes): read, parse, and understand the
+workspace freely. In the shell, a known read-only command set runs directly
+(ls, cat, grep/rg/sgrep, jq, git status/log/diff/show and the other read-only
+git forms, PowerShell Get-*, …); anything else - tests, builds, scripts,
+copies - asks the user for approval first, so prefer the free readers.
+{plan_lists}
+Do your investigation, then deliver the plan via submit_plan. Describe the edits
+you WOULD make; don't make them until the user switches mode.
+
+MANUAL: mutating tools need user approval. Prefer apply_patch/multi_edit for
+structured edits.
+
+AUTO: tools auto-approved. Prefer minimal safe diffs; avoid destructive shell.
+
+# Tools
+{tools_catalog}
+
+The tool surface is fixed for the session so provider-side schema caching
+holds. Never invent a tool call whose schema is not available.
+
+## Turn economics
+Every turn re-sends the whole conversation, so a turn costs far more than a
+tool call. Go wide rather than deep: when the next calls do not depend on each
+other's output - reading several files, running the build and the tests,
+probing two hypotheses - issue them together in one turn instead of one per
+turn. You never have to babysit slow work: a long `bash` command is handed to a
+background job and its result arrives on its own, so keep doing useful work
+instead of polling it.{codemode_note}
+
+## Tool policy - search and failure handling
+- SEARCH - `sgrep` first, then `grep`/`glob`; not the shell. `sgrep` is semantic search (Context.dev sgrep, local, ripgrep-backed): describe what the code does in plain English - "where are retries with backoff", "code that validates the session token" - and it returns the few ranked chunks that matter, exact identifier hits first. Lead with it whenever you know the behavior but not the name, when orienting in unfamiliar code, or when a grep would return more than a screen; pass `pattern` to have it rerank a regex's matches by intent instead. Use `grep` for an exact identifier, string or regex you already know, and `glob` for file names. Search via the tools rather than bash commands like `grep`, `rg`, `ag`, `find`, `ls`, `Get-ChildItem`: the search tools are sandboxed, respect .gitignore, and are the only reliable search path. When sgrep is not installed it says so and answers with grep, so leading with it is never a wasted call.
+- FILE IO - dedicated tools: `list_dir` for directory shape, `read_file` for contents. Avoid bash `cat`, `type`, `ls`, `dir`, `head`, `tail` for reading the workspace - the tools are cheaper, faster, and never hang.
+- GIT - use `git_status` / `git_diff` tools, not `bash git ...` - they are approval-free and structured. Reserve bash git only when the tool does not cover the needed flag.
+- BASH: real shell when available (Git Bash/pwsh). The result is the stdout alone; `Stderr:` and `Exit code: N` sections appear only when non-empty / non-zero (no `Exit code` line means 0), `(no output)` when nothing was printed. Long output keeps head and tail around a `...N bytes truncated; complete output in <path>...` marker (`max_output_length` sets the cap; `read_file` the path when the middle matters). Prefer non-interactive one-shot commands; pipelines and `&&` chains are fine. Default timeout 60s (hard max 600s); a command still producing output at the deadline is handed to a background job whose result arrives in a later turn, a silent one is killed and may be retried once with a larger `timeout_ms` or `background=true`. The harness refuses identical retries of a command that hung or was cancelled, and refuses hang-prone patterns (dev servers, watch, `read -p`, `while true`).
+- FAILURE RECOVERY - mandatory: If ANY tool returns error, `exit_code != 0`, timeout, idle-kill, or cancellation:
+  1) STOP - read exit_code/stdout/stderr.
+  2) Do NOT retry the identical failing command (harness will refuse anyway).
+  3) SWITCH to the canonical tool: failed `ls` -> `list_dir`, failed `cat` -> `read_file`, failed `grep` via bash -> `sgrep`/`grep` tool, failed `find` -> `glob`/`grep`.
+  4) If a base command repeatedly fails (e.g. command not found on Windows), immediately use the dedicated tool and never hang the turn.
+  5) On timeout/idle-kill, do not bump timeout_ms - change approach. Do not re-run the same failing script - that wastes the turn. Self-correct immediately.
+- HANG PREVENTION: Never run interactive, watch, or long-lived server commands. Prefer `sgrep`/`grep`/`list_dir`/`read_file`/`glob`.
+- Paths are sandboxed to the workspace - never scan drive roots (`/`, `C:\`, `~`).
+- web_search -> find docs/errors; web_fetch -> read a result url (text only - not video)
+- skill: action=list / action=read - load one skill by name when needed. Skills are **not**
+  pre-loaded into this prompt (catalog would waste tokens). Discover with skill(list) or
+  skill(read, name=…). Never load every playbook at once (e.g. cybersecurity: one by name).
+- Skills activate on demand only: `/skill-name` slash, the skill tool, or natural-language
+  intent when the user enabled it (`[skills] auto_activate`). When a **SKILL ACTIVATED** item
+  appears in the conversation, follow it for the turn.
+- todo_write: maintain a live task list for multi-step work (always keep one in_progress)
+- submit_plan: formal plan artifact in plan mode
+- Prefer edit_file / multi_edit / apply_patch over full rewrites
+{ecosystem_bullets}{subagents_section}"#,
             self.cwd.display(),
             std::env::consts::OS,
             self.shell_label,
+            plan_lists = plan_lists,
+            tools_catalog = tools_catalog,
+            codemode_note = codemode_note,
+            ecosystem_bullets = ecosystem_bullets,
+            subagents_section = subagents_section,
         );
 
         s.push_str(
@@ -629,13 +680,16 @@ reflects the moment the request was sent; follow it over anything earlier.
         // Memory excerpts and the PLUR/OptMem blocks are read once per user
         // turn and change only when something was learned, so they stay in the
         // cached prefix. (The activated skill body is a conversation item: see
-        // `activation_item`.)
+        // `activation_item`.) The core profile never carries the ecosystem
+        // blocks, even if a context was built with them.
         s.push_str(&self.memory);
-        s.push_str(&self.plur);
-        s.push_str(&self.optmem);
+        if !self.core_profile {
+            s.push_str(&self.plur);
+            s.push_str(&self.optmem);
+        }
 
         let cfg = crate::config::load_config().unwrap_or_default();
-        if cfg.native_memory {
+        if cfg.native_memory && !self.core_profile {
             // Central router: give the model the routing table so it stops
             // guessing which memory resident to use (m4).
             s.push('\n');
@@ -656,8 +710,9 @@ reflects the moment the request was sent; follow it over anything earlier.
         };
         t.push_str(mode_line);
         t.push('\n');
-        // Plan mode blocks `agent`, so there is nothing to fan out.
-        if self.ultracode && !matches!(mode, PermissionMode::Plan) {
+        // Plan mode blocks `agent`, and the core profile has no agent tool, so
+        // in both cases there is nothing to fan out.
+        if self.ultracode && !self.core_profile && !matches!(mode, PermissionMode::Plan) {
             t.push_str(ULTRACODE_BLOCK);
         }
         // Per-turn nudge - only when the user explicitly asked to delegate to
@@ -686,7 +741,7 @@ reflects the moment the request was sent; follow it over anything earlier.
         }
         // Agent-native memory (arXiv:2606.24775) + Connectome continuity scope.
         // Project-scoped so the same agent persists across sessions on a machine.
-        if cfg.native_memory {
+        if cfg.native_memory && !self.core_profile {
             let mem_scope = {
                 let proj = self
                     .cwd
@@ -763,6 +818,55 @@ mod tests {
         assert!(a.system_tokens > 0 && a.tool_schema_tokens > 0);
         assert!(a.dialogue_tokens > 0 && a.tool_output_tokens > 0);
         assert_eq!(a.stable_prefix_fingerprint, b.stable_prefix_fingerprint);
+    }
+
+    /// `[tools] profile = "core"` drops the ecosystem blocks and prose. The
+    /// overhead is measurable: the core system prompt must be meaningfully
+    /// smaller than the full one with the same inputs.
+    #[test]
+    fn core_profile_prompt_is_smaller_and_ecosystem_free() {
+        let build = |core: bool| PromptContext {
+            cwd: PathBuf::from("."),
+            is_subagent: false,
+            core_profile: core,
+            model: "test-model".into(),
+            provider: "test-provider".into(),
+            shell_label: "PowerShell".into(),
+            project: None,
+            memory: String::new(),
+            plur: "\n# PLUR shared memory (auto-injected)\nremembered correction\n".into(),
+            optmem: "\n# OptMem (permanent memory)\nlong-term memory block\n".into(),
+            activation: String::new(),
+            activation_label: None,
+            activation_skill: None,
+            activation_requirements: Vec::new(),
+            activation_path: None,
+            named_providers: vec!["claude".into()],
+            ultracode: true,
+        };
+        let full = build(false).render(PermissionMode::Auto, "(no todos)", "");
+        let core = build(true).render(PermissionMode::Auto, "(no todos)", "");
+        // Full keeps the ecosystem blocks; core drops every one of them.
+        assert!(full.system.contains("# PLUR"));
+        assert!(full.system.contains("# OptMem"));
+        assert!(full.system.contains("# Cross-provider subagents"));
+        assert!(full.turn_state.contains("ULTRACODE"));
+        for needle in [
+            "# PLUR",
+            "# OptMem",
+            "# Cross-provider subagents",
+            "plur:",
+            "ruflo:",
+        ] {
+            assert!(!core.system.contains(needle), "core leaked {needle}");
+        }
+        assert!(!core.turn_state.contains("ULTRACODE"));
+        let full_tokens = estimate_tokens(&full.system);
+        let core_tokens = estimate_tokens(&core.system);
+        assert!(
+            core_tokens < full_tokens * 4 / 5,
+            "core profile should cut overhead: core={core_tokens} full={full_tokens}"
+        );
     }
 
     #[test]

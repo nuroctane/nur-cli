@@ -1,0 +1,19 @@
+{
+  "description": "With [skills] auto_activate = true, a prompt that names an installed skill injects its body into the first request.",
+  "prompt": "please use e2e-echo-skill, then reply with exactly: done",
+  "mode": "auto",
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n\n[skills]\nauto_activate = true\n",
+    "skills/e2e-echo-skill/SKILL.md": "---\nname: e2e-echo-skill\ndescription: echoes a fixed marker for the end-to-end harness\n---\n\n# Echo\n\nMarker E2E-SKILL-MARKER-5531.\n"
+  },
+  "script": [
+    {"text": "done"}
+  ],
+  "expect": {
+    "requests": 1,
+    "request_contains": [
+      {"request": 1, "contains": ["E2E-SKILL-MARKER-5531"]}
+    ],
+    "stdout_contains": ["done"]
+  }
+}

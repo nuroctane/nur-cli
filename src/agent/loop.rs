@@ -664,9 +664,7 @@ impl AgentRunner {
             let mut approved_lines: Vec<String> = Vec::new();
             for item in items {
                 match item {
-                    crate::agent::mailbox::InboundItem::Deliver(line) => {
-                        approved_lines.push(line)
-                    }
+                    crate::agent::mailbox::InboundItem::Deliver(line) => approved_lines.push(line),
                     crate::agent::mailbox::InboundItem::Held(letter, reply) => {
                         let shown = letter.from_name.clone();
                         let chars = letter.text.chars().count();
@@ -1004,6 +1002,8 @@ impl AgentRunner {
             // between two requests re-bills them and everything after them.
             let mut tools = if self.is_subagent {
                 self.tools.subagent_tool_defs()
+            } else if self.config.tools.is_core() {
+                self.tools.core_tool_defs()
             } else {
                 self.tools.tool_defs()
             };
@@ -3327,9 +3327,7 @@ async fn ask_peer_mail(
         decision = rx => decision,
     };
     match decision {
-        Ok(answer) => {
-            !answer.dismissed && answer.selected.first().is_some_and(|s| s == "Read it")
-        }
+        Ok(answer) => !answer.dismissed && answer.selected.first().is_some_and(|s| s == "Read it"),
         Err(_) => false,
     }
 }
@@ -3366,11 +3364,7 @@ fn plan_mode_gate(
 
 /// Pure plan-mode classification; the denial message at the call site reads
 /// it too, so it must not emit events.
-fn plan_gate_classify(
-    name: &str,
-    args: &str,
-    read_only: bool,
-) -> (PlanGate, Option<&'static str>) {
+fn plan_gate_classify(name: &str, args: &str, read_only: bool) -> (PlanGate, Option<&'static str>) {
     if read_only && name != "agent" {
         return (PlanGate::Allow, None);
     }
@@ -3446,14 +3440,14 @@ fn plan_command_read_only(command: &str) -> bool {
         // Pure readers on both shells. `env` is absent: it runs whatever
         // follows the assignments. `sed`/`awk`/`xargs` are absent: they carry
         // `-i` / `system()` / a nested command.
-        "ls" | "pwd" | "cat" | "head" | "tail" | "wc" | "file" | "stat" | "grep"
-        | "egrep" | "fgrep" | "rg" | "sgrep" | "sort" | "uniq" | "tr" | "cut" | "diff"
-        | "comm" | "jq" | "echo" | "printf" | "true" | "false" | "which" | "where"
-        | "whereis" | "uname" | "whoami" | "hostname" | "date" | "printenv" | "id" | "df"
-        | "du" | "ps" | "tree" | "basename" | "dirname" | "realpath" | "readlink" | "xxd"
-        | "od" | "sha256sum" | "md5sum" | "cd" | "type" | "dir" | "findstr"
-        | "select-string" | "select-object" | "sort-object" | "measure-object"
-        | "compare-object" | "format-table" | "format-list" | "out-string" => true,
+        "ls" | "pwd" | "cat" | "head" | "tail" | "wc" | "file" | "stat" | "grep" | "egrep"
+        | "fgrep" | "rg" | "sgrep" | "sort" | "uniq" | "tr" | "cut" | "diff" | "comm" | "jq"
+        | "echo" | "printf" | "true" | "false" | "which" | "where" | "whereis" | "uname"
+        | "whoami" | "hostname" | "date" | "printenv" | "id" | "df" | "du" | "ps" | "tree"
+        | "basename" | "dirname" | "realpath" | "readlink" | "xxd" | "od" | "sha256sum"
+        | "md5sum" | "cd" | "type" | "dir" | "findstr" | "select-string" | "select-object"
+        | "sort-object" | "measure-object" | "compare-object" | "format-table" | "format-list"
+        | "out-string" => true,
         // PowerShell's Get-* verb reads by convention.
         p if p.starts_with("get-") => true,
         "find" => !args.iter().any(|a| {
@@ -3525,7 +3519,9 @@ fn plan_git_read_only(args: &[&str]) -> bool {
         "remote" => {
             rest.is_empty()
                 || rest.iter().all(|a| a.starts_with('-'))
-                || rest.first().is_some_and(|a| a.eq_ignore_ascii_case("get-url"))
+                || rest
+                    .first()
+                    .is_some_and(|a| a.eq_ignore_ascii_case("get-url"))
         }
         // `git config key` reads; `git config key value` writes.
         "config" => {

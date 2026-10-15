@@ -129,6 +129,9 @@ pub fn find_by_expanded_triggers<'a>(user_norm: &str, installed: &'a [Skill]) ->
         let Some(&sk) = installed_by_name.get(&skill_name.to_ascii_lowercase()) else {
             continue;
         };
+        if sk.disable_model_invocation {
+            continue;
+        }
         let words = trigger_norm.split_whitespace().count() as u64;
         let chars = trigger_norm.chars().count();
         let overlap = sk
@@ -168,6 +171,7 @@ mod tests {
                 description: entry.description.clone(),
                 body: String::new(),
                 path: std::path::PathBuf::from("SKILL.md"),
+                ..Default::default()
             })
             .collect()
     }
@@ -187,6 +191,7 @@ mod tests {
                 description: entry.description.clone(),
                 body: String::new(),
                 path: std::path::PathBuf::from("SKILL.md"),
+                ..Default::default()
             };
             let skills = vec![skill];
             assert_eq!(

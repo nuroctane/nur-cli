@@ -170,9 +170,28 @@ impl App {
                 );
             }
             "/skills" => {
-                self.startup.list_skills = true;
-                agent::skill_cache::invalidate_cache();
-                self.refresh_skill_palette_cache();
+                if arg.trim() == "trust" {
+                    // Project-local skills (./.nur/skills, ./.claude/skills,
+                    // ./.agents/skills) are inert until trusted; trust records
+                    // a digest of their SKILL.md files, so an edit holds them
+                    // again.
+                    let cwd = self.cwd.clone();
+                    match agent::skill_trust::trust(&cwd) {
+                        Ok(0) => self.push_info("no project-local skills found".into()),
+                        Ok(n) => {
+                            agent::skill_cache::invalidate_cache();
+                            self.refresh_skill_palette_cache();
+                            self.push_info(format!(
+                                "trusted {n} project skill(s) as they stand now - edits will need /skills trust again"
+                            ));
+                        }
+                        Err(e) => self.push_error(format!("skills trust failed: {e}")),
+                    }
+                } else {
+                    self.startup.list_skills = true;
+                    agent::skill_cache::invalidate_cache();
+                    self.refresh_skill_palette_cache();
+                }
             }
             "/usage" | "/cost" => self.cmd_usage(),
             "/budget" => self.cmd_budget(&arg),

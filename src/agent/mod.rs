@@ -26,6 +26,7 @@ pub mod repl;
 pub mod session;
 pub mod skill_cache;
 pub mod skill_intents;
+pub mod skill_trust;
 pub mod skills;
 pub mod subagent;
 pub mod swarm;

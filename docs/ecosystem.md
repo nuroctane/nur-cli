@@ -151,7 +151,10 @@ Sticky skills appear on `/status` and `/skills`. Clear with `/skill-name off`.
 
 ## Natural-language skill activation
 
-Slash commands are **optional**. When your wording matches a high-signal workflow skill that is installed, Nur **auto-injects** that skill’s full body into the system prompt for the turn and shows a status chip:
+**Opt-in.** Set `[skills] auto_activate = true` in `~/.nur/config.toml` first; off by default,
+explicit `/skill-name` and the `skill` tool always work. When enabled and your wording matches
+a high-signal workflow skill that is installed, Nur **auto-injects** that skill's full body
+into the system prompt for the turn and shows a status chip:
 
 ```text
 fable-method · activated from your wording (no slash command needed)
@@ -188,6 +191,22 @@ fable-method · activated from your wording (no slash command needed)
 | *vercel ai sdk*, `/ai-sdk` | `ai-sdk` |
 
 Only **installed** skills fire (marketplace plugin or skill pack). Unrelated chat does not activate anything. The injected skill is **mandatory for that turn** - the model must follow it, not freestyle a shorter path.
+
+### Skill trust and invocation flags
+
+Skills that live **inside a project** (`./.nur/skills`, `./.claude/skills`, `./.agents/skills`)
+are inert until you trust them, because a cloned repo must not inject instructions into your
+agent on first open. `/skills trust` records a digest of every project `SKILL.md` in
+`~/.nur/trusted-skills.json`; editing any project skill holds it again until you re-trust.
+While a project has untrusted skills the TUI notes it once per session. Global skills
+(`~/.nur/skills`, `~/.agents/skills`, …) are already yours and need no trust.
+
+Two frontmatter flags shape who can invoke a skill:
+
+| Flag | Effect |
+|------|--------|
+| `disable-model-invocation: true` | User-only: never NL-activated and `skill` tool `read` refuses it; `/skill-name` still loads it |
+| `user-invocable: false` | Engine-only: hidden from slash resolution and the `/skills` palette |
 
 ### Context discipline (why 1,000+ skills do not blow the prompt)
 

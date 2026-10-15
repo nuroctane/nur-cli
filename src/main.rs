@@ -174,6 +174,34 @@ async fn real_main() -> Result<()> {
             run_permissions_cli(action.as_ref(), &cwd)?;
             return Ok(());
         }
+        Some(Commands::Skills { action }) => {
+            let requested = cli
+                .cwd
+                .as_ref()
+                .map(PathBuf::from)
+                .unwrap_or(std::env::current_dir()?);
+            let (cwd, _) = tools::resolve_safe_workspace(&requested, cli.cwd.is_some())?;
+            match action {
+                cli::SkillsCmd::Trust => {
+                    match agent::skill_trust::trust(&cwd)? {
+                        0 => theme::print_info("no project-local skills found"),
+                        n => theme::print_ok(&format!(
+                            "trusted {n} project skill(s) as they stand now - edits will need `nur skills trust` again"
+                        )),
+                    }
+                    agent::skill_cache::invalidate_cache();
+                }
+                cli::SkillsCmd::Untrust => {
+                    if agent::skill_trust::untrust(&cwd)? {
+                        theme::print_ok("this project's skills are held again");
+                        agent::skill_cache::invalidate_cache();
+                    } else {
+                        theme::print_info("this project's skills were not trusted");
+                    }
+                }
+            }
+            return Ok(());
+        }
         Some(Commands::Ledger { period, json, home, refresh_prices }) => {
             let report=ledger::run(period,home.as_deref(),*refresh_prices)?;
             println!("{}",if *json {serde_json::to_string_pretty(&report)?} else {ledger::format(&report)});
@@ -697,6 +725,7 @@ async fn real_main() -> Result<()> {
         Some(Commands::Auth { .. })
         | Some(Commands::Usage)
         | Some(Commands::Permissions { .. })
+        | Some(Commands::Skills { .. })
         | Some(Commands::Sessions { .. })
         | Some(Commands::InstallHook)
         | Some(Commands::Install)

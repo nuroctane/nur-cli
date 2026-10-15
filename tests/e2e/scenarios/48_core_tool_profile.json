@@ -1,0 +1,16 @@
+{
+  "description": "[tools] profile = \"core\" narrows the request surface: no ecosystem tools (optmem, agent), no subagent prose, no ultracode block reach the model.",
+  "prompt": "Reply with exactly: done",
+  "mode": "auto",
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n\n[tools]\nprofile = \"core\"\n"
+  },
+  "script": [
+    {"text": "done"}
+  ],
+  "expect": {
+    "requests": 1,
+    "requests_lack": ["# Cross-provider subagents", "\"name\": \"optmem\"", "\"name\": \"agent\"", "ULTRACODE"],
+    "stdout_contains": ["done"]
+  }
+}

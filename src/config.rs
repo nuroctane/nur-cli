@@ -221,6 +221,12 @@ pub struct Config {
     /// Theme setup additions (accent override, inline-image protocol).
     #[serde(default)]
     pub theme_setup: ThemeConfig,
+    /// [skills] - discovery trust and natural-language activation.
+    #[serde(default)]
+    pub skills: SkillsConfig,
+    /// [tools] - which tools the model is offered this session.
+    #[serde(default)]
+    pub tools: ToolsConfig,
     /// OMP-style prewalk: strong model plans + todos, then switch to a cheap
     /// model at the first edit/write. Default **off**.
     #[serde(default)]
@@ -782,6 +788,52 @@ pub struct OptmemConfig {
     pub enabled: bool,
 }
 
+/// `[skills]` — discovery trust and natural-language activation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SkillsConfig {
+    /// Natural-language auto-activation: match your message against installed
+    /// skills and inject the match for the turn. Default **off**; `/name`,
+    /// `skill(action=read)` and Jev reranking keep working regardless.
+    /// Skills with `disable-model-invocation: true` are never auto-activated.
+    #[serde(default)]
+    pub auto_activate: bool,
+}
+
+/// `[tools]` — which tools the model is offered. Session-fixed: changing the
+/// profile needs a restart so the provider's cached prefix stays stable.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolsConfig {
+    /// `full` (default): every tool. `core`: a minimal editing shell -
+    /// read/write/edit, bash, search, web, todo/question/plan - with no
+    /// ecosystem tools or ecosystem prompt prose.
+    #[serde(default = "default_tool_profile")]
+    pub profile: String,
+}
+fn default_tool_profile() -> String {
+    "full".into()
+}
+impl Default for ToolsConfig {
+    fn default() -> Self {
+        ToolsConfig {
+            profile: default_tool_profile(),
+        }
+    }
+}
+impl ToolsConfig {
+    /// True when the session should run the minimal `core` surface.
+    /// Unknown values warn once and fall back to the full surface.
+    pub fn is_core(&self) -> bool {
+        match self.profile.as_str() {
+            "core" => true,
+            "full" | "" => false,
+            other => {
+                tracing::warn!("unknown [tools] profile '{other}' - using 'full'");
+                false
+            }
+        }
+    }
+}
+
 /// `[theme]` — theme setup additions: per-user accent overrides and terminal
 /// graphics controls. All fields optional; empty = use the picked theme as-is.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1046,6 +1098,8 @@ impl Default for Config {
             typesafe: TypesafeConfig::default(),
             enclave: EnclaveConfig::default(),
             theme_setup: ThemeConfig::default(),
+            skills: SkillsConfig::default(),
+            tools: ToolsConfig::default(),
             prewalk: PrewalkConfig::default(),
             compaction: CompactionConfig::default(),
             proposal_mode: false,
@@ -2180,5 +2234,29 @@ min_reduction = 0.5
         assert_eq!(model_display_name(""), "model");
         assert_eq!(model_display_name("  "), "model");
         assert_eq!(model_display_name("gpt-5.5"), "Gpt 5.5");
+    }
+
+    #[test]
+    fn skills_and_tools_sections_default_off() {
+        let cfg = Config::default();
+        assert!(!cfg.skills.auto_activate, "NL activation is opt-in");
+        assert!(!cfg.tools.is_core(), "full tool profile is the default");
+    }
+
+    #[test]
+    fn tools_profile_parses_core_and_unknown_falls_back_to_full() {
+        let core: Config = toml::from_str("[tools]\nprofile = \"core\"\n").unwrap();
+        assert!(core.tools.is_core());
+        let unknown: Config = toml::from_str("[tools]\nprofile = \"slim\"\n").unwrap();
+        assert!(
+            !unknown.tools.is_core(),
+            "an unknown profile must not silently narrow the surface"
+        );
+    }
+
+    #[test]
+    fn skills_auto_activate_parses_opt_in() {
+        let on: Config = toml::from_str("[skills]\nauto_activate = true\n").unwrap();
+        assert!(on.skills.auto_activate);
     }
 }
