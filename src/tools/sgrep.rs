@@ -115,27 +115,88 @@ fn execute_with(bin: Option<String>, args: &Value, ctx: &ToolContext) -> Result<
         );
     };
 
-    let (dir, target) = search_target(&root);
+    let req = SemanticRequest {
+        query: &query,
+        root: &root,
+        pattern: pattern.as_deref(),
+        glob: glob.as_deref(),
+        file_type: None,
+        fixed_strings: false,
+        case_insensitive: false,
+        count,
+        model,
+    };
+    match semantic(&bin, &req, ctx) {
+        Semantic::Chunks(out) => Ok(out),
+        Semantic::NoMatches => Ok("no matches".into()),
+        Semantic::Cancelled => Ok("[search cancelled]".into()),
+        Semantic::RgError(e) => Err(NurError::Tool(format!("sgrep: {e}"))),
+        Semantic::Unreadable(e) => Err(NurError::Tool(format!("sgrep: unreadable output: {e}"))),
+        Semantic::Unavailable(reason) => lexical_fallback(
+            args,
+            ctx,
+            &query,
+            pattern.as_deref(),
+            format!("{reason} - searched with grep instead"),
+        ),
+    }
+}
+
+/// One semantic search, with the binary already resolved. `grep` hands
+/// itself over to this when a call was really a job for sgrep.
+pub(crate) struct SemanticRequest<'a> {
+    pub query: &'a str,
+    /// Resolved search root (directory or file).
+    pub root: &'a Path,
+    /// Rerank mode when set: ripgrep gathers the candidates for this regex.
+    pub pattern: Option<&'a str>,
+    pub glob: Option<&'a str>,
+    pub file_type: Option<&'a str>,
+    pub fixed_strings: bool,
+    pub case_insensitive: bool,
+    pub count: u64,
+    pub model: &'a str,
+}
+
+/// What one sgrep run produced. Callers that have their own answer (grep)
+/// keep it on anything but `Chunks`; the sgrep tool maps the rest to its
+/// lexical fallback or an error.
+pub(crate) enum Semantic {
+    /// Rendered chunks with any notes attached.
+    Chunks(String),
+    NoMatches,
+    Cancelled,
+    /// ripgrep could not gather the rerank candidates (bad regex, missing rg).
+    RgError(String),
+    /// sgrep exited 0 with output that is not its JSON.
+    Unreadable(String),
+    /// sgrep did not run to completion; the reason is phrased for a note.
+    Unavailable(String),
+}
+
+pub(crate) fn semantic(bin: &str, req: &SemanticRequest<'_>, ctx: &ToolContext) -> Semantic {
+    let (dir, target) = search_target(req.root);
     let prefix = display_prefix(&ctx.cwd, &dir);
 
-    let (rg_input, rg_note) = match pattern.as_deref() {
-        Some(pat) => match rg_json(ctx, &dir, &target, pat, glob.as_deref()) {
+    let (rg_input, rg_note) = match req.pattern {
+        Some(pat) => match rg_json(ctx, &dir, &target, pat, req) {
             Ok(Some(feed)) => (Some(feed.bytes), feed.note),
-            Ok(None) => return Ok("no matches".into()),
-            Err(e) => return Err(NurError::Tool(format!("sgrep: {e}"))),
+            Ok(None) => return Semantic::NoMatches,
+            Err(e) if e == "search cancelled" => return Semantic::Cancelled,
+            Err(e) => return Semantic::RgError(e),
         },
         None => (None, None),
     };
 
-    let mut cmd = Command::new(&bin);
+    let mut cmd = Command::new(bin);
     cmd.current_dir(&dir)
-        .arg(&query)
+        .arg(req.query)
         .arg(&target)
         .arg("-n")
-        .arg(count.to_string())
+        .arg(req.count.to_string())
         .arg("--json")
         .arg("--model")
-        .arg(model);
+        .arg(req.model);
     if rg_input.is_some() {
         cmd.arg("--stdin");
     }
@@ -144,53 +205,35 @@ fn execute_with(bin: Option<String>, args: &Value, ctx: &ToolContext) -> Result<
     }
     let run = match run_sgrep(cmd, rg_input.as_deref(), ctx) {
         Ok(r) => r,
-        Err(e) => {
-            return lexical_fallback(
-                args,
-                ctx,
-                &query,
-                pattern.as_deref(),
-                format!("sgrep could not run ({e}) - searched with grep instead"),
-            )
-        }
+        Err(e) => return Semantic::Unavailable(format!("sgrep could not run ({e})")),
     };
     match run.exit {
-            Exit::Code(0) => {}
-            Exit::Code(1) => return Ok("no matches".into()),
-            Exit::Cancelled => return Ok("[search cancelled]".into()),
-            Exit::Timeout => {
-                return lexical_fallback(
-                    args,
-                    ctx,
-                    &query,
-                    pattern.as_deref(),
-                    format!(
-                        "sgrep gave up after {}s (first run indexes the repository; retry later) - searched with grep instead",
-                        SGREP_BUDGET.as_secs()
-                    ),
-                )
-            }
-            Exit::Code(_) => {
-                let reason = first_line(&run.stderr).unwrap_or("unknown error");
-                return lexical_fallback(
-                    args,
-                    ctx,
-                    &query,
-                    pattern.as_deref(),
-                    format!("sgrep failed: {reason} - searched with grep instead"),
-                );
-            }
+        Exit::Code(0) => {}
+        Exit::Code(1) => return Semantic::NoMatches,
+        Exit::Cancelled => return Semantic::Cancelled,
+        Exit::Timeout => {
+            return Semantic::Unavailable(format!(
+                "sgrep gave up after {}s (first run indexes the repository; retry later)",
+                SGREP_BUDGET.as_secs()
+            ))
         }
-    let chunks = parse_chunks(&run.stdout)
-        .map_err(|e| NurError::Tool(format!("sgrep: unreadable output: {e}")))?;
+        Exit::Code(_) => {
+            let reason = first_line(&run.stderr).unwrap_or("unknown error");
+            return Semantic::Unavailable(format!("sgrep failed: {reason}"));
+        }
+    }
+    let chunks = match parse_chunks(&run.stdout) {
+        Ok(c) => c,
+        Err(e) => return Semantic::Unreadable(e.to_string()),
+    };
     if chunks.is_empty() {
-        return Ok("no matches".into());
+        return Semantic::NoMatches;
     }
     let mut out = render(&chunks, &prefix);
     for note in [rg_note, run.note].into_iter().flatten() {
         out.push_str(&format!("\n[{note}]"));
     }
-    Ok(out)
+    Semantic::Chunks(out)
 }
 
 /// One result chunk as sgrep prints it with `--json`.
@@ -280,7 +323,7 @@ fn rg_json(
     dir: &Path,
     target: &Path,
     pattern: &str,
-    glob: Option<&str>,
+    req: &SemanticRequest<'_>,
 ) -> std::result::Result<Option<RgFeed>, String> {
     let rg = find_rg().ok_or_else(|| "ripgrep is required for pattern reranking".to_string())?;
     let mut cmd = Command::new(rg);
@@ -295,8 +338,17 @@ fn rg_json(
     for d in super::search_util::HARD_EXCLUDES {
         cmd.arg(format!("--glob=!**/{d}/"));
     }
-    if let Some(g) = glob {
+    if let Some(g) = req.glob {
         cmd.arg("--glob").arg(g);
+    }
+    if let Some(t) = req.file_type {
+        cmd.arg("--type").arg(t);
+    }
+    if req.fixed_strings {
+        cmd.arg("-F");
+    }
+    if req.case_insensitive {
+        cmd.arg("-i");
     }
     cmd.arg("-e").arg(pattern).arg("--").arg(target);
     cmd.stdin(Stdio::null())
@@ -506,7 +558,7 @@ fn lexical_fallback(
             grep_args.insert("max_matches".into(), Value::from(count * 6));
         }
     }
-    let text = super::grep::Grep.execute(&Value::Object(grep_args), ctx)?;
+    let text = super::grep::grep_lexical(&Value::Object(grep_args), ctx)?;
     Ok(format!("[{note}]\n{text}"))
 }
 

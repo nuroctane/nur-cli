@@ -55,7 +55,8 @@ impl Tool for Bash {
          bg(action=result, id=N)); background=true hands off right away for builds/test suites. \
          Idle commands with no output are killed; the whole process tree dies with the command. \
          Output keeps head+tail within max_output_length (full text spilled to disk). \
-         Never use for search/file-read (use grep/glob/list_dir/read_file). \
+         Not for search or file reads: a grep/rg/findstr/Select-String command is refused \
+         (use sgrep/grep/glob; list_dir/read_file for contents). \
          A command that hit its deadline may be retried once with a larger timeout_ms or \
          background=true; identical idle/cancelled commands are refused for 15 minutes."
     }
@@ -129,6 +130,12 @@ impl Tool for Bash {
         }
         if let Some(reason) = refuse_recent_failure(&ctx.cwd, &command, timeout_ms, background) {
             return Err(NurError::Tool(reason));
+        }
+        let sgrep_first = config.as_ref().map(|c| c.tools.sgrep_first).unwrap_or(true);
+        if sgrep_first {
+            if let Some(reason) = refuse_shell_search(&command) {
+                return Err(NurError::Tool(reason));
+            }
         }
 
         match run_in_shell_with(shell_backend(), &command, &ctx.cwd, &opts, &ctx.cancel) {
@@ -243,6 +250,52 @@ fn refuse_recent_failure(
              Do not retry it; ask before running it again or change the command."
         )),
     }
+}
+
+/// A shell command whose point is searching the workspace is refused: the
+/// `sgrep`/`grep`/`glob` tools are the search path (sandboxed, .gitignore,
+/// never hang, and sgrep ranks by intent). That is the command when a
+/// searcher (`grep`, `rg`, `ag`, `ack`, `findstr`, `Select-String`) starts the
+/// line, or when it filters a bare file read (`cat x | grep y`). A searcher
+/// filtering another command's output (`git log | grep fix`) is not a
+/// workspace search and runs; so does `echo "grep this"`.
+fn refuse_shell_search(cmd: &str) -> Option<String> {
+    const SEARCHERS: [&str; 7] = ["grep", "rg", "ag", "ack", "findstr", "select-string", "sls"];
+    const READERS: [&str; 5] = ["cat", "type", "get-content", "gc", "head"];
+    let segments = command_segments(cmd);
+    let base_of = |seg: &str| -> Option<String> {
+        let s = strip_env_assigns(seg);
+        let first = s.split_whitespace().next()?;
+        let base = first
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(first)
+            .to_ascii_lowercase();
+        Some(base.trim_end_matches(".exe").to_string())
+    };
+    // `cd src && rg foo` is still a search; skip the setup segments.
+    const SETUP: [&str; 5] = ["cd", "pushd", "export", "set", "source"];
+    let start = segments
+        .iter()
+        .position(|seg| base_of(seg).is_some_and(|b| !SETUP.contains(&b.as_str())))?;
+    let first = base_of(segments[start])?;
+    let searcher = if SEARCHERS.contains(&first.as_str()) {
+        first
+    } else if READERS.contains(&first.as_str()) {
+        segments
+            .get(start + 1)
+            .and_then(|s| base_of(s))
+            .filter(|b| SEARCHERS.contains(&b.as_str()))?
+    } else {
+        return None;
+    };
+    Some(format!(
+        "refused: `{searcher}` as a shell command - search goes through the tools. \
+         sgrep query=\"<what the code does>\" ranks passages by intent (exact identifier hits \
+         first); grep pattern=<regex> for an identifier or string you already know \
+         (fixed_strings=true for literal text, glob/type to narrow); glob for file names. \
+         Filtering another command's output (`git log | grep fix`) still runs."
+    ))
 }
 
 fn command_segments(cmd: &str) -> Vec<&str> {
@@ -904,5 +957,27 @@ mod tests {
         );
         assert_eq!(failure_kind("exit code 1\nstderr: boom"), None);
         assert_eq!(failure_kind("failed to spawn shell: not found"), None);
+    }
+
+    // Failure modes: a searcher named inside an argument (`echo "grep this"`,
+    // `git grep`) refused; a legitimate filter of another command's output
+    // (`git log | grep`, `cargo test 2>&1 | grep FAILED`) refused; a workspace
+    // search behind an env assignment, a full Windows path, a PowerShell
+    // cmdlet or a bare file read allowed through.
+    #[test]
+    fn shell_search_refusal_targets_workspace_searches_only() {
+        assert!(refuse_shell_search("echo \"grep this\"").is_none());
+        assert!(refuse_shell_search("git grep -n foo").is_none());
+        assert!(refuse_shell_search("git log --oneline | grep fix").is_none());
+        assert!(refuse_shell_search("cargo test 2>&1 | grep FAILED").is_none());
+        assert!(refuse_shell_search("cargo test").is_none());
+        assert!(refuse_shell_search("rg -n foo src").is_some());
+        assert!(refuse_shell_search("cd src && rg -n foo").is_some());
+        assert!(refuse_shell_search("LC_ALL=C grep -r foo .").is_some());
+        assert!(refuse_shell_search("cat a.txt | grep foo").is_some());
+        let win = refuse_shell_search("C:\\tools\\rg.exe foo src").unwrap();
+        assert!(win.starts_with("refused: `rg`"), "{win}");
+        assert!(refuse_shell_search("Select-String -Path *.rs -Pattern foo").is_some());
+        assert!(refuse_shell_search("sls foo *.rs").is_some());
     }
 }

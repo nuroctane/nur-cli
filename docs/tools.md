@@ -57,6 +57,14 @@ Arguments: `query` (required), `path`, `pattern`, `glob`, `count`, `model` (`aut
 
 When the binary is missing the tool answers through `grep` (the regex, or the query's identifiers as alternatives) and leads with `[sgrep not installed - searched with grep instead. Install: …]`, so a model that leads with `sgrep` never wastes the call. The system prompt tells every model to lead with `sgrep` for intent queries and unfamiliar code, `grep` for an exact identifier or regex, `glob` for file names.
 
+Models trained on grep-first habits are held to this rather than reminded of it (`[tools] sgrep_first = true`, the default, and only while sgrep is installed):
+
+- A `grep` whose pattern reads like a description (three or more words, no regex syntax - the kind grep matches literally and finds nothing for) is answered by sgrep in discover mode; the result opens with `[grep: "…" reads as a description … answered by sgrep query="…"]`.
+- A `grep` that overflows the **default** `max_matches` comes back as sgrep's top eight passages for that pattern (rerank mode, same glob/type/case/literal flags) instead of the first page, with a header saying how to get the exhaustive list: set `max_matches` yourself, which is always honored as written.
+- A `bash` command that is a workspace search - `grep`, `rg`, `ag`, `ack`, `findstr`, `Select-String` as the command, including behind `cd …` or a bare `cat file |` - is refused before it runs, naming the tool calls that do the job. Filtering another command's output (`git log | grep fix`, `cargo test | grep FAILED`) is not a search and runs.
+
+When sgrep fails mid-call (timeout on a first index, a crash), grep's own result is returned, so routing never costs an answer. `sgrep_first = false` turns all three off.
+
 Install: `nur ecosystem ensure` builds it with `cargo install --git https://github.com/context-dot-dev/sgrep --locked` and warms the model; the installer scripts do the same. `nur doctor` shows the resolved path. `NUR_SGREP_BIN=<path>` pins the binary; `NUR_SGREP_BIN=` (empty) disables it.
 
 ### `grep`

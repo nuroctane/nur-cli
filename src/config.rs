@@ -808,6 +808,14 @@ pub struct ToolsConfig {
     /// ecosystem tools or ecosystem prompt prose.
     #[serde(default = "default_tool_profile")]
     pub profile: String,
+    /// `true` (default): semantic search is the search path, not a
+    /// suggestion. A `grep` whose pattern is a description is answered by
+    /// `sgrep`, a `grep` that overflows its default cap comes back reranked by
+    /// `sgrep`, and shell searches (`grep`, `rg`, `findstr`, `Select-String`
+    /// as the command) are refused in favour of the tools. `false` leaves
+    /// every call as written. Needs sgrep installed to change anything.
+    #[serde(default = "default_true")]
+    pub sgrep_first: bool,
 }
 fn default_tool_profile() -> String {
     "full".into()
@@ -816,6 +824,7 @@ impl Default for ToolsConfig {
     fn default() -> Self {
         ToolsConfig {
             profile: default_tool_profile(),
+            sgrep_first: true,
         }
     }
 }
