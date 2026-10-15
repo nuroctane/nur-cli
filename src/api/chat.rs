@@ -276,6 +276,19 @@ pub fn build_body_opts(
     if provider_id == "kimi" && req.reasoning.is_some() {
         body["thinking"] = json!({ "type": "enabled" });
     }
+    if provider_id == "paperinstruments" {
+        // Ultramarine's reasoning is mandatory and set through the top-level
+        // Chat Completions field; the loop has already clamped the rung onto
+        // the route's low/high/max ladder. Omitted, the API runs at `max`.
+        if let Some(effort) = req
+            .reasoning
+            .as_ref()
+            .and_then(|r| r.effort.as_deref())
+            .filter(|e| !e.is_empty())
+        {
+            body["reasoning_effort"] = json!(effort);
+        }
+    }
     body
 }
 
@@ -426,14 +439,17 @@ fn push_item_messages_opts(
         out.push(json!({ "role": role, "content": text }));
     } else if images.is_empty() {
         let mut message = json!({ "role": role, "content": text });
-        if role == "assistant" && (deepseek_rules || matches!(provider_id, "kimi" | "moonshot")) {
+        if role == "assistant"
+            && (deepseek_rules || matches!(provider_id, "kimi" | "moonshot" | "paperinstruments"))
+        {
             // DeepSeek thinking mode REQUIRES the assistant tool-call turn's
             // reasoning_content to be passed back on the next request (400
             // "The `reasoning_content` in the thinking mode must be passed
             // back to the API."); Command Code routes deepseek models and
             // needs the same shape. to_chat_body strips it again from
             // assistant messages that do not carry tool_calls, where
-            // reasoning_content is not legal.
+            // reasoning_content is not legal. Ultramarine's tool-call recipe
+            // replays it the Kimi way: on every assistant message that had it.
             if let Some(reasoning) = item.get("reasoning_content").and_then(Value::as_str) {
                 message["reasoning_content"] = Value::String(reasoning.to_string());
             }
@@ -1691,6 +1707,49 @@ mod tool_choice_tests {
             .expect("assistant replay");
         assert_eq!(assistant["reasoning_content"], "Need a search.");
         assert_eq!(assistant["tool_calls"][0]["id"], "call_1");
+    }
+
+    /// Ultramarine rejects unknown fields and `developer` messages with 400
+    /// and reads reasoning depth from the top-level Chat Completions field,
+    /// so the body carries `reasoning_effort`, a `system` message, and the
+    /// tool-call turn's `reasoning_content` as its docs' recipe asks.
+    #[test]
+    fn paperinstruments_sends_effort_on_the_top_level_field_and_replays_reasoning() {
+        let raw = json!({
+            "choices": [{"message": {
+                "content": null,
+                "reasoning_content": "Need the workbook.",
+                "tool_calls": [{"id": "call_1", "function": {"name": "read_file", "arguments": "{}"}}]
+            }}]
+        });
+        let response = to_api_response(parse_completion(&raw)).expect("map response");
+        let replay = crate::api::types::replay_output_items(&response.output);
+        let mut request = req_with_choice(None);
+        request.instructions = Some("Be brief.".into());
+        request.input = Value::Array(replay);
+        request.reasoning = Some(crate::api::types::ReasoningConfig {
+            effort: Some("high".into()),
+            summary: None,
+        });
+        let body = build_body_for_provider(&request, false, "paperinstruments");
+        assert_eq!(body["reasoning_effort"], "high");
+        assert!(
+            body.get("reasoning").is_none(),
+            "no nested reasoning object"
+        );
+        let messages = body["messages"].as_array().unwrap();
+        assert_eq!(messages[0]["role"], "system");
+        let assistant = messages
+            .iter()
+            .find(|message| message["role"] == "assistant")
+            .expect("assistant replay");
+        assert_eq!(assistant["reasoning_content"], "Need the workbook.");
+
+        // Without an effort the field stays off the wire and the API's own
+        // default (`max`) applies, instead of an empty string it would 400 on.
+        request.reasoning = None;
+        let body = build_body_for_provider(&request, false, "paperinstruments");
+        assert!(body.get("reasoning_effort").is_none());
     }
 
     /// DeepSeek thinking mode 400s with "The `reasoning_content` in the

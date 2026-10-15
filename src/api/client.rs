@@ -862,6 +862,15 @@ impl ApiClient {
             // already holds the prefix can serve it from cache.
             req = req.header("x-session-affinity", self.session_affinity.as_str());
         }
+        if self.provider_id == "paperinstruments"
+            || self.base_url.contains("api.paperinstruments.com")
+        {
+            // Paper Instruments' gateway keeps a conversation on one deployment
+            // and forwards a replica-affinity hint when the same id arrives on
+            // every turn (docs: ultramarine/sticky-sessions). The provider id
+            // counts too, so a proxy in front of the gateway still passes it on.
+            req = req.header("x-session-id", self.session_affinity.as_str());
+        }
         if self.provider_id == "openai" {
             if let Some(oauth) = &oauth {
                 // Codex backend requires a known originator (`codex_cli_rs`) +
@@ -4409,6 +4418,49 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
             .build()
             .unwrap();
         assert!(request.headers().get("x-opencode-session").is_none());
+    }
+
+    /// Paper Instruments' sticky routing keys on `x-session-id`; a custom
+    /// provider on the same host is the same gateway, the catalog provider
+    /// behind a proxy base URL still is, and nothing else may carry the header.
+    #[test]
+    fn paperinstruments_route_sends_the_sticky_session_header() {
+        let client = ApiClient::for_provider(
+            crate::providers::PAPERINSTRUMENTS_BASE_URL,
+            "pi-key",
+            "custom-pi",
+        )
+        .unwrap()
+        .with_style(ApiStyle::ChatCompletions);
+        let request = client
+            .auth_headers(client.http.post("https://example.test/v1/chat/completions"))
+            .build()
+            .unwrap();
+        let session = request
+            .headers()
+            .get("x-session-id")
+            .and_then(|v| v.to_str().ok())
+            .expect("x-session-id on the Ultramarine route");
+        assert!(!session.is_empty());
+
+        let proxied =
+            ApiClient::for_provider("http://127.0.0.1:9/v1", "pi-key", "paperinstruments")
+                .unwrap()
+                .with_style(ApiStyle::ChatCompletions);
+        let request = proxied
+            .auth_headers(proxied.http.post("http://127.0.0.1:9/v1/chat/completions"))
+            .build()
+            .unwrap();
+        assert!(request.headers().get("x-session-id").is_some());
+
+        let plain = ApiClient::for_provider("https://api.example.test/v1", "k", "openai-cc")
+            .unwrap()
+            .with_style(ApiStyle::ChatCompletions);
+        let request = plain
+            .auth_headers(plain.http.post("https://example.test/v1/chat/completions"))
+            .build()
+            .unwrap();
+        assert!(request.headers().get("x-session-id").is_none());
     }
 
     /// Affinity headers exist to keep one conversation on one backend. A fresh

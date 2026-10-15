@@ -1,0 +1,31 @@
+{
+  "description": "Paper Instruments (Ultramarine) speaks Chat Completions with the effort on the top-level reasoning_effort field, clamped onto its low/high/max ladder (config says medium, the wire says high), a system message instead of developer, and the sticky x-session-id header on every request of the conversation.",
+  "provider": "paperinstruments",
+  "model": "ultramarine-1-flash",
+  "env": {
+    "PAPERINSTRUMENTS_API_KEY": "e2e-isolated-key"
+  },
+  "setup_home_files": {
+    "config.toml": "provider = \"paperinstruments\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"ultramarine-1-flash\"\nreasoning_effort = \"medium\"\n"
+  },
+  "prompt": "Read notes.txt and reply with exactly what it says.",
+  "setup_files": {
+    "notes.txt": "ULTRAMARINE_OK"
+  },
+  "script": [
+    { "tool_calls": [{ "name": "read_file", "arguments": { "path": "notes.txt" } }] },
+    { "text": "ULTRAMARINE_OK" }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "stdout_contains": ["ULTRAMARINE_OK"],
+    "protocol": "chat/completions",
+    "headers": { "present": ["x-session-id"] },
+    "request_contains": [
+      { "request": 1, "contains": ["\"reasoning_effort\": \"high\"", "\"role\": \"system\""] },
+      { "request": 2, "contains": ["\"reasoning_effort\": \"high\"", "\"tool_call_id\""] }
+    ],
+    "requests_lack": ["\"developer\"", "\"store\""],
+    "requests": 2
+  }
+}

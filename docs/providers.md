@@ -1,6 +1,6 @@
 # Provider setup and conformance matrix
 
-This is the user-facing mirror of the 69-entry `PROVIDERS` catalog in
+This is the user-facing mirror of the 70-entry `PROVIDERS` catalog in
 [`src/providers.rs`](https://github.com/nuroctane/nur-cli/blob/main/src/providers.rs). The base URL, request style, default
 model, and environment variable below are the exact current catalog values, not
 recommendations inferred from a vendor's marketing page.
@@ -71,6 +71,7 @@ capability for this exact Nur route/model, so Nur must treat it as unverified.
 | `kimi` - Kimi Code (kimi.com) | `KIMI_API_KEY`; `https://api.kimi.com/coding/v1`; CC; `kimi-for-coding` | [Kimi Code](https://www.kimi.com/code/docs) | Managed coding route; public docs do not establish full OpenAI-tool conformance. | API key or supported browser OAuth. |
 | `moonshot` - Moonshot AI | `MOONSHOT_API_KEY`; `https://api.moonshot.ai/v1`; CC; `kimi-k2.7-code` | [Moonshot API](https://platform.moonshot.ai/docs) | Verify model-specific tools/stream/usage. | Platform API key, distinct from Kimi Code OAuth. |
 | `zhipu` - Z.AI | `ZAI_API_KEY`; `https://api.z.ai/api/paas/v4`; CC; `glm-5.2` | [Z.AI API](https://docs.z.ai/) · [ZCode connect](https://zcode.z.ai/en/docs/configuration) | Coding Plan / ZCode OAuth uses `https://api.z.ai/api/coding/paas/v4` and `glm-5.3`. | `zcode login`, or paste a key. Do not point a Coding Plan key at `/api/paas/v4`. |
+| `paperinstruments` - Paper Instruments | `PAPERINSTRUMENTS_API_KEY`; `https://api.paperinstruments.com/v1`; CC; `ultramarine-1-flash` | [Ultramarine API](https://docs.paperinstruments.com/docs/ultramarine) · [Chat completions](https://docs.paperinstruments.com/docs/ultramarine/chat-completions) | One model, a GLM-5.3 Flash post-train for finance, law, consulting and operations deliverables (Excel, PowerPoint, Word). Docs cover function tools, streaming with usage and `cached_tokens`. Reasoning is mandatory: the effort ladder is `low`/`high`/`max` (`/effort medium` lands on `high`), and the output ceiling is 32,768 tokens including reasoning. Also speaks Responses and Messages; nur uses Chat Completions. | Create a key at platform.paperinstruments.com. Nur sends the sticky `x-session-id` header so turns stay on one deployment. |
 | `qwen` - Alibaba Qwen (DashScope) | `DASHSCOPE_API_KEY`; `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`; CC; `qwen-max` | [DashScope OpenAI compatibility](https://www.alibabacloud.com/help/en/model-studio/developer-reference/compatibility-with-openai) | Tool/stream/usage depend on Qwen model and region. | Use an international DashScope key for this endpoint. |
 | `minimax` - MiniMax (minimaxi.com) | `MINIMAX_API_KEY`; `https://api.minimaxi.com/anthropic/v1`; AM; `MiniMax-M2.7` | [MiniMax API overview](https://platform.minimaxi.com/docs/api-reference/api-overview) | Anthropic compatibility does not establish every Anthropic telemetry field; the direct catalog currently documents M2.7/M2.5 families. | Use a MiniMax API key; preserve model casing. |
 | `stepfun` - StepFun (China) | `STEPFUN_API_KEY`; `https://api.stepfun.ai/v1`; CC; `step-3.5-flash-2603` | [StepFun models](https://platform.stepfun.ai/docs/en/guides/models/overview) | Reasoning and tool behavior are model-specific; Nur uses the current documented agent model instead of the nonexistent `step-3.7-flash`. | Create a StepFun API key. |
@@ -126,9 +127,9 @@ request so that prefix is as long and as stable as it can be:
   stable id, derived from the nur session id (so it survives `/model`,
   `/resume` and failover), as whichever header the route understands:
   `x-opencode-session` on the OpenCode Go route (gated on the URL, so a custom
-  provider pointed at Go gets it too), `session_id` on the Codex OAuth path, and
-  `x-session-affinity` on Fireworks. OpenAI-style routes also set
-  `prompt_cache_key` to the session id.
+  provider pointed at Go gets it too), `session_id` on the Codex OAuth path,
+  `x-session-affinity` on Fireworks, and `x-session-id` on Paper Instruments.
+  OpenAI-style routes also set `prompt_cache_key` to the session id.
 - **Compaction is cache-aware**: pruning happens in the oldest part of the
   transcript only when the window is actually full, which is the one moment the
   prefix has to change anyway.
@@ -141,7 +142,7 @@ asserts the stable prefix across a whole turn.
 
 ## Catalog conformance check
 
-The matrix must have exactly 69 data rows, matching `PROVIDERS.len()`. A row
+The matrix must have exactly 70 data rows, matching `PROVIDERS.len()`. A row
 is a catalog contract, not a promise that a remote model is available to every
 account. The primary expected catalog mismatches are intentional placeholders:
 

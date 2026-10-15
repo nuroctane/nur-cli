@@ -420,6 +420,16 @@ pub const ZHIPU_CODING_BASE_URL: &str = "https://api.z.ai/api/coding/paas/v4";
 pub const ZHIPU_DEFAULT_MODEL: &str = "glm-5.3";
 pub const ZHIPU_CODING_DEFAULT_MODEL: &str = "glm-5.3";
 
+/// Paper Instruments' Ultramarine API. One model (`ultramarine-1-flash`, a
+/// GLM-5.3 Flash post-train for finance, law, consulting and operations work)
+/// behind Chat Completions, Responses and Messages on the same key. Reasoning
+/// is mandatory there: `reasoning_effort` takes `low`/`high`/`max` only, and
+/// `developer` messages, `store`, `metadata` and `service_tier` are 400s, so
+/// nur speaks Chat Completions with a `system` message and the effort on the
+/// top-level field. Docs: <https://docs.paperinstruments.com/docs/ultramarine>.
+pub const PAPERINSTRUMENTS_BASE_URL: &str = "https://api.paperinstruments.com/v1";
+pub const PAPERINSTRUMENTS_DEFAULT_MODEL: &str = "ultramarine-1-flash";
+
 /// Rewrite the retired DeepSeek aliases.
 ///
 /// DeepSeek removes `deepseek-chat` and `deepseek-reasoner` on
@@ -714,6 +724,7 @@ const EFFORT_OPENAI_MAX: &[&str] = &["none", "low", "medium", "high", "xhigh", "
 const EFFORT_OPENAI_GPT6: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 /// Nous Portal's own effort ladder (Portal catalog `supported_efforts`):
 /// `stealth/ox-alpha` and most reasoning routes take `max`/`high`/`low`.
+/// Paper Instruments' Ultramarine API accepts exactly the same three rungs.
 pub const EFFORT_NOUS: &[&str] = &["low", "high", "max"];
 /// Perplexity Agent API `reasoning.effort` (one enum for every hosted model).
 const EFFORT_PERPLEXITY: &[&str] = &["minimal", "low", "medium", "high", "xhigh", "max"];
@@ -753,7 +764,7 @@ pub fn effort_levels(provider_id: &str, model: &str) -> &'static [&'static str] 
             EFFORT_OPENAI_MAX
         }
         "openai" | "openai-cc" if model.starts_with("gpt-6") => EFFORT_OPENAI_GPT6,
-        "nous" => EFFORT_NOUS,
+        "nous" | "paperinstruments" => EFFORT_NOUS,
         "perplexity" => EFFORT_PERPLEXITY,
         _ => EFFORT_OPENAI,
     }
@@ -1404,6 +1415,17 @@ pub const PROVIDERS: &[Provider] = &[
         browser_auth: true,
     },
     Provider {
+        id: "paperinstruments",
+        name: "Paper Instruments",
+        base_url: PAPERINSTRUMENTS_BASE_URL,
+        default_model: PAPERINSTRUMENTS_DEFAULT_MODEL,
+        env_key: "PAPERINSTRUMENTS_API_KEY",
+        style: CC,
+        note: "Ultramarine 1 Flash · finance, law, consulting, ops",
+        key_optional: false,
+        browser_auth: false,
+    },
+    Provider {
         id: "qwen",
         name: "Alibaba Qwen (DashScope)",
         base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
@@ -2033,6 +2055,11 @@ pub const PROVIDER_ALIASES: &[(&str, &str)] = &[
     ("glm-5.3", "zhipu"),
     ("glm-5.2", "zhipu"),
     ("zai-coding-plan", "zhipu"),
+    // Paper Instruments (Ultramarine)
+    ("paper-instruments", "paperinstruments"),
+    ("paper", "paperinstruments"),
+    ("ultramarine", "paperinstruments"),
+    ("ultramarine-1-flash", "paperinstruments"),
     ("abab", "minimax"),
     ("minimax-code", "minimax"),
     ("step", "stepfun"),
@@ -3103,7 +3130,7 @@ mod tests {
         // `PROVIDER_COUNT_DOC_SITES` below too.
         assert_eq!(
             PROVIDERS.len(),
-            69,
+            70,
             "provider count changed — update the docs that quote it: {}",
             PROVIDER_COUNT_DOC_SITES.join(", ")
         );
@@ -3155,6 +3182,37 @@ mod tests {
                 .iter()
                 .any(|h| h.contains("commandcode")),
         );
+    }
+
+    /// Ultramarine's effort field takes only low/high/max, so the ladder must
+    /// clamp onto those three and every alias must land on the one id.
+    #[test]
+    fn paperinstruments_speaks_chat_completions_with_a_three_rung_effort_ladder() {
+        let p = by_id("paperinstruments").expect("paperinstruments is in the catalog");
+        assert_eq!(p.base_url, "https://api.paperinstruments.com/v1");
+        assert_eq!(p.default_model, "ultramarine-1-flash");
+        assert_eq!(p.env_key, "PAPERINSTRUMENTS_API_KEY");
+        assert_eq!(p.style, ApiStyle::ChatCompletions);
+        assert!(!p.browser_auth);
+        for (want, got) in [
+            ("minimal", "low"),
+            ("medium", "high"),
+            ("xhigh", "max"),
+            ("ultracode", "max"),
+        ] {
+            assert_eq!(
+                nearest_effort("paperinstruments", p.default_model, want).as_deref(),
+                Some(got),
+                "{want}"
+            );
+        }
+        for alias in ["paper-instruments", "ultramarine", "Paper Instruments"] {
+            assert_eq!(
+                resolve_provider_alias(alias).map(|p| p.id),
+                Some("paperinstruments"),
+                "{alias}"
+            );
+        }
     }
 
     /// Their data policy documents no-train / no-sell plus first-party ZDR
