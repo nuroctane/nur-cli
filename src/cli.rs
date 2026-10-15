@@ -74,8 +74,9 @@ pub struct Cli {
     pub max_turns: Option<u32>,
 
     /// Continuous/sovereign mode: run headless turns toward the prompt as a goal,
-    /// looping until the model replies DONE, Ctrl+C, or --max-iters. Auto-approves
-    /// tools (sandboxed). Example: nur "keep the tests green" --continuous
+    /// looping until the model replies DONE, Ctrl+C, or --max-iters. Mutating tools
+    /// ask for approval unless --yes (or --mode auto) is passed.
+    /// Example: nur "keep the tests green" --continuous --yes
     #[arg(long)]
     pub continuous: bool,
 
@@ -421,6 +422,15 @@ pub enum EcosystemCmd {
     Status,
     /// Rebuild global skill metadata without installing packages or resolving credentials
     RefreshSkills,
+    /// Install one component (penecho, sgrep, web3-skills, …): prints the pinned
+    /// plan first, and only installs with --yes
+    Install {
+        /// Component, skill pack, or plugin name
+        name: String,
+        /// Actually install (without it, only the plan is shown)
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]

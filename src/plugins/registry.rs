@@ -152,8 +152,14 @@ pub fn install_entry(entry: &PluginEntry) -> Result<String, String> {
     }
 
     let dest = home.join(entry.id);
+    // Default plugins carry a lockfile pin: the clone tracks that exact
+    // commit, never a moved HEAD. Catalog plugins without a pin (user-chosen
+    // installs) keep the latest-HEAD behavior.
+    let pin = crate::ecosystem::lock::plugin_pin(entry.id);
     if dest.is_dir() {
-        // Shallow clones often cannot ff-only pull; fetch + reset to origin.
+        // Shallow clones often cannot ff-only pull; fetch + reset to origin
+        // (or to the pinned commit when the lockfile has one).
+        let target = pin.as_ref().map(|p| p.commit.as_str()).unwrap_or("HEAD");
         let fetch = Command::new("git")
             .args([
                 "-C",
@@ -162,6 +168,7 @@ pub fn install_entry(entry: &PluginEntry) -> Result<String, String> {
                 "--depth",
                 "1",
                 "origin",
+                target,
             ])
             .output();
         match fetch {
@@ -183,23 +190,97 @@ pub fn install_entry(entry: &PluginEntry) -> Result<String, String> {
             Err(e) => tracing::warn!("plugin fetch {}: {e}", entry.id),
         }
     } else {
-        // Shallow clone into a temp dir then rename (atomic-ish).
+        // Shallow clone into a temp dir then rename (atomic-ish). With a pin,
+        // fetch that exact commit and verify HEAD matches before the rename.
         let tmp = home.join(format!(".tmp-{}", entry.id));
         let _ = fs::remove_dir_all(&tmp);
-        let out = Command::new("git")
-            .args([
-                "clone",
-                "--depth",
-                "1",
-                entry.source_url,
-                &tmp.display().to_string(),
-            ])
-            .output()
-            .map_err(|e| format!("git clone failed to start: {e}"))?;
+        let out = if let Some(p) = &pin {
+            Command::new("git")
+                .args(["init", "-q"])
+                .arg(&tmp)
+                .output()
+                .and_then(|o| {
+                    if o.status.success() {
+                        Command::new("git")
+                            .args([
+                                "-C",
+                                &tmp.display().to_string(),
+                                "remote",
+                                "add",
+                                "origin",
+                                entry.source_url,
+                            ])
+                            .output()
+                    } else {
+                        Ok(o)
+                    }
+                })
+                .and_then(|o| {
+                    if o.status.success() {
+                        Command::new("git")
+                            .args([
+                                "-C",
+                                &tmp.display().to_string(),
+                                "fetch",
+                                "--depth",
+                                "1",
+                                "origin",
+                                &p.commit,
+                            ])
+                            .output()
+                    } else {
+                        Ok(o)
+                    }
+                })
+                .and_then(|o| {
+                    if o.status.success() {
+                        Command::new("git")
+                            .args([
+                                "-C",
+                                &tmp.display().to_string(),
+                                "reset",
+                                "-q",
+                                "--hard",
+                                &p.commit,
+                            ])
+                            .output()
+                    } else {
+                        Ok(o)
+                    }
+                })
+                .map_err(|e| format!("git clone failed to start: {e}"))?
+        } else {
+            Command::new("git")
+                .args([
+                    "clone",
+                    "--depth",
+                    "1",
+                    entry.source_url,
+                    &tmp.display().to_string(),
+                ])
+                .output()
+                .map_err(|e| format!("git clone failed to start: {e}"))?
+        };
         if !out.status.success() {
             let err = String::from_utf8_lossy(&out.stderr);
             let _ = fs::remove_dir_all(&tmp);
             return Err(format!("git clone failed: {err}"));
+        }
+        if let Some(p) = &pin {
+            let head = Command::new("git")
+                .args(["-C", &tmp.display().to_string(), "rev-parse", "HEAD"])
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .unwrap_or_default();
+            if head != p.commit {
+                let _ = fs::remove_dir_all(&tmp);
+                return Err(format!(
+                    "plugin {} pinned checkout drifted ({head} != {})",
+                    entry.id, p.commit
+                ));
+            }
         }
 
         // Optional path_in_repo: promote that subdirectory to the plugin root.

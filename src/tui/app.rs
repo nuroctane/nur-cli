@@ -2150,6 +2150,8 @@ pub struct App {
     pub todos: SharedTodos,
     /// OMP-style prewalk model override for this TUI session (shared across turns).
     pub prewalk_override: Arc<Mutex<Option<String>>>,
+    /// Domains approved for web_fetch this session (shared across turns).
+    pub approved_domains: Arc<Mutex<HashSet<String>>>,
 
     pub cells: Vec<Cell>,
     tool_cells: HashMap<u64, usize>,
@@ -2788,6 +2790,7 @@ pub(super) fn new_app(
         permissions,
         todos: agent::shared_empty(),
         prewalk_override: Arc::new(Mutex::new(None)),
+        approved_domains: Arc::new(Mutex::new(HashSet::new())),
         cells: vec![Cell::Banner],
         tool_cells: HashMap::new(),
         scroll_from_bottom: 0,
@@ -10358,6 +10361,7 @@ impl App {
             hooks: agent::hooks::HooksConfig::load(),
             is_subagent: false,
             prewalk_override: self.prewalk_override.clone(),
+            approved_domains: self.approved_domains.clone(),
             subagent_depth: 0,
         }
     }

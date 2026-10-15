@@ -169,7 +169,10 @@ fn python_import_ok_uncached() -> bool {
     };
     let mut cmd = Command::new(&py);
     with_py_launcher(&py, &mut cmd);
-    cmd.args(["-c", "from headroom import compress"])
+    // Same isolation as the compress run: the probe must report what the
+    // helper will actually see (the pinned uv tool environment), not what a
+    // user site-packages directory happens to add.
+    cmd.args(["-I", "-c", "from headroom import compress"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -348,6 +351,11 @@ pub fn compress_text_with_provenance(
     {
         argv.push("-3".into());
     }
+    // Isolated mode: no user site-packages, no cwd on sys.path, no PYTHONPATH -
+    // the helper must not pick up whatever the agent's project directory or the
+    // user's environment happens to contain. The interpreter itself comes from
+    // the pinned uv tool environment when headroom-ai was installed that way.
+    argv.push("-I".into());
     argv.push(helper_s);
     argv.push("--model".into());
     argv.push(model.clone());
@@ -357,7 +365,9 @@ pub fn compress_text_with_provenance(
     argv.push(tmp_s);
     argv.push("--json-out".into());
     let refs: Vec<&str> = argv.iter().map(|s| s.as_str()).collect();
-    let captured = run_capture(&py, &refs, None, COMPRESS_TIMEOUT_MS);
+    // Neutral cwd: the helper never runs with the agent's workspace as its
+    // current directory (defense in depth behind -I, plus sane temp defaults).
+    let captured = run_capture(&py, &refs, Some(&tmp_dir), COMPRESS_TIMEOUT_MS);
     let _ = std::fs::remove_file(&tmp);
 
     let out = match captured {

@@ -16,9 +16,13 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub mod browser_setup;
+mod install;
+pub mod lock;
 mod packs;
 mod plur_context;
 mod skills;
+
+pub(crate) use install::run_install;
 
 pub use plur_context::{plur_context, plur_prefetch};
 
@@ -439,8 +443,9 @@ pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
         Err(e) => status.notes.push(format!("tldraw offline: {e}")),
     }
 
-    // Third-party skill packs via skills CLI (network; markers skip re-download).
-    let (packs_ok, pack_notes) = packs::install_skill_packs(&status.skills_cli);
+    // Third-party skill packs, cloned at their lockfile-pinned commits
+    // (network; markers skip re-download).
+    let (packs_ok, pack_notes) = packs::install_skill_packs();
     status.packs_installed = packs_ok;
     status.notes.extend(pack_notes);
 
@@ -519,17 +524,13 @@ fn ensure_penecho(node_ok: bool) -> ComponentStatus {
             c.available = true;
             c.path = Some(bin.clone());
             c.version = cmd_version(&bin, &["--version"]);
-            // Best-effort config so launch never drops into interactive configure.
-            match crate::penecho::auto_configure_from_nur(false, crate::penecho::Effort::Medium) {
-                Ok((_, msg)) => {
-                    c.detail = format!("CLI ready · {msg} · penecho tool opens browser canvas");
-                }
-                Err(e) => {
-                    c.detail = format!(
-                        "CLI ready · config deferred ({e}) · launch will retry /login or CLI mode"
-                    );
-                }
-            }
+            // Ecosystem ensure never writes another tool's config: exporting a
+            // provider key needs an explicit, approved `penecho` tool launch.
+            c.detail = if crate::penecho::config_is_usable() {
+                "CLI ready · config ready · penecho tool opens browser canvas".into()
+            } else {
+                "CLI ready · config not written by ensure - an approved penecho tool launch finishes setup".into()
+            };
             return c;
         }
     }
@@ -539,7 +540,8 @@ fn ensure_penecho(node_ok: bool) -> ComponentStatus {
     }
     let npm = find_bin("npm").unwrap_or_else(|| "npm".into());
     let _npm_guard = npm_lock();
-    match run_capture(&npm, &["install", "-g", "penecho@latest"], None, 300_000) {
+    let spec = lock::npm_spec("penecho");
+    match run_capture(&npm, &["install", "-g", &spec], None, 300_000) {
         Ok(_) => {}
         Err(e) => {
             c.detail = format!(
@@ -553,14 +555,12 @@ fn ensure_penecho(node_ok: bool) -> ComponentStatus {
         c.available = true;
         c.path = Some(bin.clone());
         c.version = cmd_version(&bin, &["--version"]);
-        match crate::penecho::auto_configure_from_nur(false, crate::penecho::Effort::Medium) {
-            Ok((_, msg)) => {
-                c.detail = format!("installed via npm · {msg}");
-            }
-            Err(e) => {
-                c.detail = format!("installed via npm · config deferred ({e})");
-            }
-        }
+        // Same rule as the already-installed path: no silent key export.
+        c.detail = if crate::penecho::config_is_usable() {
+            "installed via npm · config ready".into()
+        } else {
+            "installed via npm · config not written by ensure - an approved penecho tool launch finishes setup".into()
+        };
         return c;
     }
     if c.detail.is_empty() {
@@ -614,7 +614,8 @@ fn ensure_excalidraw(node_ok: bool) -> ComponentStatus {
     }
     let npm = find_bin("npm").unwrap_or_else(|| "npm".into());
     let _npm_guard = npm_lock();
-    match run_capture(&npm, &["install", "-g", "excalidraw-cli"], None, 300_000) {
+    let spec = lock::npm_spec("excalidraw-cli");
+    match run_capture(&npm, &["install", "-g", &spec], None, 300_000) {
         Ok(_) => {}
         Err(e) => {
             c.detail = format!(
@@ -681,21 +682,14 @@ fn ensure_headroom() -> ComponentStatus {
             "CLI ready · inline tool-result compress (disable: [headroom] enabled=false)".into();
         return c;
     }
-    // Best-effort install via uv / pip
+    // Best-effort install via uv / pip, pinned by the ecosystem lockfile.
     if let Some(uv) = find_bin("uv") {
-        let _ = run_capture(
-            &uv,
-            &["tool", "install", "--python", "3.13", "headroom-ai[all]"],
-            None,
-            600_000,
-        );
+        // `headroom-ai[all]==x.y.z`: extras before the == pin.
+        let spec = lock::pypi_spec("headroom-ai").replace("==", "[all]==");
+        let _ = run_capture(&uv, &["tool", "install", "--python", "3.13", &spec], None, 600_000);
     } else if let Some(pip) = find_bin("pip3").or_else(|| find_bin("pip")) {
-        let _ = run_capture(
-            &pip,
-            &["install", "--user", "-U", "headroom-ai[all]"],
-            None,
-            600_000,
-        );
+        let spec = lock::pypi_spec("headroom-ai").replace("==", "[all]==");
+        let _ = run_capture(&pip, &["install", "--user", &spec], None, 600_000);
     }
     if let Some(bin) = find_bin("headroom") {
         c.available = true;
@@ -754,17 +748,23 @@ fn ensure_dogwood() -> ComponentStatus {
         let cargo_ready = which("cargo") || which("cargo.exe");
         if cargo_ready && !crate::dogwood::dogwood_install_attempted() {
             crate::dogwood::mark_dogwood_install_attempted();
-            let _ = run_quiet(
-                "cargo",
-                &[
-                    "install",
-                    "--git",
-                    "https://github.com/dogwood-policy/dogwood",
-                    "amzn-dogwood-cli",
-                ],
-                None,
-                600_000,
-            );
+            // Pinned commit: a force-pushed or compromised upstream never
+            // reaches the machine through ensure.
+            let pin = lock::git_pin("dogwood");
+            let mut args = vec![
+                "install".to_string(),
+                "--git".to_string(),
+                pin.as_ref()
+                    .map(|p| p.repo.clone())
+                    .unwrap_or_else(|| "https://github.com/dogwood-policy/dogwood".to_string()),
+            ];
+            if let Some(p) = &pin {
+                args.push("--rev".to_string());
+                args.push(p.commit.clone());
+            }
+            args.push("amzn-dogwood-cli".to_string());
+            let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            let _ = run_quiet("cargo", &refs, None, 600_000);
         }
     }
     if let Some(bin) = find_bin("dogwood") {
@@ -808,12 +808,21 @@ fn ensure_sgrep() -> ComponentStatus {
         let cargo_ready = which("cargo") || which("cargo.exe");
         if cargo_ready && !crate::sgrep::install_attempted() {
             crate::sgrep::mark_install_attempted();
-            let _ = run_quiet(
-                "cargo",
-                &["install", "--git", crate::sgrep::SGREP_GIT, "--locked"],
-                None,
-                900_000,
-            );
+            let pin = lock::git_pin("sgrep");
+            let mut args = vec![
+                "install".to_string(),
+                "--git".to_string(),
+                pin.as_ref()
+                    .map(|p| p.repo.clone())
+                    .unwrap_or_else(|| crate::sgrep::SGREP_GIT.to_string()),
+            ];
+            if let Some(p) = &pin {
+                args.push("--rev".to_string());
+                args.push(p.commit.clone());
+            }
+            args.push("--locked".to_string());
+            let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            let _ = run_quiet("cargo", &refs, None, 900_000);
         }
     }
     let Some(bin) = crate::sgrep::sgrep_bin() else {
@@ -863,7 +872,12 @@ fn ensure_egaki(node_ok: bool) -> ComponentStatus {
     }
     let npm = find_bin("npm").unwrap_or_else(|| "npm".into());
     let _npm_guard = npm_lock();
-    let _ = run_capture(&npm, &["install", "-g", "egaki@latest"], None, 300_000);
+    let _ = run_capture(
+        &npm,
+        &["install", "-g", &lock::npm_spec("egaki")],
+        None,
+        300_000,
+    );
     if let Some(bin) = find_bin("egaki") {
         c.available = true;
         c.path = Some(bin.clone());
@@ -910,12 +924,13 @@ fn ensure_fractal() -> ComponentStatus {
             return c;
         }
         if let Some(uv) = find_bin("uv") {
+            let spec = lock::pypi_spec("plasma-fractal");
             let _ = run_capture(
                 &uv,
                 &[
                     "tool",
                     "install",
-                    "plasma-fractal",
+                    &spec,
                     "--with-executables-from",
                     "plasma-wiki",
                 ],
@@ -923,7 +938,8 @@ fn ensure_fractal() -> ComponentStatus {
                 600_000,
             );
         } else if let Some(pipx) = find_bin("pipx") {
-            let _ = run_capture(&pipx, &["install", "plasma-fractal"], None, 600_000);
+            let spec = lock::pypi_spec("plasma-fractal");
+            let _ = run_capture(&pipx, &["install", &spec], None, 600_000);
         }
         if let Some(bin) = crate::fractal::find_on_path("fractal") {
             c.available = true;
@@ -962,7 +978,12 @@ fn ensure_akarso(node_ok: bool) -> ComponentStatus {
         return c;
     }
     let _npm_guard = npm_lock();
-    let _ = run_quiet("npm", &["install", "-g", "akarso"], None, 600_000);
+    let _ = run_quiet(
+        "npm",
+        &["install", "-g", &lock::npm_spec("akarso")],
+        None,
+        600_000,
+    );
     if let Some(bin) = find_bin("akarso") {
         c.available = true;
         c.path = Some(bin.clone());
@@ -1080,17 +1101,10 @@ fn ensure_graphify() -> ComponentStatus {
             return c;
         }
     }
-    // Prefer upgrading via uv when available so ensure tracks latest graphifyy.
+    // Prefer upgrading via uv when available so ensure tracks the pinned graphifyy.
     if which("uv") || which("uv.exe") {
-        let _ = run_quiet(
-            "uv",
-            &["tool", "install", "--upgrade", "graphifyy"],
-            None,
-            300_000,
-        );
-        if find_bin("graphify").is_none() {
-            let _ = run_quiet("uv", &["tool", "install", "graphifyy"], None, 300_000);
-        }
+        let spec = lock::pypi_spec("graphifyy");
+        let _ = run_quiet("uv", &["tool", "install", &spec], None, 300_000);
     }
     if let Some(bin) = find_bin("graphify") {
         c.available = true;
@@ -1128,16 +1142,13 @@ fn ensure_plur(node_ok: bool) -> ComponentStatus {
             return c;
         }
     }
-    // Refresh to latest on every ensure (marker TTL / schema bump gated).
+    // Refresh to the pinned versions on every ensure (marker TTL / schema bump gated).
     let _npm_guard = npm_lock();
+    let plur_cli = lock::npm_spec("@plur-ai/cli");
+    let plur_mcp = lock::npm_spec("@plur-ai/mcp");
     let _ = run_quiet(
         "npm",
-        &[
-            "install",
-            "-g",
-            "@plur-ai/cli@latest",
-            "@plur-ai/mcp@latest",
-        ],
+        &["install", "-g", &plur_cli, &plur_mcp],
         None,
         600_000,
     );
@@ -1211,17 +1222,18 @@ fn ensure_ruflo(node_ok: bool) -> ComponentStatus {
             // Stale or unreadable version: fall through to the npm refresh.
         }
     }
-    // Refresh ruflo to latest on ensure.
+    // Refresh ruflo to the pinned version on ensure.
     let npm = find_bin("npm").unwrap_or_else(|| "npm".into());
     let _npm_guard = npm_lock();
+    let spec = lock::npm_spec("ruflo");
     let _ = run_quiet(
         &npm,
-        &["install", "-g", "ruflo@latest", "--omit=optional"],
+        &["install", "-g", &spec, "--omit=optional"],
         None,
         600_000,
     );
     if find_bin("ruflo").is_none() {
-        let _ = run_quiet(&npm, &["install", "-g", "ruflo@latest"], None, 600_000);
+        let _ = run_quiet(&npm, &["install", "-g", &spec], None, 600_000);
     }
     let Some(bin) = find_bin("ruflo") else {
         c.detail = "not found - npm install -g ruflo".into();

@@ -242,6 +242,11 @@ async fn real_main() -> Result<()> {
                         .map_err(|error| error::NurError::Other(format!("skill metadata refresh failed: {error}")))?;
                     theme::print_ok(&format!("refreshed {count} global skills"));
                 }
+                cli::EcosystemCmd::Install { name, yes } => {
+                    let out = ecosystem::run_install(name, *yes)
+                        .map_err(error::NurError::Other)?;
+                    print!("{out}");
+                }
             }
             return Ok(());
         }
@@ -647,6 +652,7 @@ async fn real_main() -> Result<()> {
                 permission_mode,
                 cli.verbose,
                 cli.max_iters,
+                cli.yes,
             )
             .await?;
             if code != error::exit::OK {
@@ -1393,6 +1399,7 @@ async fn run_headless(
         hooks: agent::hooks::HooksConfig::load(),
         is_subagent: false,
         prewalk_override: Arc::new(Mutex::new(None)),
+        approved_domains: Arc::new(Mutex::new(HashSet::new())),
         subagent_depth: 0,
     });
 
@@ -1576,8 +1583,10 @@ async fn run_headless(
 
 /// Continuous / sovereign mode: loop headless turns on one session toward a
 /// goal until the model replies `DONE`, Ctrl+C, or `--max-iters`. Ported from
-/// wizard's `--continuous`. Auto-approves tools (nur is sandboxed by default);
-/// the per-turn agent loop auto-compacts context so long missions stay bounded.
+/// wizard's `--continuous`. Tools auto-approve only with `--yes` (or
+/// `--mode auto`); otherwise each mutating call asks on stderr, like
+/// `nur run` without `-y`. The per-turn agent loop auto-compacts context so
+/// long missions stay bounded.
 #[allow(clippy::too_many_arguments)]
 async fn run_continuous(
     client: ApiClient,
@@ -1589,9 +1598,12 @@ async fn run_continuous(
     permission_mode: SharedMode,
     verbose: bool,
     max_iters: u32,
+    yes: bool,
 ) -> Result<i32> {
     use error::exit;
-    permission_mode.set(PermissionMode::Auto);
+    if yes {
+        permission_mode.set(PermissionMode::Auto);
+    }
     ade::disable_terminal_title();
     ade::set_title_prompt(goal);
     layers::announce(&cfg, |layers| eprintln!("{}", layers::status_line(&layers)));
@@ -1602,13 +1614,14 @@ async fn run_continuous(
         client,
         config: cfg,
         cwd: cwd.clone(),
-        permission_mode,
+        permission_mode: permission_mode.clone(),
         approved_tools: Arc::new(Mutex::new(HashSet::new())),
         tools: tools::ToolHost::default(),
         permissions: agent::SharedPermissions::load(&cwd),
         hooks: agent::hooks::HooksConfig::load(),
         is_subagent: false,
         prewalk_override: Arc::new(Mutex::new(None)),
+        approved_domains: Arc::new(Mutex::new(HashSet::new())),
         subagent_depth: 0,
     });
 
@@ -1622,7 +1635,13 @@ async fn run_continuous(
     }
 
     theme::print_info(&format!("continuous · goal: {goal}"));
-    theme::print_info("auto-approving tools · Ctrl+C stops after the current step");
+    if permission_mode.get().auto_approves() {
+        theme::print_info("auto-approving tools (--yes) · Ctrl+C stops after the current step");
+    } else {
+        theme::print_info(
+            "manual approval per mutating tool (pass --yes to auto-approve) · Ctrl+C stops after the current step",
+        );
+    }
     if max_iters > 0 {
         theme::print_info(&format!("continuous · max {max_iters} steps"));
     }
@@ -1721,6 +1740,32 @@ async fn run_continuous(
                 // redirect text and proceeds, defers, or declares BLOCKED:.
                 AgentEvent::QuestionRequest { respond, .. } => {
                     let _ = respond.send(agent::QuestionAnswer::unavailable());
+                }
+                // Without --yes the mode stays Manual: ask on stderr and read
+                // the answer from stdin, exactly like `nur run` without -y.
+                AgentEvent::ApprovalRequest {
+                    name,
+                    args,
+                    respond,
+                } => {
+                    let decision = tokio::task::spawn_blocking(move || {
+                        eprintln!();
+                        eprintln!("  {name} {}", truncate_line(&args, 200));
+                        eprint!(
+                            "  approve? [y]es / [a]lways ({}) / [N]o: ",
+                            agent::permissions::session_grant_label(&name, &args)
+                        );
+                        let mut line = String::new();
+                        let _ = std::io::stdin().read_line(&mut line);
+                        match line.trim().to_lowercase().as_str() {
+                            "y" | "yes" => ApprovalDecision::Approve,
+                            "a" | "always" => ApprovalDecision::ApproveAlways,
+                            _ => ApprovalDecision::Deny,
+                        }
+                    })
+                    .await
+                    .unwrap_or(ApprovalDecision::Deny);
+                    let _ = respond.send(decision);
                 }
                 _ => {}
             }

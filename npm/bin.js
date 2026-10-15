@@ -13,7 +13,6 @@
 "use strict";
 
 const https = require("https");
-const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
@@ -21,8 +20,9 @@ const crypto = require("crypto");
 const { spawnSync } = require("child_process");
 
 const REPO = "nuroctane/nur-cli";
-// Falls back to this package's own release when `latest/download` is
-// unreachable. publish-npm.yml stamps the release tag into package.json.
+// The shim installs exactly its own package version, never `latest`: the
+// binary you get is the one this package was published with.
+// publish-npm.yml stamps the release tag into package.json.
 const FALLBACK_VERSION = require("./package.json").version;
 
 function fail(msg) {
@@ -53,7 +53,12 @@ function platformAsset() {
 function fetchBuffer(url, redirects) {
   const maxRedirects = redirects == null ? 6 : redirects;
   return new Promise((resolve, reject) => {
-    const mod = url.startsWith("http://") ? http : https;
+    // https only: a redirect must never downgrade the binary (or its
+    // checksum) to plaintext http.
+    if (!url.startsWith("https://")) {
+      return reject(new Error(`refusing non-https url: ${url}`));
+    }
+    const mod = https;
     const req = mod.get(
       url,
       { headers: { "user-agent": "nur-cli-npm-shim" } },
@@ -99,15 +104,10 @@ async function downloadAndInstall() {
   const dir = installDir();
   fs.mkdirSync(dir, { recursive: true });
 
-  // Try every (asset, version) combination: latest first, then the pinned
-  // fallback version. Covers legacy release layouts too.
-  const versions = ["latest/download", `download/v${FALLBACK_VERSION}`];
-  const urls = [];
-  for (const v of versions) {
-    for (const name of asset.names) {
-      urls.push(`https://github.com/${REPO}/releases/${v}/${name}`);
-    }
-  }
+  // Exactly this package's own release, https-pinned asset names only.
+  const urls = asset.names.map(
+    (name) => `https://github.com/${REPO}/releases/download/v${FALLBACK_VERSION}/${name}`
+  );
 
   let buf = null;
   let lastErr = null;
@@ -155,8 +155,8 @@ async function verifyChecksum(url, buf) {
   try {
     record = (await fetchBuffer(`${url}.sha256`)).toString("utf8");
   } catch (e) {
-    if (e.status === 404) return; // a release from before checksums were published
-    fail(`could not fetch the checksum for ${name} (${e.message})`);
+    // A missing checksum is a failed verification, not a pass: refuse.
+    fail(`could not fetch the checksum for ${name} (${e.message}) - aborting`);
   }
   const expected = (record.trim().split(/\s+/)[0] || "").toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(expected)) {
@@ -195,7 +195,7 @@ async function main() {
     return;
   }
 
-  // Default: always fetch latest, then hand off to `nur install`.
+  // Default: fetch this package's own pinned release, then `nur install`.
   const bin = await downloadAndInstall();
   runNurInstall(bin);
 }

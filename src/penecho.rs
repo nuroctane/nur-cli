@@ -425,6 +425,11 @@ pub enum AutoConfigMode {
 /// Auto-write `~/.penecho/config.env` from nur auth / detected CLIs.
 /// Returns a **non-secret** summary. Skips rewrite when config is already usable
 /// unless `force` is true.
+///
+/// Call this only from an explicit, user-approved path (the `penecho` tool's
+/// launch/open actions). It can copy a provider API key into another tool's
+/// config file, so background paths (ecosystem ensure, status, doctor) must
+/// report `config_is_usable()` instead of writing.
 pub fn auto_configure_from_nur(force: bool, effort: Effort) -> Result<(AutoConfigMode, String)> {
     if !force && config_is_usable() {
         let mode = detect_mode_from_config().unwrap_or(AutoConfigMode::Api {
@@ -878,10 +883,20 @@ fn format_launch_report(
     s
 }
 
-/// Ensure install + config without launching (for ecosystem / status).
-pub fn ensure_ready(effort: Effort) -> Result<String> {
+/// Ensure install + report config status without launching (for ecosystem /
+/// status). Never writes config: exporting a provider key into another tool's
+/// file requires an explicit, approved launch.
+pub fn ensure_ready(_effort: Effort) -> Result<String> {
     let install = ensure_installed()?;
-    let (_, cfg) = auto_configure_from_nur(false, effort)?;
+    let cfg = if config_is_usable() {
+        format!(
+            "config ready at {}",
+            penecho_state_dir().join("config.env").display()
+        )
+    } else {
+        "config not written by a read-only status check - an approved launch finishes setup"
+            .to_string()
+    };
     let st = probe();
     Ok(format!(
         "{install}\n{cfg}\n binary={:?}\n config={} usable={}\n listening={}\n canvas={}\n",

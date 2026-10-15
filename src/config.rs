@@ -252,11 +252,6 @@ pub struct Config {
     /// 2 = grandchildren allowed, etc. Budget carefully: each level multiplies cost.
     #[serde(default = "default_subagent_depth")]
     pub subagent_depth: u32,
-    /// Shepherd-style OS sandbox on Linux (Landlock) for high-risk runs.
-    /// Optional; enforced only on Linux (privileged), no-op on Windows/macOS
-    /// where nur's proposal/approval model is the safety layer.
-    #[serde(default)]
-    pub landlock: bool,
     /// Model-based memory extraction (Mem0-class, paper M2). When true, the
     /// active model writes durable first-person memories from assistant turns
     /// (one cheap low-effort call per turn). Off by default (heuristic+explicit
@@ -284,9 +279,11 @@ pub struct Config {
     /// background-synced acceleration and cross-process query layer.
     #[serde(default)]
     pub helix_memory: HelixMemoryConfig,
-    /// Inbound peer-mail policy (pi-peer `inbound`): `accept` (default) /
-    /// `ask` (flag inbound mail for review, never auto-approve) / `refuse`
-    /// (drop inbound mail). See `~/.nur/peers` and the `message` tool.
+    /// Inbound peer-mail policy (pi-peer `inbound`): `refuse` (default - peer
+    /// mail is off until you opt in) / `ask` (you approve each letter before
+    /// the model sees it; held when nobody can answer) / `accept` (deliver).
+    /// An unrecognized value fails closed, as refuse. See `~/.nur/peers` and
+    /// the `message` tool.
     #[serde(default = "default_message_inbound")]
     pub message_inbound: String,
 }
@@ -1005,7 +1002,7 @@ fn default_embed_mode() -> String {
     "auto".to_string()
 }
 fn default_message_inbound() -> String {
-    "accept".to_string()
+    "refuse".to_string()
 }
 fn default_subagent_depth() -> u32 {
     1
@@ -1056,7 +1053,6 @@ impl Default for Config {
             context_register_min_chars: default_context_register_min_chars(),
             native_memory: true,
             subagent_depth: default_subagent_depth(),
-            landlock: false,
             memory_model_extract: false,
             kv_stable_compact: true,
             memory_embed_model: String::new(),
@@ -1536,7 +1532,20 @@ fn write_atomically(path: &std::path::Path, content: &[u8], private: bool) -> st
 /// shared or misconfigured machines includes other users. Falls back to the
 /// OWNER RIGHTS SID when the account name is not in the environment.
 #[cfg(windows)]
-fn restrict_to_owner(path: &std::path::Path) -> std::io::Result<()> {
+pub(crate) fn restrict_to_owner(path: &std::path::Path) -> std::io::Result<()> {
+    restrict_to_owner_grant(path, "F")
+}
+
+/// The same restriction for a directory whose children must inherit it
+/// (`~/.nur/peers`): (OI)(CI) propagates the owner-only ACE to letters and
+/// records written later.
+#[cfg(windows)]
+pub(crate) fn restrict_to_owner_tree(path: &std::path::Path) -> std::io::Result<()> {
+    restrict_to_owner_grant(path, "(OI)(CI)F")
+}
+
+#[cfg(windows)]
+fn restrict_to_owner_grant(path: &std::path::Path, grant: &str) -> std::io::Result<()> {
     use std::os::windows::process::CommandExt;
     let user = match (std::env::var("USERDOMAIN"), std::env::var("USERNAME")) {
         (Ok(domain), Ok(user)) if !domain.trim().is_empty() && !user.trim().is_empty() => {
@@ -1549,7 +1558,7 @@ fn restrict_to_owner(path: &std::path::Path) -> std::io::Result<()> {
         .arg(path)
         .arg("/inheritance:r")
         .arg("/grant:r")
-        .arg(format!("{user}:F"))
+        .arg(format!("{user}:{grant}"))
         .creation_flags(crate::process_tree::CREATE_NO_WINDOW)
         .output()?;
     if output.status.success() {

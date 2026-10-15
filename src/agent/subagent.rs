@@ -21,6 +21,7 @@ pub async fn run_subagent(
     config: Config,
     cwd: PathBuf,
     parent_mode: SharedMode,
+    approved_domains: Arc<Mutex<HashSet<String>>>,
     prompt: &str,
     subagent_type: &str,
     parent_depth: u32,
@@ -60,6 +61,9 @@ pub async fn run_subagent(
         hooks: super::hooks::HooksConfig::load(),
         is_subagent: true,
         prewalk_override: Arc::new(Mutex::new(None)),
+        // Children share the parent's approved fetch domains: a domain the
+        // user already blessed stays blessed inside a delegated run.
+        approved_domains,
         subagent_depth: parent_depth.saturating_add(1),
     });
 

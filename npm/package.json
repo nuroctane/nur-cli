@@ -28,6 +28,6 @@
     "node": ">=18"
   },
   "scripts": {
-    "postinstall": "node bin.js --ensure || exit 0"
+    "postinstall": "node bin.js --ensure"
   }
 }

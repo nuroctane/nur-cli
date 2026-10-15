@@ -25,8 +25,9 @@ impl Tool for Penecho {
 
     fn description(&self) -> &str {
         "penecho — AI canvas beyond chat (20k×20k ink, MathJax, plots, animations, flowchart plugins). \
-         Auto-installs via npm, auto-writes ~/.penecho/config.env from nur auth (or codex/claude/kimi CLI), \
-         opens browser to http://127.0.0.1:3888. \
+         Auto-installs via npm; on an approved launch writes ~/.penecho/config.env from nur auth (or codex/claude/kimi CLI) - \
+         ecosystem ensure never exports keys on its own. \
+         Opens browser to http://127.0.0.1:3888. \
          Actions: launch|open|restart|stop|status|probe|doctor|export|export_png|inject|atlas. \
          Optional: port=, inject= text, effort=, open=bool, background=true (install in bg job). \
          Never ask the user to diagnose — launch just works. AGPL sidecar."
@@ -85,8 +86,9 @@ impl Tool for Penecho {
                 Err(e) => Ok(format!("penecho status (partial): {e}")),
             },
             "doctor" => {
+                // Read-only action: probe only. Writing ~/.penecho/config.env
+                // (which exports a provider key) belongs to an approved launch.
                 let _ = crate::penecho::ensure_installed();
-                let _ = crate::penecho::auto_configure_from_nur(false, effort);
                 let rep = crate::penecho::doctor();
                 Ok(format!(
                     "penecho doctor:\n binary={} config={} usable={} url_ok={} key={} codex={} claude={} kimi={} listening={}\n canvas={}\n",

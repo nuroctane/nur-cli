@@ -895,6 +895,56 @@ fn parse_sha256_record(text: &str) -> Option<String> {
         .then(|| token.to_ascii_lowercase())
 }
 
+/// The minisign public key every release binary must verify against. Pinned
+/// here, not downloaded: the whole point is that a compromised release listing
+/// cannot swap it. The matching secret key lives in the repo's CI secrets
+/// (`MINISIGN_SECRET_KEY`) and signs each asset as `<asset>.minisig`.
+pub(crate) const RELEASE_SIGNING_PUBLIC_KEY: &str =
+    "RWRlwG813pftnQB1FDOUM099/2/Efrnu525EH1xdEDoHHOQqzA5yrqtA";
+
+/// Verify `bytes` against the release's `<name>.minisig` asset and the pinned
+/// public key. Fail closed: a missing, unreadable, or invalid signature is an
+/// error, never a skip - the sha256 half remains as a second layer, not the
+/// only one.
+fn verify_release_signature(
+    http: &reqwest::blocking::Client,
+    assets: &[(String, String)],
+    name: &str,
+    bytes: &[u8],
+) -> Result<()> {
+    let want = format!("{name}.minisig");
+    let (_, url) = assets
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case(&want))
+        .ok_or_else(|| {
+            NurError::Other(format!(
+                "release has no {want} - refusing to install an unsigned binary"
+            ))
+        })?;
+    let text = http
+        .get(url)
+        .send()
+        .and_then(|r| r.error_for_status())
+        .and_then(|r| r.text())
+        .map_err(|e| NurError::Other(format!("signature download: {e}")))?;
+    verify_minisig_text(bytes, &text)
+}
+
+/// Pure verification step, split out for tests: pinned key + detached
+/// minisign signature text + payload.
+fn verify_minisig_text(bytes: &[u8], signature: &str) -> Result<()> {
+    verify_minisig_with_key(bytes, signature, RELEASE_SIGNING_PUBLIC_KEY)
+}
+
+fn verify_minisig_with_key(bytes: &[u8], signature: &str, pubkey_b64: &str) -> Result<()> {
+    let pk = minisign_verify::PublicKey::from_base64(pubkey_b64)
+        .map_err(|e| NurError::Other(format!("release signing key is invalid: {e}")))?;
+    let sig = minisign_verify::Signature::decode(signature)
+        .map_err(|e| NurError::Other(format!("release signature is malformed: {e}")))?;
+    pk.verify(bytes, &sig, false)
+        .map_err(|_| NurError::Other("release signature does not verify - aborting".into()))
+}
+
 /// Query GitHub Releases and install a newer binary when available.
 /// `force_verbose` prints status lines (used by `nur update`); the launch path
 /// passes `false` and stays **completely silent** — it runs on a background
@@ -969,6 +1019,10 @@ fn try_install_from_github(force_verbose: bool) -> Result<UpdateOutcome> {
             "downloaded asset is not a native executable — aborting".into(),
         ));
     }
+    // Signature first, fail closed: the binary must verify against the pinned
+    // minisign key before it touches disk. The sha256 record stays as a
+    // second, independent layer when the release publishes one.
+    verify_release_signature(&http, &assets, &name, &bytes)?;
     if let Some(expected) = published_sha256(&http, &assets, &name)? {
         let actual = sha256_hex(&bytes);
         if actual != expected {
@@ -1485,11 +1539,24 @@ fn ensure_sgrep_best_effort() {
         ));
         return;
     }
-    theme::print_info("installing sgrep — local semantic code search (cargo build, a few minutes)…");
+    theme::print_info(
+        "installing sgrep — local semantic code search (cargo build, a few minutes)…",
+    );
     crate::sgrep::mark_install_attempted();
-    let _ = Command::new("cargo")
-        .args(["install", "--git", crate::sgrep::SGREP_GIT, "--locked"])
-        .status();
+    let pin = crate::ecosystem::lock::git_pin("sgrep");
+    let mut args = vec![
+        "install".to_string(),
+        "--git".to_string(),
+        pin.as_ref()
+            .map(|p| p.repo.clone())
+            .unwrap_or_else(|| crate::sgrep::SGREP_GIT.to_string()),
+    ];
+    if let Some(p) = &pin {
+        args.push("--rev".to_string());
+        args.push(p.commit.clone());
+    }
+    args.push("--locked".to_string());
+    let _ = Command::new("cargo").args(&args).status();
     if crate::sgrep::sgrep_bin().is_some() {
         theme::print_ok("sgrep installed");
     } else {
@@ -1568,6 +1635,45 @@ mod auto_update_tests {
     fn strip_v_prefix_works() {
         assert_eq!(strip_v_prefix("v0.18.7"), "0.18.7");
         assert_eq!(strip_v_prefix("0.18.7"), "0.18.7");
+    }
+
+    // ── release signatures ────────────────────────────────────────────────
+    // Throwaway keypair, generated for this test with rsign2; the payload is
+    // exactly "hello nur release" (no trailing newline).
+
+    const TEST_PUB: &str = "RWQ/T2/KetsbXIFN4X/AGLP3WFqm/VLyQcbGpEyRRZBsobFchH6mfXjp";
+    const TEST_SIG: &str = "untrusted comment: signature from rsign secret key\n\
+RUQ/T2/KetsbXKXsMjaqKchvlqNh/JiAM0TxsCHa/HJOXDy7zELM0Vbo5gNU6C35895WzFFRKfa+XYxcPVZbWhvbenTy7GaOmQ4=\n\
+trusted comment: test vector\n\
+O9jEmmu1S6/v5219JxglK57GvARN/HhDxn2hY+cvhnn63bn8AcgwLiL4d43tRHvuKWCaVage4fw8gPorK32RCw==\n";
+
+    #[test]
+    fn release_signature_verifies_against_matching_key() {
+        verify_minisig_with_key(b"hello nur release", TEST_SIG, TEST_PUB)
+            .expect("known-good vector must verify");
+    }
+
+    #[test]
+    fn release_signature_rejects_tampered_payload() {
+        assert!(verify_minisig_with_key(b"hello nur RELEASE", TEST_SIG, TEST_PUB).is_err());
+    }
+
+    #[test]
+    fn release_signature_rejects_wrong_key() {
+        // The production key did not sign the test vector.
+        assert!(verify_minisig_with_key(
+            b"hello nur release",
+            TEST_SIG,
+            RELEASE_SIGNING_PUBLIC_KEY
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn release_signature_rejects_malformed_text() {
+        assert!(
+            verify_minisig_with_key(b"hello nur release", "not a signature", TEST_PUB).is_err()
+        );
     }
 
     // ── launch gate ───────────────────────────────────────────────────────

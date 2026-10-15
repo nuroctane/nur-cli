@@ -36,13 +36,55 @@ termination through stale PID records.
 
 ---
 
-## Sandbox
+## Execution safety
 
-NurCLI hardens shell execution by default:
+nur has **no OS sandbox**. Shell commands and tools run with your user
+privileges, exactly as if you typed them. What nur provides is a gate in
+front of the model, not a wall around it:
 
-- **Bash denylist**: blocks dangerous commands
-- **Timeout**: long-running commands are killed
-- **SSRF blocks**: web tools reject private-IP targets
+- **Approval modes**: `manual` asks before every mutating tool call, `plan`
+  allows reads and a known read-only shell set (anything else asks; VCS
+  mutations, publishing and dependency installs stay blocked), `auto`
+  approves everything - choose it with Shift+Tab or `--mode`. `nur run` and
+  `--continuous` auto-approve only with an explicit `--yes`.
+- **Bash denylist**: refuses destructive commands even after approval and in
+  auto mode. It parses each command segment (quotes, chains, `sudo` /
+  `powershell -Command` wrappers) instead of matching substrings: recursive
+  deletes of `/`, `~`, `$HOME`, `%USERPROFILE%` or a drive root
+  (`rm -fr ~`, `Remove-Item -Recurse -Force C:\`, `rmdir /s /q`, `del /s`),
+  raw disk writes (`dd of=/dev/…`, `> /dev/sd…`), `format`, `cipher /w`,
+  `mkfs`, machine shutdown, fork bombs and encoded PowerShell. It is a
+  heuristic backstop, not a confinement boundary.
+- **Per-domain fetch approval**: `web_fetch` to a domain you have not
+  approved this session asks first, in every prompting mode - a fetched page
+  can carry instructions, and a new host is a choice you should make.
+- **Real-browser control**: the `browser` tool drives your logged-in Chrome,
+  so control actions always take the approval path, and an "always" grant
+  covers one action (`browser:click`), never the whole tool.
+- **Peer mail**: sessions on this machine can leave each other messages
+  (`~/.nur/peers`, the `message` tool). Inbound mail is **off by default**
+  (`message_inbound = "refuse"`); `ask` makes you approve each letter before
+  the model sees it, and only `accept` delivers directly. Letters carry the
+  sender's per-mailbox registration secret so a local process cannot forge
+  mail from a live session, delivery is wrapped in an explicit
+  `<peer-mail authority="none">` block, and on Windows the peers directory
+  ACL is reset to the owning account. Peer mail is data with no authority:
+  it cannot approve actions or change config.
+- **Supply chain**: release binaries are minisign-signed in CI and the
+  updater verifies the signature against a public key pinned in the source
+  before installing (fail closed when the signature asset is missing); every
+  ecosystem component installs at an exact pinned version or commit from
+  `src/ecosystem/lock.json` (git clones verify `HEAD` equals the pin), the
+  `nur-cli` npm shim fetches only its own version over https with a mandatory
+  checksum, and ecosystem tools never write credentials outside an approved
+  tool launch.
+- **Workspace-root refusal**: nur refuses to run tools when the working
+  directory is a filesystem root (`C:\`, `/`); pass `--cwd` or `/cd` into a
+  project folder.
+- **SSRF blocks**: web tools reject private-IP and loopback targets, resolve
+  DNS and pin the address across redirects.
+- **Timeouts**: long-running commands are killed, and a command that just
+  timed out cannot be retried unchanged for 15 minutes.
 - **Atomic IO**: all writes to `~/.nur/` use atomic file operations (write-to-temp, rename)
 - **Session bak**: each session save copies the previous file to `*.json.bak` first
 - **Optional rules**: `permissions.toml` deny/ask/allow; plan mode still blocks code authoring / VCS. A project's own `.nur/permissions.toml` cannot loosen anything until you trust it: its deny/ask rules apply at once, its allow rules wait for `/permissions trust` (or `nur permissions trust`), and an edit to that list holds it again. `bash` rules see every command in a chain: deny/ask fire on any of them, allow needs all of them and never covers a substitution or a redirect into a file ([details](configuration.md#permission-rules)). Rules hold for read-only tools too: a call a deny or ask rule names leaves the free parallel batch and takes the gated path

@@ -8,6 +8,7 @@ use super::{find_bin, run_capture, run_quiet, which, ComponentStatus};
 use crate::config::nur_home;
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 
 /// Skill sources installed via the `skills` CLI (vercel-labs/skills).
 const SKILL_PACKS: &[(&str, &str)] = &[
@@ -39,6 +40,11 @@ const SKILL_PACKS: &[(&str, &str)] = &[
     ("Cyfrin/solskill", "solskill"),
 ];
 
+/// Labels accepted by `nur ecosystem install <pack>`.
+pub(crate) fn pack_labels() -> Vec<&'static str> {
+    SKILL_PACKS.iter().map(|(_, label)| *label).collect()
+}
+
 pub fn ensure_skills_cli(node_ok: bool) -> ComponentStatus {
     let mut c = ComponentStatus {
         name: "skills".into(),
@@ -50,7 +56,8 @@ pub fn ensure_skills_cli(node_ok: bool) -> ComponentStatus {
     }
     if find_bin("skills").is_none() || super::ecosystem_force_pub() {
         let _guard = super::npm_lock();
-        let _ = run_quiet("npm", &["install", "-g", "skills@latest"], None, 300_000);
+        let spec = super::lock::npm_spec("skills");
+        let _ = run_quiet("npm", &["install", "-g", &spec], None, 300_000);
     }
     if let Some(bin) = find_bin("skills") {
         c.available = true;
@@ -75,7 +82,8 @@ pub fn ensure_akm(node_ok: bool) -> ComponentStatus {
     // akm-cli ships a bun wrapper on Windows; also try running via node.
     if find_bin("akm").is_none() || super::ecosystem_force_pub() {
         let _guard = super::npm_lock();
-        let _ = run_quiet("npm", &["install", "-g", "akm-cli@latest"], None, 300_000);
+        let spec = super::lock::npm_spec("akm-cli");
+        let _ = run_quiet("npm", &["install", "-g", &spec], None, 300_000);
     }
     // Prefer bun if present (akm's native runtime).
     if !which("bun") && !which("bun.exe") {
@@ -148,12 +156,13 @@ pub fn ensure_executor(node_ok: bool) -> ComponentStatus {
         return c;
     }
 
-    // Always refresh to @latest on ensure (schema bumps force this).
+    // Always refresh to the pinned version on ensure (schema bumps force this).
     // Serialized under NPM_LOCK: concurrent global installs corrupt npm's
     // store (parallel ensure threads would otherwise race here).
     let _guard = super::npm_lock();
     let npm = find_bin("npm").unwrap_or_else(|| "npm".into());
-    match run_capture(&npm, &["install", "-g", "executor@latest"], None, 300_000) {
+    let spec = super::lock::npm_spec("executor");
+    match run_capture(&npm, &["install", "-g", &spec], None, 300_000) {
         Ok(_) => {}
         Err(e) => {
             c.detail = format!(
@@ -196,7 +205,8 @@ pub fn ensure_graphjin() -> ComponentStatus {
     if (find_bin("graphjin").is_none() || super::ecosystem_force_pub()) && node_ok {
         let _guard = super::npm_lock();
         let npm = find_bin("npm").unwrap_or_else(|| "npm".into());
-        let _ = super::run_quiet(&npm, &["install", "-g", "graphjin@latest"], None, 600_000);
+        let spec = super::lock::npm_spec("graphjin");
+        let _ = super::run_quiet(&npm, &["install", "-g", &spec], None, 600_000);
     }
     match find_bin("graphjin") {
         Some(bin) => {
@@ -348,12 +358,8 @@ fn upgrade_omp(c: &mut ComponentStatus) {
     if let Some(bun) = find_bin("bun") {
         let bun_version = super::cmd_version_pub(&bun, &["--version"]);
         if bun_version.as_deref().is_some_and(bun_meets_omp_floor) {
-            if let Err(e) = run_capture(
-                &bun,
-                &["install", "-g", "@oh-my-pi/pi-coding-agent@latest"],
-                None,
-                300_000,
-            ) {
+            let spec = super::lock::npm_spec("@oh-my-pi/pi-coding-agent");
+            if let Err(e) = run_capture(&bun, &["install", "-g", &spec], None, 300_000) {
                 c.detail = format!(
                     "bun install failed: {}",
                     e.chars().take(160).collect::<String>()
@@ -544,12 +550,8 @@ pub fn ensure_browser_cli(node_ok: bool) -> ComponentStatus {
     {
         // Serialized under NPM_LOCK (see ensure_executor).
         let _guard = super::npm_lock();
-        match run_capture(
-            &npm,
-            &["install", "-g", "@sleepinsummer/agent-browser-cli@latest"],
-            None,
-            300_000,
-        ) {
+        let spec = super::lock::npm_spec("@sleepinsummer/agent-browser-cli");
+        match run_capture(&npm, &["install", "-g", &spec], None, 300_000) {
             Ok(_) => {}
             Err(e) => {
                 c.detail = format!(
@@ -589,7 +591,11 @@ pub fn ensure_browser_cli(node_ok: bool) -> ComponentStatus {
 }
 
 /// Install curated skill packs into ~/.agents/skills (Meta discovers this).
-pub fn install_skill_packs(skills_cli: &ComponentStatus) -> (Vec<String>, Vec<String>) {
+///
+/// Pinned by the ecosystem lockfile: each pack is cloned at the commit
+/// recorded for this nur release, never at whatever HEAD happens to be. A
+/// pack with no pin is skipped, not silently unpinned.
+pub fn install_skill_packs() -> (Vec<String>, Vec<String>) {
     let mut ok = Vec::new();
     let mut notes = Vec::new();
 
@@ -600,36 +606,43 @@ pub fn install_skill_packs(skills_cli: &ComponentStatus) -> (Vec<String>, Vec<St
         ok.push("catalogs".into());
     }
 
-    if !skills_cli.available {
-        notes.push("skills CLI missing — pack install deferred".into());
+    if !which("git") && !which("git.exe") {
+        notes.push("git missing — pack install deferred".into());
         return (ok, notes);
     }
-    let Some(bin) = find_bin("skills") else {
-        return (ok, notes);
-    };
 
     for (source, label) in SKILL_PACKS {
         // Skip re-install only when this schema already recorded a success.
-        // Schema bumps re-run `skills add` so upstream playbook edits land.
+        // Schema bumps re-install so upstream playbook edits land.
         let marker = pack_marker(label);
         if pack_marker_current(&marker) {
             ok.push((*label).into());
             continue;
         }
-        // skills add <source> -g -a universal -y --copy
-        // Design + cyber: install all skills in the repo.
-        // Clone-website: full-depth search for nested SKILL.md under .claude/skills.
-        let args = skill_pack_install_args(source, label);
-        match run_capture(&bin, &args, None, 600_000) {
-            Ok(out) => {
+        let Some(pin) = super::lock::pack_pin(label) else {
+            notes.push(format!(
+                "{label}: no lockfile pin - skipped (add one to lock.json)"
+            ));
+            continue;
+        };
+        if pin.repo != *source {
+            notes.push(format!(
+                "{label}: lockfile repo {} disagrees with the pack table - skipped",
+                pin.repo
+            ));
+            continue;
+        }
+        let url = format!("https://github.com/{source}");
+        match install_pack_pinned(label, &url, &pin.commit) {
+            Ok(count) => {
                 let _ = fs::create_dir_all(marker.parent().unwrap());
                 let _ = fs::write(
                     &marker,
                     format!(
-                        "source={source}\nschema={}\ninstalled_at={}\n{}\n",
+                        "source={source}\ncommit={}\nschema={}\ninstalled_at={}\nskills={count}\n",
+                        pin.commit,
                         super::ECOSYSTEM_SCHEMA,
                         chrono_now(),
-                        out.chars().take(500).collect::<String>()
                     ),
                 );
                 // Mirror complete skill directories into ~/.nur/skills so scripts,
@@ -649,16 +662,157 @@ pub fn install_skill_packs(skills_cli: &ComponentStatus) -> (Vec<String>, Vec<St
     (ok, notes)
 }
 
-fn skill_pack_install_args<'a>(source: &'a str, label: &'a str) -> Vec<&'a str> {
-    let mut args = vec!["add", source, "-g", "-a", "universal", "-y", "--copy"];
-    if label == "clone-website" {
-        args.extend(["--full-depth", "-s", "clone-website"]);
-    } else {
-        // Do not use `--all`: skills CLI defines it as both `--skill '*'` and
-        // `--agent '*'`, which would install into dozens of unrelated agents.
-        args.extend(["-s", "*"]);
+/// Clone `url` at exactly `commit` and copy its skills into ~/.agents/skills.
+/// Returns the number of skills installed.
+pub(crate) fn install_pack_pinned(label: &str, url: &str, commit: &str) -> Result<usize, String> {
+    let src_root = nur_home().join("skill-packs-src");
+    let _ = fs::create_dir_all(&src_root);
+    let checkout = src_root.join(label);
+    clone_at_commit(url, commit, &checkout)?;
+
+    // Copy every skill dir (SKILL.md parent) into the universal agent root,
+    // replacing the previous copy wholesale so a pin bump drops removed files.
+    let Some(home) = crate::config::home_dir() else {
+        return Err("no home directory".into());
+    };
+    let agents = home.join(".agents").join("skills");
+    let _ = fs::create_dir_all(&agents);
+    let mut count = 0usize;
+    for skill_md in crate::agent::skills::find_skill_mds(&checkout, 6) {
+        let Some(dir) = skill_md.parent() else {
+            continue;
+        };
+        let name = dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_string();
+        if name.is_empty() {
+            continue;
+        }
+        // clone-website's template repo hosts unrelated skeletons; upstream
+        // nur only ever installed the one nested skill.
+        if label == "clone-website" && name != "clone-website" {
+            continue;
+        }
+        let dest = agents.join(&name);
+        let _ = fs::remove_dir_all(&dest);
+        copy_tree(dir, &dest)?;
+        count += 1;
     }
-    args
+    if count == 0 {
+        return Err(format!("no SKILL.md found at pinned commit {commit}"));
+    }
+    Ok(count)
+}
+
+/// Fetch exactly `commit` into `dest`, verifying HEAD afterwards. A shallow
+/// fetch of the pinned sha is tried first (GitHub serves reachable commits);
+/// the fallback is a full clone. The checkout is reused across retries.
+fn clone_at_commit(url: &str, commit: &str, dest: &PathBuf) -> Result<(), String> {
+    // Already at the pin: nothing to do.
+    if dest.is_dir() && git_head(dest).as_deref() == Some(commit) {
+        return Ok(());
+    }
+    let tmp = dest.with_extension(format!("tmp-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&tmp);
+    let git = || {
+        let mut c = Command::new("git");
+        c.arg("-C").arg(&tmp);
+        c
+    };
+    run_git(
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(&tmp)
+            .output()
+            .map_err(|e| format!("git init failed to start: {e}"))?,
+        "git init",
+    )?;
+    run_git(
+        git()
+            .args(["remote", "add", "origin", url])
+            .output()
+            .map_err(|e| format!("git remote failed to start: {e}"))?,
+        "git remote",
+    )?;
+    let shallow = git()
+        .args(["fetch", "-q", "--depth", "1", "origin", commit])
+        .output();
+    match shallow {
+        Ok(o) if o.status.success() => {}
+        _ => {
+            // Some hosts refuse sha fetches; fall back to a full clone of the
+            // default branch and walk to the pin.
+            run_git(
+                git()
+                    .args(["fetch", "-q", "origin"])
+                    .output()
+                    .map_err(|e| format!("git fetch failed to start: {e}"))?,
+                "git fetch",
+            )?;
+        }
+    }
+    run_git(
+        git()
+            .args(["reset", "-q", "--hard", commit])
+            .output()
+            .map_err(|e| format!("git reset failed to start: {e}"))?,
+        "git reset",
+    )?;
+    // The pin is the contract: refuse a checkout that is not exactly it.
+    let head = git_head(&tmp).unwrap_or_default();
+    if head != commit {
+        let _ = fs::remove_dir_all(&tmp);
+        return Err(format!("pinned checkout drifted ({head} != {commit})"));
+    }
+    let _ = fs::remove_dir_all(dest);
+    fs::rename(&tmp, dest).map_err(|e| format!("install move failed: {e}"))?;
+    Ok(())
+}
+
+fn git_head(dir: &PathBuf) -> Option<String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn run_git(out: std::process::Output, what: &str) -> Result<(), String> {
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{what} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+                .chars()
+                .take(200)
+                .collect::<String>()
+        ))
+    }
+}
+
+fn copy_tree(src: &std::path::Path, dest: &std::path::Path) -> Result<usize, String> {
+    fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+    let mut n = 0;
+    for entry in fs::read_dir(src).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let from = entry.path();
+        let to = dest.join(entry.file_name());
+        if from.is_dir() {
+            n += copy_tree(&from, &to)?;
+        } else if from.is_file() {
+            fs::copy(&from, &to).map_err(|e| e.to_string())?;
+            n += 1;
+        }
+    }
+    Ok(n)
 }
 
 fn pack_marker(label: &str) -> PathBuf {
@@ -684,7 +838,9 @@ fn chrono_now() -> String {
 }
 
 fn mirror_agents_to_nur() {
-    let Some(home) = crate::config::home_dir() else { return };
+    let Some(home) = crate::config::home_dir() else {
+        return;
+    };
     let agents = home.join(".agents").join("skills");
     let nur = nur_home().join("skills");
     if !agents.is_dir() {
@@ -1041,9 +1197,7 @@ akm install <package>
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        bun_meets_omp_floor, mirror_missing_tree, omp_meets_feature_floor, skill_pack_install_args,
-    };
+    use super::{bun_meets_omp_floor, mirror_missing_tree, omp_meets_feature_floor, SKILL_PACKS};
 
     #[test]
     fn omp_bun_floor_is_enforced() {
@@ -1065,11 +1219,23 @@ mod tests {
     }
 
     #[test]
-    fn pack_install_targets_only_the_agents_root() {
-        let args = skill_pack_install_args("earthtojake/text-to-cad", "text-to-cad");
-        assert!(args.windows(2).any(|pair| pair == ["-a", "universal"]));
-        assert!(args.windows(2).any(|pair| pair == ["-s", "*"]));
-        assert!(!args.contains(&"--all"));
+    fn every_skill_pack_label_has_a_lockfile_pin_for_its_repo() {
+        // Failure mode: a pack whose label is absent from (or points at the
+        // wrong repo in) lock.json would silently skip - or worse, install
+        // unpinned - on every machine.
+        for (repo, label) in SKILL_PACKS {
+            let pin = crate::ecosystem::lock::pack_pin(label)
+                .unwrap_or_else(|| panic!("lock.json has no pin for pack {label}"));
+            assert_eq!(
+                &pin.repo, repo,
+                "lock pin for {label} points at a different repo"
+            );
+            assert_eq!(
+                pin.commit.len(),
+                40,
+                "lock pin for {label} is not a full commit sha"
+            );
+        }
     }
 
     #[test]

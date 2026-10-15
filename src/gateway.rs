@@ -213,6 +213,7 @@ pub async fn run_gateway(
         hooks: agent::hooks::HooksConfig::load(),
         is_subagent: false,
         prewalk_override: Arc::new(Mutex::new(None)),
+        approved_domains: Arc::new(Mutex::new(HashSet::new())),
         subagent_depth: 0,
     });
 

@@ -389,7 +389,26 @@ Agent Knowledge Management - a package manager for skills, commands, and tools a
 nur ecosystem ensure          # install / repair all components
 nur ecosystem ensure --force  # force re-install (useful after updates)
 nur ecosystem status          # show readiness per component
+nur ecosystem install <name>  # print the pinned install plan for one component
+nur ecosystem install <name> --yes   # execute the printed plan
 ```
+
+## Pinned supply chain
+
+Everything `nur ecosystem ensure` (and the bootstrapper) installs is pinned in
+`src/ecosystem/lock.json`: npm packages by exact version, pypi packages by
+exact version, git-sourced components (skill packs, default plugins, dogwood,
+sgrep) by full commit SHA. Skill packs are cloned at their pinned commit with
+`git` (never via `npx skills add`, which resolves a mutable ref) and the
+checkout's `HEAD` is verified against the pin before any SKILL.md is copied.
+Nothing resolves `latest` at install time.
+
+`nur ecosystem install <name>` shows the plan (source, pin, target directory)
+and does nothing without `--yes`. Known names: `penecho`, `sgrep`, `dogwood`,
+`headroom`, `graphjin`, `egaki`, `akarso`, `ruflo`, `plur`, `executor`,
+`agent-browser`, `excalidraw`, `skills`, `akm`, `omp`, `graphify`, `fractal`,
+the skill-pack labels (`web3-skills`, `infinite-headcount`, …) and catalog
+plugin ids (`superpowers`, `fable`, …).
 
 **Environment variables:**
 

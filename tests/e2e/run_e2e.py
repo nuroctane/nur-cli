@@ -14,6 +14,7 @@ The binary defaults to target/release/nur(.exe), then target/debug, then PATH.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -504,8 +505,17 @@ def run_scenario(binary, scenario_path):
         # Files under the scenario's nur home (hooks.toml, config additions).
         # "{home}" and "{workspace}" are replaced with the real paths.
         nur_home = Path(env["NUR_HOME"])
+        # Peer-mail scenarios address the current session's inbox, whose
+        # directory name is mailbox_id(cwd, NUR_SESSION_ID): the first 12 hex
+        # of sha256("cwd\0sid"). nur canonicalizes --cwd before hashing, so
+        # resolve the workspace the same way here.
+        mailbox_sid = env.get("NUR_SESSION_ID", "")
+        mailbox_id = hashlib.sha256(
+            (str(workspace.resolve()) + "\0" + mailbox_sid).encode("utf-8")
+        ).hexdigest()[:12]
         for rel, text in scenario.get("setup_home_files", {}).items():
-            text = text.replace("{home}", nur_home.as_posix()).replace("{workspace}", workspace.as_posix()).replace("{port}",str(port))
+            rel = rel.replace("{mailbox_id}", mailbox_id)
+            text = text.replace("{home}", nur_home.as_posix()).replace("{workspace}", workspace.as_posix()).replace("{port}",str(port)).replace("{mailbox_id}", mailbox_id)
             (nur_home / rel).parent.mkdir(parents=True, exist_ok=True)
             (nur_home / rel).write_text(text, encoding="utf-8")
         setup_failures = []

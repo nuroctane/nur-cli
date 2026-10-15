@@ -623,8 +623,14 @@ session's inbox) · `peers` (a.k.a. `list` - presence, cwd, status) · `inbound`
 (show, or set with `policy=accept|ask|refuse`) · `status`. Read-only and free:
 `recv` | `status` | `peers` | `list`; `send` and `inbound` policy changes are
 write-class. Scope defaults to the project directory name (override with `scope=`).
-Boundary stated in the code: inbound peer mail carries **no authority** - it cannot
-approve actions or change config, and slash commands inside it are inert.
+Inbound mail defaults to `refuse`: nothing arrives until you opt in with
+`message_inbound = "ask"` (you approve each letter before the model sees it;
+held when nobody can answer) or `"accept"`. Every registered session carries a
+mailbox secret that outgoing letters present, so a local process cannot forge
+mail from a live session. Delivery is wrapped in an explicit
+`<peer-mail authority="none">` block: inbound peer mail carries **no
+authority** - it cannot approve actions or change config, and slash commands
+inside it are inert.
 
 <!-- src/tools/message_tool.rs:67 actions: send|recv|peers|list|inbound|status -->
 

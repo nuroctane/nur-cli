@@ -409,9 +409,10 @@ fn check_hang_prone(cmd: &str) -> Option<String> {
 
 fn check_destructive(cmd: &str, cwd: &std::path::Path) -> Option<String> {
     let lower = cmd.to_lowercase();
-    let trimmed = lower.trim();
     let _ = cwd;
 
+    // Signatures, not commands: these survive any segment parser, so they
+    // stay textual.
     if lower.contains("encodedcommand")
         || lower.contains("-enc ")
         || lower.contains("frombase64string")
@@ -420,70 +421,324 @@ fn check_destructive(cmd: &str, cwd: &std::path::Path) -> Option<String> {
             "refused: encoded PowerShell obscures intent: {cmd}"
         ));
     }
-    if lower.contains(":(){:|:&};:") || lower.contains("fork bomb") {
+    if lower.contains(":(){") && lower.contains("|:&") {
         return Some("refused: fork bomb detected".into());
     }
 
-    let always_block = [
-        "rm -rf /",
-        "rm -rf /*",
-        "rm -rf ~",
-        "rm -rf $home",
-        "rm -rf $userprofile",
-        "rm -rf %userprofile%",
-        "rm -rf ..",
-        "mkfs.",
-        "mkfs -t",
-        "dd if=",
-        ">/dev/sda",
-        ">/dev/nvme",
-        "shutdown -h",
-        "shutdown -s",
-        "shutdown /s",
-        "halt -f",
-        "poweroff -f",
-        "del /f /s /q c:",
-        "rd /s /q c:",
-        "remove-item -recurse -force c:",
-        "remove-item -recurse -force $home",
-        "remove-item -recurse -force $env:userprofile",
-        "format c:",
-        "format d:",
-        r"\\?\c:",
-        "cipher /w:",
-        ":(){ :|:& };:",
-    ];
-    for d in always_block {
-        if lower.contains(d) {
-            return Some(format!("refused destructive pattern '{d}' in: {cmd}"));
+    let parts = crate::agent::permissions::shell_parts(cmd);
+    // Substitution or a file redirect breaks the segment view; sweep the raw
+    // text as a backstop for those, then still check the visible segments.
+    if parts.opaque {
+        const OPAQUE_BACKSTOP: &[&str] = &[
+            "rm -rf /",
+            "rm -fr /",
+            "rm -rf ~",
+            "rm -fr ~",
+            "rm -rf $home",
+            "rm -rf %userprofile%",
+            "rm -rf ..",
+            ">/dev/sd",
+            ">/dev/nvme",
+            ">/dev/hd",
+            "format c:",
+            "cipher /w:",
+            r"\\?\c:",
+        ];
+        for d in OPAQUE_BACKSTOP {
+            if lower.contains(d) {
+                return Some(format!("refused destructive pattern '{d}' in: {cmd}"));
+            }
+        }
+    }
+    for seg in &parts.commands {
+        if let Some(reason) = destructive_segment(seg) {
+            return Some(format!("{reason}: {cmd}"));
+        }
+    }
+    None
+}
+
+/// Words of one simple command, quotes stripped (the denylist reads the
+/// command the shell would run, not the string that hides it). Backslashes
+/// stay literal outside double quotes so Windows device paths (`\\?\c:\`)
+/// survive parsing.
+fn shell_words(seg: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quote: Option<char> = None;
+    let mut chars = seg.chars().peekable();
+    while let Some(c) = chars.next() {
+        match quote {
+            Some('"') => match c {
+                '"' => quote = None,
+                '\\' => {
+                    if let Some(&n) = chars.peek() {
+                        if matches!(n, '"' | '\\') {
+                            cur.push(chars.next().unwrap());
+                            continue;
+                        }
+                    }
+                    cur.push(c);
+                }
+                _ => cur.push(c),
+            },
+            Some('\'') => {
+                if c == '\'' {
+                    quote = None;
+                } else {
+                    cur.push(c);
+                }
+            }
+            // quote is only ever Some('"') or Some('\''); keep the wildcard
+            // for the compiler.
+            Some(_) => cur.push(c),
+            None => match c {
+                '\'' | '"' => quote = Some(c),
+                c if c.is_whitespace() => {
+                    if !cur.is_empty() {
+                        out.push(std::mem::take(&mut cur));
+                    }
+                }
+                _ => cur.push(c),
+            },
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// A target whose recursive deletion is catastrophic: filesystem root, the
+/// user's home (however spelled), a drive root, or a parent-directory climb.
+fn catastrophic_target(word: &str) -> bool {
+    let w = word.trim_matches(['"', '\'']);
+    let w = w.strip_prefix(r"\\?\").unwrap_or(w);
+    let mut t = w.trim_end_matches(['/', '\\']);
+    // `rm -rf /*` and `rm -rf ~/*` spell the same thing as their prefix.
+    if let Some(stripped) = t.strip_suffix('*') {
+        t = stripped.trim_end_matches(['/', '\\']);
+    }
+    if t.is_empty() {
+        return !matches!(w, "" | "*"); // "/" and friends collapsed to nothing
+    }
+    let l = t.to_ascii_lowercase();
+    if matches!(
+        l.as_str(),
+        "/" | "~"
+            | ".."
+            | "$home"
+            | "${home}"
+            | "$userprofile"
+            | "${userprofile}"
+            | "%userprofile%"
+            | "%home%"
+            | "$env:userprofile"
+            | "$env:home"
+            | "/root"
+    ) {
+        return true;
+    }
+    // A pure parent-climb (`..`, `../..`, `..\..\..`) escapes the workspace.
+    if t.contains("..") && t.split(['/', '\\']).all(|s| s == "..") {
+        return true;
+    }
+    // Drive root: `c:` / `c:\` / `d:/` …
+    let b = l.as_bytes();
+    if b.len() == 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+        return true;
+    }
+    // The literal home path, with either slash style.
+    if let Some(home) = crate::config::home_dir() {
+        let h = home.to_string_lossy().replace('/', "\\");
+        let h = h.trim_end_matches('\\').to_ascii_lowercase();
+        let t_norm = t.replace('/', "\\");
+        if !h.is_empty() && t_norm.trim_end_matches('\\').to_ascii_lowercase() == h {
+            return true;
+        }
+    }
+    false
+}
+
+/// True when a short/long flag cluster carries the recursive bit: `-r`,
+/// `-rf`, `-fr`, `-Rf`, `--recursive`, and PowerShell prefix spellings of
+/// `-Recurse` (`-r` … `-recurse`). Short clusters read as unix (`-force`
+/// without an `r` is not recursive); longer ones as PowerShell prefixes.
+fn has_recursive_flag(args: &[String]) -> bool {
+    args.iter().any(|a| {
+        let l = a.to_ascii_lowercase();
+        if let Some(rest) = l.strip_prefix("--") {
+            return rest == "recursive";
+        }
+        if let Some(rest) = l.strip_prefix('-') {
+            if rest.is_empty() || !rest.chars().all(|c| c.is_ascii_alphabetic()) {
+                return false;
+            }
+            if rest.len() <= 3 {
+                return rest.contains('r');
+            }
+            return "recurse".starts_with(rest);
+        }
+        false
+    })
+}
+
+/// A cmd-style switch (`/s`, `/q`, `/fs:ntfs`) vs a unix absolute path (`/`,
+/// `/usr`). Only single-letter-ish slash words count as switches.
+fn is_cmd_switch(word: &str) -> bool {
+    let Some(rest) = word.strip_prefix('/') else {
+        return false;
+    };
+    !rest.is_empty() && rest.len() <= 3 && rest.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+/// One simple command, parsed: program + words, matched against the
+/// catastrophic-target rules. Returns the refusal reason when destructive.
+fn destructive_segment(seg: &str) -> Option<String> {
+    let words = shell_words(seg);
+    if words.is_empty() {
+        return None;
+    }
+    let program = crate::agent::permissions::program(seg)?;
+    let prog_at = words
+        .iter()
+        .position(|w| !(w.contains('=') && !w.starts_with('=') && !w.starts_with('-')))?;
+    let args: Vec<String> = words[prog_at + 1..].to_vec();
+    // Non-flag words are candidate targets. For rm/Remove-Item only `-`
+    // introduces a flag, so `/` and `/*` stay visible as targets; for the
+    // cmd builtins `/s`-style switches are filtered out too.
+    let dash_targets: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
+    let cmd_targets: Vec<&String> = args
+        .iter()
+        .filter(|a| !a.starts_with('-') && !is_cmd_switch(a))
+        .collect();
+
+    // A device write hides as a plain argument or a shell redirect token.
+    for (i, a) in args.iter().enumerate() {
+        let l = a.to_ascii_lowercase();
+        let dev = l
+            .strip_prefix("of=")
+            .or_else(|| l.strip_prefix("of ="))
+            .map(str::trim_start);
+        let redirect_target = (a == ">" || a == "1>").then(|| args.get(i + 1)).flatten();
+        let inline_redirect = l
+            .strip_prefix('>')
+            .filter(|s| !s.is_empty() && !s.starts_with('&') && !s.starts_with('>'));
+        for cand in [dev, redirect_target.map(String::as_str), inline_redirect]
+            .into_iter()
+            .flatten()
+        {
+            let c = cand.to_ascii_lowercase();
+            if c.starts_with("/dev/sd")
+                || c.starts_with("/dev/nvme")
+                || c.starts_with("/dev/hd")
+                || c.starts_with("/dev/mmcblk")
+            {
+                return Some(format!("refused raw disk write to {cand}"));
+            }
         }
     }
 
-    static RM_ROOT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    static RM_HOME: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    static RM_DOTDOT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let rm_root = RM_ROOT.get_or_init(|| {
-        regex::Regex::new(r"(?i)\brm\s+-[a-z]*r[a-z]*f[a-z]*\s+/(?:\s|;|&|$)")
-            .expect("rm root pattern")
-    });
-    let rm_home = RM_HOME.get_or_init(|| {
-        regex::Regex::new(r"(?i)\brm\s+-[a-z]*r[a-z]*f[a-z]*.*\s+~(?:\s|;|&|$)")
-            .expect("rm home pattern")
-    });
-    let rm_dotdot = RM_DOTDOT.get_or_init(|| {
-        regex::Regex::new(r"(?i)\brm\s+-[a-z]*r[a-z]*f[a-z]*\s+\.\.(?:\s|;|&|$)")
-            .expect("rm dotdot pattern")
-    });
-    if rm_root.is_match(trimmed) {
-        return Some(format!("refused rm -rf / detected: {cmd}"));
+    match program.as_str() {
+        // Elevation wrappers: the payload follows the wrapper's flags.
+        "sudo" | "doas" | "pkexec" | "gsudo" | "runas" => {
+            let mut rest = &args[..];
+            while let Some(first) = rest.first() {
+                if first.starts_with('-') {
+                    rest = if matches!(first.as_str(), "-u" | "-g" | "-h" | "-p") && rest.len() > 1
+                    {
+                        &rest[2..]
+                    } else {
+                        &rest[1..]
+                    };
+                } else {
+                    break;
+                }
+            }
+            if rest.is_empty() {
+                return None;
+            }
+            destructive_segment(&rest.join(" "))
+        }
+        // `-Command <script>` arrives as one quoted word; parse it again.
+        "powershell" | "pwsh" => {
+            for a in &args {
+                if a.contains(' ') {
+                    if let Some(r) = destructive_segment(a) {
+                        return Some(r);
+                    }
+                }
+            }
+            None
+        }
+        // `cmd /c <line>` re-parses the words after the switch.
+        "cmd" => {
+            if let Some(at) = args
+                .iter()
+                .position(|a| a.eq_ignore_ascii_case("/c") || a.eq_ignore_ascii_case("/k"))
+            {
+                let inner = args[at + 1..].join(" ");
+                if !inner.is_empty() {
+                    return destructive_segment(&inner);
+                }
+            }
+            None
+        }
+        // `rm` on unix; Remove-Item's alias in PowerShell.
+        "rm" | "remove-item" | "ri" => {
+            if has_recursive_flag(&args) && dash_targets.iter().any(|t| catastrophic_target(t)) {
+                let t = dash_targets
+                    .iter()
+                    .find(|t| catastrophic_target(t))
+                    .map(|s| s.as_str())
+                    .unwrap_or("");
+                return Some(format!("refused recursive delete of {t}"));
+            }
+            None
+        }
+        "rmdir" | "rd" => {
+            let recursive =
+                args.iter().any(|a| a.eq_ignore_ascii_case("/s")) || has_recursive_flag(&args);
+            if recursive && cmd_targets.iter().any(|t| catastrophic_target(t)) {
+                return Some("refused recursive rmdir of a root/home path".into());
+            }
+            // Unix `rmdir` only removes empty dirs; no recurse, no block.
+            None
+        }
+        "del" | "erase" => {
+            let recursive = args.iter().any(|a| a.eq_ignore_ascii_case("/s"));
+            if recursive && cmd_targets.iter().any(|t| catastrophic_target(t)) {
+                return Some("refused recursive del of a root/home path".into());
+            }
+            None
+        }
+        "format" => {
+            if args.iter().any(|a| {
+                let b = a.as_bytes();
+                b.len() == 2 && b[0].is_ascii_alphabetic() && b[1] == b':'
+            }) {
+                return Some("refused format of a drive".into());
+            }
+            None
+        }
+        "cipher" => {
+            if args
+                .iter()
+                .any(|a| a.to_ascii_lowercase().starts_with("/w"))
+            {
+                return Some("refused cipher /w (wipes free space)".into());
+            }
+            None
+        }
+        "dd" => None, // device writes caught by the of=/redirect scan above
+        "shutdown" | "halt" | "poweroff" | "reboot" => Some(format!(
+            "refused {program}: it stops the machine mid-session"
+        )),
+        p if p == "mkfs" || p.starts_with("mkfs.") || p == "mke2fs" => {
+            Some("refused filesystem creation on a device".into())
+        }
+        _ => None,
     }
-    if rm_home.is_match(trimmed) {
-        return Some(format!("refused rm -rf ~ detected: {cmd}"));
-    }
-    if rm_dotdot.is_match(trimmed) {
-        return Some(format!("refused rm -rf .. detected: {cmd}"));
-    }
-    None
 }
 
 #[cfg(test)]
@@ -502,6 +757,87 @@ mod tests {
             "echo of hang phrase must not refuse"
         );
         assert!(check_hang_prone("FOO=1 npm run dev").is_some());
+    }
+
+    /// Failure modes the denylist exists for: recursive deletion of root or
+    /// home in any flag order or quoting, drive wipes, disk/device writes,
+    /// and mid-session machine shutdowns - without refusing ordinary project
+    /// cleanup like `rm -rf target`.
+    #[test]
+    fn destructive_table() {
+        let cwd = PathBuf::from("C:/proj");
+        for bad in [
+            "rm -rf /",
+            "rm -rf /*",
+            "rm -fr /",
+            "sudo rm -rf /",
+            "rm -r /",
+            "rm --recursive --force /",
+            "rm -rf ~",
+            "rm -fr ~",
+            "rm -rf \"$HOME\"",
+            "rm -rf ${HOME}",
+            "rm -rf %USERPROFILE%",
+            "rm -rf $env:USERPROFILE",
+            "rm ~ -rf",
+            "rm -rf ..",
+            "rm -rf ../..",
+            "Remove-Item -Recurse -Force C:\\",
+            "remove-item -r -force $home",
+            "Remove-Item -recurse $env:USERPROFILE",
+            "ri -Recurse ~",
+            "rmdir /s /q C:\\",
+            "rd /s %USERPROFILE%",
+            "del /f /s /q c:",
+            "del /s %USERPROFILE%",
+            "format c:",
+            "format D: /q",
+            "cipher /w:C:\\",
+            "mkfs.ext4 /dev/sda1",
+            "mkfs -t ext4 /dev/sda",
+            "dd if=/dev/zero of=/dev/sda",
+            "dd if=img of=/dev/nvme0n1",
+            "echo x > /dev/sda",
+            "cat img.bin > /dev/mmcblk0",
+            "shutdown -h now",
+            "shutdown /s",
+            "shutdown",
+            "halt -f",
+            "poweroff",
+            "reboot",
+            "powershell -enc SQBFAFgA",
+            "powershell -EncodedCommand SQBFAFgA",
+            ":(){ :|:& };:",
+            "rm -rf \\\\?\\c:\\",
+            "sudo -u root rm -rf ~",
+            "powershell -Command \"Remove-Item -Recurse -Force C:\\\"",
+            "cmd /c rmdir /s /q C:\\",
+            "pwsh -c \"rm -r $HOME\"",
+        ] {
+            assert!(
+                check_destructive(bad, &cwd).is_some(),
+                "should refuse: {bad}"
+            );
+        }
+        for ok in [
+            "rm -rf target",
+            "rm -rf node_modules",
+            "rm -rf ./dist",
+            "rm -f src/main.rs",
+            "rm target/debug/old.exe",
+            "Remove-Item -Force build.log",
+            "rmdir empty_dir",
+            "del /q build.log",
+            "dd if=/dev/sda of=disk.img bs=4M count=1",
+            "dd if=input.bin of=output.bin",
+            "echo rm -rf /",
+            "echo \"Remove-Item -Recurse -Force C:\\\"",
+            "git clean -fdx",
+            "cargo clean",
+            "cat README.md | grep format",
+        ] {
+            assert!(check_destructive(ok, &cwd).is_none(), "should allow: {ok}");
+        }
     }
 
     #[test]

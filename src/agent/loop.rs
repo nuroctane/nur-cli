@@ -194,6 +194,10 @@ pub struct AgentRunner {
     /// OMP-style prewalk: once fired, later turns in this TUI session use this
     /// model (shared Arc so `make_runner` each turn still sees the switch).
     pub prewalk_override: Arc<Mutex<Option<String>>>,
+    /// Domains the user approved for `web_fetch` this session. A fetch to a
+    /// new domain asks first (a page's instructions could otherwise pull the
+    /// agent onto any host); Auto mode skips the gate by definition.
+    pub approved_domains: Arc<Mutex<HashSet<String>>>,
 }
 
 pub fn spawn_turn(
@@ -654,7 +658,30 @@ impl AgentRunner {
             );
             // Existing queued mail may race the just-started watcher: combine a
             // direct turn-start drain with anything the watcher already queued.
-            peer_mail = crate::agent::mailbox::drain_inbound_for_prompt();
+            // Policy `ask` letters are held for a user decision right here;
+            // with nobody answering (headless EOF, continuous) they refuse.
+            let items = crate::agent::mailbox::drain_inbound_items();
+            let mut approved_lines: Vec<String> = Vec::new();
+            for item in items {
+                match item {
+                    crate::agent::mailbox::InboundItem::Deliver(line) => {
+                        approved_lines.push(line)
+                    }
+                    crate::agent::mailbox::InboundItem::Held(letter, reply) => {
+                        let shown = letter.from_name.clone();
+                        let chars = letter.text.chars().count();
+                        if ask_peer_mail(tx, &shown, chars, cancel).await {
+                            approved_lines
+                                .push(crate::agent::mailbox::format_delivery(&letter, &reply));
+                        } else {
+                            let _ = tx.send(AgentEvent::Status(format!(
+                                "peer mail from {shown} refused"
+                            )));
+                        }
+                    }
+                }
+            }
+            peer_mail = crate::agent::mailbox::wrap_peer_block(&approved_lines);
             peer_mail.push_str(&crate::agent::mailbox::take_pending_peer_prompt());
             if !peer_mail.is_empty() {
                 let _ = tx.send(AgentEvent::Status(
@@ -1747,13 +1774,16 @@ impl AgentRunner {
 
             // Contiguous parallel-safe batch. The batch skips the approval
             // gate, so a call that a deny or ask rule names takes the gated
-            // path instead: a rule must hold for reads as well as writes.
+            // path instead: a rule must hold for reads as well as writes. The
+            // same goes for a first-time web_fetch domain - its prompt lives
+            // in check_approval, so the call must reach it.
             let parallel = |call: &FunctionCallRef| {
                 is_concurrency_safe(&call.name, &call.arguments)
                     && !matches!(
                         self.permissions.decide(&call.name, &call.arguments),
                         Some(RuleDecision::Deny | RuleDecision::Ask)
                     )
+                    && !self.web_fetch_needs_domain_gate(&call.name, &call.arguments)
             };
             if parallel(&calls[idx]) {
                 let mut batch_end = idx + 1;
@@ -1943,15 +1973,21 @@ impl AgentRunner {
                 .check_approval(&call.name, &call.arguments, tx, cancel)
                 .await;
             if !approved {
-                let plan_block = mode_at_gate.is_read_only_enforced()
-                    && !is_read_only_call(&call.name, &call.arguments);
+                let plan_block = mode_at_gate == PermissionMode::Plan
+                    && matches!(
+                        plan_gate_classify(&call.name, &call.arguments, {
+                            is_read_only_call(&call.name, &call.arguments)
+                        })
+                        .0,
+                        PlanGate::Deny
+                    );
                 let (msg, result_label) = if plan_block {
                     (
                         format!(
                             "blocked in plan mode — {} needs manual/auto (Shift+Tab). \
-                                 Plan allows reads, analysis, and non-mutating shell (incl. \
-                                 ffmpeg/scratch work); it blocks code edits and repo/VCS commits. \
-                                 Describe the change instead, or ask the user to switch mode.",
+                             Plan allows reads and a known read-only shell set (other shell \
+                             asks first); it blocks code edits and repo/VCS commits. \
+                             Describe the change instead, or ask the user to switch mode.",
                             call.name
                         ),
                         "blocked · plan mode".into(),
@@ -2825,6 +2861,7 @@ impl AgentRunner {
             let config = self.config.clone();
             let cwd = self.cwd.clone();
             let mode = self.permission_mode.clone();
+            let domains = self.approved_domains.clone();
             let tx_child = tx.clone();
             let cancel_child = cancel.clone();
             let permits = permits.clone();
@@ -2883,6 +2920,7 @@ impl AgentRunner {
                             *child_config,
                             cwd,
                             mode,
+                            domains,
                             &prompt,
                             &kind,
                             depth,
@@ -3107,6 +3145,25 @@ impl AgentRunner {
         }
     }
 
+    /// True when a `web_fetch` call must take the gated path for its domain
+    /// prompt: not Auto mode, no allow rule, and the host is not yet approved
+    /// this session. An unparsable url is treated as unapproved.
+    fn web_fetch_needs_domain_gate(&self, name: &str, args: &str) -> bool {
+        if name != "web_fetch" || self.permission_mode.get() == PermissionMode::Auto {
+            return false;
+        }
+        if self.permissions.decide(name, args) == Some(RuleDecision::Allow) {
+            return false;
+        }
+        let host = fetch_host(args);
+        host.is_empty()
+            || !self
+                .approved_domains
+                .lock()
+                .map(|set| set.contains(&host))
+                .unwrap_or(false)
+    }
+
     async fn check_approval(
         &self,
         name: &str,
@@ -3125,17 +3182,47 @@ impl AgentRunner {
             return false;
         }
 
-        // 2) Plan-mode structural gates (cannot be overridden by allow rules).
-        if mode == PermissionMode::Plan {
-            let plan_ok = plan_mode_allows(name, args, read_only, tx);
-            if !plan_ok {
+        // 1.5) A fetched page can carry instructions, and exfiltration is one
+        // url away: the first fetch to a domain asks, in every prompting mode.
+        // Auto mode is the user's blanket yes; an explicit allow rule is too.
+        if self.web_fetch_needs_domain_gate(name, args) {
+            let host = fetch_host(args);
+            let _ = tx.send(AgentEvent::Status(format!(
+                "web_fetch · first fetch to {host} asks once per session"
+            )));
+            if !self.prompt_approval(name, args, tx, cancel).await {
                 return false;
             }
-            // Plan allowed — still honor ask rules (force a prompt).
-            if self.permissions.decide(name, args) == Some(RuleDecision::Ask) {
-                return self.prompt_approval(name, args, tx, cancel).await;
+            if !host.is_empty() {
+                if let Ok(mut set) = self.approved_domains.lock() {
+                    set.insert(host);
+                }
             }
-            return true;
+        }
+
+        // 2) Plan-mode structural gates (deny cannot be overridden by allow rules).
+        if mode == PermissionMode::Plan {
+            match plan_mode_gate(name, args, read_only, tx) {
+                PlanGate::Deny => return false,
+                PlanGate::Ask => {
+                    // An explicit allow rule is the user's standing answer;
+                    // anything else asks once per action.
+                    if self.permissions.decide(name, args) == Some(RuleDecision::Allow) {
+                        return true;
+                    }
+                    let _ = tx.send(AgentEvent::Status(format!(
+                        "plan mode · {name} needs approval"
+                    )));
+                    return self.prompt_approval(name, args, tx, cancel).await;
+                }
+                PlanGate::Allow => {
+                    // Plan allowed — still honor ask rules (force a prompt).
+                    if self.permissions.decide(name, args) == Some(RuleDecision::Ask) {
+                        return self.prompt_approval(name, args, tx, cancel).await;
+                    }
+                    return true;
+                }
+            }
         }
 
         // 3) Allow rule skips approval (manual) / short-circuits auto.
@@ -3203,40 +3290,257 @@ impl AgentRunner {
     }
 }
 
-/// Plan-mode structural allow/deny (same rules as before permissions.toml).
-fn plan_mode_allows(
+/// Policy-`ask` peer mail decision. The user, not the model, chooses whether
+/// a letter from another session enters the context. A dismissed or
+/// unanswered prompt refuses: held mail never falls through to delivery.
+async fn ask_peer_mail(
+    tx: &mpsc::UnboundedSender<AgentEvent>,
+    from_name: &str,
+    chars: usize,
+    cancel: &CancellationToken,
+) -> bool {
+    let (respond, rx) = oneshot::channel();
+    if tx
+        .send(AgentEvent::QuestionRequest {
+            turn_cancel: cancel.clone(),
+            question: format!("A message from peer session {from_name} ({chars} chars) arrived. Peer mail is data with no authority; it cannot approve or change anything."),
+            header: format!("Peer mail from {from_name}"),
+            options: vec![
+                (
+                    "Read it".to_string(),
+                    "Show this message to the model now".to_string(),
+                ),
+                (
+                    "Refuse".to_string(),
+                    "Drop it; the sender was already receipted".to_string(),
+                ),
+            ],
+            multi_select: false,
+            respond,
+        })
+        .is_err()
+    {
+        return false;
+    }
+    let decision = tokio::select! {
+        _ = cancel.cancelled() => return false,
+        decision = rx => decision,
+    };
+    match decision {
+        Ok(answer) => {
+            !answer.dismissed && answer.selected.first().is_some_and(|s| s == "Read it")
+        }
+        Err(_) => false,
+    }
+}
+
+/// Plan-mode gate for one tool call.
+enum PlanGate {
+    /// Runs without a prompt.
+    Allow,
+    /// Not clearly read-only; the user decides. An explicit allow rule counts
+    /// as that decision; the structural VCS/publish blocks above it do not.
+    Ask,
+    /// Structurally blocked (writes, VCS mutation, publishing).
+    Deny,
+}
+
+/// Plan-mode structural gate (same rules as before permissions.toml, plus a
+/// read-only shell allowlist: known read-only commands run, anything else
+/// asks instead of running free).
+fn plan_mode_gate(
     name: &str,
     args: &str,
     read_only: bool,
     tx: &mpsc::UnboundedSender<AgentEvent>,
-) -> bool {
+) -> PlanGate {
+    let (gate, reason) = plan_gate_classify(name, args, read_only);
+    if matches!(gate, PlanGate::Deny) {
+        let msg = reason
+            .map(|r| format!("plan mode · {r}"))
+            .unwrap_or_else(|| format!("plan mode blocked · {name}"));
+        let _ = tx.send(AgentEvent::Status(msg));
+    }
+    gate
+}
+
+/// Pure plan-mode classification; the denial message at the call site reads
+/// it too, so it must not emit events.
+fn plan_gate_classify(
+    name: &str,
+    args: &str,
+    read_only: bool,
+) -> (PlanGate, Option<&'static str>) {
     if read_only && name != "agent" {
-        return true;
+        return (PlanGate::Allow, None);
     }
     if name == "extract_frames" {
-        return true;
+        return (PlanGate::Allow, None);
     }
     if name == "browser" && crate::tools::browser::is_plan_safe_action(args) {
-        return true;
+        return (PlanGate::Allow, None);
     }
     if name == "terminal_browser" && crate::tools::terminal_browser::is_plan_safe_action(args) {
-        return true;
+        return (PlanGate::Allow, None);
     }
     if name == "bash" {
         let cmd = serde_json::from_str::<Value>(args)
             .ok()
             .and_then(|v| v.get("command").and_then(|c| c.as_str()).map(String::from))
             .unwrap_or_default();
-        return match plan_blocks_shell(&cmd) {
-            None => true,
-            Some(reason) => {
-                let _ = tx.send(AgentEvent::Status(format!("plan mode · {reason}")));
-                false
-            }
+        if let Some(reason) = plan_blocks_shell(&cmd) {
+            return (PlanGate::Deny, Some(reason));
+        }
+        return if plan_shell_read_only(&cmd) {
+            (PlanGate::Allow, None)
+        } else {
+            (PlanGate::Ask, None)
         };
     }
-    let _ = tx.send(AgentEvent::Status(format!("plan mode blocked · {name}")));
-    false
+    (PlanGate::Deny, None)
+}
+
+/// Host of a `web_fetch` call's url argument, lowercased; "" when the args
+/// or url do not parse (an unparsable url never counts as approved).
+fn fetch_host(args: &str) -> String {
+    serde_json::from_str::<Value>(args)
+        .ok()
+        .and_then(|v| v.get("url").and_then(|u| u.as_str()).map(String::from))
+        .and_then(|u| reqwest::Url::parse(&u).ok())
+        .and_then(|u| u.host_str().map(str::to_ascii_lowercase))
+        .unwrap_or_default()
+}
+
+/// True when every simple command in the line is a known read-only program.
+/// Opaque lines (command substitution, output redirected into a file) are not
+/// read-only: they ask instead.
+fn plan_shell_read_only(command: &str) -> bool {
+    let parts = super::permissions::shell_parts(command);
+    if parts.opaque || parts.commands.is_empty() {
+        return false;
+    }
+    parts.commands.iter().all(|c| plan_command_read_only(c))
+}
+
+/// One simple command is read-only when its program is in the plan-mode set
+/// and its arguments do not turn it into a writer (`git diff --output=…`,
+/// `find -delete`, `env FOO=x bar`, …).
+fn plan_command_read_only(command: &str) -> bool {
+    let words: Vec<&str> = command.split_whitespace().collect();
+    // Skip leading VAR=value assignments; the program is the first other word.
+    let prog_at = words
+        .iter()
+        .position(|w| !(w.contains('=') && !w.starts_with('=') && !w.starts_with('-')));
+    let Some(prog_at) = prog_at else {
+        return true; // bare assignments set shell vars; no program runs
+    };
+    let program = super::permissions::program(command);
+    let Some(program) = program else {
+        return false;
+    };
+    let args: Vec<&str> = words[prog_at + 1..]
+        .iter()
+        .map(|w| w.trim_matches(['"', '\'']))
+        .collect();
+    match program.as_str() {
+        // Pure readers on both shells. `env` is absent: it runs whatever
+        // follows the assignments. `sed`/`awk`/`xargs` are absent: they carry
+        // `-i` / `system()` / a nested command.
+        "ls" | "pwd" | "cat" | "head" | "tail" | "wc" | "file" | "stat" | "grep"
+        | "egrep" | "fgrep" | "rg" | "sgrep" | "sort" | "uniq" | "tr" | "cut" | "diff"
+        | "comm" | "jq" | "echo" | "printf" | "true" | "false" | "which" | "where"
+        | "whereis" | "uname" | "whoami" | "hostname" | "date" | "printenv" | "id" | "df"
+        | "du" | "ps" | "tree" | "basename" | "dirname" | "realpath" | "readlink" | "xxd"
+        | "od" | "sha256sum" | "md5sum" | "cd" | "type" | "dir" | "findstr"
+        | "select-string" | "select-object" | "sort-object" | "measure-object"
+        | "compare-object" | "format-table" | "format-list" | "out-string" => true,
+        // PowerShell's Get-* verb reads by convention.
+        p if p.starts_with("get-") => true,
+        "find" => !args.iter().any(|a| {
+            matches!(
+                a.to_ascii_lowercase().as_str(),
+                "-delete" | "-exec" | "-execdir" | "-ok" | "-okdir" | "-fprintf" | "-fls"
+            )
+        }),
+        "git" => plan_git_read_only(&args),
+        _ => false,
+    }
+}
+
+/// The read-only side of git: inspection subcommands, plus the list/read
+/// forms of the dual-purpose ones (`git branch` reads, `git branch x` writes).
+fn plan_git_read_only(args: &[&str]) -> bool {
+    // `--output=<file>` writes a patch without any shell redirect.
+    if args.iter().any(|a| a.starts_with("--output")) {
+        return false;
+    }
+    // Skip git's global options (`-C dir`, `-c k=v`, `--git-dir=…`,
+    // `--no-pager`, …) so `git -C ../other log` reads as `git log`.
+    let mut sub_at: Option<usize> = None;
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i];
+        if a.starts_with('-') {
+            if matches!(a, "-c" | "-C" | "--git-dir" | "--work-tree" | "--namespace") {
+                i += 1; // these take the next word as their value
+            }
+            i += 1;
+            continue;
+        }
+        sub_at = Some(i);
+        break;
+    }
+    let Some(sub_at) = sub_at else {
+        return true; // bare `git` (help text)
+    };
+    let sub = args[sub_at].to_ascii_lowercase();
+    if matches!(
+        sub.as_str(),
+        "status"
+            | "log"
+            | "diff"
+            | "show"
+            | "blame"
+            | "rev-parse"
+            | "rev-list"
+            | "ls-files"
+            | "ls-tree"
+            | "ls-remote"
+            | "describe"
+            | "shortlog"
+            | "grep"
+            | "count-objects"
+            | "show-branch"
+            | "show-ref"
+            | "whatchanged"
+            | "reflog"
+            | "name-rev"
+    ) {
+        return true;
+    }
+    let rest: Vec<&str> = args[sub_at + 1..].to_vec();
+    match sub.as_str() {
+        // `git branch` / `git tag` with flags only list; a positional name writes.
+        "branch" | "tag" => rest.iter().all(|a| a.starts_with('-')),
+        "remote" => {
+            rest.is_empty()
+                || rest.iter().all(|a| a.starts_with('-'))
+                || rest.first().is_some_and(|a| a.eq_ignore_ascii_case("get-url"))
+        }
+        // `git config key` reads; `git config key value` writes.
+        "config" => {
+            !rest.iter().any(|a| {
+                matches!(
+                    a.to_ascii_lowercase().as_str(),
+                    "--add" | "--unset" | "--unset-all" | "--replace-all"
+                )
+            }) && rest.iter().filter(|a| !a.starts_with('-')).count() <= 1
+        }
+        "stash" => rest
+            .first()
+            .is_some_and(|a| matches!(a.to_ascii_lowercase().as_str(), "list" | "show")),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -3434,6 +3738,7 @@ mod tests {
             is_subagent: true, // Do not update the user's latest-session pointer.
             subagent_depth: 0,
             prewalk_override: Arc::new(Mutex::new(None)),
+            approved_domains: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -4504,6 +4809,101 @@ mod tests {
             "npm  install",
         ] {
             assert!(plan_blocks_shell(bad).is_some(), "should block: {bad}");
+        }
+    }
+
+    #[test]
+    fn fetch_host_reads_the_url_arg() {
+        // Failure modes: a host with different case bypasses the approved
+        // set; an unparsable url counts as approved and never asks.
+        assert_eq!(
+            fetch_host(r#"{"url":"https://Docs.Example.com/x?y=1"}"#),
+            "docs.example.com"
+        );
+        assert_eq!(fetch_host(r#"{"url":"not a url"}"#), "");
+        assert_eq!(fetch_host(r#"{}"#), "");
+        assert_eq!(fetch_host("garbage"), "");
+    }
+
+    #[test]
+    fn web_fetch_domain_gate_only_for_new_hosts_outside_auto() {
+        // Failure modes: a first-time host rides the free parallel batch and
+        // the domain prompt never fires; an already-approved host asks again;
+        // Auto mode (a blanket yes) gets prompted anyway.
+        let runner = compaction_test_runner(Config::default());
+        let args = r#"{"url":"https://example.com/"}"#;
+
+        runner.permission_mode.set(PermissionMode::Auto);
+        assert!(!runner.web_fetch_needs_domain_gate("web_fetch", args));
+
+        runner.permission_mode.set(PermissionMode::Manual);
+        assert!(runner.web_fetch_needs_domain_gate("web_fetch", args));
+        assert!(!runner.web_fetch_needs_domain_gate("read_file", args));
+
+        runner
+            .approved_domains
+            .lock()
+            .unwrap()
+            .insert("example.com".to_string());
+        assert!(!runner.web_fetch_needs_domain_gate("web_fetch", args));
+    }
+
+    #[test]
+    fn plan_shell_read_only_covers_known_readers_only() {
+        // Failure modes: a writer or code runner slipping through the
+        // read-only set (plan mode runs it with no prompt), or a plain reader
+        // falling out (every exploration step nags the user).
+        for ro in [
+            "ls -la",
+            "cat src/main.rs",
+            "rg 'fn main' -n",
+            "grep -rn TODO src",
+            "git status",
+            "git -C ../other log --oneline",
+            "git --no-pager diff",
+            "git branch -a",
+            "git tag -l",
+            "git config user.name",
+            "git remote -v",
+            "git remote get-url origin",
+            "git stash list",
+            "cat a.rs | grep foo | wc -l",
+            "Get-ChildItem src",
+            "Select-String foo bar.rs",
+            "Get-Process",
+            "echo hello",
+            "FOO=1 rg bar",
+            "find src -name '*.rs'",
+            "jq .package.json package.json",
+        ] {
+            assert!(plan_shell_read_only(ro), "read-only: {ro}");
+        }
+        for ask in [
+            // Interpreters and build/test runners are not read-only.
+            "python analyze.py --report",
+            "cargo test",
+            "npm run build",
+            // Plain writers.
+            "cp demo.mp4 /tmp/clip.mp4",
+            "rm -rf target",
+            "echo hi > out.txt",
+            // Substitution hides the real command.
+            "cat $(ls)",
+            // Dual-purpose forms that write.
+            "git diff --output=patch.diff",
+            "git branch new-feature",
+            "git tag v1.0",
+            "git config user.name bob",
+            "git config --add alias.x y",
+            "git stash pop",
+            "git remote add upstream u",
+            // find/xargs/env carry a nested command or a delete flag.
+            "find . -delete",
+            "find . -exec rm {} +",
+            "env FOO=1 rm x",
+            "xargs rm",
+        ] {
+            assert!(!plan_shell_read_only(ask), "should ask: {ask}");
         }
     }
 
@@ -5969,6 +6369,7 @@ async fn run_agent_tool(
         let config = runner.config.clone();
         let cwd = runner.cwd.clone();
         let mode = runner.permission_mode.clone();
+        let domains = runner.approved_domains.clone();
         let prompt = prompt.clone();
         let kind = kind.clone();
         let desc_for_spawn = desc.clone();
@@ -6002,7 +6403,7 @@ async fn run_agent_tool(
                     config: cc,
                 } => {
                     crate::agent::subagent::run_subagent(
-                        c, *cc, cwd, mode, &prompt, &kind, depth, &accept, &tx2,
+                        c, *cc, cwd, mode, domains, &prompt, &kind, depth, &accept, &tx2,
                     )
                     .await
                 }
@@ -6057,6 +6458,7 @@ async fn run_agent_tool(
                 *config,
                 runner.cwd.clone(),
                 runner.permission_mode.clone(),
+                runner.approved_domains.clone(),
                 &prompt,
                 &kind,
                 runner.subagent_depth,

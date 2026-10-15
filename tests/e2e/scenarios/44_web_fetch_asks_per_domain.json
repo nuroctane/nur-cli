@@ -1,0 +1,17 @@
+{
+  "description": "web_fetch to a domain not yet approved this session asks first (headless stdin = denied); the fetch never happens and the model sees the refusal.",
+  "prompt": "Fetch the page and summarize it.",
+  "mode": "manual",
+  "script": [
+    {"tool_calls": [{"name": "web_fetch", "arguments": {"url": "https://example.com/page"}}]},
+    {"text": "I could not fetch the page: access was not approved."}
+  ],
+  "expect": {
+    "requests": 2,
+    "tool_results": [
+      {"request": 2, "contains": ["user denied this tool call"]}
+    ],
+    "stdout_contains": ["I could not fetch the page"],
+    "stderr_contains": ["approve?", "example.com"]
+  }
+}

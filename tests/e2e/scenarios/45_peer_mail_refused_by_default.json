@@ -1,0 +1,19 @@
+{
+  "description": "Peer mail is off by default: a valid letter (correct sender secret) waiting in this session's inbox is refused and never reaches the model, because message_inbound defaults to refuse.",
+  "prompt": "Reply with exactly: done",
+  "mode": "auto",
+  "env": {"NUR_SESSION_ID": "e2e-peer-recv"},
+  "setup_home_files": {
+    "peers/sender000000.json": "{\"id\":\"sender000000\",\"name\":\"sender\",\"cwd\":\"C:/sender\",\"session_id\":\"sess-sender\",\"pid\":null,\"started_at\":1,\"beat_at\":1,\"state\":\"idle\",\"secret\":\"sendersecret\"}",
+    "peers/{mailbox_id}.inbox/letter1.json": "{\"from_id\":\"sender000000\",\"from_name\":\"sender\",\"from_cwd\":\"C:/sender\",\"text\":\"PEERMAIL-LEAK-TOKEN-7712\",\"sent_at\":1,\"secret\":\"sendersecret\"}"
+  },
+  "script": [
+    {"text": "done"}
+  ],
+  "expect": {
+    "requests": 1,
+    "requests_lack": ["PEERMAIL-LEAK-TOKEN-7712"],
+    "stdout_lacks": ["PEERMAIL-LEAK-TOKEN-7712"],
+    "stdout_contains": ["done"]
+  }
+}

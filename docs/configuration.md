@@ -165,12 +165,11 @@ auto_update = true
 | `memory_embed_mode` | string | `auto` | Embedding mode: `auto` (API, fall back to local on error), `api` (require API), or `local` (offline n-gram hash embedding only) |
 | `memory_embed_model` | string | provider default | Embedding model for the vector store. Empty = provider default (`text-embedding-3-small`); falls back to the local embedding when the API path is unavailable |
 | `memory_model_extract` | bool | `false` | Let the active model write durable first-person memories from assistant turns (one cheap low-effort call per turn). Off by default |
-| `message_inbound` | string | `accept` | Inbound peer-mail policy (`~/.nur/peers`, `message` tool): `accept` / `ask` (flag for review) / `refuse` (drop) |
+| `message_inbound` | string | `refuse` | Inbound peer-mail policy (`~/.nur/peers`, `message` tool): `refuse` (default - off) / `ask` (you approve each letter before the model sees it) / `accept` (deliver). Unknown values fail closed as `refuse` |
 | `proposal_mode` | bool | `false` | Shepherd-style retained outputs: `write_file` stages under `~/.nur/proposals/<session>/` until `proposal apply` |
 | `quality_gate` | string | empty | Shell command run as a quality gate before accepting DONE in autonomous mode. Empty = none |
 | `context_register_min_chars` | integer | `8000` | Auto-register tool results larger than this into the RLM context store (`0` = disabled) |
 | `subagent_depth` | integer | `1` | RLM-style subagent recursion depth. `1` = children only; each extra level multiplies cost |
-| `landlock` | bool | `false` | Shepherd-style OS sandbox via Linux Landlock for high-risk runs. Linux-only; no-op on Windows/macOS |
 | `poor_mode` | bool | `false` | Skip PLUR auto-inject and long memory (skill NL/slash activation still works) |
 | `theme` | string | unset | Picked theme id (`/theme`). Unset = Nur Gold until onboarding choice |
 | `theme_setup.accent` | hex string | unset | Personal accent color (`#rrggbb`) layered over **every** theme pick - recolors the accent ramp, highlights, and banner gradient. `theme_setup.accent_deep` / `theme_setup.accent_sky` optionally pin the ramp ends (derived automatically when absent) |

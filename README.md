@@ -22,7 +22,7 @@ The harness supersedes stale duplicate reads, spills large tool results, preserv
   <sub><a href="https://www.nuroctane.xyz/cli#demo">Watch the full demo</a></sub>
 </p>
 
-**Your personal coding agent.** Custom Rust harness, dense gold TUI, **native vision**, tools, knowledge stack, hardened sandbox. Multi-provider `/provider` plus a unified `/auth` vault. Any model via `--model` / `/model` / config.
+**Your personal coding agent.** Custom Rust harness, dense gold TUI, **native vision**, tools, knowledge stack, gated execution. Multi-provider `/provider` plus a unified `/auth` vault. Any model via `--model` / `/model` / config.
 
 ```text
 nur          # interactive gold TUI
@@ -185,7 +185,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 | **Vision** | `look` · `extract_frames` · prompt auto-attach · **compact image attachments with on-demand previews** (Ctrl+V paste or `/image <path>`, F4 preview) |
 | **Tools** | read · edit · bash · web · **browser** (incl. **element picking**) · git · knowledge · agent · **judgments** (`typesafe`) · **security agents** (`enclave`) · **memory** (`optmem` `connectome` `mem`) · **diagrams** (`excalidraw` `tldraw` `penecho`) · **policy** (`dogwood`) · **background** (`bg`) · **async** (`admission` `goal` `proposal` `message` `question`) · **docs** (`anydoc`) · **python REPL** (`repl`) · **excalidraw** |
 | **Ecosystem** | Graphify · GraphJin · PLUR · Ruflo · Executor · **TypeSafe/Jev** (+ **keyless local engines**) · **Enclave** (security agents over native MCP) · **OptMem** · **Headroom** · **Connectome** · **dogwood** · omp · browser · AKM · 1,000+ skills · **`/sc-research` whitehat DeFi + X bounty intel + historical vuln library** · **plugin marketplace** (Fable, Superpowers, Vercel, …) |
-| **Hardening** | Sandbox · denylist · SSRF blocks · atomic `~/.nur` IO · permissions/hooks · SHA-256 install · `nur doctor` |
+| **Hardening** | Approval modes · parsed bash denylist · per-domain fetch approval · SSRF blocks · atomic `~/.nur` IO · permissions/hooks · signed releases (minisign + SHA-256) · `nur doctor` |
 
 ---
 
@@ -193,7 +193,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 
 | | |
 |--|--|
-| **Real agent, not a wrapper** | Modes, tools, sandbox, streaming, cancel, subagents, auto-compact |
+| **Real agent, not a wrapper** | Modes, tools, streaming, cancel, subagents, auto-compact |
 | **Sees media** | Multimodal images/short video. Sparse frames, not spam. |
 | **One-shot install** | `npx nur-cli`, one-liner, or Windows EXE · PATH · ecosystem · browser |
 | **Easy updates** | `nur update` |

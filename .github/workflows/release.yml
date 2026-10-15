@@ -1,9 +1,12 @@
 # Release pipeline: build prebuilt binaries for Windows / macOS / Linux on a
-# version tag (v*), then publish them to the GitHub Release.
+# version tag (v*), sign them with minisign (pinned public key in
+# src/bootstrap.rs), then publish them to the GitHub Release.
 #
 # Asset names are load-bearing: `nur update` / `npx nur-cli` pick assets by
 # name via `pick_nur_release_asset` in src/bootstrap.rs:
 #   nur-windows-x86_64.exe · nur-macos-aarch64 · nur-macos-x86_64 · nur-linux-x86_64
+# Every binary must ship with a `<asset>.minisig` - the updater refuses
+# unsigned assets. The secret key is the MINISIGN_SECRET_KEY repo secret.
 # Keep names in sync when adding targets.
 
 name: release
@@ -95,6 +98,25 @@ jobs:
         with:
           merge-multiple: true
           path: dist
+
+      - name: Install rsign2 (minisign)
+        run: cargo install rsign2 --locked
+
+      - name: Sign binaries (minisign)
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/minisign.key"
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key"
+          chmod 600 "$key"
+          for f in dist/nur-*; do
+            case "$f" in
+              *.sha256|*.minisig) continue ;;
+            esac
+            rsign sign -W -s "$key" -x "$f.minisig" -t "nur ${GITHUB_REF_NAME} signed by CI" "$f"
+          done
+          rm -f "$key"
 
       - name: Attach to GitHub Release
         uses: softprops/action-gh-release@e598afbe1493e6b1bafb1f389cabb956eab91231 # v3.0.3

@@ -242,10 +242,13 @@ pub fn canonical(tool: &str, args_json: &str) -> String {
 /// grant names the programs the command runs (`git status && npm test` grants
 /// `git` and `npm`), so approving `git` never approves `rm`; a command whose
 /// text a rule cannot see (substitution, redirect into a file) is granted as
-/// that exact command only. Every other tool is granted by name.
+/// that exact command only. A browser grant names the action: the browser is
+/// the user's real, logged-in profile, so an "always" for `click` must never
+/// bless `exec`. Every other tool is granted by name.
 pub fn session_grant_keys(tool: &str, args_json: &str) -> Vec<String> {
     match tool {
         "enclave" => vec![canonical(tool, args_json)],
+        "browser" | "terminal_browser" => vec![canonical(tool, args_json)],
         "bash" => {
             let canon = canonical(tool, args_json);
             let Some(command) = canon.strip_prefix("bash:") else {
@@ -316,7 +319,7 @@ pub fn session_grant_label(tool: &str, args_json: &str) -> String {
 
 /// The program a simple command runs: its first word after `VAR=value`
 /// assignments, without a directory (`/usr/bin/git` and `git` are one grant).
-fn program(command: &str) -> Option<String> {
+pub(crate) fn program(command: &str) -> Option<String> {
     let word = command
         .split_whitespace()
         .find(|w| !(w.contains('=') && !w.starts_with('=') && !w.starts_with('-')))?;
@@ -386,19 +389,19 @@ pub fn glob_match(pattern: &str, text: &str) -> bool {
 }
 
 /// A shell command as permission rules see it.
-struct ShellParts {
+pub(crate) struct ShellParts {
     /// The simple commands between control operators (`;` `&` `&&` `|` `||`,
     /// newlines, subshell parentheses), trimmed, quotes left in place.
-    commands: Vec<String>,
+    pub commands: Vec<String>,
     /// Runs a command the text does not spell out (`$(…)`, backticks, `<(…)`,
     /// `>(…)`) or redirects output into a file.
-    opaque: bool,
+    pub opaque: bool,
 }
 
 /// Split `cmd` at its control operators, respecting quotes and escapes. For an
 /// opaque command the substituted text is split out too, so deny and ask rules
 /// still see `rm -rf /` inside `echo $(rm -rf /)`.
-fn shell_parts(cmd: &str) -> ShellParts {
+pub(crate) fn shell_parts(cmd: &str) -> ShellParts {
     #[derive(PartialEq)]
     enum Quote {
         None,

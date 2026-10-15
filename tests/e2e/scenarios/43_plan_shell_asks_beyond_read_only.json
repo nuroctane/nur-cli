@@ -1,0 +1,24 @@
+{
+  "description": "Plan mode shell: a known read-only command runs free, an ambiguous command asks (headless stdin = denied), and a VCS mutation stays structurally blocked.",
+  "prompt": "Inspect the note, then adjust the repo.",
+  "mode": "plan",
+  "setup_files": {"note.txt": "needle\n"},
+  "global_args": ["-v"],
+  "script": [
+    {"tool_calls": [{"name": "bash", "arguments": {"command": "cat note.txt"}}]},
+    {"tool_calls": [{"name": "bash", "arguments": {"command": "copy note.txt copy.txt"}}]},
+    {"tool_calls": [{"name": "bash", "arguments": {"command": "git commit -m x"}}]},
+    {"text": "The read ran; the copy needed approval and was denied; the commit stayed blocked."}
+  ],
+  "expect": {
+    "absent_files": ["copy.txt"],
+    "requests": 4,
+    "tool_results": [
+      {"request": 2, "contains": ["needle"]},
+      {"request": 3, "contains": ["user denied this tool call"]},
+      {"request": 4, "contains": ["blocked in plan mode"]}
+    ],
+    "stdout_contains": ["plan mode"],
+    "stderr_contains": ["approve?"]
+  }
+}
