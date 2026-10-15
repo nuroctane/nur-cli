@@ -450,14 +450,29 @@ pub fn resolve_bin() -> Option<PathBuf> {
     found
 }
 
+/// Every `droid` on this machine, newest build first. A machine often holds
+/// several: the installer's launcher in `~/bin` that nobody runs (so it never
+/// self-updates), the one on PATH, and the copy the Factory desktop app ships
+/// under `app-<ver>/resources/bin` and keeps current. Each release compiles
+/// its own model catalog, so asking an old binary hides the models the
+/// account can actually use; the most recently modified file is the newest
+/// release on every install path Factory uses.
 fn probe_bin() -> Option<PathBuf> {
-    const NAMES: [&str; 3] = ["droid.exe", "droid.cmd", "droid"];
     if let Ok(explicit) = std::env::var("NUR_DROID_BIN") {
         let p = PathBuf::from(explicit.trim());
         if p.is_file() {
             return Some(p);
         }
     }
+    let mut candidates = candidate_bins();
+    if let Some(on_path) = crate::ecosystem::find_bin("droid") {
+        candidates.push(PathBuf::from(on_path));
+    }
+    newest_file(candidates)
+}
+
+fn candidate_bins() -> Vec<PathBuf> {
+    const NAMES: [&str; 3] = ["droid.exe", "droid.cmd", "droid"];
     let mut dirs_to_try: Vec<PathBuf> = Vec::new();
     if let Some(home) = crate::config::home_dir() {
         // `curl … | sh` installs under ~/.factory/bin; older builds and the
@@ -469,21 +484,61 @@ fn probe_bin() -> Option<PathBuf> {
     if let Some(local) = dirs::data_local_dir() {
         dirs_to_try.push(local.join("Programs").join("factory"));
         dirs_to_try.push(local.join("factory").join("bin"));
+        dirs_to_try.extend(desktop_bundle_dirs(&local.join("Factory")));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        dirs_to_try.push(PathBuf::from(
+            "/Applications/Factory.app/Contents/Resources/bin",
+        ));
     }
     #[cfg(not(windows))]
     {
         dirs_to_try.push(PathBuf::from("/usr/local/bin"));
         dirs_to_try.push(PathBuf::from("/opt/factory/bin"));
     }
+    let mut out = Vec::new();
     for dir in dirs_to_try {
         for name in NAMES {
             let p = dir.join(name);
             if p.is_file() {
-                return Some(p);
+                out.push(p);
             }
         }
     }
-    crate::ecosystem::find_bin("droid").map(PathBuf::from)
+    out
+}
+
+/// `<root>/app-<version>/resources/bin` for every Squirrel-style desktop
+/// install under `root` (the Windows Factory app keeps the previous version
+/// around during an update, so there can be several).
+fn desktop_bundle_dirs(root: &std::path::Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with("app-"))
+        .map(|e| e.path().join("resources").join("bin"))
+        .filter(|p| p.is_dir())
+        .collect()
+}
+
+/// The candidate with the latest modification time; ties and unreadable
+/// metadata keep the earlier (more canonical) entry.
+fn newest_file(candidates: Vec<PathBuf>) -> Option<PathBuf> {
+    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+    for p in candidates {
+        let Ok(meta) = std::fs::metadata(&p) else {
+            continue;
+        };
+        let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+        match &best {
+            Some((t, _)) if *t >= mtime => {}
+            _ => best = Some((mtime, p)),
+        }
+    }
+    best.map(|(_, p)| p)
 }
 
 /// True when a Factory key is available for this call: the one nur holds for
@@ -1052,6 +1107,59 @@ mod tests {
             "Usage: droid exec [options]\n\nOptions:\n  -m, --model <id>  Model ID\n"
         )
         .is_empty());
+    }
+
+    /// Ways binary selection can fail: the stale `~/bin` launcher listed
+    /// first wins over the desktop app's current build; a desktop root with
+    /// no `app-*` folders or a bundle without `resources/bin` yields paths
+    /// that do not exist; an empty candidate list.
+    #[test]
+    fn newest_droid_build_wins_over_the_stale_launcher_listed_first() {
+        use std::time::{Duration, SystemTime};
+        let root = std::env::temp_dir().join(format!("nur-droid-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let stale = root.join("bin").join("droid.exe");
+        let fresh = root
+            .join("Factory")
+            .join("app-0.197.1")
+            .join("resources")
+            .join("bin")
+            .join("droid.exe");
+        for p in [&stale, &fresh] {
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, b"bin").unwrap();
+        }
+        let old = SystemTime::now() - Duration::from_secs(60 * 24 * 3600);
+        // Setting the timestamp needs a writable handle on Windows.
+        let touch = |p: &std::path::Path, t: SystemTime| {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(p)
+                .unwrap()
+                .set_modified(t)
+                .unwrap();
+        };
+        touch(&stale, old);
+        touch(&fresh, old + Duration::from_secs(3600));
+
+        assert_eq!(
+            newest_file(vec![stale.clone(), fresh.clone()]),
+            Some(fresh.clone())
+        );
+        assert_eq!(
+            desktop_bundle_dirs(&root.join("Factory")),
+            vec![fresh.parent().unwrap().to_path_buf()]
+        );
+        std::fs::create_dir_all(root.join("Factory").join("app-0.200.0")).unwrap();
+        assert_eq!(
+            desktop_bundle_dirs(&root.join("Factory")).len(),
+            1,
+            "a bundle without resources/bin is not a candidate"
+        );
+        assert!(desktop_bundle_dirs(&root.join("missing")).is_empty());
+        assert_eq!(newest_file(vec![root.join("nope")]), None);
+        assert_eq!(newest_file(Vec::new()), None);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
