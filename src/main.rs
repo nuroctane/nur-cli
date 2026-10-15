@@ -267,6 +267,16 @@ async fn real_main() -> Result<()> {
                     print!("{}", ecosystem::quick_status());
                 }
                 cli::EcosystemCmd::RefreshSkills => {
+                    match ecosystem::install_bundled_skills() {
+                        Ok(names) => theme::print_ok(&format!(
+                            "first-party skill pack v{}: {} packs in place",
+                            env!("CARGO_PKG_VERSION"),
+                            names.len()
+                        )),
+                        Err(e) => theme::print_info(&format!(
+                            "first-party skill pack not installed: {e} (kept what is on disk)"
+                        )),
+                    }
                     let count = agent::skill_cache::refresh_global()
                         .map_err(|error| error::NurError::Other(format!("skill metadata refresh failed: {error}")))?;
                     theme::print_ok(&format!("refreshed {count} global skills"));

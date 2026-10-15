@@ -8,6 +8,11 @@
 # Every binary must ship with a `<asset>.minisig` - the updater refuses
 # unsigned assets. The secret key is the MINISIGN_SECRET_KEY repo secret.
 # Keep names in sync when adding targets.
+#
+# `nur-skills.zip` is the first-party skill pack (scripts/build_skill_pack.py,
+# manifest skills/bundled.json). `ecosystem ensure` downloads the one for its
+# own version and verifies `nur-skills.zip.minisig` against the same key, so
+# the pack is signed and published alongside the binaries.
 
 name: release
 
@@ -89,8 +94,27 @@ jobs:
             ${{ matrix.asset }}.sha256
           if-no-files-found: error
 
+  skills:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      - name: Build skill pack
+        run: python scripts/build_skill_pack.py --out nur-skills.zip
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nur-skills.zip
+          path: |
+            nur-skills.zip
+            nur-skills.zip.sha256
+          if-no-files-found: error
+
   publish:
-    needs: build
+    needs: [build, skills]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts

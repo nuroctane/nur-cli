@@ -353,12 +353,54 @@ def credential_encryption(binary):
     assert 'authenticated: yes' in status()
 
 
+def skill_pack(binary):
+    """The first-party skills come from a `nur-skills.zip` (the release asset),
+    not from the binary: a pack given through NUR_SKILL_PACK lands in
+    ~/.nur/skills with its nested files, a deleted file is restored on the
+    next refresh, and an unusable pack leaves the installed copy alone."""
+    work, workspace, home, env = fixture('skill-pack')
+    pack = work / 'nur-skills.zip'
+    built = subprocess.run([sys.executable, str(ROOT / 'scripts/build_skill_pack.py'), '--out', str(pack)],
+                           capture_output=True, text=True, encoding='utf-8', timeout=120)
+    assert built.returncode == 0, built.stdout + built.stderr
+    skills = home / '.nur/skills'
+    stamp = skills / '.bundled-pack.json'
+    nested = skills / 'sc-research/references/sources.md'
+
+    def refresh(source):
+        done = subprocess.run([str(binary), 'ecosystem', 'refresh-skills'], cwd=workspace, env={**env, 'NUR_SKILL_PACK': str(source)},
+                              capture_output=True, text=True, encoding='utf-8', timeout=120)
+        assert done.returncode == 0, done.stdout + done.stderr
+        return done.stdout + done.stderr
+
+    out = refresh(pack)
+    assert 'packs in place' in out, out
+    assert nested.is_file(), 'nested reference file was not installed'
+    assert (skills / 'excalidraw/SKILL.md').read_text(encoding='utf-8').count('excalidraw(action=create') == 1, "nur's own excalidraw skill did not win"
+    assert not (skills / 'resume-session/SKILL.md').exists(), 'the takeover engine must not be a user-facing skill'
+    assert json.loads(stamp.read_text(encoding='utf-8'))['source'] == 'NUR_SKILL_PACK'
+    assert (home / '.agents/skills/sc-research/SKILL.md').is_file(), 'cross-framework mirror missing'
+    assert not any(p.name.startswith('.') and '.tmp-' in p.name for p in skills.iterdir()), 'staging dir leaked'
+
+    nested.unlink()
+    refresh(pack)
+    assert nested.is_file(), 'a deleted pack file was not restored'
+
+    body = nested.read_text(encoding='utf-8')
+    broken = work / 'broken.zip'; broken.write_bytes(b'PK\x03\x04 not really a zip')
+    stamp.unlink()  # a new binary version would miss the fast path the same way
+    out = refresh(broken)
+    assert not stamp.exists(), 'a failed install must not be stamped as done'
+    assert 'not installed' in out, out
+    assert nested.read_text(encoding='utf-8') == body, 'a bad pack damaged the installed copy'
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--bin'); parser.add_argument('cases', nargs='*')
     args = parser.parse_args(); binary = find_binary(args.bin).resolve()
     cases = {'queue-reset':queue_reset, 'bridge-ownership':bridge_ownership, 'external-skill-refresh':external_skill_refresh,
-             'enclave-key':enclave_key, 'credential-encryption':credential_encryption}
+             'enclave-key':enclave_key, 'credential-encryption':credential_encryption, 'skill-pack':skill_pack}
     cases.update({f'account-{action}':lambda b, action=action: account_lock(b, action) for action in ['logout','key','model','delete']})
     cases.update({f'cancel-{provider}':lambda b, p=provider, m=model: cancelled_judgment(b, p, m) for provider, model in [('vllm','e2e-model'), ('openai','gpt-5.5'), ('anthropic','claude-sonnet-5')]})
     unknown = set(args.cases) - cases.keys()

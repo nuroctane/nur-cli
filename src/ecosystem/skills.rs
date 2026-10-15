@@ -1,9 +1,46 @@
-//! Install Nur-bundled SKILL packs into `~/.nur/skills/` so the agent
-//! discovers them on first launch (also mirrors to `~/.agents/skills`).
+//! Install the first-party skill pack into `~/.nur/skills/` so the agent
+//! discovers it on first launch (also mirrored to `~/.agents/skills`).
+//!
+//! The pack itself is not compiled into the binary. `skills/bundled.json` (the
+//! manifest, a few KB) is, so a binary knows which packs it ships; the bodies
+//! come from the `nur-skills.zip` release asset of the running version,
+//! verified against the minisign key pinned in `bootstrap.rs`. Debug builds
+//! and `NUR_SKILL_PACK` read a checkout (or a zip) instead, which is also how
+//! the E2E harness feeds a pack without the network.
 
 use crate::config::nur_home;
-use crate::error::Result;
+use crate::error::{NurError, Result};
+use serde::Deserialize;
 use std::fs;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+
+const MANIFEST_JSON: &str = include_str!("../../skills/bundled.json");
+const PACK_ASSET: &str = "nur-skills.zip";
+const RELEASE_DOWNLOADS: &str = "https://github.com/nuroctane/nur-cli/releases/download";
+/// Compressed pack is ~300 KB; anything near this is not our asset.
+const MAX_PACK_BYTES: usize = 32 * 1024 * 1024;
+const STAMP_FILE: &str = ".bundled-pack.json";
+
+#[derive(Deserialize)]
+struct Manifest {
+    packs: Vec<Pack>,
+}
+
+#[derive(Deserialize, Clone)]
+struct Pack {
+    name: String,
+    /// Repository directory the files come from (checkout sources only).
+    source: String,
+    files: Vec<String>,
+}
+
+#[derive(Deserialize, serde::Serialize, Default)]
+struct Stamp {
+    version: String,
+    source: String,
+    installed_at: u64,
+}
 
 /// Skills we used to ship and now retire on upgrade. Without this sweep an
 /// existing install keeps discovering (and NL-activating) them forever, since
@@ -17,904 +54,368 @@ const RETIRED_SKILLS: &[&str] = &[
 ];
 
 /// Remove retired skill dirs, plus the SKILL.md that used to make the
-/// `resume-session` reader a user-facing skill (the reader itself stays —
+/// `resume-session` reader a user-facing skill (the reader itself stays -
 /// `chagent` shells out to it).
-fn retire_stale_skills(root: &std::path::Path) {
+fn retire_stale_skills(root: &Path) {
     for name in RETIRED_SKILLS {
         let _ = fs::remove_dir_all(root.join(name));
     }
     let _ = fs::remove_file(root.join("resume-session").join("SKILL.md"));
 }
 
+fn manifest() -> Result<Vec<Pack>> {
+    let m: Manifest = serde_json::from_str(MANIFEST_JSON)?;
+    Ok(m.packs)
+}
+
+/// Where the pack bodies came from, for the stamp and `ecosystem status`.
+enum PackSource {
+    /// A directory laid out like the repository (`<source>/<file>` per pack).
+    Checkout(PathBuf),
+    /// Verified `nur-skills.zip` bytes.
+    Zip(Vec<u8>),
+}
+
+impl PackSource {
+    fn read(&self, pack: &Pack, file: &str) -> Result<Vec<u8>> {
+        match self {
+            PackSource::Checkout(root) => {
+                let path = root.join(&pack.source).join(file);
+                fs::read(&path).map_err(|e| NurError::Other(format!("{}: {e}", path.display())))
+            }
+            PackSource::Zip(bytes) => {
+                let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+                    .map_err(|e| NurError::Other(format!("{PACK_ASSET}: {e}")))?;
+                let entry = format!("{}/{file}", pack.name);
+                let mut f = zip
+                    .by_name(&entry)
+                    .map_err(|e| NurError::Other(format!("{PACK_ASSET} has no {entry}: {e}")))?;
+                let mut out = Vec::with_capacity(f.size() as usize);
+                f.read_to_end(&mut out)?;
+                Ok(out)
+            }
+        }
+    }
+}
+
+/// Install (or refresh) the first-party pack. Returns the pack names.
+///
+/// Fast path: the stamp says this version already installed and every file is
+/// present. Otherwise the pack is fetched, written under `~/.nur/skills`, and
+/// mirrored. A fetch failure is an error for the caller's notes; whatever an
+/// earlier version installed stays usable in the meantime.
 pub fn install_bundled_skills() -> Result<Vec<String>> {
     let root = nur_home().join("skills");
     fs::create_dir_all(&root)?;
     retire_stale_skills(&root);
-    let mut installed = Vec::new();
+    let packs = manifest()?;
+    let names: Vec<String> = packs.iter().map(|p| p.name.clone()).collect();
+    let version = env!("CARGO_PKG_VERSION");
 
-    for (name, body) in BUNDLED {
-        let dir = root.join(name);
-        fs::create_dir_all(&dir)?;
-        let path = dir.join("SKILL.md");
-        // Always refresh so skill docs stay in sync with this Nur version.
-        fs::write(&path, body)?;
-        installed.push(name.to_string());
+    if !super::ecosystem_force_pub() && stamp_matches(&root, version) && all_present(&root, &packs)
+    {
+        return Ok(names);
     }
 
-    // Multi-file packs (the resume-session reader, dmmulroy skills, …).
-    for (name, files) in MULTI_FILE_PACKS {
-        let dir = root.join(name);
-        fs::create_dir_all(&dir)?;
-        for (filename, body) in *files {
-            let dest = dir.join(filename);
-            if let Some(parent) = dest.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::write(&dest, body)?;
-        }
-        if !installed.iter().any(|n| n == name) {
-            installed.push((*name).to_string());
-        }
-    }
+    let (source, origin) = locate_pack(version)?;
+    write_packs(&root, &packs, &source)?;
 
     // Also mirror into ~/.agents/skills for cross-framework discovery.
     if let Some(home) = crate::config::home_dir() {
         let agents = home.join(".agents").join("skills");
-        let _ = fs::create_dir_all(&agents);
-        retire_stale_skills(&agents);
-        for (name, body) in BUNDLED {
-            let dir = agents.join(name);
-            let _ = fs::create_dir_all(&dir);
-            let _ = fs::write(dir.join("SKILL.md"), body);
+        if fs::create_dir_all(&agents).is_ok() {
+            retire_stale_skills(&agents);
+            let _ = write_packs(&agents, &packs, &source);
         }
-        for (name, files) in MULTI_FILE_PACKS {
-            let dir = agents.join(name);
-            let _ = fs::create_dir_all(&dir);
-            for (filename, body) in *files {
-                let dest = dir.join(filename);
-                if let Some(parent) = dest.parent() {
-                    let _ = fs::create_dir_all(parent);
-                }
-                let _ = fs::write(&dest, body);
+    }
+
+    let stamp = Stamp {
+        version: version.to_string(),
+        source: origin.to_string(),
+        installed_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+    };
+    fs::write(
+        root.join(STAMP_FILE),
+        serde_json::to_string_pretty(&stamp).unwrap_or_default(),
+    )?;
+    Ok(names)
+}
+
+fn stamp_matches(root: &Path, version: &str) -> bool {
+    fs::read_to_string(root.join(STAMP_FILE))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Stamp>(&t).ok())
+        .is_some_and(|s| s.version == version)
+}
+
+fn all_present(root: &Path, packs: &[Pack]) -> bool {
+    packs
+        .iter()
+        .all(|p| p.files.iter().all(|f| root.join(&p.name).join(f).is_file()))
+}
+
+/// Write every pack as `<root>/<name>/<file>`, staging each pack in a temp dir
+/// so a failure mid-pack never leaves a half-written skill in place.
+fn write_packs(root: &Path, packs: &[Pack], source: &PackSource) -> Result<()> {
+    for pack in packs {
+        let dest = root.join(&pack.name);
+        let tmp = root.join(format!(".{}.tmp-{}", pack.name, std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let staged = stage_pack(pack, source, &tmp).and_then(|()| {
+            // Replace wholesale so a manifest that dropped a file drops it here too.
+            let _ = fs::remove_dir_all(&dest);
+            fs::rename(&tmp, &dest).map_err(|e| {
+                NurError::Other(format!("{}: install move failed: {e}", dest.display()))
+            })
+        });
+        if staged.is_err() {
+            let _ = fs::remove_dir_all(&tmp);
+        }
+        staged?;
+    }
+    Ok(())
+}
+
+fn stage_pack(pack: &Pack, source: &PackSource, tmp: &Path) -> Result<()> {
+    fs::create_dir_all(tmp)?;
+    for file in &pack.files {
+        let body = source.read(pack, file)?;
+        let path = tmp.join(file);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&path, body)?;
+    }
+    Ok(())
+}
+
+/// Pick where this version's pack bodies come from, in priority order:
+/// `NUR_SKILL_PACK` (a zip or a checkout root), the checkout a debug build was
+/// compiled in, then the signed release asset.
+fn locate_pack(version: &str) -> Result<(PackSource, &'static str)> {
+    if let Some(path) = std::env::var_os("NUR_SKILL_PACK").filter(|v| !v.is_empty()) {
+        let path = PathBuf::from(path);
+        if path.is_dir() {
+            return Ok((PackSource::Checkout(path), "NUR_SKILL_PACK"));
+        }
+        let bytes = fs::read(&path)
+            .map_err(|e| NurError::Other(format!("NUR_SKILL_PACK {}: {e}", path.display())))?;
+        return Ok((PackSource::Zip(bytes), "NUR_SKILL_PACK"));
+    }
+    // A shipped binary must not read whatever path it happened to be compiled
+    // in (on user machines it never exists); debug builds and tests may.
+    #[cfg(any(test, debug_assertions))]
+    {
+        let checkout = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        if checkout.join("skills").join("bundled.json").is_file() {
+            return Ok((PackSource::Checkout(checkout), "checkout"));
+        }
+    }
+    download_release_pack(version).map(|bytes| (PackSource::Zip(bytes), "release"))
+}
+
+/// Fetch `nur-skills.zip` for exactly `version` and verify it the way the
+/// updater verifies a binary: pinned minisign key first (fail closed), then
+/// the published sha256 when present.
+fn download_release_pack(version: &str) -> Result<Vec<u8>> {
+    let http = crate::bootstrap::http_client(30)?;
+    let base = format!("{RELEASE_DOWNLOADS}/v{version}/{PACK_ASSET}");
+    let get = |url: &str, what: &str| -> Result<Vec<u8>> {
+        let bytes = http
+            .get(url)
+            .send()
+            .and_then(|r| r.error_for_status())
+            .and_then(|r| r.bytes())
+            .map_err(|e| NurError::Other(format!("{what} download: {e}")))?;
+        if bytes.len() > MAX_PACK_BYTES {
+            return Err(NurError::Other(format!(
+                "{what} is {} bytes - not a skill pack",
+                bytes.len()
+            )));
+        }
+        Ok(bytes.to_vec())
+    };
+    let bytes = get(&base, PACK_ASSET)?;
+    if bytes.len() < 4 || &bytes[..2] != b"PK" {
+        return Err(NurError::Other(format!(
+            "{PACK_ASSET} is not a zip archive"
+        )));
+    }
+    let sig = get(&format!("{base}.minisig"), "skill pack signature")?;
+    let sig = String::from_utf8(sig)
+        .map_err(|_| NurError::Other("skill pack signature is not text".into()))?;
+    crate::bootstrap::verify_minisig_text(&bytes, &sig)?;
+    if let Ok(record) = get(&format!("{base}.sha256"), "skill pack checksum") {
+        let record = String::from_utf8_lossy(&record);
+        let expected = crate::bootstrap::parse_sha256_record(&record).ok_or_else(|| {
+            NurError::Other(format!("{PACK_ASSET}.sha256 is not a sha256 record"))
+        })?;
+        let actual = crate::bootstrap::sha256_hex(&bytes);
+        if actual != expected {
+            return Err(NurError::Other(format!(
+                "{PACK_ASSET} does not match its published sha256 ({actual} != {expected})"
+            )));
+        }
+    }
+    Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_root() -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        let d = std::env::temp_dir().join(format!("nur_skillpack_test_{nanos}_{n}"));
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn pack(name: &str, files: &[&str]) -> Pack {
+        Pack {
+            name: name.into(),
+            source: format!("skills/{name}"),
+            files: files.iter().map(|f| f.to_string()).collect(),
+        }
+    }
+
+    fn zip_of(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        use std::io::Write;
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        {
+            let mut w = zip::ZipWriter::new(&mut cursor);
+            for (name, body) in entries {
+                w.start_file(*name, zip::write::SimpleFileOptions::default())
+                    .unwrap();
+                w.write_all(body).unwrap();
+            }
+            w.finish().unwrap();
+        }
+        cursor.into_inner()
+    }
+
+    #[test]
+    fn manifest_is_well_formed_and_every_source_exists() {
+        let packs = manifest().expect("bundled.json parses");
+        assert!(packs.len() >= 50, "manifest lost packs: {}", packs.len());
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let mut seen = std::collections::HashSet::new();
+        for p in &packs {
+            assert!(seen.insert(p.name.clone()), "duplicate pack {}", p.name);
+            assert!(!p.files.is_empty(), "{} has no files", p.name);
+            for f in &p.files {
+                assert!(
+                    !f.contains("..") && !f.starts_with('/'),
+                    "{}: unsafe path {f}",
+                    p.name
+                );
+                assert!(
+                    root.join(&p.source).join(f).is_file(),
+                    "{}: missing {}/{f}",
+                    p.name,
+                    p.source
+                );
             }
         }
     }
 
-    Ok(installed)
+    #[test]
+    fn a_pack_missing_from_the_zip_fails_without_touching_the_installed_copy() {
+        let root = temp_root().join("skills");
+        fs::create_dir_all(root.join("a")).unwrap();
+        fs::write(root.join("a/SKILL.md"), "old a").unwrap();
+        fs::create_dir_all(root.join("b")).unwrap();
+        fs::write(root.join("b/SKILL.md"), "old b").unwrap();
+
+        let packs = [pack("a", &["SKILL.md"]), pack("b", &["SKILL.md", "ref.md"])];
+        let good = zip_of(&[("a/SKILL.md", b"new a"), ("b/SKILL.md", b"new b")]);
+        let err = write_packs(&root, &packs, &PackSource::Zip(good)).unwrap_err();
+        assert!(err.to_string().contains("b/ref.md"), "{err}");
+        // `a` was complete and landed; `b` was incomplete and the old copy stays.
+        assert_eq!(
+            fs::read_to_string(root.join("a/SKILL.md")).unwrap(),
+            "new a"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("b/SKILL.md")).unwrap(),
+            "old b"
+        );
+        assert!(!root.join("b/ref.md").exists());
+        assert!(
+            fs::read_dir(&root).unwrap().all(|e| !e
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".tmp-")),
+            "staging dir leaked"
+        );
+    }
+
+    #[test]
+    fn a_stale_file_disappears_when_the_manifest_drops_it() {
+        let root = temp_root().join("skills");
+        fs::create_dir_all(root.join("a/references")).unwrap();
+        fs::write(root.join("a/SKILL.md"), "old").unwrap();
+        fs::write(root.join("a/references/gone.md"), "stale").unwrap();
+        let packs = [pack("a", &["SKILL.md"])];
+        write_packs(
+            &root,
+            &packs,
+            &PackSource::Zip(zip_of(&[("a/SKILL.md", b"new")])),
+        )
+        .unwrap();
+        assert_eq!(fs::read_to_string(root.join("a/SKILL.md")).unwrap(), "new");
+        assert!(!root.join("a/references/gone.md").exists());
+    }
+
+    #[test]
+    fn stamp_fast_path_needs_both_the_version_and_every_file() {
+        let root = temp_root();
+        let packs = [pack("a", &["SKILL.md", "ref.md"])];
+        assert!(!stamp_matches(&root, "1.0.0"), "no stamp yet");
+        fs::write(
+            root.join(STAMP_FILE),
+            serde_json::to_string(&Stamp {
+                version: "1.0.0".into(),
+                ..Default::default()
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(stamp_matches(&root, "1.0.0"));
+        assert!(!stamp_matches(&root, "1.0.1"), "a new binary reinstalls");
+        assert!(!all_present(&root, &packs), "stamp alone is not enough");
+        fs::create_dir_all(root.join("a")).unwrap();
+        fs::write(root.join("a/SKILL.md"), "x").unwrap();
+        assert!(
+            !all_present(&root, &packs),
+            "one deleted file forces a reinstall"
+        );
+        fs::write(root.join("a/ref.md"), "y").unwrap();
+        assert!(all_present(&root, &packs));
+    }
+
+    #[test]
+    fn checkout_source_reads_from_the_manifest_directory_not_the_pack_name() {
+        let dir = temp_root();
+        let src = dir.join("skills/nur/excalidraw");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("SKILL.md"), "body").unwrap();
+        let p = Pack {
+            name: "excalidraw".into(),
+            source: "skills/nur/excalidraw".into(),
+            files: vec!["SKILL.md".into()],
+        };
+        let source = PackSource::Checkout(dir.clone());
+        assert_eq!(source.read(&p, "SKILL.md").unwrap(), b"body");
+    }
 }
-
-const BUNDLED: &[(&str, &str)] = &[
-    (
-        "startup-skill",
-        include_str!("../../skills/startup-skill/SKILL.md"),
-    ),
-    ("plur", PLUR_SKILL),
-    ("ruflo", RUFLO_SKILL),
-    ("graphify", GRAPHIFY_SKILL),
-    ("excalidraw", EXCALIDRAW_SKILL),
-    ("how-to-illustrate", HOW_TO_ILLUSTRATE_SKILL),
-];
-
-/// Packs with extra files (Python reader, CORE.md). Paths relative to crate root.
-const MULTI_FILE_PACKS: &[(&str, &[(&str, &str)])] = &[
-    // TypeSafe (Jev): how to design and use typed judgments, and how the layer
-    // is wired into this harness (including the keyless local engines). Shipped
-    // as a pack rather than a bare SKILL.md so the `references/` file travels
-    // with it - an installed nur has no repository to read them from.
-    (
-        "typesafe-ai",
-        &[
-            (
-                "SKILL.md",
-                include_str!("../../skills/typesafe-ai/SKILL.md"),
-            ),
-            (
-                "references/nur-integration.md",
-                include_str!("../../skills/typesafe-ai/references/nur-integration.md"),
-            ),
-        ],
-    ),
-    // Engine for `/takeover`, not a user-facing skill: no SKILL.md, so it is
-    // never indexed or activated. `chagent` shells out to `session_reader.py`.
-    (
-        "resume-session",
-        &[
-            (
-                "CORE.md",
-                include_str!("../../skills/resume-session/CORE.md"),
-            ),
-            (
-                "session_reader.py",
-                include_str!("../../skills/resume-session/session_reader.py"),
-            ),
-        ],
-    ),
-    // dmmulroy/skills (MIT) — baked in so a fresh install ships them.
-    (
-        "bro",
-        &[("SKILL.md", include_str!("../../skills/bro/SKILL.md"))],
-    ),
-    (
-        "scan",
-        &[("SKILL.md", include_str!("../../skills/scan/SKILL.md"))],
-    ),
-    (
-        "coding-standards",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/coding-standards/SKILL.md"),
-        )],
-    ),
-    (
-        "tech-spec",
-        &[("SKILL.md", include_str!("../../skills/tech-spec/SKILL.md"))],
-    ),
-    (
-        "herdr",
-        &[("SKILL.md", include_str!("../../skills/herdr/SKILL.md"))],
-    ),
-    (
-        "prelude",
-        &[
-            ("SKILL.md", include_str!("../../skills/prelude/SKILL.md")),
-            (
-                "prelude.ts",
-                include_str!("../../skills/prelude/prelude.ts"),
-            ),
-        ],
-    ),
-    (
-        "cloudflare-composition-root",
-        &[
-            (
-                "SKILL.md",
-                include_str!("../../skills/cloudflare-composition-root/SKILL.md"),
-            ),
-            (
-                "EXAMPLES.md",
-                include_str!("../../skills/cloudflare-composition-root/EXAMPLES.md"),
-            ),
-        ],
-    ),
-    (
-        "toolcraft",
-        &[("SKILL.md", include_str!("../../skills/toolcraft/SKILL.md"))],
-    ),
-    // Saurabh-2607/Skills — dark skeuomorphic UI component skill.
-    (
-        "skeuomorphic-ui",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/skeuomorphic-ui/SKILL.md"),
-        )],
-    ),
-    // Gateway/proxy prompt-cache hit-rate awareness (inference-point insight).
-    (
-        "gateway-cache-awareness",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/gateway-cache-awareness/SKILL.md"),
-        )],
-    ),
-    // Akarso — social posting CLI/MCP (paired with the native `akarso` tool).
-    (
-        "akarso",
-        &[("SKILL.md", include_str!("../../skills/akarso/SKILL.md"))],
-    ),
-    // OpenSEO — SEO research/audits via MCP (open-source Semrush/Ahrefs alt).
-    (
-        "openseo",
-        &[("SKILL.md", include_str!("../../skills/openseo/SKILL.md"))],
-    ),
-    // Dialkit — live tuning of interface parameters (multi-framework UI lib).
-    (
-        "dialkit",
-        &[("SKILL.md", include_str!("../../skills/dialkit/SKILL.md"))],
-    ),
-    // terminal-browser — in-terminal Chromium (+ Windows host fallback).
-    (
-        "terminal-browser",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/terminal-browser/SKILL.md"),
-        )],
-    ),
-    // ddoemonn/interior — finished React micro-interactions (half-second craft).
-    (
-        "interior",
-        &[("SKILL.md", include_str!("../../skills/interior/SKILL.md"))],
-    ),
-    // Whitehat smart-contract research pack (router + fat references + playbooks).
-    (
-        "sc-research",
-        &[
-            (
-                "SKILL.md",
-                include_str!("../../skills/security/SCA/sc-research/SKILL.md"),
-            ),
-            (
-                "references/sources.md",
-                include_str!("../../skills/security/SCA/sc-research/references/sources.md"),
-            ),
-            (
-                "references/disclosure.md",
-                include_str!("../../skills/security/SCA/sc-research/references/disclosure.md"),
-            ),
-            (
-                "references/swc-map.md",
-                include_str!("../../skills/security/SCA/sc-research/references/swc-map.md"),
-            ),
-            (
-                "references/bug-classes.md",
-                include_str!("../../skills/security/SCA/sc-research/references/bug-classes.md"),
-            ),
-            (
-                "references/tools-matrix.md",
-                include_str!("../../skills/security/SCA/sc-research/references/tools-matrix.md"),
-            ),
-            (
-                "references/platforms.md",
-                include_str!("../../skills/security/SCA/sc-research/references/platforms.md"),
-            ),
-            (
-                "references/gym.md",
-                include_str!("../../skills/security/SCA/sc-research/references/gym.md"),
-            ),
-            (
-                "references/tob-bsc.md",
-                include_str!("../../skills/security/SCA/sc-research/references/tob-bsc.md"),
-            ),
-            (
-                "references/grep-patterns.md",
-                include_str!("../../skills/security/SCA/sc-research/references/grep-patterns.md"),
-            ),
-            (
-                "references/protocol-invariants.md",
-                include_str!("../../skills/security/SCA/sc-research/references/protocol-invariants.md"),
-            ),
-        ],
-    ),
-    (
-        "reviewing-with-solodit-and-swc",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/reviewing-with-solodit-and-swc/SKILL.md"),
-        )],
-    ),
-    (
-        "writing-foundry-invariant-handlers",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/writing-foundry-invariant-handlers/SKILL.md"),
-        )],
-    ),
-    (
-        "reviewing-oracles-and-pricing",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/reviewing-oracles-and-pricing/SKILL.md"),
-        )],
-    ),
-    (
-        "reviewing-upgradeable-proxies",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/reviewing-upgradeable-proxies/SKILL.md"),
-        )],
-    ),
-    (
-        "contest-and-bounty-reporting",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/contest-and-bounty-reporting/SKILL.md"),
-        )],
-    ),
-    (
-        "onchain-read-recon",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/onchain-read-recon/SKILL.md"),
-        )],
-    ),
-    (
-        "fuzzing-with-echidna-and-medusa",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/fuzzing-with-echidna-and-medusa/SKILL.md"),
-        )],
-    ),
-    (
-        "reviewing-erc4626-and-vaults",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/reviewing-erc4626-and-vaults/SKILL.md"),
-        )],
-    ),
-    (
-        "reviewing-amm-and-cl-pools",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/reviewing-amm-and-cl-pools/SKILL.md"),
-        )],
-    ),
-    (
-        "reviewing-lending-and-liquidations",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/reviewing-lending-and-liquidations/SKILL.md"),
-        )],
-    ),
-    (
-        "reviewing-bridges-and-messaging",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/reviewing-bridges-and-messaging/SKILL.md"),
-        )],
-    ),
-    (
-        "reviewing-governance-and-timelocks",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/reviewing-governance-and-timelocks/SKILL.md"),
-        )],
-    ),
-    (
-        "reviewing-token-standard-pitfalls",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/reviewing-token-standard-pitfalls/SKILL.md"),
-        )],
-    ),
-    (
-        "reviewing-signatures-permit-and-eip712",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/reviewing-signatures-permit-and-eip712/SKILL.md"),
-        )],
-    ),
-    (
-        "reviewing-reentrancy-and-callbacks",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/reviewing-reentrancy-and-callbacks/SKILL.md"),
-        )],
-    ),
-    (
-        "reviewing-access-control-and-auth",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/reviewing-access-control-and-auth/SKILL.md"),
-        )],
-    ),
-    (
-        "reviewing-mev-ordering-and-slippage",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/reviewing-mev-ordering-and-slippage/SKILL.md"),
-        )],
-    ),
-    (
-        "reviewing-l2-sequencer-and-finality",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/reviewing-l2-sequencer-and-finality/SKILL.md"),
-        )],
-    ),
-    (
-        "reviewing-nft-and-marketplace",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/reviewing-nft-and-marketplace/SKILL.md"),
-        )],
-    ),
-    (
-        "reviewing-cross-function-and-composer",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/reviewing-cross-function-and-composer/SKILL.md"),
-        )],
-    ),
-    (
-        "static-analysis-slither-aderyn-semgrep-wake",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/static-analysis-slither-aderyn-semgrep-wake/SKILL.md"),
-        )],
-    ),
-    (
-        "formal-verification-halmos-certora-kontrol",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/formal-verification-halmos-certora-kontrol/SKILL.md"),
-        )],
-    ),
-    (
-        "reconstructing-public-postmortems",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/reconstructing-public-postmortems/SKILL.md"),
-        )],
-    ),
-    (
-        "researcher-gym-and-curriculum",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/researcher-gym-and-curriculum/SKILL.md"),
-        )],
-    ),
-    (
-        "auditing-blockchain-clients",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/auditing-blockchain-clients/SKILL.md"),
-        )],
-    ),
-    (
-        "battlechain-safe-harbor-whitehat",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/battlechain-safe-harbor-whitehat/SKILL.md"),
-        )],
-    ),
-    (
-        "triaging-and-deduping-findings",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/triaging-and-deduping-findings/SKILL.md"),
-        )],
-    ),
-    (
-        "historical-smart-contract-vulns",
-        &[
-            (
-                "SKILL.md",
-                include_str!("../../skills/security/SCA/historical-smart-contract-vulns/SKILL.md"),
-            ),
-            (
-                "references/index.md",
-                include_str!("../../skills/security/SCA/historical-smart-contract-vulns/references/index.md"),
-            ),
-            (
-                "references/taxonomy.md",
-                include_str!(
-                    "../../skills/security/SCA/historical-smart-contract-vulns/references/taxonomy.md"
-                ),
-            ),
-            (
-                "references/notable-bounties.md",
-                include_str!(
-                    "../../skills/security/SCA/historical-smart-contract-vulns/references/notable-bounties.md"
-                ),
-            ),
-            (
-                "references/case-cards.md",
-                include_str!(
-                    "../../skills/security/SCA/historical-smart-contract-vulns/references/case-cards.md"
-                ),
-            ),
-            (
-                "references/incident-timeline.md",
-                include_str!(
-                    "../../skills/security/SCA/historical-smart-contract-vulns/references/incident-timeline.md"
-                ),
-            ),
-            (
-                "references/named-losses.md",
-                include_str!(
-                    "../../skills/security/SCA/historical-smart-contract-vulns/references/named-losses.md"
-                ),
-            ),
-            (
-                "references/incident-corpus.md",
-                include_str!(
-                    "../../skills/security/SCA/historical-smart-contract-vulns/references/incident-corpus.md"
-                ),
-            ),
-            (
-                "references/chain-catalog.md",
-                include_str!(
-                    "../../skills/security/SCA/historical-smart-contract-vulns/references/chain-catalog.md"
-                ),
-            ),
-            (
-                "references/evm-and-l2.md",
-                include_str!(
-                    "../../skills/security/SCA/historical-smart-contract-vulns/references/evm-and-l2.md"
-                ),
-            ),
-            (
-                "references/solana.md",
-                include_str!("../../skills/security/SCA/historical-smart-contract-vulns/references/solana.md"),
-            ),
-            (
-                "references/move-cosmos-cairo.md",
-                include_str!(
-                    "../../skills/security/SCA/historical-smart-contract-vulns/references/move-cosmos-cairo.md"
-                ),
-            ),
-            (
-                "references/bitcoin-and-other-vms.md",
-                include_str!(
-                    "../../skills/security/SCA/historical-smart-contract-vulns/references/bitcoin-and-other-vms.md"
-                ),
-            ),
-            (
-                "references/contest-winning-classes.md",
-                include_str!(
-                    "../../skills/security/SCA/historical-smart-contract-vulns/references/contest-winning-classes.md"
-                ),
-            ),
-            (
-                "references/how-to-query.md",
-                include_str!(
-                    "../../skills/security/SCA/historical-smart-contract-vulns/references/how-to-query.md"
-                ),
-            ),
-            (
-                "references/x-and-public-signal.md",
-                include_str!(
-                    "../../skills/security/SCA/historical-smart-contract-vulns/references/x-and-public-signal.md"
-                ),
-            ),
-            (
-                "references/investigator-ops.md",
-                include_str!(
-                    "../../skills/security/SCA/historical-smart-contract-vulns/references/investigator-ops.md"
-                ),
-            ),
-            (
-                "references/ingest-class-map.md",
-                include_str!(
-                    "../../skills/security/SCA/historical-smart-contract-vulns/references/ingest-class-map.md"
-                ),
-            ),
-        ],
-    ),
-    (
-        "reviewing-solana-programs",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/reviewing-solana-programs/SKILL.md"),
-        )],
-    ),
-    (
-        "reviewing-move-modules",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/reviewing-move-modules/SKILL.md"),
-        )],
-    ),
-    (
-        "reviewing-cosmos-and-ibc",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/reviewing-cosmos-and-ibc/SKILL.md"),
-        )],
-    ),
-    (
-        "reviewing-cairo-and-starknet",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/reviewing-cairo-and-starknet/SKILL.md"),
-        )],
-    ),
-    (
-        "reviewing-bitcoin-adjacent",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/reviewing-bitcoin-adjacent/SKILL.md"),
-        )],
-    ),
-    (
-        "reviewing-frontend-and-ops-surfaces",
-        &[(
-            "SKILL.md",
-            include_str!("../../skills/security/SCA/reviewing-frontend-and-ops-surfaces/SKILL.md"),
-        )],
-    ),
-    (
-        "hunting-x-linked-bounties",
-        &[
-            (
-                "SKILL.md",
-                include_str!("../../skills/security/SCA/hunting-x-linked-bounties/SKILL.md"),
-            ),
-            (
-                "references/paid-payouts.md",
-                include_str!(
-                    "../../skills/security/SCA/hunting-x-linked-bounties/references/paid-payouts.md"
-                ),
-            ),
-            (
-                "references/x-linked-2024-2026.md",
-                include_str!(
-                    "../../skills/security/SCA/hunting-x-linked-bounties/references/x-linked-2024-2026.md"
-                ),
-            ),
-            (
-                "references/researcher-index.md",
-                include_str!(
-                    "../../skills/security/SCA/hunting-x-linked-bounties/references/researcher-index.md"
-                ),
-            ),
-        ],
-    ),
-    (
-        "auditing-foundry-smart-contract-security",
-        &[
-            (
-                "SKILL.md",
-                include_str!(
-                    "../../skills/security/SCA/auditing-foundry-smart-contract-security/SKILL.md"
-                ),
-            ),
-            (
-                "references/api-reference.md",
-                include_str!(
-                    "../../skills/security/SCA/auditing-foundry-smart-contract-security/references/api-reference.md"
-                ),
-            ),
-            (
-                "references/vulnerability-checklist.md",
-                include_str!(
-                    "../../skills/security/SCA/auditing-foundry-smart-contract-security/references/vulnerability-checklist.md"
-                ),
-            ),
-            (
-                "references/secure-deployment-and-keys.md",
-                include_str!(
-                    "../../skills/security/SCA/auditing-foundry-smart-contract-security/references/secure-deployment-and-keys.md"
-                ),
-            ),
-            (
-                "scripts/agent.py",
-                include_str!(
-                    "../../skills/security/SCA/auditing-foundry-smart-contract-security/scripts/agent.py"
-                ),
-            ),
-        ],
-    ),
-];
-
-const PLUR_SKILL: &str = r#"---
-name: plur
-description: "Local-first shared memory for AI agents (engrams + episodes). Use for preferences, corrections, conventions, and session learnings that must persist across tools and sessions."
----
-
-# PLUR — shared agent memory
-
-NurCLI auto-installs `@plur-ai/cli` and provisions `~/.plur/`. Use the **`plur`** tool
-(or `/plur` slash command) — do not ask the user to run npm.
-
-## When to use
-
-- User corrects style, architecture, or conventions → `plur(action=learn, …)`
-- Start of a task that may reuse past knowledge → `plur(action=inject)` or `recall`
-- After fixing an incident → `plur(action=capture)` episode
-- Cross-session preferences → always prefer PLUR over ephemeral chat memory
-
-## Actions (via `plur` tool)
-
-| action | purpose |
-|--------|---------|
-| status | store health + engram counts |
-| learn | store a correction / preference / convention |
-| recall | hybrid search over engrams |
-| inject | select engrams for the current task (token-budgeted) |
-| list | list engrams |
-| capture | record an episode (what happened when) |
-| timeline | query episodes |
-| feedback | rate an engram positive/negative |
-| forget | retire an engram |
-| ingest | extract engrams from free text |
-
-## Rules
-
-- Never store secrets, API keys, tokens, or passwords in engrams.
-- Scope project knowledge with `scope` (e.g. `project:nur-cli`); personal prefs → `global`.
-- After a user correction, learn it immediately so the next turn benefits.
-- PLUR is memory of *assertions*, not a code index — use graphify for code structure.
-
-Upstream: https://github.com/plur-ai/plur · https://plur.ai
-"#;
-
-const RUFLO_SKILL: &str = r#"---
-name: ruflo
-description: "Agent meta-harness: vector memory, swarm coordination, hive-mind, hooks. Use for multi-agent orchestration patterns, semantic memory search, and self-learning trajectories."
----
-
-# Ruflo — agent orchestration harness
-
-NurCLI auto-installs `ruflo` and provisions global vector memory at
-`~/.nur/ruflo/memory.db`. Use the **`ruflo`** tool (or `/ruflo`) — no separate init.
-
-## When to use
-
-- Need semantic pattern memory across sessions → `ruflo(action=memory_search|memory_store)`
-- Multi-step parallel research that benefits from swarm topology → `swarm_init` / `hive_status`
-- Check harness health → `status`
-- List agent types → `agent_list`
-
-## Actions (via `ruflo` tool)
-
-| action | purpose |
-|--------|---------|
-| status | ruflo + memory status |
-| memory_store | store key/value (+ optional vector) in global AgentDB |
-| memory_search | semantic/hybrid search |
-| memory_stats | entry counts / backend |
-| memory_list | list entries |
-| agent_list | available agent types |
-| swarm_init | init hierarchical swarm (coordination state) |
-| swarm_status | swarm health |
-| hive_status | hive-mind status |
-| doctor | diagnostics |
-
-## Rules
-
-- Default memory lives under Meta's home (`~/.nur/ruflo/`) so project trees stay clean.
-- Prefer PLUR for *preferences and corrections*; Ruflo memory for *patterns, trajectories, embeddings*.
-- Prefer graphify for *code structure graphs*.
-- Do not require Claude Code — Meta is the host agent.
-- Swarm spawn of external Claude/Codex workers is optional; Meta's own `agent` tool covers nested research.
-
-Upstream: https://github.com/ruvnet/ruflo
-"#;
-
-const GRAPHIFY_SKILL: &str = r#"---
-name: graphify
-description: "Code knowledge graph. Prefer graphify query/path/explain over broad grep when graphify-out/ exists. Build with extract (local AST, no API key)."
----
-
-# Graphify — knowledge graph over the workspace
-
-Meta auto-installs `graphifyy` (CLI: `graphify`) and registers the agents skill.
-Use the **`graphify`** tool or `/graphify`.
-
-## Fast path
-
-1. If `graphify-out/graph.json` exists and the question is architectural →
-   `graphify(action=query|path|explain)` immediately.
-2. If missing → `graphify(action=extract)` (defaults to `--code-only`, free, local).
-3. Full docs/PDF semantic pipeline: read upstream skill references or run with `code_only=false`
-   (needs an LLM backend).
-
-## Actions
-
-status · query · path · explain · affected · report · extract · update
-
-Upstream: https://github.com/Graphify-Labs/graphify
-"#;
-
-const EXCALIDRAW_SKILL: &str = r##"---
-name: excalidraw
-description: "Hand-drawn Excalidraw diagrams (.excalidraw). Use for architecture, flowcharts, decision trees. Prefer the excalidraw tool over bash."
----
-
-# Excalidraw — diagrams from element JSON
-
-Nur auto-installs `excalidraw-cli` (npm) when Node is available.
-Prefer the **`excalidraw`** tool — do not shell out to bash for diagrams.
-
-## When to use
-
-- Architecture diagrams, request/data flows, decision flowcharts
-- Not for pixel-perfect UI mockups (use design skills / HTML instead)
-
-## Fast path
-
-1. Build element JSON (camera → dark bg optional → shapes → arrows with bindings)
-2. **`excalidraw(action=create, elements=[…], output="docs/foo.excalidraw")`**
-   - Writes the file, uploads to excalidraw.com, and **opens the share URL in the user's browser** (default)
-   - Do **not** stop at "here's a link" — create already opens it. Tell the user the browser should have opened.
-3. Format help: `excalidraw(action=reference)` if stuck on schema
-4. `open=false` only when the user asked not to open anything
-
-## Open policy (critical)
-
-- **Excalidraw = web share only.** `open=true` opens the browser to `https://excalidraw.com/...`.
-- **Never** OS-open a local `.excalidraw` file:
-  - forbidden: `Start-Process path\to\file.excalidraw`
-  - forbidden: `open_uri::open_path(.excalidraw)` / `xdg-open` / `open` on the file
-  - that triggers Windows **"Open with"** when no association exists
-- If export fails or no share URL is printed: leave the file on disk and report the path + error. Do **not** "console open" the local file as a fallback.
-- Prefer the `excalidraw` tool. If you must shell to CLI: `excalidraw export <file>` then open **only** the printed `https://excalidraw.com/...` URL.
-- For interactive offline boards the user can keep editing natively: use **`tldraw`** / `/draw` (desktop app) — not Excalidraw.
-
-## CLI defaults (omit these in JSON)
-
-roughness=2 · roundness rounded · fontFamily=1 (handwritten) · strokeWidth=2
-
-## Minimal shapes
-
-```json
-{ "type": "rectangle", "id": "r1", "x": 100, "y": 100, "width": 200, "height": 80,
-  "backgroundColor": "#1e3a5f", "fillStyle": "solid", "strokeColor": "#4a9eed",
-  "label": { "text": "Label", "strokeColor": "#e5e5e5" } }
-```
-
-Types: `rectangle` · `ellipse` · `diamond` · `text` · `arrow`
-
-## Labels
-
-Use `label: { "text": "…", "fontSize": 20, "strokeColor": "#e5e5e5" }` on shapes and arrows.
-CLI expands labels into bound text elements.
-
-## Arrows + bindings
-
-```json
-{ "type": "arrow", "id": "a1", "x": 300, "y": 140, "width": 150, "height": 0,
-  "points": [[0,0],[150,0]], "endArrowhead": "arrow", "strokeColor": "#4a9eed",
-  "startBinding": { "elementId": "b1", "fixedPoint": [1, 0.5] },
-  "endBinding": { "elementId": "b2", "fixedPoint": [0, 0.5] },
-  "label": { "text": "edge", "strokeColor": "#a0a0a0" } }
-```
-
-fixedPoint: right `[1,0.5]` · left `[0,0.5]` · top `[0.5,0]` · bottom `[0.5,1]`
-
-Also add the arrow id to each shape's `boundElements`.
-
-## Camera (4:3 required)
-
-```json
-{ "type": "cameraUpdate", "width": 1200, "height": 900, "x": 0, "y": 0 }
-```
-
-Sizes: 400×300 S · 600×450 M · **800×600 L** · **1200×900 XL** · 1600×1200 XXL
-
-## Dark mode background (first element after camera)
-
-```json
-{ "type": "rectangle", "id": "darkbg", "x": -4000, "y": -3000, "width": 10000, "height": 7500,
-  "backgroundColor": "#1e1e2e", "fillStyle": "solid", "strokeColor": "transparent", "strokeWidth": 0 }
-```
-
-Dark fills: `#1e3a5f` blue · `#1a4d2e` green · `#2d1b69` purple · `#5c3d1a` amber · `#5c1a1a` red · `#1a4d4d` teal  
-Text: `#e5e5e5` primary · `#a0a0a0` muted
-
-## Drawing order
-
-camera → background zones → shape → its text/label → its arrows → next shape…  
-**Bad:** all rects then all arrows. **Good:** progressive per node.
-
-## Sizing rules
-
-- Min labeled shape ~120×60 · gaps 20–30px · fontSize 28 title · 20 labels · 14 min
-- No emoji (Excalifont does not render them)
-
-## 3-box flow template
-
-```json
-[
-  { "type": "cameraUpdate", "width": 1200, "height": 900, "x": 0, "y": 100 },
-  { "type": "rectangle", "id": "darkbg", "x": -4000, "y": -3000, "width": 10000, "height": 7500,
-    "backgroundColor": "#1e1e2e", "fillStyle": "solid", "strokeColor": "transparent", "strokeWidth": 0 },
-  { "type": "rectangle", "id": "b1", "x": 60, "y": 350, "width": 220, "height": 90,
-    "backgroundColor": "#1e3a5f", "fillStyle": "solid", "strokeColor": "#4a9eed",
-    "label": { "text": "Request", "strokeColor": "#e5e5e5" },
-    "boundElements": [{ "id": "a1", "type": "arrow" }] },
-  { "type": "arrow", "id": "a1", "x": 280, "y": 395, "width": 200, "height": 0,
-    "points": [[0,0],[200,0]], "endArrowhead": "arrow", "strokeColor": "#4a9eed",
-    "startBinding": { "elementId": "b1", "fixedPoint": [1, 0.5] },
-    "endBinding": { "elementId": "b2", "fixedPoint": [0, 0.5] },
-    "label": { "text": "process", "strokeColor": "#a0a0a0" } },
-  { "type": "rectangle", "id": "b2", "x": 500, "y": 350, "width": 220, "height": 90,
-    "backgroundColor": "#5c3d1a", "fillStyle": "solid", "strokeColor": "#f59e0b",
-    "label": { "text": "Server", "strokeColor": "#e5e5e5" },
-    "boundElements": [{ "id": "a1", "type": "arrow" }, { "id": "a2", "type": "arrow" }] },
-  { "type": "arrow", "id": "a2", "x": 720, "y": 395, "width": 200, "height": 0,
-    "points": [[0,0],[200,0]], "endArrowhead": "arrow", "strokeColor": "#22c55e",
-    "startBinding": { "elementId": "b2", "fixedPoint": [1, 0.5] },
-    "endBinding": { "elementId": "b3", "fixedPoint": [0, 0.5] },
-    "label": { "text": "respond", "strokeColor": "#a0a0a0" } },
-  { "type": "rectangle", "id": "b3", "x": 940, "y": 350, "width": 220, "height": 90,
-    "backgroundColor": "#1a4d2e", "fillStyle": "solid", "strokeColor": "#22c55e",
-    "label": { "text": "Response", "strokeColor": "#e5e5e5" },
-    "boundElements": [{ "id": "a2", "type": "arrow" }] }
-]
-```
-
-Upstream: https://github.com/ahmadawais/excalidraw-cli
-"##;
-
-const HOW_TO_ILLUSTRATE_SKILL: &str = include_str!("../../skills/how-to-illustrate/SKILL.md");

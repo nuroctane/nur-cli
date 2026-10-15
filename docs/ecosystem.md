@@ -235,11 +235,21 @@ nur plugins install fable
 nur plugins install superpowers
 ```
 
-**Bundled on install:** the `bro`, `coding-standards`, `prelude`, `tech-spec`,
-`cloudflare-composition-root`, `herdr` skills (from
-[dmmulroy/skills](https://github.com/dmmulroy/skills)), plus pointer skill
-**`toolcraft`**, ship with NurCLI and are written to `~/.nur/skills` (mirrored to
-`~/.agents/skills`) on install / `nur ecosystem ensure`.
+**First-party skill pack:** the skills NurCLI ships itself - `plur`, `ruflo`,
+`graphify`, `excalidraw`, `startup-skill`, `how-to-illustrate`, `typesafe-ai`,
+the `resume-session` engine, the `bro`, `coding-standards`, `prelude`,
+`tech-spec`, `cloudflare-composition-root`, `herdr` skills (from
+[dmmulroy/skills](https://github.com/dmmulroy/skills)), pointer skill
+**`toolcraft`**, and the whitehat DeFi pack under `skills/security/SCA/` - are
+listed in `skills/bundled.json` and published with every release as
+`nur-skills.zip` (signed with the same minisign key as the binaries). They are
+not compiled into the binary: on install / `nur ecosystem ensure` /
+`nur ecosystem refresh-skills`, nur downloads the pack for its own version,
+verifies the signature, and writes it to `~/.nur/skills` (mirrored to
+`~/.agents/skills`). `~/.nur/skills/.bundled-pack.json` records the installed
+version; a pack that cannot be fetched leaves the previous one in place and is
+noted in `nur ecosystem status`. `NUR_SKILL_PACK=<zip or checkout>` installs
+from a local copy instead (debug builds use their own checkout).
 
 ---
 

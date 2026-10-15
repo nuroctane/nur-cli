@@ -840,7 +840,7 @@ fn fetch_latest_release(timeout_secs: u64) -> Result<serde_json::Value> {
         .map_err(|e| NurError::Other(format!("releases JSON: {e}")))
 }
 
-fn http_client(timeout_secs: u64) -> Result<reqwest::blocking::Client> {
+pub(crate) fn http_client(timeout_secs: u64) -> Result<reqwest::blocking::Client> {
     reqwest::blocking::Client::builder()
         .user_agent(format!("nur-cli/{}", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(timeout_secs))
@@ -889,7 +889,7 @@ fn published_sha256(
 }
 
 /// First token of a `sha256sum` line, when it is 64 hex digits.
-fn parse_sha256_record(text: &str) -> Option<String> {
+pub(crate) fn parse_sha256_record(text: &str) -> Option<String> {
     let token = text.split_whitespace().next()?;
     (token.len() == 64 && token.chars().all(|c| c.is_ascii_hexdigit()))
         .then(|| token.to_ascii_lowercase())
@@ -932,7 +932,7 @@ fn verify_release_signature(
 
 /// Pure verification step, split out for tests: pinned key + detached
 /// minisign signature text + payload.
-fn verify_minisig_text(bytes: &[u8], signature: &str) -> Result<()> {
+pub(crate) fn verify_minisig_text(bytes: &[u8], signature: &str) -> Result<()> {
     verify_minisig_with_key(bytes, signature, RELEASE_SIGNING_PUBLIC_KEY)
 }
 
@@ -1340,7 +1340,7 @@ fn install_binary_safe(src: &Path, target: &Path) -> Result<()> {
 }
 
 /// Lowercase hex SHA-256 of `bytes`.
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     Sha256::digest(bytes)
         .iter()

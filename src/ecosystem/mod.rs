@@ -331,7 +331,9 @@ pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
             // Invalidate skill cache so next TUI gets fresh index (was 263ms cold, now 17ms cached)
             crate::agent::skill_cache::invalidate_cache();
         }
-        Err(e) => status.notes.push(format!("bundled skills: {e}")),
+        Err(e) => status.notes.push(format!(
+            "first-party skill pack not installed ({e}); kept what is on disk - retry with `nur ecosystem refresh-skills`"
+        )),
     }
 
     // ── Component ensures, in parallel ────────────────────────────────────

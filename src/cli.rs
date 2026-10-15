@@ -435,7 +435,8 @@ pub enum EcosystemCmd {
     },
     /// Show ecosystem readiness
     Status,
-    /// Rebuild global skill metadata without installing packages or resolving credentials
+    /// Install this version's first-party skill pack and rebuild global skill
+    /// metadata, without installing packages or resolving credentials
     RefreshSkills,
     /// Install one component (penecho, sgrep, web3-skills, …): prints the pinned
     /// plan first, and only installs with --yes

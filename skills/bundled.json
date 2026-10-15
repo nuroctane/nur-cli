@@ -1,0 +1,463 @@
+{
+  "_comment": "First-party skills shipped as the nur-skills.zip release asset and installed into ~/.nur/skills by ecosystem ensure. Each pack is written as <name>/<file>; source is the repository directory. Validate with scripts/build_skill_pack.py --check.",
+  "packs": [
+    {
+      "name": "startup-skill",
+      "source": "skills/startup-skill",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "plur",
+      "source": "skills/plur",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "ruflo",
+      "source": "skills/ruflo",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "graphify",
+      "source": "skills/graphify",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "excalidraw",
+      "source": "skills/nur/excalidraw",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "how-to-illustrate",
+      "source": "skills/how-to-illustrate",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "typesafe-ai",
+      "source": "skills/typesafe-ai",
+      "files": [
+        "SKILL.md",
+        "references/nur-integration.md"
+      ]
+    },
+    {
+      "name": "resume-session",
+      "source": "skills/resume-session",
+      "files": [
+        "CORE.md",
+        "session_reader.py"
+      ]
+    },
+    {
+      "name": "bro",
+      "source": "skills/bro",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "scan",
+      "source": "skills/scan",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "coding-standards",
+      "source": "skills/coding-standards",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "tech-spec",
+      "source": "skills/tech-spec",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "herdr",
+      "source": "skills/herdr",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "prelude",
+      "source": "skills/prelude",
+      "files": [
+        "SKILL.md",
+        "prelude.ts"
+      ]
+    },
+    {
+      "name": "cloudflare-composition-root",
+      "source": "skills/cloudflare-composition-root",
+      "files": [
+        "SKILL.md",
+        "EXAMPLES.md"
+      ]
+    },
+    {
+      "name": "toolcraft",
+      "source": "skills/toolcraft",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "skeuomorphic-ui",
+      "source": "skills/skeuomorphic-ui",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "gateway-cache-awareness",
+      "source": "skills/gateway-cache-awareness",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "akarso",
+      "source": "skills/akarso",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "openseo",
+      "source": "skills/openseo",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "dialkit",
+      "source": "skills/dialkit",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "terminal-browser",
+      "source": "skills/terminal-browser",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "interior",
+      "source": "skills/interior",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "sc-research",
+      "source": "skills/security/SCA/sc-research",
+      "files": [
+        "SKILL.md",
+        "references/sources.md",
+        "references/disclosure.md",
+        "references/swc-map.md",
+        "references/bug-classes.md",
+        "references/tools-matrix.md",
+        "references/platforms.md",
+        "references/gym.md",
+        "references/tob-bsc.md",
+        "references/grep-patterns.md",
+        "references/protocol-invariants.md"
+      ]
+    },
+    {
+      "name": "reviewing-with-solodit-and-swc",
+      "source": "skills/security/SCA/reviewing-with-solodit-and-swc",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "writing-foundry-invariant-handlers",
+      "source": "skills/security/SCA/writing-foundry-invariant-handlers",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "reviewing-oracles-and-pricing",
+      "source": "skills/security/SCA/reviewing-oracles-and-pricing",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "reviewing-upgradeable-proxies",
+      "source": "skills/security/SCA/reviewing-upgradeable-proxies",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "contest-and-bounty-reporting",
+      "source": "skills/security/SCA/contest-and-bounty-reporting",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "onchain-read-recon",
+      "source": "skills/security/SCA/onchain-read-recon",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "fuzzing-with-echidna-and-medusa",
+      "source": "skills/security/SCA/fuzzing-with-echidna-and-medusa",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "reviewing-erc4626-and-vaults",
+      "source": "skills/security/SCA/reviewing-erc4626-and-vaults",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "reviewing-amm-and-cl-pools",
+      "source": "skills/security/SCA/reviewing-amm-and-cl-pools",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "reviewing-lending-and-liquidations",
+      "source": "skills/security/SCA/reviewing-lending-and-liquidations",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "reviewing-bridges-and-messaging",
+      "source": "skills/security/SCA/reviewing-bridges-and-messaging",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "reviewing-governance-and-timelocks",
+      "source": "skills/security/SCA/reviewing-governance-and-timelocks",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "reviewing-token-standard-pitfalls",
+      "source": "skills/security/SCA/reviewing-token-standard-pitfalls",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "reviewing-signatures-permit-and-eip712",
+      "source": "skills/security/SCA/reviewing-signatures-permit-and-eip712",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "reviewing-reentrancy-and-callbacks",
+      "source": "skills/security/SCA/reviewing-reentrancy-and-callbacks",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "reviewing-access-control-and-auth",
+      "source": "skills/security/SCA/reviewing-access-control-and-auth",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "reviewing-mev-ordering-and-slippage",
+      "source": "skills/security/SCA/reviewing-mev-ordering-and-slippage",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "reviewing-l2-sequencer-and-finality",
+      "source": "skills/security/SCA/reviewing-l2-sequencer-and-finality",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "reviewing-nft-and-marketplace",
+      "source": "skills/security/SCA/reviewing-nft-and-marketplace",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "reviewing-cross-function-and-composer",
+      "source": "skills/security/SCA/reviewing-cross-function-and-composer",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "static-analysis-slither-aderyn-semgrep-wake",
+      "source": "skills/security/SCA/static-analysis-slither-aderyn-semgrep-wake",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "formal-verification-halmos-certora-kontrol",
+      "source": "skills/security/SCA/formal-verification-halmos-certora-kontrol",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "reconstructing-public-postmortems",
+      "source": "skills/security/SCA/reconstructing-public-postmortems",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "researcher-gym-and-curriculum",
+      "source": "skills/security/SCA/researcher-gym-and-curriculum",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "auditing-blockchain-clients",
+      "source": "skills/security/SCA/auditing-blockchain-clients",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "battlechain-safe-harbor-whitehat",
+      "source": "skills/security/SCA/battlechain-safe-harbor-whitehat",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "triaging-and-deduping-findings",
+      "source": "skills/security/SCA/triaging-and-deduping-findings",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "historical-smart-contract-vulns",
+      "source": "skills/security/SCA/historical-smart-contract-vulns",
+      "files": [
+        "SKILL.md",
+        "references/index.md",
+        "references/taxonomy.md",
+        "references/notable-bounties.md",
+        "references/case-cards.md",
+        "references/incident-timeline.md",
+        "references/named-losses.md",
+        "references/incident-corpus.md",
+        "references/chain-catalog.md",
+        "references/evm-and-l2.md",
+        "references/solana.md",
+        "references/move-cosmos-cairo.md",
+        "references/bitcoin-and-other-vms.md",
+        "references/contest-winning-classes.md",
+        "references/how-to-query.md",
+        "references/x-and-public-signal.md",
+        "references/investigator-ops.md",
+        "references/ingest-class-map.md"
+      ]
+    },
+    {
+      "name": "reviewing-solana-programs",
+      "source": "skills/security/SCA/reviewing-solana-programs",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "reviewing-move-modules",
+      "source": "skills/security/SCA/reviewing-move-modules",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "reviewing-cosmos-and-ibc",
+      "source": "skills/security/SCA/reviewing-cosmos-and-ibc",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "reviewing-cairo-and-starknet",
+      "source": "skills/security/SCA/reviewing-cairo-and-starknet",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "reviewing-bitcoin-adjacent",
+      "source": "skills/security/SCA/reviewing-bitcoin-adjacent",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "reviewing-frontend-and-ops-surfaces",
+      "source": "skills/security/SCA/reviewing-frontend-and-ops-surfaces",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "hunting-x-linked-bounties",
+      "source": "skills/security/SCA/hunting-x-linked-bounties",
+      "files": [
+        "SKILL.md",
+        "references/paid-payouts.md",
+        "references/x-linked-2024-2026.md",
+        "references/researcher-index.md"
+      ]
+    },
+    {
+      "name": "auditing-foundry-smart-contract-security",
+      "source": "skills/security/SCA/auditing-foundry-smart-contract-security",
+      "files": [
+        "SKILL.md",
+        "references/api-reference.md",
+        "references/vulnerability-checklist.md",
+        "references/secure-deployment-and-keys.md",
+        "scripts/agent.py"
+      ]
+    }
+  ]
+}

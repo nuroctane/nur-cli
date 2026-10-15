@@ -379,8 +379,12 @@ nur ecosystem ensure [--force]
 
 #### `nur ecosystem refresh-skills`
 
-Rebuild and persist global skill metadata without installing packages or resolving
-credentials. Existing complete metadata remains readable during replacement.
+Install this version's first-party skill pack (the signed `nur-skills.zip`
+release asset, see [Ecosystem](ecosystem.md)) if it is not already in place,
+then rebuild and persist global skill metadata, without installing packages or
+resolving credentials. Existing complete metadata remains readable during
+replacement. A pack that cannot be fetched is reported and the installed copy
+is kept.
 
 ```bash
 nur ecosystem refresh-skills
