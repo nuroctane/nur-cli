@@ -176,6 +176,7 @@ auto_update = true
 | `theme_setup.protocol` | string | `auto` | Force the terminal graphics protocol for inline images: `kitty`, `sixel`, `iterm2`, `halfblocks`, or `auto` |
 | `theme_setup.inline_images` | bool | `true` | Master switch for inline pixel rendering in transcript + peeks |
 | `theme_setup.transparent` | bool | `false` | Skip painting panel/code backgrounds so a translucent terminal shows through (`/theme transparent`) |
+| `theme_setup.motion` | string | `auto` | Ambient animation. `full`: the banner shimmer, aurora rules and modal edges repaint at ~11fps while idle. `reduced`: they hold one still frame, the idle loop repaints only on input or agent events, and spinners tick at ~10fps - the right setting when the terminal is drawn elsewhere (Orca panes, browser terminals, SSH), where every frame crosses a link and typing starts to feel late. `auto` picks `reduced` inside an Orca pane (`ORCA_PANE_KEY`) or an SSH session (`SSH_TTY`/`SSH_CONNECTION`). `/theme motion` toggles and saves; `NUR_REDUCED_MOTION=1|0` overrides for one run |
 | `ecosystem_auto_ensure` | bool | `true` | Background TTL **repair** of packs on later TUI opens (first install is foreground via npx / one-liner / EXE / `nur install\); set `false` to skip repair |
 | `skills.auto_activate` | bool | `false` | Natural-language skill activation ("think like fable" injects the skill body). Off by default; explicit `/skill-name` and the `skill` tool always work. See [skills](./skills.md) |
 | `tools.profile` | string | `full` | `core` = minimal local editing shell (15 tools: read/list/write/edit/multi_edit/apply_patch, bash, sgrep/grep/glob, web_fetch/web_search, question, todo_write, submit_plan) with no ecosystem tools or prose. Session-fixed; restart to change. Unknown values fall back to `full`. Measured per-request overhead on the E2E harness (chars/4, no PLUR or OptMem installed): `full` about 3.9k system-prompt + 15.4k tool-schema tokens (54 tools), `core` about 1.8k + 2.8k (15 tools) |
@@ -378,6 +379,7 @@ Non-zero **pre_tool** exit blocks the tool. Missing file = no hooks. Check statu
 |----------|---------|
 | `NUR_IMAGE_PROTOCOL` | Force the terminal graphics protocol for inline images (`kitty`, `sixel`, `iterm2`, `halfblocks`); overrides `theme_setup.protocol` |
 | `NUR_IMAGE_QUERY` | Set to `1` to run the full stdio graphics-capability probe on launch (default is the instant, non-blocking path) |
+| `NUR_REDUCED_MOTION` | `1` freezes ambient animation and stops idle repaints for this run, `0` forces full motion; overrides `theme_setup.motion` |
 | `NUR_STARTUP_TRACE` | Set to `1` for local phase timings in `$NUR_HOME/cache/startup-<pid>.jsonl`, or set a file path. Records elapsed milliseconds and stage names, without prompts or credentials. Off by default |
 
 ### Paths

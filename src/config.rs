@@ -863,9 +863,19 @@ pub struct ThemeConfig {
     /// disable to fall back to text-only peeks even on capable terminals.
     #[serde(default = "default_true")]
     pub inline_images: bool,
+    /// Ambient animation: `auto` (default; reduced inside an Orca pane or an
+    /// SSH session), `full`, or `reduced` (shimmer holds one frame, idle loop
+    /// stops repainting, spinners tick at ~10fps). `NUR_REDUCED_MOTION=1|0`
+    /// overrides; `/theme motion` toggles and saves.
+    #[serde(default = "default_theme_motion")]
+    pub motion: String,
 }
 
 fn default_theme_protocol() -> String {
+    "auto".into()
+}
+
+fn default_theme_motion() -> String {
     "auto".into()
 }
 
@@ -878,6 +888,7 @@ impl Default for ThemeConfig {
             protocol: default_theme_protocol(),
             transparent: false,
             inline_images: true,
+            motion: default_theme_motion(),
         }
     }
 }

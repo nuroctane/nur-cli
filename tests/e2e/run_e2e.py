@@ -145,6 +145,11 @@ def stop_tree(proc):
 
 def isolated_env(home, port, warm_skills=True):
     env = {k: v for k, v in os.environ.items() if not k.startswith(("NUR_", "OPENAI_", "ANTHROPIC_", "ENCLAVE_"))}
+    # Reduced motion auto-detects Orca panes and SSH from the environment; the
+    # suites assert full ambient animation, so the terminal that launched the
+    # harness must not decide it.
+    for marker in ("ORCA_PANE_KEY", "SSH_TTY", "SSH_CONNECTION"):
+        env.pop(marker, None)
     env.update(
         {
             "NUR_HOME": str(home / ".nur"),

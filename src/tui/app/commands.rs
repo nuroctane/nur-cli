@@ -2345,6 +2345,27 @@ impl App {
             }
             return;
         }
+        // `/theme motion` toggles reduced motion and pins the choice (the
+        // default is `auto`, which follows the terminal: Orca pane / SSH).
+        if requested.eq_ignore_ascii_case("motion") {
+            let next = !crate::theme::reduced_motion();
+            crate::theme::set_reduced_motion(next);
+            self.cfg.theme_setup.motion = if next { "reduced" } else { "full" }.into();
+            self.needs_full_redraw = true;
+            match crate::config::save_config(&self.cfg) {
+                Ok(()) => self.push_note(
+                    Tone::Mode,
+                    if next {
+                        "reduced motion on · ambient shimmer holds still, idle frames are not repainted (good over web and SSH terminals)"
+                            .into()
+                    } else {
+                        "reduced motion off · full ambient animation".into()
+                    },
+                ),
+                Err(e) => self.push_error(format!("could not save motion setting: {e}")),
+            }
+            return;
+        }
         let Some(id) = crate::theme::canonical_theme_id(requested) else {
             self.push_error(format!(
                 "unknown theme `{requested}` · choose one of: {}",

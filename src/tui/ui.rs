@@ -2122,6 +2122,7 @@ fn draw_modal_frame(
     right_label: Option<&str>,
     footer: &str,
 ) {
+    let phase = if theme::reduced_motion() { 0 } else { phase };
     let buf = f.buffer_mut();
     let border = Style::default().fg(hue).bg(theme::SURFACE_2());
     // Traveling accent head cycles the aurora ring so every modal edge shimmers.
@@ -2732,7 +2733,10 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
             app.hit_urls[abs_i].clear();
             app.hit_paths[abs_i].clear();
             app.hit_swarm_panes[abs_i].clear();
-            visible.push(turn_separator(inner_w as usize, elapsed));
+            visible.push(turn_separator(
+                inner_w as usize,
+                theme::ambient_time(elapsed),
+            ));
             continue;
         };
         let cell = &app.cells[cell_idx];
@@ -6303,7 +6307,7 @@ fn banner_lines(app: &App, out: &mut Vec<Line<'static>>) {
         r#"██║ ╚████║╚██████╔╝██║  ██║"#,
         r#"╚═╝  ╚═══╝ ╚═════╝ ╚═╝  ╚═╝"#,
     ];
-    let elapsed = app.spinner_epoch.elapsed();
+    let elapsed = theme::ambient_time(app.spinner_epoch.elapsed());
     out.push(Line::default());
     for (i, row) in logo.iter().enumerate() {
         // Diagonal aurora wave sweeping the logotype.
@@ -6461,7 +6465,7 @@ fn draft_attachment_line(count: usize, width: u16) -> Line<'static> {
 }
 
 fn draw_input(f: &mut Frame, app: &mut App, area: Rect) {
-    let tick = app.spinner_epoch.elapsed();
+    let tick = theme::ambient_time(app.spinner_epoch.elapsed());
     // Border is calm-but-alive when ready for input (slow whole-border aurora
     // shimmer), and quietly dim while a turn runs or a modal owns focus.
     let active_border = !app.busy && app.approval.is_none() && app.question.is_none();

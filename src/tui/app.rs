@@ -15,10 +15,11 @@ use crate::tui::scrollbar::{Hit, ScrollMetrics};
 use crate::usage::{TokenUsage, UsageTracker};
 use crossterm::cursor::{Hide, Show};
 use crossterm::event::{
-    self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
-    EnableFocusChange, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
-    MouseButton, MouseEventKind,
+    self, DisableBracketedPaste, DisableFocusChange, EnableBracketedPaste, EnableFocusChange,
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
+#[cfg(windows)]
+use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
@@ -2649,7 +2650,15 @@ fn now_stamp() -> String {
 /// a motion event for every cell the pointer crosses, which - combined with the
 /// ambient repaint - backs up the event queue and makes drags/clicks lag. The
 /// cost is free (no-click) hover-peek; click-to-peek stays the primary path.
+///
+/// crossterm's `EnableMouseCapture` is used only on Windows, where it sets the
+/// console input mode (`ENABLE_MOUSE_INPUT`) and writes no escape sequence. On
+/// every other platform it writes `?1003h` (and `?1015h`) along with the modes
+/// above, which re-enabled any-motion tracking behind this comment's back; a
+/// browser or SSH terminal then relayed a motion event, and a repaint, for
+/// every pixel the pointer crossed.
 fn enable_mouse() {
+    #[cfg(windows)]
     let _ = stdout().execute(EnableMouseCapture);
     let mut out = stdout();
     let _ = write!(out, "\x1b[?1000h\x1b[?1002h\x1b[?1006h");
@@ -2660,6 +2669,7 @@ fn disable_mouse() {
     let mut out = stdout();
     let _ = write!(out, "\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?1006l");
     let _ = out.flush();
+    #[cfg(windows)]
     let _ = stdout().execute(DisableMouseCapture);
 }
 
@@ -3100,6 +3110,11 @@ pub async fn run_tui(
     // (especially while a turn is streaming at ~30fps).
     const FRAME_BUSY_MS: u64 = 33; // ~30fps under load
     const FRAME_IDLE_MS: u64 = 90; // ~11fps ambient shimmer
+
+    // Reduced motion (`[theme] motion`, NUR_REDUCED_MOTION, Orca/SSH auto):
+    // ambient shimmer is a still frame, so the idle loop paints only on
+    // input or agent events; progress spinners tick at ~10fps.
+    const FRAME_REDUCED_MS: u64 = 100;
     let mut dirty = true;
     let mut last_draw = Instant::now();
     let mut last_title = Instant::now();
@@ -3129,7 +3144,8 @@ pub async fn run_tui(
             dirty = true;
         }
 
-        let frame_ms = if app.busy
+        let reduced_motion = theme::reduced_motion();
+        let animating = app.busy
             || app.startup_pending()
             || app.picker.is_some()
             || app.approval.is_some()
@@ -3140,8 +3156,10 @@ pub async fn run_tui(
             || app.plugin_picker.is_some()
             || app.scrollbar_drag
             || app.selecting
-            || app.mouse_left_down
-        {
+            || app.mouse_left_down;
+        let frame_ms = if animating && reduced_motion {
+            FRAME_REDUCED_MS
+        } else if animating {
             FRAME_BUSY_MS
         } else {
             FRAME_IDLE_MS
@@ -3467,7 +3485,11 @@ pub async fn run_tui(
         // Locked design: the NUR banner's gradient shimmer (and the other
         // ambient animation) repaints every frame, idle included. Never
         // throttle idle repaints to save work; that froze the banner in v0.38.3.
-        if last_draw.elapsed().as_millis() as u64 >= frame_ms {
+        // Reduced motion is the one deliberate exception: the shimmer is a
+        // still frame there, so an idle repaint would send identical cells
+        // over a slow link for nothing. Spinners, modals and streaming still
+        // get their tick.
+        if (!reduced_motion || animating) && last_draw.elapsed().as_millis() as u64 >= frame_ms {
             dirty = true;
         }
         if let Some((_, t)) = app.expand_flash {

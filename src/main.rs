@@ -335,6 +335,10 @@ async fn real_main() -> Result<()> {
     // personal accent color survives every `/theme` switch.
     theme::apply_theme_config_global(&cfg.theme_setup);
     theme::set_transparent(cfg.theme_setup.transparent);
+    theme::set_reduced_motion(theme::resolve_reduced_motion(
+        &cfg.theme_setup.motion,
+        &|k| std::env::var(k).ok(),
+    ));
     // Override precedence: `--model` (explicit, always wins), then NUR_MODEL from
     // a *user* environment, then config.
     //

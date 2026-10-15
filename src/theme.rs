@@ -1872,6 +1872,56 @@ pub fn transparent() -> bool {
 
 static TRANSPARENT: std::sync::RwLock<bool> = std::sync::RwLock::new(false);
 
+/// Reduced motion: ambient animation (the banner's aurora shimmer, rules,
+/// modal edges, separators) holds one still frame and the event loop stops
+/// repainting while idle. Progress indicators keep moving. Meant for
+/// terminals that relay every frame over a network or a web renderer
+/// (Orca panes, SSH, browser terminals), where an 11 fps shimmer across a
+/// few hundred cells is what makes typing feel late.
+static REDUCED_MOTION: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_reduced_motion(on: bool) {
+    REDUCED_MOTION.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn reduced_motion() -> bool {
+    REDUCED_MOTION.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Resolve the `[theme] motion` setting against the environment.
+/// `NUR_REDUCED_MOTION` (`1`/`0`) wins; then an explicit `full`/`reduced`;
+/// `auto` reduces inside an Orca pane or an SSH session, where the terminal
+/// is drawn somewhere other than the machine running nur.
+pub fn resolve_reduced_motion(setting: &str, env: &dyn Fn(&str) -> Option<String>) -> bool {
+    if let Some(v) = env("NUR_REDUCED_MOTION") {
+        let v = v.trim().to_ascii_lowercase();
+        if matches!(v.as_str(), "1" | "true" | "yes" | "on" | "reduced") {
+            return true;
+        }
+        if matches!(v.as_str(), "0" | "false" | "no" | "off" | "full") {
+            return false;
+        }
+    }
+    match setting.trim().to_ascii_lowercase().as_str() {
+        "reduced" | "reduce" | "low" | "off" => true,
+        "full" | "on" => false,
+        _ => {
+            let set = |k: &str| env(k).is_some_and(|v| !v.trim().is_empty());
+            set("ORCA_PANE_KEY") || set("SSH_TTY") || set("SSH_CONNECTION")
+        }
+    }
+}
+
+/// Time source for ambient animation: frozen under reduced motion so every
+/// shimmer renders the same still frame no matter when it is drawn.
+pub fn ambient_time(elapsed: Duration) -> Duration {
+    if reduced_motion() {
+        Duration::ZERO
+    } else {
+        elapsed
+    }
+}
+
 /// Resolve a background field through the transparency switch.
 fn bg_field(field: Color) -> Color {
     if transparent() {
@@ -2025,6 +2075,7 @@ pub fn aurora_at(phase: f64) -> Color {
 /// basis for shimmering borders and separators.
 /// `elapsed` drives motion; `pos`/`span` give a per-cell phase offset.
 pub fn aurora_cell(elapsed: Duration, pos: usize, span: usize, period_ms: u128) -> Color {
+    let elapsed = ambient_time(elapsed);
     let t = if period_ms == 0 {
         0.0
     } else {
@@ -2500,6 +2551,49 @@ pub fn print_tool(name: &str, detail: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Ways motion resolution can fail: the env override losing to config,
+    /// `auto` not seeing the Orca pane or SSH markers, an explicit `full`
+    /// being overridden by those markers, and a garbage env value counting
+    /// as an override instead of falling through.
+    #[test]
+    fn reduced_motion_resolution_order() {
+        let env_of = |vars: &'static [(&'static str, &'static str)]| {
+            move |k: &str| {
+                vars.iter()
+                    .find(|(name, _)| *name == k)
+                    .map(|(_, v)| v.to_string())
+            }
+        };
+        let none = env_of(&[]);
+        assert!(!resolve_reduced_motion("auto", &none));
+        assert!(resolve_reduced_motion("reduced", &none));
+        assert!(!resolve_reduced_motion("full", &none));
+
+        let orca = env_of(&[("ORCA_PANE_KEY", "pane-7")]);
+        assert!(resolve_reduced_motion("auto", &orca));
+        assert!(
+            !resolve_reduced_motion("full", &orca),
+            "explicit full wins over auto-detect"
+        );
+        let ssh = env_of(&[("SSH_CONNECTION", "10.0.0.2 51234 10.0.0.9 22")]);
+        assert!(resolve_reduced_motion("auto", &ssh));
+        let empty_marker = env_of(&[("SSH_TTY", "  ")]);
+        assert!(!resolve_reduced_motion("auto", &empty_marker));
+
+        let force_off = env_of(&[("NUR_REDUCED_MOTION", "0"), ("ORCA_PANE_KEY", "pane-7")]);
+        assert!(
+            !resolve_reduced_motion("reduced", &force_off),
+            "env beats config"
+        );
+        let force_on = env_of(&[("NUR_REDUCED_MOTION", "1")]);
+        assert!(resolve_reduced_motion("full", &force_on));
+        let garbage = env_of(&[("NUR_REDUCED_MOTION", "maybe"), ("ORCA_PANE_KEY", "p")]);
+        assert!(
+            resolve_reduced_motion("auto", &garbage),
+            "unknown env value falls through"
+        );
+    }
 
     fn rgb(c: Color) -> (f64, f64, f64) {
         match c {
