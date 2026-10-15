@@ -1867,9 +1867,17 @@ mod tests {
             .arg(&plain)
             .output()
             .unwrap();
+        // Not restricted: more than the one owner entry. (Whether those extra
+        // entries show as inherited `(I)` or explicit depends on the machine;
+        // hosted runners hand new files explicit ACEs.)
+        let plain_text = String::from_utf8_lossy(&plain_acl.stdout).to_string();
+        let plain_aces = plain_text
+            .lines()
+            .filter(|l| l.contains("(F)") || l.contains("(R") || l.contains("(M)"))
+            .count();
         assert!(
-            String::from_utf8_lossy(&plain_acl.stdout).contains("(I)"),
-            "non-secret files keep inheriting"
+            plain_aces > 1,
+            "non-secret files are not restricted: {plain_text}"
         );
         let _ = fs::remove_dir_all(&root);
     }
