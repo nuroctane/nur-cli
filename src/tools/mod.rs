@@ -203,10 +203,10 @@ pub struct ToolContext {
     pub session_id: String,
 }
 
-/// Tool contract. Capability methods are **fail-closed** by default
-/// (not free, not parallel, not destructive). Override or rely on the
-/// central classifier in [`capabilities`] via the default impls.
 impl ToolContext {
+    /// Only `codemode` builds contexts outside the runner; everything else
+    /// receives one from the loop.
+    #[cfg(any(test, feature = "codemode"))]
     pub fn new(
         cwd: PathBuf,
         cancel: tokio_util::sync::CancellationToken,
@@ -230,6 +230,9 @@ impl ToolContext {
     }
 }
 
+/// Tool contract. Capability methods are **fail-closed** by default
+/// (not free, not parallel, not destructive). Override or rely on the
+/// central classifier in [`capabilities`] via the default impls.
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;

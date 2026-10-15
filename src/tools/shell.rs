@@ -908,17 +908,18 @@ mod tests {
             return;
         }
         let backend = shell_backend().clone();
-        // Login-shell startup alone can take ~1s on Windows, so the first echo
-        // gets a 3s window and the sleep outlasts it comfortably.
+        // Handoff needs output before the deadline. Shell startup on a hosted
+        // Windows runner has taken over 3s, so the first echo gets a 6s window
+        // and the sleep outlasts it comfortably.
         let cmd = if backend.kind == ShellKind::Bash {
-            "echo first; sleep 5; echo second"
+            "echo first; sleep 12; echo second"
         } else if backend.kind == ShellKind::Cmd {
-            "echo first & ping -n 6 127.0.0.1 >nul & echo second"
+            "echo first & ping -n 13 127.0.0.1 >nul & echo second"
         } else {
-            "Write-Output first; Start-Sleep -Seconds 5; Write-Output second"
+            "Write-Output first; Start-Sleep -Seconds 12; Write-Output second"
         };
         let opts = ShellOptions {
-            timeout_ms: 3_000,
+            timeout_ms: 6_000,
             handoff_on_timeout: true,
             ..ShellOptions::default()
         };
@@ -933,7 +934,7 @@ mod tests {
             .and_then(|s| s.parse().ok())
             .expect("job id");
         let mut state = None;
-        for _ in 0..200 {
+        for _ in 0..400 {
             let j = crate::bg_jobs::get(id).expect("job");
             if j.state != crate::bg_jobs::JobState::Running {
                 state = Some(j.state);

@@ -276,15 +276,6 @@
       "repository": "https://github.com/MengTo/Skills.git",
       "source_path": "agent-skills/web-design/agency-grid-layout-minimal"
     },
-    "agent-only-skill": {
-      "commit": "89408fddf8dff7703e512b14d0cfcdc9b97a5019",
-      "executables": [],
-      "files": {
-        "SKILL.md": "22fcf9b4c569f995ae233fb993b6d672b53fe4bce0493a5a87adf5182059d9a4"
-      },
-      "repository": "https://github.com/EveryInc/compound-engineering-plugin.git",
-      "source_path": "tests/fixtures/sample-plugin/skills/agent-only-skill"
-    },
     "agent-platform-alert-configuration": {
       "commit": "d970a4d0ae258377b6efb57a8e2209c9693b6dbf",
       "executables": [],
@@ -3222,15 +3213,6 @@
       "repository": "https://github.com/mattpocock/skills.git",
       "source_path": "skills/in-progress/claude-handoff"
     },
-    "claude-only-skill": {
-      "commit": "89408fddf8dff7703e512b14d0cfcdc9b97a5019",
-      "executables": [],
-      "files": {
-        "SKILL.md": "562de331bc35066c0e436e7b732f79e79aa441442c6b9d1a49d9dbfb316bdb98"
-      },
-      "repository": "https://github.com/EveryInc/compound-engineering-plugin.git",
-      "source_path": "tests/fixtures/sample-plugin/skills/claude-only-skill"
-    },
     "claymorphism": {
       "commit": "f631a09b4fcc0166f2e2c1a8c81906ef680c57e8",
       "executables": [],
@@ -4239,15 +4221,6 @@
       "repository": "https://github.com/vercel/vercel-plugin.git",
       "source_path": "skills/custom-metrics"
     },
-    "custom-skill": {
-      "commit": "89408fddf8dff7703e512b14d0cfcdc9b97a5019",
-      "executables": [],
-      "files": {
-        "SKILL.md": "ea062b8213ca0442ef66df29ba9144a2e13d2cfea2bc35ce0a19910142703ff9"
-      },
-      "repository": "https://github.com/EveryInc/compound-engineering-plugin.git",
-      "source_path": "tests/fixtures/custom-paths/custom-skills/custom-skill"
-    },
     "daily-ui-inspiration-capture": {
       "commit": "0c6169d09f8dff5dc26e57a8c33f027ffb3d28d9",
       "executables": [],
@@ -4361,15 +4334,6 @@
       },
       "repository": "https://github.com/addyosmani/agent-skills.git",
       "source_path": "skills/debugging-and-error-recovery"
-    },
-    "default-skill": {
-      "commit": "89408fddf8dff7703e512b14d0cfcdc9b97a5019",
-      "executables": [],
-      "files": {
-        "SKILL.md": "01564b9a0ebfb5da8ff713f03b329597882e6303e2c91afbba83474b7ebdcfc6"
-      },
-      "repository": "https://github.com/EveryInc/compound-engineering-plugin.git",
-      "source_path": "tests/fixtures/custom-paths/skills/default-skill"
     },
     "defending-llms-with-guardrails": {
       "commit": "54a798831d2266a3ca61ce68a7acb80b81160d57",
@@ -4754,15 +4718,6 @@
       },
       "repository": "https://github.com/garrytan/gstack.git",
       "source_path": "diagram"
-    },
-    "disabled-skill": {
-      "commit": "89408fddf8dff7703e512b14d0cfcdc9b97a5019",
-      "executables": [],
-      "files": {
-        "SKILL.md": "9a417c75dafac90cf3e6c96950f5fb0417a9b8930eb8de28a34516877c0f6c7e"
-      },
-      "repository": "https://github.com/EveryInc/compound-engineering-plugin.git",
-      "source_path": "tests/fixtures/sample-plugin/skills/disabled-skill"
     },
     "discernment-nudge": {
       "commit": "8a1541c4a3ffa5a20a5a91de0dcf3f0bab1d1ef4",
@@ -23593,15 +23548,6 @@
       "repository": "https://github.com/anthropics/skills.git",
       "source_path": "skills/skill-creator"
     },
-    "skill-one": {
-      "commit": "89408fddf8dff7703e512b14d0cfcdc9b97a5019",
-      "executables": [],
-      "files": {
-        "SKILL.md": "86f237eccce7c76d928ded4f6709bf7eb55e6e014ef58de4df6bff7f672f2b5c"
-      },
-      "repository": "https://github.com/EveryInc/compound-engineering-plugin.git",
-      "source_path": "tests/fixtures/sample-plugin/skills/skill-one"
-    },
     "skillify": {
       "commit": "96764e80a641e28141ec8297223768029f5bf483",
       "executables": [],
@@ -24287,15 +24233,6 @@
       },
       "repository": "https://github.com/MengTo/Skills.git",
       "source_path": "agent-skills/web-design/technical-wireframe-info-layout"
-    },
-    "template": {
-      "commit": "8a1541c4a3ffa5a20a5a91de0dcf3f0bab1d1ef4",
-      "executables": [],
-      "files": {
-        "SKILL.md": "eb685d91de039ed864fbd790cddf31684b017fd4a34ee1a55760d8d7cdbadefa"
-      },
-      "repository": "https://github.com/anthropics/skills.git",
-      "source_path": "template"
     },
     "terracotta": {
       "commit": "f631a09b4fcc0166f2e2c1a8c81906ef680c57e8",
