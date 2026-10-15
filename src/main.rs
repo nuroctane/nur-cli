@@ -35,6 +35,7 @@ mod pricing;
 mod process_tree;
 mod provider_logos;
 mod providers;
+mod credential_seal;
 mod sgrep;
 mod startup;
 mod t3code;

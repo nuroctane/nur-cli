@@ -145,7 +145,10 @@ def account_lock(binary, action):
         wrapper.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(str(helper))}\n', encoding='utf-8')
         wrapper.chmod(0o700)
     env['PATH'] = str(helpers) + os.pathsep + env.get('PATH', '')
-    config(home, 1, provider='github-copilot', model='gpt-4o')
+    # This scenario hands the binary a credential file and reads it back, so
+    # it opts out of at-rest sealing (covered by `credential-encryption`).
+    config(home, 1, provider='github-copilot', model='gpt-4o',
+           extra='[typesafe]\nenabled=false\n[auth]\nencrypt_at_rest=false\n')
     (home / '.nur/auth.json').write_text(json.dumps({
         'api_key':'synthetic-expired-token', 'provider':'github-copilot',
         'source':'oauth', 'auth_method':'oauth', 'refresh_token':'gh', 'expires_at':1,
@@ -311,12 +314,51 @@ def bridge_ownership(binary):
         helper.wait(timeout=5)
 
 
+def credential_encryption(binary):
+    """A saved key is unreadable in the file on Windows (DPAPI at rest) and
+    still resolves through the binary; `encrypt_at_rest = false` keeps the
+    old plaintext JSON. Unix has no sealing, so the file stays JSON."""
+    work, workspace, home, env = fixture('credential-encryption')
+    key = 'sk-regression-at-rest-0001'
+    auth = home / '.nur/auth.json'
+
+    def login(extra_config=''):
+        if auth.exists(): auth.unlink()
+        config(home, 1, extra=extra_config)
+        done = subprocess.run([str(binary), 'auth', 'login', '--key', key, '--provider', 'openai', '-y'],
+                              env=env, cwd=workspace, capture_output=True, text=True, encoding='utf-8', timeout=60)
+        assert done.returncode == 0, done.stderr
+        return auth.read_text(encoding='utf-8')
+
+    def status():
+        done = subprocess.run([str(binary), 'auth', 'status'], env=env, cwd=workspace,
+                              capture_output=True, text=True, encoding='utf-8', timeout=60)
+        assert done.returncode == 0, done.stderr
+        return done.stdout
+
+    saved = login()
+    if os.name == 'nt':
+        assert saved.startswith('nur-dpapi:v1:'), f'key was not sealed: {saved[:40]}'
+        assert key not in saved, 'key is readable in the credential file'
+        assert 'encrypted at rest' in status(), status()
+        # The sealed file must still resolve, and a legacy plaintext file
+        # must keep working and be sealed in place on the next read.
+        auth.write_text(json.dumps({'api_key': key, 'provider': 'openai', 'auth_method': 'api_key'}), encoding='utf-8')
+        assert 'authenticated: yes' in status()
+        wait_for(lambda: auth.read_text(encoding='utf-8').startswith('nur-dpapi:v1:'), 5)
+        assert json.loads(login('[auth]\nencrypt_at_rest = false\n'))['api_key'] == key
+    else:
+        assert json.loads(saved)['api_key'] == key, saved
+        assert oct(auth.stat().st_mode)[-3:] == '600', oct(auth.stat().st_mode)
+    assert 'authenticated: yes' in status()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--bin'); parser.add_argument('cases', nargs='*')
     args = parser.parse_args(); binary = find_binary(args.bin).resolve()
     cases = {'queue-reset':queue_reset, 'bridge-ownership':bridge_ownership, 'external-skill-refresh':external_skill_refresh,
-             'enclave-key':enclave_key}
+             'enclave-key':enclave_key, 'credential-encryption':credential_encryption}
     cases.update({f'account-{action}':lambda b, action=action: account_lock(b, action) for action in ['logout','key','model','delete']})
     cases.update({f'cancel-{provider}':lambda b, p=provider, m=model: cancelled_judgment(b, p, m) for provider, model in [('vllm','e2e-model'), ('openai','gpt-5.5'), ('anthropic','claude-sonnet-5')]})
     unknown = set(args.cases) - cases.keys()

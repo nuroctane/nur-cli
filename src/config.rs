@@ -294,8 +294,9 @@ pub struct Config {
     pub message_inbound: String,
 }
 
-/// `[auth]` - where nur may look for credentials it was not given.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// `[auth]` - where nur may look for credentials it was not given, and how
+/// the ones it holds are stored.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthConfig {
     /// When no saved nur credential, env key or explicit import covers a
     /// provider, read another tool's sign-in (Codex CLI, Claude Code, Cursor,
@@ -305,6 +306,24 @@ pub struct AuthConfig {
     /// `nur auth import --from <cli>` instead.
     #[serde(default)]
     pub import_fallback: bool,
+    /// Encrypt the credential files at rest where the OS offers a per-user
+    /// key: Windows DPAPI (`CryptProtectData`, user scope), which ties the
+    /// bytes to this Windows account on this machine. Default **true**;
+    /// files written before this are read as they are and re-encrypted in
+    /// place. Turn it off when `~/.nur` is synced between machines or
+    /// accounts, where the ciphertext would be undecryptable. No effect on
+    /// Unix, where file mode 0600 is the protection.
+    #[serde(default = "default_true")]
+    pub encrypt_at_rest: bool,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        AuthConfig {
+            import_fallback: false,
+            encrypt_at_rest: true,
+        }
+    }
 }
 
 /// Parse a `[protocols]` value. Accepts the documented names and the obvious

@@ -314,9 +314,12 @@ def blocked_auth(binary, fail=False):
         path.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(str(helper))}\n')
         path.chmod(0o700)
     env['PATH'] = str(helpers)+os.pathsep+env.get('PATH','')
+    # The refreshed credential is asserted by reading auth.json, so this
+    # scenario opts out of at-rest sealing (run_regressions covers that).
     (home/'.nur/config.toml').write_text(
         'provider = "github-copilot"\nmodel = "gpt-4o"\ntheme = "gold"\n'
-        'auto_update = false\necosystem_auto_ensure = false\n', encoding='utf-8')
+        'auto_update = false\necosystem_auto_ensure = false\n'
+        '[auth]\nencrypt_at_rest = false\n', encoding='utf-8')
     (home/'.nur/auth.json').write_text(json.dumps({
         'api_key':'synthetic-expired-token','provider':'github-copilot',
         'source':'oauth','auth_method':'oauth','refresh_token':'gh','expires_at':1,

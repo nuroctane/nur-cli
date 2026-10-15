@@ -354,11 +354,31 @@ export NUR_BASE_URL="http://localhost:11434/v1"   # overrides config base_url
 
 `META_API_KEY` remains the provider-specific key for Meta Model API.
 
-!!! warning "Plaintext secrets on disk"
-    `~/.nur/auth.json` stores API keys and OAuth access/refresh tokens in
-    **plaintext JSON**. On Unix NurCLI sets mode `0600`. On Windows the file lives
-    under your user profile (default NTFS ACLs, not a portable 0600). Never commit
-    or share `~/.nur/`. OS keychain storage is a future option, not the default.
+### How credentials are stored
+
+`~/.nur/auth.json`, `provider_keys.json` and `provider_sessions.json` hold API
+keys and OAuth access/refresh tokens. Two layers protect them:
+
+- **Permissions, everywhere.** On Unix the file is created mode `0600` before a
+  byte is written. On Windows an explicit owner-only DACL is set on the
+  temporary file, which the atomic rename carries over, so inherited directory
+  rights never expose it.
+- **Encryption at rest, on Windows.** The bytes are sealed with DPAPI
+  (`CryptProtectData`, user scope, with application entropy) before they are
+  written, so the file reads as `nur-dpapi:v1:<base64>` and is inert on any
+  other Windows account or machine. A file written by an older build stays
+  readable and is sealed in place the first time it is read. `nur auth status`
+  reports which state the file is actually in.
+
+!!! warning "Permissions do not survive a copy"
+    A backup, a sync client or a `tar` of your profile carries the file without
+    its ACL. On Windows the DPAPI envelope still protects it; on Unix (no
+    keyring-free equivalent) the JSON is plaintext once copied. Never commit or
+    share `~/.nur/`.
+
+Set `[auth] encrypt_at_rest = false` when `~/.nur` is synced between machines
+or Windows accounts, where the ciphertext could not be decrypted on the other
+end. It has no effect outside Windows.
 
 ## Check auth status
 
@@ -501,7 +521,9 @@ Active **provider id / base URL / model** come from `~/.nur/config.toml`
 
 | Location | Contents |
 |----------|----------|
-| `~/.nur/auth.json` | API key **or** OAuth access/refresh tokens (**plaintext**) |
+| `~/.nur/auth.json` | API key **or** OAuth access/refresh tokens (DPAPI-sealed on Windows; plaintext 0600 on Unix) |
+| `~/.nur/provider_keys.json` | Per-provider failover keys (same protection) |
+| `~/.nur/provider_sessions.json` | Per-provider OAuth sessions (same protection) |
 | `~/.nur/config.toml` | `provider`, `base_url`, `model`, … (no secret) |
 | Env `NUR_API_KEY` | Optional global override (never printed in logs) |
 | Env `META_API_KEY` | Optional key for the Meta Model API provider |

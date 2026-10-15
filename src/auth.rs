@@ -520,7 +520,16 @@ pub fn load_auth() -> Result<Option<Auth>> {
     if !path.exists() {
         return Ok(None);
     }
-    let text = fs::read_to_string(&path)?;
+    let text = match crate::credential_seal::read_to_string(&path) {
+        Ok(text) => text,
+        // An envelope this account cannot open is as good as signed out; a
+        // real IO error still propagates.
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+            tracing::warn!("{e} — treating as signed out");
+            return Ok(None);
+        }
+        Err(e) => return Err(e.into()),
+    };
     let Ok(mut auth) = serde_json::from_str::<Auth>(&text) else {
         // A malformed store must not hard-fail every provider resolution
         // (it used to defeat even env keys with a bare serde error). The
@@ -794,7 +803,7 @@ pub fn save_auth(auth: &Auth) -> Result<()> {
     ensure_dirs()?;
     let text = serde_json::to_string_pretty(auth)?;
     let path = auth_path();
-    private_atomic_write(&path, text.as_bytes())
+    crate::credential_seal::write(&path, &text)
         .map_err(|e| NurError::Other(format!("failed to save auth atomically: {e}")))?;
     #[cfg(unix)]
     {
@@ -866,6 +875,27 @@ fn credential_family_ids(provider_id: &str) -> Vec<&str> {
         GOOGLE_CREDENTIAL_FAMILY.to_vec()
     } else {
         vec![provider_id]
+    }
+}
+
+/// How the credential files are protected right now, for `nur auth status`
+/// and `/auth`. Reports what is actually on disk, not what was configured:
+/// a DPAPI failure or `[auth] encrypt_at_rest = false` leaves plaintext, and
+/// saying otherwise would be worse than saying nothing.
+pub fn credential_store_note(path: &Path) -> String {
+    let owner_only = if cfg!(windows) {
+        "Windows owner-only ACL"
+    } else {
+        "Unix 0600"
+    };
+    if crate::credential_seal::is_sealed(path) {
+        format!("~/.nur/auth.json is encrypted at rest (Windows DPAPI, this account on this machine) + {owner_only}")
+    } else if crate::credential_seal::sealing_available() {
+        format!("~/.nur/auth.json holds plaintext secrets ({owner_only}); it is encrypted at rest on the next sign-in")
+    } else if cfg!(windows) {
+        format!("~/.nur/auth.json holds plaintext secrets ({owner_only}); set [auth] encrypt_at_rest = true to seal it with DPAPI")
+    } else {
+        format!("~/.nur/auth.json holds plaintext secrets ({owner_only})")
     }
 }
 
@@ -943,7 +973,7 @@ fn block_t3_fallback(provider_id: &str) -> Result<()> {
 // provider so `failover::resolve_target_key` can find it without env vars.
 
 fn read_keys_at(path: &Path) -> BTreeMap<String, String> {
-    std::fs::read_to_string(path)
+    crate::credential_seal::read_to_string(path)
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or_default()
@@ -963,7 +993,7 @@ fn save_key_at(path: &Path, provider_id: &str, key: &str) -> Result<()> {
         return Err(NurError::Other("API key contains whitespace".into()));
     }
     let mut map = if path.exists() {
-        let text = fs::read_to_string(path)?;
+        let text = crate::credential_seal::read_to_string(path)?;
         serde_json::from_str(&text).map_err(|error| {
             NurError::Other(format!(
                 "refusing to overwrite malformed provider key store {}: {error}",
@@ -975,7 +1005,7 @@ fn save_key_at(path: &Path, provider_id: &str, key: &str) -> Result<()> {
     };
     map.insert(provider_id.to_string(), trimmed.to_string());
     let text = serde_json::to_string_pretty(&map)?;
-    private_atomic_write(path, text.as_bytes())
+    crate::credential_seal::write(path, &text)
         .map_err(|e| NurError::Other(format!("failed to save provider keys: {e}")))?;
     #[cfg(unix)]
     {
@@ -1106,7 +1136,7 @@ fn forget_provider_at(keys_path: &Path, sessions_path: &Path, provider_id: &str)
     // remaining credentials while trying to remove one entry.
     for path in [keys_path, sessions_path] {
         if path.exists()
-            && fs::read_to_string(path)
+            && crate::credential_seal::read_to_string(path)
                 .ok()
                 .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
                 .is_none()
@@ -1124,7 +1154,7 @@ fn forget_provider_at(keys_path: &Path, sessions_path: &Path, provider_id: &str)
     if removed_key {
         removed = true;
         let text = serde_json::to_string_pretty(&keys).unwrap_or_else(|_| "{}".into());
-        let _ = private_atomic_write(keys_path, text.as_bytes());
+        let _ = crate::credential_seal::write(keys_path, &text);
     }
 
     let mut sessions = read_sessions_at(sessions_path);
@@ -1250,7 +1280,7 @@ pub fn oauth_session_supported(provider_id: &str) -> bool {
 }
 
 fn read_sessions_at(path: &Path) -> BTreeMap<String, Auth> {
-    let mut map: BTreeMap<String, Auth> = std::fs::read_to_string(path)
+    let mut map: BTreeMap<String, Auth> = crate::credential_seal::read_to_string(path)
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or_default();
@@ -1286,7 +1316,7 @@ fn read_sessions_at(path: &Path) -> BTreeMap<String, Auth> {
 
 fn write_sessions_at(path: &Path, map: &BTreeMap<String, Auth>) -> Result<()> {
     let text = serde_json::to_string_pretty(map)?;
-    private_atomic_write(path, text.as_bytes())
+    crate::credential_seal::write(path, &text)
         .map_err(|e| NurError::Other(format!("failed to save provider sessions: {e}")))?;
     #[cfg(unix)]
     {
@@ -1304,7 +1334,7 @@ fn save_provider_session_at(path: &Path, auth: &Auth) -> Result<()> {
         ));
     }
     if path.exists() {
-        let text = fs::read_to_string(path)?;
+        let text = crate::credential_seal::read_to_string(path)?;
         serde_json::from_str::<BTreeMap<String, Auth>>(&text).map_err(|error| {
             NurError::Other(format!(
                 "refusing to overwrite malformed provider session store {}: {error}",
@@ -1401,7 +1431,7 @@ fn forget_saved_key_at(keys_path: &Path, sessions_path: &Path, provider: &str) -
     // remaining credentials while trying to remove one entry.
     for path in [keys_path, sessions_path] {
         if path.exists() {
-            let text = fs::read_to_string(path)?;
+            let text = crate::credential_seal::read_to_string(path)?;
             serde_json::from_str::<serde_json::Value>(&text).map_err(|error| {
                 NurError::Other(format!(
                     "refusing to edit malformed credential store {}: {error}",
@@ -1417,7 +1447,7 @@ fn forget_saved_key_at(keys_path: &Path, sessions_path: &Path, provider: &str) -
     }
     if changed {
         let text = serde_json::to_string_pretty(&keys)?;
-        private_atomic_write(keys_path, text.as_bytes())
+        crate::credential_seal::write(keys_path, &text)
             .map_err(|error| NurError::Other(format!("failed to save provider keys: {error}")))?;
     }
     let mut sessions = read_sessions_at(sessions_path);
@@ -1924,9 +1954,7 @@ pub fn auth_status() -> Result<()> {
             );
             println!("expires: {}", format_expires_relative(auth.expires_at));
             println!("key: {}", key_fingerprint(&auth.api_key));
-            println!(
-                "note: ~/.nur/auth.json is plaintext secrets (Unix 0600; Windows profile ACLs)"
-            );
+            println!("note: {}", credential_store_note(&auth_path()));
             Ok(())
         }
         _ => {

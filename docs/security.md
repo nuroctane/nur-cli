@@ -11,9 +11,9 @@ termination through stale PID records.
 
 | Location | Contents |
 |----------|----------|
-| `~/.nur/auth.json` | Provider API key / tokens after `/login` or `nur auth login`; on Windows the ACL is reset to the owning user only |
+| `~/.nur/auth.json` | Provider API key / tokens after `/login` or `nur auth login`; 0600 on Unix, owner-only ACL on Windows, and sealed with Windows DPAPI at rest |
 | Env `NUR_API_KEY` / vendor keys | Optional override (never printed in logs) |
-| `~/.nur/provider_keys.json` | Scoped and sidecar keys (TypeSafe, Enclave, failover routes); 0600 on Unix, owner-only ACL on Windows |
+| `~/.nur/provider_keys.json`, `provider_sessions.json` | Scoped and sidecar keys (TypeSafe, Enclave, failover routes) and per-provider OAuth sessions; same protection as `auth.json` |
 | `~/.nur/plugins/` | Marketplace skill packs (local clones; no secrets) |
 | `~/.nur/sessions/` | Session files + `.json.bak` / `.precompact.bak` (no key) |
 | `~/.nur/tool-results/` | Spilled large tool outputs (may include workspace text) |
