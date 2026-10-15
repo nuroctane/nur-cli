@@ -1873,11 +1873,14 @@ pub fn transparent() -> bool {
 static TRANSPARENT: std::sync::RwLock<bool> = std::sync::RwLock::new(false);
 
 /// Reduced motion: ambient animation (the banner's aurora shimmer, rules,
-/// modal edges, separators) holds one still frame and the event loop stops
-/// repainting while idle. Progress indicators keep moving. Meant for
-/// terminals that relay every frame over a network or a web renderer
-/// (Orca panes, SSH, browser terminals), where an 11 fps shimmer across a
-/// few hundred cells is what makes typing feel late.
+/// modal edges, separators) runs slow instead of freezing, and the event loop
+/// repaints idle frames at a calm cadence. Progress indicators (spinners, the
+/// moon title, streaming) always run full speed. Meant for terminals that relay
+/// every frame over a network or a web renderer (Orca panes, SSH, browser
+/// terminals), where an 11 fps shimmer across a few hundred cells is what
+/// makes typing feel late. Motion never stops entirely: a frozen frame reads
+/// as a hung session.
+pub const REDUCED_DIVISOR: u32 = 6;
 static REDUCED_MOTION: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub fn set_reduced_motion(on: bool) {
@@ -1912,11 +1915,11 @@ pub fn resolve_reduced_motion(setting: &str, env: &dyn Fn(&str) -> Option<String
     }
 }
 
-/// Time source for ambient animation: frozen under reduced motion so every
-/// shimmer renders the same still frame no matter when it is drawn.
+/// Time source for ambient animation: slowed under reduced motion so the
+/// shimmer still visibly moves, just calmly.
 pub fn ambient_time(elapsed: Duration) -> Duration {
     if reduced_motion() {
-        Duration::ZERO
+        elapsed / REDUCED_DIVISOR
     } else {
         elapsed
     }
@@ -2551,6 +2554,22 @@ pub fn print_tool(name: &str, detail: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Ways reduced motion can regress into a freeze: ambient time collapsing
+    /// to zero (a still frame reads as a hung session) or stopping entirely.
+    /// Reduced motion must slow ambient animation, never stop it.
+    #[test]
+    fn ambient_time_slows_but_never_freezes_under_reduced_motion() {
+        set_reduced_motion(true);
+        let slow = ambient_time(Duration::from_secs(6));
+        let nonzero = ambient_time(Duration::from_millis(100));
+        set_reduced_motion(false);
+        let full = ambient_time(Duration::from_secs(6));
+        assert_eq!(slow, Duration::from_secs(1));
+        assert!(nonzero > Duration::ZERO);
+        assert_eq!(full, Duration::from_secs(6));
+        assert!(!reduced_motion());
+    }
 
     /// Ways motion resolution can fail: the env override losing to config,
     /// `auto` not seeing the Orca pane or SSH markers, an explicit `full`

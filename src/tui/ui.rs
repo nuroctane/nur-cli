@@ -119,39 +119,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         app.sidegraph_max_scroll = 0;
         draw_transcript(f, app, chunks[0]);
     }
-    if app.startup_line_shown() && !app.busy {
+    if app.busy || app.startup_line_shown() {
         draw_busy_line(f, app, chunks[1]);
-    } else if app.busy {
-        // Provider logo sits left of the spinner: split the busy row into a
-        // logo gutter + the text line when graphics are available.
-        #[cfg(feature = "image-peek")]
-        let (logo_area, busy_area) = {
-            if app.cfg.theme_setup.inline_images && chunks[1].width > 24 && chunks[1].height >= 1 {
-                if crate::provider_logos::for_provider(&app.cfg.provider).is_some() {
-                    let parts = ratatui::layout::Layout::default()
-                        .direction(ratatui::layout::Direction::Horizontal)
-                        .constraints([Constraint::Length(3), Constraint::Min(10)])
-                        .split(chunks[1]);
-                    (Some(parts[0]), parts[1])
-                } else {
-                    (None, chunks[1])
-                }
-            } else {
-                (None, chunks[1])
-            }
-        };
-        #[cfg(not(feature = "image-peek"))]
-        let busy_area = chunks[1];
-        draw_busy_line(f, app, busy_area);
-        #[cfg(feature = "image-peek")]
-        if let Some(gutter) = logo_area {
-            // Clear first — kitty/sixel pixels sit outside the cell buffer.
-            f.render_widget(Clear, gutter);
-            let pid = app.cfg.provider.clone();
-            if let Some(proto) = app.provider_logo_protocol(&pid) {
-                f.render_stateful_widget(ratatui_image::StatefulImage::default(), gutter, proto);
-            }
-        }
     }
     draw_input(f, app, chunks[2]); // publishes input_inner for click-to-caret
     draw_statusline(f, app, chunks[3]);
@@ -2122,7 +2091,11 @@ fn draw_modal_frame(
     right_label: Option<&str>,
     footer: &str,
 ) {
-    let phase = if theme::reduced_motion() { 0 } else { phase };
+    let phase = if theme::reduced_motion() {
+        phase / theme::REDUCED_DIVISOR as usize
+    } else {
+        phase
+    };
     let buf = f.buffer_mut();
     let border = Style::default().fg(hue).bg(theme::SURFACE_2());
     // Traveling accent head cycles the aurora ring so every modal edge shimmers.
@@ -7945,7 +7918,7 @@ mod tests {
         let client =
             crate::api::ApiClient::for_provider("http://127.0.0.1:1/v1", "", "vllm").unwrap();
         let mode = crate::agent::SharedMode::new(crate::agent::PermissionMode::Manual);
-        let mut app = super::super::app::new_app(client, cfg, cwd, mode, session, usage, None);
+        let mut app = super::super::app::new_app(client, cfg, cwd, mode, session, usage);
         for i in 0..300 {
             app.cells.push(Cell::User(format!("Prompt {i}")));
             app.cells.push(Cell::Assistant { text: "Finished explanation with a list and a code example.\n\n- First step\n- Second step\n\n```rust\nlet value = 42;\n```\n".repeat(24), streaming: false });
@@ -8061,7 +8034,7 @@ mod tests {
         let client =
             crate::api::ApiClient::for_provider("http://127.0.0.1:1/v1", "", "vllm").unwrap();
         let mode = crate::agent::SharedMode::new(crate::agent::PermissionMode::Manual);
-        let mut app = super::super::app::new_app(client, cfg, cwd, mode, session, usage, None);
+        let mut app = super::super::app::new_app(client, cfg, cwd, mode, session, usage);
         let now = std::time::Instant::now();
         let tool =
             |name: &str, args: &str, result: &str, ok: Option<bool>, expanded: bool| Cell::Tool {
@@ -8791,7 +8764,7 @@ See the [token store notes](https://example.test/docs/token-store) for the stora
         let client =
             crate::api::ApiClient::for_provider("http://127.0.0.1:1/v1", "", "vllm").unwrap();
         let mode = crate::agent::SharedMode::new(crate::agent::PermissionMode::Manual);
-        let mut app = super::super::app::new_app(client, cfg, cwd, mode, session, usage, None);
+        let mut app = super::super::app::new_app(client, cfg, cwd, mode, session, usage);
         let mut modal = super::super::app::LoginModal::new("vllm".into());
         modal.manage_auth = true;
         modal.stage = super::super::app::LoginStage::JevSlots;

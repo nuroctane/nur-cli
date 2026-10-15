@@ -1323,9 +1323,6 @@ impl App {
         self.u_session = TokenUsage::default();
         self.u_last = TokenUsage::default();
         self.cells.retain(|c| matches!(c, Cell::Banner));
-        self.title_from_prompt = false;
-        // /new resets the shared title state to a clean idle "ready" tab.
-        crate::ade::set_title_prompt("ready");
         self.push_info(format!(
             "new session {}",
             &self.session_id[..8.min(self.session_id.len())]
@@ -1682,11 +1679,6 @@ impl App {
         };
         if show_user_cell {
             self.cells.push(Cell::User(format!("/fusion {question}")));
-        }
-        if !self.title_from_prompt {
-            self.window_base = question.to_string();
-            self.title_from_prompt = true;
-            crate::ade::set_title_prompt(question);
         }
         self.scroll_to_bottom();
         self.scrollbar_drag = false;
@@ -2356,7 +2348,7 @@ impl App {
                 Ok(()) => self.push_note(
                     Tone::Mode,
                     if next {
-                        "reduced motion on · ambient shimmer holds still, idle frames are not repainted (good over web and SSH terminals)"
+                        "reduced motion on · ambient animation slows to a crawl, idle repaints continue at ~2fps (good over web and SSH terminals)"
                             .into()
                     } else {
                         "reduced motion off · full ambient animation".into()
@@ -2577,11 +2569,6 @@ impl App {
                 tracker.set_provider(self.cfg.provider.clone());
                 tracker.seed_session(loaded.usage.clone());
                 self.u_session = loaded.usage.clone();
-                // Window title = first user prompt of the resumed session.
-                if let Some(first) = loaded.messages.iter().find(|m| m.role == "user") {
-                    crate::ade::set_title_prompt(&first.content);
-                    self.title_from_prompt = true;
-                }
                 self.session = Some(Box::new(loaded));
                 self.usage = Some(Box::new(tracker));
                 self.cells.retain(|c| matches!(c, Cell::Banner));

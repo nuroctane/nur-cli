@@ -44,7 +44,7 @@ pub fn open_browser(url: &str) -> Result<()> {
                 "browser open command failed — open the URL manually".into(),
             ));
         }
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {

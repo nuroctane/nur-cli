@@ -18,14 +18,13 @@ pub fn disable_terminal_title() {
     TITLE_DISABLED.store(true, Ordering::Relaxed);
 }
 
-/// Set terminal title (OSC 0/2). Keep the word `nur` in the title so Orca/ADEs
-/// can still recognize the agent process. Written only when stdout is a
-/// terminal; a redirected stdout gets no escape bytes.
+/// Set the terminal title (OSC 0). Written only when stdout is a terminal; a
+/// redirected stdout gets no escape bytes.
 ///
 /// Mutex-guarded: the TUI thread (110ms animation) and the agent thread
 /// (post-tool re-asserts) both write here concurrently, and two interleaved OSC
 /// sequences can corrupt the title mid-frame.
-pub fn set_terminal_title(title: &str) {
+fn set_terminal_title(title: &str) {
     use std::io::IsTerminal;
     if TITLE_DISABLED.load(Ordering::Relaxed) || !std::io::stdout().is_terminal() {
         return;
@@ -48,129 +47,23 @@ pub fn copy_to_clipboard(text: &str) -> bool {
     }
 }
 
-/// Preferred session tab title: moon · nur · abbreviated first prompt.
-///
-/// Example: `🌕 nur · fix the login hang…`
-pub fn session_window_title(prompt: &str) -> String {
-    title_with_marker(crate::theme::TITLE_IDLE, prompt)
-}
-
-/// Animated window title while inference is running — the marker orb rotates
-/// through moon phases so the tab visibly "works". Drive with the TUI's spinner
-/// clock and throttle updates (~110ms) so we don't spam OSC every frame.
-pub fn running_window_title(elapsed: std::time::Duration, prompt: &str) -> String {
-    let marker = crate::theme::frame_at(crate::theme::TITLE_FRAMES, elapsed, 110);
-    title_with_marker(marker, prompt)
-}
-
-/// The provider label carried in the tab title. Set from the TUI whenever the
-/// active provider changes (and once at launch) so the title always names who
-/// is serving this session. Subagents deliberately do NOT touch it — the
-/// parent's provider persists for the whole session.
-static TITLE_PROVIDER: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
-
-fn product_label() -> String {
-    TITLE_PROVIDER
-        .read()
-        .map(|p| p.clone())
-        .unwrap_or_else(|_| "nur".to_string())
-}
-
-fn title_with_marker(marker: &str, prompt: &str) -> String {
-    let abbr = abbreviate_for_title(prompt, 48);
-    let brand = product_label();
-    let logo = title_emoji();
-    let head = if logo.is_empty() {
-        marker.to_string()
-    } else {
-        format!("{logo} {marker}")
-    };
-    if abbr.is_empty() || abbr == "ready" {
-        format!("{head} {brand}")
-    } else {
-        format!("{head} {brand} · {abbr}")
+/// The window title is the moon and nothing else: the full moon while idle,
+/// the phases cycling (~110ms a frame) while a turn runs. No product name,
+/// provider or prompt text rides along.
+fn window_title(busy_for: Option<Duration>) -> &'static str {
+    match busy_for {
+        Some(elapsed) => crate::theme::frame_at(crate::theme::TITLE_FRAMES, elapsed, 110),
+        None => crate::theme::TITLE_IDLE,
     }
 }
 
-/// Provider logo EMOJI for the tab title — renders in every terminal's tab
-/// bar with zero image support. The moon-phase spinner stays as the working
-/// marker; the provider mark rides in front of the product label. The
-/// mapping itself lives in `provider_logos::title_emoji` (one source of
-/// truth for ids AND chrome labels, shared with the graphics fallback).
-fn provider_title_emoji(provider_chrome: &str) -> &'static str {
-    crate::provider_logos::title_emoji(provider_chrome)
-}
-
-/// Rebrand with the provider's logo emoji: .
-/// Called at launch and on /provider switch; subagents never call it, so the
-/// parent provider's logo persists for the whole session.
-pub fn set_title_provider(label: &str) {
-    let emoji = provider_title_emoji(label);
-    let clean = label.trim();
-    let next = if clean.is_empty() {
-        "nur".to_string()
-    } else {
-        clean.to_string()
-    };
-    let changed = TITLE_PROVIDER
-        .read()
-        .map(|p| p.as_str() != next)
-        .unwrap_or(true);
-    if let Ok(mut w) = TITLE_PROVIDER.write() {
-        *w = next;
-    }
-    // Store the emoji alongside so title_with_marker can pick it up.
-    if let Ok(mut w) = TITLE_EMOJI.write() {
-        *w = emoji.to_string();
-    }
-    if changed {
-        render_title();
-    }
-}
-
-static TITLE_EMOJI: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
-
-fn title_emoji() -> String {
-    TITLE_EMOJI.read().map(|e| e.clone()).unwrap_or_default()
-}
-
-/// Single source of truth for the terminal-tab title, so every writer (TUI
-/// animation loop, agent-loop re-asserts after tool children, CLI paths)
-/// renders the same composed string instead of fighting over whose prompt and
-/// whose marker (idle moon vs running phases) is on screen.
-///
-/// `TITLE_PROMPT` is the session's title text (first prompt of the session;
-/// empty means "ready"). Kept as the canonical copy so a re-assert from any
-/// thread reproduces exactly what the TUI would draw.
-static TITLE_PROMPT: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
 static TITLE_BUSY: AtomicBool = AtomicBool::new(false);
 static TITLE_BUSY_SINCE: std::sync::RwLock<Option<std::time::Instant>> =
     std::sync::RwLock::new(None);
 
-fn title_prompt() -> String {
-    TITLE_PROMPT
-        .read()
-        .map(|p| {
-            if p.is_empty() {
-                "ready".to_string()
-            } else {
-                p.clone()
-            }
-        })
-        .unwrap_or_else(|_| "ready".to_string())
-}
-
-/// Record the session's title text and repaint the tab from shared state.
-pub fn set_title_prompt(prompt: &str) {
-    if let Ok(mut w) = TITLE_PROMPT.write() {
-        *w = prompt.to_string();
-    }
-    render_title();
-}
-
 /// Mirror the turn state (busy = inference running) and repaint. `true` also
 /// stamps when the busy period began so any re-assert mid-turn renders the
-/// animated running title rather than flipping the tab back to the idle moon.
+/// running phases rather than flipping the tab back to the idle moon.
 pub fn set_title_busy(busy: bool) {
     TITLE_BUSY.store(busy, Ordering::Relaxed);
     if busy {
@@ -181,60 +74,34 @@ pub fn set_title_busy(busy: bool) {
     render_title();
 }
 
-/// Repaint the tab title from shared state: running (animated marker + prompt)
-/// while busy, idle (moon + prompt) otherwise.
+/// Repaint the title from shared state, so every writer (TUI animation loop,
+/// agent-loop re-asserts after tool children, startup) draws the same moon.
 pub fn render_title() {
-    let prompt = title_prompt();
-    if TITLE_BUSY.load(Ordering::Relaxed) {
-        let busy_since = TITLE_BUSY_SINCE
+    let busy_for = TITLE_BUSY.load(Ordering::Relaxed).then(|| {
+        TITLE_BUSY_SINCE
             .read()
             .ok()
             .and_then(|g| *g)
-            .unwrap_or_else(std::time::Instant::now);
-        set_terminal_title(&running_window_title(busy_since.elapsed(), &prompt));
-    } else {
-        set_terminal_title(&session_window_title(&prompt));
-    }
+            .map(|since| since.elapsed())
+            .unwrap_or_default()
+    });
+    set_terminal_title(window_title(busy_for));
 }
 
-/// Animation tick for the TUI's 110ms loop: renders the running title from the
-/// shared prompt plus the TUI's own elapsed clock WITHOUT mutating state, so
-/// the animation clock stays owned by the TUI.
+/// Animation tick for the TUI's 110ms loop: renders the running moon from the
+/// TUI's own elapsed clock WITHOUT mutating state, so the animation clock
+/// stays owned by the TUI.
 pub fn tick_running_title(elapsed: Duration) {
-    let prompt = title_prompt();
-    set_terminal_title(&running_window_title(elapsed, &prompt));
+    set_terminal_title(window_title(Some(elapsed)));
 }
 
 /// Child processes (omp, egaki, graphjin serve, …) rewrite the terminal title
 /// with their own branding while they run (omp sets it to "π"). Call this
-/// after any child completes — and periodically during long ones — to put our
-/// provider-branded title back. Cheap when nothing changed. Renders from the
-/// shared title state, so a busy turn re-asserts the running marker instead of
-/// fighting the TUI animation with the idle one.
+/// after any child completes, and periodically during long ones, to put the
+/// moon back. Renders from the shared state, so a busy turn re-asserts the
+/// running phases instead of fighting the TUI animation with the idle moon.
 pub fn reassert_after_child() {
     render_title();
-}
-
-/// Collapse whitespace and truncate for a compact window/tab label.
-pub fn abbreviate_for_title(prompt: &str, max_chars: usize) -> String {
-    let collapsed: String = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
-    let collapsed = collapsed.trim();
-    if collapsed.is_empty() {
-        return String::new();
-    }
-    if collapsed.chars().count() <= max_chars {
-        return collapsed.to_string();
-    }
-    let take = max_chars.saturating_sub(1).max(8);
-    let mut s: String = collapsed.chars().take(take).collect();
-    // Prefer breaking on a word boundary when close to the end.
-    if let Some(i) = s.rfind(' ') {
-        if i > take / 2 {
-            s.truncate(i);
-        }
-    }
-    s.push('…');
-    s
 }
 
 /// Write ADE discovery file at ~/.nur/ade.json
@@ -464,35 +331,18 @@ exit /b 0
 mod tests {
     use super::*;
 
+    // Failure modes: anything besides the moon leaks into the title (product
+    // name, provider, prompt text), or idle and running render the same.
     #[test]
-    fn set_title_prompt_propagates_into_shared_state() {
-        set_title_prompt("fix the login hang");
-        assert_eq!(title_prompt(), "fix the login hang");
-        // The composed idle title carries brand + prompt text together.
-        set_title_provider("grok");
-        let title = session_window_title(&title_prompt());
-        assert!(title.contains("grok"), "brand missing: {title}");
-        assert!(
-            title.contains("fix the login hang"),
-            "prompt missing: {title}"
+    fn the_title_is_only_the_moon() {
+        assert_eq!(window_title(None), crate::theme::TITLE_IDLE);
+        for ms in [0, 110, 220, 770, 5_000] {
+            let running = window_title(Some(Duration::from_millis(ms)));
+            assert!(crate::theme::TITLE_FRAMES.contains(&running), "{running}");
+        }
+        assert_ne!(
+            window_title(Some(Duration::from_millis(0))),
+            window_title(Some(Duration::from_millis(110)))
         );
-        // Reset so parallel/serial tests are not order-dependent.
-        set_title_prompt("ready");
-    }
-
-    #[test]
-    fn busy_and_idle_titles_use_their_own_markers() {
-        let prompt = "write the drain bound test";
-        let idle = session_window_title(prompt);
-        let running = running_window_title(Duration::from_millis(0), prompt);
-        // Idle shows the idle moon; the running title at t=0 starts on the
-        // first running frame and differs from idle.
-        assert!(idle.contains(crate::theme::TITLE_IDLE));
-        assert_ne!(idle, running);
-        // The busy flag flips state and is observable.
-        set_title_busy(true);
-        assert!(TITLE_BUSY.load(Ordering::Relaxed));
-        set_title_busy(false);
-        assert!(!TITLE_BUSY.load(Ordering::Relaxed));
     }
 }

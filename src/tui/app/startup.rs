@@ -467,9 +467,6 @@ impl App {
             if !self.startup.announced_ready {
                 self.startup.announced_ready = true;
                 crate::startup::mark("ready");
-                if !self.title_from_prompt {
-                    crate::ade::set_title_prompt("ready");
-                }
                 if !self.busy {
                     self.status = "idle".into();
                 }

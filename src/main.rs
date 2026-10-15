@@ -34,7 +34,6 @@ mod penecho;
 mod plugins;
 mod pricing;
 mod process_tree;
-mod provider_logos;
 mod providers;
 mod sgrep;
 mod startup;
@@ -728,21 +727,6 @@ async fn real_main() -> Result<()> {
             }
         }
         None => {
-            // Compact host tab title from first prompt (implementation detail, not marketing).
-            let seed = cli
-                .prompt
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_string())
-                .or_else(|| {
-                    session
-                        .messages
-                        .iter()
-                        .find(|m| m.role == "user")
-                        .map(|m| m.content.clone())
-                });
-            ade::set_title_prompt(seed.as_deref().unwrap_or("starting"));
             tui::run_tui(
                 client,
                 cfg,
@@ -1439,7 +1423,6 @@ async fn run_headless(
 ) -> Result<i32> {
     use headless::{Emitter, Outcome};
     ade::disable_terminal_title();
-    ade::set_title_prompt(prompt);
     let mut out = Emitter::new(output_format, verbose);
     let peer_session_id = std::env::var("NUR_SESSION_ID").unwrap_or_else(|_| session.id.clone());
     let peer_cwd = cwd.to_string_lossy().into_owned();
@@ -1674,7 +1657,6 @@ async fn run_continuous(
         permission_mode.set(PermissionMode::Auto);
     }
     ade::disable_terminal_title();
-    ade::set_title_prompt(goal);
     layers::announce(&cfg, |layers| eprintln!("{}", layers::status_line(&layers)));
     let quality_gate = cfg.quality_gate.clone();
     let ts_cfg = cfg.typesafe.clone();

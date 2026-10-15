@@ -2479,10 +2479,6 @@ pub struct App {
     rx: mpsc::UnboundedReceiver<AgentEvent>,
     cancel: Option<CancellationToken>,
     should_quit: bool,
-    /// Window title locked to the session's first user prompt.
-    title_from_prompt: bool,
-    /// Base text for the (animated) window title - the current prompt or "ready".
-    window_base: String,
     /// Secure API-key entry modal (`/login`), when open.
     pub login: Option<LoginModal>,
     /// When a subagent asked for a provider with no credentials, we pop a
@@ -2779,7 +2775,6 @@ pub(super) fn new_app(
     permission_mode: SharedMode,
     session: Session,
     usage: UsageTracker,
-    seed_prompt: Option<String>,
 ) -> App {
     #[cfg(feature = "image-peek")]
     let img_picker = None;
@@ -2787,7 +2782,6 @@ pub(super) fn new_app(
     let (tx, rx) = mpsc::unbounded_channel();
     let u_session = usage.session_usage().clone();
     let session_id = session.id.clone();
-    let title_from_prompt = seed_prompt.is_some();
     let permissions = SharedPermissions::load(&cwd);
     App {
         startup: startup::StartupState::new(),
@@ -2959,8 +2953,6 @@ pub(super) fn new_app(
         rx,
         cancel: None,
         should_quit: false,
-        title_from_prompt,
-        window_base: seed_prompt.clone().unwrap_or_else(|| "ready".into()),
         login: None,
         pending_subagent_login: None,
         pending_fusion_login: None,
@@ -3027,35 +3019,10 @@ pub async fn run_tui(
     let mut terminal = Terminal::new(backend)
         .map_err(|e| crate::error::NurError::Other(format!("terminal init: {e}")))?;
 
-    // Host tab title from first prompt (prefer CLI seed, else resume history).
-    let seed_prompt = initial_prompt
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .or_else(|| {
-            session
-                .messages
-                .iter()
-                .find(|m| m.role == "user")
-                .map(|m| m.content.clone())
-        });
-    // Provider-branded title: set the provider label FIRST so the very first
-    // title write already carries it (moon + provider + prompt). The prompt is
-    // recorded in ade's shared title state, which every writer (TUI animation,
-    // agent-loop re-asserts) renders from.
-    crate::ade::set_title_provider(&crate::config::active_provider_chrome(&cfg));
-    crate::ade::set_title_prompt(seed_prompt.as_deref().unwrap_or("starting"));
+    // The window title is the moon alone (see `ade::render_title`).
+    crate::ade::render_title();
 
-    let mut app = new_app(
-        client,
-        cfg,
-        cwd,
-        permission_mode,
-        session,
-        usage,
-        seed_prompt,
-    );
+    let mut app = new_app(client, cfg, cwd, permission_mode, session, usage);
 
     app.replay_session_history();
     // Seed auto-update seen timestamp from existing file so we only announce
@@ -3112,9 +3079,10 @@ pub async fn run_tui(
     const FRAME_IDLE_MS: u64 = 90; // ~11fps ambient shimmer
 
     // Reduced motion (`[theme] motion`, NUR_REDUCED_MOTION, Orca/SSH auto):
-    // ambient shimmer is a still frame, so the idle loop paints only on
-    // input or agent events; progress spinners tick at ~10fps.
+    // ambient animation runs slow instead of freezing, so the idle loop keeps
+    // painting at a calm cadence; progress spinners tick at ~10fps.
     const FRAME_REDUCED_MS: u64 = 100;
+    const FRAME_IDLE_REDUCED_MS: u64 = 500; // ~2fps ambient while idle
     let mut dirty = true;
     let mut last_draw = Instant::now();
     let mut last_title = Instant::now();
@@ -3161,6 +3129,10 @@ pub async fn run_tui(
             FRAME_REDUCED_MS
         } else if animating {
             FRAME_BUSY_MS
+        } else if reduced_motion {
+            // Calm but alive: ambient motion keeps stepping while idle instead
+            // of freezing, at a cadence a relayed terminal absorbs.
+            FRAME_IDLE_REDUCED_MS
         } else {
             FRAME_IDLE_MS
         };
@@ -3483,13 +3455,11 @@ pub async fn run_tui(
         }
         //
         // Locked design: the NUR banner's gradient shimmer (and the other
-        // ambient animation) repaints every frame, idle included. Never
-        // throttle idle repaints to save work; that froze the banner in v0.38.3.
-        // Reduced motion is the one deliberate exception: the shimmer is a
-        // still frame there, so an idle repaint would send identical cells
-        // over a slow link for nothing. Spinners, modals and streaming still
-        // get their tick.
-        if (!reduced_motion || animating) && last_draw.elapsed().as_millis() as u64 >= frame_ms {
+        // ambient animation) repaints every frame, idle included. Under reduced
+        // motion it steps slowly instead of freezing — a frozen frame reads as
+        // a hung session, so idle repaints continue at FRAME_IDLE_REDUCED_MS.
+        // Spinners, modals and streaming always get their tick.
+        if last_draw.elapsed().as_millis() as u64 >= frame_ms {
             dirty = true;
         }
         if let Some((_, t)) = app.expand_flash {
@@ -5752,23 +5722,6 @@ impl App {
                 .insert(path.to_string(), picker.new_resize_protocol(img));
         }
         self.img_cache.get_mut(path)
-    }
-
-    /// Provider logo protocol (busy-line brand mark). Cached by provider id;
-    /// re-encoded only when /provider switches.
-    #[cfg(feature = "image-peek")]
-    pub fn provider_logo_protocol(
-        &mut self,
-        provider_id: &str,
-    ) -> Option<&mut ratatui_image::protocol::StatefulProtocol> {
-        let logo = crate::provider_logos::for_provider(provider_id)?;
-        if !self.theme_preview_cache.contains_key(logo.png) {
-            let picker = self.img_picker.as_ref()?;
-            let img = image::load_from_memory(logo.png).ok()?;
-            self.theme_preview_cache
-                .insert(logo.png.to_vec(), picker.new_resize_protocol(img));
-        }
-        self.theme_preview_cache.get_mut(logo.png)
     }
 
     /// Graphics-protocol renderer for in-memory theme-preview PNG bytes.
@@ -8620,6 +8573,14 @@ impl App {
         }
     }
 
+    /// QUEUED (experiential incident 2026-10-15): make this login atomic. The
+    /// key save below can succeed while `choose_provider_key` fails, which
+    /// flips `auth.json` without applying config and traps the user in the
+    /// "saved credentials are for X but active provider is Y" loop. On any
+    /// failure, roll `auth.json` back to its prior content (or delete it when
+    /// it did not exist). Same for abandoning the BaseUrl confirm stage after
+    /// the key screen: nothing persisted before confirm, or warn about the
+    /// saved-but-unapplied state. Isolated unit tests per failure point.
     fn submit_login(&mut self) {
         let (provider_id, key, is_fallback, jev_slot) = match &self.login {
             Some(m) => (
@@ -8966,9 +8927,6 @@ impl App {
         }
         // Soft-update context window from models.dev when still on the default.
         crate::pricing::maybe_apply_context_window(&mut self.cfg);
-        // Rebrand the terminal title for the new provider (updates on switch;
-        // subagents never touch it so the parent provider persists).
-        crate::ade::set_title_provider(&crate::config::active_provider_chrome(&self.cfg));
 
         match crate::api::ApiClient::for_provider(&self.cfg.base_url, bearer, provider.id)
             .map(|c| c.with_style(style))
@@ -10305,14 +10263,6 @@ impl App {
             return;
         };
         self.cells.push(Cell::User(display.to_string()));
-        // First user prompt of the session owns the window/tab title text; the
-        // loop animates its marker orb while the turn runs. Record it in ade's
-        // shared title state so every writer composes the same string.
-        if !self.title_from_prompt {
-            self.window_base = display.to_string();
-            self.title_from_prompt = true;
-            crate::ade::set_title_prompt(display);
-        }
         // Sending always snaps you back to the live end of the conversation.
         self.scroll_to_bottom();
         // Clear any stale drag state from the previous idle frame.

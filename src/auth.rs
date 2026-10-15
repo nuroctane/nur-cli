@@ -2259,6 +2259,10 @@ fn atty_stdin() -> bool {
     std::io::stdin().is_terminal()
 }
 
+/// QUEUED (experiential incident 2026-10-15): make this atomic with the
+/// `choose_provider_key` call below. If that fails after `auth.json` was
+/// written, roll `auth.json` back (or delete when it did not exist) so a
+/// failed login leaves zero state change. Isolated unit tests per failure.
 fn persist_cli_api_key(
     provider: &str,
     key: &str,
