@@ -2077,7 +2077,7 @@ pub mod openai {
     }
 }
 
-// ── xAI Grok (device code / Grok CLI import) ───────────────────────────────
+// ── xAI Grok (browser PKCE / device code / Grok CLI import) ───────────────────────────────
 
 pub mod xai {
     use super::*;
@@ -2110,52 +2110,162 @@ pub mod xai {
         error_description: Option<String>,
     }
 
+    /// The endpoints auth.x.ai publishes in its OIDC discovery document. The
+    /// `/oauth/...` spellings answer with a Cloudflare bot challenge (403
+    /// HTML): refresh posted there and could never succeed, and every sign-in
+    /// poll hit the challenge from the user's IP first.
+    const AUTHORIZE: &str = "https://auth.x.ai/oauth2/authorize";
+    const DEVICE_CODE: &str = "https://auth.x.ai/oauth2/device/code";
+    const TOKEN: &str = "https://auth.x.ai/oauth2/token";
+    const SCOPE: &str = "openid profile email offline_access grok-cli:access api:access";
+    /// Grok Build tags its sign-ins with this referrer.
+    const REFERRER: &str = "grok-build";
+
+    /// Sign in the way Grok Build does by default: authorization code + PKCE
+    /// through the browser, back to a loopback redirect on a random port
+    /// (`http://127.0.0.1:<port>/callback`, registered for this client).
+    ///
+    /// The device-code flow routed approval through xAI's device-consent
+    /// anti-abuse check, which rejected the first approval ("We couldn't
+    /// verify this request") and made the retry ask for the code by hand. It
+    /// stays for SSH sessions, where the browser is not on this machine, and
+    /// for when no loopback port can be bound.
     pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
+        let remote =
+            std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some();
+        match TcpListener::bind(("127.0.0.1", 0)) {
+            Ok(listener) if !remote => loopback_login(listener, tx, cancel),
+            _ => device_login(tx, cancel),
+        }
+    }
+
+    fn loopback_login(
+        listener: TcpListener,
+        tx: &ProgressTx,
+        cancel: &CancelFlag,
+    ) -> Result<OAuthTokens> {
+        let port = listener
+            .local_addr()
+            .map_err(|e| NurError::Other(format!("xAI callback port: {e}")))?
+            .port();
+        let redirect = format!("http://127.0.0.1:{port}/callback");
+        let verifier = random_urlsafe(64);
+        let state = random_urlsafe(32);
+        let auth_url = authorize_url(
+            &redirect,
+            &pkce_challenge(&verifier),
+            &state,
+            &random_urlsafe(16),
+        );
+        send(tx, BrowserLoginProgress::OpenUrl(auth_url.clone()));
+        send(
+            tx,
+            BrowserLoginProgress::Status("complete Grok sign-in in the browser…".into()),
+        );
+        let _ = open_browser(&auth_url);
+        let code =
+            wait_localhost_code_on(listener, Some(&state), cancel, Duration::from_secs(600))?;
+        send(
+            tx,
+            BrowserLoginProgress::Status("exchanging Grok authorization code…".into()),
+        );
+        exchange_code(TOKEN, &code, &redirect, &verifier)
+    }
+
+    fn authorize_url(redirect: &str, challenge: &str, state: &str, nonce: &str) -> String {
+        format!(
+            "{AUTHORIZE}?response_type=code&client_id={CLIENT_ID}&redirect_uri={}&scope={}&code_challenge={challenge}&code_challenge_method=S256&state={state}&nonce={nonce}&referrer={REFERRER}",
+            urlencoding_encode(redirect),
+            urlencoding_encode(SCOPE),
+        )
+    }
+
+    fn exchange_code(
+        token_url: &str,
+        code: &str,
+        redirect: &str,
+        verifier: &str,
+    ) -> Result<OAuthTokens> {
+        let form = [
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("redirect_uri", redirect),
+            ("client_id", CLIENT_ID),
+            ("code_verifier", verifier),
+        ];
+        let res = http()?
+            .post(token_url)
+            .form(&form)
+            .send()
+            .map_err(|e| NurError::Other(format!("xAI token exchange failed: {e}")))?;
+        token_response(res, "sign-in", None, None)
+    }
+
+    /// A token endpoint reply as tokens. A body that is not a token response
+    /// (a Cloudflare challenge page) is named as such, not as a serde error.
+    fn token_response(
+        res: reqwest::blocking::Response,
+        what: &str,
+        previous_refresh: Option<&str>,
+        meta: Option<OauthMeta>,
+    ) -> Result<OAuthTokens> {
+        let status = res.status().as_u16();
+        let body = res.text().unwrap_or_default();
+        let parsed: TokenResp = serde_json::from_str(&body).map_err(|_| {
+            NurError::Other(format!(
+                "xAI {what} failed: HTTP {status} without a token response"
+            ))
+        })?;
+        let access = parsed
+            .access_token
+            .filter(|token| !token.trim().is_empty())
+            .ok_or_else(|| {
+                NurError::Other(format!("xAI {what} failed: {}", oauth_error_summary(&body)))
+            })?;
+        Ok(OAuthTokens {
+            access_token: access,
+            refresh_token: parsed
+                .refresh_token
+                .or_else(|| previous_refresh.map(str::to_string)),
+            expires_at: expires_in_to_at(parsed.expires_in),
+            meta: meta.or_else(|| {
+                Some(OauthMeta {
+                    issuer: ISSUER.into(),
+                    client_id: CLIENT_ID.into(),
+                    extra: serde_json::json!({}),
+                })
+            }),
+        })
+    }
+
+    /// RFC 8628 device flow, for SSH sessions and busy loopback.
+    fn device_login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
         send(
             tx,
             BrowserLoginProgress::Status("requesting xAI device code…".into()),
         );
         let client = http()?;
-        // OIDC device authorization endpoint (Grok / auth.x.ai).
-        let endpoints = [
-            format!("{ISSUER}/oauth/device/code"),
-            format!("{ISSUER}/oauth2/device/code"),
-            "https://accounts.x.ai/oauth/device/code".to_string(),
+        let form = [
+            ("client_id", CLIENT_ID),
+            ("scope", SCOPE),
+            ("referrer", REFERRER),
         ];
-        let mut device: Option<DeviceCodeResp> = None;
-        let mut last_err = String::new();
-        for url in &endpoints {
-            let form = [
-                ("client_id", CLIENT_ID),
-                (
-                    "scope",
-                    "openid profile email offline_access grok-cli:access api:access",
-                ),
-            ];
-            match client.post(url).form(&form).send() {
-                Ok(res) => {
-                    let status = res.status();
-                    let body = res.text().unwrap_or_default();
-                    if status.is_success() {
-                        match serde_json::from_str::<DeviceCodeResp>(&body) {
-                            Ok(d) => {
-                                device = Some(d);
-                                break;
-                            }
-                            Err(e) => last_err = format!("parse device code: {e}"),
-                        }
-                    } else {
-                        last_err = format!("{url} -> {status}: {}", oauth_error_summary(&body));
-                    }
-                }
-                Err(e) => last_err = e.to_string(),
-            }
+        let res = client
+            .post(DEVICE_CODE)
+            .form(&form)
+            .send()
+            .map_err(|e| NurError::Other(format!("xAI device code failed: {e}")))?;
+        let status = res.status();
+        let body = res.text().unwrap_or_default();
+        if !status.is_success() {
+            return Err(NurError::Other(format!(
+                "xAI device code failed (HTTP {}: {}). Paste an XAI_API_KEY or sign in with the Grok CLI first.",
+                status.as_u16(),
+                oauth_error_summary(&body)
+            )));
         }
-        let device = device.ok_or_else(|| {
-            NurError::Other(format!(
-                "xAI device code failed ({last_err}). Paste an XAI_API_KEY or sign in with the Grok CLI first."
-            ))
-        })?;
+        let device: DeviceCodeResp = serde_json::from_str(&body)
+            .map_err(|e| NurError::Other(format!("xAI device code: {e}")))?;
 
         let verify = device
             .verification_uri_complete
@@ -2168,11 +2278,10 @@ pub mod xai {
             })
             .unwrap_or_else(|| {
                 format!(
-                    "https://accounts.x.ai/connect?user_code={}",
+                    "https://accounts.x.ai/oauth2/device?user_code={}",
                     device.user_code
                 )
             });
-
         send(
             tx,
             BrowserLoginProgress::DeviceCode {
@@ -2182,78 +2291,57 @@ pub mod xai {
         );
         let _ = open_browser(&verify);
 
-        let token_urls = [
-            format!("{ISSUER}/oauth/token"),
-            format!("{ISSUER}/oauth2/token"),
-            "https://accounts.x.ai/oauth/token".to_string(),
-        ];
         let deadline = std::time::Instant::now()
             + Duration::from_secs(if device.expires_in > 0 {
                 device.expires_in
             } else {
                 900
             });
-        let base_interval = device.interval.max(3);
-        let mut poll = super::super::DevicePoll::new(base_interval);
-        let mut terminal_errors: Vec<String> = Vec::new();
-
+        let mut poll = super::super::DevicePoll::new(device.interval.max(3));
         while std::time::Instant::now() < deadline {
             if cancel.is_cancelled() {
                 return Err(NurError::Other("login cancelled".into()));
             }
             poll.wait(cancel, deadline)?;
-            for turl in &token_urls {
-                let form = [
-                    ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
-                    ("device_code", device.device_code.as_str()),
-                    ("client_id", CLIENT_ID),
-                ];
-                let Ok(res) = client.post(turl).form(&form).send() else {
+            let form = [
+                ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+                ("device_code", device.device_code.as_str()),
+                ("client_id", CLIENT_ID),
+            ];
+            let Ok(res) = client.post(TOKEN).form(&form).send() else {
+                continue;
+            };
+            let body = res.text().unwrap_or_default();
+            let parsed: TokenResp = serde_json::from_str(&body).unwrap_or(TokenResp {
+                access_token: None,
+                refresh_token: None,
+                expires_in: None,
+                error: Some("parse".into()),
+                error_description: None,
+            });
+            match classify_device_poll_error(&parsed) {
+                DevicePollOutcome::NoError => {}
+                DevicePollOutcome::Pending | DevicePollOutcome::Unparseable => continue,
+                DevicePollOutcome::SlowDown => {
+                    poll.slow_down();
                     continue;
-                };
-                let body = res.text().unwrap_or_default();
-                let parsed: TokenResp = serde_json::from_str(&body).unwrap_or(TokenResp {
-                    access_token: None,
-                    refresh_token: None,
-                    expires_in: None,
-                    error: Some("parse".into()),
-                    error_description: Some(body.clone()),
+                }
+                DevicePollOutcome::Terminal(reason) => {
+                    return Err(NurError::Other(format!("xAI token error: {reason}")));
+                }
+            }
+            if let Some(access) = parsed.access_token {
+                return Ok(OAuthTokens {
+                    access_token: access,
+                    refresh_token: parsed.refresh_token,
+                    expires_at: expires_in_to_at(parsed.expires_in),
+                    meta: Some(OauthMeta {
+                        issuer: ISSUER.into(),
+                        client_id: CLIENT_ID.into(),
+                        extra: serde_json::json!({}),
+                    }),
                 });
-                match classify_device_poll_error(&parsed) {
-                    DevicePollOutcome::NoError => {}
-                    DevicePollOutcome::Pending => break,
-                    DevicePollOutcome::SlowDown => {
-                        poll.slow_down();
-                        break;
-                    }
-                    DevicePollOutcome::Unparseable => continue,
-                    DevicePollOutcome::Terminal(reason) => {
-                        // Terminal for THIS endpoint only. Another candidate
-                        // host may still be the right one - remember it and
-                        // fail only after every candidate has refused.
-                        terminal_errors.push(reason);
-                        continue;
-                    }
-                }
-                if let Some(access) = parsed.access_token {
-                    return Ok(OAuthTokens {
-                        access_token: access,
-                        refresh_token: parsed.refresh_token,
-                        expires_at: expires_in_to_at(parsed.expires_in),
-                        meta: Some(OauthMeta {
-                            issuer: ISSUER.into(),
-                            client_id: CLIENT_ID.into(),
-                            extra: serde_json::json!({}),
-                        }),
-                    });
-                }
             }
-            // Every candidate refused with a definitive error and nothing is
-            // pending anywhere - fail now with the collected reasons.
-            if let Some(msg) = terminal_failure(&terminal_errors, token_urls.len()) {
-                return Err(NurError::Other(msg));
-            }
-            terminal_errors.clear();
             send(
                 tx,
                 BrowserLoginProgress::Status("waiting for browser approval…".into()),
@@ -2263,7 +2351,10 @@ pub mod xai {
     }
 
     pub fn refresh(auth: &Auth, refresh: &str) -> Result<OAuthTokens> {
-        let client = http()?;
+        refresh_at(TOKEN, auth, refresh)
+    }
+
+    fn refresh_at(token_url: &str, auth: &Auth, refresh: &str) -> Result<OAuthTokens> {
         let client_id = auth
             .oauth_meta
             .as_ref()
@@ -2275,26 +2366,12 @@ pub mod xai {
             ("refresh_token", refresh),
             ("client_id", client_id),
         ];
-        let res = client
-            .post(format!("{ISSUER}/oauth/token"))
+        let res = http()?
+            .post(token_url)
             .form(&form)
             .send()
-            .map_err(|e| NurError::Other(e.to_string()))?;
-        let body = res.text().unwrap_or_default();
-        let parsed: TokenResp = serde_json::from_str(&body)
-            .map_err(|e| NurError::Other(format!("invalid xAI refresh response: {e}")))?;
-        let access = parsed.access_token.ok_or_else(|| {
-            NurError::Other(format!(
-                "xAI refresh failed: {}",
-                oauth_error_summary(&body)
-            ))
-        })?;
-        Ok(OAuthTokens {
-            access_token: access,
-            refresh_token: parsed.refresh_token.or_else(|| Some(refresh.to_string())),
-            expires_at: expires_in_to_at(parsed.expires_in),
-            meta: auth.oauth_meta.clone(),
-        })
+            .map_err(|e| NurError::Other(format!("xAI refresh failed: {e}")))?;
+        token_response(res, "refresh", Some(refresh), auth.oauth_meta.clone())
     }
 
     pub fn import_grok_cli() -> Result<Option<OAuthTokens>> {
@@ -2402,11 +2479,6 @@ pub mod xai {
         }
     }
 
-    /// All candidate endpoints refused with definitive errors and nothing is
-    /// pending anywhere - surface the collected reasons as one failure.
-    fn terminal_failure(errors: &[String], endpoint_count: usize) -> Option<String> {
-        (errors.len() >= endpoint_count).then(|| format!("xAI token error: {}", errors.join("; ")))
-    }
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -2496,25 +2568,160 @@ pub mod xai {
             );
         }
 
-        /// A terminal error from ONE candidate endpoint must not fail the
-        /// login while other candidates remain; only a full round of refusals
-        /// surfaces the collected reasons.
-        #[test]
-        fn terminal_errors_accumulate_before_failing() {
-            let mut errors: Vec<String> = Vec::new();
-            // First endpoint refuses.
-            errors.push("expired_token gone".to_string());
-            assert!(
-                terminal_failure(&errors, 3).is_none(),
-                "2 endpoints still pending"
+        /// One-shot local token endpoint: answers `reply` with `status` and
+        /// hands back the raw request it received.
+        fn fake_token_endpoint(
+            status: u16,
+            reply: &'static str,
+        ) -> (String, std::thread::JoinHandle<String>) {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            let url = format!(
+                "http://127.0.0.1:{}/oauth2/token",
+                listener.local_addr().unwrap().port()
             );
-            // Nothing pending anywhere -> next cycle would collect all three.
-            errors.push("access_denied no".to_string());
-            errors.push("server_error boom".to_string());
-            let msg = terminal_failure(&errors, 3).expect("all endpoints refused");
-            assert!(msg.contains("expired_token gone"));
-            assert!(msg.contains("access_denied no"));
-            assert!(msg.contains("server_error boom"));
+            let handle = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 4096];
+                loop {
+                    let n = stream.read(&mut chunk).unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                    if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&buf[..pos]).to_ascii_lowercase();
+                        let len = head
+                            .lines()
+                            .find_map(|l| l.strip_prefix("content-length:"))
+                            .map_or(0, |v| v.trim().parse::<usize>().unwrap());
+                        if buf.len() >= pos + 4 + len {
+                            break;
+                        }
+                    }
+                }
+                let kind = if reply.starts_with('{') {
+                    "application/json"
+                } else {
+                    "text/html"
+                };
+                let resp = format!(
+                    "HTTP/1.1 {status} X\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    reply.len()
+                );
+                stream.write_all(resp.as_bytes()).unwrap();
+                String::from_utf8_lossy(&buf).into_owned()
+            });
+            (url, handle)
+        }
+
+        fn query(url: &str) -> std::collections::HashMap<String, String> {
+            url.split_once('?')
+                .map_or("", |(_, q)| q)
+                .split('&')
+                .filter_map(|pair| pair.split_once('='))
+                .map(|(k, v)| (k.to_string(), urlencoding_decode(v)))
+                .collect()
+        }
+
+        // Fails if the authorize request leaves the published /oauth2 path,
+        // drops PKCE, or sends a redirect xAI has not registered for the
+        // client (it answers "redirect_uri does not match any registered URI").
+        #[test]
+        fn authorize_url_is_pkce_on_oauth2_with_the_registered_loopback() {
+            let url = authorize_url(
+                "http://127.0.0.1:53123/callback",
+                "challenge-x",
+                "state-y",
+                "nonce-z",
+            );
+            assert!(
+                url.starts_with("https://auth.x.ai/oauth2/authorize?"),
+                "{url}"
+            );
+            let q = query(&url);
+            assert_eq!(q["response_type"], "code");
+            assert_eq!(q["client_id"], CLIENT_ID);
+            assert_eq!(q["redirect_uri"], "http://127.0.0.1:53123/callback");
+            assert_eq!(q["code_challenge"], "challenge-x");
+            assert_eq!(q["code_challenge_method"], "S256");
+            assert_eq!(q["state"], "state-y");
+            assert!(q["scope"].split(' ').any(|s| s == "offline_access"));
+        }
+
+        // Fails if the exchange omits the verifier or a redirect matching the
+        // authorize request, or mis-reads the reply.
+        #[test]
+        fn code_exchange_sends_the_pkce_verifier_and_reads_the_tokens() {
+            let (url, server) = fake_token_endpoint(
+                200,
+                r#"{"access_token":"at-1","refresh_token":"rt-1","expires_in":3600}"#,
+            );
+            let tokens = exchange_code(&url, "code-1", "http://127.0.0.1:5/callback", "verifier-1")
+                .expect("exchange");
+            let request = server.join().unwrap();
+            assert!(request.starts_with("POST /oauth2/token "), "{request}");
+            let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
+            let form = query(&format!("?{body}"));
+            assert_eq!(form["grant_type"], "authorization_code");
+            assert_eq!(form["code"], "code-1");
+            assert_eq!(form["code_verifier"], "verifier-1");
+            assert_eq!(form["redirect_uri"], "http://127.0.0.1:5/callback");
+            assert_eq!(tokens.access_token, "at-1");
+            assert_eq!(tokens.refresh_token.as_deref(), Some("rt-1"));
+            assert!(tokens.expires_at.is_some());
+        }
+
+        fn grok_auth() -> Auth {
+            Auth {
+                api_key: "old".into(),
+                source: "oauth".into(),
+                auth_method: crate::auth::AuthMethod::Oauth,
+                provider: "xai".into(),
+                refresh_token: Some("rt-0".into()),
+                expires_at: Some(1),
+                oauth_meta: Some(OauthMeta {
+                    issuer: ISSUER.into(),
+                    client_id: CLIENT_ID.into(),
+                    extra: serde_json::json!({"imported_from": "grok-cli"}),
+                }),
+            }
+        }
+
+        // Fails if refresh loses the session's refresh token when xAI does
+        // not rotate it, or drops the imported-session metadata.
+        #[test]
+        fn refresh_keeps_the_refresh_token_when_xai_does_not_rotate_it() {
+            let (url, server) =
+                fake_token_endpoint(200, r#"{"access_token":"at-2","expires_in":3600}"#);
+            let tokens = refresh_at(&url, &grok_auth(), "rt-0").expect("refresh");
+            let request = server.join().unwrap();
+            let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
+            let form = query(&format!("?{body}"));
+            assert_eq!(form["grant_type"], "refresh_token");
+            assert_eq!(form["refresh_token"], "rt-0");
+            assert_eq!(tokens.access_token, "at-2");
+            assert_eq!(tokens.refresh_token.as_deref(), Some("rt-0"));
+            assert_eq!(
+                tokens.meta.unwrap().extra["imported_from"],
+                serde_json::json!("grok-cli")
+            );
+        }
+
+        // The old refresh URL answered with a Cloudflare challenge page and
+        // surfaced as an opaque serde error; a non-token body must say what
+        // came back.
+        #[test]
+        fn a_challenge_page_is_reported_as_one() {
+            let (url, server) = fake_token_endpoint(403, "<!DOCTYPE html><title>Attention</title>");
+            let err = refresh_at(&url, &grok_auth(), "rt-0")
+                .unwrap_err()
+                .to_string();
+            server.join().unwrap();
+            assert!(
+                err.contains("xAI refresh failed: HTTP 403 without a token response"),
+                "{err}"
+            );
         }
 
         #[test]

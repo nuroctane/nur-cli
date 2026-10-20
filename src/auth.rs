@@ -2259,10 +2259,41 @@ fn atty_stdin() -> bool {
     std::io::stdin().is_terminal()
 }
 
-/// QUEUED (experiential incident 2026-10-15): make this atomic with the
-/// `choose_provider_key` call below. If that fails after `auth.json` was
-/// written, roll `auth.json` back (or delete when it did not exist) so a
-/// failed login leaves zero state change. Isolated unit tests per failure.
+/// `auth.json` exactly as it was (sealed or not) before a login started
+/// writing, so a login that fails part-way can put it back. A login that
+/// flips `auth.json` to a new provider but never applies that provider's
+/// config leaves the "saved credentials are for X but the active provider is
+/// Y" state every later start refuses to run with.
+pub struct AuthSnapshot(Option<Vec<u8>>);
+
+impl AuthSnapshot {
+    pub fn take() -> Self {
+        Self::take_at(&auth_path())
+    }
+
+    fn take_at(path: &Path) -> Self {
+        AuthSnapshot(fs::read(path).ok())
+    }
+
+    /// Put `auth.json` back: its old bytes, or no file when there was none.
+    pub fn restore(self) -> Result<()> {
+        let _guard = oauth_store_guard()?;
+        self.restore_at(&auth_path())
+    }
+
+    fn restore_at(self, path: &Path) -> Result<()> {
+        match self.0 {
+            Some(bytes) => private_atomic_write(path, &bytes).map_err(NurError::Io),
+            None => match fs::remove_file(path) {
+                Err(error) if error.kind() != io::ErrorKind::NotFound => Err(NurError::Io(error)),
+                _ => Ok(()),
+            },
+        }
+    }
+}
+
+/// `nur auth login` with a key: `auth.json`, the per-provider store and the
+/// config change together, or not at all.
 fn persist_cli_api_key(
     provider: &str,
     key: &str,
@@ -2271,11 +2302,22 @@ fn persist_cli_api_key(
     if key.is_empty() {
         return Err(NurError::Other("empty API key".into()));
     }
-    save_api_key_for(key, Some(provider))?;
-    choose_provider_key(provider, key)?;
+    let before = AuthSnapshot::take();
+    let applied = (|| {
+        save_api_key_for(key, Some(provider))?;
+        choose_provider_key(provider, key)?;
+        crate::config::apply_provider_defaults(cfg, provider, false);
+        crate::config::save_config(cfg)
+    })();
+    if let Err(error) = applied {
+        if let Err(rollback) = before.restore() {
+            return Err(NurError::Other(format!(
+                "{error}; restoring the previous sign-in also failed: {rollback}"
+            )));
+        }
+        return Err(error);
+    }
     crate::oauth::omp_bridge::invalidate_omp_token_cache();
-    crate::config::apply_provider_defaults(cfg, provider, false);
-    crate::config::save_config(cfg)?;
     println!("saved to {}", auth_path().display());
     println!("provider: {provider}");
     println!("key: {}", key_fingerprint(key));
@@ -2433,6 +2475,33 @@ fn persist_cli_browser(provider: &str, cfg: &mut crate::config::Config) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Failure modes: a login that fails after writing `auth.json` leaves it
+    // naming the new provider (the "credentials are for X, provider is Y"
+    // trap); a restore that rewrites a sealed file through JSON instead of
+    // byte-for-byte; a first-ever login that fails leaving a file behind.
+    #[test]
+    fn a_failed_login_puts_auth_json_back_exactly() {
+        let dir = std::env::temp_dir().join(format!("nur-auth-snapshot-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("auth.json");
+
+        let sealed = b"nur-dpapi:v1:AAECAwQ=".to_vec();
+        fs::write(&path, &sealed).unwrap();
+        let before = AuthSnapshot::take_at(&path);
+        fs::write(&path, br#"{"provider":"experiential"}"#).unwrap();
+        before.restore_at(&path).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), sealed);
+
+        fs::remove_file(&path).unwrap();
+        let none = AuthSnapshot::take_at(&path);
+        fs::write(&path, br#"{"provider":"experiential"}"#).unwrap();
+        none.restore_at(&path).unwrap();
+        assert!(!path.exists());
+        AuthSnapshot::take_at(&path).restore_at(&path).unwrap();
+        assert!(!path.exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn refresh_response_preserves_rotation_and_rejects_empty_access() {

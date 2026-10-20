@@ -441,6 +441,13 @@ const FALLBACK_HOSTED: &[(&[&str], &str, &str, &str, &str)] = &[
         "inception/mercury-decide",
         "OpenRouter Decisions · Mercury Decide (OPENROUTER_API_KEY)",
     ),
+    (
+        &["LIQUID_AI_API_KEY"],
+        "liquidai",
+        "https://api.liquid.ai/decisions/v1/systemone",
+        "d1-ultra",
+        "Liquid AI · d1-ultra (LIQUID_AI_API_KEY)",
+    ),
 ];
 
 /// True when `[typesafe]` names an engine, a slot or an endpoint itself.
@@ -1818,6 +1825,29 @@ mod tests {
         let stored_subq = |slot: &str| (slot == "jev:subq-snap").then(|| "subq-stored".to_string());
         let engine = hosted_fallback_engine(none, stored_subq).expect("stored subq");
         assert_eq!(engine.model, "subq-snap-preview");
+
+        // A machine with only a Liquid console key judges with d1-ultra on
+        // Liquid's own endpoint, from the env or the shared `liquidai` slot,
+        // and a gateway key still outranks it.
+        let liquid_env = |var: &str| (var == "LIQUID_AI_API_KEY").then(|| "liquid_env".to_string());
+        let engine = hosted_fallback_engine(liquid_env, none).expect("liquid");
+        assert_eq!(engine.base_url, "https://api.liquid.ai/decisions/v1/systemone");
+        assert_eq!(engine.model, "d1-ultra");
+        assert_eq!(engine.slot, "liquidai");
+        let stored_liquid = |slot: &str| (slot == "liquidai").then(|| "liquid_stored".to_string());
+        let engine = hosted_fallback_engine(none, stored_liquid).expect("stored liquid");
+        assert_eq!(engine.key.as_deref(), Some("liquid_stored"));
+        let gateway_too = |var: &str| match var {
+            "LIQUID_AI_API_KEY" => Some("liquid_env".to_string()),
+            "OPENROUTER_API_KEY" => Some("sk-or-env".to_string()),
+            _ => None,
+        };
+        assert_eq!(hosted_fallback_engine(gateway_too, none).unwrap().slot, "openrouter");
+        // Liquid serves System One under its own path; it must not be rewritten.
+        assert_eq!(
+            normalize_local_bridge_url("https://api.liquid.ai/decisions/v1/systemone").as_deref(),
+            Some("https://api.liquid.ai/decisions/v1/systemone")
+        );
     }
 
     /// An engine serving the System One schema under its own path must keep

@@ -1,0 +1,21 @@
+{
+  "description": "A permissions.toml deny or ask rule holds inside a codemode script exactly as outside it: a script cannot read a file a deny rule names, cannot make a call an ask rule names (a script cannot ask), and other reads still run.",
+  "prompt": "Summarize the notes.",
+  "mode": "auto",
+  "setup_files": {
+    ".nur/permissions.toml": "deny = [\"read_file:secret*\"]\nask = [\"read_file:private*\"]\n",
+    "secret.txt": "the launch code is 0000\n",
+    "private.txt": "diary entry\n",
+    "notes.txt": "plain notes\n"
+  },
+  "script": [
+    {"tool_calls": [{"name": "codemode", "arguments": {"code": "const read = (path) => { try { return tools.read_file({ path }); } catch (e) { return 'REFUSED ' + String(e); } };\ntext('notes=' + read('notes.txt'));\ntext('secret=' + read('secret.txt'));\ntext('private=' + read('private.txt'));\nreturn 0;"}}]},
+    {"text": "Only the plain notes were readable."}
+  ],
+  "expect": {
+    "requests": 2,
+    "tool_results": [{"request": 2, "contains": ["|plain notes", "denied by permissions.toml", "needs approval under permissions.toml"]}],
+    "requests_lack": ["the launch code is 0000", "diary entry"],
+    "stdout_contains": ["Only the plain notes were readable."]
+  }
+}

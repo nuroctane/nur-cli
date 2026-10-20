@@ -1,5 +1,5 @@
 {
-  "reviewed": "2026-10-13",
+  "reviewed": "2026-10-16",
   "note": "Jev-class decision models released after the pinned JevBench roster. Vendor-documented, unranked until JevBench measures them. `s1bench` is the macro accuracy S1Bench (bench.jakecuth.com, same six public suites as Jev 1.13.0, Jev = 0.775) reported on the review date; it is a third-party read, not a JevBench rank.",
   "engines": [
     {
@@ -468,6 +468,63 @@
       "credential_provider": "experiential",
       "evidence": "https://platform.experientiallabs.ai/llms.txt",
       "notes": "The gateway serves the System One schema with the same xpl_ key as its chat API, so one `nur auth login --provider experiential` covers both. Select with `nur jev use --engine jev-via-experiential`."
+    },
+    {
+      "id": "liquid-d1-ultra",
+      "name": "Liquid d1-ultra (Liquid AI Console, hosted System One)",
+      "source": "https://console.liquid.ai/",
+      "protocol": "systemone",
+      "adapter": "",
+      "license": "Liquid AI API terms",
+      "open": "no",
+      "hardware": "hosted (api.liquid.ai)",
+      "support": {"choice": "native", "noul": "native", "score": "native", "images": "native"},
+      "status": {"status": "released 2026-10-15; not yet measured by JevBench"},
+      "rank": null,
+      "model": "d1-ultra",
+      "endpoint": "https://api.liquid.ai/decisions/v1/systemone",
+      "key_env": "LIQUID_AI_API_KEY",
+      "credential_provider": "liquidai",
+      "evidence": "https://www.liquid.ai/blog/d1-ultra",
+      "notes": "Liquid's strongest decision model: multimodal, 44 languages, #1 on the Artificial Analysis Decision Index at release. Speaks the System One schema natively at Liquid's own endpoint ($0.042 per million input tokens, no output tokens; each question is billed for the state and every image again). Keys come from console.liquid.ai (liquid_...). Store one with `nur jev login liquid-d1-ultra` or export LIQUID_AI_API_KEY; the liquid-d1-ultra, liquid-d1-direct and liquid-d1-free engines share that one slot. nur reads LIQUID_AI_API_KEY rather than the LIQUID_API_KEY Liquid's docs name, because LIQUID_API_KEY already belongs to the Liquid Inference chat route."
+    },
+    {
+      "id": "liquid-d1-direct",
+      "name": "Liquid d1 (Liquid AI Console, hosted System One)",
+      "source": "https://console.liquid.ai/",
+      "protocol": "systemone",
+      "adapter": "",
+      "license": "Liquid AI API terms",
+      "open": "no",
+      "hardware": "hosted (api.liquid.ai)",
+      "support": {"choice": "native", "noul": "native", "score": "native", "images": "native"},
+      "status": {"status": "released; not yet measured by JevBench"},
+      "rank": null,
+      "model": "d1",
+      "endpoint": "https://api.liquid.ai/decisions/v1/systemone",
+      "key_env": "LIQUID_AI_API_KEY",
+      "credential_provider": "liquidai",
+      "evidence": "https://docs.liquid.ai/lfm/models/d1",
+      "notes": "The paid d1 tier on Liquid's own endpoint (up to 8 images per request, 4.5 MB body). The same model through OpenRouter Decisions is the `liquid-d1` entry. Keys come from console.liquid.ai (liquid_...). Store one with `nur jev login liquid-d1-ultra` or export LIQUID_AI_API_KEY; the liquid-d1-ultra, liquid-d1-direct and liquid-d1-free engines share that one slot. nur reads LIQUID_AI_API_KEY rather than the LIQUID_API_KEY Liquid's docs name, because LIQUID_API_KEY already belongs to the Liquid Inference chat route."
+    },
+    {
+      "id": "liquid-d1-free",
+      "name": "Liquid d1:free (Liquid AI Console, text only)",
+      "source": "https://console.liquid.ai/",
+      "protocol": "systemone",
+      "adapter": "",
+      "license": "Liquid AI API terms",
+      "open": "no",
+      "hardware": "hosted (api.liquid.ai)",
+      "support": {"choice": "native", "noul": "native", "score": "native"},
+      "status": {"status": "free tier; text only; not yet measured by JevBench"},
+      "rank": null,
+      "model": "d1:free",
+      "endpoint": "https://api.liquid.ai/decisions/v1/systemone",
+      "key_env": "LIQUID_AI_API_KEY",
+      "credential_provider": "liquidai",
+      "evidence": "https://docs.liquid.ai/lfm/models/d1",
+      "notes": "Liquid's free d1 tier: text only (a request with images is refused). Keys come from console.liquid.ai (liquid_...). Store one with `nur jev login liquid-d1-ultra` or export LIQUID_AI_API_KEY; the liquid-d1-ultra, liquid-d1-direct and liquid-d1-free engines share that one slot. nur reads LIQUID_AI_API_KEY rather than the LIQUID_API_KEY Liquid's docs name, because LIQUID_API_KEY already belongs to the Liquid Inference chat route."
     }
   ]
 }

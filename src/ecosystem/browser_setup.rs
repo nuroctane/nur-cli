@@ -120,18 +120,19 @@ fn arc_installed_windows() -> bool {
 pub fn detect_default_browser() -> BrowserKind {
     // Arc is the common case for this project; prefer a direct app-presence
     // check, then fall back to LaunchServices via `defaultbrowser` if present.
-    if Path::new("/Applications/Arc.app").exists() {
-        return BrowserKind::Arc;
-    }
-    for (path, kind) in [
-        ("/Applications/Google Chrome.app", BrowserKind::Chrome),
-        ("/Applications/Microsoft Edge.app", BrowserKind::Edge),
-        ("/Applications/Brave Browser.app", BrowserKind::Brave),
-        ("/Applications/Vivaldi.app", BrowserKind::Vivaldi),
-        ("/Applications/Chromium.app", BrowserKind::Chromium),
+    // App bundle names map through the same pure matcher as the Windows
+    // ProgIds and the Linux .desktop names, so the three cannot drift apart.
+    for app in [
+        "Arc",
+        "Google Chrome",
+        "Microsoft Edge",
+        "Brave Browser",
+        "Vivaldi",
+        "Opera",
+        "Chromium",
     ] {
-        if Path::new(path).exists() {
-            return kind;
+        if Path::new(&format!("/Applications/{app}.app")).exists() {
+            return kind_from_hint(app);
         }
     }
     BrowserKind::Other
@@ -265,6 +266,18 @@ mod tests {
         assert_eq!(kind_from_hint("MSEdgeHTM"), BrowserKind::Edge);
         assert_eq!(kind_from_hint("BraveHTML"), BrowserKind::Brave);
         assert_eq!(kind_from_hint("FirefoxURL"), BrowserKind::Other);
+        // macOS app bundle names go through the same matcher.
+        for (app, kind) in [
+            ("Arc", BrowserKind::Arc),
+            ("Google Chrome", BrowserKind::Chrome),
+            ("Microsoft Edge", BrowserKind::Edge),
+            ("Brave Browser", BrowserKind::Brave),
+            ("Vivaldi", BrowserKind::Vivaldi),
+            ("Opera", BrowserKind::Opera),
+            ("Chromium", BrowserKind::Chromium),
+        ] {
+            assert_eq!(kind_from_hint(app), kind, "{app}");
+        }
     }
 
     #[test]

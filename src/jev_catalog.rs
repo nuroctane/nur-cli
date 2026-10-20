@@ -135,8 +135,12 @@ pub fn info(id: &str) -> Result<String> {
     if e.is_hosted_systemone() {
         let login = match (e.key_optional, &e.credential_provider, &e.key_env) {
             (true, _, _) => "  (no key needed: the endpoint checks none; a key saved with `nur jev login` would still be sent)".to_string(),
-            (false, Some(slot), Some(env)) => format!(
+            (false, Some(slot), Some(env)) if crate::providers::by_id(slot).is_some() => format!(
                 "  nur auth login --provider {slot}   (or export {env}; shared with the {slot} chat provider)"
+            ),
+            // A decision-only vendor (Liquid AI's d1 family): one slot, no chat route.
+            (false, Some(slot), Some(env)) => format!(
+                "  nur jev login {id}   (or export {env}; saved in the `{slot}` slot every {slot} engine shares)"
             ),
             (false, None, Some(env)) => format!("  nur jev login {id}   (or export {env})"),
             (false, _, None) => format!("  nur jev login {id}"),

@@ -28,6 +28,8 @@ pub const BRIDGE_SLOT: &str = client::LOCAL_BRIDGE_SLOT;
 pub const SUBQ_SLOT: &str = "jev:subq-snap";
 pub const OPENROUTER_SLOT: &str = "openrouter";
 pub const EXPERIENTIAL_SLOT: &str = "experiential";
+/// Liquid AI's d1 engines (d1-ultra, d1, d1:free) share one console key.
+pub const LIQUID_AI_SLOT: &str = "liquidai";
 
 /// One hosted decision engine with a fixed slot: id, name, detail, env vars
 /// read for the key, and the chat provider that shares the saved key.
@@ -60,6 +62,13 @@ const HOSTED: &[HostedSlot] = &[
         "jev-latest · api.experientiallabs.ai",
         &["EXPLABS_API_KEY"],
         Some("Experiential Labs chat"),
+    ),
+    (
+        LIQUID_AI_SLOT,
+        "Liquid AI",
+        "d1-ultra · api.liquid.ai",
+        &["LIQUID_AI_API_KEY"],
+        None,
     ),
 ];
 
@@ -851,6 +860,24 @@ mod tests {
             Residence::Store("openrouter".into())
         );
         assert_eq!(in_use(&all), Some(OPENROUTER_SLOT));
+    }
+
+    // Failure mode: a catalog engine names a shared credential slot that is
+    // neither a chat provider nor a fixed `/auth` row, so `nur jev use`
+    // selects a slot no login path can ever fill and judgments stay off.
+    #[test]
+    fn every_shared_engine_slot_can_be_filled() {
+        for engine in crate::jev_catalog::engines() {
+            let Some(slot) = engine.credential_provider.as_deref() else {
+                continue;
+            };
+            let fixed = HOSTED.iter().any(|(id, ..)| *id == slot);
+            let chat = crate::providers::by_id(slot).is_some();
+            assert!(fixed || chat, "{} reads slot `{slot}`, which nothing fills", engine.id);
+        }
+        let liquid = crate::jev_catalog::find("liquid-d1-ultra").unwrap();
+        assert_eq!(liquid.credential_provider.as_deref(), Some(LIQUID_AI_SLOT));
+        assert!(liquid.is_hosted_systemone());
     }
 
     /// A key-optional engine (AMOS) with nothing stored is a working

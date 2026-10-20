@@ -234,7 +234,10 @@ still looks for a decision model it can use, in this order:
    (`https://api.subq.ai/v1/systemone`, model `subq-snap-preview`);
 3. `OPENROUTER_API_KEY` or the `openrouter` credential slot: Mercury Decide via
    OpenRouter's Decisions API (`https://openrouter.ai/api/alpha/decisions`,
-   model `inception/mercury-decide`).
+   model `inception/mercury-decide`);
+4. `LIQUID_AI_API_KEY` or the `liquidai` credential slot: Liquid AI's
+   d1-ultra on Liquid's own System One endpoint
+   (`https://api.liquid.ai/decisions/v1/systemone`).
 
 So a running local engine or an OpenRouter login is enough for autocompaction,
 tool gating and result judging to run on a Jev-class model; nothing has to be
@@ -242,8 +245,25 @@ configured. `nur jev status` prints `(auto: …)` beside the endpoint when this
 path is active. Any explicit selection turns it off, and it re-probes within a
 few seconds of a bridge start/stop or a key change. The hosted engines above are
 in the catalog (`nur jev info subq-snap`, `mercury-decide`, `span-01`,
-`liquid-d1`, `solar-decide`, `tev1-4b`) and can be pinned with
-`nur jev use --engine <id>`.
+`liquid-d1`, `solar-decide`, `tev1-4b`, `liquid-d1-ultra`) and can be pinned
+with `nur jev use --engine <id>`.
+
+### Liquid AI (d1-ultra, d1, d1:free)
+
+[Liquid Console](https://console.liquid.ai/) serves Liquid's decision models
+on the System One schema itself, so nur talks to it directly with no bridge:
+
+```bash
+nur jev login liquid-d1-ultra          # paste the liquid_... key once
+nur jev use --engine liquid-d1-ultra   # or liquid-d1-direct, liquid-d1-free
+```
+
+The three engines share one `liquidai` slot (also shown in `/auth` → Jev
+engines as **Liquid AI**). In the environment nur reads `LIQUID_AI_API_KEY`;
+Liquid's own docs say `LIQUID_API_KEY`, but that name already belongs to the
+Liquid Inference chat route, so nur keeps them apart. d1-ultra and d1 accept
+images; `d1:free` is text only. The same d1 through OpenRouter Decisions is
+`liquid-d1`.
 
 ### Key
 

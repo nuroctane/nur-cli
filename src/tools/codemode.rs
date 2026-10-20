@@ -75,6 +75,10 @@ struct Bridge {
     /// Workspace, cancellation and session of the call that started the
     /// script; every nested call runs with the same three.
     ctx: ToolContext,
+    /// The `permissions.toml` rules for this workspace, read when the script
+    /// starts: a nested call is still a call, so a deny or ask rule that
+    /// names it holds inside a script exactly as it does outside.
+    rules: crate::agent::permissions::PermissionRules,
     deadline: Instant,
     printed: String,
     calls: usize,
@@ -186,6 +190,7 @@ impl Tool for CodeMode {
 fn run_script(code: &str, ctx: ToolContext, deadline: Instant) -> Result<String> {
     BRIDGE.with(|b| {
         *b.borrow_mut() = Some(Bridge {
+            rules: crate::agent::permissions::PermissionRules::load(&ctx.cwd),
             ctx,
             deadline,
             printed: String::new(),
@@ -202,6 +207,7 @@ fn run_script(code: &str, ctx: ToolContext, deadline: Instant) -> Result<String>
                 tokio_util::sync::CancellationToken::new(),
                 "",
             ),
+            rules: Default::default(),
             deadline,
             printed: String::new(),
             calls: 0,
@@ -435,19 +441,23 @@ fn string_arg(value: Option<&JsValue>, context: &mut Context) -> String {
 /// One nested call: same classification, same workspace, same cancellation as
 /// a call the model makes directly.
 fn call_tool(name: &str, args_json: &str) -> std::result::Result<String, String> {
-    let ctx = BRIDGE.with(|b| {
+    let (ctx, ruled) = BRIDGE.with(|b| {
         let borrowed = b.borrow();
         let bridge = borrowed.as_ref().ok_or("codemode: no sandbox")?;
         bridge.check_budget()?;
-        Ok::<_, String>(ToolContext::new(
-            bridge.ctx.cwd.clone(),
-            bridge.ctx.cancel.clone(),
-            &bridge.ctx.session_id,
+        Ok::<_, String>((
+            ToolContext::new(
+                bridge.ctx.cwd.clone(),
+                bridge.ctx.cancel.clone(),
+                &bridge.ctx.session_id,
+            ),
+            bridge.rules.decide(name, args_json),
         ))
     })?;
 
     let args: Value = serde_json::from_str(args_json).unwrap_or_else(|_| serde_json::json!({}));
     script_may_call(name, &args)?;
+    rules_allow(name, ruled)?;
 
     BRIDGE.with(|b| {
         if let Some(bridge) = b.borrow_mut().as_mut() {
@@ -476,6 +486,24 @@ fn script_may_call(name: &str, args: &Value) -> std::result::Result<(), String> 
         ));
     }
     Ok(())
+}
+
+/// A deny rule refuses the call; an ask rule needs a person, and a script
+/// cannot ask, so it is refused too with a pointer to the direct call.
+fn rules_allow(
+    name: &str,
+    ruled: Option<crate::agent::permissions::RuleDecision>,
+) -> std::result::Result<(), String> {
+    use crate::agent::permissions::RuleDecision;
+    match ruled {
+        Some(RuleDecision::Deny) => Err(format!(
+            "{name} with these arguments is denied by permissions.toml"
+        )),
+        Some(RuleDecision::Ask) => Err(format!(
+            "{name} with these arguments needs approval under permissions.toml, and a script              cannot ask. Call it directly."
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// The roster a script sees: every tool with at least one read-only call.

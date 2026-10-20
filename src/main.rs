@@ -953,10 +953,28 @@ fn run_jev(action: cli::JevCmd) -> Result<()> {
                 ));
             }
             let key = rpassword::prompt_password(format!("API key for {engine} (hidden): "))?;
-            auth::save_provider_key(&format!("jev:{engine}"), &key)?;
-            theme::print_ok(&format!(
-                "saved credential for {engine}; other engine keys are unchanged"
-            ));
+            // An engine that reads a shared slot (Liquid's d1 family, a
+            // gateway's chat key) must be saved there: `nur jev use` points
+            // the layer at that slot, so a `jev:<id>` copy would never be read.
+            match selected.credential_provider.as_deref() {
+                Some(slot) => {
+                    auth::save_provider_key(slot, &key)?;
+                    let shared = if providers::by_id(slot).is_some() {
+                        format!(" (also the {slot} chat provider's key)")
+                    } else {
+                        String::new()
+                    };
+                    theme::print_ok(&format!(
+                        "saved credential for {engine} in the `{slot}` slot{shared}; every engine on that slot uses it"
+                    ));
+                }
+                None => {
+                    auth::save_provider_key(&format!("jev:{engine}"), &key)?;
+                    theme::print_ok(&format!(
+                        "saved credential for {engine}; other engine keys are unchanged"
+                    ));
+                }
+            }
         }
         cli::JevCmd::Status => {
             theme::print_info("nur jev · local typed decisions");

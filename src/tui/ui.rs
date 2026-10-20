@@ -2686,6 +2686,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     let mut visible = Vec::with_capacity(body_h as usize);
     let mut visible_edges = Vec::with_capacity(body_h as usize);
     let elapsed = app.spinner_epoch.elapsed();
+    let mut banner_on_screen = false;
     for abs_i in visible_rows(top, body_h as usize, total_rows) {
         let (cell_idx, i) = row_index.row(abs_i);
         visible_edges.push(cell_idx.and_then(|c| {
@@ -2709,6 +2710,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
             continue;
         };
         let cell = &app.cells[cell_idx];
+        banner_on_screen |= matches!(cell, Cell::Banner);
         let mut line = app.wrap_cache_parts[cell_idx][i].clone();
         let collapsible = cell.is_collapsible();
         let peekable = cell.is_peekable();
@@ -2833,6 +2835,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
         });
     }
     app.transcript_rows = row_index;
+    app.banner_on_screen = banner_on_screen;
 
     // The body is the content rect inside the frames: hitboxes, selection and
     // copy all work in its columns, untouched by the chrome around it.
@@ -6201,6 +6204,8 @@ fn image_arg_path(args: &str) -> Option<String> {
 
 /// Per-character aurora shimmer for a run of text — a colour wave travels
 /// through it over time. `row_offset` phases successive rows into a diagonal.
+/// Banner only: `elapsed` is already [`theme::banner_time`], which keeps
+/// moving while the rest of the ambient motion holds still.
 fn shimmer_spans(
     text: &str,
     elapsed: Duration,
@@ -6216,14 +6221,14 @@ fn shimmer_spans(
             let col = i + row_offset;
             Span::styled(
                 c.to_string(),
-                Style::default().fg(theme::aurora_cell(elapsed, col, span, period_ms)),
+                Style::default().fg(theme::aurora_cell_at(elapsed, col, span, period_ms)),
             )
         })
         .collect()
 }
 
-/// A full-width horizontal rule whose colour shimmers along the aurora ring.
-/// `glyph` is repeated; the whole strip drifts over time.
+/// A horizontal rule whose colour shimmers along the aurora ring. `glyph` is
+/// repeated; the whole strip drifts over time. Banner only, on its own clock.
 fn aurora_rule(width: usize, elapsed: Duration, glyph: char, period_ms: u128) -> Line<'static> {
     if width == 0 {
         return Line::default();
@@ -6232,7 +6237,7 @@ fn aurora_rule(width: usize, elapsed: Duration, glyph: char, period_ms: u128) ->
         .map(|i| {
             Span::styled(
                 glyph.to_string(),
-                Style::default().fg(theme::aurora_cell(elapsed, i, width, period_ms)),
+                Style::default().fg(theme::aurora_cell_at(elapsed, i, width, period_ms)),
             )
         })
         .collect();
@@ -6276,7 +6281,7 @@ fn banner_lines(app: &App, out: &mut Vec<Line<'static>>) {
         r#"██║ ╚████║╚██████╔╝██║  ██║"#,
         r#"╚═╝  ╚═══╝ ╚═════╝ ╚═╝  ╚═╝"#,
     ];
-    let elapsed = theme::ambient_time(app.spinner_epoch.elapsed());
+    let elapsed = theme::banner_time(app.spinner_epoch.elapsed());
     out.push(Line::default());
     for (i, row) in logo.iter().enumerate() {
         // Diagonal aurora wave sweeping the logotype.
@@ -6297,7 +6302,7 @@ fn banner_lines(app: &App, out: &mut Vec<Line<'static>>) {
         Span::raw("  ".to_string()),
         Span::styled(
             format!("{sparkle} "),
-            Style::default().fg(theme::aurora_cell(elapsed, 0, 1, 1500)),
+            Style::default().fg(theme::aurora_cell_at(elapsed, 0, 1, 1500)),
         ),
     ];
     title_row.extend(shimmer_spans(

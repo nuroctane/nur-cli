@@ -1916,9 +1916,48 @@ pub fn resolve_reduced_motion(setting: &str, env: &dyn Fn(&str) -> Option<String
     }
 }
 
-/// Time source for ambient animation: frozen under reduced motion so every
-/// shimmer renders the same still frame no matter when it is drawn.
+/// Whether something is active (a turn, startup, an open modal, a drag) - the
+/// TUI loop sets it every tick. Ambient motion runs only while it is true.
+static AMBIENT_LIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+/// The ambient clock at the moment activity last ended, so an idle screen
+/// holds that exact frame instead of snapping back to phase zero.
+static AMBIENT_HELD_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn set_ambient_live(live: bool) {
+    AMBIENT_LIVE.store(live, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Time source for ambient animation (turn separators, the input border,
+/// modal edges): it moves only while an agent or a modal is active and holds
+/// its last frame while idle, and it is still under reduced motion. The NUR
+/// banner is the exception and keeps its own clock ([`banner_time`]).
 pub fn ambient_time(elapsed: Duration) -> Duration {
+    use std::sync::atomic::Ordering::Relaxed;
+    let live = AMBIENT_LIVE.load(Relaxed);
+    let held = Duration::from_millis(AMBIENT_HELD_MS.load(Relaxed));
+    let frame = ambient_frame(elapsed, reduced_motion(), live, held);
+    if live && !reduced_motion() {
+        AMBIENT_HELD_MS.store(elapsed.as_millis() as u64, Relaxed);
+    }
+    frame
+}
+
+/// The ambient clock's decision, free of global state: still under reduced
+/// motion, live time while active, the held frame while idle.
+fn ambient_frame(elapsed: Duration, reduced: bool, live: bool, held: Duration) -> Duration {
+    if reduced {
+        Duration::ZERO
+    } else if live {
+        elapsed
+    } else {
+        held
+    }
+}
+
+/// Time source for the NUR banner shimmer: always running, idle included
+/// (a locked design decision); still only under an explicit reduced-motion
+/// request.
+pub fn banner_time(elapsed: Duration) -> Duration {
     if reduced_motion() {
         Duration::ZERO
     } else {
@@ -2079,7 +2118,12 @@ pub fn aurora_at(phase: f64) -> Color {
 /// basis for shimmering borders and separators.
 /// `elapsed` drives motion; `pos`/`span` give a per-cell phase offset.
 pub fn aurora_cell(elapsed: Duration, pos: usize, span: usize, period_ms: u128) -> Color {
-    let elapsed = ambient_time(elapsed);
+    aurora_cell_at(ambient_time(elapsed), pos, span, period_ms)
+}
+
+/// [`aurora_cell`] on a clock the caller already chose (the banner passes
+/// [`banner_time`], which keeps moving while ambient motion is held).
+pub fn aurora_cell_at(elapsed: Duration, pos: usize, span: usize, period_ms: u128) -> Color {
     let t = if period_ms == 0 {
         0.0
     } else {
@@ -2556,18 +2600,21 @@ pub fn print_tool(name: &str, detail: &str) {
 mod tests {
     use super::*;
 
-    /// Ways reduced motion can be wrong in either direction: ambient time
-    /// failing to freeze under an explicit request, running while idle, or an
-    /// Orca pane auto-reducing (Orca renders locally at full speed).
+    /// Failure modes: ambient motion running while idle (the repaint cost the
+    /// idle gate exists to avoid), snapping back to phase zero when activity
+    /// ends instead of holding its frame, moving under an explicit
+    /// reduced-motion request, or holding still while an agent is active.
+    /// Pure, so it cannot race the tests that toggle the global flags. The
+    /// banner's idle shimmer is checked end to end by the startup suite's
+    /// `banner-animates`.
     #[test]
-    fn ambient_time_freezes_only_on_explicit_request() {
-        set_reduced_motion(true);
-        let frozen = ambient_time(Duration::from_secs(6));
-        set_reduced_motion(false);
-        let full = ambient_time(Duration::from_secs(6));
-        assert_eq!(frozen, Duration::ZERO);
-        assert_eq!(full, Duration::from_secs(6));
-        assert!(!reduced_motion());
+    fn ambient_motion_runs_only_while_active_and_holds_its_frame() {
+        let now = Duration::from_secs(6);
+        let held = Duration::from_millis(4_200);
+        assert_eq!(ambient_frame(now, false, true, held), now);
+        assert_eq!(ambient_frame(now, false, false, held), held);
+        assert_eq!(ambient_frame(now, true, true, held), Duration::ZERO);
+        assert_eq!(ambient_frame(now, true, false, held), Duration::ZERO);
     }
 
     /// Ways motion resolution can fail: the env override losing to config,

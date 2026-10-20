@@ -19,10 +19,13 @@ nur jev use --engine instinct
 nur jev use --engine mercury-decide     # or span-01, liquid-d1, solar-decide, tev1-4b
 nur jev use --engine subq-snap
 nur jev use --engine jev-via-experiential   # same xpl_ key as the chat provider
+# Liquid AI's own endpoint: one key for d1-ultra, d1 and d1:free (LIQUID_AI_API_KEY):
+nur jev login liquid-d1-ultra
+nur jev use --engine liquid-d1-ultra
 # AMOS 1 checks no key at all - selecting it is enough:
 nur jev use --engine amos-1-mini        # or amos-1-small / -medium / -large
-# With no selection at all, a running bridge, SUBQ_API_KEY or OPENROUTER_API_KEY is
-# picked up automatically (see typesafe.md, "Automatic engine selection").
+# With no selection at all, a running bridge, SUBQ_API_KEY, OPENROUTER_API_KEY or
+# LIQUID_AI_API_KEY is picked up automatically (see typesafe.md, "Automatic engine selection").
 # Translate another API shape through the local bridge:
 nur jev login djev
 nur jev start --engine djev

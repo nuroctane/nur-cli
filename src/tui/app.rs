@@ -1270,6 +1270,10 @@ pub struct LoginModal {
     /// ✕: deleting a slot shared with a chat provider also signs that
     /// provider out, so it is never done on a single press.
     pub jev_remove_armed: Option<String>,
+    /// The key typed on the Key stage, held through the optional base-URL
+    /// step: `auth.json` names the provider only when its config is applied
+    /// in the same step, so abandoning the login changes nothing.
+    pub pending_key: Option<String>,
 }
 
 impl LoginModal {
@@ -1305,6 +1309,7 @@ impl LoginModal {
             jev_buttons: Vec::new(),
             jev_slot: None,
             jev_remove_armed: None,
+            pending_key: None,
         }
     }
 
@@ -2452,6 +2457,10 @@ pub struct App {
     thought_accum: Duration,
     pub status: String,
     pub spinner_epoch: Instant,
+    /// The NUR banner was in the last drawn viewport. Its shimmer is the one
+    /// animation that runs while idle, so the loop keeps repainting only while
+    /// it can be seen.
+    pub banner_on_screen: bool,
 
     pub session: Option<Box<Session>>,
     pub usage: Option<Box<UsageTracker>>,
@@ -2934,6 +2943,7 @@ pub(super) fn new_app(
         thought_accum: Duration::ZERO,
         status: "starting".into(),
         spinner_epoch: Instant::now(),
+        banner_on_screen: true,
         session: Some(Box::new(session)),
         usage: Some(Box::new(usage)),
         session_id,
@@ -3130,6 +3140,12 @@ pub async fn run_tui(
         } else {
             FRAME_IDLE_MS
         };
+        // Ambient motion (separators, input border, modal edges) runs only
+        // while something is active and holds its frame while idle.
+        theme::set_ambient_live(animating);
+        // The NUR banner always shimmers, idle included (locked design);
+        // only an explicit reduced-motion request stills it.
+        let banner_shimmer = !reduced_motion && app.banner_on_screen;
 
         // 2) Input FIRST - drain the whole queue every tick.
         //    Wait up to one frame for the first event when idle; never draw
@@ -3448,13 +3464,13 @@ pub async fn run_tui(
             dirty = true;
         }
         //
-        // Locked design: ambient animation runs only while something is
-        // active (a turn, streaming, an open modal). Idle means a still
-        // frame and no ambient repaint — that is the whole perf strategy, on
-        // every terminal, with no environment sniffing. Under reduced motion
-        // the ambient frame is still even while active. Spinners, modals and
-        // streaming always get their tick.
-        if animating && last_draw.elapsed().as_millis() as u64 >= frame_ms {
+        // Locked design: the NUR banner shimmers whenever it is on screen,
+        // idle included, unless reduced motion was explicitly requested. All
+        // other ambient animation runs only while something is active (a
+        // turn, streaming, an open modal) and holds still while idle, so an
+        // idle repaint with the banner scrolled away is skipped entirely.
+        // Spinners, modals and streaming always get their tick.
+        if (animating || banner_shimmer) && last_draw.elapsed().as_millis() as u64 >= frame_ms {
             dirty = true;
         }
         if let Some((_, t)) = app.expand_flash {
@@ -8568,14 +8584,11 @@ impl App {
         }
     }
 
-    /// QUEUED (experiential incident 2026-10-15): make this login atomic. The
-    /// key save below can succeed while `choose_provider_key` fails, which
-    /// flips `auth.json` without applying config and traps the user in the
-    /// "saved credentials are for X but active provider is Y" loop. On any
-    /// failure, roll `auth.json` back to its prior content (or delete it when
-    /// it did not exist). Same for abandoning the BaseUrl confirm stage after
-    /// the key screen: nothing persisted before confirm, or warn about the
-    /// saved-but-unapplied state. Isolated unit tests per failure point.
+    /// Key stage: save the key to the per-provider store only. The active
+    /// sign-in (`auth.json`) and the config switch together later, in
+    /// [`Self::apply_provider_login`], so a failed save, an abandoned base-URL
+    /// step or a closed modal never leaves `auth.json` naming a provider the
+    /// config does not use.
     fn submit_login(&mut self) {
         let (provider_id, key, is_fallback, jev_slot) = match &self.login {
             Some(m) => (
@@ -8606,9 +8619,6 @@ impl App {
         self.account_work(
             !is_fallback,
             move || {
-                if !is_fallback && !saved_key.is_empty() {
-                    crate::auth::save_api_key_for(&saved_key, Some(&selected))?;
-                }
                 if !saved_key.is_empty() {
                     crate::auth::choose_provider_key(&selected, &saved_key)?;
                 }
@@ -8710,6 +8720,7 @@ impl App {
                 m.stage = LoginStage::BaseUrl;
                 m.buf = prefill;
                 m.error = None;
+                m.pending_key = Some(key.to_string());
             }
             return;
         }
@@ -8722,11 +8733,13 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 self.startup.login_epoch = self.startup.login_epoch.wrapping_add(1);
-                // Back to key entry (the key is still buffered/saved).
+                // Back to key entry. The key sits in the per-provider store
+                // only; the active sign-in was never touched.
                 m.form_scroll = 0;
                 m.stage = LoginStage::Key;
                 m.buf.clear();
                 m.error = None;
+                m.pending_key = None;
             }
             KeyCode::Enter => self.submit_baseurl(),
             KeyCode::Backspace => {
@@ -8746,8 +8759,12 @@ impl App {
     /// Confirm the base-URL stage: persist a per-provider override (or clear it
     /// when the field is left at the catalog default), then apply the login.
     fn submit_baseurl(&mut self) {
-        let (provider_id, typed) = match &self.login {
-            Some(m) => (m.provider_id.clone(), m.buf.trim().to_string()),
+        let (provider_id, typed, key) = match &self.login {
+            Some(m) => (
+                m.provider_id.clone(),
+                m.buf.trim().to_string(),
+                m.pending_key.clone().unwrap_or_default(),
+            ),
             None => return,
         };
         let provider = crate::providers::by_id(&provider_id)
@@ -8774,9 +8791,12 @@ impl App {
             m.buf.clear();
             m.error = None;
         }
-        // apply_provider_login re-resolves the saved key and picks up the
-        // override via provider_base_url_override.
-        self.apply_provider_login(&provider_id, "", false);
+        // apply_provider_login commits the held key as the active sign-in and
+        // picks up the override via provider_base_url_override.
+        if let Some(m) = &mut self.login {
+            m.pending_key = None;
+        }
+        self.apply_provider_login(&provider_id, &key, false);
     }
 
     /// Apply provider config + hot-swap HTTP client after key or OAuth success.
@@ -8876,19 +8896,34 @@ impl App {
         let provider_id = provider_id.to_string();
         let selected = provider_id.clone();
         let key = key.to_string();
+        let cfg_before = self.cfg.clone();
         crate::config::apply_provider_defaults(&mut self.cfg, &provider_id, via_oauth);
+        let cfg_after = self.cfg.clone();
         self.account_work(
             true,
             move || {
-                if via_oauth || key.is_empty() {
-                    crate::auth::resolve_api_key_for(Some(&selected))
-                } else {
-                    Ok(key.clone())
+                // The active sign-in and the config switch as one step: if
+                // anything after `auth.json` is written fails, it goes back.
+                let before = crate::auth::AuthSnapshot::take();
+                let applied = (|| {
+                    let bearer = if via_oauth || key.is_empty() {
+                        crate::auth::resolve_api_key_for(Some(&selected))?
+                    } else {
+                        crate::auth::save_api_key_for(&key, Some(&selected))?;
+                        key.clone()
+                    };
+                    crate::config::save_config(&cfg_after)?;
+                    Ok::<_, crate::error::NurError>(bearer)
+                })();
+                if applied.is_err() {
+                    let _ = before.restore();
                 }
+                applied
             },
             move |app, result| match result {
                 Ok(bearer) => app.finish_provider_login(&provider_id, &bearer, via_oauth),
                 Err(error) => {
+                    app.cfg = cfg_before;
                     app.authed = false;
                     app.provider_selected();
                     app.push_error(format!("account connection failed: {error}"));

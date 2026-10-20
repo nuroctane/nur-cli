@@ -33,7 +33,7 @@ regression checks, and remaining vendor-specific limitations.
 |----------|---------|----------------|
 | **Meta Model API** | `META_API_KEY` or `MODEL_API_KEY` | Muse Code browser (`muse login`) or import `~/.config/muse/auth.json` |
 | **OpenAI** | `OPENAI_API_KEY` | ChatGPT browser OAuth (Codex backend) or import `~/.codex` |
-| **xAI Grok** | `XAI_API_KEY` | Device code / Grok CLI session (cli-chat-proxy) |
+| **xAI Grok** | `XAI_API_KEY` | Browser sign-in (PKCE, as Grok Build) / device code over SSH / Grok CLI session (cli-chat-proxy) |
 | **Kimi Code (kimi.com)** | `KIMI_API_KEY` | Device code / Kimi CLI session |
 | **Anthropic Claude** | `ANTHROPIC_API_KEY` | Claude browser OAuth (`claude.com/cai/…`) or import `~/.claude` |
 | **Google Gemini** | `GEMINI_API_KEY` | Google Cloud ADC via `gcloud auth login --update-adc` |
@@ -100,8 +100,8 @@ judgment layer resolves to and where its key sits (`TypeSafe hosted · saved
 key`, `Local bridge · loopback :8788`, `SubQ Snap · env SUBQ_API_KEY`, or
 `no engine · add a key or nur jev start`). Selecting it opens the **Jev
 engines** panel: one row per Jev-class slot (TypeSafe hosted, local bridge, SubQ
-Snap, OpenRouter Decisions, plus any catalog engine selected with `nur jev use
---engine`), `●` on the one in use, the key's residence (`env`, `saved key`,
+Snap, OpenRouter Decisions, Experiential Labs, Liquid AI, plus any catalog engine
+selected with `nur jev use --engine`), `●` on the one in use, the key's residence (`env`, `saved key`,
 `config.toml`, `file`, `loopback`), and a `[✕]` button wherever Nur owns that
 credential. `↵` adds or replaces the key under that slot's own store id (SubQ
 and OpenRouter keys never land on `typesafe`); `Del`, `Ctrl+D` or the `✕`
@@ -126,7 +126,7 @@ these providers:
 | Provider | Browser flow | Import existing CLI session | OAuth inference host |
 |----------|--------------|-----------------------------|----------------------|
 | **OpenAI** | Loopback PKCE (Codex client) | `$CODEX_HOME` or `~/.codex` | `chatgpt.com/backend-api/codex` |
-| **xAI** | Device code | `$XAI_CONFIG_DIR` or `~/.grok` | `cli-chat-proxy.grok.com` (+ Grok CLI version headers) |
+| **xAI** | Browser (PKCE, loopback `127.0.0.1/callback`); device code over SSH | `$XAI_CONFIG_DIR` or `~/.grok` | `cli-chat-proxy.grok.com` (+ Grok CLI version headers) |
 | **Anthropic** | Loopback PKCE (Claude Code client) | `$CLAUDE_CONFIG_DIR` or `~/.claude` | `api.anthropic.com` (Bearer + `oauth-2025-04-20` beta) |
 | **Kimi** | Device code | `~/.kimi` | `api.kimi.com/coding/v1` |
 | **Google Gemini** | Google Cloud ADC via `gcloud` | ADC store | `generativelanguage.googleapis.com` |
