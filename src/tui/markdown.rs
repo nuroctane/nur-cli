@@ -14,24 +14,40 @@
 //! Everything here is drawn from theme roles, so all 23 themes stay correct
 //! with no per-theme branching.
 //!
+//! Tables are the one block laid out against the available width (see
+//! [`Composer::emit_table`]): a grid at natural width when it fits, a grid
+//! whose cells wrap inside their own column when it does not, and stacked
+//! `Header: value` records when even narrow columns cannot fit. The wrapper
+//! downstream never has to cut a table row, so a table reads cleanly at any
+//! window size instead of breaking mid-row wherever the window happens to end.
+//!
 //! [`tui-markdown`]: https://github.com/joshka/tui-markdown
 
 use crate::theme;
-use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Alignment, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use std::ops::Range;
+use unicode_width::UnicodeWidthStr;
 
-/// Render markdown to styled lines. `base` supplies the default foreground for
-/// plain (uncoloured) text - e.g. the assistant message colour.
+/// Render markdown to styled lines with no width limit (tests and previews).
+#[cfg(test)]
 pub fn render_markdown(text: &str, base: Style) -> Vec<Line<'static>> {
+    render_markdown_at(text, base, usize::MAX / 4)
+}
+
+/// Render markdown to styled lines for a body `width` columns wide. `base`
+/// supplies the default foreground for plain (uncoloured) text - e.g. the
+/// assistant message colour. Only tables use the width; everything else is
+/// wrapped downstream.
+pub fn render_markdown_at(text: &str, base: Style, width: usize) -> Vec<Line<'static>> {
     #[cfg(feature = "image-peek")]
     let annotated = crate::tui::latex::annotate_display_math(text);
     #[cfg(feature = "image-peek")]
     let text = annotated.as_str();
 
     let default_fg = base.fg.unwrap_or(theme::FG());
-    let mut composer = Composer::new(text, default_fg);
+    let mut composer = Composer::new(text, default_fg, width.max(1));
     composer.run();
     if composer.out.is_empty() {
         composer
@@ -61,9 +77,22 @@ enum Marker {
     Task(bool),
 }
 
+/// A table being collected: cells arrive as inline runs between
+/// `TableCell` events and are laid out once the whole table is known.
+#[derive(Default)]
+struct TableState {
+    aligns: Vec<Alignment>,
+    head: Vec<Vec<Span<'static>>>,
+    rows: Vec<Vec<Vec<Span<'static>>>>,
+    current: Vec<Vec<Span<'static>>>,
+}
+
 struct Composer<'a> {
     src: &'a str,
     base_fg: Color,
+    /// Body width in columns; tables are laid out to fit inside it.
+    width: usize,
+    table: Option<TableState>,
     out: Vec<Line<'static>>,
     lists: Vec<ListLevel>,
     /// Quote nesting depth (0 = not inside a quote).
@@ -87,10 +116,12 @@ struct Composer<'a> {
 }
 
 impl<'a> Composer<'a> {
-    fn new(src: &'a str, base_fg: Color) -> Self {
+    fn new(src: &'a str, base_fg: Color, width: usize) -> Self {
         Self {
             src,
             base_fg,
+            width,
+            table: None,
             out: Vec::new(),
             lists: Vec::new(),
             quote_depth: 0,
@@ -108,6 +139,7 @@ impl<'a> Composer<'a> {
         let mut options = Options::empty();
         options.insert(Options::ENABLE_TASKLISTS);
         options.insert(Options::ENABLE_STRIKETHROUGH);
+        options.insert(Options::ENABLE_TABLES);
         for (event, range) in Parser::new_ext(self.src, options).into_offset_iter() {
             self.event(event, range);
         }
@@ -230,7 +262,185 @@ impl<'a> Composer<'a> {
                 self.out.push(rule_line());
                 self.mark_emitted();
             }
+            Event::Start(Tag::Table(aligns)) => {
+                self.flush_inline();
+                self.table = Some(TableState {
+                    aligns,
+                    ..Default::default()
+                });
+            }
+            Event::Start(Tag::TableHead) | Event::Start(Tag::TableRow) => {
+                if let Some(t) = self.table.as_mut() {
+                    t.current.clear();
+                }
+            }
+            Event::End(TagEnd::TableHead) => {
+                if let Some(t) = self.table.as_mut() {
+                    t.head = std::mem::take(&mut t.current);
+                }
+            }
+            Event::End(TagEnd::TableRow) => {
+                if let Some(t) = self.table.as_mut() {
+                    let row = std::mem::take(&mut t.current);
+                    t.rows.push(row);
+                }
+            }
+            Event::Start(Tag::TableCell) => self.inline = None,
+            Event::End(TagEnd::TableCell) => {
+                let spans = match self.inline.take() {
+                    Some(range) => self.cell_spans(&range),
+                    None => Vec::new(),
+                };
+                if let Some(t) = self.table.as_mut() {
+                    t.current.push(spans);
+                }
+            }
+            Event::End(TagEnd::Table) => {
+                if let Some(table) = self.table.take() {
+                    self.emit_table(table);
+                }
+            }
             _ => {}
+        }
+    }
+
+    /// One table cell's inline content as a single run of styled spans.
+    fn cell_spans(&self, range: &Range<usize>) -> Vec<Span<'static>> {
+        let (lines, _) = self.inline_lines(range);
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        for (i, line) in lines.into_iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::raw(" ".to_string()));
+            }
+            spans.extend(line.spans);
+        }
+        trim_spans(spans)
+    }
+
+    /// Lay a table out against the body width, in the first form that fits:
+    /// a grid at natural width, a grid whose cells wrap inside their column,
+    /// or one stacked `Header: value` record per row. Every emitted line fits
+    /// the width, so the downstream wrapper never cuts through a row.
+    fn emit_table(&mut self, table: TableState) {
+        let TableState {
+            aligns, head, rows, ..
+        } = table;
+        let cols = rows
+            .iter()
+            .map(Vec::len)
+            .chain(std::iter::once(head.len()))
+            .max()
+            .unwrap_or(0);
+        if cols == 0 {
+            return;
+        }
+        self.blank_before_block();
+        let prefix = Prefix {
+            quote: self.quote_depth,
+            indent: self.item.as_ref().map(|i| i.depth).unwrap_or(0),
+            marker: None,
+        };
+        let gutter = spans_width(&prefix.spans());
+        let avail = self.width.saturating_sub(gutter).max(1);
+        let header: Vec<Vec<Span<'static>>> = (0..cols)
+            .map(|c| header_spans(head.get(c).cloned().unwrap_or_default()))
+            .collect();
+        let body: Vec<Vec<Vec<Span<'static>>>> = rows
+            .iter()
+            .map(|r| {
+                (0..cols)
+                    .map(|c| r.get(c).cloned().unwrap_or_default())
+                    .collect()
+            })
+            .collect();
+        match grid_widths(&header, &body, avail) {
+            Some(widths) => {
+                let wrapped = self.emit_grid_row(&prefix, &header, &widths, &aligns);
+                self.out.push(table_rule(&prefix, &widths, false));
+                let mut wrapped_any = wrapped;
+                for (i, row) in body.iter().enumerate() {
+                    if i > 0 && wrapped_any {
+                        // Wrapped rows need a quiet divider or they run together.
+                        self.out.push(table_rule(&prefix, &widths, true));
+                    }
+                    wrapped_any |= self.emit_grid_row(&prefix, row, &widths, &aligns);
+                }
+            }
+            None => self.emit_stacked(&prefix, &header, &body, avail),
+        }
+        self.mark_emitted();
+    }
+
+    /// One grid row; returns whether any cell had to wrap onto extra lines.
+    fn emit_grid_row(
+        &mut self,
+        prefix: &Prefix,
+        cells: &[Vec<Span<'static>>],
+        widths: &[usize],
+        aligns: &[Alignment],
+    ) -> bool {
+        let wrapped: Vec<Vec<Vec<Span<'static>>>> = cells
+            .iter()
+            .zip(widths)
+            .map(|(cell, w)| wrap_cell(cell, *w))
+            .collect();
+        let height = wrapped.iter().map(Vec::len).max().unwrap_or(1).max(1);
+        for row in 0..height {
+            let mut spans = prefix.spans();
+            for (c, cell) in wrapped.iter().enumerate() {
+                if c > 0 {
+                    spans.push(Span::styled(
+                        " │ ".to_string(),
+                        Style::default().fg(table_rule_fg()),
+                    ));
+                }
+                let content = cell.get(row).cloned().unwrap_or_default();
+                let align = aligns.get(c).copied().unwrap_or(Alignment::None);
+                spans.extend(pad_cell(content, widths[c], align));
+            }
+            self.out.push(Line::from(trim_trailing_pad(spans)));
+        }
+        height > 1
+    }
+
+    /// Narrow fallback: each row becomes a small record, the first field on a
+    /// marker line and the rest under it, `Header: value` throughout.
+    fn emit_stacked(
+        &mut self,
+        prefix: &Prefix,
+        header: &[Vec<Span<'static>>],
+        body: &[Vec<Vec<Span<'static>>>],
+        avail: usize,
+    ) {
+        for (r, row) in body.iter().enumerate() {
+            if r > 0 {
+                self.out.push(Line::default());
+            }
+            for (c, cell) in row.iter().enumerate() {
+                let mut field = header.get(c).cloned().unwrap_or_default();
+                if spans_width(&field) > 0 {
+                    field.push(Span::styled(
+                        ": ".to_string(),
+                        Style::default().fg(table_rule_fg()),
+                    ));
+                }
+                field.extend(cell.iter().cloned());
+                // Two columns of marker / hanging indent, the field wrapped
+                // under it, so a record fits the width by construction too.
+                for (i, part) in wrap_cell(&field, avail.saturating_sub(2).max(1))
+                    .into_iter()
+                    .enumerate()
+                {
+                    let mut spans = prefix.spans();
+                    spans.push(if c == 0 && i == 0 {
+                        Span::styled("▪ ".to_string(), Style::default().fg(theme::MD_LIST()))
+                    } else {
+                        Span::raw("  ".to_string())
+                    });
+                    spans.extend(part);
+                    self.out.push(Line::from(spans));
+                }
+            }
         }
     }
 
@@ -483,6 +693,205 @@ impl Prefix {
             marker: None,
         }
     }
+}
+
+/// Narrowest a column is squeezed to before the table stacks instead: below
+/// this, most words break mid-word and a grid stops being readable.
+const MIN_COLUMN: usize = 6;
+/// The ` │ ` between columns.
+const COLUMN_GAP: usize = 3;
+
+fn spans_width(spans: &[Span<'_>]) -> usize {
+    spans
+        .iter()
+        .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+        .sum()
+}
+
+/// Drop leading and trailing whitespace from a run of spans.
+fn trim_spans(mut spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
+    while let Some(first) = spans.first_mut() {
+        let trimmed = first.content.trim_start().to_string();
+        if trimmed.is_empty() {
+            spans.remove(0);
+        } else {
+            first.content = trimmed.into();
+            break;
+        }
+    }
+    while let Some(last) = spans.last_mut() {
+        let trimmed = last.content.trim_end().to_string();
+        if trimmed.is_empty() {
+            spans.pop();
+        } else {
+            last.content = trimmed.into();
+            break;
+        }
+    }
+    spans
+}
+
+/// Header cells read as structure: bold, in the heading hue.
+fn header_spans(spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
+    spans
+        .into_iter()
+        .map(|mut s| {
+            s.style = s.style.add_modifier(Modifier::BOLD);
+            if s.style.bg.is_none() {
+                s.style.fg = Some(theme::MD_H2());
+            }
+            s
+        })
+        .collect()
+}
+
+/// Tallest a wrapped cell may get before the table stacks instead: past this
+/// a column has become a ribbon and a record reads better than a grid.
+const MAX_CELL_LINES: usize = 4;
+
+/// Column widths for a grid that fits `avail` columns, or `None` when the
+/// table reads better stacked (see [`MIN_COLUMN`], [`MAX_CELL_LINES`]).
+///
+/// Natural widths are used when they fit. Otherwise the room is water-filled:
+/// any column that fits within a fair share of what is left keeps its natural
+/// width (short ids and numbers never break mid-word), and the long columns
+/// share the remainder in proportion to their natural widths.
+fn grid_widths(
+    header: &[Vec<Span<'static>>],
+    body: &[Vec<Vec<Span<'static>>>],
+    avail: usize,
+) -> Option<Vec<usize>> {
+    let cols = header.len();
+    let natural: Vec<usize> = (0..cols)
+        .map(|c| {
+            body.iter()
+                .map(|r| spans_width(&r[c]))
+                .chain(std::iter::once(spans_width(&header[c])))
+                .max()
+                .unwrap_or(0)
+                .max(1)
+        })
+        .collect();
+    let gaps = COLUMN_GAP * cols.saturating_sub(1);
+    let budget = avail.checked_sub(gaps)?;
+    if natural.iter().sum::<usize>() <= budget {
+        return Some(natural);
+    }
+    let mut widths = vec![0usize; cols];
+    let mut open: Vec<usize> = (0..cols).collect();
+    let mut left = budget;
+    while !open.is_empty() {
+        let fair = left / open.len();
+        let (fit, long): (Vec<usize>, Vec<usize>) = open.iter().partition(|c| natural[**c] <= fair);
+        if fit.is_empty() {
+            let total: usize = long.iter().map(|c| natural[*c]).sum::<usize>().max(1);
+            let mut given = 0;
+            for c in &long {
+                widths[*c] = left * natural[*c] / total;
+                given += widths[*c];
+            }
+            // Rounding leftovers go to the widest column.
+            if let Some(widest) = long.iter().max_by_key(|c| natural[**c]) {
+                widths[*widest] += left - given;
+            }
+            break;
+        }
+        for c in &fit {
+            widths[*c] = natural[*c];
+            left -= natural[*c];
+        }
+        open = long;
+    }
+    if (0..cols).any(|c| widths[c] < natural[c].min(MIN_COLUMN)) {
+        return None;
+    }
+    let tallest = body
+        .iter()
+        .chain(std::iter::once(&header.to_vec()))
+        .flat_map(|row| {
+            row.iter()
+                .zip(&widths)
+                .map(|(cell, w)| wrap_cell(cell, *w).len())
+        })
+        .max()
+        .unwrap_or(1);
+    (tallest <= MAX_CELL_LINES).then_some(widths)
+}
+
+/// A cell's content broken into lines no wider than `width`.
+fn wrap_cell(cell: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> {
+    if spans_width(cell) <= width {
+        return vec![cell.to_vec()];
+    }
+    let (lines, _) = crate::tui::wrap::wrap_lines_with_links(
+        &[Line::from(cell.to_vec())],
+        width.min(u16::MAX as usize) as u16,
+    );
+    lines.into_iter().map(|l| trim_spans(l.spans)).collect()
+}
+
+/// Pad one cell line to exactly `width` columns, honouring the column's
+/// markdown alignment (`:--`, `:-:`, `--:`).
+fn pad_cell(content: Vec<Span<'static>>, width: usize, align: Alignment) -> Vec<Span<'static>> {
+    let used = spans_width(&content);
+    let room = width.saturating_sub(used);
+    let (left, right) = match align {
+        Alignment::Right => (room, 0),
+        Alignment::Center => (room / 2, room - room / 2),
+        Alignment::Left | Alignment::None => (0, room),
+    };
+    let mut out = Vec::with_capacity(content.len() + 2);
+    if left > 0 {
+        out.push(Span::raw(" ".repeat(left)));
+    }
+    out.extend(content);
+    if right > 0 {
+        out.push(Span::raw(" ".repeat(right)));
+    }
+    out
+}
+
+/// A row's last cell needs no padding after it: trailing spaces would only
+/// push the line toward the wrap edge.
+fn trim_trailing_pad(mut spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
+    while let Some(last) = spans.last() {
+        if last.content.trim().is_empty() && last.style.bg.is_none() {
+            spans.pop();
+        } else {
+            break;
+        }
+    }
+    spans
+}
+
+/// Table chrome (column bars, the header rule) uses the quote-bar role: it
+/// is structure the eye has to follow across a row, so it must clear the
+/// contrast floor in every theme, which the plain border role does not.
+fn table_rule_fg() -> Color {
+    theme::MD_QUOTE()
+}
+
+/// The rule under a table header (`─┼─`); `quiet` is the lighter divider
+/// between wrapped body rows (thin glyphs, same role, so it still clears the
+/// contrast floor).
+fn table_rule(prefix: &Prefix, widths: &[usize], quiet: bool) -> Line<'static> {
+    let (line, cross) = if quiet {
+        ('╌', '┼')
+    } else {
+        ('─', '┼')
+    };
+    let mut text = String::new();
+    for (c, w) in widths.iter().enumerate() {
+        if c > 0 {
+            text.push(line);
+            text.push(cross);
+            text.push(line);
+        }
+        text.extend(std::iter::repeat_n(line, *w));
+    }
+    let mut spans = prefix.spans();
+    spans.push(Span::styled(text, Style::default().fg(table_rule_fg())));
+    Line::from(spans)
 }
 
 /// Heading decoration by level: (marker, colour).
@@ -871,14 +1280,23 @@ mod tests {
             .map(|s| s.style.add_modifier)
             .collect();
         assert!(mods.iter().any(|m| m.contains(Modifier::BOLD)), "{mods:?}");
-        assert!(mods.iter().any(|m| m.contains(Modifier::ITALIC)), "{mods:?}");
+        assert!(
+            mods.iter().any(|m| m.contains(Modifier::ITALIC)),
+            "{mods:?}"
+        );
         assert!(
             mods.iter().any(|m| m.contains(Modifier::CROSSED_OUT)),
             "strikethrough should survive: {mods:?}"
         );
         let text = flat(&out);
-        assert!(!text.contains('*'), "emphasis markers must be consumed: {text:?}");
-        assert!(!text.contains('~'), "strikethrough markers must be consumed: {text:?}");
+        assert!(
+            !text.contains('*'),
+            "emphasis markers must be consumed: {text:?}"
+        );
+        assert!(
+            !text.contains('~'),
+            "strikethrough markers must be consumed: {text:?}"
+        );
     }
 
     /// Structure that nests must not lose its gutters.
@@ -886,11 +1304,127 @@ mod tests {
     fn nested_quotes_and_lists_keep_their_structure() {
         let quoted_list = flat(&render_markdown("> - one\n> - two", Style::default()));
         assert!(quoted_list.contains('▏'), "quote bar kept: {quoted_list:?}");
-        assert!(quoted_list.contains("• one"), "list inside quote: {quoted_list:?}");
+        assert!(
+            quoted_list.contains("• one"),
+            "list inside quote: {quoted_list:?}"
+        );
 
         let list_with_quote = flat(&render_markdown("- item\n\n  > aside", Style::default()));
         assert!(list_with_quote.contains("• item"), "{list_with_quote:?}");
         assert!(list_with_quote.contains('▏'), "{list_with_quote:?}");
+    }
+
+    fn rows_at(src: &str, width: usize) -> Vec<String> {
+        render_markdown_at(src, Style::default(), width)
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect()
+    }
+
+    const WIDE_TABLE: &str = "| Engine | Endpoint | Notes |\n|:--|:-:|--:|\n| d1-ultra | api.liquid.ai | Liquid's strongest decision model, multimodal and fluent in forty-four languages |\n| `amos-1` | **none** | keyless |";
+
+    // Failure mode (the reported bug): a table row wider than the window, so
+    // the wrapper cuts it mid-row and the columns fall apart. Every rendered
+    // line must fit the width it was laid out for, at every width.
+    #[test]
+    fn table_rows_never_exceed_the_width() {
+        for width in [12, 20, 30, 44, 60, 80, 120, 200] {
+            for row in rows_at(WIDE_TABLE, width) {
+                assert!(
+                    UnicodeWidthStr::width(row.as_str()) <= width,
+                    "width {width}: row {row:?} is {} wide",
+                    UnicodeWidthStr::width(row.as_str())
+                );
+            }
+        }
+    }
+
+    // Failure modes: pipe syntax and the dash delimiter row reaching the
+    // screen, columns that do not line up, inline styling lost in a cell.
+    #[test]
+    fn a_table_that_fits_renders_as_an_aligned_grid() {
+        let rows = rows_at("| a | bb |\n|---|---|\n| ccc | d |", 80);
+        let rows: Vec<&String> = rows.iter().filter(|r| !r.trim().is_empty()).collect();
+        assert_eq!(rows.len(), 3, "{rows:?}");
+        assert!(
+            rows.iter().all(|r| !r.contains('|') && !r.contains("---")),
+            "{rows:?}"
+        );
+        assert!(rows[1].contains('┼'), "header rule expected: {rows:?}");
+        let bar = |r: &str| r.find('│').map(|i| UnicodeWidthStr::width(&r[..i]));
+        assert_eq!(bar(rows[0]), bar(rows[2]), "columns must line up: {rows:?}");
+
+        let styled = render_markdown_at("| x |\n|---|\n| **bold** `code` |", Style::default(), 80);
+        let bold = styled
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .any(|s| s.content.contains("bold") && s.style.add_modifier.contains(Modifier::BOLD));
+        assert!(bold, "inline styling must survive inside a cell");
+    }
+
+    #[test]
+    fn column_alignment_is_honoured() {
+        let rows = rows_at(
+            "| left | right | mid |\n|:--|--:|:-:|\n| a | b | c |\n| aaaa | bbbbb | ccc |",
+            80,
+        );
+        let body = rows
+            .iter()
+            .find(|r| r.starts_with("a "))
+            .expect("first body row");
+        // `right` is 5 wide: a right-aligned "b" sits at the column's end.
+        let cols: Vec<&str> = body.split(" │ ").collect();
+        assert_eq!(cols[1], "    b", "{rows:?}");
+        assert_eq!(cols[2].trim_end(), " c", "{rows:?}");
+    }
+
+    // Failure mode: a narrow window squeezes columns until every word
+    // breaks mid-word. Below that point the table becomes stacked records.
+    #[test]
+    fn a_table_too_wide_for_any_grid_stacks_into_records() {
+        let rows = rows_at(WIDE_TABLE, 20);
+        let text = rows.join("\n");
+        assert!(!text.contains('│'), "too narrow for a grid: {text}");
+        assert!(text.contains("▪ Engine: d1-ultra"), "{text}");
+        assert!(
+            text.contains("Endpoint:") && text.contains("api.liquid.ai"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_shrunk_grid_wraps_long_cells_inside_their_column() {
+        let rows = rows_at(WIDE_TABLE, 60);
+        let grid: Vec<&String> = rows.iter().filter(|r| r.contains('│')).collect();
+        assert!(
+            grid.len() > 3,
+            "the long notes cell must wrap onto more lines: {rows:?}"
+        );
+        let bars: Vec<Option<usize>> = grid
+            .iter()
+            .map(|r| r.find('│').map(|i| UnicodeWidthStr::width(&r[..i])))
+            .collect();
+        assert!(
+            bars.windows(2).all(|w| w[0] == w[1]),
+            "wrapped rows keep the column edge: {rows:?}"
+        );
+        // Short columns keep their natural width: only the long notes wrap,
+        // nothing breaks mid-word.
+        assert!(grid.iter().any(|r| r.starts_with("d1-ultra ")), "{rows:?}");
+        assert!(grid.iter().any(|r| r.contains("api.liquid.ai")), "{rows:?}");
+    }
+
+    #[test]
+    fn a_table_inside_a_quote_keeps_the_bar() {
+        let rows = rows_at("> | a | b |\n> |---|---|\n> | 1 | 2 |", 80);
+        let grid: Vec<&String> = rows
+            .iter()
+            .filter(|r| r.contains('│') || r.contains('┼'))
+            .collect();
+        assert!(
+            !grid.is_empty() && grid.iter().all(|r| r.starts_with('▏')),
+            "{rows:?}"
+        );
     }
 
     #[test]

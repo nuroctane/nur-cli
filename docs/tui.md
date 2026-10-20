@@ -608,6 +608,7 @@ Assistant answers are composed for reading, not dumped as markdown source. `src/
 | Blockquote | `▏` bar in `md_quote` on **every** row, text a step down from body. |
 | Code block | Fences never render. Every row sits on `code_bg` with a two-space gutter; syntax colours on dark palettes, the theme's own `md_code` on light ones (the highlighter's palette is dark-only). |
 | Rule | A short `─` rule in `border`, not literal `---`. |
+| Table | Laid out for the window width, never raw pipes. A grid with a `─┼─` header rule, bold headers in `md_h2`, and the column alignment from the delimiter row (`:--` `:-:` `--:`) when it fits. When it does not, short columns keep their width and long cells wrap inside their own column. When even that would leave a cell taller than four lines, or a column under six wide, each row becomes a stacked `Header: value` record. Rows never exceed the width, so resizing re-lays the table instead of breaking it mid-row. |
 | Link | Label in `md_link`, URL appended dimmed + underlined so it stays clickable without shouting. |
 | Path | A path that exists on disk is a link (see below). Directories take the theme's `dir` hue. |
 

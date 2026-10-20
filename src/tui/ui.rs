@@ -2474,6 +2474,12 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
         app.prose_cache_keys.clear();
         app.prose_cache_parts.clear();
     }
+    // Prose is laid out against the width too (tables fit it), so a resize
+    // must rebuild it, not just re-wrap it.
+    if app.wrap_cache_width != inner_w {
+        app.prose_cache_keys.clear();
+        app.prose_cache_parts.clear();
+    }
     fit_wrap_cache(
         &mut app.wrap_cache_width,
         &mut app.wrap_cache_keys,
@@ -3013,8 +3019,9 @@ fn draw_scrollbar(f: &mut Frame, app: &App, track: Rect, top: usize, total: usiz
 /// Kept separate from [`cell_lines`] so the prose pipeline (markdown → gutter →
 /// wrap) can be rendered and inspected on its own - see the theme-preview
 /// harness in this module's tests.
-fn assistant_prose_lines(text: &str) -> Vec<Line<'static>> {
-    let md = markdown::render_markdown(text, theme::style_assistant());
+fn assistant_prose_lines(text: &str, width: usize) -> Vec<Line<'static>> {
+    // The 2-column gutter below comes off the body width tables lay out in.
+    let md = markdown::render_markdown_at(text, theme::style_assistant(), width.saturating_sub(2));
     let bullet = theme::SEAFOAM();
     md.into_iter()
         .enumerate()
@@ -3092,7 +3099,7 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                     ),
                 ]));
             }
-            out.extend(assistant_prose_lines(text));
+            out.extend(assistant_prose_lines(text, width));
             #[cfg(feature = "image-peek")]
             if crate::tui::latex::first_cached_png(text).is_some() {
                 out.push(Line::from(vec![
@@ -8209,7 +8216,7 @@ mod tests {
                 compact_tool_line("read_file", r#"{"path":"src/tui/ui.rs"}"#, Some(Duration::from_millis(28)), main_width as usize, &mut lines);
                 compact_tool_line("edit_file", r#"{"path":"src/agent/session.rs"}"#, Some(Duration::from_millis(42)), main_width as usize, &mut lines);
                 lines.push(Line::default());
-                lines.extend(assistant_prose_lines("Updated the transcript and inspector.\n\n- Completed tools stay compact.\n- Details open when you need them."));
+                lines.extend(assistant_prose_lines("Updated the transcript and inspector.\n\n- Completed tools stay compact.\n- Details open when you need them.", 80));
                 f.render_widget(Paragraph::new(wrap::wrap_lines(&lines, main_width)), Rect::new(0,0,main_width,18));
                 let panel = if width >= 90 { Rect::new(width-42,0,42,18) } else { Rect::new(0,0,width,18) };
                 draw_rows(f, &mut inspector, &rows, panel);
@@ -8408,9 +8415,9 @@ mod tests {
         let sample = SAMPLE_ANSWER;
         for theme_id in theme::theme_ids() {
             assert!(theme::set_theme(theme_id), "unknown theme {theme_id}");
-            for width in [100u16, 72] {
+            for width in [100u16, 72, 44] {
                 let mut lines = Vec::new();
-                lines.extend(assistant_prose_lines(sample));
+                lines.extend(assistant_prose_lines(sample, width as usize));
                 let rows = wrap::wrap_lines(&lines, width);
                 // Mirror what draw_transcript does to each wrapped line, so the
                 // dump shows the transcript the user actually sees: every
@@ -8488,6 +8495,11 @@ I checked the **auth path** and found two problems. One is a real bug; the other
 1. Serialized refresh behind the existing session mutex.
 2. Collapsed the duplicate log line into the retry report.
 3. Added a regression test: `auth::tests::concurrent_refresh_keeps_one_token`.
+
+| Path | Before | After | Notes |
+|:--|:-:|--:|:--|
+| `refresh()` | racy | locked | serialized behind the session mutex so a late refresh can no longer clobber a fresh token |
+| retry log | 2 lines | 1 line | **one** report per retry |
 
 > The retry budget is unchanged. This only removes the race; if a refresh genuinely fails you still get the same error surface as before.
 
