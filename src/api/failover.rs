@@ -165,8 +165,10 @@ pub fn should_failover_for(err: &NurError, provider_id: &str) -> bool {
             }
             false
         }
-        // Transport/connection/parse failures from the client layer.
-        NurError::Other(_) => true,
+        // Transport/connection/parse failures from the client layer. A
+        // transport failure reaches here only after the same-provider
+        // reconnects ran out, so the provider is really unreachable.
+        NurError::Other(_) | NurError::Transport(_) => true,
         _ => false,
     }
 }

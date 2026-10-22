@@ -137,6 +137,9 @@ pub async fn run_subagent(
                 swarm::thinking(run_id);
                 last_text.push_str(&d);
             }
+            AgentEvent::StreamRestart { discard } => {
+                crate::agent::r#loop::discard_streamed_tail(&mut last_text, discard);
+            }
             AgentEvent::AssistantMessage(m) => {
                 if !m.is_empty() {
                     last_text = m;

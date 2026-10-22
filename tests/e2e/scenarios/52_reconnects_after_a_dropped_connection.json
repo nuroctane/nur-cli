@@ -1,0 +1,12 @@
+{
+  "description": "A connection reset before the provider answers is a transport failure, not an error: nur reconnects and replays the request on the same provider, and the turn ends with the answer.",
+  "prompt": "Say hello.",
+  "script": [
+    {"drop": "before_response"},
+    {"text": "Answer after reconnect."}
+  ],
+  "expect": {
+    "stdout_contains": ["Answer after reconnect."],
+    "requests": 2
+  }
+}

@@ -562,28 +562,25 @@ fn auth_hint() -> &'static str {
     }
 }
 
+/// The user's NUR_PROVIDER_TURN_TIMEOUT_SECS cap, else none.
 fn provider_turn_timeout() -> Duration {
-    std::env::var("NUR_PROVIDER_TURN_TIMEOUT_SECS")
-        .ok()
-        .and_then(|v| v.trim().parse::<u64>().ok())
-        .filter(|s| *s > 0)
-        .map(Duration::from_secs)
-        .unwrap_or_else(|| Duration::from_secs(300))
+    crate::api::client::provider_turn_cap().unwrap_or(super::UNCAPPED)
 }
 
 /// No stdout/stderr line for this long means the CLI is wedged (most often a
 /// permission prompt that has no console in exec mode).
 ///
 /// `--output-format json` prints nothing until the run is over, so silence is
-/// normal: the default is the whole turn budget and only an explicit
-/// `NUR_DROID_IDLE_TIMEOUT_SECS` cuts a quiet run short.
+/// normal: the default is the turn cap (30 minutes when none is set, long
+/// enough for real work, short enough that a wedged prompt still surfaces)
+/// and only an explicit `NUR_DROID_IDLE_TIMEOUT_SECS` cuts a quiet run short.
 fn idle_timeout(total: Duration) -> Duration {
     std::env::var("NUR_DROID_IDLE_TIMEOUT_SECS")
         .ok()
         .and_then(|v| v.trim().parse::<u64>().ok())
         .filter(|s| *s > 0)
         .map(Duration::from_secs)
-        .unwrap_or(total)
+        .unwrap_or(total.min(Duration::from_secs(30 * 60)))
 }
 
 /// Run a non-streaming Droid completion. `api_key` is a key nur holds for the

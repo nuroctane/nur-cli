@@ -6,7 +6,10 @@ system prompt, message order) as well as on what it did.
 
 A reply is {"text": "..."}, {"tool_calls": [{"name", "arguments"}]} (a string
 "arguments" is sent verbatim, so malformed JSON can be scripted), or
-{"status": 500, "error": "..."} for an HTTP failure. On the Responses wire a
+{"status": 500, "error": "..."} for an HTTP failure. A reply with
+"drop": "before_response" resets the connection without answering, and
+"drop": "mid_stream" streams its text then resets: both are transport failures,
+not HTTP errors. On the Responses wire a
 reply may also carry "reasoning" (an encrypted reasoning item, as OpenAI returns
 with store=false) and "extra_output" (raw output items such as Perplexity's
 search_results), both emitted before the message.
@@ -20,6 +23,9 @@ Usage: python fake_provider.py <script.json> <requests.jsonl> <port-file> [<mcp.
 """
 
 import json
+import os
+import socket
+import struct
 import sys
 import threading
 import time
@@ -189,6 +195,10 @@ def make_handler(state, mcp=None):
             headers = {name.lower(): value for name, value in self.headers.items()}
             reply = state.next_reply({**body, "_path": path, "_headers": headers})
             n = state.count
+            drop = reply.get("drop")
+            if drop == "before_response":
+                self._reset()
+                return
             if "status" in reply:
                 # Scripted HTTP failure: {"status": 500, "error": "..."}.
                 self._json(reply["status"], {"error": {"message": reply.get("error", "scripted failure")}})
@@ -213,6 +223,10 @@ def make_handler(state, mcp=None):
                 if calls:
                     delta["tool_calls"] = calls
                 self._sse({"choices": [{"index": 0, "delta": delta, "finish_reason": None}]}, n)
+                if drop == "mid_stream":
+                    time.sleep(0.2)  # let the client read the partial text first
+                    self._reset()
+                    return
                 self._sse({"choices": [{"index": 0, "delta": {}, "finish_reason": finish}], "usage": usage}, n)
                 self.wfile.write(b"data: [DONE]\n\n")
                 self.wfile.flush()
@@ -289,6 +303,14 @@ def make_handler(state, mcp=None):
                 self._event("content_block_stop", {"type":"content_block_stop", "index":i})
             self._event("message_delta", {"type":"message_delta", "delta":{"stop_reason":stop, "stop_sequence":None}, "usage":{"output_tokens":5}})
             self._event("message_stop", {"type":"message_stop"})
+
+        def _reset(self):
+            """Close with RST, not FIN, so the client sees a dropped connection
+            rather than a body that ended cleanly."""
+            linger = struct.pack("HH" if os.name == "nt" else "ii", 1, 0)
+            self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, linger)
+            self.close_connection = True
+            self.connection.close()
 
         def _sse(self, chunk, n):
             chunk = {"id": f"cmpl-{n}", "object": "chat.completion.chunk", "model": "e2e-model", **chunk}

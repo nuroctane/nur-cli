@@ -312,6 +312,26 @@ If you hit this constantly on one provider, you are probably outrunning it:
 subagents fan out up to 4 at a time, so a small worker pool saturates fast. Send
 less in parallel, or add a fallback with `/failover`.
 
+#### `connection to … dropped - reconnecting`
+
+The connection to the provider broke before the answer finished: a reset, a
+keep-alive socket the server had already closed, an edge restart, or no bytes at
+all for `NUR_PROVIDER_IDLE_TIMEOUT_SECS` (default 300). nur reconnects to the
+same provider and replays the request, six times over about 30 seconds
+(250ms, 1s, 2s, 4s, 8s, 15s). If the stream had already written text, that text
+is taken back first, so the answer is not doubled; tool calls only run from a
+finished response, so none run twice.
+
+Only when every reconnect fails does the turn stop (or move along the failover
+chain), with the whole cause instead of only `error sending request for url`:
+
+```text
+stream connect failed: error sending request for url (…): client error (SendRequest): connection error: An existing connection was forcibly closed by the remote host. (os error 10054)
+```
+
+No clock cuts off a response that is still arriving. Set
+`NUR_PROVIDER_TURN_TIMEOUT_SECS` only if you want a hard cap.
+
 ### Session not resuming
 
 ```bash

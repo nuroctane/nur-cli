@@ -27,6 +27,13 @@ pub enum AgentEvent {
     Status(String),
     ReasoningDelta(String),
     TextDelta(String),
+    /// The model stream dropped after `discard` bytes of text had already been
+    /// sent as [`AgentEvent::TextDelta`]s, and the request is being replayed.
+    /// Consumers remove that tail so the replayed answer does not land on top
+    /// of the partial one ([`discard_streamed_tail`]).
+    StreamRestart {
+        discard: usize,
+    },
     AssistantMessage(String),
     ToolStart {
         id: u64,
@@ -256,6 +263,7 @@ pub async fn run_collect(
         while let Some(ev) = rx.recv().await {
             match ev {
                 AgentEvent::TextDelta(d) => acc.push_str(&d),
+                AgentEvent::StreamRestart { discard } => discard_streamed_tail(&mut acc, discard),
                 AgentEvent::AssistantMessage(m) => {
                     if acc.trim().is_empty() {
                         acc = m;
@@ -303,18 +311,23 @@ struct Served {
     failover: bool,
 }
 
-fn provider_turn_timeout_from(value: Option<&str>) -> std::time::Duration {
-    value
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .filter(|secs| *secs > 0)
-        .map(std::time::Duration::from_secs)
-        .unwrap_or_else(|| std::time::Duration::from_secs(300))
+/// Drop the last `discard` bytes of streamed text after an
+/// [`AgentEvent::StreamRestart`]. Falls back to the nearest char boundary
+/// below, so a consumer that saw extra text never panics on a split char.
+pub fn discard_streamed_tail(text: &mut String, discard: usize) {
+    let mut keep = text.len().saturating_sub(discard);
+    while !text.is_char_boundary(keep) {
+        keep -= 1;
+    }
+    text.truncate(keep);
 }
 
-fn provider_turn_timeout() -> std::time::Duration {
-    let value = std::env::var("NUR_PROVIDER_TURN_TIMEOUT_SECS").ok();
-    provider_turn_timeout_from(value.as_deref())
-}
+/// Backoff before each reconnect after a transport failure (see
+/// [`NurError::is_transport`]). The first retry is almost immediate: the most
+/// common cause is a pooled socket the server had already closed, and a fresh
+/// connection fixes it at once. The rest ride out a network blip or a provider
+/// edge restart (~30s in all) before the failover chain or the error takes over.
+const TRANSPORT_BACKOFF_MS: &[u64] = &[250, 1_000, 2_000, 4_000, 8_000, 15_000];
 
 impl AgentRunner {
     fn persist_session(&self, session: &Session) {
@@ -337,9 +350,15 @@ impl AgentRunner {
     }
 
     /// Run one model request against `client`, forwarding stream events to the
-    /// UI. Returns `(response, text_deltas_emitted)` on success, or
-    /// `(error, text_deltas_emitted)` so the caller can tell whether failing
-    /// over is safe (only when nothing was streamed yet).
+    /// UI. Returns `(response, text_bytes_streamed)` on success, or
+    /// `(error, text_bytes_streamed)` so the caller can tell whether failing
+    /// over is safe (only when nothing was streamed yet) and how much streamed
+    /// text a replay must retract.
+    ///
+    /// No wall clock bounds the request unless the user set
+    /// `NUR_PROVIDER_TURN_TIMEOUT_SECS`: a long answer that keeps streaming is
+    /// never cut off. A silent connection is caught by the HTTP client's idle
+    /// timeout and comes back as a transport error.
     async fn stream_one(
         &self,
         client: &ApiClient,
@@ -349,7 +368,21 @@ impl AgentRunner {
     ) -> std::result::Result<(ApiResponse, usize), (NurError, usize)> {
         let delta_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let turn_cancel = cancel.child_token();
-        let timeout = provider_turn_timeout();
+        let cap = crate::api::client::provider_turn_cap();
+        let capped = async {
+            match cap {
+                Some(cap) => tokio::time::sleep(cap).await,
+                None => std::future::pending::<()>().await,
+            }
+        };
+        tokio::pin!(capped);
+        let cap_error = || {
+            NurError::Other(format!(
+                "provider request exceeded your {}s cap ({})",
+                cap.unwrap_or_default().as_secs(),
+                crate::api::client::TURN_TIMEOUT_ENV
+            ))
+        };
         // Agent CLIs (cursor-agent, droid) must honor Esc cancel; always take
         // the streaming path so the CancellationToken reaches the child
         // process (even for subagents).
@@ -359,7 +392,7 @@ impl AgentRunner {
                 req,
                 move |ev| match ev {
                     StreamEvent::TextDelta(d) => {
-                        streamed_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        streamed_count.fetch_add(d.len(), std::sync::atomic::Ordering::Relaxed);
                         let _ = tx.send(AgentEvent::TextDelta(d));
                     }
                     StreamEvent::ReasoningDelta(d) => {
@@ -378,12 +411,9 @@ impl AgentRunner {
                         delta_count.load(std::sync::atomic::Ordering::Relaxed),
                     ));
                 }
-                _ = tokio::time::sleep(timeout) => {
+                _ = &mut capped => {
                     turn_cancel.cancel();
-                    Err(NurError::Other(format!(
-                        "provider turn exceeded the {}s timeout (set NUR_PROVIDER_TURN_TIMEOUT_SECS to adjust)",
-                        timeout.as_secs()
-                    )))
+                    Err(cap_error())
                 }
                 result = &mut request => result,
             };
@@ -398,12 +428,9 @@ impl AgentRunner {
                     turn_cancel.cancel();
                     Err((NurError::Interrupted, 0))
                 },
-                _ = tokio::time::sleep(timeout) => {
+                _ = &mut capped => {
                     turn_cancel.cancel();
-                    Err((NurError::Other(format!(
-                        "provider turn exceeded the {}s timeout (set NUR_PROVIDER_TURN_TIMEOUT_SECS to adjust)",
-                        timeout.as_secs()
-                    )), 0))
+                    Err((cap_error(), 0))
                 },
                 r = client.create_response(req) => match r {
                     Ok(resp) => Ok((resp, 0)),
@@ -434,7 +461,16 @@ impl AgentRunner {
         //
         // Only retried when the stream emitted nothing: replaying a request that
         // already wrote text would duplicate it into the transcript.
+        //
+        // A dropped connection is a pause too. Reset sockets, a keep-alive the
+        // server had already closed, an edge restart or a silent stall all
+        // mean the provider never finished answering, not that the request is
+        // wrong, so it is replayed on the same provider with backoff. If text
+        // had already streamed, consumers are told to retract it first
+        // (`StreamRestart`); tool calls only run from a completed response, so
+        // a replay cannot repeat one.
         let mut attempt: u32 = 0;
+        let mut reconnects: usize = 0;
         let primary_err = loop {
             match self.stream_one(&self.client, req, tx, cancel).await {
                 Ok((resp, deltas)) => {
@@ -449,6 +485,31 @@ impl AgentRunner {
                     ))
                 }
                 Err((e, emitted)) => {
+                    if e.is_transport()
+                        && reconnects < TRANSPORT_BACKOFF_MS.len()
+                        && !cancel.is_cancelled()
+                    {
+                        let wait_ms = TRANSPORT_BACKOFF_MS[reconnects];
+                        reconnects += 1;
+                        if emitted > 0 {
+                            let _ = tx.send(AgentEvent::StreamRestart { discard: emitted });
+                        }
+                        let wait = if wait_ms < 1_000 {
+                            format!("{wait_ms}ms")
+                        } else {
+                            format!("{}s", wait_ms / 1_000)
+                        };
+                        let _ = tx.send(AgentEvent::Status(format!(
+                            "connection to {} dropped ({e}) - reconnecting in {wait}, retry {reconnects}/{}",
+                            self.config.provider,
+                            TRANSPORT_BACKOFF_MS.len()
+                        )));
+                        tokio::select! {
+                            _ = cancel.cancelled() => return Err(NurError::Interrupted),
+                            _ = tokio::time::sleep(std::time::Duration::from_millis(wait_ms)) => {}
+                        }
+                        continue;
+                    }
                     if emitted == 0
                         && attempt < CAPACITY_RETRIES
                         && crate::api::failover::is_transient_capacity(&e)
@@ -3780,11 +3841,19 @@ mod tests {
     }
 
     #[test]
-    fn provider_turn_timeout_is_bounded_and_configurable() {
-        assert_eq!(provider_turn_timeout_from(None).as_secs(), 300);
-        assert_eq!(provider_turn_timeout_from(Some("17")).as_secs(), 17);
-        assert_eq!(provider_turn_timeout_from(Some("0")).as_secs(), 300);
-        assert_eq!(provider_turn_timeout_from(Some("invalid")).as_secs(), 300);
+    fn discarding_a_streamed_tail_never_splits_a_char() {
+        let mut text = String::from("kept · partial");
+        discard_streamed_tail(&mut text, "partial".len());
+        assert_eq!(text, "kept · ");
+        // A consumer that missed the start of the failed attempt can be told
+        // to drop more than it holds: it empties rather than panicking.
+        let mut short = String::from("ab");
+        discard_streamed_tail(&mut short, 10);
+        assert_eq!(short, "");
+        // Landing inside the two-byte middle dot moves down to its start.
+        let mut mid = String::from("a·b");
+        discard_streamed_tail(&mut mid, 2);
+        assert_eq!(mid, "a");
     }
 
     fn call(id: &str, name: &str) -> FunctionCallRef {

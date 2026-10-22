@@ -69,6 +69,20 @@ impl Emitter {
         }
     }
 
+    /// The stream dropped after `discard` bytes of this answer and the model
+    /// request is being replayed. Printed text cannot be taken back, so text
+    /// mode says so and the replay follows on a fresh line; stream-json tells
+    /// the reader exactly how much of its `text` events to drop.
+    pub fn stream_restart(&mut self, discard: usize) {
+        match self.format {
+            OutputFormat::Text => self.notice("connection dropped - replaying the answer"),
+            OutputFormat::StreamJson => {
+                Self::line(json!({"type": "stream_restart", "discard_bytes": discard}))
+            }
+            OutputFormat::Json => {}
+        }
+    }
+
     /// A complete assistant message (the streamed text, assembled).
     pub fn assistant_message(&mut self, m: &str) {
         match self.format {

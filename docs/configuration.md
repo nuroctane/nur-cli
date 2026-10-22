@@ -374,7 +374,8 @@ Non-zero **pre_tool** exit blocks the tool. Missing file = no hooks. Check statu
 
 | Variable | Purpose |
 |----------|---------|
-| `NUR_PROVIDER_TURN_TIMEOUT_SECS` | Maximum time for one provider request before Nur cancels it (default `300`). Applies to Responses, Chat Completions, Anthropic Messages, Gemini Cloud Code, and Cursor Agent CLI transports |
+| `NUR_PROVIDER_IDLE_TIMEOUT_SECS` | How long a provider connection may stay completely silent (no bytes, headers included) before Nur treats it as dead and reconnects (default `300`). A response that is still streaming is never cut off |
+| `NUR_PROVIDER_TURN_TIMEOUT_SECS` | Optional hard cap on one provider request, every transport including the Cursor Agent and Droid CLIs. Unset (the default) means no cap |
 
 ### Rendering
 

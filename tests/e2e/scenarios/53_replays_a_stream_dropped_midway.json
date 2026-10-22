@@ -1,0 +1,16 @@
+{
+  "description": "A stream reset after text has already arrived is replayed, and the partial text is retracted: stream-json readers get a stream_restart event and the final result holds only the complete answer.",
+  "prompt": "Say hello.",
+  "run_args": ["--output-format", "stream-json"],
+  "script": [
+    {"text": "PARTIAL-ANSWER-", "drop": "mid_stream"},
+    {"text": "Complete answer."}
+  ],
+  "expect": {
+    "requests": 2,
+    "stdout_jsonl": {
+      "types": ["text", "stream_restart", "result"],
+      "last": {"equals": {"type": "result", "ok": true, "exit_code": 0, "result": "Complete answer."}}
+    }
+  }
+}

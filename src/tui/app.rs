@@ -10526,6 +10526,20 @@ impl App {
                     self.refresh_sidegraph();
                 }
             }
+            AgentEvent::StreamRestart { discard } => {
+                // The partial answer is being replayed: take it back out of
+                // the streaming cell (or the whole cell, if that was all).
+                if let Some(Cell::Assistant {
+                    text,
+                    streaming: true,
+                }) = self.cells.last_mut()
+                {
+                    crate::agent::r#loop::discard_streamed_tail(text, discard);
+                    if text.is_empty() {
+                        self.cells.pop();
+                    }
+                }
+            }
             AgentEvent::AssistantMessage(m) => {
                 self.finish_thinking();
                 self.finish_streaming();

@@ -913,9 +913,9 @@ pub fn complete_stream(
     // thinking cell so turn 1 is not a silent hang; final commentary lands as
     // TextDelta after the nur-tools fence is stripped.
     //
-    // Total cap sits 30s above the agent-loop select (same
-    // NUR_PROVIDER_TURN_TIMEOUT_SECS, default 300) so the loop's token fires
-    // first and cancels us cleanly instead of racing this internal kill.
+    // An explicit NUR_PROVIDER_TURN_TIMEOUT_SECS cap sits 30s above the
+    // agent loop's, so the loop's token fires first and cancels us cleanly
+    // instead of racing this internal kill. Without one there is no cap.
     let (text, model, usage) = run_print(
         req,
         Some(&mut |ev| {
@@ -1053,13 +1053,11 @@ fn parse_completed_transcript(jsonl: &str, prompt: &str) -> Option<String> {
     }
 }
 
+/// The user's NUR_PROVIDER_TURN_TIMEOUT_SECS cap, else none: a run that keeps
+/// printing is never killed by the clock, and a silent one is caught by
+/// [`cursor_idle_timeout`].
 fn provider_turn_timeout() -> Duration {
-    std::env::var("NUR_PROVIDER_TURN_TIMEOUT_SECS")
-        .ok()
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .filter(|secs| *secs > 0)
-        .map(Duration::from_secs)
-        .unwrap_or_else(|| Duration::from_secs(300))
+    crate::api::client::provider_turn_cap().unwrap_or(super::UNCAPPED)
 }
 
 /// Idle cutoff: no stdout line for this long → kill, try transcript recovery,

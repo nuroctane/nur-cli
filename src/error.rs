@@ -91,6 +91,15 @@ pub enum NurError {
     #[error("interrupted")]
     Interrupted,
 
+    /// The connection to the provider failed or dropped: refused, reset,
+    /// closed under a reused keep-alive socket, or silent past the idle
+    /// window. Nothing about the request was wrong, so the agent loop
+    /// reconnects and replays it rather than ending the turn. The message
+    /// carries the whole cause chain (`error sending request` alone says
+    /// nothing about *why*).
+    #[error("{0}")]
+    Transport(String),
+
     #[error("{0}")]
     Other(String),
 }
@@ -116,7 +125,7 @@ impl NurError {
             NurError::Api {
                 status: 401 | 403, ..
             } => exit::AUTH,
-            NurError::Api { .. } | NurError::Request(_) => exit::PROVIDER,
+            NurError::Api { .. } | NurError::Request(_) | NurError::Transport(_) => exit::PROVIDER,
             NurError::Config(_) => exit::CONFIG,
             NurError::MaxTurns(_) | NurError::Budget(_) => exit::BUDGET,
             NurError::Interrupted => exit::CANCELLED,
@@ -125,6 +134,50 @@ impl NurError {
             }
         }
     }
+
+    /// A transport failure from `context` ("stream connect failed", ...) with
+    /// reqwest's full source chain, so the user sees "connection closed before
+    /// message completed" instead of only "error sending request for url".
+    pub fn transport(context: &str, error: &reqwest::Error) -> NurError {
+        let cause = if error.is_timeout() {
+            format!(
+                "no data from the provider for {}s ({})",
+                crate::api::client::provider_idle_timeout().as_secs(),
+                crate::api::client::IDLE_TIMEOUT_ENV
+            )
+        } else {
+            error_chain(error)
+        };
+        NurError::Transport(format!("{context}: {cause}"))
+    }
+
+    /// True when the request never got a usable answer because the connection
+    /// failed, not because the provider refused it. Safe to replay.
+    pub fn is_transport(&self) -> bool {
+        match self {
+            NurError::Transport(_) => true,
+            NurError::Request(e) => {
+                e.is_connect() || e.is_timeout() || e.is_request() || e.is_body()
+            }
+            _ => false,
+        }
+    }
+}
+
+/// `error: source: source`, skipping a source whose text its parent already
+/// ends with (hyper and reqwest often repeat each other).
+pub fn error_chain(error: &dyn std::error::Error) -> String {
+    let mut out = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        let text = cause.to_string();
+        if !text.is_empty() && !out.ends_with(&text) {
+            out.push_str(": ");
+            out.push_str(&text);
+        }
+        source = cause.source();
+    }
+    out
 }
 
 pub type Result<T> = std::result::Result<T, NurError>;

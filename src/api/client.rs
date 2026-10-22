@@ -331,17 +331,56 @@ fn affinity_from(session_id: Option<&str>) -> String {
         .unwrap_or_else(|| crate::oauth::random_urlsafe(16))
 }
 
+/// Env var for the idle window: how long a provider connection may stay
+/// silent (no bytes at all) before it is treated as dead and replayed.
+pub const IDLE_TIMEOUT_ENV: &str = "NUR_PROVIDER_IDLE_TIMEOUT_SECS";
+
+/// Env var for the opt-in hard cap on one provider request. Unset means no
+/// cap: a response that keeps streaming is never cut off by the clock.
+pub const TURN_TIMEOUT_ENV: &str = "NUR_PROVIDER_TURN_TIMEOUT_SECS";
+
+fn positive_secs(value: Option<&str>) -> Option<std::time::Duration> {
+    value
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .map(std::time::Duration::from_secs)
+}
+
+/// Idle window (default 300s). Resets on every byte, response headers
+/// included, so a long answer or a slow prefill that is still sending is
+/// never cut off; only a connection that has gone silent is.
+pub fn provider_idle_timeout() -> std::time::Duration {
+    positive_secs(std::env::var(IDLE_TIMEOUT_ENV).ok().as_deref())
+        .unwrap_or(std::time::Duration::from_secs(300))
+}
+
+/// The user's explicit cap on one provider request, if they set one.
+pub fn provider_turn_cap() -> Option<std::time::Duration> {
+    positive_secs(std::env::var(TURN_TIMEOUT_ENV).ok().as_deref())
+}
+
 impl ApiClient {
     pub fn new(base_url: impl Into<String>, api_key: impl Into<String>) -> Result<Self> {
-        let timeout_secs = std::env::var("NUR_PROVIDER_TURN_TIMEOUT_SECS")
-            .ok()
-            .and_then(|value| value.trim().parse::<u64>().ok())
-            .filter(|secs| *secs > 0)
-            .unwrap_or(300);
-        let http = Client::builder()
+        // No total timeout: reqwest's `timeout` is a deadline on the whole
+        // response, which cut every answer still streaming at 300s. A silent
+        // connection is caught by `read_timeout` (resets per read) and a dead
+        // peer by TCP keepalive (reqwest default 15s); both surface as
+        // transport errors the agent loop reconnects from.
+        //
+        // Pooled sockets are dropped after 30s idle. Servers close keep-alive
+        // connections on their own clock (Node's default is 5s), and a request
+        // written onto a socket the server just closed fails at once with
+        // "connection closed before message completed". That raced every
+        // request that followed a long tool run.
+        let mut http = Client::builder()
             .user_agent(format!("nur-cli/{}", env!("CARGO_PKG_VERSION")))
-            .timeout(std::time::Duration::from_secs(timeout_secs))
-            .build()?;
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .read_timeout(provider_idle_timeout())
+            .pool_idle_timeout(std::time::Duration::from_secs(30));
+        if let Some(cap) = provider_turn_cap() {
+            http = http.timeout(cap);
+        }
+        let http = http.build()?;
         Ok(Self {
             http,
             base_url: base_url.into().trim_end_matches('/').to_string(),
@@ -1201,9 +1240,10 @@ impl ApiClient {
                         tokio::time::sleep(backoff).await;
                         continue;
                     }
-                    return Err(NurError::Other(format!(
-                        "request failed after {attempt} attempts: {e}"
-                    )));
+                    return Err(NurError::transport(
+                        &format!("request failed after {attempt} attempts"),
+                        &e,
+                    ));
                 }
             };
 
@@ -1396,9 +1436,10 @@ impl ApiClient {
                         last_err = Some(NurError::Other(e.to_string()));
                         continue;
                     }
-                    return Err(NurError::Other(format!(
-                        "stream connect failed after {attempt}: {e}"
-                    )));
+                    return Err(NurError::transport(
+                        &format!("stream connect failed after {attempt} attempts"),
+                        &e,
+                    ));
                 }
             };
 
@@ -1568,10 +1609,10 @@ impl ApiClient {
                     Ok(c) => c,
                     Err(e) => {
                         if attempt < 3 && !saw_any_data {
-                            last_err = Some(NurError::Other(format!("stream chunk error: {e}")));
+                            last_err = Some(NurError::transport("stream interrupted", &e));
                             break;
                         } else {
-                            return Err(NurError::Other(format!("stream chunk error: {e}")));
+                            return Err(NurError::transport("stream interrupted", &e));
                         }
                     }
                 };
@@ -1769,7 +1810,7 @@ impl ApiClient {
                         Some(&e.to_string()),
                         None,
                     );
-                    return Err(NurError::Other(format!("request failed: {e}")));
+                    return Err(NurError::transport("request failed", &e));
                 }
             };
             let status = res.status();
@@ -1897,7 +1938,7 @@ impl ApiClient {
                         Some(&error.to_string()),
                         None,
                     );
-                    return Err(NurError::Other(format!("stream connect failed: {error}")));
+                    return Err(NurError::transport("stream connect failed", &error));
                 }
             };
 
@@ -2001,8 +2042,7 @@ impl ApiClient {
             let end_of_body = chunk.is_none();
             let events = match chunk {
                 Some(chunk) => {
-                    let chunk =
-                        chunk.map_err(|e| NurError::Other(format!("stream chunk error: {e}")))?;
+                    let chunk = chunk.map_err(|e| NurError::transport("stream interrupted", &e))?;
                     parser.push(&chunk)
                 }
                 None => parser.finish().into_iter().collect(),
@@ -2118,7 +2158,7 @@ impl ApiClient {
                     let _ = e;
                     continue;
                 }
-                Err(e) => return Err(NurError::Other(format!("request failed: {e}"))),
+                Err(e) => return Err(NurError::transport("request failed", &e)),
             };
             let status = res.status();
             let text = res.text().await.unwrap_or_default();
@@ -2219,7 +2259,7 @@ impl ApiClient {
                     let _ = e;
                     continue;
                 }
-                Err(e) => return Err(NurError::Other(format!("stream connect failed: {e}"))),
+                Err(e) => return Err(NurError::transport("stream connect failed", &e)),
             };
 
             let status = res.status();
@@ -2276,8 +2316,7 @@ impl ApiClient {
             let end_of_body = chunk.is_none();
             let events = match chunk {
                 Some(chunk) => {
-                    let chunk =
-                        chunk.map_err(|e| NurError::Other(format!("stream chunk error: {e}")))?;
+                    let chunk = chunk.map_err(|e| NurError::transport("stream interrupted", &e))?;
                     parser.push(&chunk)
                 }
                 None => parser.finish().into_iter().collect(),
@@ -2459,9 +2498,10 @@ impl ApiClient {
                         Some(&error.to_string()),
                         None,
                     );
-                    return Err(NurError::Other(format!(
-                        "OpenCode Gemini request failed: {error}"
-                    )));
+                    return Err(NurError::transport(
+                        "OpenCode Gemini request failed",
+                        &error,
+                    ));
                 }
             };
             let status = response.status();
@@ -2556,9 +2596,10 @@ impl ApiClient {
                         Some(&error.to_string()),
                         None,
                     );
-                    return Err(NurError::Other(format!(
-                        "OpenCode Gemini stream connect failed: {error}"
-                    )));
+                    return Err(NurError::transport(
+                        "OpenCode Gemini stream connect failed",
+                        &error,
+                    ));
                 }
             };
             let status = response.status();
@@ -2601,7 +2642,7 @@ impl ApiClient {
                     break;
                 };
                 let chunk = chunk.map_err(|error| {
-                    NurError::Other(format!("OpenCode Gemini stream chunk failed: {error}"))
+                    NurError::transport("OpenCode Gemini stream interrupted", &error)
                 })?;
                 for data in parser.push(&chunk) {
                     drain_gemini_frame(&data, &mut accumulator, &mut on_event);
@@ -2658,7 +2699,7 @@ impl ApiClient {
                     let _ = e;
                     continue;
                 }
-                Err(e) => return Err(NurError::Other(format!("request failed: {e}"))),
+                Err(e) => return Err(NurError::transport("request failed", &e)),
             };
             let status = res.status();
             let text = res.text().await.unwrap_or_default();
@@ -2747,9 +2788,10 @@ impl ApiClient {
                             .await;
                         continue;
                     }
-                    return Err(NurError::Other(format!(
-                        "Cloud Code stream connect failed after {attempt}: {e}"
-                    )));
+                    return Err(NurError::transport(
+                        &format!("Cloud Code stream connect failed after {attempt} attempts"),
+                        &e,
+                    ));
                 }
             };
 
@@ -2813,7 +2855,7 @@ impl ApiClient {
                 };
                 let chunk = match chunk {
                     Ok(c) => c,
-                    Err(e) => return Err(NurError::Other(format!("stream chunk error: {e}"))),
+                    Err(e) => return Err(NurError::transport("stream interrupted", &e)),
                 };
                 for data in parser.push(&chunk) {
                     drain_gemini_frame(&data, &mut acc, &mut on_event);

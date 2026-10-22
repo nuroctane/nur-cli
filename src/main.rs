@@ -1501,6 +1501,7 @@ async fn run_headless(
         };
         match ev {
             AgentEvent::TextDelta(d) => out.text_delta(&d),
+            AgentEvent::StreamRestart { discard } => out.stream_restart(discard),
             AgentEvent::AssistantMessage(m) => out.assistant_message(&m),
             AgentEvent::ReasoningDelta(_) => {}
             AgentEvent::Status(s) => out.status(&s),
@@ -1771,6 +1772,11 @@ async fn run_continuous(
                     midline = !d.ends_with('\n');
                     print!("{d}");
                     let _ = std::io::stdout().flush();
+                }
+                // Printed text cannot be taken back; the newline the match
+                // guard above already wrote separates the replay from it.
+                AgentEvent::StreamRestart { .. } => {
+                    theme::print_info("connection dropped - replaying the answer");
                 }
                 AgentEvent::Status(s) => {
                     if verbose {
