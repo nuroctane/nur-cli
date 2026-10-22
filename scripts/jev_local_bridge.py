@@ -43,8 +43,25 @@ import sys
 import threading
 import time
 import zlib
+import socketserver
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+
+
+class LoopbackHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer without the reverse-DNS lookup in server_bind.
+
+    HTTPServer.server_bind sets server_name from socket.getfqdn(host), which on
+    macOS (GitHub's runners included) can stall for tens of seconds before the
+    socket is usable. Nothing here reads server_name, so skip the lookup.
+    """
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = host
+        self.server_port = port
+
 
 # TypeSafe's own naming, so a mismatch is a refusal rather than a wrong answer.
 INSUFFICIENT = "none_of_these"
@@ -1607,7 +1624,7 @@ def selftest() -> int:
         import socket as _socket
 
         Handler.backend = MockBackend()
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server = LoopbackHTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         port = server.server_address[1]
         # Announce an over-cap body and send only a little of it: the guard is on
@@ -1652,7 +1669,7 @@ def selftest() -> int:
     # until `nur jev start` died. This closes that gap.
     try:
         Handler.backend = MockBackend()
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server = LoopbackHTTPServer(("127.0.0.1", 0), Handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         port = server.server_address[1]
@@ -1751,7 +1768,7 @@ def main(argv: list[str] | None = None) -> int:
 
     Handler.backend = backend
     try:
-        server = ThreadingHTTPServer((args.host, args.port), Handler)
+        server = LoopbackHTTPServer((args.host, args.port), Handler)
     except OSError as exc:
         print(
             f"cannot bind {args.host}:{args.port}: {exc}\n"

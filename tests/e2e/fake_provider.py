@@ -29,9 +29,25 @@ import struct
 import sys
 import threading
 import time
+import socketserver
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 EXHAUSTED = "[fake provider: script exhausted]"
+
+
+class LoopbackHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer without the reverse-DNS lookup in server_bind.
+
+    HTTPServer.server_bind sets server_name from socket.getfqdn(host), which on
+    macOS (GitHub's runners included) can stall for tens of seconds before the
+    socket is usable. Nothing here reads server_name, so skip the lookup.
+    """
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = host
+        self.server_port = port
 
 
 class State:
@@ -343,7 +359,7 @@ def main():
     if len(sys.argv) > 5:
         with open(sys.argv[4], encoding="utf-8") as f:
             mcp = FakeMcp(json.load(f), sys.argv[5])
-    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(State(script, log_path), mcp))
+    server = LoopbackHTTPServer(("127.0.0.1", 0), make_handler(State(script, log_path), mcp))
     with open(port_file, "w", encoding="utf-8") as f:
         f.write(str(server.server_address[1]))
     server.serve_forever()

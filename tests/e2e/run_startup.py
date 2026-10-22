@@ -18,10 +18,27 @@ import sys
 import threading
 import time
 import pyte
+import socketserver
 from http.server import ThreadingHTTPServer
 
 from fake_provider import State, make_handler
 from run_e2e import isolated_env, find_binary
+
+
+class LoopbackHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer without the reverse-DNS lookup in server_bind.
+
+    HTTPServer.server_bind sets server_name from socket.getfqdn(host), which on
+    macOS (GitHub's runners included) can stall for tens of seconds before the
+    socket is usable. Nothing here reads server_name, so skip the lookup.
+    """
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = host
+        self.server_port = port
+
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / 'target' / 'startup-e2e'
@@ -193,7 +210,7 @@ def blocked_models(binary, skill=False, cancel=False, controls=False, compact=Fa
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass
 
-    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    server = LoopbackHTTPServer(('127.0.0.1', 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     env = isolated_env(home, server.server_port, warm_skills=False)
     env['TERM'] = 'xterm-256color'
@@ -549,7 +566,7 @@ def transcript_frames(binary):
         {'tool_calls': [{'name': 'read_file', 'arguments': json.dumps({'path': 'notes.txt'})}]},
         {'text': 'FRAMED_ANSWER_5531 the notes hold one line.'},
     ], log)
-    server = ThreadingHTTPServer(('127.0.0.1', 0), make_handler(state))
+    server = LoopbackHTTPServer(('127.0.0.1', 0), make_handler(state))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     env = isolated_env(home, server.server_port, warm_skills=False)
     env.pop('NO_COLOR', None)

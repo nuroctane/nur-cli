@@ -110,8 +110,9 @@ def start_provider(script, workdir, mcp=None):
         (workdir / "mcp.jsonl").write_text("", encoding="utf-8")
         argv += [str(workdir / "mcp.json"), str(workdir / "mcp.jsonl")]
     proc = spawn_process(argv)
-    # A cold interpreter on a loaded macOS runner has taken over 10s to bind
-    # (v0.53.0's release run), so allow 30s and say which way it failed.
+    # Binding itself is instant (LoopbackHTTPServer skips the reverse-DNS
+    # lookup that stalled macOS runners past the old 10s); the margin is for a
+    # cold interpreter on a loaded runner, and the error says which way it failed.
     deadline = time.time() + 30
     while not (port_file.exists() and port_file.read_text().strip()):
         code = proc.poll()

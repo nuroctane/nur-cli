@@ -13,11 +13,28 @@ import subprocess
 import sys
 import threading
 import time
+import socketserver
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from fake_provider import FakeMcp, State, make_handler
 from run_e2e import find_binary, isolated_env
 from run_startup import BuilderLease, Terminal
+
+
+class LoopbackHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer without the reverse-DNS lookup in server_bind.
+
+    HTTPServer.server_bind sets server_name from socket.getfqdn(host), which on
+    macOS (GitHub's runners included) can stall for tens of seconds before the
+    socket is usable. Nothing here reads server_name, so skip the lookup.
+    """
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = host
+        self.server_port = port
+
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / 'target' / 'regression-e2e'
@@ -51,7 +68,7 @@ def config(home, port, extra='', provider='vllm', model='e2e-model'):
 
 
 def server(handler):
-    instance = ThreadingHTTPServer(('127.0.0.1', 0), handler)
+    instance = LoopbackHTTPServer(('127.0.0.1', 0), handler)
     threading.Thread(target=instance.serve_forever, daemon=True).start()
     return instance
 
