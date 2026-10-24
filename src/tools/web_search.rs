@@ -12,8 +12,9 @@ impl Tool for WebSearch {
     }
 
     fn description(&self) -> &str {
-        "Search the web (DuckDuckGo). Returns top results as title, url, snippet. \
-         Use for docs, error messages, APIs; follow up with web_fetch on a result url."
+        "Search the web (treg when TREG_TOKEN is set, else DuckDuckGo). Returns top results \
+         as title, url, snippet. Use for docs, error messages, APIs; follow up with web_fetch \
+         on a result url."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -30,6 +31,26 @@ impl Tool for WebSearch {
     fn execute(&self, args: &Value, _ctx: &ToolContext) -> Result<String> {
         let query = arg_str(args, "query")?;
         let max = arg_u64(args, "max_results").unwrap_or(8).clamp(1, 15) as usize;
+
+        // treg first when configured (free search, vendor fallback); any
+        // failure or an empty answer falls through to DuckDuckGo.
+        if let Some(token) = super::treg::token() {
+            match super::treg::search(&token, &query) {
+                Ok(rows) if !rows.is_empty() => {
+                    let mut out = format!("results for: {query} (via treg)\n\n");
+                    for (i, (title, url, snippet)) in rows.iter().take(max).enumerate() {
+                        out.push_str(&format!("{}. {}\n   {}\n", i + 1, title, url));
+                        if !snippet.is_empty() {
+                            out.push_str(&format!("   {snippet}\n"));
+                        }
+                        out.push('\n');
+                    }
+                    return Ok(out.trim_end().to_string());
+                }
+                Ok(_) => {}
+                Err(e) => tracing::debug!("treg search: {e}"),
+            }
+        }
 
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(20))

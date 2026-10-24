@@ -28,6 +28,15 @@ When rules pull in different directions, use this order:
 - Test behavior through real seams; **avoid** module mocks and spy-driven tests.
 - Keep code discoverable for humans and agents.
 
+## Scope discipline
+
+These keep an agent's change the size the task needs (adapted from opencode's AGENTS.md):
+
+- Before adding complexity for a speculative or very unlikely race, failure or security edge case, explain the concrete failure mode, how likely it is and what the complexity costs, and get the user's agreement. Do not silently widen scope for theoretical robustness.
+- Do not extract a single-use helper preemptively. Inline the logic unless the helper is reused, hides a genuinely complex boundary, or has a name that makes the caller clearer.
+- Data from outside systems changes under you: accept unknown enum members, event types and option values by ignoring or passing them through, and fail only on errors in the documented shape, malformed known types, or a missing terminal event. Use closed types only where your code branches on the value.
+- Look for maintained, clearly licensed prior art before building unfamiliar functionality (see the `prior-art-first` skill).
+
 ## Adapting to existing codebases
 
 Before adding a new pattern or library, inspect the repo for existing choices around:

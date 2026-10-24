@@ -1,5 +1,5 @@
 {
-  "description": "Paper Instruments (Ultramarine) speaks Chat Completions with the effort on the top-level reasoning_effort field, clamped onto its low/high/max ladder (config says medium, the wire says high), a system message instead of developer, and the sticky x-session-id header on every request of the conversation.",
+  "description": "Paper Instruments (Ultramarine) speaks Chat Completions with the effort on the top-level reasoning_effort field, clamped onto its low/high/max ladder (config says medium, the wire says high), a system message instead of developer, and the sticky x-session-id header on every request of the conversation. The system prompt carries the Ultramarine tuning block PI asks for (concision, plain prose, stop when done).",
   "provider": "paperinstruments",
   "model": "ultramarine-1-flash",
   "env": {
@@ -22,7 +22,7 @@
     "protocol": "chat/completions",
     "headers": { "present": ["x-session-id"] },
     "request_contains": [
-      { "request": 1, "contains": ["\"reasoning_effort\": \"high\"", "\"role\": \"system\""] },
+      { "request": 1, "contains": ["\"reasoning_effort\": \"high\"", "\"role\": \"system\"", "# Writing and stopping (Ultramarine)"] },
       { "request": 2, "contains": ["\"reasoning_effort\": \"high\"", "\"tool_call_id\""] }
     ],
     "requests_lack": ["\"developer\"", "\"store\""],

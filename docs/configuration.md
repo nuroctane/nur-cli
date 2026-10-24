@@ -180,7 +180,7 @@ auto_update = true
 | `theme_setup.motion` | string | `auto` | Animation. With `full`, the NUR banner shimmers whenever it is on screen, idle included; every other ambient animation (aurora rules, the input border, modal edges) moves only while an agent turn, startup or a modal is active, and holds its frame while idle. `reduced` is an accessibility setting: the banner and all ambient animation hold one still frame, and spinners tick at ~10fps. `auto` picks `reduced` only over SSH (`SSH_TTY`/`SSH_CONNECTION`), where every frame crosses a network link. `/theme motion` toggles and saves; `NUR_REDUCED_MOTION=1|0` overrides for one run |
 | `ecosystem_auto_ensure` | bool | `true` | Background TTL **repair** of packs on later TUI opens (first install is foreground via npx / one-liner / EXE / `nur install\); set `false` to skip repair |
 | `skills.auto_activate` | bool | `false` | Natural-language skill activation ("think like fable" injects the skill body). Off by default; explicit `/skill-name` and the `skill` tool always work. See [natural-language skill activation](./ecosystem.md#natural-language-skill-activation) |
-| `tools.profile` | string | `full` | `core` = minimal local editing shell (15 tools: read/list/write/edit/multi_edit/apply_patch, bash, sgrep/grep/glob, web_fetch/web_search, question, todo_write, submit_plan) with no ecosystem tools or prose. Session-fixed; restart to change. Unknown values fall back to `full`. Measured per-request overhead on the E2E harness (chars/4, no PLUR or OptMem installed): `full` about 3.9k system-prompt + 15.4k tool-schema tokens (54 tools), `core` about 1.8k + 2.8k (15 tools) |
+| `tools.profile` | string | `lean` | `lean` = the editing shell and session tools up front, every ecosystem tool loaded on demand through `tool_search` (about 6.1k tool-schema tokens, 27 tools, plus 5k system prompt; a loaded tool joins the end of the roster from the next request on). `full` = every tool up front. `core` = minimal local editing shell (15 tools: read/list/write/edit/multi_edit/apply_patch, bash, sgrep/grep/glob, web_fetch/web_search, question, todo_write, submit_plan) with no ecosystem tools or prose. Restart to change. Unknown values fall back to `lean`. Measured per-request overhead on the E2E harness (chars/4, no PLUR or OptMem installed): `full` about 3.9k system-prompt + 15.4k tool-schema tokens (54 tools), `core` about 1.8k + 2.8k (15 tools) |
 | `tools.sgrep_first` | bool | `true` | Semantic search is enforced, not suggested: a `grep` whose pattern is a description is answered by `sgrep`, a `grep` past its default cap comes back reranked by `sgrep` (an explicit `max_matches` is honored), and shell searches (`grep`/`rg`/`findstr`/`Select-String` as the command) are refused. Needs sgrep installed to change anything; see [Tools](tools.md#sgrep) |
 | `auto_update` | bool | `true` | On **every** launch (bare TUI, `nur "prompt"`, `nur run …`, gateway), check [GitHub Releases](https://github.com/nuroctane/nur-cli/releases/latest) and install a newer binary when available; it runs on a background thread so it never delays or breaks a run, and the new binary is picked up on the next launch. A 60s floor between network checks stops a script that loops `nur` from hammering the API — tune it with `NUR_AUTO_UPDATE_TTL_SECS` (`0` = check every run). Opt out with `false` or env `NUR_SKIP_AUTO_UPDATE=1`. Verify with `nur update --check`; `nur update` always runs the full update path |
 
@@ -224,12 +224,18 @@ field: the Responses API (`reasoning.effort`) and Anthropic's own Messages API
 | Other Responses-API routes (`reasoning.effort`) | `minimal` … `xhigh`; `max` and `ultracode` send `xhigh` |
 | xAI browser login (Responses) | Grok 4.6/4.7: `low`, `medium`, `high`, `xhigh`; Grok 4.5: through `high`; legacy Grok 3 mini: `low` or `high` |
 | Anthropic (`output_config.effort`) | By model: Fable, Opus 4.7+ and Sonnet 5 take `low` … `max`; Opus/Sonnet 4.6 and Mythos Preview take all but `xhigh`; Opus 4.5 takes `low` … `high`; Haiku and older models get none |
+| Paper Instruments (Ultramarine) | Top-level `reasoning_effort`: `low`, `high`, `max` |
+| Morph | DeepSeek snapshots (`morph-dsv4…`): top-level `reasoning_effort` `low`, `high`, `xhigh`, `max`; GLM and Kimi models: `reasoning.effort` `low`, `medium`, `high` |
 | Chat Completions routes (OpenRouter, Groq, Nous Portal, xAI API keys, local servers, …) | No effort field, so nothing is sent |
 | Gemini, MiniMax | No effort control, so nothing is sent |
 
 The level is saved either way and applies again on a route that takes one.
 `ultracode` also turns on parallel subagent orchestration, which works on every
 route because it is an instruction to the agent rather than a request field.
+
+Write **`ultrathink`** as a word anywhere in a prompt to send the strongest rung the route
+accepts for that turn only; the saved level does not change. Inside code spans, fenced blocks,
+paths, flags and identifiers (`docs/ultrathink.md`, `--ultrathink`) it is just text.
 
 Provider references: [OpenAI](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-5.6), [xAI](https://docs.x.ai/developers/model-capabilities/text/reasoning), [Anthropic](https://platform.claude.com/docs/en/build-with-claude/effort).
 
@@ -374,6 +380,8 @@ Non-zero **pre_tool** exit blocks the tool. Missing file = no hooks. Check statu
 
 | Variable | Purpose |
 |----------|---------|
+| `TREG_TOKEN` | Token from [treg](https://treg.to/web-access) (`treg login`). Turns on treg as `web_search`'s first backend and `web_fetch`'s fallback for blocked or JavaScript-only pages; each call prefers the free vendor and is capped at $0.02. `NUR_TREG_BASE` points at a self-hosted treg. |
+| `NUR_SCRATCH` | Set by nur for every shell command: `<workspace>/.nur/scratch`, the model's scratch folder (created on demand with a `.gitignore` of `*`). Not read from your environment. |
 | `NUR_PROVIDER_IDLE_TIMEOUT_SECS` | How long a provider connection may stay completely silent (no bytes, headers included) before Nur treats it as dead and reconnects (default `300`). A response that is still streaming is never cut off |
 | `NUR_PROVIDER_TURN_TIMEOUT_SECS` | Optional hard cap on one provider request, every transport including the Cursor Agent and Droid CLIs. Unset (the default) means no cap |
 

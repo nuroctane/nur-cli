@@ -22,6 +22,8 @@ pub mod permissions;
 pub mod prompt;
 pub mod proposal;
 pub mod receipt;
+pub mod scratch;
+pub mod keywords;
 pub mod repl;
 pub mod session;
 pub mod skill_cache;

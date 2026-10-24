@@ -276,6 +276,23 @@ pub fn build_body_opts(
     if provider_id == "kimi" && req.reasoning.is_some() {
         body["thinking"] = json!({ "type": "enabled" });
     }
+    if provider_id == "morph" {
+        // Morph documents two effort fields: its DeepSeek snapshots read the
+        // top-level `reasoning_effort`, the other fast models `reasoning`.
+        // The loop has already clamped the rung onto the model's ladder.
+        if let Some(effort) = req
+            .reasoning
+            .as_ref()
+            .and_then(|r| r.effort.as_deref())
+            .filter(|e| !e.is_empty())
+        {
+            if crate::providers::is_morph_deepseek(&req.model) {
+                body["reasoning_effort"] = json!(effort);
+            } else {
+                body["reasoning"] = json!({ "effort": effort });
+            }
+        }
+    }
     if provider_id == "paperinstruments" {
         // Ultramarine's reasoning is mandatory and set through the top-level
         // Chat Completions field; the loop has already clamped the rung onto
@@ -440,7 +457,11 @@ fn push_item_messages_opts(
     } else if images.is_empty() {
         let mut message = json!({ "role": role, "content": text });
         if role == "assistant"
-            && (deepseek_rules || matches!(provider_id, "kimi" | "moonshot" | "paperinstruments"))
+            && (deepseek_rules
+                || matches!(
+                    provider_id,
+                    "kimi" | "moonshot" | "paperinstruments" | "morph"
+                ))
         {
             // DeepSeek thinking mode REQUIRES the assistant tool-call turn's
             // reasoning_content to be passed back on the next request (400
@@ -472,6 +493,10 @@ fn push_item_messages_opts(
 /// new deepseek route needs no new allowlist entry.
 fn deepseek_thinking_rules(provider_id: &str, model: &str) -> bool {
     if provider_id == "deepseek" {
+        return true;
+    }
+    // Morph serves DeepSeek under its own ids (`morph-dsv41flash`).
+    if provider_id == "morph" && crate::providers::is_morph_deepseek(model) {
         return true;
     }
     let m = model.trim().to_ascii_lowercase();
@@ -1750,6 +1775,50 @@ mod tool_choice_tests {
         request.reasoning = None;
         let body = build_body_for_provider(&request, false, "paperinstruments");
         assert!(body.get("reasoning_effort").is_none());
+    }
+
+    /// Morph's two effort fields: the DeepSeek snapshots read the top-level
+    /// `reasoning_effort`, GLM and Kimi the nested `reasoning.effort`. The
+    /// DeepSeek ids carry no "deepseek" in them, so the thinking-mode replay and
+    /// the auto-only tool_choice have to key on the Morph id as well.
+    #[test]
+    fn morph_routes_effort_by_model_family_and_keeps_deepseek_rules() {
+        let raw = json!({
+            "choices": [{"message": {
+                "content": null,
+                "reasoning_content": "Need the file.",
+                "tool_calls": [{"id": "call_1", "function": {"name": "read_file", "arguments": "{}"}}]
+            }}]
+        });
+        let response = to_api_response(parse_completion(&raw)).expect("map response");
+        let mut request = req_with_choice(Some("required"));
+        request.input = Value::Array(crate::api::types::replay_output_items(&response.output));
+        request.reasoning = Some(crate::api::types::ReasoningConfig {
+            effort: Some("high".into()),
+            summary: None,
+        });
+
+        request.model = "morph-dsv41flash-1017".into();
+        let body = build_body_for_provider(&request, false, "morph");
+        assert_eq!(body["reasoning_effort"], "high");
+        assert!(body.get("reasoning").is_none());
+        assert_eq!(
+            body["tool_choice"], "auto",
+            "DeepSeek thinking takes auto only"
+        );
+        let assistant = body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|message| message["role"] == "assistant")
+            .expect("assistant replay");
+        assert_eq!(assistant["reasoning_content"], "Need the file.");
+
+        request.model = "morph-glm53-744b".into();
+        let body = build_body_for_provider(&request, false, "morph");
+        assert_eq!(body["reasoning"]["effort"], "high");
+        assert!(body.get("reasoning_effort").is_none());
+        assert_eq!(body["tool_choice"], "required");
     }
 
     /// DeepSeek thinking mode 400s with "The `reasoning_content` in the

@@ -901,6 +901,12 @@ impl ApiClient {
             // already holds the prefix can serve it from cache.
             req = req.header("x-session-affinity", self.session_affinity.as_str());
         }
+        if self.provider_id == "morph" || self.base_url.contains("api.morphllm.com") {
+            // Morph's prefix cache routes a conversation back to the worker
+            // that holds its prefix when the same id arrives on every turn
+            // (docs: sdk/components/caching).
+            req = req.header("x-session-id", self.session_affinity.as_str());
+        }
         if self.provider_id == "paperinstruments"
             || self.base_url.contains("api.paperinstruments.com")
         {

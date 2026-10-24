@@ -53,6 +53,7 @@ regression checks, and remaining vendor-specific limitations.
 | Gemini, Groq, … | Vendor dashboard | - |
 | **Poolside** | `POOLSIDE_API_KEY` | Free developer key at [platform.poolside.ai](https://platform.poolside.ai/) → API Keys |
 | **Paper Instruments** | `PAPERINSTRUMENTS_API_KEY` | Key from [platform.paperinstruments.com](https://platform.paperinstruments.com/) (Ultramarine 1 Flash) |
+| **Morph** | `MORPH_API_KEY` | Key from [morphllm.com/dashboard/api-keys](https://morphllm.com/dashboard/api-keys) (GLM-5.3, Kimi K3, DeepSeek V4.1 Flash) |
 | OpenCode (Zen and Go), Vercel AI Gateway, GitHub Models, Helicone, … | Gateway key | - |
 | Baseten, Friendli, Chutes, Venice, Writer, Upstage, … | Vendor dashboard | - |
 | Ollama, LM Studio, … | Often none (local) | - |
@@ -69,7 +70,7 @@ What happens:
 1. **Nothing is cleared.** Opening the picker — and backing out of it with `Esc`
    — leaves your current credential exactly as it was. Credentials are replaced
    only at the moment a new one is committed.
-2. A **scrollable, type-to-filter** picker lists **70 providers** (frontier APIs,
+2. A **scrollable, type-to-filter** picker lists **71 providers** (frontier APIs,
    inference clouds, Chinese labs, OpenAI-compatible routers, local servers).
    Providers with browser sign-in show a 🌐 hint.
 3. If the provider supports browser auth, choose:

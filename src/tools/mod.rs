@@ -59,6 +59,8 @@ pub mod spill;
 mod submit_plan;
 pub mod tldraw;
 mod todo_write;
+pub mod treg;
+pub mod tool_search;
 pub mod undo;
 mod web_fetch;
 mod web_search;
@@ -326,6 +328,7 @@ impl ToolHost {
         // in the middle would reorder every schema after it between builds.
         #[cfg(feature = "codemode")]
         tools.push(Box::new(codemode::CodeMode));
+        tools.push(Box::new(tool_search::ToolSearch));
         tools
     }
 
@@ -346,6 +349,39 @@ impl ToolHost {
                     .collect()
             })
             .clone()
+    }
+
+    /// The `full` profile: every tool, offered up front (so no loader).
+    pub fn full_tool_defs(&self) -> Vec<ToolDef> {
+        static CACHE: std::sync::OnceLock<Vec<ToolDef>> = std::sync::OnceLock::new();
+        CACHE
+            .get_or_init(|| {
+                self.tool_defs()
+                    .into_iter()
+                    .filter(|tool| tool.name != tool_search::NAME)
+                    .collect()
+            })
+            .clone()
+    }
+
+    /// The `lean` profile: the always-on tools, then each deferred tool this
+    /// conversation has loaded, in the order it was loaded (see
+    /// [`tool_search`]), so the roster only ever grows at its end.
+    pub fn lean_tool_defs(&self, loaded: &[String]) -> Vec<ToolDef> {
+        let all = self.tool_defs();
+        let mut defs: Vec<ToolDef> = all
+            .iter()
+            .filter(|tool| tool_search::LEAN_ALWAYS_ON.contains(&tool.name.as_str()))
+            .cloned()
+            .collect();
+        for name in loaded {
+            if let Some(def) = all.iter().find(|tool| &tool.name == name) {
+                if !defs.iter().any(|d| d.name == def.name) {
+                    defs.push(def.clone());
+                }
+            }
+        }
+        defs
     }
 
     pub fn subagent_tool_defs(&self) -> Vec<ToolDef> {
@@ -459,6 +495,7 @@ impl ToolHost {
             "omp" => omp::OmpTool.execute(&args, ctx),
             "skill" => skill_tool::SkillTool.execute(&args, ctx),
             "memory" => memory_tool::MemoryTool.execute(&args, ctx),
+            "tool_search" => tool_search::ToolSearch.execute(&args, ctx),
             "todo_write" => todo_write::TodoWrite {
                 todos: self.todos.clone(),
             }
@@ -746,6 +783,7 @@ mod tests {
         ];
         #[cfg(feature = "codemode")]
         want.push("codemode");
+        want.push("tool_search");
         want.sort();
 
         assert_eq!(

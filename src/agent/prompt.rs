@@ -140,6 +140,8 @@ pub struct PromptContext {
     is_subagent: bool,
     /// `[tools] profile = "core"`: minimal tool surface, no ecosystem prose.
     core_profile: bool,
+    /// `[tools] profile = "lean"`: ecosystem tools wait behind `tool_search`.
+    lean_profile: bool,
     /// Active model id (wire format).
     model: String,
     /// Human provider name (e.g. "xAI Grok", "Meta Model API").
@@ -166,6 +168,44 @@ pub struct PromptContext {
     named_providers: Vec<String>,
     /// Effort `ultracode`: orchestrate work that splits across parallel subagents.
     ultracode: bool,
+    /// Prompt tuning the model's vendor asks for (fixed per model, so it can
+    /// ride in the cached system prompt).
+    model_tuning: Option<&'static str>,
+}
+
+/// Paper Instruments asks for prompts retuned to Ultramarine: tuned for other
+/// models, which push for thoroughness, it overdelivers to the point of
+/// verbosity (docs: ultramarine/prompt-tuning). Condensed from the production
+/// profile of their MIT-licensed Feather Harness
+/// (github.com/paper-instruments/feather-train): concision with completeness,
+/// plain professional prose, and a firm stop once the work is done.
+const ULTRAMARINE_TUNING: &str = r#"
+# Writing and stopping (Ultramarine)
+- Concision with completeness: write only what the reader needs, in clear complete sentences, and
+  cut filler that restates the surrounding text. Never cut a required row, formula, figure,
+  citation, condition or open question to be brief, and do not add unrequested sections or extras.
+  Follow explicit length limits but never invent one.
+- A deliverable never contains process narration, self-evaluation, working notes, drafting
+  residue, placeholder brackets, uncalled-for labels or taglines, or the same caveat twice.
+- Open every document, section and message with its substance. Take a position and give only
+  the qualifications that matter. When a recommendation depends on conditions, state them.
+- Plain prose: no em dashes, no middle-dot or slash chains of fragments, no semicolons between
+  independent clauses, no rhetorical questions, colon reveals, rhythm triplets or inflated words
+  (robust, seamless, leverage, landscape, unlock). Write about the subject, not the deliverable.
+- The final message is a short handoff: what was delivered and where, then any decision or
+  limitation the user must know. Do not retell the work or claim a check that did not happen.
+- Stop when the result is usable and the requirements are met. Then hand off: do not reopen
+  unchanged files, rerun checks that passed, or polish what was not asked for.
+"#;
+
+/// The tuning block `model` should carry, if its vendor asks for one.
+fn model_tuning(provider: &str, model: &str) -> Option<&'static str> {
+    let model = model.to_ascii_lowercase();
+    let bare = model.rsplit('/').next().unwrap_or(&model);
+    if bare.starts_with("ultramarine") || provider.eq_ignore_ascii_case("paperinstruments") {
+        return Some(ULTRAMARINE_TUNING);
+    }
+    None
 }
 
 /// Effort `ultracode` for the root agent. The strongest effort rung already
@@ -317,6 +357,7 @@ impl PromptContext {
             cwd: cwd.to_path_buf(),
             is_subagent,
             core_profile: core,
+            lean_profile: !core && cfg.tools.is_lean(),
             model: model.to_string(),
             provider: provider.to_string(),
             shell_label: shell_backend().label.clone(),
@@ -334,6 +375,7 @@ impl PromptContext {
             ultracode: !is_subagent
                 && !core
                 && crate::providers::canonical_effort(effort) == "ultracode",
+            model_tuning: model_tuning(&cfg.provider, model),
         }
     }
 
@@ -458,7 +500,7 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
              merge/rebase/pull, and dependency installs (npm/pip/cargo/… install/add)."
         } else {
             "Free: read_file, list_dir, sgrep, grep, glob, web_fetch, web_search, look, extract_frames,\n\
-             git_status, git_diff, skill, memory(read), todo_write, submit_plan, codemode,\n\
+             git_status, git_diff, skill, memory(read), todo_write, submit_plan, codemode, tool_search,\n\
              graphify(query|path|explain|status|report|affected), excalidraw(status|reference),\n\
              plur(recall|status|…), ruflo(memory_search|status|…), executor(search|status),\n\
              enclave(status|tools), and bash for the read-only set above.\n\
@@ -471,9 +513,23 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
              plur(learn|capture), ruflo(memory_store|swarm_init), executor(call|install),\n\
              enclave(call), memory(append), agent."
         };
+        let lean_catalog;
         let tools_catalog = if self.core_profile {
             "read_file, list_dir, write_file, edit_file, multi_edit, apply_patch, bash,\n\
              sgrep, grep, glob, web_fetch, web_search, todo_write, question, submit_plan"
+        } else if self.lean_profile {
+            lean_catalog = format!(
+                "{}\n\nLoaded on demand - call `tool_search` with the names you need (or a \
+                 description of the job) first; from the next step on, call the tool itself:\n{}",
+                crate::tools::tool_search::LEAN_ALWAYS_ON
+                    .iter()
+                    .filter(|name| **name != "codemode" || cfg!(feature = "codemode"))
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                crate::tools::tool_search::deferred_catalog()
+            );
+            lean_catalog.as_str()
         } else {
             "read_file, list_dir, write_file, edit_file, multi_edit, apply_patch, bash, sgrep, grep, glob,\n\
              web_fetch, web_search, look, extract_frames, git_status, git_diff,\n\
@@ -604,8 +660,8 @@ AUTO: tools auto-approved. Prefer minimal safe diffs; avoid destructive shell.
 # Tools
 {tools_catalog}
 
-The tool surface is fixed for the session so provider-side schema caching
-holds. Never invent a tool call whose schema is not available.
+The tool surface only changes when you load a tool, so provider-side schema
+caching holds. Never invent a tool call whose schema is not available.
 
 ## Turn economics
 Every turn re-sends the whole conversation, so a turn costs far more than a
@@ -658,6 +714,18 @@ instead of polling it.{codemode_note}
 3. Implement - smallest correct change; verify with tests/build
 4. Report - what changed, how to verify
 
+Before building unfamiliar functionality from scratch, look for actively maintained, clearly
+licensed open-source projects that already solve it: compare their approach, dependencies and
+known issues, and adapt the proven design. Never copy code whose license is incompatible or
+whose origin is unclear.
+
+# Scratch files
+Throwaway files (downloads, experiments, intermediate output, one-off scripts) go in
+`.nur/scratch/` in the workspace (`$NUR_SCRATCH` in the shell), never /tmp or %TEMP%: the OS
+purges those on reboot or by age and search does not see them. The folder ignores itself in git.
+Delete scratch that has served its purpose before you finish; keep and point to anything the
+user may want.
+
 # Tool-call rationale
 Before the first tool call for a task, give at most one short sentence explaining
 the next action. Do not repeat a stock preamble before later calls. Keep tool-call
@@ -676,6 +744,9 @@ reflects the moment the request was sent; follow it over anything earlier.
 
         if let Some((name, text)) = &self.project {
             s.push_str(&format!("\n# Project instructions ({name})\n{text}\n"));
+        }
+        if let Some(tuning) = self.model_tuning {
+            s.push_str(tuning);
         }
 
         // Memory excerpts and the PLUR/OptMem blocks are read once per user
@@ -830,6 +901,7 @@ mod tests {
             cwd: PathBuf::from("."),
             is_subagent: false,
             core_profile: core,
+            lean_profile: false,
             model: "test-model".into(),
             provider: "test-provider".into(),
             shell_label: "PowerShell".into(),
@@ -844,6 +916,7 @@ mod tests {
             activation_path: None,
             named_providers: vec!["claude".into()],
             ultracode: true,
+            model_tuning: None,
         };
         let full = build(false).render(PermissionMode::Auto, "(no todos)", "");
         let core = build(true).render(PermissionMode::Auto, "(no todos)", "");

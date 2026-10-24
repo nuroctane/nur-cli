@@ -1,0 +1,40 @@
+{
+  "description": "With TREG_TOKEN set, web_search goes through treg's routed treg.web.search first (free vendor preferred, cost-capped) and the results reach the model; the stand-in refuses calls missing the token or the cost ceiling.",
+  "prompt": "Search the web for treg web access.",
+  "env": {
+    "TREG_TOKEN": "e2e-treg-token",
+    "NUR_TREG_BASE": "http://127.0.0.1:{port}"
+  },
+  "script": [
+    {
+      "tool_calls": [
+        {
+          "name": "web_search",
+          "arguments": {
+            "query": "treg web access"
+          }
+        }
+      ]
+    },
+    {
+      "text": "treg serves free search."
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "stdout_contains": [
+      "treg serves free search."
+    ],
+    "tool_results": [
+      {
+        "request": 2,
+        "contains": [
+          "(via treg)",
+          "https://treg.to/web-access",
+          "free search for treg web access"
+        ]
+      }
+    ]
+  }
+}

@@ -15,7 +15,7 @@ All native tools available to the NurCLI agent.
 | **browser** | `browser` `terminal_browser` | teal |
 | **knowledge** | `graphify` `graphjin` `plur` `ruflo` `akarso` `executor` `skill` `memory` | indigo / orange |
 | **delegate** | `omp` | - |
-| **agent** | `todo_write` `submit_plan` `agent` `harness` `codemode` | - |
+| **agent** | `todo_write` `submit_plan` `agent` `harness` `codemode` `tool_search` | - |
 | **memory** | `optmem` `connectome` `mem` `memory` `plur` `ruflo` | indigo |
 | **judgments** | `typesafe` | violet |
 | **security** | `enclave` | teal |
@@ -25,7 +25,13 @@ All native tools available to the NurCLI agent.
 | **policy** | `dogwood` | cyan |
 | **python** | `repl` | teal |
 
-All of the above are **first-class** in the tool schema every turn (nothing is hidden behind a “search tools” gate). Capability flags (read-only / concurrency-safe / destructive) drive parallel batching and approvals.
+Which schemas ride on every request depends on `[tools] profile`:
+
+- **`lean` (default):** the editing shell and session tools are always offered (`read_file`, `list_dir`, the edit tools, `bash`, `sgrep`/`grep`/`glob`, `web_search`/`web_fetch`, `look`, `git_status`/`git_diff`, `context`, `goal`, `message`, `bg`, `skill`, `memory`, `question`, `todo_write`, `submit_plan`, `agent`, `codemode`, `tool_search`). Every other tool is listed by name and one line in the system prompt and loads through `tool_search`; from the next request on the model calls it by its real name, so permissions, approvals and plan mode see the real tool. The loaded set is read back from the conversation, so `/resume` keeps it. About 6k tool-schema tokens per request instead of 15k.
+- **`full`:** every schema on every request.
+- **`core`:** 15 local tools, no ecosystem tools.
+
+Capability flags (read-only / concurrency-safe / destructive) drive parallel batching and approvals.
 
 ### Tool results and context
 
@@ -154,11 +160,17 @@ Extract keyframes from video via ffmpeg. Output goes to `.nur/frames/<name>/`.
 
 ### `web_search`
 
-Search the web for information.
+Search the web (DuckDuckGo). With `TREG_TOKEN` set, [treg](https://treg.to/web-access)'s free routed search runs first and DuckDuckGo is the fallback.
 
 ### `web_fetch`
 
-Fetch content from a URL.
+Fetch a public URL (SSRF-checked on every redirect hop). With `TREG_TOKEN` set, a page that refuses the request (401, 403, 429, 5xx) or only renders with JavaScript (x.com, most single-page apps) is read through `treg.web.extract` and returned as markdown. treg calls prefer the free vendor and carry a 2-cent ceiling each; without a token nothing goes to treg.
+
+---
+
+### `tool_search`
+
+Loads deferred tools in the `lean` profile. Pass `names` (exact tool names from the system prompt's "Loaded on demand" list) or a `query` describing the job; the result carries each tool's full schema, and the tool joins the request from the next step on. Read-only and free in plan mode.
 
 ---
 

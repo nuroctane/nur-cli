@@ -64,7 +64,7 @@ nur                 # open the TUI
 nur doctor          # health check
 ```
 
-Or run `nur` and use **`/provider`** in the TUI (`/login` remains an alias): pick any of **70 providers**
+Or run `nur` and use **`/provider`** in the TUI (`/login` remains an alias): pick any of **71 providers**
 (OpenAI, Anthropic, Gemini, xAI, Groq, OpenRouter, Requesty, local Ollama/LM Studio, Meta Model API, and so on).
 For **OpenAI, Anthropic, xAI, Kimi Code, Google Gemini, Azure OpenAI, GitHub Models, GitHub Copilot, Cursor, Factory Droid, Cline, Muse Code, DeepSeek Harness, and ZCode (GLM)** you can **sign in with a browser or an official CLI session** (or import an existing Codex / Claude Code / Grok / Kimi / Cursor Agent / Droid / Cline / Muse / `dsh` / ZCode session) instead of pasting an API key. `nur auth login --provider muse --browser` (and the same for `deepseek` / `zcode`) is the CLI equivalent of TUI `/login`. OAuth sessions refresh before use, retry once after an authentication rejection, and `/model` detects the models available to the active credential. Cursor uses `cursor-agent login` and runs chat through the Agent CLI (no API key required); Factory Droid works the same way through `droid exec` (`NUR_DROID_BIN` when the launcher is outside `PATH`). DeepSeek's official harness is API-key only (`$DSH_HOME/.credentials.yaml`). No credential on launch and login opens automatically.
 
@@ -208,7 +208,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 ## Feature map
 
 ### Agent harness
-- **Multi-provider** via `/login` (70); Responses or Chat Completions adapter
+- **Multi-provider** via `/login` (71); Responses or Chat Completions adapter
 - Manual / plan / auto · Shift+Tab mid-turn
 - Tool loop, approvals, Esc cancel, subagents, todos, plan mode
 - Session budgets (`/budget`), tool-result spill, smarter auto-compact
@@ -237,7 +237,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 | edit | `write_file` `edit_file` `multi_edit` `apply_patch` |
 | shell | `bash` |
 | vision | `look` · `extract_frames` |
-| web | `web_search` `web_fetch` |
+| web | `web_search` `web_fetch` (treg fallback for blocked or JavaScript-only pages with `TREG_TOKEN`) |
 | browser | real default browser via agent-browser-cli |
 | terminal_browser | in-terminal Chromium ([terminal-browser.com](https://terminal-browser.com/)); Windows host fallback |
 | git | `git_status` `git_diff` |
@@ -250,7 +250,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 | context | `context` (RLM store: register/peek/slice/search) · `anydoc` (PDF/DOCX/XLSX → markdown) |
 | background | `bg` (jobs that outlive the turn) · `admission` (async subagent handles) · `goal` · `proposal` (staged outputs) · `message` (peer mail) |
 | python | `repl` (long-lived kernel; state survives compaction) |
-| agent | `todo_write` `submit_plan` `agent` `omp` · `skill` `harness` · `codemode` (one JS script, several read-only tool calls, one model round) |
+| agent | `todo_write` `submit_plan` `agent` `omp` · `skill` `harness` · `codemode` (one JS script, several read-only tool calls, one model round) · `tool_search` (loads the ecosystem tools the default `lean` profile keeps out of every request) |
 
 ### Vision
 

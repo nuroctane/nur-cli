@@ -1,0 +1,35 @@
+{
+  "description": "`ultrathink` in the user's prose raises the reasoning effort to the route's strongest rung for that turn only: config says low, Ultramarine's ladder tops out at max, so the wire says max.",
+  "provider": "paperinstruments",
+  "model": "ultramarine-1-flash",
+  "env": {
+    "PAPERINSTRUMENTS_API_KEY": "e2e-isolated-key"
+  },
+  "setup_home_files": {
+    "config.toml": "provider = \"paperinstruments\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"ultramarine-1-flash\"\nreasoning_effort = \"low\"\n"
+  },
+  "prompt": "ultrathink: is 2^61-1 prime? Answer yes or no.",
+  "script": [
+    {
+      "text": "Yes."
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "stdout_contains": [
+      "Yes."
+    ],
+    "requests": 1,
+    "request_contains": [
+      {
+        "request": 1,
+        "contains": [
+          "\"reasoning_effort\": \"max\""
+        ]
+      }
+    ],
+    "requests_lack": [
+      "\"reasoning_effort\": \"low\""
+    ]
+  }
+}

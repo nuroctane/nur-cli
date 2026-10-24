@@ -822,9 +822,11 @@ pub struct SkillsConfig {
 /// profile needs a restart so the provider's cached prefix stays stable.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolsConfig {
-    /// `full` (default): every tool. `core`: a minimal editing shell -
-    /// read/write/edit, bash, search, web, todo/question/plan - with no
-    /// ecosystem tools or ecosystem prompt prose.
+    /// `lean` (default): the editing shell and session tools up front, every
+    /// ecosystem tool loaded on demand through `tool_search` (about a third of
+    /// the schema tokens on every request). `full`: every tool up front.
+    /// `core`: a minimal editing shell - read/write/edit, bash, search, web,
+    /// todo/question/plan - with no ecosystem tools or ecosystem prompt prose.
     #[serde(default = "default_tool_profile")]
     pub profile: String,
     /// `true` (default): semantic search is the search path, not a
@@ -837,7 +839,7 @@ pub struct ToolsConfig {
     pub sgrep_first: bool,
 }
 fn default_tool_profile() -> String {
-    "full".into()
+    "lean".into()
 }
 impl Default for ToolsConfig {
     fn default() -> Self {
@@ -851,12 +853,18 @@ impl ToolsConfig {
     /// True when the session should run the minimal `core` surface.
     /// Unknown values warn once and fall back to the full surface.
     pub fn is_core(&self) -> bool {
-        match self.profile.as_str() {
-            "core" => true,
-            "full" | "" => false,
+        self.profile.trim() == "core"
+    }
+
+    /// True when ecosystem tools wait behind `tool_search` (the default).
+    /// Unknown values warn once and fall back to `lean`.
+    pub fn is_lean(&self) -> bool {
+        match self.profile.trim() {
+            "lean" | "" => true,
+            "core" | "full" => false,
             other => {
-                tracing::warn!("unknown [tools] profile '{other}' - using 'full'");
-                false
+                tracing::warn!("unknown [tools] profile '{other}' - using 'lean'");
+                true
             }
         }
     }
@@ -2333,18 +2341,21 @@ min_reduction = 0.5
     fn skills_and_tools_sections_default_off() {
         let cfg = Config::default();
         assert!(!cfg.skills.auto_activate, "NL activation is opt-in");
-        assert!(!cfg.tools.is_core(), "full tool profile is the default");
+        assert!(!cfg.tools.is_core());
+        assert!(cfg.tools.is_lean(), "lean tool profile is the default");
     }
 
     #[test]
-    fn tools_profile_parses_core_and_unknown_falls_back_to_full() {
+    fn tools_profile_parses_each_name_and_unknown_falls_back_to_lean() {
         let core: Config = toml::from_str("[tools]\nprofile = \"core\"\n").unwrap();
-        assert!(core.tools.is_core());
+        assert!(core.tools.is_core() && !core.tools.is_lean());
+        let full: Config = toml::from_str("[tools]\nprofile = \"full\"\n").unwrap();
+        assert!(!full.tools.is_core() && !full.tools.is_lean());
+        // An unknown name must neither drop tools for good (core) nor quietly
+        // bring back every schema on every request (full): lean keeps every
+        // tool reachable through tool_search.
         let unknown: Config = toml::from_str("[tools]\nprofile = \"slim\"\n").unwrap();
-        assert!(
-            !unknown.tools.is_core(),
-            "an unknown profile must not silently narrow the surface"
-        );
+        assert!(!unknown.tools.is_core() && unknown.tools.is_lean());
     }
 
     #[test]

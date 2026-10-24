@@ -19,7 +19,9 @@ impl Tool for WebFetch {
 
     fn description(&self) -> &str {
         "Fetch a public HTTP(S) URL and return text content (HTML/JSON/plain). \
-         Max 500KB. Use for docs and APIs — not for authenticated/private resources."
+         Max 500KB. Use for docs and APIs — not for authenticated/private resources. \
+         With TREG_TOKEN set, a page that refuses the request or needs JavaScript is \
+         read through treg instead and comes back as markdown."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -54,10 +56,13 @@ impl Tool for WebFetch {
             }
             let client = builder.build().map_err(|e| NurError::Tool(e.to_string()))?;
 
-            let resp = client
-                .get(parsed)
-                .send()
-                .map_err(|e| NurError::Tool(format!("fetch failed: {e}")))?;
+            let resp = match client.get(parsed).send() {
+                Ok(resp) => resp,
+                Err(e) => {
+                    let failure = format!("fetch failed: {e}");
+                    return through_treg(&current, max).unwrap_or(Err(NurError::Tool(failure)));
+                }
+            };
 
             let status = resp.status();
             if status.is_redirection() {
@@ -92,6 +97,14 @@ impl Tool for WebFetch {
             let slice = if truncated { &buf[..max] } else { &buf[..] };
             let text = String::from_utf8_lossy(slice);
 
+            if super::treg::should_fall_back(status.as_u16(), &ctype, &text) {
+                if let Some(answer) = through_treg(&current, max) {
+                    match answer {
+                        Ok(out) => return Ok(out),
+                        Err(e) => tracing::debug!("treg fallback for {current}: {e}"),
+                    }
+                }
+            }
             let mut out = format!("url: {current}\nstatus: {status}\ncontent-type: {ctype}\n\n");
             out.push_str(&text);
             if truncated {
@@ -103,6 +116,17 @@ impl Tool for WebFetch {
             "too many redirects (>{MAX_REDIRECTS}): {url}"
         )))
     }
+}
+
+/// Read `url` through treg when a token is configured: `None` without one, so
+/// callers keep their own answer.
+fn through_treg(url: &str, max: usize) -> Option<Result<String>> {
+    let token = super::treg::token()?;
+    Some(
+        super::treg::extract(&token, url)
+            .map(|(text, served)| super::treg::fetched(url, &text, served.as_deref(), max))
+            .map_err(NurError::Tool),
+    )
 }
 
 /// Parse the URL, resolve its host, and require every address to be public.

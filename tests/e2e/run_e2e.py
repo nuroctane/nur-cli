@@ -433,6 +433,9 @@ def check(scenario, result, workspace, requests, mcp_requests=()):
         for needle in rule.get("contains", []):
             if needle not in body:
                 failures.append(f"request {n} lacks {needle!r}")
+        for needle in rule.get("lacks", []):
+            if needle in body:
+                failures.append(f"request {n} contains {needle!r}")
         for needle in rule.get("count_once", []):
             seen = body.count(needle)
             if seen != 1:
@@ -510,7 +513,7 @@ def run_scenario(binary, scenario_path):
         script = expand_workspace_paths(scenario["script"], workspace) if scenario.get("workspace_paths") else scenario["script"]
         provider, port, log = start_provider(script, tmp, scenario.get("mcp"))
         env = isolated_env(tmp / "home", port)
-        env.update(scenario.get("env", {}))
+        env.update({k: v.replace("{port}", str(port)) for k, v in scenario.get("env", {}).items()})
         if scenario.get("provider"):
             provider_id = scenario["provider"]
             env["OPENAI_API_KEY"] = "e2e-isolated-key"

@@ -203,6 +203,9 @@ def make_handler(state, mcp=None):
             if mcp and path == mcp.path:
                 mcp.handle(self, body)
                 return
+            if path.startswith("/call/"):
+                self._treg(path[len("/call/"):], body)
+                return
             if not path.endswith(("/chat/completions", "/responses", "/messages")):
                 self._json(404, {"error": {"message": f"unexpected path {self.path}"}})
                 return
@@ -319,6 +322,28 @@ def make_handler(state, mcp=None):
                 self._event("content_block_stop", {"type":"content_block_stop", "index":i})
             self._event("message_delta", {"type":"message_delta", "delta":{"stop_reason":stop, "stop_sequence":None}, "usage":{"output_tokens":5}})
             self._event("message_stop", {"type":"message_stop"})
+
+        def _treg(self, tool, body):
+            """A stand-in for treg.to's routed web jobs. It refuses calls without
+            the token or the per-call cost ceiling, so a passing scenario proves
+            nur sends both."""
+            if not self.headers.get("x-treg-token"):
+                self._json(401, {"message": "missing X-Treg-Token"})
+                return
+            if not self.headers.get("x-treg-route-max-cost"):
+                self._json(400, {"message": "e2e: X-Treg-Route-Max-Cost is required"})
+                return
+            served = {"served_by": self.headers.get("x-treg-route-prefer", "?"), "charged_micro": 0}
+            if tool == "treg.web.search":
+                self._json(200, {"output": {"results": [{
+                    "title": "treg web access",
+                    "url": "https://treg.to/web-access",
+                    "snippet": f"free search for {body.get('q', '')}",
+                }]}, "_treg": served})
+            elif tool == "treg.web.extract":
+                self._json(200, {"output": {"markdown": f"# Read by treg\n{body.get('url', '')}"}, "_treg": served})
+            else:
+                self._json(404, {"message": f"no tool {tool}"})
 
         def _reset(self):
             """Close with RST, not FIN, so the client sees a dropped connection

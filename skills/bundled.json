@@ -458,6 +458,61 @@
         "references/secure-deployment-and-keys.md",
         "scripts/agent.py"
       ]
+    },
+    {
+      "name": "house-style",
+      "source": "skills/house-style",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "prior-art-first",
+      "source": "skills/prior-art-first",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "agents-md",
+      "source": "skills/agents-md",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "web-access-treg",
+      "source": "skills/web-access-treg",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "office-deliverables",
+      "source": "skills/office-deliverables",
+      "files": [
+        "LICENSE.txt",
+        "SKILL.md",
+        "references/design.md",
+        "references/docx.md",
+        "references/pdf.md",
+        "references/pptx.md",
+        "references/xlsx.md"
+      ]
+    },
+    {
+      "name": "vesalius",
+      "source": "skills/vesalius",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "binny",
+      "source": "skills/binny",
+      "files": [
+        "SKILL.md"
+      ]
     }
   ]
 }

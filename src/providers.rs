@@ -430,6 +430,18 @@ pub const ZHIPU_CODING_DEFAULT_MODEL: &str = "glm-5.3";
 pub const PAPERINSTRUMENTS_BASE_URL: &str = "https://api.paperinstruments.com/v1";
 pub const PAPERINSTRUMENTS_DEFAULT_MODEL: &str = "ultramarine-1-flash";
 
+/// Morph's general inference API: open-weight models (GLM-5.3, Kimi K3,
+/// DeepSeek V4.1 Flash, 1M context, tools on every one) on Morph's own stack,
+/// behind OpenAI Chat Completions with one key that also drives Fast Apply,
+/// WarpGrep and Compact. Prefix caching follows the `x-session-id` header.
+/// Effort is per model family: the DeepSeek snapshots take the top-level
+/// `reasoning_effort` (`low`/`high`/`xhigh`/`max`), the rest `reasoning.effort`
+/// (`low`/`medium`/`high`). The abliterated DeepSeek snapshot is approval-gated
+/// (morphllm.com/privileged-access) and served under the id Morph issues with
+/// access. Docs: <https://docs.morphllm.com/endpoints>.
+pub const MORPH_BASE_URL: &str = "https://api.morphllm.com/v1";
+pub const MORPH_DEFAULT_MODEL: &str = "morph-glm53-744b";
+
 /// Rewrite the retired DeepSeek aliases.
 ///
 /// DeepSeek removes `deepseek-chat` and `deepseek-reasoner` on
@@ -726,6 +738,21 @@ const EFFORT_OPENAI_GPT6: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 /// `stealth/ox-alpha` and most reasoning routes take `max`/`high`/`low`.
 /// Paper Instruments' Ultramarine API accepts exactly the same three rungs.
 pub const EFFORT_NOUS: &[&str] = &["low", "high", "max"];
+/// Morph's DeepSeek V4.1 Flash snapshots: `reasoning_effort` takes these four
+/// (`medium` and `minimal` are folded server-side, so nur sends a real rung).
+const EFFORT_MORPH_DEEPSEEK: &[&str] = &["low", "high", "xhigh", "max"];
+/// Morph's other fast models document `reasoning.effort` low/medium/high.
+const EFFORT_MORPH: &[&str] = &["low", "medium", "high"];
+
+/// Is `model` one of Morph's DeepSeek snapshots (`morph-dsv4…`)?
+pub fn is_morph_deepseek(model: &str) -> bool {
+    model
+        .trim()
+        .to_ascii_lowercase()
+        .rsplit('/')
+        .next()
+        .is_some_and(|bare| bare.starts_with("morph-dsv") || bare.contains("deepseek"))
+}
 /// Perplexity Agent API `reasoning.effort` (one enum for every hosted model).
 const EFFORT_PERPLEXITY: &[&str] = &["minimal", "low", "medium", "high", "xhigh", "max"];
 
@@ -765,6 +792,8 @@ pub fn effort_levels(provider_id: &str, model: &str) -> &'static [&'static str] 
         }
         "openai" | "openai-cc" if model.starts_with("gpt-6") => EFFORT_OPENAI_GPT6,
         "nous" | "paperinstruments" => EFFORT_NOUS,
+        "morph" if is_morph_deepseek(model) => EFFORT_MORPH_DEEPSEEK,
+        "morph" => EFFORT_MORPH,
         "perplexity" => EFFORT_PERPLEXITY,
         _ => EFFORT_OPENAI,
     }
@@ -1426,6 +1455,17 @@ pub const PROVIDERS: &[Provider] = &[
         browser_auth: false,
     },
     Provider {
+        id: "morph",
+        name: "Morph",
+        base_url: MORPH_BASE_URL,
+        default_model: MORPH_DEFAULT_MODEL,
+        env_key: "MORPH_API_KEY",
+        style: CC,
+        note: "GLM-5.3 · Kimi K3 · DeepSeek V4.1 Flash · 1M context",
+        key_optional: false,
+        browser_auth: false,
+    },
+    Provider {
         id: "qwen",
         name: "Alibaba Qwen (DashScope)",
         base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
@@ -2060,6 +2100,10 @@ pub const PROVIDER_ALIASES: &[(&str, &str)] = &[
     ("paper", "paperinstruments"),
     ("ultramarine", "paperinstruments"),
     ("ultramarine-1-flash", "paperinstruments"),
+    // Morph (general inference)
+    ("morphllm", "morph"),
+    ("morph-llm", "morph"),
+    ("morph-ai", "morph"),
     ("abab", "minimax"),
     ("minimax-code", "minimax"),
     ("step", "stepfun"),
@@ -3130,7 +3174,7 @@ mod tests {
         // `PROVIDER_COUNT_DOC_SITES` below too.
         assert_eq!(
             PROVIDERS.len(),
-            70,
+            71,
             "provider count changed — update the docs that quote it: {}",
             PROVIDER_COUNT_DOC_SITES.join(", ")
         );
@@ -3210,6 +3254,38 @@ mod tests {
             assert_eq!(
                 resolve_provider_alias(alias).map(|p| p.id),
                 Some("paperinstruments"),
+                "{alias}"
+            );
+        }
+    }
+
+    /// Morph speaks Chat Completions with an effort ladder per model family:
+    /// the DeepSeek snapshots go up to `max`, the GLM and Kimi models stop at
+    /// `high`, and every spelling of the vendor lands on the one id.
+    #[test]
+    fn morph_is_chat_completions_with_a_ladder_per_model_family() {
+        let p = by_id("morph").expect("morph is in the catalog");
+        assert_eq!(p.base_url, "https://api.morphllm.com/v1");
+        assert_eq!(p.default_model, "morph-glm53-744b");
+        assert_eq!(p.env_key, "MORPH_API_KEY");
+        assert_eq!(p.style, ApiStyle::ChatCompletions);
+        for (model, want, got) in [
+            ("morph-dsv41flash-1017", "medium", "high"),
+            ("morph-dsv41flash", "ultracode", "max"),
+            ("morph-dsv41flash", "minimal", "low"),
+            ("morph-glm53-744b", "max", "high"),
+            ("morph-kimik3", "medium", "medium"),
+        ] {
+            assert_eq!(
+                nearest_effort("morph", model, want).as_deref(),
+                Some(got),
+                "{model} {want}"
+            );
+        }
+        for alias in ["morphllm", "Morph", "morph-llm"] {
+            assert_eq!(
+                resolve_provider_alias(alias).map(|p| p.id),
+                Some("morph"),
                 "{alias}"
             );
         }

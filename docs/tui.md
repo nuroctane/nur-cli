@@ -345,7 +345,7 @@ The note is appended to your persistent memory file and recalled automatically i
 |---------|---------|
 | `/model` | Show and switch models. Run bare to open a picker that fetches your provider's live model list (`/models`) - filter, arrow, and Enter to switch, or type any id. `/model <id>` switches directly (e.g. `/model gpt-5.5`) |
 | `/plugins` | Marketplace picker (same UX as provider/`/login` picker): filter, ↑↓/wheel, ↵ to install or enable/disable. Skills land in `~/.nur/plugins/<id>` and mirror **in full** (incl. `references/`) to `~/.nur/skills`. CLI: `nur plugins list\|install\|enable\|disable\|uninstall`. Natural-language phrases (e.g. *think like fable*) **or** `/skill-name` auto-activate skills — status chip confirms activation |
-| `/effort` | Reasoning effort: `low` … `max`, or `ultracode` (max effort + parallel subagents). Bare `/effort` shows the ladder and what the active route receives; `/effort <level>` saves it |
+| `/effort` | Reasoning effort: `low` … `max`, or `ultracode` (max effort + parallel subagents). Bare `/effort` shows the ladder and what the active route receives; `/effort <level>` saves it Writing `ultrathink` in a prompt uses the strongest rung for that turn only. |
 | `/provider` | Choose the active provider and sign-in route (`/login` is an alias) |
 | `/auth` | Manage saved OAuth, API-key, CLI and OMP credentials for every provider |
 | `/headroom` | Context-compression status / doctor (inline tool-result compression is on by default) |
@@ -408,7 +408,7 @@ The note is appended to your persistent memory file and recalled automatically i
 /login
 ```
 
-Scrollable, **type-to-filter** catalog of 70 providers → browser / official
+Scrollable, **type-to-filter** catalog of 71 providers → browser / official
 harness sign-in when available (including Muse Code, DeepSeek Harness, ZCode,
 Cline) or a masked key → writes `provider` / `base_url` / `model` to config and
 hot-swaps the HTTP client.

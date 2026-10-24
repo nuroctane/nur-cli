@@ -1053,11 +1053,35 @@ fn try_install_from_github(force_verbose: bool) -> Result<UpdateOutcome> {
     }
 
     let dest = install_binary_path();
+    // Keep a copy of the working binary until the new one proves it runs.
+    // Copying (not renaming) works on Windows even while it is executing.
+    let rollback = dest.with_extension(if cfg!(windows) {
+        "rollback.exe"
+    } else {
+        "rollback"
+    });
+    let had_previous = dest.is_file() && fs::copy(&dest, &rollback).is_ok();
     // Remove the temp on the failure path too — otherwise a locked target leaks
     // a multi-MB file into ~/.local/bin on every attempt.
     let installed = install_binary_safe(&tmp, &dest);
     let _ = fs::remove_file(&tmp);
-    installed?;
+    if let Err(e) = installed {
+        let _ = fs::remove_file(&rollback);
+        return Err(e);
+    }
+    // A signed, checksummed binary can still fail to start on this machine
+    // (missing runtime library, wrong CPU features). Run it before trusting
+    // it, and put the previous binary back if it does not report the release.
+    if let Err(problem) = smoke_test_installed(&dest, remote) {
+        let restored = had_previous && fs::copy(&rollback, &dest).is_ok();
+        let _ = fs::remove_file(&rollback);
+        return Err(NurError::Other(if restored {
+            format!("v{remote} did not start ({problem}); kept v{local}")
+        } else {
+            format!("v{remote} did not start ({problem}) and the previous binary could not be restored; reinstall nur")
+        }));
+    }
+    let _ = fs::remove_file(&rollback);
     scrub_impostor_bins(&dest_dir, &dest);
     if let Ok(hash) = file_sha256(&dest) {
         let record = format!(
@@ -1071,6 +1095,51 @@ fn try_install_from_github(force_verbose: bool) -> Result<UpdateOutcome> {
     Ok(UpdateOutcome::Updated {
         version: remote.to_string(),
     })
+}
+
+/// Run `binary --version` (15s leash) and require it to name `version`.
+fn smoke_test_installed(binary: &Path, version: &str) -> std::result::Result<(), String> {
+    let mut child = std::process::Command::new(binary)
+        .arg("--version")
+        .env("NUR_NO_UPDATE", "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("could not launch: {e}"))?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(50))
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("`--version` did not finish in 15s".into());
+            }
+            Err(e) => return Err(format!("could not wait: {e}")),
+        }
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("could not read output: {e}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !output.status.success() {
+        return Err(format!("`--version` exited with {}", output.status));
+    }
+    if !reports_version(&stdout, version) {
+        return Err(format!("`--version` printed {:?}", stdout.trim()));
+    }
+    Ok(())
+}
+
+/// Does a `--version` line (`nur 0.53.2`) name exactly `version`?
+fn reports_version(stdout: &str, version: &str) -> bool {
+    stdout
+        .split_whitespace()
+        .any(|word| strip_v_prefix(word) == version)
 }
 
 /// Cheap "is this actually a binary for this OS" check on the downloaded body.
@@ -1621,6 +1690,37 @@ fn stage_browser_quiet() -> Result<String> {
 #[cfg(test)]
 mod auto_update_tests {
     use super::*;
+
+    #[test]
+    fn the_smoke_test_wants_the_exact_release_version() {
+        assert!(reports_version(
+            "nur 0.53.2
+",
+            "0.53.2"
+        ));
+        assert!(reports_version("nur v0.53.2", "0.53.2"));
+        // A prefix of another release, or the old binary, must not pass.
+        assert!(!reports_version("nur 0.53.20", "0.53.2"));
+        assert!(!reports_version("nur 0.53.1", "0.53.2"));
+        assert!(!reports_version("", "0.53.2"));
+    }
+
+    /// A binary that cannot run (here: not a binary at all) fails the check,
+    /// which is what puts the previous one back.
+    #[test]
+    fn a_binary_that_does_not_run_fails_the_smoke_test() {
+        let dir = std::env::temp_dir().join(format!("nur-smoke-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join(if cfg!(windows) { "nur.exe" } else { "nur" });
+        fs::write(&fake, b"not an executable").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert!(smoke_test_installed(&fake, "9.9.9").is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn version_is_newer_semver() {

@@ -515,7 +515,7 @@ Type these inside the `nur` TUI. Aliases are shown in the same row.
 | `/akarso` | Akarso social posting: `/akarso` (auth), `accounts`, `posts`; publishing/scheduling runs through the `akarso` tool with approval |
 | `/openseo` | Open OpenSEO (open-source Semrush/Ahrefs alt) dashboard + MCP setup; SEO via MCP |
 | `/dialkit` | Activate the dialkit skill — live-tune interface parameters (React/Svelte/Vue/Solid) |
-| `/effort` | Reasoning effort: `low`, `medium`, `high`, `xhigh`, `max`, `ultracode`. Saved to config; shows what the active route receives |
+| `/effort` | Reasoning effort: `low`, `medium`, `high`, `xhigh`, `max`, `ultracode`. Saved to config; shows what the active route receives Writing `ultrathink` in a prompt uses the strongest rung for that turn only. |
 | `/mode` | Permission mode: `manual` \| `plan` \| `auto` (or Shift+Tab) |
 | `/manual` | Switch to manual mode (approve writes/shell) |
 | `/plan` | Switch to plan mode (read-only explore) |

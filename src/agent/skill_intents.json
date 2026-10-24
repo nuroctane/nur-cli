@@ -1,5 +1,5 @@
 {
-  "total_skills": 1704,
+  "total_skills": 1711,
   "note": "Comprehensive skill intent index - 700+ skills, expanded NL triggers. Must be updated when adding skills per AGENTS.md. Run: python scripts/generate_skill_intents.py",
   "skills": [
     {
@@ -1324,6 +1324,31 @@
         "active",
         "against",
         "attackers"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "agents-md",
+      "description": "Write or improve an AGENTS.md (or CLAUDE.md / NUR.md) so coding agents work well in a repository. Use when creating, auditing or trimming agent instructions, or when agents keep repeating the same mistake in a repo.",
+      "path": "skills/agents-md/SKILL.md",
+      "triggers": [
+        "write improve",
+        "/agents md",
+        "/agents-md",
+        "agents md",
+        "agents-md"
+      ],
+      "keywords": [
+        "write",
+        "improve",
+        "claude",
+        "coding",
+        "well",
+        "repository",
+        "creating",
+        "auditing",
+        "trimming",
+        "instructions"
       ],
       "aliases": []
     },
@@ -5990,6 +6015,29 @@
         "performant",
         "schemas",
         "querying"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "binny",
+      "description": "Pointer skill for BINNY, OpenBin's open-source agent harness for reverse engineering and malware analysis (Ghidra decompilation, sandboxed scripts, STIX triage, report drafts). Use when the user mentions BINNY or OpenBin, or wants a binary, APK or firmware analyzed with an agent.",
+      "path": "skills/binny/SKILL.md",
+      "triggers": [
+        "pointer binny",
+        "/binny",
+        "binny"
+      ],
+      "keywords": [
+        "binny",
+        "pointer",
+        "openbin",
+        "open",
+        "source",
+        "harness",
+        "reverse",
+        "engineering",
+        "malware",
+        "analysis"
       ],
       "aliases": []
     },
@@ -25180,6 +25228,31 @@
       "aliases": []
     },
     {
+      "name": "house-style",
+      "description": "No-slop house style for interfaces, documents and prose. Use when designing or reviewing UI, landing pages, decks, docs, READMEs or any user-facing copy, or when output looks generic, AI-made, over-decorated or wordy.",
+      "path": "skills/house-style/SKILL.md",
+      "triggers": [
+        "/house style",
+        "/house-style",
+        "house style",
+        "house-style",
+        "slop house"
+      ],
+      "keywords": [
+        "house",
+        "style",
+        "slop",
+        "interfaces",
+        "documents",
+        "prose",
+        "designing",
+        "reviewing",
+        "landing",
+        "pages"
+      ],
+      "aliases": []
+    },
+    {
       "name": "how-to-illustrate",
       "description": "MANDATORY router for ANY request to draw, illustrate, diagram, chart, graph, visualize, or map something. Exhaustive diagram-type taxonomy (30+ categories, 200+ named types) + tool selection (excalidraw/tldraw/penecho/flint-chart) + source-figure extraction mandate + visual-encoding mandate (semanti",
       "path": "skills/how-to-illustrate/SKILL.md",
@@ -34642,6 +34715,31 @@
       "aliases": []
     },
     {
+      "name": "office-deliverables",
+      "description": "Professional standards for Word documents, Excel workbooks, PowerPoint decks and PDFs - house style, structure, and the checks that make a deliverable trustworthy. Use with the docx, xlsx, pptx or pdf skills whenever the output is a document someone will read or a model someone will keep using.",
+      "path": "skills/office-deliverables/SKILL.md",
+      "triggers": [
+        "professional standards",
+        "/office deliverables",
+        "/office-deliverables",
+        "office deliverables",
+        "office-deliverables"
+      ],
+      "keywords": [
+        "office",
+        "deliverables",
+        "professional",
+        "standards",
+        "word",
+        "documents",
+        "excel",
+        "workbooks",
+        "powerpoint",
+        "decks"
+      ],
+      "aliases": []
+    },
+    {
       "name": "office-hours",
       "description": "YC Office Hours \u2014 two modes. (gstack)",
       "path": "skills/gstack/office-hours/SKILL.md",
@@ -41215,6 +41313,38 @@
         "structure",
         "plan",
         "design"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "prior-art-first",
+      "description": "Look for maintained, clearly licensed open-source implementations before building unfamiliar functionality from scratch. Use when a task needs a feature, algorithm, protocol, parser or integration you have not built before, or before adding a dependency.",
+      "path": "skills/prior-art-first/SKILL.md",
+      "triggers": [
+        "/prior art first",
+        "/prior-art-first",
+        "look maintained",
+        "prior art first",
+        "prior-art-first",
+        "/art first",
+        "/art-first",
+        "/prior art",
+        "/prior-art",
+        "art first",
+        "art-first",
+        "prior art"
+      ],
+      "keywords": [
+        "prior",
+        "first",
+        "look",
+        "maintained",
+        "clearly",
+        "licensed",
+        "open",
+        "source",
+        "implementations",
+        "building"
       ],
       "aliases": []
     },
@@ -48867,6 +48997,29 @@
       "aliases": []
     },
     {
+      "name": "vesalius",
+      "description": "Pointer skill for Vesalius, a local codebase map for coding agents (macOS on Apple silicon). Use when the user mentions Vesalius or asks to cut the tokens spent orienting in a repo on a Mac, or to answer \"what calls this\", \"where does this feature live\" or \"what breaks if this changes\" in one query.",
+      "path": "skills/vesalius/SKILL.md",
+      "triggers": [
+        "pointer vesalius",
+        "/vesalius",
+        "vesalius"
+      ],
+      "keywords": [
+        "vesalius",
+        "pointer",
+        "local",
+        "codebase",
+        "coding",
+        "macos",
+        "apple",
+        "silicon",
+        "user",
+        "mentions"
+      ],
+      "aliases": []
+    },
+    {
       "name": "vibrant",
       "description": "Lively, colorful design with bold playful typography, warm accents, and dynamic visual energy.",
       "path": "skills/vibrant/SKILL.md",
@@ -49058,6 +49211,38 @@
         "decision",
         "tickets",
         "issue"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "web-access-treg",
+      "description": "Reach the live web through treg when nur's own web_fetch or web_search falls short - blocked or JavaScript-only pages, site maps, typed extraction, news, papers, and platform data (X, LinkedIn, Reddit, YouTube, stores, reviews, maps). Use when a page will not load, or when the task needs structured ",
+      "path": "skills/web-access-treg/SKILL.md",
+      "triggers": [
+        "/web access treg",
+        "/web-access-treg",
+        "web access treg",
+        "web-access-treg",
+        "/access treg",
+        "/access-treg",
+        "/web access",
+        "/web-access",
+        "access treg",
+        "access-treg",
+        "reach live",
+        "web access"
+      ],
+      "keywords": [
+        "access",
+        "treg",
+        "reach",
+        "live",
+        "fetch",
+        "search",
+        "falls",
+        "short",
+        "blocked",
+        "javascript"
       ],
       "aliases": []
     },

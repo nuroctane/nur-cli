@@ -1,0 +1,62 @@
+{
+  "description": "Morph speaks Chat Completions with the sticky x-session-id header (prefix-cache routing) on every request. Its DeepSeek snapshot reads the top-level reasoning_effort clamped onto low/high/xhigh/max (config says medium, the wire says high) and never the nested reasoning object.",
+  "provider": "morph",
+  "model": "morph-dsv41flash-1017",
+  "env": {
+    "MORPH_API_KEY": "e2e-isolated-key"
+  },
+  "setup_home_files": {
+    "config.toml": "provider = \"morph\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"morph-dsv41flash-1017\"\nreasoning_effort = \"medium\"\n"
+  },
+  "prompt": "Read notes.txt and reply with exactly what it says.",
+  "setup_files": {
+    "notes.txt": "MORPH_OK"
+  },
+  "script": [
+    {
+      "tool_calls": [
+        {
+          "name": "read_file",
+          "arguments": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "text": "MORPH_OK"
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "stdout_contains": [
+      "MORPH_OK"
+    ],
+    "protocol": "chat/completions",
+    "headers": {
+      "present": [
+        "x-session-id"
+      ]
+    },
+    "request_contains": [
+      {
+        "request": 1,
+        "contains": [
+          "\"reasoning_effort\": \"high\""
+        ]
+      },
+      {
+        "request": 2,
+        "contains": [
+          "\"reasoning_effort\": \"high\"",
+          "\"tool_call_id\""
+        ]
+      }
+    ],
+    "requests_lack": [
+      "\"reasoning\": {",
+      "Writing and stopping (Ultramarine)"
+    ],
+    "requests": 2
+  }
+}

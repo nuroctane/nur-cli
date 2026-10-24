@@ -481,6 +481,11 @@ pub fn run_in_shell_with(
         .env("NPM_CONFIG_YES", "true")
         .env("DEBIAN_FRONTEND", "noninteractive")
         .env("PYTHONUNBUFFERED", "1");
+    // The model's scratch space (see `agent::scratch`): durable, inside the
+    // sandbox, and the place the prompt sends throwaway files instead of /tmp.
+    if let Some(scratch) = crate::agent::scratch::ensure(cwd) {
+        cmd.env(crate::agent::scratch::ENV, scratch);
+    }
     match kind {
         ShellKind::Bash => {
             // Non-login: sourcing ~/.bash_profile on every call is slow and

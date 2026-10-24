@@ -53,7 +53,8 @@ fn action_is(args: &Value, allowed: &[&str]) -> bool {
 pub fn is_read_only(name: &str, args: &Value) -> bool {
     match name {
         "read_file" | "list_dir" | "sgrep" | "grep" | "glob" | "web_fetch" | "web_search"
-        | "look" | "git_status" | "git_diff" | "skill" | "todo_write" | "submit_plan" => true,
+        | "look" | "git_status" | "git_diff" | "skill" | "todo_write" | "submit_plan"
+        | "tool_search" => true,
         // A script is as read-only as the calls it makes, and its bridge admits
         // a nested call only when this same function says so, so the tool
         // inherits the classification transitively.
@@ -175,6 +176,7 @@ fn is_concurrency_safe_inner(name: &str, _args: &Value) -> bool {
             | "excalidraw"
             | "plur"
             | "ruflo"
+            | "tool_search"
     )
 }
 

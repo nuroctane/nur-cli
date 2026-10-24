@@ -1,0 +1,68 @@
+{
+  "description": "The default lean profile keeps ecosystem tools out of the request until tool_search loads them. The first request offers tool_search but not proposal's schema; once tool_search names it, proposal's schema joins the roster on the next request and the model calls it by its own name.",
+  "prompt": "List the staged proposals.",
+  "script": [
+    {
+      "tool_calls": [
+        {
+          "name": "tool_search",
+          "arguments": {
+            "names": [
+              "proposal"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "name": "proposal",
+          "arguments": {
+            "action": "list"
+          }
+        }
+      ]
+    },
+    {
+      "text": "No proposals are staged."
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 3,
+    "stdout_contains": [
+      "No proposals are staged."
+    ],
+    "tool_results": [
+      {
+        "request": 2,
+        "contains": [
+          "Loaded: proposal"
+        ]
+      }
+    ],
+    "request_contains": [
+      {
+        "request": 1,
+        "contains": [
+          "\"name\": \"tool_search\"",
+          "Loaded on demand"
+        ],
+        "lacks": [
+          "\"name\": \"proposal\"",
+          "\"name\": \"graphjin\""
+        ]
+      },
+      {
+        "request": 2,
+        "contains": [
+          "\"name\": \"proposal\""
+        ],
+        "lacks": [
+          "\"name\": \"graphjin\""
+        ]
+      }
+    ]
+  }
+}

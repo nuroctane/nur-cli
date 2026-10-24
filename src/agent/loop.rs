@@ -834,6 +834,19 @@ impl AgentRunner {
         )
         .await
         .map_err(|e| NurError::Other(format!("prompt context worker failed: {e}")))?;
+        // `ultrathink` in the user's prose: the strongest effort this route
+        // accepts, for this turn only (an `ultracode` setting already is).
+        let ultrathink = !self.is_subagent
+            && super::keywords::has_keyword(&user_text, super::keywords::ULTRATHINK)
+            && crate::providers::canonical_effort(&self.config.reasoning_effort) != "ultracode";
+        let turn_effort = if ultrathink {
+            let _ = tx.send(AgentEvent::Status(
+                "ultrathink · strongest reasoning effort for this turn".into(),
+            ));
+            "max".to_string()
+        } else {
+            self.config.reasoning_effort.clone()
+        };
         if prompt_ctx.has_skill_activation() {
             let label = prompt_ctx.skill_activation_label().unwrap_or("skill");
             let _ = tx.send(AgentEvent::Status(format!(
@@ -1061,12 +1074,19 @@ impl AgentRunner {
             // The same tool roster on every request of the session: schemas
             // sit at the head of the cached prefix, so a set that differs
             // between two requests re-bills them and everything after them.
+            //
+            // The lean profile is the one exception, and only by growing: a
+            // tool loaded through `tool_search` joins the end of the roster
+            // from the next request on and stays for the rest of the session.
             let mut tools = if self.is_subagent {
                 self.tools.subagent_tool_defs()
             } else if self.config.tools.is_core() {
                 self.tools.core_tool_defs()
+            } else if self.config.tools.is_lean() {
+                let loaded = crate::tools::tool_search::loaded_from_history(&session.input_items);
+                self.tools.lean_tool_defs(&loaded)
             } else {
-                self.tools.tool_defs()
+                self.tools.full_tool_defs()
             };
             // Opt-in narrowing, first round only: later rounds keep the full
             // surface, so a tool once offered is never withdrawn mid-turn.
@@ -1203,7 +1223,7 @@ impl AgentRunner {
             let effort = crate::providers::nearest_effort(
                 &self.config.provider,
                 &effective_model,
-                &self.config.reasoning_effort,
+                &turn_effort,
             );
             let req = ResponseRequest {
                 model: effective_model,
