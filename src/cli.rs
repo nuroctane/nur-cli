@@ -493,4 +493,30 @@ pub enum AuthCmd {
         #[arg(long)]
         revoke: bool,
     },
+    /// Extra API keys a provider rotates through when one is rate-limited, out of quota or refused
+    Pool {
+        #[command(subcommand)]
+        action: PoolCmd,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum PoolCmd {
+    /// Add a key to a provider's rotation (the main key stays as it is)
+    Add {
+        /// Catalog provider id or alias. Default: current config.
+        #[arg(long, short = 'p')]
+        provider: Option<String>,
+        /// The extra API key
+        #[arg(long)]
+        key: String,
+    },
+    /// Show how many keys each provider rotates through (never prints keys)
+    List,
+    /// Remove a provider's extra keys (the main key stays)
+    Clear {
+        /// Catalog provider id or alias. Default: current config.
+        #[arg(long, short = 'p')]
+        provider: Option<String>,
+    },
 }

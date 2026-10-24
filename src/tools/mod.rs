@@ -36,6 +36,7 @@ pub mod executor_tool;
 mod git_diff;
 mod git_status;
 mod glob;
+pub mod hashline;
 pub use executor_tool::is_read_only_action as executor_is_read_only;
 pub mod excalidraw;
 pub mod graphify;
@@ -106,6 +107,7 @@ pub const SUBAGENT_TOOL_NAMES: &[&str] = &[
     "edit_file",
     "multi_edit",
     "apply_patch",
+    "hashline_edit",
     "bash",
     "sgrep",
     "grep",
@@ -146,6 +148,7 @@ pub(crate) const ROOT_CORE_TOOL_NAMES: &[&str] = &[
     "edit_file",
     "multi_edit",
     "apply_patch",
+    "hashline_edit",
     "bash",
     "sgrep",
     "grep",
@@ -182,6 +185,7 @@ pub const CORE_PROFILE_TOOL_NAMES: &[&str] = &[
     "edit_file",
     "multi_edit",
     "apply_patch",
+    "hashline_edit",
     "bash",
     "sgrep",
     "grep",
@@ -270,6 +274,7 @@ impl ToolHost {
             Box::new(edit_file::EditFile),
             Box::new(multi_edit::MultiEdit),
             Box::new(apply_patch::ApplyPatch),
+            Box::new(hashline::HashlineEdit),
             Box::new(bash::Bash),
             Box::new(sgrep::Sgrep),
             Box::new(grep::Grep),
@@ -451,6 +456,7 @@ impl ToolHost {
             "edit_file" => edit_file::EditFile.execute(&args, ctx),
             "multi_edit" => multi_edit::MultiEdit.execute(&args, ctx),
             "apply_patch" => apply_patch::ApplyPatch.execute(&args, ctx),
+            "hashline_edit" => hashline::HashlineEdit.execute(&args, ctx),
             "bash" => bash::Bash.execute(&args, ctx),
             "sgrep" => sgrep::Sgrep.execute(&args, ctx),
             "grep" => grep::Grep.execute(&args, ctx),
@@ -733,6 +739,7 @@ mod tests {
             "edit_file",
             "multi_edit",
             "apply_patch",
+            "hashline_edit",
             "bash",
             "sgrep",
             "grep",

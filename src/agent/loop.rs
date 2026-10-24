@@ -510,6 +510,16 @@ impl AgentRunner {
                         }
                         continue;
                     }
+                    // Another key for the same provider is the cheapest fix
+                    // for a rate limit, an empty quota or a refused key: no
+                    // wait, no provider switch. Each rotation blocks the key
+                    // that failed, so this ends once every key has been tried.
+                    if emitted == 0 && !cancel.is_cancelled() {
+                        if let Some(note) = self.client.rotate_key_after(&e) {
+                            let _ = tx.send(AgentEvent::Status(note));
+                            continue;
+                        }
+                    }
                     if emitted == 0
                         && attempt < CAPACITY_RETRIES
                         && crate::api::failover::is_transient_capacity(&e)
@@ -2175,7 +2185,7 @@ impl AgentRunner {
                 let mut recorded_undo: Option<std::path::PathBuf> = None;
                 if matches!(
                     call.name.as_str(),
-                    "write_file" | "edit_file" | "multi_edit" | "apply_patch"
+                    "write_file" | "edit_file" | "multi_edit" | "apply_patch" | "hashline_edit"
                 ) {
                     if let Ok(v) = serde_json::from_str::<Value>(&call.arguments) {
                         if let Some(p) = v.get("path").and_then(|p| p.as_str()) {
@@ -6922,7 +6932,7 @@ fn driver_for_provider(provider_id: &str) -> Option<crate::t3code::DriverId> {
 fn is_prewalk_mutate_tool(name: &str) -> bool {
     matches!(
         name,
-        "write_file" | "edit_file" | "multi_edit" | "apply_patch"
+        "write_file" | "edit_file" | "multi_edit" | "apply_patch" | "hashline_edit"
     )
 }
 

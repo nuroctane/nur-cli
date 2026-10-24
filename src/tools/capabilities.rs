@@ -147,8 +147,8 @@ pub fn is_read_only(name: &str, args: &Value) -> bool {
         "omp" => crate::tools::omp::is_read_only_value(args),
         "browser" => crate::tools::browser_is_read_only(&args.to_string()),
         "terminal_browser" => crate::tools::terminal_browser_is_read_only(&args.to_string()),
-        "agent" | "write_file" | "edit_file" | "multi_edit" | "apply_patch" | "bash"
-        | "extract_frames" => false,
+        "agent" | "write_file" | "edit_file" | "multi_edit" | "apply_patch" | "hashline_edit"
+        | "bash" | "extract_frames" => false,
         _ => false, // fail-closed: unknown tools are not free
     }
 }
@@ -185,8 +185,8 @@ fn is_concurrency_safe_inner(name: &str, _args: &Value) -> bool {
 /// are destructive (e.g. todo_write is session-local).
 pub fn is_destructive(name: &str, args: &Value) -> bool {
     match name {
-        "write_file" | "edit_file" | "multi_edit" | "apply_patch" | "bash" | "agent"
-        | "extract_frames" => true,
+        "write_file" | "edit_file" | "multi_edit" | "apply_patch" | "hashline_edit" | "bash"
+        | "agent" | "extract_frames" => true,
         "memory" => !is_read_only("memory", args),
         "graphify" => !is_read_only("graphify", args),
         "graphjin" => !is_read_only("graphjin", args),
@@ -337,6 +337,7 @@ mod tests {
             "edit_file",
             "multi_edit",
             "apply_patch",
+            "hashline_edit",
             "bash",
             "agent",
         ] {

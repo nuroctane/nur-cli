@@ -1,0 +1,35 @@
+{
+  "description": "Rotating keys: with a main key and one extra (MORPH_API_KEYS), a 429 on the key in use is not retried on that key; the request goes straight out again on the other key and the turn finishes.",
+  "provider": "morph",
+  "model": "morph-glm53-744b",
+  "env": {
+    "MORPH_API_KEY": "e2e-key-one-aaaa",
+    "MORPH_API_KEYS": "e2e-key-two-bbbb"
+  },
+  "setup_home_files": {
+    "config.toml": "provider = \"morph\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"morph-glm53-744b\"\n"
+  },
+  "prompt": "Say hello.",
+  "script": [
+    {
+      "status": 429,
+      "error": "Rate limit reached for this key"
+    },
+    {
+      "text": "Hello on the second key."
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "stdout_contains": [
+      "Hello on the second key."
+    ],
+    "headers": {
+      "rotating_bearer": [
+        "e2e-key-one-aaaa",
+        "e2e-key-two-bbbb"
+      ]
+    }
+  }
+}

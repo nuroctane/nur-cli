@@ -1387,6 +1387,13 @@ pub fn provider_keys_path() -> PathBuf {
     nur_home().join("provider_keys.json")
 }
 
+/// Extra API keys per provider for rotation (`nur auth pool`), sealed like
+/// `provider_keys.json`: `{provider_id: [key, ...]}`. The main key stays in
+/// `provider_keys.json`, so nothing that reads it changes.
+pub fn provider_key_pools_path() -> PathBuf {
+    nur_home().join("provider_key_pools.json")
+}
+
 /// Per-provider OAuth sessions for cross-provider failover (JSON map
 /// `{provider_id: Auth}`). Lets a browser-signed-in provider stay usable as a
 /// fallback after you switch the active login.

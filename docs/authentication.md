@@ -382,6 +382,29 @@ Set `[auth] encrypt_at_rest = false` when `~/.nur` is synced between machines
 or Windows accounts, where the ciphertext could not be decrypted on the other
 end. It has no effect outside Windows.
 
+## Rotating keys
+
+A provider can hold several API keys. A conversation sticks to one of them
+(chosen by hashing its session id, so the provider's prompt cache keeps
+working), and when that key is rate-limited, out of quota or refused it is set
+aside and the request goes straight out again on the next free key: no wait,
+no failover to another provider. A rate limit sets a key aside for a minute,
+an empty quota for an hour, a refused key for the rest of the day. Only when
+every key is set aside do the normal capacity retries and the failover chain
+take over.
+
+```bash
+nur auth pool add --provider morph --key <second-key>   # main key stays as it is
+nur auth pool list                                       # counts only, never keys
+nur auth pool clear --provider morph
+```
+
+Or list extra keys in the plural of the provider's env var, separated by commas
+or whitespace: `MORPH_API_KEYS=key2,key3` beside `MORPH_API_KEY=key1`. Stored
+pool keys are sealed like the main key store (`~/.nur/provider_key_pools.json`)
+and removed with the provider's other credentials. `/auth` shows `+N rotating`.
+OAuth sessions are one account each and never rotate.
+
 ## Check auth status
 
 ```bash

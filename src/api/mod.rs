@@ -6,6 +6,7 @@ pub mod droid_cli;
 pub mod failover;
 pub mod fusion;
 pub mod gemini;
+pub mod key_pool;
 pub mod local;
 pub mod models;
 pub mod perplexity;

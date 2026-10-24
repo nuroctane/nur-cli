@@ -35,6 +35,7 @@ pub const LEAN_ALWAYS_ON: &[&str] = &[
     "edit_file",
     "multi_edit",
     "apply_patch",
+    "hashline_edit",
     "bash",
     "sgrep",
     "grep",

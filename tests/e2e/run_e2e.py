@@ -229,6 +229,17 @@ def check_headers(rules, requests):
         seen = {(r.get("_headers") or {}).get(name.lower()) for r in requests}
         if len(seen) > 1:
             failures.append(f"{name} changed between requests: {sorted(map(str, seen))}")
+    # `rotating_bearer`: every request authenticates with one of these keys,
+    # and consecutive requests use different ones (key rotation).
+    keys = rules.get("rotating_bearer")
+    if keys:
+        used = [((r.get("_headers") or {}).get("authorization") or "").removeprefix("Bearer ") for r in requests]
+        for n, key in enumerate(used, 1):
+            if key not in keys:
+                failures.append(f"request {n} used an unexpected key")
+        for n in range(1, len(used)):
+            if used[n] == used[n - 1]:
+                failures.append(f"request {n + 1} reused the key of request {n}")
     return failures
 
 

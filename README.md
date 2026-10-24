@@ -209,6 +209,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 
 ### Agent harness
 - **Multi-provider** via `/login` (71); Responses or Chat Completions adapter
+- **Rotating API keys** per provider (`nur auth pool add`, or `<ENV_KEY>S=k1,k2`): a rate-limited, empty or refused key steps aside and the next one takes the request at once
 - Manual / plan / auto · Shift+Tab mid-turn
 - Tool loop, approvals, Esc cancel, subagents, todos, plan mode
 - Session budgets (`/budget`), tool-result spill, smarter auto-compact
@@ -250,7 +251,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 | context | `context` (RLM store: register/peek/slice/search) · `anydoc` (PDF/DOCX/XLSX → markdown) |
 | background | `bg` (jobs that outlive the turn) · `admission` (async subagent handles) · `goal` · `proposal` (staged outputs) · `message` (peer mail) |
 | python | `repl` (long-lived kernel; state survives compaction) |
-| agent | `todo_write` `submit_plan` `agent` `omp` · `skill` `harness` · `codemode` (one JS script, several read-only tool calls, one model round) · `tool_search` (loads the ecosystem tools the default `lean` profile keeps out of every request) |
+| agent | `todo_write` `submit_plan` `agent` `omp` · `skill` `harness` · `codemode` (one JS script, several read-only tool calls, one model round) · `tool_search` (loads the ecosystem tools the default `lean` profile keeps out of every request) · `hashline_edit` (edit by line number against the `[path#TAG]` snapshot `read_file` prints; a stale tag is refused) |
 
 ### Vision
 

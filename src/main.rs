@@ -61,6 +61,54 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use usage::{print_usage_summary, UsageTracker};
 
+/// `nur auth pool add|list|clear`: extra keys a provider rotates through.
+fn run_key_pool(action: &cli::PoolCmd) -> Result<()> {
+    let provider_for = |given: &Option<String>| -> Result<String> {
+        let raw = match given {
+            Some(id) => id.clone(),
+            None => config::load_config()?.provider,
+        };
+        providers::resolve_provider_alias(&raw)
+            .map(|p| p.id.to_string())
+            .ok_or_else(|| error::NurError::Config(format!("unknown provider `{raw}`")))
+    };
+    match action {
+        cli::PoolCmd::Add { provider, key } => {
+            let id = provider_for(provider)?;
+            let total = auth::add_pool_key(&id, key)?;
+            theme::print_ok(&format!(
+                "{id}: {total} key(s) in rotation (fingerprint {})",
+                auth::key_fingerprint(key)
+            ));
+            if auth::load_provider_key(&id).is_none() {
+                theme::print_info(&format!(
+                    "{id} has no main key saved; rotation starts once one is (`nur auth login --provider {id}`) or its env var is set"
+                ));
+            }
+        }
+        cli::PoolCmd::List => {
+            let pools = auth::pool_summaries();
+            if pools.is_empty() {
+                theme::print_info(
+                    "no rotation keys saved (`nur auth pool add --provider <id> --key <key>`)",
+                );
+            }
+            for (id, extra) in pools {
+                theme::print_info(&format!("{id}: main key + {extra} rotating"));
+            }
+        }
+        cli::PoolCmd::Clear { provider } => {
+            let id = provider_for(provider)?;
+            if auth::clear_pool_keys(&id)? {
+                theme::print_ok(&format!("{id}: rotation keys removed (main key kept)"));
+            } else {
+                theme::print_info(&format!("{id}: no rotation keys were saved"));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() {
     startup::mark("main");
@@ -147,6 +195,7 @@ async fn real_main() -> Result<()> {
                     auth::import_from_cli(from, model.clone(), *yes)?
                 }
                 AuthCmd::Status => auth_status()?,
+                AuthCmd::Pool { action } => run_key_pool(action)?,
                 AuthCmd::Logout { revoke } => {
                     logout(*revoke)?;
                     if *revoke {

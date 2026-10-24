@@ -980,18 +980,7 @@ fn read_keys_at(path: &Path) -> BTreeMap<String, String> {
 }
 
 fn save_key_at(path: &Path, provider_id: &str, key: &str) -> Result<()> {
-    let trimmed = key.trim();
-    if trimmed.len() < 8 {
-        return Err(NurError::Other(
-            "API key too short — expected at least 8 characters".into(),
-        ));
-    }
-    if trimmed.len() > 16 * 1024 {
-        return Err(NurError::Other("API key is unexpectedly large".into()));
-    }
-    if trimmed.chars().any(char::is_whitespace) {
-        return Err(NurError::Other("API key contains whitespace".into()));
-    }
+    let trimmed = check_key_shape(key)?;
     let mut map = if path.exists() {
         let text = crate::credential_seal::read_to_string(path)?;
         serde_json::from_str(&text).map_err(|error| {
@@ -1013,6 +1002,90 @@ fn save_key_at(path: &Path, provider_id: &str, key: &str) -> Result<()> {
         let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
     }
     Ok(())
+}
+
+/// Validation shared by every stored key.
+fn check_key_shape(key: &str) -> Result<&str> {
+    let trimmed = key.trim();
+    if trimmed.len() < 8 {
+        return Err(NurError::Other(
+            "API key too short — expected at least 8 characters".into(),
+        ));
+    }
+    if trimmed.len() > 16 * 1024 {
+        return Err(NurError::Other("API key is unexpectedly large".into()));
+    }
+    if trimmed.chars().any(char::is_whitespace) {
+        return Err(NurError::Other("API key contains whitespace".into()));
+    }
+    Ok(trimmed)
+}
+
+fn read_pools_at(path: &Path) -> BTreeMap<String, Vec<String>> {
+    crate::credential_seal::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+fn write_pools_at(path: &Path, pools: &BTreeMap<String, Vec<String>>) -> Result<()> {
+    let text = serde_json::to_string_pretty(pools)?;
+    crate::credential_seal::write(path, &text)
+        .map_err(|e| NurError::Other(format!("failed to save key pool: {e}")))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+/// Extra keys stored for `provider_id` (rotation pool, not the main key).
+pub fn load_pool_keys(provider_id: &str) -> Vec<String> {
+    read_pools_at(&crate::config::provider_key_pools_path())
+        .remove(provider_id)
+        .unwrap_or_default()
+}
+
+/// Add `key` to `provider_id`'s rotation pool. Returns how many keys the
+/// provider can rotate through, main key included.
+pub fn add_pool_key(provider_id: &str, key: &str) -> Result<usize> {
+    let key = check_key_shape(key)?.to_string();
+    ensure_dirs()?;
+    let _guard = key_store_guard();
+    let path = crate::config::provider_key_pools_path();
+    let mut pools = read_pools_at(&path);
+    let main = load_provider_key(provider_id);
+    let extras = pools.entry(provider_id.to_string()).or_default();
+    if main.as_deref() != Some(key.as_str()) && !extras.contains(&key) {
+        extras.push(key);
+    }
+    let total = extras.len() + usize::from(main.is_some());
+    write_pools_at(&path, &pools)?;
+    Ok(total)
+}
+
+/// Drop every extra key for `provider_id`. Returns whether any existed.
+pub fn clear_pool_keys(provider_id: &str) -> Result<bool> {
+    let _guard = key_store_guard();
+    let path = crate::config::provider_key_pools_path();
+    let mut pools = read_pools_at(&path);
+    let removed = pools
+        .remove(provider_id)
+        .is_some_and(|keys| !keys.is_empty());
+    if removed {
+        write_pools_at(&path, &pools)?;
+    }
+    Ok(removed)
+}
+
+/// `(provider_id, extra key count)` for every provider with a stored pool.
+pub fn pool_summaries() -> Vec<(String, usize)> {
+    read_pools_at(&crate::config::provider_key_pools_path())
+        .into_iter()
+        .filter(|(_, keys)| !keys.is_empty())
+        .map(|(id, keys)| (id, keys.len()))
+        .collect()
 }
 
 /// A stored per-provider failover key, if one was saved for this provider id.
@@ -1207,6 +1280,9 @@ pub fn delete_provider_credentials(provider_id: &str) -> Result<bool> {
         }
     }
     let removed = forget_provider_unlocked(id);
+    // Rotation keys go with the provider's credentials.
+    let pooled = clear_pool_keys(id).unwrap_or(false);
+    let removed = removed || pooled;
     block_t3_fallback(id)?;
     crate::oauth::omp_bridge::invalidate_omp_token_cache();
     Ok(removed || active_matches)
@@ -1671,6 +1747,13 @@ pub fn provider_credential_summaries() -> BTreeMap<String, String> {
         }
         if std::env::var(provider.env_key).is_ok_and(|value| !value.trim().is_empty()) {
             sources.push(format!("env {}", provider.env_key));
+        }
+        let pooled = read_pools_at(&crate::config::provider_key_pools_path())
+            .get(provider.id)
+            .map_or(0, Vec::len)
+            + crate::api::key_pool::env_keys(provider.env_key).len();
+        if pooled > 0 {
+            sources.push(format!("+{pooled} rotating"));
         }
         let driver = match provider.id {
             "openai" => Some(crate::t3code::DriverId::Codex),

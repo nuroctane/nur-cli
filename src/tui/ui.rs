@@ -4478,7 +4478,7 @@ fn sg_cat_for_tool(name: &str) -> SgCat {
         "read_file" | "list_dir" | "sgrep" | "grep" | "glob" | "git_status" | "git_diff"
         | "web_fetch" | "web_search" | "look" | "browser" | "terminal_browser" => SgCat::Search,
         // editing
-        "write_file" | "edit_file" | "multi_edit" | "apply_patch" => SgCat::Edit,
+        "write_file" | "edit_file" | "multi_edit" | "apply_patch" | "hashline_edit" => SgCat::Edit,
         // execution
         "bash" | "extract_frames" | "excalidraw" | "tldraw" => SgCat::Exec,
         // agent / delegation
@@ -7349,7 +7349,7 @@ fn mini_unified_diff(old: &str, new: &str, max_lines: usize) -> Vec<String> {
 fn is_edit_tool(name: &str) -> bool {
     matches!(
         name,
-        "write_file" | "edit_file" | "multi_edit" | "apply_patch"
+        "write_file" | "edit_file" | "multi_edit" | "apply_patch" | "hashline_edit"
     )
 }
 
@@ -7717,7 +7717,7 @@ fn summarize_args(tool: &str, args: &str) -> String {
         let key = match tool {
             "bash" => "command",
             "read_file" | "write_file" | "edit_file" | "multi_edit" | "apply_patch"
-            | "list_dir" => "path",
+            | "hashline_edit" | "list_dir" => "path",
             "grep" | "glob" => "pattern",
             "web_fetch" => "url",
             "sgrep" | "web_search" => "query",

@@ -7,7 +7,7 @@ All native tools available to the NurCLI agent.
 | Family | Tools | Colour |
 |--------|-------|--------|
 | **read** | `read_file` `list_dir` `sgrep` `grep` `glob` | sky |
-| **edit** | `write_file` `edit_file` `multi_edit` `apply_patch` | violet |
+| **edit** | `write_file` `edit_file` `multi_edit` `apply_patch` `hashline_edit` | violet |
 | **shell** | `bash` | amber |
 | **vision** | `look` `extract_frames` | pink |
 | **web** | `web_search` `web_fetch` | teal |
@@ -29,7 +29,7 @@ Which schemas ride on every request depends on `[tools] profile`:
 
 - **`lean` (default):** the editing shell and session tools are always offered (`read_file`, `list_dir`, the edit tools, `bash`, `sgrep`/`grep`/`glob`, `web_search`/`web_fetch`, `look`, `git_status`/`git_diff`, `context`, `goal`, `message`, `bg`, `skill`, `memory`, `question`, `todo_write`, `submit_plan`, `agent`, `codemode`, `tool_search`). Every other tool is listed by name and one line in the system prompt and loads through `tool_search`; from the next request on the model calls it by its real name, so permissions, approvals and plan mode see the real tool. The loaded set is read back from the conversation, so `/resume` keeps it. About 6k tool-schema tokens per request instead of 15k.
 - **`full`:** every schema on every request.
-- **`core`:** 15 local tools, no ecosystem tools.
+- **`core`:** 16 local tools, no ecosystem tools.
 
 Capability flags (read-only / concurrency-safe / destructive) drive parallel batching and approvals.
 
@@ -100,6 +100,21 @@ Apply targeted string replacements to a file. Requires exact string matching, wi
 ### `multi_edit`
 
 Apply multiple edits to a file in a single operation. Every edit is validated before anything is written: an empty or unmatched `old_string` fails the whole call and leaves the file untouched.
+
+### `hashline_edit`
+
+Edits an existing file by line number instead of by retyping old text (oh-my-pi's "hashline" format). `read_file` heads every read with `[path#TAG]`, a 4-hex snapshot of the whole file; pass that `tag` with the edits, and a file that changed since the read is refused before anything is written. Numbers always refer to that snapshot, never to lines shifted by an earlier operation in the same call.
+
+```text
+PUT 4.=6:        replace lines 4-6 with the + rows below (PUT 4.=4: for one line)
++    new text
+PUT <1:          insert at the file head (PUT <N: before line N)
+PUT >$:          append at the end (PUT >N: after line N)
+CUT 8.=9 @fn     delete lines 8-9, keeping them in register @fn
+PUT >12 @fn      paste the register after line 12 (no body)
+```
+
+Body rows are `+` and the exact final text (`+` alone is a blank line). The file's line endings, BOM and final newline are kept, and the result returns the new tag with the changed lines, so the next edit needs no re-read. Block anchors (`N*`) and file moves are not supported; use explicit ranges, and `write_file` / `bash` for files.
 
 ### `apply_patch`
 

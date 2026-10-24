@@ -495,7 +495,7 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
             "Free: read_file, list_dir, sgrep, grep, glob, web_fetch, web_search, question,\n\
              todo_write, submit_plan, and bash for the read-only set above.\n\
              BLOCKED in plan mode (do NOT attempt - they need manual/auto via Shift+Tab):\n\
-             - Authoring code: write_file, edit_file, multi_edit, apply_patch.\n\
+             - Authoring code: write_file, edit_file, multi_edit, apply_patch, hashline_edit.\n\
              - Mutating the repo via shell: git commit/push/add/reset/checkout/restore/stash/\n\
              merge/rebase/pull, and dependency installs (npm/pip/cargo/… install/add)."
         } else {
@@ -505,7 +505,7 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
              plur(recall|status|…), ruflo(memory_search|status|…), executor(search|status),\n\
              enclave(status|tools), and bash for the read-only set above.\n\
              BLOCKED in plan mode (do NOT attempt - they need manual/auto via Shift+Tab):\n\
-             - Authoring code: write_file, edit_file, multi_edit, apply_patch.\n\
+             - Authoring code: write_file, edit_file, multi_edit, apply_patch, hashline_edit.\n\
              - Submitting/mutating the repo via shell: git commit/push/add/reset/checkout/\n\
              restore/stash/merge/rebase/pull, gh pr create/merge, and dependency installs\n\
              (npm/pnpm/yarn/pip/cargo/… install/add).\n\
@@ -515,8 +515,8 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
         };
         let lean_catalog;
         let tools_catalog = if self.core_profile {
-            "read_file, list_dir, write_file, edit_file, multi_edit, apply_patch, bash,\n\
-             sgrep, grep, glob, web_fetch, web_search, todo_write, question, submit_plan"
+            "read_file, list_dir, write_file, edit_file, multi_edit, apply_patch, hashline_edit,\n\
+             bash, sgrep, grep, glob, web_fetch, web_search, todo_write, question, submit_plan"
         } else if self.lean_profile {
             lean_catalog = format!(
                 "{}\n\nLoaded on demand - call `tool_search` with the names you need (or a \
@@ -531,7 +531,8 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
             );
             lean_catalog.as_str()
         } else {
-            "read_file, list_dir, write_file, edit_file, multi_edit, apply_patch, bash, sgrep, grep, glob,\n\
+            "read_file, list_dir, write_file, edit_file, multi_edit, apply_patch, hashline_edit, bash,\n\
+             sgrep, grep, glob,\n\
              web_fetch, web_search, look, extract_frames, git_status, git_diff,\n\
              context (RLM store), anydoc (docs→md), goal, proposal, harness (continual refine),\n\
              connectome (agent-native memory + chronicle continuity), repl (persistent Python REPL),\n\
@@ -695,6 +696,10 @@ instead of polling it.{codemode_note}
 - todo_write: maintain a live task list for multi-step work (always keep one in_progress)
 - submit_plan: formal plan artifact in plan mode
 - Prefer edit_file / multi_edit / apply_patch over full rewrites
+- hashline_edit: read_file heads every file with `[path#TAG]`; hashline_edit changes lines by those
+  numbers (`PUT N.=M:` + `+` rows, `PUT >N:`, `CUT N.=M`) with the tag, so you never retype old
+  text. A stale tag means the file changed: read it again. Use it when the old text is long or
+  whitespace-sensitive, or for several changes in one file.
 {ecosystem_bullets}{subagents_section}"#,
             self.cwd.display(),
             std::env::consts::OS,

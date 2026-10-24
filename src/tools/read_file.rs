@@ -12,7 +12,9 @@ impl Tool for ReadFile {
     }
 
     fn description(&self) -> &str {
-        "Read a file from the workspace. Optionally limit to a line range (1-indexed)."
+        "Read a file from the workspace. Optionally limit to a line range (1-indexed). \
+         The first line is `[path#TAG]`: the file's snapshot tag for hashline_edit, then \
+         one `N|text` row per line."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -47,6 +49,9 @@ impl Tool for ReadFile {
         // Whatever range is returned, the model has now "seen" this version of
         // the file; the edit tools compare against it.
         super::file_ledger::note_read(&full, &bytes);
+        // The snapshot tag covers the whole file whatever range is shown, so a
+        // partial read still anchors hashline_edit.
+        let tag_line = super::hashline::header(&path, &String::from_utf8_lossy(&bytes));
         let reader = BufReader::new(std::io::Cursor::new(bytes));
 
         let start = offset.saturating_sub(1);
@@ -79,7 +84,7 @@ impl Tool for ReadFile {
         } else if truncated {
             out.push_str("\n… truncated (hit 200k output cap; raise offset or lower limit)\n");
         }
-        Ok(out)
+        Ok(format!("{tag_line}\n{out}"))
     }
 }
 

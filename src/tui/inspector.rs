@@ -67,7 +67,7 @@ fn fit_label(text: &str, width: usize) -> String {
 pub fn is_change(name: &str) -> bool {
     matches!(
         name,
-        "apply_patch" | "edit_file" | "write_file" | "multi_edit"
+        "apply_patch" | "edit_file" | "write_file" | "multi_edit" | "hashline_edit"
     )
 }
 

@@ -2142,7 +2142,7 @@ pub fn aurora_cell_at(elapsed: Duration, pos: usize, span: usize, period_ms: u12
 pub fn tool_color(name: &str) -> Color {
     match name {
         "read_file" | "list_dir" | "sgrep" | "grep" | "glob" => BLUE_300(),
-        "write_file" | "edit_file" | "multi_edit" | "apply_patch" => VIOLET(),
+        "write_file" | "edit_file" | "multi_edit" | "apply_patch" | "hashline_edit" => VIOLET(),
         "bash" => AMBER(),
         "web_fetch" | "web_search" | "browser" | "terminal_browser" | "enclave" => TEAL(),
         "look" | "extract_frames" => PINK(),
@@ -2159,7 +2159,7 @@ pub fn tool_color(name: &str) -> Color {
 pub fn tool_family(name: &str) -> &'static str {
     match name {
         "read_file" | "list_dir" | "sgrep" | "grep" | "glob" => "read",
-        "write_file" | "edit_file" | "multi_edit" | "apply_patch" => "edit",
+        "write_file" | "edit_file" | "multi_edit" | "apply_patch" | "hashline_edit" => "edit",
         "bash" => "shell",
         "web_fetch" | "web_search" => "web",
         "browser" => "browser",

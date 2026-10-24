@@ -868,7 +868,7 @@ impl Cell {
                 // short approval preview), so click-to-peek is useful for review.
                 if matches!(
                     name.as_str(),
-                    "write_file" | "edit_file" | "multi_edit" | "apply_patch"
+                    "write_file" | "edit_file" | "multi_edit" | "apply_patch" | "hashline_edit"
                 ) {
                     return Some(super::ui::tool_file_peek_body(
                         name,

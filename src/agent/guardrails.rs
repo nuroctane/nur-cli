@@ -76,7 +76,7 @@ pub fn check_tool_args(name: &str, args_json: &str) -> GuardDecision {
     // Absolute filesystem roots - nur also refuses in sandbox, but fail early.
     if matches!(
         name,
-        "bash" | "write_file" | "edit_file" | "read_file" | "list_dir"
+        "bash" | "write_file" | "edit_file" | "hashline_edit" | "read_file" | "list_dir"
     ) {
         let lower = args_json.to_ascii_lowercase();
         if lower.contains("\"path\":\"/\"")

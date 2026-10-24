@@ -4,7 +4,7 @@ Browse every system in the [Jev model library](jev-models.md) with `nur jev mode
 
 **Fully loaded multi-provider terminal coding agent.** Not a thin wrapper.
 
-Custom Rust harness, dense gold TUI, **native vision**, 55 tools (the rarely used ones loaded on demand), a knowledge stack, and a hardened sandbox. Pick any of **71 providers** with `/login` (`/provider`), any model via `--model` / `/model`. **TypeSafe - Jev** typed judgments run *inside* the loop: which tool calls still earn their tokens, whether a result actually worked, what a fresh context can drop, which skill rules matter, which model is adequate - and they are **keyless on this machine** through three bundled local engines. Install marketplace plugins with `/plugins` (same picker UX as providers).
+Custom Rust harness, dense gold TUI, **native vision**, 56 tools (the rarely used ones loaded on demand), a knowledge stack, and a hardened sandbox. Pick any of **71 providers** with `/login` (`/provider`), any model via `--model` / `/model`. **TypeSafe - Jev** typed judgments run *inside* the loop: which tool calls still earn their tokens, whether a result actually worked, what a fresh context can drop, which skill rules matter, which model is adequate - and they are **keyless on this machine** through three bundled local engines. Install marketplace plugins with `/plugins` (same picker UX as providers).
 
 ```text
 nur           # gold interactive TUI

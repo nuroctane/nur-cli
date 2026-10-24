@@ -1,0 +1,82 @@
+{
+  "description": "Hash-anchored edits: read_file heads the file with [path#TAG]; hashline_edit with a stale tag is refused and writes nothing; with the read's tag it replaces line 2 by number, keeps the rest byte for byte, and returns the new tag with the changed lines.",
+  "prompt": "Make greet print the name.",
+  "setup_files": {
+    "app.py": "def greet(name):\n    print('hi')\n    return name\n"
+  },
+  "script": [
+    {
+      "tool_calls": [
+        {
+          "name": "read_file",
+          "arguments": {
+            "path": "app.py"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "name": "hashline_edit",
+          "arguments": {
+            "path": "app.py",
+            "tag": "0000",
+            "edits": "PUT 2.=2:\n+    print(name)"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "name": "hashline_edit",
+          "arguments": {
+            "path": "app.py",
+            "tag": "A687",
+            "edits": "PUT 2.=2:\n+    print(f'hi {name}')"
+          }
+        }
+      ]
+    },
+    {
+      "text": "greet prints the name now."
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 4,
+    "stdout_contains": [
+      "greet prints the name now."
+    ],
+    "tool_results": [
+      {
+        "request": 2,
+        "contains": [
+          "[app.py#A687]",
+          "     2|    print('hi')"
+        ]
+      },
+      {
+        "request": 3,
+        "contains": [
+          "stale tag 0000"
+        ]
+      },
+      {
+        "request": 4,
+        "contains": [
+          "edited app.py: 1 operation(s), 3 -> 3 lines",
+          "     2|    print(f'hi {name}')"
+        ]
+      }
+    ],
+    "files": {
+      "app.py": {
+        "contains": [
+          "def greet(name):\n    print(f'hi {name}')\n    return name\n"
+        ]
+      }
+    }
+  }
+}

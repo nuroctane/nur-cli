@@ -257,6 +257,10 @@ pub struct ApiClient {
     provider_id: String,
     oauth: Option<crate::auth::OAuthRequestContext>,
     refresh_oauth: bool,
+    /// Extra API keys to rotate through when the one in use is rate-limited,
+    /// out of quota or refused (see [`super::key_pool`]). Shared by clones, so
+    /// a blocked key stays blocked for the routed and subagent copies too.
+    key_pool: Option<std::sync::Arc<super::key_pool::KeyPool>>,
     /// Wire format for this client (Responses / Chat Completions / Anthropic Messages).
     style: ApiStyle,
     /// Cursor CLI chat chain (`--resume` session id + items already sent).
@@ -388,6 +392,7 @@ impl ApiClient {
             provider_id: String::new(),
             oauth: None,
             refresh_oauth: false,
+            key_pool: None,
             style: ApiStyle::Responses,
             cursor_chat: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
             session_affinity: std::sync::Arc::new(session_affinity_id()),
@@ -406,6 +411,18 @@ impl ApiClient {
         let requested_base = base_url.into();
         let effective_base = effective_base_url(&requested_base, &provider_id, oauth.is_some());
         let mut client = Self::new(effective_base, api_key)?;
+        // API-key routes rotate through the provider's extra keys; an OAuth
+        // session is one account and never does.
+        if oauth.is_none() && !client.api_key.trim().is_empty() {
+            let env_key = crate::providers::by_id(&provider_id)
+                .map(|p| p.env_key)
+                .unwrap_or_default();
+            let mut keys = vec![client.api_key.clone()];
+            keys.extend(super::key_pool::env_keys(env_key));
+            keys.extend(crate::auth::load_pool_keys(&provider_id));
+            client.key_pool = super::key_pool::KeyPool::new(keys, &client.session_affinity)
+                .map(std::sync::Arc::new);
+        }
         client.provider_id = provider_id;
         client.refresh_oauth = oauth.is_some();
         client.oauth = oauth;
@@ -507,6 +524,14 @@ impl ApiClient {
 
     fn is_retryable_status(status: u16) -> bool {
         matches!(status, 429 | 500 | 502 | 503 | 504)
+    }
+
+    /// With a spare key free, a rate limit or overload is answered by the
+    /// next key, not by retrying the one that drew it: the error goes back to
+    /// the agent loop at once, which rotates and replays (`rotate_key_after`).
+    fn defer_to_key_rotation(&self, status: u16) -> bool {
+        matches!(status, 429 | 503 | 529)
+            && self.key_pool.as_ref().is_some_and(|pool| pool.has_spare())
     }
 
     /// Only send an idempotency key to routes which document support for it.
@@ -804,7 +829,34 @@ impl ApiClient {
         routed
     }
 
+    /// After a provider error, take the key in use out of rotation and move to
+    /// the next free one. Returns a status line when it switched, `None` when
+    /// there is no pool, the error is about the request rather than the key,
+    /// or every other key is blocked too.
+    pub fn rotate_key_after(&self, error: &NurError) -> Option<String> {
+        let pool = self.key_pool.as_ref()?;
+        let block = super::key_pool::block_for(error)?;
+        let (from, to) = pool.rotate(block)?;
+        let reason = match error {
+            NurError::Api {
+                status: 401 | 403, ..
+            } => "was refused",
+            _ if block >= super::key_pool::QUOTA_BLOCK => "is out of quota",
+            _ => "is rate-limited",
+        };
+        Some(format!(
+            "{} key {from}/{n} {reason} - switching to key {to}/{n}",
+            self.provider_id,
+            n = pool.len()
+        ))
+    }
+
     fn api_key_for_request(&self) -> String {
+        if !self.refresh_oauth {
+            if let Some(pool) = &self.key_pool {
+                return pool.current();
+            }
+        }
         if self.refresh_oauth {
             let provider_id = self.provider_id.as_str();
             if let Ok(Some(token)) =
@@ -1285,7 +1337,8 @@ impl ApiClient {
                     continue;
                 }
                 let retryable =
-                    is_retryable_error(status.as_u16(), &message, self.is_opencode_route());
+                    is_retryable_error(status.as_u16(), &message, self.is_opencode_route())
+                        && !self.defer_to_key_rotation(status.as_u16());
                 self.record_attempt(
                     &req_owned,
                     &attempt_id,
@@ -1484,7 +1537,8 @@ impl ApiClient {
                     stream_req.max_output_tokens = None;
                     continue;
                 }
-                let retryable = is_retryable_error(status.as_u16(), &msg, self.is_opencode_route());
+                let retryable = is_retryable_error(status.as_u16(), &msg, self.is_opencode_route())
+                    && !self.defer_to_key_rotation(status.as_u16());
                 self.record_attempt(
                     &stream_req,
                     &attempt_id,
@@ -1842,7 +1896,8 @@ impl ApiClient {
                     continue;
                 }
                 let retryable =
-                    is_retryable_error(status.as_u16(), &message, self.is_opencode_route());
+                    is_retryable_error(status.as_u16(), &message, self.is_opencode_route())
+                        && !self.defer_to_key_rotation(status.as_u16());
                 self.record_attempt(
                     req,
                     &attempt_id,
@@ -2181,7 +2236,8 @@ impl ApiClient {
                 // Anthropic 4xx must still fail fast.
                 let retry_msg = parse_error_message(&text).unwrap_or_else(|| text.clone());
                 let retryable =
-                    is_retryable_error(status.as_u16(), &retry_msg, self.is_opencode_route());
+                    is_retryable_error(status.as_u16(), &retry_msg, self.is_opencode_route())
+                        && !self.defer_to_key_rotation(status.as_u16());
                 if retryable && attempt < 4 && !is_oauth_429 {
                     tokio::time::sleep(std::time::Duration::from_millis(
                         400 * (1 << (attempt - 1)),
@@ -2271,7 +2327,8 @@ impl ApiClient {
             let status = res.status();
             let code = status.as_u16();
             if !status.is_success() {
-                let retryable = Self::is_retryable_status(code) || code == 529;
+                let retryable = (Self::is_retryable_status(code) || code == 529)
+                    && !self.defer_to_key_rotation(code);
                 if retryable && attempt < 4 && !cancel.is_cancelled() {
                     tokio::time::sleep(std::time::Duration::from_millis(
                         400 * 2u64.pow(attempt - 1),
@@ -2735,7 +2792,10 @@ impl ApiClient {
                         }
                     }
                 }
-                if is_retryable_error(status.as_u16(), &message, false) && attempt < 4 {
+                if is_retryable_error(status.as_u16(), &message, false)
+                    && !self.defer_to_key_rotation(status.as_u16())
+                    && attempt < 4
+                {
                     let backoff = std::time::Duration::from_millis(
                         300 * (1 << (attempt - 1)) + rand_jitter(),
                     );
@@ -4047,6 +4107,7 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
                 base_url: None,
             }),
             refresh_oauth: false,
+            key_pool: None,
             style: ApiStyle::Responses,
             session_affinity: std::sync::Arc::new("test-session".into()),
             cursor_chat: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
@@ -4096,6 +4157,7 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
                 base_url: None,
             }),
             refresh_oauth: false,
+            key_pool: None,
             style: ApiStyle::ChatCompletions,
             session_affinity: std::sync::Arc::new("test-session".into()),
             cursor_chat: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
@@ -4128,6 +4190,7 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
                 base_url: None,
             }),
             refresh_oauth: false,
+            key_pool: None,
             style: ApiStyle::GeminiCloudCode,
             session_affinity: std::sync::Arc::new("test-session".into()),
             cursor_chat: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
@@ -4218,6 +4281,7 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
                 base_url: None,
             }),
             refresh_oauth: false,
+            key_pool: None,
             style: ApiStyle::GeminiCloudCode,
             session_affinity: std::sync::Arc::new("test-session".into()),
             cursor_chat: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
