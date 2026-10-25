@@ -85,7 +85,7 @@ Mouse/keyboard interaction tips that used to live under the art are behind
 
 | Key | Action |
 |-----|--------|
-| `↑` `↓` · mouse wheel · drag scrollbar | Scroll transcript (wheel and keys glide; the thumb stays under the pointer while dragging, a click on the open track pages toward it) |
+| `↑` `↓` · mouse wheel · drag scrollbar | Scroll transcript (wheel and keys glide; the thumb stays under the pointer while dragging, a click on the open track pages toward it). Scrolled back, the view holds still while output streams in, cards reflow or the turn ends: the same text stays on the top row and `↓ N · End` counts what arrived. **End**, the chip, or sending a message returns to the newest line. |
 | **Rail in any list dialogue** (`/model`, `/login`, `/plugins`, `/theme`, sessions) | Click or drag the right-hand rail to jump through the list; the selection follows the window |
 | **Drag on chat text** | Select + auto-copy (keeps range while you scroll; works on expanded thought/tool bodies) |
 | **Click `↓ N · End`** | Jump to latest message |
@@ -199,6 +199,7 @@ See [Permission modes](#permission-modes) below for exactly what each mode allow
 | `/swarm` | Inline subagent grid — one live pane per subagent |
 | `/clear` | Clear the screen only — the model keeps full context and the session history is untouched (`/compact` shrinks context, `/new` starts fresh) |
 | `/new` | Start a new session |
+| `/fresh` | Reset what the provider holds for this conversation - a new prompt-cache key and affinity id, new connections, no Cursor/Droid resume chain - while the transcript and the model's context stay as they are. For a stale cache or a wedged stream; refused mid-turn. |
 | `/steer <text>` | Inject a message into the *running* turn without cancelling it (tools, subagents and bg jobs keep going). While busy, a plain Enter queues a choice card instead of steering |
 | `/undo` | Revert the last file edit made this session (`write_file` `edit_file` `multi_edit`) |
 | `/receipt` | Session receipt: what actually ran (models, tools, privacy tiers) plus **hash-chain verification** and an OTLP span export |

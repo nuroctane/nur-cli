@@ -28,6 +28,12 @@ pub struct Session {
     /// TUI transcript cards (thought · tools · answers) for reload. Additive.
     #[serde(default)]
     pub ui_log: Vec<UiLogItem>,
+    /// The id the provider sees for this conversation (prompt-cache key and
+    /// affinity headers). `None` means the session id; `/fresh` mints a new
+    /// one so the provider starts a clean cache and stream state while the
+    /// conversation itself stays as it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_session: Option<String>,
 }
 
 /// One persisted transcript card (display only — not API wire format).
@@ -106,7 +112,13 @@ impl Session {
             usage: TokenUsage::default(),
             input_items: Vec::new(),
             ui_log: Vec::new(),
+            provider_session: None,
         }
+    }
+
+    /// The id the provider keys this conversation's cache and routing on.
+    pub fn provider_session_id(&self) -> &str {
+        self.provider_session.as_deref().unwrap_or(&self.id)
     }
 
     pub fn new_for_provider(model: &str, provider: &str, cwd: &str) -> Self {

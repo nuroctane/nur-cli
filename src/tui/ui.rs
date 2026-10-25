@@ -2654,11 +2654,36 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     app.view_total = total;
 
     let max_scroll = total.saturating_sub(body_h as usize);
+    // Scrolled back to read, the top row keeps its text while output streams
+    // in below or a card above reflows: the offset from the bottom grows by
+    // whatever arrived. Only a reader who has not scrolled since the last
+    // frame is held - the wheel, keys and their glide move the view freely.
+    if let Some(anchor) = app.scroll_anchor.take() {
+        if app.scroll_from_bottom > 0 && app.scroll_from_bottom == anchor.scroll_from_bottom {
+            if let Some(row) = super::row_index::settle(&row_index, &app.plain_lines, &anchor) {
+                let held = max_scroll.saturating_sub(row.min(max_scroll));
+                if held != app.scroll_from_bottom {
+                    let shift = held as isize - app.scroll_from_bottom as isize;
+                    app.scroll_target = (app.scroll_target as isize + shift).max(0) as usize;
+                    app.scroll_from_bottom = held;
+                }
+            }
+        }
+    }
     if app.scroll_from_bottom > max_scroll {
         app.scroll_from_bottom = max_scroll;
     }
     let top = max_scroll.saturating_sub(app.scroll_from_bottom);
     app.transcript_top = top;
+    app.scroll_anchor = (app.scroll_from_bottom > 0)
+        .then(|| row_index.anchor_at(top))
+        .flatten()
+        .map(|(cell, offset)| super::row_index::ScrollAnchor {
+            cell,
+            offset,
+            scroll_from_bottom: app.scroll_from_bottom,
+            text: app.plain_lines.get(top).cloned().unwrap_or_default(),
+        });
 
     // The banner shows when the prompt owning the first *uncovered* row has
     // its header above that row (it may sit under the banner itself: the

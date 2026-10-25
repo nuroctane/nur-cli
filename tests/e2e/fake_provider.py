@@ -9,7 +9,8 @@ A reply is {"text": "..."}, {"tool_calls": [{"name", "arguments"}]} (a string
 {"status": 500, "error": "..."} for an HTTP failure. A reply with
 "drop": "before_response" resets the connection without answering, and
 "drop": "mid_stream" streams its text then resets: both are transport failures,
-not HTTP errors. On the Responses wire a
+not HTTP errors. "stream_delay": S streams the text one line every S seconds,
+so a client sees output keep arriving. On the Responses wire a
 reply may also carry "reasoning" (an encrypted reasoning item, as OpenAI returns
 with store=false) and "extra_output" (raw output items such as Perplexity's
 search_results), both emitted before the message.
@@ -237,6 +238,12 @@ def make_handler(state, mcp=None):
                 self.send_header("content-type", "text/event-stream")
                 self.end_headers()
                 delta = {"role": "assistant"}
+                pace = reply.get("stream_delay")
+                if text and pace:
+                    for line in text.splitlines(keepends=True):
+                        self._sse({"choices": [{"index": 0, "delta": {**delta, "content": line}, "finish_reason": None}]}, n)
+                        time.sleep(float(pace))
+                    text = ""
                 if text:
                     delta["content"] = text
                 if calls:

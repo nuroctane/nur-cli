@@ -138,6 +138,7 @@ impl App {
                 );
             }
             "/new" => self.cmd_new(),
+            "/fresh" => self.cmd_fresh(),
             "/compact" => self.cmd_compact(),
             "/cd" => self.cmd_cd(&arg),
             "/pwd" => self.push_info(format!("cwd  {}", self.cwd.display())),
@@ -1297,6 +1298,48 @@ impl App {
         }
         s.push_str("\n  #<note>       quick-save to memory (no turn)\n");
         self.push_info(s);
+    }
+
+    /// `/fresh`: a clean provider-side slate for the same conversation. The
+    /// provider gets a new session id (prompt-cache key and affinity headers),
+    /// new connections and no CLI resume chain; the transcript, the session file
+    /// and what the model sees stay exactly as they are. For a stale cache or a
+    /// wedged stream, where `/new` would throw the conversation away.
+    fn cmd_fresh(&mut self) {
+        if self.busy {
+            self.push_error("wait for the current turn to finish (or Esc it), then /fresh".into());
+            return;
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        let Some(session) = self.session.as_mut() else {
+            self.push_info("no conversation yet - the next one starts fresh anyway".into());
+            return;
+        };
+        let (client, dropped) = match self.client.fresh(&id) {
+            Ok(fresh) => fresh,
+            Err(e) => {
+                self.push_error(format!("/fresh failed: {e}"));
+                return;
+            }
+        };
+        session.provider_session = Some(id.clone());
+        let _ = session.save();
+        self.client = client;
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
+        let handles = match dropped {
+            0 => String::new(),
+            n => format!(
+                ", dropped {n} CLI resume chain{}",
+                if n == 1 { "" } else { "s" }
+            ),
+        };
+        self.push_note(
+            Tone::Mode,
+            format!(
+                "fresh provider session {} - new cache key and connections{handles}; the conversation is unchanged",
+                &id[..8]
+            ),
+        );
     }
 
     fn cmd_new(&mut self) {

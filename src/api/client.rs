@@ -829,6 +829,37 @@ impl ApiClient {
         routed
     }
 
+    /// Route this conversation as `id` (affinity headers such as
+    /// `x-session-id`), e.g. the provider session `/fresh` minted.
+    pub fn with_affinity(mut self, id: &str) -> Self {
+        if self.session_affinity.as_str() != id {
+            self.session_affinity = std::sync::Arc::new(id.to_string());
+        }
+        self
+    }
+
+    /// The same route with a clean provider-side slate, for `/fresh`: a new
+    /// connection pool (a wedged keep-alive stream goes with the old one), the
+    /// affinity id `affinity`, and no Cursor / Droid `--resume` chain, so the
+    /// next request rebuilds from the local conversation. Provider, keys
+    /// (and their rotation state), OAuth and wire style are kept. Returns the
+    /// client and how many server-side chat handles were dropped.
+    pub fn fresh(&self, affinity: &str) -> Result<(Self, usize)> {
+        let mut next = Self::new(self.base_url.clone(), self.api_key.clone())?;
+        next.provider_id = self.provider_id.clone();
+        next.oauth = self.oauth.clone();
+        next.refresh_oauth = self.refresh_oauth;
+        next.key_pool = self.key_pool.clone();
+        next.style = self.style;
+        next.session_affinity = std::sync::Arc::new(affinity.to_string());
+        let dropped = self
+            .cursor_chat
+            .lock()
+            .map(|chat| usize::from(chat.session_id.is_some()))
+            .unwrap_or(0);
+        Ok((next, dropped))
+    }
+
     /// After a provider error, take the key in use out of rotation and move to
     /// the next free one. Returns a status line when it switched, `None` when
     /// there is no pool, the error is about the request rather than the key,

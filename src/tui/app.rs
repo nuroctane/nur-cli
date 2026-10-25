@@ -169,6 +169,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/commands", "commands + keyboard shortcuts"),
     ("/clear", "clear the transcript display"),
     ("/new", "start a fresh session"),
+    ("/fresh", "reset the provider's cache and stream state, keep the conversation"),
     ("/compact", "summarize conversation, free context"),
     ("/cd", "change working directory: /cd <path>  (tools sandbox here)"),
     ("/pwd", "print the current working directory"),
@@ -2163,6 +2164,9 @@ pub struct App {
     tool_cells: HashMap<u64, usize>,
     /// Lines scrolled back from the newest line (0 = following the bottom).
     pub scroll_from_bottom: usize,
+    /// The text a scrolled-back reader has on the top row, so new output does
+    /// not slide it away (see `draw_transcript`).
+    pub scroll_anchor: Option<super::row_index::ScrollAnchor>,
     /// Where the wheel and page keys want the viewport; `scroll_from_bottom`
     /// eases toward it one frame at a time (`tick_scroll_animation`).
     pub scroll_target: usize,
@@ -2807,6 +2811,7 @@ pub(super) fn new_app(
         cells: vec![Cell::Banner],
         tool_cells: HashMap::new(),
         scroll_from_bottom: 0,
+        scroll_anchor: None,
         scroll_target: 0,
         scroll_anim_at: Instant::now(),
         view_h: 20,
@@ -3727,6 +3732,12 @@ impl App {
     fn scroll_to_bottom(&mut self) {
         self.scroll_from_bottom = 0;
         self.scroll_target = 0;
+        self.scroll_anchor = None;
+    }
+
+    /// Is the viewport following the newest line (not scrolled back)?
+    fn following(&self) -> bool {
+        self.scroll_target == 0
     }
 
     /// Absolute jump used by scrollbar thumb drag (0 = latest, max = oldest).
@@ -9558,7 +9569,9 @@ impl App {
             live: true,
             detail: want_detail,
         });
-        self.scroll_to_bottom();
+        if self.following() {
+            self.scroll_to_bottom();
+        }
         found
     }
 
@@ -10352,8 +10365,17 @@ impl App {
             // the running loop.
             steer: self.tool_host.steer.clone(),
         };
+        // A `/fresh`-minted provider session routes under its own id.
+        let client = match self
+            .session
+            .as_ref()
+            .and_then(|s| s.provider_session.as_deref())
+        {
+            Some(id) => self.client.clone().with_affinity(id),
+            None => self.client.clone(),
+        };
         AgentRunner {
-            client: self.client.clone(),
+            client,
             config: self.cfg.clone(),
             cwd: self.cwd.clone(),
             permission_mode: self.permission_mode.clone(),
@@ -10878,8 +10900,9 @@ impl App {
             thought: self.thought_accum,
             interrupted,
         });
-        // Snap to latest so the timing strip is always visible at end of output.
-        if !interrupted {
+        // Keep the timing strip in view when following the output; a
+        // reader scrolled back stays where they are (End jumps).
+        if !interrupted && self.following() {
             self.scroll_to_bottom();
         }
     }

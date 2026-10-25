@@ -664,6 +664,109 @@ def transcript_frames(binary):
         server.server_close()
 
 
+def fresh_provider_session(binary):
+    """`/fresh` hands the provider a clean slate without touching the
+    conversation: the next request carries a new session id (Morph routes its
+    prefix cache on `x-session-id`) and still holds the earlier exchange."""
+    scenario = 'fresh-provider-session'
+    work = OUT / f'{scenario}-{time.time_ns()}'
+    work.mkdir(parents=True)
+    home, workspace = work/'home', work/'workspace'
+    workspace.mkdir()
+    log = work/'requests.jsonl'
+    state = State([{'text': 'FRESH_ANSWER_ONE'}, {'text': 'FRESH_ANSWER_TWO'}], log)
+    server = LoopbackHTTPServer(('127.0.0.1', 0), make_handler(state))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    env = isolated_env(home, server.server_port, warm_skills=False)
+    env['MORPH_API_KEY'] = 'e2e-fresh-key-0001'
+    (home/'.nur/config.toml').write_text(
+        f'provider = "morph"\nmodel = "morph-glm53-744b"\nbase_url = "http://127.0.0.1:{server.server_port}/v1"\n'
+        'ecosystem_auto_ensure = false\nauto_update = false\nnative_memory = false\n'
+        '[typesafe]\nenabled = false\n', encoding='utf-8')
+    term = None
+    try:
+        term = Terminal(binary, workspace, env)
+        term.until('F6 inspect', timeout=5)
+        term.type_text('FRESH_PROMPT_ONE')
+        term.write('\r')
+        term.until('FRESH_ANSWER_ONE', timeout=45)
+        term.pump(.5)
+        term.type_text('/fresh')
+        term.write('\r')
+        term.until('fresh provider session', timeout=10)
+        term.type_text('FRESH_PROMPT_TWO')
+        term.write('\r')
+        term.until('FRESH_ANSWER_TWO', timeout=45)
+        requests = [json.loads(line) for line in log.read_text(encoding='utf-8').splitlines() if line.strip()]
+        assert len(requests) == 2, f'{len(requests)} requests'
+        before, after = (r.get('_headers', {}).get('x-session-id') for r in requests)
+        assert before and after, f'x-session-id missing: {before!r} {after!r}'
+        assert before != after, 'the provider session id did not change after /fresh'
+        assert 'FRESH_PROMPT_ONE' in json.dumps(requests[1]), 'the conversation was dropped'
+        print(f'PASS {scenario}: x-session-id changed, conversation kept', flush=True)
+        return {'scenario':scenario,'passed':True}
+    finally:
+        if term:
+            (work/'terminal.txt').write_text(term.output, encoding='utf-8')
+            (work/'screen.txt').write_text('\n'.join(term.screen.display), encoding='utf-8')
+            term.close()
+        server.shutdown()
+        server.server_close()
+
+
+def scroll_holds_while_reading(binary):
+    """Scrolled back to read, the transcript stays exactly where it is while
+    output keeps streaming below, and when the turn ends: only End (or
+    sending) brings the newest line back into view."""
+    scenario = 'scroll-holds-while-reading'
+    work = OUT / f'{scenario}-{time.time_ns()}'
+    work.mkdir(parents=True)
+    home, workspace = work/'home', work/'workspace'
+    workspace.mkdir()
+    log = work/'requests.jsonl'
+    answer = ''.join(f'READ_LINE_{i:03d} steady text to read\n' for i in range(1, 221))
+    state = State([{'text': answer, 'stream_delay': 0.04}], log)
+    server = LoopbackHTTPServer(('127.0.0.1', 0), make_handler(state))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    env = isolated_env(home, server.server_port, warm_skills=False)
+    (home/'.nur/config.toml').write_text(
+        f'provider = "vllm"\nmodel = "e2e-model"\nbase_url = "http://127.0.0.1:{server.server_port}/v1"\n'
+        'ecosystem_auto_ensure = false\nauto_update = false\nnative_memory = false\n'
+        '[typesafe]\nenabled = false\n', encoding='utf-8')
+    visible = lambda: [w for r in term.screen.display for w in r.split() if w.startswith('READ_LINE_')]
+    term = None
+    try:
+        term = Terminal(binary, workspace, env)
+        term.until('F6 inspect', timeout=5)
+        term.type_text('SCROLL_PROMPT')
+        term.write('\r')
+        term.until('READ_LINE_150', timeout=45)
+        term.write('\x1b[5~')  # PageUp: step back to read
+        term.pump(1.0)           # let the glide settle
+        held = visible()
+        assert held, 'nothing readable on screen after PageUp'
+        term.pump(1.5)           # more lines stream in below
+        assert visible() == held, f'scrolled view moved while output streamed: {held[0]}..{held[-1]} ({len(held)}) -> {visible()[0]}..{visible()[-1]} ({len(visible())})'
+        term.pump(5.0)           # the rest streams (220 lines x 40ms) and the turn finishes
+        # The finished answer renders as markdown and may pack more onto a
+        # row, so the reader keeps the same first line rather than the same
+        # rows below it.
+        top_row = visible()[:4]
+        assert held[0] in top_row, f'scrolled view moved when the turn ended: {held[0]} not in top row {top_row}'
+        term.write('\x1b[F')    # End: back to the newest output
+        term.pump(1.0)
+        assert 'READ_LINE_220' in visible(), 'End did not return to the newest line'
+        print(f'PASS {scenario}: view held at {held[0]} while output streamed and through the reflow when the turn ended; End returned to the latest', flush=True)
+        return {'scenario':scenario,'passed':True}
+    finally:
+        if term:
+            (work/'terminal.txt').write_text(term.output, encoding='utf-8')
+            (work/'screen.txt').write_text('\n'.join(term.screen.display), encoding='utf-8')
+            term.close()
+        server.shutdown()
+        server.server_close()
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--bin')
@@ -681,6 +784,8 @@ if __name__ == '__main__':
              'compact-during-indexing':lambda:blocked_models(binary, compact=True),
              'commands-during-indexing':lambda:commands_during_indexing(binary),
              'banner-animates':lambda:banner_animates(binary),
-             'transcript-frames':lambda:transcript_frames(binary)}
+             'transcript-frames':lambda:transcript_frames(binary),
+             'fresh-provider-session':lambda:fresh_provider_session(binary),
+             'scroll-holds-while-reading':lambda:scroll_holds_while_reading(binary)}
     result = [cases[name]() for name in (args.scenarios or cases)]
     (OUT/'report.json').write_text(json.dumps(result,indent=2),encoding='utf-8')

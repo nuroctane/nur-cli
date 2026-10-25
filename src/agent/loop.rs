@@ -1255,7 +1255,7 @@ impl AgentRunner {
                 parallel_tool_calls: Some(primary_caps.parallel_tools),
                 // One cache key per session so system instructions + tools can be
                 // prefix-cached across multi-turn agent loops.
-                prompt_cache_key: Some(session.id.clone()),
+                prompt_cache_key: Some(session.provider_session_id().to_string()),
                 max_output_tokens: (output_reserve > 0 && primary_output_limit)
                     .then_some(output_reserve),
             };
