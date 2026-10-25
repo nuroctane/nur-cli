@@ -31,6 +31,11 @@ pub enum AgentEvent {
     /// sent as [`AgentEvent::TextDelta`]s, and the request is being replayed.
     /// Consumers remove that tail so the replayed answer does not land on top
     /// of the partial one ([`discard_streamed_tail`]).
+    /// The advisor (`agent::advisor`) left a note for the agent.
+    Advice {
+        model: String,
+        note: String,
+    },
     StreamRestart {
         discard: usize,
     },
@@ -365,6 +370,7 @@ impl AgentRunner {
         req: &ResponseRequest,
         tx: &mpsc::UnboundedSender<AgentEvent>,
         cancel: &CancellationToken,
+        rules: &super::stream_rules::RuleWatch,
     ) -> std::result::Result<(ApiResponse, usize), (NurError, usize)> {
         let delta_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let turn_cancel = cancel.child_token();
@@ -388,11 +394,28 @@ impl AgentRunner {
         // process (even for subagents).
         if req.stream == Some(true) || client.uses_agent_cli() {
             let streamed_count = delta_count.clone();
+            // Stream rules watch the answer as it arrives; a match stops the
+            // request here and the caller asks again with the rule added.
+            let streamed_text = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+            let rule_hit: std::sync::Arc<std::sync::Mutex<Option<String>>> = Default::default();
+            let (watch_text, watch_hit, stop) =
+                (streamed_text.clone(), rule_hit.clone(), turn_cancel.clone());
             let request = client.create_response_stream(
                 req,
                 move |ev| match ev {
                     StreamEvent::TextDelta(d) => {
                         streamed_count.fetch_add(d.len(), std::sync::atomic::Ordering::Relaxed);
+                        if !rules.is_empty() {
+                            let mut text = watch_text.lock().unwrap_or_else(|e| e.into_inner());
+                            text.push_str(&d);
+                            let mut hit = watch_hit.lock().unwrap_or_else(|e| e.into_inner());
+                            if hit.is_none() {
+                                if let Some(rule) = rules.check(&text) {
+                                    *hit = Some(rule.name.clone());
+                                    stop.cancel();
+                                }
+                            }
+                        }
                         let _ = tx.send(AgentEvent::TextDelta(d));
                     }
                     StreamEvent::ReasoningDelta(d) => {
@@ -418,6 +441,15 @@ impl AgentRunner {
                 result = &mut request => result,
             };
             let deltas = delta_count.load(std::sync::atomic::Ordering::Relaxed);
+            if let Some(name) = rule_hit.lock().unwrap_or_else(|e| e.into_inner()).take() {
+                return Err((
+                    NurError::StreamRule {
+                        name,
+                        discard: deltas,
+                    },
+                    deltas,
+                ));
+            }
             match r {
                 Ok(resp) => Ok((resp, deltas)),
                 Err(e) => Err((e, deltas)),
@@ -451,6 +483,7 @@ impl AgentRunner {
         usage: &UsageTracker,
         tx: &mpsc::UnboundedSender<AgentEvent>,
         cancel: &CancellationToken,
+        rules: &super::stream_rules::RuleWatch,
     ) -> Result<(ApiResponse, usize, Served)> {
         // Saturation is a pause, not a failure. Providers that queue per worker
         // (NVIDIA NIM, vLLM, Triton, local servers) refuse admission *mid-stream*
@@ -472,7 +505,7 @@ impl AgentRunner {
         let mut attempt: u32 = 0;
         let mut reconnects: usize = 0;
         let primary_err = loop {
-            match self.stream_one(&self.client, req, tx, cancel).await {
+            match self.stream_one(&self.client, req, tx, cancel, rules).await {
                 Ok((resp, deltas)) => {
                     return Ok((
                         resp,
@@ -661,7 +694,7 @@ impl AgentRunner {
             if !client.supports_output_limit(&req2.model) {
                 req2.max_output_tokens = None;
             }
-            match self.stream_one(&client, &req2, tx, cancel).await {
+            match self.stream_one(&client, &req2, tx, cancel, rules).await {
                 Ok((resp, deltas)) => {
                     return Ok((
                         resp,
@@ -846,6 +879,28 @@ impl AgentRunner {
         .map_err(|e| NurError::Other(format!("prompt context worker failed: {e}")))?;
         // `ultrathink` in the user's prose: the strongest effort this route
         // accepts, for this turn only (an `ultracode` setting already is).
+        let mut rules = super::stream_rules::RuleWatch::load(&self.cwd, &self.config.stream_rules);
+        let advisor = if self.is_subagent {
+            None
+        } else {
+            match super::advisor::Advisor::for_session(&self.config, &self.client) {
+                Ok(advisor) => advisor,
+                Err(error) => {
+                    let _ = tx.send(AgentEvent::Status(format!(
+                        "advisor off this turn · {error}"
+                    )));
+                    None
+                }
+            }
+        };
+        // The advisor pushes back on an answer once per turn.
+        let mut advisor_reviewed_answer = false;
+        if !rules.invalid.is_empty() {
+            let _ = tx.send(AgentEvent::Status(format!(
+                "stream rules skipped · {}",
+                rules.invalid.join(" · ")
+            )));
+        }
         let ultrathink = !self.is_subagent
             && super::keywords::has_keyword(&user_text, super::keywords::ULTRATHINK)
             && crate::providers::canonical_effort(&self.config.reasoning_effort) != "ultracode";
@@ -1261,10 +1316,25 @@ impl AgentRunner {
             };
 
             let (resp, text_deltas, served): (ApiResponse, usize, Served) = match self
-                .request_with_failover(&req, usage, tx, cancel)
+                .request_with_failover(&req, usage, tx, cancel, &rules)
                 .await
             {
                 Ok(response) => response,
+                Err(NurError::StreamRule { name, discard }) => {
+                    if discard > 0 {
+                        let _ = tx.send(AgentEvent::StreamRestart { discard });
+                    }
+                    if let Some(rule) = rules.rule(&name) {
+                        session
+                            .input_items
+                            .push(super::stream_rules::injection_item(rule));
+                    }
+                    rules.fired.insert(name.clone());
+                    let _ = tx.send(AgentEvent::Status(format!(
+                        "stream rule `{name}` fired - answering again with it"
+                    )));
+                    continue;
+                }
                 Err(error) if is_context_limit_error(&error) => {
                     // OMP contextPromotion: switch to a larger sibling *before*
                     // compaction when the API rejects the window (e.g. *-spark).
@@ -1455,6 +1525,32 @@ impl AgentRunner {
 
             let mut calls = resp.function_calls();
             let text = resp.output_text();
+            // Tool-call arguments never stream, so a rule is checked against
+            // the finished response too; a match drops it before any tool runs.
+            if !rules.is_empty() {
+                let haystack = calls
+                    .iter()
+                    .map(|call| call.arguments.as_str())
+                    .chain(std::iter::once(text.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if let Some(rule) = rules.check_whole(&haystack) {
+                    let name = rule.name.clone();
+                    session
+                        .input_items
+                        .push(super::stream_rules::injection_item(rule));
+                    rules.fired.insert(name.clone());
+                    if text_deltas > 0 {
+                        let _ = tx.send(AgentEvent::StreamRestart {
+                            discard: text_deltas,
+                        });
+                    }
+                    let _ = tx.send(AgentEvent::Status(format!(
+                        "stream rule `{name}` fired - answering again with it"
+                    )));
+                    continue;
+                }
+            }
             let suppress_duplicate_preamble =
                 !calls.is_empty() && is_duplicate_tool_preamble(&session.input_items, &text);
             let mut replayed = replay_output_items(&resp.output);
@@ -1619,6 +1715,22 @@ impl AgentRunner {
                     skill_nudges += 1;
                     self.persist_session(session);
                     continue;
+                }
+                if let Some(advisor) = advisor
+                    .as_ref()
+                    .filter(|_| !advisor_reviewed_answer && !text.trim().is_empty())
+                {
+                    advisor_reviewed_answer = true;
+                    if let Some(note) = self
+                        .consult_advisor(advisor, session, usage, tx, cancel, Some(text.as_str()))
+                        .await
+                    {
+                        session
+                            .input_items
+                            .push(super::advisor::note_item(&advisor.model, &note));
+                        self.persist_session(session);
+                        continue;
+                    }
                 }
                 // Reasoning-only / empty completion: model "planned" but never
                 // answered or called tools. Common on ChatGPT free + Codex OAuth
@@ -1819,6 +1931,16 @@ impl AgentRunner {
             }
             match exec_result {
                 Ok(()) => {
+                    if let Some(advisor) = advisor.as_ref().filter(|advisor| advisor.every_round) {
+                        if let Some(note) = self
+                            .consult_advisor(advisor, session, usage, tx, cancel, None)
+                            .await
+                        {
+                            session
+                                .input_items
+                                .push(super::advisor::note_item(&advisor.model, &note));
+                        }
+                    }
                     self.persist_session(session);
                 }
                 Err(e) => {
@@ -2710,6 +2832,55 @@ impl AgentRunner {
     /// Returns `true` when a steer was injected (the caller re-runs the model).
     /// Nothing is ever blocked or rewritten: the skill machinery corrects the
     /// work inside the loop, which is where it belongs.
+    /// One advisor review, metered under its own route; the note, if it left
+    /// one. A failed request is a status line and no note.
+    async fn consult_advisor(
+        &self,
+        advisor: &super::advisor::Advisor,
+        session: &mut Session,
+        usage: &mut UsageTracker,
+        tx: &mpsc::UnboundedSender<AgentEvent>,
+        cancel: &CancellationToken,
+        answer: Option<&str>,
+    ) -> Option<String> {
+        let request = advisor.request(&typesafe_goal(session, 2), &session.input_items, answer);
+        let _ = tx.send(AgentEvent::Status(format!(
+            "advisor · {} reviewing",
+            advisor.model
+        )));
+        let response = tokio::select! {
+            response = advisor.client.create_response(&request) => response,
+            _ = cancel.cancelled() => return None,
+        };
+        match response {
+            Ok(response) => {
+                usage.record_request_as(
+                    &advisor.provider,
+                    &advisor.model,
+                    response.accounting_usage(),
+                    response.id.clone(),
+                    "advisor",
+                );
+                let metered = usage.last_usage().clone();
+                session.usage.add(&metered);
+                let _ = tx.send(AgentEvent::Usage {
+                    session: usage.session_usage().clone(),
+                    last: metered,
+                });
+                let note = super::advisor::parse_note(&response.output_text())?;
+                let _ = tx.send(AgentEvent::Advice {
+                    model: advisor.model.clone(),
+                    note: note.clone(),
+                });
+                Some(note)
+            }
+            Err(error) => {
+                let _ = tx.send(AgentEvent::Status(format!("advisor skipped · {error}")));
+                None
+            }
+        }
+    }
+
     async fn typesafe_skill_nudge(
         &self,
         prompt_ctx: &super::prompt::PromptContext,

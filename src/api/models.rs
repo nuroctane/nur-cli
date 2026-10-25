@@ -134,6 +134,32 @@ pub fn fetch_model_ids(
                     last_err = error.message;
                     break;
                 }
+                // OpenCode's catalogs are public: an expired or revoked key
+                // must not empty the picker. List them anonymously and keep the
+                // key's error for when nothing at all comes back.
+                Err(error)
+                    if pid == "opencode"
+                        && matches!(error.status, Some(401 | 403))
+                        && !current_key.is_empty() =>
+                {
+                    match fetch_once(&url, "", pid, None) {
+                        Ok(ids) => {
+                            tracing::warn!(
+                                "opencode model list without the key: {}",
+                                error.message
+                            );
+                            if url.starts_with(crate::providers::OPENCODE_GO_BASE_URL) {
+                                opencode_ids
+                                    .extend(ids.into_iter().map(opencode_picker_id_from_go));
+                            } else {
+                                opencode_ids
+                                    .extend(ids.into_iter().map(opencode_picker_id_from_zen));
+                            }
+                        }
+                        Err(_) => last_err = error.message,
+                    }
+                    break;
+                }
                 Err(error) => {
                     last_err = error.message;
                     break;

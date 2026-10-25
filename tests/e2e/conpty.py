@@ -63,7 +63,7 @@ def checked(ok):
 
 
 class ConPtyProcess:
-    def __init__(self, binary, cwd, env, columns=120, rows=32):
+    def __init__(self, binary, cwd, env, columns=120, rows=32, args=()):
         self.input = self.output = self.console = self.process = None
         self.decoder = codecs.getincrementaldecoder('utf-8')()
         input_read, input_write, output_read, output_write = (w.HANDLE() for _ in range(4))
@@ -92,7 +92,7 @@ class ConPtyProcess:
             startup.info.flags = 0x00000100  # STARTF_USESTDHANDLES
             startup.attributes = c.cast(attributes, c.c_void_p)
             process = ProcessInfo()
-            command = c.create_unicode_buffer(subprocess.list2cmdline([str(binary)]))
+            command = c.create_unicode_buffer(subprocess.list2cmdline([str(binary), *args]))
             environment = c.create_unicode_buffer('\0'.join(f'{key}={value}' for key, value in
                 sorted(env.items(), key=lambda pair: pair[0].upper())) + '\0')
             # Extended startup info + Unicode environment. ConPTY owns the

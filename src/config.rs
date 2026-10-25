@@ -227,6 +227,27 @@ pub struct Config {
     /// [tools] - which tools the model is offered this session.
     #[serde(default)]
     pub tools: ToolsConfig,
+    /// `[[stream_rules]]`: patterns that stop an answer mid-stream and send it
+    /// again with the rule in the conversation (see `agent::stream_rules`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stream_rules: Vec<crate::agent::stream_rules::StreamRuleSpec>,
+    /// `[advisor]`: a second model that reviews the work (see `agent::advisor`).
+    #[serde(
+        default,
+        skip_serializing_if = "crate::agent::advisor::AdvisorConfig::is_unset"
+    )]
+    pub advisor: crate::agent::advisor::AdvisorConfig,
+    /// `[[path_models]]`: the model a directory uses (see [`PathModel`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub path_models: Vec<PathModel>,
+    /// The configured route a path model replaced this session. Never written:
+    /// `save_config` puts the configured route back in the file.
+    #[serde(skip)]
+    pub scoped: Option<ScopedFrom>,
+    /// This session was told its model (`--model`, NUR_MODEL, NUR_PROVIDER,
+    /// `/model`), so path models stay out of it.
+    #[serde(skip)]
+    pub route_pinned: bool,
     /// OMP-style prewalk: strong model plans + todos, then switch to a cheap
     /// model at the first edit/write. Default **off**.
     #[serde(default)]
@@ -1147,6 +1168,11 @@ impl Default for Config {
             theme_setup: ThemeConfig::default(),
             skills: SkillsConfig::default(),
             tools: ToolsConfig::default(),
+            stream_rules: Vec::new(),
+            advisor: Default::default(),
+            path_models: Vec::new(),
+            scoped: None,
+            route_pinned: false,
             prewalk: PrewalkConfig::default(),
             compaction: CompactionConfig::default(),
             proposal_mode: false,
@@ -1285,6 +1311,9 @@ pub fn migrate_config(cfg: &mut Config) -> bool {
 /// Apply catalog (or OAuth) host + default model for a provider onto config.
 /// Used by TUI `/login` and `nur auth login --provider`.
 pub fn apply_provider_defaults(cfg: &mut Config, provider_id: &str, via_oauth: bool) {
+    // Choosing a provider is choosing the configured route: a directory's
+    // model no longer stands in for it.
+    cfg.scoped = None;
     let provider = crate::providers::by_id(provider_id)
         .copied()
         .unwrap_or(*crate::providers::default_provider());
@@ -1693,10 +1722,151 @@ fn restrict_to_owner_grant(path: &std::path::Path, grant: &str) -> std::io::Resu
 
 pub fn save_config(cfg: &Config) -> Result<()> {
     ensure_dirs()?;
-    let text = toml::to_string_pretty(cfg).map_err(|e| NurError::Config(e.to_string()))?;
+    let text = if cfg.scoped.is_some() {
+        let mut configured = cfg.clone();
+        configured.unscope();
+        toml::to_string_pretty(&configured)
+    } else {
+        toml::to_string_pretty(cfg)
+    }
+    .map_err(|e| NurError::Config(e.to_string()))?;
     atomic_write(&config_path(), text.as_bytes())
         .map_err(|e| NurError::Other(format!("save_config atomic write failed: {e}")))?;
     Ok(())
+}
+
+/// One `[[path_models]]` entry: work under `path` runs on `model` (and, when
+/// given, `provider` and `effort`). The longest `path` containing the working
+/// directory wins; outside every entry the configured model applies.
+///
+/// ```toml
+/// [[path_models]]
+/// path = "~/work/site"
+/// model = "claude-sonnet-5"
+/// provider = "anthropic"
+/// effort = "low"
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct PathModel {
+    /// An absolute directory, or one under `~`.
+    pub path: String,
+    pub model: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub provider: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub effort: String,
+}
+
+/// The route in effect before a path model applied, and which entry did it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScopedFrom {
+    pub path: String,
+    provider: String,
+    base_url: String,
+    model: String,
+    reasoning_effort: String,
+}
+
+/// A path as compared for `[[path_models]]`: `~` expanded, no verbatim
+/// prefix, and on Windows one separator and one case.
+fn comparable_path(path: &str) -> Option<PathBuf> {
+    let path = path.trim();
+    let expanded = if path == "~" {
+        home_dir()?
+    } else if let Some(rest) = path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\")) {
+        home_dir()?.join(rest)
+    } else {
+        PathBuf::from(path)
+    };
+    let text = expanded.to_string_lossy().replace(r"\\?\", "");
+    let text = if cfg!(windows) {
+        text.replace('/', "\\").to_lowercase()
+    } else {
+        text
+    };
+    let path = PathBuf::from(text);
+    path.is_absolute().then_some(path)
+}
+
+/// The `[[path_models]]` entry for `cwd`: the longest path containing it.
+pub fn path_model_for<'a>(entries: &'a [PathModel], cwd: &Path) -> Option<&'a PathModel> {
+    let cwd = comparable_path(&cwd.to_string_lossy())?;
+    entries
+        .iter()
+        .filter(|entry| !entry.model.trim().is_empty())
+        .filter_map(|entry| Some((entry, comparable_path(&entry.path)?)))
+        .filter(|(_, root)| cwd.starts_with(root))
+        .max_by_key(|(_, root)| root.components().count())
+        .map(|(entry, _)| entry)
+}
+
+impl Config {
+    /// Put the configured route back after a path model.
+    pub fn unscope(&mut self) {
+        if let Some(from) = self.scoped.take() {
+            self.provider = from.provider;
+            self.base_url = from.base_url;
+            self.model = from.model;
+            self.reasoning_effort = from.reasoning_effort;
+        }
+    }
+
+    /// Run on the path model for `cwd`, or on the configured route when no
+    /// entry covers it. Returns a line saying what changed, if anything did.
+    pub fn scope_to(&mut self, cwd: &Path) -> Option<String> {
+        if self.route_pinned {
+            return None;
+        }
+        let entry = path_model_for(&self.path_models, cwd).cloned();
+        let active = self.scoped.as_ref().map(|from| from.path.as_str());
+        if entry.as_ref().map(|entry| entry.path.as_str()) == active {
+            return None;
+        }
+        let before = (self.provider.clone(), self.model.clone());
+        self.unscope();
+        let Some(entry) = entry else {
+            return (before != (self.provider.clone(), self.model.clone()))
+                .then(|| format!("model {} (configured)", self.model));
+        };
+        let from = ScopedFrom {
+            path: entry.path.clone(),
+            provider: self.provider.clone(),
+            base_url: self.base_url.clone(),
+            model: self.model.clone(),
+            reasoning_effort: self.reasoning_effort.clone(),
+        };
+        let provider = entry.provider.trim();
+        if !provider.is_empty() {
+            let Some(found) = crate::providers::by_id(provider)
+                .or_else(|| crate::providers::resolve_provider_alias(provider))
+            else {
+                return Some(format!(
+                    "path model for {} skipped: {}",
+                    entry.path,
+                    crate::providers::unknown_provider_message(provider)
+                ));
+            };
+            if found.id != self.provider {
+                apply_provider_defaults(self, found.id, false);
+            }
+        }
+        self.model = entry.model.trim().to_string();
+        if self.provider == "opencode"
+            && crate::providers::opencode_host_split_applies(&self.base_url)
+        {
+            let (bare, base) = crate::providers::normalize_opencode_selection(&self.model);
+            self.model = bare;
+            self.base_url = base.to_string();
+        }
+        if !entry.effort.trim().is_empty() {
+            self.reasoning_effort = crate::providers::canonical_effort(entry.effort.trim());
+        }
+        self.scoped = Some(from);
+        Some(format!(
+            "model {} (path model for {})",
+            self.model, entry.path
+        ))
+    }
 }
 
 /// Rung names nur ships knowing about. Not a whitelist — the set a request may
@@ -1782,6 +1952,90 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn path_model(path: &str, model: &str) -> PathModel {
+        PathModel {
+            path: path.into(),
+            model: model.into(),
+            ..Default::default()
+        }
+    }
+
+    /// Ways the lookup can go wrong: a sibling sharing a name prefix matches,
+    /// the outer entry beats the inner one, a relative or empty entry matches
+    /// everything, or Windows spelling (case, separators) breaks a match.
+    #[test]
+    fn the_longest_containing_path_picks_the_model() {
+        let root = if cfg!(windows) { "C:\\work" } else { "/work" };
+        let entries = vec![
+            path_model(root, "outer"),
+            path_model(&format!("{root}/site"), "inner"),
+            path_model("relative", "never"),
+            path_model(&format!("{root}/empty"), ""),
+        ];
+        let at = |p: &str| path_model_for(&entries, Path::new(p)).map(|e| e.model.as_str());
+        let sep = std::path::MAIN_SEPARATOR;
+        assert_eq!(at(&format!("{root}{sep}site{sep}src")), Some("inner"));
+        assert_eq!(at(&format!("{root}{sep}site2")), Some("outer"));
+        assert_eq!(at(&format!("{root}{sep}empty")), Some("outer"));
+        assert_eq!(
+            at(if cfg!(windows) {
+                "C:\\elsewhere"
+            } else {
+                "/elsewhere"
+            }),
+            None
+        );
+        if cfg!(windows) {
+            assert_eq!(at(r"\\?\c:\WORK\Site"), Some("inner"));
+        }
+    }
+
+    /// Entering a path model and leaving it round-trips the configured route,
+    /// the file never sees the directory's model, and a pinned session or a
+    /// chosen provider is left alone.
+    #[test]
+    fn path_models_scope_the_session_not_the_file() {
+        let root = if cfg!(windows) { "C:\\work" } else { "/work" };
+        let mut cfg = Config::default();
+        let configured = (
+            cfg.provider.clone(),
+            cfg.model.clone(),
+            cfg.reasoning_effort.clone(),
+        );
+        cfg.path_models = vec![PathModel {
+            path: root.into(),
+            model: "dir-model".into(),
+            effort: "low".into(),
+            ..Default::default()
+        }];
+        let inside = Path::new(root).join("app");
+        assert!(cfg.scope_to(&inside).unwrap().contains("dir-model"));
+        assert_eq!(cfg.model, "dir-model");
+        assert_eq!(cfg.scope_to(&inside), None, "same entry, nothing changes");
+        let mut written = cfg.clone();
+        written.unscope();
+        assert_eq!(written.model, configured.1);
+        let left = Path::new(if cfg!(windows) { "C:\\other" } else { "/other" });
+        assert!(cfg.scope_to(left).unwrap().contains("configured"));
+        assert_eq!(
+            (
+                cfg.provider.clone(),
+                cfg.model.clone(),
+                cfg.reasoning_effort.clone()
+            ),
+            configured
+        );
+        cfg.route_pinned = true;
+        assert_eq!(cfg.scope_to(&inside), None);
+        cfg.route_pinned = false;
+        cfg.scope_to(&inside);
+        apply_provider_defaults(&mut cfg, "anthropic", false);
+        assert!(
+            cfg.scoped.is_none(),
+            "a chosen provider is the configured route"
+        );
+    }
 
     /// Ways the lookup can go wrong: the OS answer wins over an explicit
     /// `HOME`; `USERPROFILE` is ignored; `NUR_HOME` relocates nur's state but

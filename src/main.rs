@@ -399,7 +399,7 @@ async fn real_main() -> Result<()> {
         &|k| std::env::var(k).ok(),
     ));
     // Override precedence: `--model` (explicit, always wins), then NUR_MODEL from
-    // a *user* environment, then config.
+    // a *user* environment, then a `[[path_models]]` entry, then config.
     //
     // Inherited values are excluded. nur exports NUR_MODEL/NUR_PROVIDER/
     // NUR_SESSION_ID to its own children so the ADE/Orca hook can report
@@ -431,13 +431,16 @@ async fn real_main() -> Result<()> {
             if provider.id != cfg.provider {
                 config::apply_provider_defaults(&mut cfg, provider.id, false);
             }
+            cfg.route_pinned = true;
         }
     }
     if let Some(m) = &cli.model {
         cfg.model = m.clone();
+        cfg.route_pinned = true;
     } else if let Ok(m) = std::env::var("NUR_MODEL") {
         if !m.trim().is_empty() && !launched_by_a_nur_session() {
             cfg.model = m;
+            cfg.route_pinned = true;
         } else if !m.trim().is_empty() {
             theme::print_info(&format!(
                 "ignoring inherited NUR_MODEL={m} (this process was started by a nur session; \
@@ -500,6 +503,14 @@ async fn real_main() -> Result<()> {
     if let Some(t) = cli.max_turns {
         cfg.max_turns = t;
     }
+    // The directory picks the model before the credential is resolved, so a
+    // path model on another provider signs in to that provider.
+    let path_note = cli
+        .cwd
+        .as_ref()
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .and_then(|dir| cfg.scope_to(&dir));
 
     // models.dev list prices → status-line $ estimates (background refresh).
     if !deferred_tui {
@@ -569,6 +580,10 @@ async fn real_main() -> Result<()> {
             cwd.display()
         )
     });
+    let workspace_note = match (workspace_note, path_note) {
+        (Some(workspace), Some(path)) => Some(format!("{workspace}\n{path}")),
+        (workspace, path) => workspace.or(path),
+    };
     // Enter the workspace so relative paths / shell feel natural.
     let _ = std::env::set_current_dir(&cwd);
     let cwd_str = cwd.display().to_string();
@@ -1551,6 +1566,7 @@ async fn run_headless(
         match ev {
             AgentEvent::TextDelta(d) => out.text_delta(&d),
             AgentEvent::StreamRestart { discard } => out.stream_restart(discard),
+            AgentEvent::Advice { model, note } => out.advice(&model, &note),
             AgentEvent::AssistantMessage(m) => out.assistant_message(&m),
             AgentEvent::ReasoningDelta(_) => {}
             AgentEvent::Status(s) => out.status(&s),

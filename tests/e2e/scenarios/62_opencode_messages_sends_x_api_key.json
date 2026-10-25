@@ -1,0 +1,33 @@
+{
+  "description": "OpenCode Zen's Claude endpoint (/messages) reads the key from x-api-key only; a Bearer key there answers 'Missing API key' (seen live 2026-10-25), which also masked an expired key's real error.",
+  "provider": "opencode",
+  "model": "claude-sonnet-5",
+  "env": {
+    "OPENCODE_API_KEY": "e2e-opencode-key-0001"
+  },
+  "setup_home_files": {
+    "config.toml": "provider = \"opencode\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"claude-sonnet-5\"\n"
+  },
+  "prompt": "Say hello.",
+  "script": [
+    {
+      "text": "Hello over Messages."
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 1,
+    "stdout_contains": [
+      "Hello over Messages."
+    ],
+    "protocol": "messages",
+    "headers": {
+      "present": [
+        "x-api-key"
+      ],
+      "absent": [
+        "authorization"
+      ]
+    }
+  }
+}

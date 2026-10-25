@@ -1,7 +1,7 @@
 //! Rendering for the NurCLI TUI — Nur-gold surfaces, motion, cursors.
 
 use super::app::{fmt_num, line_to_plain, App, Cell, TextRange};
-use super::{ansi, cards, grid, markdown, scrollbar::ScrollMetrics, wrap};
+use super::{ansi, cards, grid, markdown, scrollbar::ScrollMetrics, tool_tables, wrap};
 use crate::theme;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect, Size};
 use ratatui::style::{Color, Modifier, Style};
@@ -3472,15 +3472,39 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                             // Full output when expanded so drag-select / copy can
                             // grab shell commands and long tool results (wrap
                             // handles width — do not truncate away copyable text).
-                            for (i, l) in all.iter().enumerate() {
+                            // A printed table too wide to fit is laid out like
+                            // an answer's table instead, so wrapping never
+                            // folds its rows into each other.
+                            // File reads and edits are numbered source, not
+                            // printed tables, and stay exactly as read.
+                            let avail = width.saturating_sub(4).max(1);
+                            let blocks = if matches!(theme::tool_family(name), "read" | "edit") {
+                                all.iter().map(|l| tool_tables::Block::Raw(l)).collect()
+                            } else {
+                                tool_tables::segment(&all, avail)
+                            };
+                            let mut rows: Vec<Vec<Span<'static>>> = Vec::new();
+                            for block in blocks {
+                                match block {
+                                    // Shell output keeps ANSI colours (cargo, git,
+                                    // ls); default base is family-tinted for non-ANSI.
+                                    tool_tables::Block::Raw(l) => {
+                                        rows.push(ansi::line_to_spans(l, body))
+                                    }
+                                    tool_tables::Block::Table(md) => rows.extend(
+                                        markdown::render_markdown_at(&md, body, avail)
+                                            .into_iter()
+                                            .map(|line| line.spans),
+                                    ),
+                                }
+                            }
+                            for (i, row) in rows.into_iter().enumerate() {
                                 let prefix = if i == 0 { "└ " } else { "  " };
                                 let mut spans = vec![
                                     Span::raw("  ".to_string()),
                                     Span::styled(prefix.to_string(), gutter),
                                 ];
-                                // Shell output keeps ANSI colours (cargo, git,
-                                // ls); default base is family-tinted for non-ANSI.
-                                spans.extend(ansi::line_to_spans(l, body));
+                                spans.extend(row);
                                 out.push(Line::from(spans));
                             }
                         }

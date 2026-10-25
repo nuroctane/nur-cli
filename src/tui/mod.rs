@@ -8,6 +8,7 @@ mod links;
 mod markdown;
 mod row_index;
 mod scrollbar;
+mod tool_tables;
 mod ui;
 mod wrap;
 

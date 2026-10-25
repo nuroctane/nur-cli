@@ -1,0 +1,57 @@
+{
+  "description": "`nur -c` continues the directory's last session over chat/completions: the earlier prompt, its tool call and result, and the answer are replayed in a request the provider accepts, and the model answers from them.",
+  "prompt": "What did notes.txt say?",
+  "global_args": [
+    "-c"
+  ],
+  "setup_files": {
+    "notes.txt": "PELICAN-7\n"
+  },
+  "setup_commands": [
+    [
+      "run",
+      "--yes",
+      "Read notes.txt and remember it."
+    ]
+  ],
+  "script": [
+    {
+      "tool_calls": [
+        {
+          "name": "read_file",
+          "arguments": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Noted the word."
+    },
+    {
+      "text": "It said PELICAN-7."
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 3,
+    "stdout_contains": [
+      "It said PELICAN-7."
+    ],
+    "request_contains": [
+      {
+        "request": 3,
+        "contains": [
+          "Read notes.txt and remember it.",
+          "PELICAN-7",
+          "Noted the word.",
+          "What did notes.txt say?"
+        ]
+      }
+    ],
+    "protocol": "chat/completions"
+  },
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n"
+  }
+}

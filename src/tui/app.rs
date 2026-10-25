@@ -7299,6 +7299,10 @@ impl App {
         if id.is_empty() {
             return;
         }
+        // A chosen model is the configured one from now on, and a `/cd` into a
+        // `[[path_models]]` directory does not take it back.
+        self.cfg.scoped = None;
+        self.cfg.route_pinned = true;
         // OpenCode's Go catalog is shown in the same picker as Zen. Its
         // `opencode-go/` prefix selects Go's required endpoint; the API itself
         // receives the bare model id.
@@ -10547,6 +10551,11 @@ impl App {
                     // "answering…" node appears live, not retroactively at Done.
                     self.refresh_sidegraph();
                 }
+            }
+            AgentEvent::Advice { model, note } => {
+                self.finish_thinking();
+                self.finish_streaming();
+                self.push_note(Tone::Plan, format!("advisor · {model}\n{note}"));
             }
             AgentEvent::StreamRestart { discard } => {
                 // The partial answer is being replayed: take it back out of

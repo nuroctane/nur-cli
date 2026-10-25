@@ -1,0 +1,31 @@
+{
+  "description": "--model is an explicit choice: a [[path_models]] entry covering the workspace does not replace it.",
+  "prompt": "Say hi.",
+  "global_args": [
+    "--model",
+    "flag-model"
+  ],
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n[[path_models]]\npath = \"{workspace}\"\nmodel = \"dir-model\"\n"
+  },
+  "script": [
+    {
+      "text": "hi"
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 1,
+    "request_contains": [
+      {
+        "request": 1,
+        "contains": [
+          "\"model\": \"flag-model\""
+        ],
+        "lacks": [
+          "dir-model"
+        ]
+      }
+    ]
+  }
+}

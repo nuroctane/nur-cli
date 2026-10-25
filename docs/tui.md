@@ -376,7 +376,7 @@ The note is appended to your persistent memory file and recalled automatically i
 
 | Command | Purpose |
 |---------|---------|
-| `/cd <path>` | Change the working directory tools are sandboxed to (`~` and relative paths OK) |
+| `/cd <path>` | Change the working directory tools are sandboxed to (`~` and relative paths OK). A [`[[path_models]]`](configuration.md#per-directory-models) entry for the new directory switches the model, with a note |
 | `/pwd` | Print the current working directory |
 | `/init` | Initialise project instructions (`NUR.md`) |
 | `/scan` | Map this codebase → local `.foglamp/scan.json`, then optionally publish to foglamp.dev. `/scan [focus]` centers the map. **Writes need manual/auto** (plan is lifted to auto). Ask only before **upload**, not before the local file. |
@@ -612,6 +612,10 @@ Assistant answers are composed for reading, not dumped as markdown source. `src/
 | Table | Laid out for the window width, never raw pipes. A grid with a `─┼─` header rule, bold headers in `md_h2`, and the column alignment from the delimiter row (`:--` `:-:` `--:`) when it fits. When it does not, short columns keep their width and long cells wrap inside their own column. When even that would leave a cell taller than four lines, or a column under six wide, each row becomes a stacked `Header: value` record. Rows never exceed the width, so resizing re-lays the table instead of breaking it mid-row. |
 | Link | Label in `md_link`, URL appended dimmed + underlined so it stays clickable without shouting. |
 | Path | A path that exists on disk is a link (see below). Directories take the theme's `dir` hue. |
+
+### Tables in tool output
+
+A table a command prints (`docker ps`, `kubectl get`, `psql`, a box-drawn report) is raw text sized for some other terminal. In an expanded tool card, a table run wider than the card is laid out like an answer's table instead of wrapped: grid, wrapped cells or records, re-laid on every resize. Two shapes are recognised: rows that split on `|` / `│` into the same number of cells (border rows such as `+--+` or `├──┼` are dropped), and columns separated by two or more spaces that line up in every row under a header naming each column. Output that fits is left exactly as printed, ANSI colours included, and `read_file` / edit results are never re-laid. The peek dialogue always shows the raw text.
 
 ### Path links
 

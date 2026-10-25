@@ -2236,6 +2236,22 @@ impl App {
         if let Some(note) = self.permissions.held_notice() {
             self.push_note(Tone::Skill, note);
         }
+        // So does a `[[path_models]]` entry.
+        let route = (self.cfg.provider.clone(), self.cfg.model.clone());
+        if let Some(note) = self.cfg.scope_to(&self.cwd) {
+            self.push_note(Tone::Mode, note);
+            if route != (self.cfg.provider.clone(), self.cfg.model.clone()) {
+                crate::pricing::maybe_apply_context_window(&mut self.cfg);
+                if let Some(s) = &mut self.session {
+                    s.model = self.cfg.model.clone();
+                }
+                if let Some(u) = &mut self.usage {
+                    u.set_model(self.cfg.model.clone());
+                    u.set_provider(self.cfg.provider.clone());
+                }
+                self.restart_provider_preparation();
+            }
+        }
         crate::agent::prompt::prefetch_slow_sources(&self.cwd, &self.cfg);
     }
 

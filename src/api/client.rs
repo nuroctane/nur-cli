@@ -938,9 +938,11 @@ impl ApiClient {
             ApiStyle::AnthropicMessages => {
                 req = req.header("anthropic-version", "2023-06-01");
                 if self.provider_id == "opencode" {
-                    // OpenCode's model-specific Claude endpoint remains a
-                    // gateway route and authenticates with its bearer key.
-                    req = req.bearer_auth(&api_key);
+                    // Zen's Claude endpoint (`/messages`) reads the key from
+                    // `x-api-key` only, Anthropic style; a Bearer key there is
+                    // "Missing API key" (observed 2026-10-25), which also hid
+                    // the real answer for an expired key.
+                    req = req.header("x-api-key", &api_key);
                 } else if self.provider_id == "commandcode" {
                     // Command Code's primary auth is Bearer on *every* route;
                     // x-api-key on /messages is only the Anthropic-SDK

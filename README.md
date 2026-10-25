@@ -180,7 +180,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 
 | Surface | What ships |
 |---------|------------|
-| **TUI** | Streaming · duration chips · thought/tool cards · **every transcript piece in a theme-coloured frame** · peek · drag-select · scrollbar · sessions · multi-provider `/login` · **`/model` picker** · **`/plugins` marketplace** · `/goal` `/bro` `/adhd` `/scan` `/btw` `/codesearch` `/mc` `/feedback` `/tips` · **every skill as `/name`** · **41 themes including 18 chromatic studies + transparency mode** · **the window title is the moon alone (phases while a turn runs)** · **every path in the transcript is a link that opens** · **block-structured markdown** with theme-role colours · **LaTeX rendering** (image-peek build) · **`/receipt` verifies the hash chain** and exports spans · budgets · doctor |
+| **TUI** | Streaming · duration chips · thought/tool cards · **every transcript piece in a theme-coloured frame** · peek · drag-select · scrollbar · sessions · multi-provider `/login` · **`/model` picker** · **`/plugins` marketplace** · `/goal` `/bro` `/adhd` `/scan` `/btw` `/codesearch` `/mc` `/feedback` `/tips` · **every skill as `/name`** · **41 themes including 18 chromatic studies + transparency mode** · **the window title is the moon alone (phases while a turn runs)** · **every path in the transcript is a link that opens** · **block-structured markdown** with theme-role colours · **tables fit the window**, in answers and in tool output · **LaTeX rendering** (image-peek build) · **`/receipt` verifies the hash chain** and exports spans · budgets · doctor |
 | **Agent** | Manual / plan / auto · tools · subagents · todos · auto-compact · session $ / token budgets · Esc cancel · Shift+Tab mid-turn · **NL skill auto-activation** |
 | **Vision** | `look` · `extract_frames` · prompt auto-attach · **compact image attachments with on-demand previews** (Ctrl+V paste or `/image <path>`, F4 preview) |
 | **Tools** | read · edit · bash · web · **browser** (incl. **element picking**) · git · knowledge · agent · **judgments** (`typesafe`) · **security agents** (`enclave`) · **memory** (`optmem` `connectome` `mem`) · **diagrams** (`excalidraw` `tldraw` `penecho`) · **policy** (`dogwood`) · **background** (`bg`) · **async** (`admission` `goal` `proposal` `message` `question`) · **docs** (`anydoc`) · **python REPL** (`repl`) · **excalidraw** |
@@ -210,6 +210,9 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 ### Agent harness
 - **Multi-provider** via `/login` (71); Responses or Chat Completions adapter
 - **Rotating API keys** per provider (`nur auth pool add`, or `<ENV_KEY>S=k1,k2`): a rate-limited, empty or refused key steps aside and the next one takes the request at once
+- **Advisor** (`[advisor]`): a second model reviews each answer before the turn ends and leaves one note the agent acts on ([docs/configuration.md](docs/configuration.md#advisor))
+- **Stream rules** (`[[stream_rules]]`, `.nur/stream-rules.toml`): an answer or tool call that matches a rule's pattern is stopped mid-stream and asked again with the rule in view
+- **Per-directory models** (`[[path_models]]`): the working directory picks the model, at startup and on `/cd`
 - Manual / plan / auto · Shift+Tab mid-turn
 - Tool loop, approvals, Esc cancel, subagents, todos, plan mode
 - Session budgets (`/budget`), tool-result spill, smarter auto-compact
@@ -251,7 +254,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 | context | `context` (RLM store: register/peek/slice/search) · `anydoc` (PDF/DOCX/XLSX → markdown) |
 | background | `bg` (jobs that outlive the turn) · `admission` (async subagent handles) · `goal` · `proposal` (staged outputs) · `message` (peer mail) |
 | python | `repl` (long-lived kernel; state survives compaction) |
-| agent | `todo_write` `submit_plan` `agent` `omp` · `skill` `harness` · `codemode` (one JS script, several read-only tool calls, one model round) · `tool_search` (loads the ecosystem tools the default `lean` profile keeps out of every request) · `hashline_edit` (edit by line number against the `[path#TAG]` snapshot `read_file` prints; a stale tag is refused) |
+| agent | `todo_write` `submit_plan` `agent` `omp` · `skill` `harness` · `codemode` (one JS script, several read-only tool calls, one model round) · `tool_search` (loads the ecosystem tools the default `lean` profile keeps out of every request) · `hashline_edit` (edit by line number or by block, `N*`, against the `[path#TAG]` snapshot `read_file` prints; a stale tag is refused) |
 
 ### Vision
 

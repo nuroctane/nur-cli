@@ -1,0 +1,28 @@
+{
+  "description": "A [[path_models]] entry covering the workspace sends the turn to that directory's model and effort instead of the configured one.",
+  "prompt": "Say hi.",
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n[[path_models]]\npath = \"{workspace}\"\nmodel = \"dir-model\"\n[[path_models]]\npath = \"{workspace}/elsewhere\"\nmodel = \"inner-model\"\n"
+  },
+  "script": [
+    {
+      "text": "hi"
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 1,
+    "request_contains": [
+      {
+        "request": 1,
+        "contains": [
+          "\"model\": \"dir-model\""
+        ],
+        "lacks": [
+          "e2e-model",
+          "inner-model"
+        ]
+      }
+    ]
+  }
+}

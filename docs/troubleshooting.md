@@ -63,7 +63,7 @@ repair or upgrade ecosystem components.
 **All green:**
 
 ```text
-nur doctor · v0.54.0
+nur doctor · v0.55.0
 
 binary  C:\Users\you\.local\bin\nur.exe
 config  model=muse-spark-1.3 effort=high max_turns=∞ budget=∞$/∞tok  (C:\Users\you\.nur\config.toml)
@@ -331,6 +331,21 @@ stream connect failed: error sending request for url (…): client error (SendRe
 
 No clock cuts off a response that is still arriving. Set
 `NUR_PROVIDER_TURN_TIMEOUT_SECS` only if you want a hard cap.
+
+#### `This API key has expired` (OpenCode)
+
+OpenCode Console keys expire, and signing in again (`opencode auth login`) does
+not renew a key it already holds. Create a new key in OpenCode Console, then
+save it with `/login` or:
+
+```bash
+nur auth login --provider opencode --key <new key>
+```
+
+`/model` still lists OpenCode's models while the key is expired (the catalogs
+are public), so an empty picker is not this. Free models answer
+`Free usage limit reached` outside OpenCode's own client; pick a non-free model
+or subscribe to OpenCode Go.
 
 ### Session not resuming
 

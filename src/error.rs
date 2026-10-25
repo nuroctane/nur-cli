@@ -12,6 +12,9 @@ fn api_message(status: u16, message: &str) -> String {
     if let Some(guided) = opencode_free_tier_guidance(message) {
         return guided;
     }
+    if let Some(guided) = expired_key_guidance(message) {
+        return guided;
+    }
     if !message.trim().is_empty() {
         return message.to_string();
     }
@@ -35,7 +38,12 @@ fn api_message(status: u16, message: &str) -> String {
 /// same provider, or another provider entirely.
 fn opencode_free_tier_guidance(message: &str) -> Option<String> {
     let lower = message.to_ascii_lowercase();
-    if !(lower.contains("free tier") && lower.contains("within opencode")) {
+    // Two wordings so far: the original 403 ("free tier can only be used from
+    // within OpenCode") and the 429 FreeUsageLimitError ("Free usage limit
+    // reached. Free models work in OpenCode").
+    let gated = (lower.contains("free tier") && lower.contains("within opencode"))
+        || (lower.contains("free usage limit") && lower.contains("opencode"));
+    if !gated {
         return None;
     }
     Some(format!(
@@ -47,6 +55,21 @@ fn opencode_free_tier_guidance(message: &str) -> Option<String> {
          `nur auth login --provider <other>`)."
     ))
 }
+/// A provider that expires API keys (OpenCode Console keys do; signing in
+/// again does not renew one) says so in its message, which alone does not
+/// tell the user where the new key goes in nur.
+fn expired_key_guidance(message: &str) -> Option<String> {
+    let lower = message.to_ascii_lowercase();
+    if !(lower.contains("api key has expired") || lower.contains("api_key_expired")) {
+        return None;
+    }
+    Some(format!(
+        "{message}\n\
+         Create a new key in the provider's console, then save it with /login \
+         (or `nur auth login --provider <id> --key <new key>`)."
+    ))
+}
+
 /// How to name the status in the message. `0` is not an HTTP code — it is our
 /// marker for "the response was 200 and the failure arrived inside the stream",
 /// and printing it as `API error (0)` read like a bug in nur rather than a
@@ -100,6 +123,11 @@ pub enum NurError {
     #[error("{0}")]
     Transport(String),
 
+    /// A stream rule matched the answer (`agent::stream_rules`); `discard` is
+    /// how many bytes of it had already streamed and must be taken back.
+    #[error("stream rule `{name}` fired")]
+    StreamRule { name: String, discard: usize },
+
     #[error("{0}")]
     Other(String),
 }
@@ -129,9 +157,11 @@ impl NurError {
             NurError::Config(_) => exit::CONFIG,
             NurError::MaxTurns(_) | NurError::Budget(_) => exit::BUDGET,
             NurError::Interrupted => exit::CANCELLED,
-            NurError::Io(_) | NurError::Json(_) | NurError::Tool(_) | NurError::Other(_) => {
-                exit::GENERAL
-            }
+            NurError::Io(_)
+            | NurError::Json(_)
+            | NurError::Tool(_)
+            | NurError::Other(_)
+            | NurError::StreamRule { .. } => exit::GENERAL,
         }
     }
 
@@ -269,6 +299,22 @@ mod tests {
         assert!(api_message(503, "").contains("provider failed on its side"));
         assert!(api_message(404, "").contains("model id"));
         assert!(api_message(418, "").contains("no details returned"));
+    }
+
+    /// OpenCode's newer free-usage refusal and an expired key both come back
+    /// with the way out appended; unrelated messages pass through untouched.
+    #[test]
+    fn newer_opencode_refusals_get_the_way_out() {
+        let limited = "Free usage limit reached. Free models work in OpenCode \
+                       (https://opencode.ai); subscribe to OpenCode Go to keep going";
+        assert!(opencode_free_tier_guidance(limited)
+            .unwrap()
+            .contains("non-free model"));
+        let expired = "This API key has expired. Create a new API key in OpenCode Console.";
+        assert!(expired_key_guidance(expired)
+            .unwrap()
+            .contains("nur auth login --provider"));
+        assert_eq!(expired_key_guidance("invalid api key"), None);
     }
 
     #[test]

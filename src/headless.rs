@@ -83,6 +83,18 @@ impl Emitter {
         }
     }
 
+    /// A note from the advisor model: always shown, since it changes what the
+    /// agent does next.
+    pub fn advice(&mut self, model: &str, note: &str) {
+        match self.format {
+            OutputFormat::Text => self.notice(&format!("advisor · {model}: {note}")),
+            OutputFormat::StreamJson => {
+                Self::line(json!({"type": "advice", "model": model, "text": note}))
+            }
+            OutputFormat::Json => eprintln!("advisor · {model}: {note}"),
+        }
+    }
+
     /// A complete assistant message (the streamed text, assembled).
     pub fn assistant_message(&mut self, m: &str) {
         match self.format {

@@ -73,14 +73,14 @@ class BuilderLease:
 
 
 class Terminal:
-    def __init__(self, binary, cwd, env):
+    def __init__(self, binary, cwd, env, args=()):
         self.output = ''
         self.screen = pyte.Screen(120, 32)
         self.stream = pyte.Stream(self.screen)
         self.chunks = queue.Queue()
         if os.name == 'nt':
             from conpty import ConPtyProcess
-            self.proc = ConPtyProcess(binary, cwd, env)
+            self.proc = ConPtyProcess(binary, cwd, env, args=args)
             self.read = self.proc.read
             self.write = self.proc.write
         else:
@@ -96,7 +96,7 @@ class Terminal:
             # child still attached to the harness's own console (a hidden
             # 1-column one under `wsl -e`) draws a one-cell frame forever.
             self.proc = subprocess.Popen(
-                [str(binary)], cwd=cwd, env=env, stdin=slave, stdout=slave, stderr=slave,
+                [str(binary), *args], cwd=cwd, env=env, stdin=slave, stdout=slave, stderr=slave,
                 start_new_session=True, preexec_fn=lambda: fcntl.ioctl(0, termios.TIOCSCTTY, 0))
             os.close(slave)
             decoder = codecs.getincrementaldecoder('utf-8')()
@@ -747,16 +747,84 @@ def scroll_holds_while_reading(binary):
         assert held, 'nothing readable on screen after PageUp'
         term.pump(1.5)           # more lines stream in below
         assert visible() == held, f'scrolled view moved while output streamed: {held[0]}..{held[-1]} ({len(held)}) -> {visible()[0]}..{visible()[-1]} ({len(visible())})'
-        term.pump(5.0)           # the rest streams (220 lines x 40ms) and the turn finishes
+        # Wait for the turn itself to end (the status bar says ready): a slow
+        # runner streams the rest well past any fixed pause.
+        term.until('ready', timeout=90, found=lambda: any(
+            r.rstrip().endswith('ready') for r in term.screen.display))
+        term.pump(0.5)
         # The finished answer renders as markdown and may pack more onto a
         # row, so the reader keeps the same first line rather than the same
         # rows below it.
         top_row = visible()[:4]
         assert held[0] in top_row, f'scrolled view moved when the turn ended: {held[0]} not in top row {top_row}'
         term.write('\x1b[F')    # End: back to the newest output
-        term.pump(1.0)
-        assert 'READ_LINE_220' in visible(), 'End did not return to the newest line'
+        term.until('READ_LINE_220', timeout=10)
         print(f'PASS {scenario}: view held at {held[0]} while output streamed and through the reflow when the turn ended; End returned to the latest', flush=True)
+        return {'scenario':scenario,'passed':True}
+    finally:
+        if term:
+            (work/'terminal.txt').write_text(term.output, encoding='utf-8')
+            (work/'screen.txt').write_text('\n'.join(term.screen.display), encoding='utf-8')
+            term.close()
+        server.shutdown()
+        server.server_close()
+
+
+def tool_table_fits(binary):
+    """A table a command prints, wider than the transcript, is laid out as a
+    grid when its tool card is expanded: each row stays one record with its
+    cells side by side, instead of raw text whose wrapped rows fold into each
+    other."""
+    scenario = 'tool-table-fits'
+    work = OUT / f'{scenario}-{time.time_ns()}'
+    work.mkdir(parents=True)
+    home, workspace = work/'home', work/'workspace'
+    workspace.mkdir()
+    ports = ', '.join(f'0.0.0.0:{5400 + n}->{5400 + n}/tcp' for n in range(5))
+    (workspace/'table.py').write_text(
+        'rows = [("NAME", "IMAGE", "STATUS", "PORTS"),\n'
+        f'        ("svc-alpha", "postgres:16", "Up 2 hours", "{ports}"),\n'
+        f'        ("svc-beta", "redis:7", "Up 5 minutes", "{ports}"),\n'
+        f'        ("svc-gamma", "nginx:1.27", "Exited (0)", "{ports}")]\n'
+        'for r in rows:\n    print(f"{r[0]:<12}{r[1]:<15}{r[2]:<15}{r[3]}")\n', encoding='utf-8')
+    python = Path(sys.executable).as_posix()
+    assert ' ' not in python, f'the shell command needs an unquoted interpreter path: {python}'
+    log = work/'requests.jsonl'
+    state = State([
+        {'tool_calls': [{'name': 'bash', 'arguments': json.dumps({'command': f'{python} table.py'})}]},
+        {'text': 'TABLE_ANSWER_8812 three services.'},
+    ], log)
+    server = LoopbackHTTPServer(('127.0.0.1', 0), make_handler(state))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    env = isolated_env(home, server.server_port, warm_skills=False)
+    (home/'.nur/config.toml').write_text(
+        f'provider = "vllm"\nmodel = "e2e-model"\nbase_url = "http://127.0.0.1:{server.server_port}/v1"\n'
+        'ecosystem_auto_ensure = false\nauto_update = false\nnative_memory = false\n'
+        '[typesafe]\nenabled = false\n', encoding='utf-8')
+    term = None
+    try:
+        term = Terminal(binary, workspace, env, args=['--yes'])
+        term.until('F6 inspect', timeout=5)
+        term.type_text('TABLE_PROMPT')
+        term.write('\r')
+        term.until('TABLE_ANSWER_8812', timeout=45)
+        term.pump(.5)
+        rows = term.screen.display
+        card = [y for y, r in enumerate(rows) if '✓ bash' in r]
+        assert card, 'no finished bash card on screen:\n' + '\n'.join(rows)
+        y = card[-1]
+        x = rows[y].index('▸')
+        term.write(f'\x1b[<0;{x + 1};{y + 1}M\x1b[<0;{x + 1};{y + 1}m')
+        term.until('svc-gamma', timeout=5)
+        term.pump(.5)
+        rows = term.screen.display
+        for name, image in [('svc-alpha', 'postgres:16'), ('svc-beta', 'redis:7'), ('svc-gamma', 'nginx:1.27')]:
+            hits = [r for r in rows if name in r]
+            assert hits, f'{name} not on screen:\n' + '\n'.join(rows)
+            assert any(f'{name} │ {image}' in ' '.join(r.split()) for r in hits), \
+                f'{name} is not a grid row next to {image}:\n' + '\n'.join(rows)
+        assert any('NAME' in r and '│' in r.strip('│ ') for r in rows), 'the header is not a grid row'
+        print(f'PASS {scenario}: a {len(ports) + 42}-column table printed by bash laid out as a grid', flush=True)
         return {'scenario':scenario,'passed':True}
     finally:
         if term:
@@ -786,6 +854,7 @@ if __name__ == '__main__':
              'banner-animates':lambda:banner_animates(binary),
              'transcript-frames':lambda:transcript_frames(binary),
              'fresh-provider-session':lambda:fresh_provider_session(binary),
-             'scroll-holds-while-reading':lambda:scroll_holds_while_reading(binary)}
+             'scroll-holds-while-reading':lambda:scroll_holds_while_reading(binary),
+             'tool-table-fits':lambda:tool_table_fits(binary)}
     result = [cases[name]() for name in (args.scenarios or cases)]
     (OUT/'report.json').write_text(json.dumps(result,indent=2),encoding='utf-8')

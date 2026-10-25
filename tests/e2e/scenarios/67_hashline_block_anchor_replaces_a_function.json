@@ -1,0 +1,43 @@
+{
+  "description": "Block anchors: hashline_edit `PUT 1*:` replaces the whole function line 1 opens (through its closing brace, past a nested block) and leaves the next function untouched.",
+  "prompt": "Rewrite old() as new().",
+  "setup_files": {
+    "lib.rs": "fn old() {\n    if x {\n        y();\n    }\n}\nfn keep() {}\n"
+  },
+  "script": [
+    {
+      "tool_calls": [
+        {
+          "name": "hashline_edit",
+          "arguments": {
+            "path": "lib.rs",
+            "tag": "479A",
+            "edits": "PUT 1*:\n+fn new() {\n+    z();\n+}"
+          }
+        }
+      ]
+    },
+    {
+      "text": "old() is new() now."
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "tool_results": [
+      {
+        "request": 2,
+        "contains": [
+          "edited lib.rs: 1 operation(s), 6 -> 4 lines"
+        ]
+      }
+    ],
+    "files": {
+      "lib.rs": {
+        "contains": [
+          "fn new() {\n    z();\n}\nfn keep() {}\n"
+        ]
+      }
+    }
+  }
+}

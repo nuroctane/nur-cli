@@ -18,12 +18,18 @@
 //! PUT >3:        insert after line 3 (>$ = file tail)
 //! CUT 8.=9 @fn   delete lines 8-9, keeping them in register @fn
 //! PUT >12 @fn    paste register @fn after line 12 (no body)
+//! PUT 20*:       replace the block that line 20 opens
+//! PUT >20*:      insert after that block
 //! ```
 //!
 //! Every number refers to the original snapshot, never to a line shifted by an
-//! earlier hunk of the same call. OMP's tree-sitter block anchors (`N*`) and
-//! file operations (`REM`, `MV`) are not part of nur's subset; `write_file`
-//! and `bash` cover the latter.
+//! earlier hunk of the same call. A block anchor `N*` stands for line N through
+//! the end of the block it opens: brackets opened on N (or a `{` alone on the
+//! next line) until they close, an indented body under a line ending in `:`,
+//! or a Markdown heading's section. OMP resolves blocks with tree-sitter; this
+//! resolver reads only brackets, indentation and headings, so it needs no
+//! grammar per language, and a line that opens none of them is refused rather
+//! than guessed. File operations (`REM`, `MV`) are left to `bash`.
 
 use super::{arg_str, resolve_path, Tool, ToolContext};
 use crate::error::{NurError, Result};
@@ -80,8 +86,8 @@ enum Op {
     },
 }
 
-/// Parse the edit text against a file of `len` lines.
-fn parse(edits: &str, len: usize) -> std::result::Result<Vec<Op>, String> {
+/// Parse the edit text against the file's `lines`.
+fn parse(edits: &str, lines: &[&str]) -> std::result::Result<Vec<Op>, String> {
     let mut ops: Vec<Op> = Vec::new();
     // The body rows of the most recent body-taking PUT.
     let mut open_body: Option<usize> = None;
@@ -129,7 +135,7 @@ fn parse(edits: &str, len: usize) -> std::result::Result<Vec<Op>, String> {
         match keyword.as_str() {
             "PUT" => {
                 let (locator, register, takes_body) = split_put(rest);
-                let op = if let Some(at) = gap(locator, len, row)? {
+                let op = if let Some(at) = gap(locator, lines, row)? {
                     let with = if takes_body {
                         Content::Body(Vec::new())
                     } else {
@@ -137,7 +143,7 @@ fn parse(edits: &str, len: usize) -> std::result::Result<Vec<Op>, String> {
                     };
                     Op::Insert { at, with }
                 } else {
-                    let (start, end) = span(locator, len, row)?;
+                    let (start, end) = span(locator, lines, row)?;
                     let with = if takes_body {
                         Content::Body(Vec::new())
                     } else {
@@ -161,7 +167,7 @@ fn parse(edits: &str, len: usize) -> std::result::Result<Vec<Op>, String> {
                     Some((l, r)) => (l.trim(), Some(r.trim().to_string())),
                     None => (rest.trim(), None),
                 };
-                let (start, end) = span(locator.trim_end_matches(':'), len, row)?;
+                let (start, end) = span(locator.trim_end_matches(':'), lines, row)?;
                 ops.push(Op::Cut {
                     start,
                     end,
@@ -197,16 +203,23 @@ fn split_put(rest: &str) -> (&str, Option<String>, bool) {
     }
 }
 
-/// A gap locator (`<N`, `>N`, `>$`), as the count of original lines before it.
-fn gap(locator: &str, len: usize, row: usize) -> std::result::Result<Option<Gap>, String> {
+/// A gap locator (`<N`, `>N`, `>$`, `>N*` after a block), as the count of
+/// original lines before it.
+fn gap(locator: &str, lines: &[&str], row: usize) -> std::result::Result<Option<Gap>, String> {
+    let len = lines.len();
     if let Some(rest) = locator.strip_prefix('>') {
         if rest == "$" {
             return Ok(Some(len));
+        }
+        if let Some(anchor) = rest.strip_suffix('*') {
+            let n = line_number(anchor, len, row)?;
+            return block_end(lines, n, row).map(Some);
         }
         let n = line_number(rest, len, row)?;
         return Ok(Some(n));
     }
     if let Some(rest) = locator.strip_prefix('<') {
+        let rest = rest.strip_suffix('*').unwrap_or(rest);
         if rest == "1" {
             return Ok(Some(0));
         }
@@ -216,12 +229,13 @@ fn gap(locator: &str, len: usize, row: usize) -> std::result::Result<Option<Gap>
     Ok(None)
 }
 
-/// A line span: `N.=M` (also `N-M`, `N..M`, `N,M`), or `N` for one line.
-fn span(locator: &str, len: usize, row: usize) -> std::result::Result<(usize, usize), String> {
-    if locator.ends_with('*') {
-        return Err(format!(
-            "row {row}: block anchors (`N*`) are not supported; give the explicit range `N.=M`"
-        ));
+/// A line span: `N.=M` (also `N-M`, `N..M`, `N,M`), `N` for one line, or `N*`
+/// for the block line N opens.
+fn span(locator: &str, lines: &[&str], row: usize) -> std::result::Result<(usize, usize), String> {
+    let len = lines.len();
+    if let Some(anchor) = locator.strip_suffix('*') {
+        let start = line_number(anchor, len, row)?;
+        return Ok((start, block_end(lines, start, row)?));
     }
     let (a, b) = [".=", "..", "-", ","]
         .iter()
@@ -233,6 +247,135 @@ fn span(locator: &str, len: usize, row: usize) -> std::result::Result<(usize, us
         return Err(format!("row {row}: range {start}.={end} runs backwards"));
     }
     Ok((start, end))
+}
+
+/// The last line of the block that line `start` opens (1-based).
+fn block_end(lines: &[&str], start: usize, row: usize) -> std::result::Result<usize, String> {
+    let opener = lines[start - 1];
+    if let Some(end) = bracket_block_end(lines, start) {
+        return Ok(end);
+    }
+    let trimmed = opener.trim_end();
+    if let Some(level) = heading_level(trimmed) {
+        let next = (start..lines.len())
+            .find(|&i| heading_level(lines[i]).is_some_and(|other| other <= level))
+            .unwrap_or(lines.len());
+        return Ok(last_content_line(lines, start, next));
+    }
+    if trimmed.ends_with(':') {
+        let indent = indent_of(opener);
+        let mut end = start;
+        for (i, line) in lines.iter().enumerate().skip(start) {
+            if line.trim().is_empty() {
+                continue;
+            }
+            if indent_of(line) <= indent {
+                break;
+            }
+            end = i + 1;
+        }
+        if end > start {
+            return Ok(end);
+        }
+    }
+    Err(format!(
+        "row {row}: line {start} opens no block (no bracket, indented body or heading starts          there); give the range `N.=M`"
+    ))
+}
+
+/// Brackets opened on `start`, or by a `{` starting the next non-blank line
+/// (Allman style), counted until they close at the end of a line. Closers
+/// before the first opener (`} else {`) belong to the previous block.
+fn bracket_block_end(lines: &[&str], start: usize) -> Option<usize> {
+    let next_brace = |after: usize| {
+        (after..lines.len())
+            .find(|&i| !lines[i].trim().is_empty())
+            .filter(|&i| lines[i].trim_start().starts_with('{'))
+    };
+    let mut depth = 0usize;
+    let mut opened = false;
+    let mut i = start - 1;
+    while i < lines.len() {
+        for delta in bracket_deltas(lines[i]) {
+            if delta > 0 {
+                depth += 1;
+                opened = true;
+            } else {
+                depth = depth.saturating_sub(1);
+            }
+        }
+        if i + 1 == start && depth == 0 {
+            // Nothing left open on the anchor line (`void f()`): the body's
+            // brace may sit below it; otherwise only a closed `{}` is a block.
+            if let Some(brace) = next_brace(i + 1) {
+                opened = false;
+                i = brace;
+                continue;
+            }
+            return (opened && lines[i].contains('{')).then_some(start);
+        }
+        if opened && depth == 0 {
+            return Some(i + 1);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// +1 / -1 for each bracket outside string literals and line comments.
+fn bracket_deltas(line: &str) -> Vec<i8> {
+    let mut out = Vec::new();
+    let mut chars = line.chars().peekable();
+    let mut quote: Option<char> = None;
+    while let Some(c) = chars.next() {
+        if let Some(q) = quote {
+            if c == '\\' {
+                chars.next();
+            } else if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '"' | '`' => quote = Some(c),
+            // A char literal like '{' (a lifetime `'a` has no closing quote).
+            '\'' => {
+                let rest: String = chars.clone().take(3).collect();
+                if rest.starts_with('\\') || rest.chars().nth(1) == Some('\'') {
+                    quote = Some('\'');
+                }
+            }
+            '/' if chars.peek() == Some(&'/') => break,
+            '(' | '[' | '{' => out.push(1),
+            ')' | ']' | '}' => out.push(-1),
+            _ => {}
+        }
+    }
+    out
+}
+
+fn heading_level(line: &str) -> Option<usize> {
+    let hashes = line.chars().take_while(|&c| c == '#').count();
+    (1..=6)
+        .contains(&hashes)
+        .then(|| line[hashes..].starts_with(' ').then_some(hashes))
+        .flatten()
+}
+
+fn indent_of(line: &str) -> usize {
+    line.chars()
+        .take_while(|c| c.is_whitespace())
+        .map(|c| if c == '\t' { 4 } else { 1 })
+        .sum()
+}
+
+/// The last non-blank line from `start` up to (not including) index `next`.
+fn last_content_line(lines: &[&str], start: usize, next: usize) -> usize {
+    (start..next)
+        .rev()
+        .find(|&i| !lines[i].trim().is_empty())
+        .map(|i| i + 1)
+        .unwrap_or(start)
 }
 
 fn line_number(text: &str, len: usize, row: usize) -> std::result::Result<usize, String> {
@@ -399,6 +542,8 @@ impl Tool for HashlineEdit {
          PUT <N:  insert before line N (<1 = file head);  PUT >N:  after N (>$ = file tail)\n\
          CUT N.=M  delete lines N-M;  CUT N.=M @name  delete and keep them in register @name\n\
          PUT >N @name  paste a register (no body);  PUT N.=M @name  replace a range with it\n\
+         N* anywhere a range or >N goes means the block line N opens (to its closing bracket, \
+         the end of its indented body, or the next heading): PUT 12*:  CUT 12*  PUT >12*:\n\
          Body rows are `+` then the exact final text with its indentation (`+` alone is a blank \
          line; a line that itself starts with + or - is `++...` / `+-...`). Never send removed or \
          unchanged lines. Keep ranges tight and split changes that are not adjacent. The result \
@@ -461,7 +606,7 @@ impl Tool for HashlineEdit {
             lines.pop();
         }
 
-        let ops = parse(&edits, lines.len()).map_err(NurError::Tool)?;
+        let ops = parse(&edits, &lines).map_err(NurError::Tool)?;
         let edited = apply(&lines, &ops).map_err(NurError::Tool)?;
         let mut updated = String::from(bom);
         updated.push_str(
@@ -502,7 +647,7 @@ mod tests {
 
     fn run(text: &str, edits: &str) -> std::result::Result<String, String> {
         let lines: Vec<&str> = text.lines().collect();
-        let ops = parse(edits, lines.len())?;
+        let ops = parse(edits, &lines)?;
         Ok(apply(&lines, &ops)?
             .into_iter()
             .map(|(l, _)| l)
@@ -565,7 +710,7 @@ mod tests {
             ("PUT 3.=2:\n+x", "backwards"),
             ("+orphan", "needs a `PUT"),
             ("PUT 2:\n-b\n+B", "never send removed"),
-            ("PUT 2*:\n+x", "block anchors"),
+            ("PUT 2*:\n+x", "opens no block"),
             ("REM", "not supported"),
             ("FIX 2", "expected `PUT` or `CUT`"),
             ("", "no operations"),
@@ -574,6 +719,40 @@ mod tests {
             let err = run(FILE, edits).unwrap_err();
             assert!(err.contains(needle), "{edits:?} -> {err}");
         }
+    }
+
+    /// Ways a block anchor can resolve wrong: stop at the first closer, count
+    /// a bracket inside a string or comment, include the `} else {` closer's
+    /// block, miss an Allman brace, run an indented body past its dedent, or
+    /// swallow the next heading or trailing blank lines.
+    #[test]
+    fn block_anchors_cover_the_block_the_line_opens() {
+        let rust = "fn a() {\n    let s = \"}\"; // }\n    if x {\n        y();\n    } else {\n        z();\n    }\n}\nfn b() {}";
+        assert_eq!(run(rust, "CUT 1*").unwrap(), "fn b() {}");
+        assert_eq!(
+            run(rust, "PUT 5*:\n+    } else {}").unwrap(),
+            "fn a() {\n    let s = \"}\"; // }\n    if x {\n        y();\n    } else {}\n}\nfn b() {}"
+        );
+        assert_eq!(
+            run(rust, "PUT >1*:\n+fn c() {}").unwrap().lines().nth(8),
+            Some("fn c() {}")
+        );
+        assert_eq!(
+            run(rust, "PUT 9*:\n+fn b2() {}").unwrap().lines().last(),
+            Some("fn b2() {}")
+        );
+        let allman = "void f()\n{\n  g();\n}\nint x;";
+        assert_eq!(run(allman, "CUT 1*").unwrap(), "int x;");
+        let lifetimes = "fn f<'a>(s: &'a str) -> char {\n    '{'\n}\nend";
+        assert_eq!(run(lifetimes, "CUT 1*").unwrap(), "end");
+        let python = "def f():\n    a = 1\n\n    return a\n\ndef g():\n    pass";
+        assert_eq!(run(python, "CUT 1*").unwrap(), "\ndef g():\n    pass");
+        let markdown = "# Top\n## One\ntext\n\n## Two\nmore";
+        assert_eq!(run(markdown, "CUT 2*").unwrap(), "# Top\n\n## Two\nmore");
+        assert_eq!(run(markdown, "CUT 1*").unwrap(), "");
+        assert!(run("let x = 1;\nlet y = 2;", "CUT 1*")
+            .unwrap_err()
+            .contains("opens no block"));
     }
 
     /// The tag ignores trailing whitespace and CRs, and changes with content.

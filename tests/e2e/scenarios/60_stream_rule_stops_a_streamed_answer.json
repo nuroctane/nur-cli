@@ -1,0 +1,51 @@
+{
+  "description": "A stream rule stops an answer that breaks it: the partial answer is taken back (stream-json gets stream_restart), the rule joins the conversation, and the model answers again; the final result is the corrected answer only.",
+  "prompt": "How do I get a &'static str from a String?",
+  "run_args": [
+    "--output-format",
+    "stream-json"
+  ],
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n[[stream_rules]]\nname = \"box-leak\"\npattern = 'Box::leak'\nrule = \"Do not use Box::leak; use Arc<str> or an owned String.\"\n"
+  },
+  "script": [
+    {
+      "text": "Call Box::leak on it."
+    },
+    {
+      "text": "Keep an Arc<str> instead."
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "stdout_jsonl": {
+      "types": [
+        "stream_restart",
+        "result"
+      ],
+      "last": {
+        "equals": {
+          "type": "result",
+          "ok": true,
+          "result": "Keep an Arc<str> instead."
+        }
+      }
+    },
+    "request_contains": [
+      {
+        "request": 1,
+        "lacks": [
+          "[nur stream rule"
+        ]
+      },
+      {
+        "request": 2,
+        "contains": [
+          "[nur stream rule `box-leak`]",
+          "use Arc<str> or an owned String."
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "provider": "anthropic",
+  "model": "claude-sonnet-5",
+  "description": "`nur -c` continues the directory's last session over messages: the earlier prompt, its tool call and result, and the answer are replayed in a request the provider accepts, and the model answers from them.",
+  "prompt": "What did notes.txt say?",
+  "global_args": [
+    "-c"
+  ],
+  "setup_files": {
+    "notes.txt": "PELICAN-7\n"
+  },
+  "setup_commands": [
+    [
+      "run",
+      "--yes",
+      "Read notes.txt and remember it."
+    ]
+  ],
+  "script": [
+    {
+      "tool_calls": [
+        {
+          "name": "read_file",
+          "arguments": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Noted the word."
+    },
+    {
+      "text": "It said PELICAN-7."
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 3,
+    "stdout_contains": [
+      "It said PELICAN-7."
+    ],
+    "request_contains": [
+      {
+        "request": 3,
+        "contains": [
+          "Read notes.txt and remember it.",
+          "PELICAN-7",
+          "Noted the word.",
+          "What did notes.txt say?"
+        ]
+      }
+    ],
+    "protocol": "messages"
+  }
+}

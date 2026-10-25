@@ -112,9 +112,13 @@ PUT <1:          insert at the file head (PUT <N: before line N)
 PUT >$:          append at the end (PUT >N: after line N)
 CUT 8.=9 @fn     delete lines 8-9, keeping them in register @fn
 PUT >12 @fn      paste the register after line 12 (no body)
+PUT 20*:         replace the block line 20 opens
+CUT 20*          delete it;  PUT >20*:  insert after it
 ```
 
-Body rows are `+` and the exact final text (`+` alone is a blank line). The file's line endings, BOM and final newline are kept, and the result returns the new tag with the changed lines, so the next edit needs no re-read. Block anchors (`N*`) and file moves are not supported; use explicit ranges, and `write_file` / `bash` for files.
+Body rows are `+` and the exact final text (`+` alone is a blank line). The file's line endings, BOM and final newline are kept, and the result returns the new tag with the changed lines, so the next edit needs no re-read.
+
+A block anchor `N*` goes anywhere a range or `>N` does and means line N through the end of the block it opens: its brackets until they close (a `{` alone on the next line counts, and `} else {` starts a new block), the indented body under a line ending in `:`, or a Markdown heading's section up to the next heading of the same or higher level. Brackets in strings and `//` comments are ignored. A line that opens none of these is refused with a request for the explicit range, never guessed. File moves and deletes are left to `bash`.
 
 ### `apply_patch`
 

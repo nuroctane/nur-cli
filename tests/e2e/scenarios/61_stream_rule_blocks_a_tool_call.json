@@ -1,0 +1,41 @@
+{
+  "description": "Tool-call arguments do not stream, so a finished response is checked too: a write that breaks a stream rule is dropped before it runs, and the model answers again with the rule in view.",
+  "prompt": "Write leak.rs.",
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n[[stream_rules]]\nname = \"box-leak\"\npattern = 'Box::leak'\nrule = \"Do not use Box::leak; use Arc<str> or an owned String.\"\n"
+  },
+  "script": [
+    {
+      "tool_calls": [
+        {
+          "name": "write_file",
+          "arguments": {
+            "path": "leak.rs",
+            "contents": "fn f(s: String) -> &'static str { Box::leak(s.into_boxed_str()) }\n"
+          }
+        }
+      ]
+    },
+    {
+      "text": "I will keep an Arc<str> instead of leaking."
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "stdout_contains": [
+      "Arc<str> instead of leaking"
+    ],
+    "absent_files": [
+      "leak.rs"
+    ],
+    "request_contains": [
+      {
+        "request": 2,
+        "contains": [
+          "[nur stream rule `box-leak`]"
+        ]
+      }
+    ]
+  }
+}

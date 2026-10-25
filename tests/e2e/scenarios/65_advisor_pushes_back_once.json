@@ -1,0 +1,57 @@
+{
+  "description": "An [advisor] model reviews the answer before the turn ends: its note is shown (stream-json advice), joins the conversation, and the agent takes one more pass; the advisor pushes back at most once per turn.",
+  "prompt": "Fix the failing test.",
+  "run_args": [
+    "--output-format",
+    "stream-json"
+  ],
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n[advisor]\nmodel = \"advisor-model\"\n"
+  },
+  "script": [
+    {
+      "text": "Fixed it."
+    },
+    {
+      "text": "You never ran the test after the change."
+    },
+    {
+      "text": "Ran it now: it passes."
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 3,
+    "stdout_jsonl": {
+      "types": [
+        "advice",
+        "result"
+      ],
+      "last": {
+        "equals": {
+          "type": "result",
+          "ok": true,
+          "result": "Ran it now: it passes."
+        }
+      }
+    },
+    "request_contains": [
+      {
+        "request": 2,
+        "contains": [
+          "\"model\": \"advisor-model\"",
+          "You advise a coding agent",
+          "Fix the failing test.",
+          "Fixed it."
+        ]
+      },
+      {
+        "request": 3,
+        "contains": [
+          "\"model\": \"e2e-model\"",
+          "[nur advisor · advisor-model] You never ran the test after the change."
+        ]
+      }
+    ]
+  }
+}

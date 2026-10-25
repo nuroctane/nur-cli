@@ -97,6 +97,9 @@ auto_update = true
 | `protocols` | map | empty | Force the wire protocol per route: `{"provider/model" = "responses" \| "chat" \| "anthropic" \| "gemini"}` (a bare `provider` key covers every model). Wins over the catalog's per-model routing; use it when a gateway rejects the default protocol (the 400 error names this table). Ignored for Anthropic and Gemini providers, whose protocol is not negotiable |
 | `auth.fallback_import` | bool | `false` | When no credential is found, silently import a signed-in vendor CLI / OMP session. `false` (default) keeps imports explicit via `nur auth import --from <source>`, because rotating vendor refresh tokens sign out whichever tool refreshes second |
 | `auth.encrypt_at_rest` | bool | `true` | Seal `auth.json`, `provider_keys.json` and `provider_sessions.json` with Windows DPAPI (user scope) before writing, so a copied file is inert on another account or machine. Older plaintext files are read as-is and sealed in place on first read. Set `false` when `~/.nur` is synced between machines or Windows accounts. No effect on Unix, where mode 0600 is the protection |
+| `path_models` | array | empty | Per-directory model: `[[path_models]]` with `path`, `model` and optional `provider` / `effort`. See [Per-directory models](#per-directory-models) |
+| `advisor.model` | string | empty | A second model that reviews each turn and leaves notes (empty = off). `advisor.provider` (empty = the session's) and `advisor.every_round` (`false`). See [Advisor](#advisor) |
+| `stream_rules` | array | empty | `[[stream_rules]]` with `name`, `pattern`, `rule`: stop an answer that matches and send it again with the rule. See [Stream rules](#stream-rules) |
 | `fusion_panel` | array | empty | Opt-in `/fusion` panel: catalog ids polled alongside the active model. `/fusion <question>` asks each and the active model synthesizes one answer. Empty = off |
 | `reasoning_effort` | string | `high` | Reasoning depth: `low`, `medium`, `high`, `xhigh`, `max`, `ultracode` (also `minimal`). See [below](#reasoning-effort-levels) |
 | `max_turns` | integer | `0` | Max agent tool/model rounds per user prompt. **`0` = unlimited** (default). Set via config or `/budget turns` / `/turns` |
@@ -359,6 +362,77 @@ Environment for hook commands:
 | `NUR_SESSION` | Session id |
 
 Non-zero **pre_tool** exit blocks the tool. Missing file = no hooks. Check status with `/hooks`.
+
+---
+
+## Per-directory models
+
+`[[path_models]]` picks the model by working directory. The longest `path`
+that contains the directory wins; outside every entry the configured model
+applies. `provider` and `effort` are optional.
+
+```toml
+[[path_models]]
+path = "~/work/site"
+model = "claude-sonnet-5"
+provider = "anthropic"
+effort = "low"
+
+[[path_models]]
+path = "C:/work/engine"
+model = "gpt-5.5"
+```
+
+The entry applies at startup and on every `/cd`, with a note naming it. It
+never touches `config.toml`: saving writes the configured model back, not the
+directory's. An explicit choice wins for the rest of the session: `--model`,
+`NUR_MODEL`, `NUR_PROVIDER`, or picking a model with `/model`.
+
+---
+
+## Advisor
+
+`[advisor]` adds a second model that reviews the agent's work. Before a turn
+ends it reads the request, the turn's recent tool trace and the answer; if it
+sees a misread request, a skipped requirement, a bug or an unchecked claim, it
+writes a short note, the note joins the conversation, and the agent takes one
+more pass. It pushes back at most once per turn. With `every_round = true` it
+also reviews after each tool round; that note is read before the next step and
+never stops anything.
+
+```toml
+[advisor]
+model = "gpt-5.5-mini"
+provider = "openai"   # optional: the session's provider when empty
+every_round = false
+```
+
+Notes appear in the transcript (`advisor · <model>`) and as `advice` events in
+`nur run --output-format stream-json`. Advisor requests are metered under their
+own route. A failed advisor request is a status line and the turn goes on. A
+provider without a saved key turns the advisor off for that turn with a note.
+
+---
+
+## Stream rules
+
+A stream rule sits idle until the model writes what it forbids. When the
+streamed answer matches a rule's pattern, the request is stopped mid-stream,
+the partial answer is taken back, the rule joins the conversation and the
+request goes out again (oh-my-pi's time-traveling stream rules). Tool-call
+arguments do not stream, so a finished response is checked too and a matching
+one is dropped before any tool runs. Each rule fires at most once per turn.
+
+```toml
+[[stream_rules]]
+name = "box-leak"
+pattern = 'Box::leak'     # Rust regex over the answer
+rule = "Do not use Box::leak; use Arc<str> or an owned String."
+```
+
+A project can add its own in `.nur/stream-rules.toml` (`[[rule]]` entries with
+the same fields). A rule that does not compile is skipped with a status line.
+In `stream-json` output a stopped answer shows as a `stream_restart` event.
 
 ---
 
