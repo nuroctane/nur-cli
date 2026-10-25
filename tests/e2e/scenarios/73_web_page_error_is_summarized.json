@@ -1,0 +1,24 @@
+{
+  "description": "A provider address that is a website answers with an HTML page (OpenCode's 404, as a hand-typed base URL got): the error names the page and says to check the base URL, and never dumps the HTML.",
+  "prompt": "Say hi.",
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n"
+  },
+  "script": [
+    {
+      "status": 404,
+      "html": "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\"><title data-sm=\"1\">OpenCode | Not Found</title><script>window._$HY||(e=>{})</script></head><body><h1>404 - Page Not Found</h1></body></html>"
+    }
+  ],
+  "expect": {
+    "exit_code": 4,
+    "stderr_contains": [
+      "web page (\"OpenCode | Not Found\")",
+      "base URL"
+    ],
+    "stderr_lacks": [
+      "<!DOCTYPE",
+      "_$HY"
+    ]
+  }
+}

@@ -8,7 +8,37 @@ use thiserror::Error;
 /// message is passed straight through unchanged, except a recognized
 /// provider-side gate (OpenCode free tier), which gets actionable guidance
 /// appended.
+/// A provider error whose body is a web page (a CDN or a site's 404) means the
+/// request reached a website, not an API. The page itself is noise; its title
+/// and what to check are what help.
+fn web_page_guidance(message: &str) -> Option<String> {
+    let start = message.trim_start().get(..15)?.to_ascii_lowercase();
+    if !(start.starts_with("<!doctype html") || start.starts_with("<html")) {
+        return None;
+    }
+    let lower = message.to_ascii_lowercase();
+    let title = lower
+        .find("<title")
+        .and_then(|at| lower[at..].find('>').map(|end| at + end + 1))
+        .and_then(|from| {
+            lower[from..]
+                .find("</title>")
+                .map(|len| &message[from..from + len])
+        })
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty());
+    Some(format!(
+        "the server answered with a web page{} instead of an API response, so the request went \
+         to the wrong address. Check the provider's base URL (/login, or [provider_base_urls] \
+         in config.toml).",
+        title.map(|t| format!(" (\"{t}\")")).unwrap_or_default()
+    ))
+}
+
 fn api_message(status: u16, message: &str) -> String {
+    if let Some(guided) = web_page_guidance(message) {
+        return guided;
+    }
     if let Some(guided) = opencode_free_tier_guidance(message) {
         return guided;
     }
@@ -310,6 +340,26 @@ mod tests {
         assert!(api_message(503, "").contains("provider failed on its side"));
         assert!(api_message(404, "").contains("model id"));
         assert!(api_message(418, "").contains("no details returned"));
+    }
+
+    /// A web page in place of an API error is summarized (its title, what to
+    /// check), never dumped; JSON and plain-text errors pass through.
+    #[test]
+    fn a_web_page_error_names_the_page_and_the_fix() {
+        let page = "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">\
+                    <title data-sm=\"1\">OpenCode | Not Found</title></head><body>404</body></html>";
+        let shown = api_message(404, page);
+        assert!(
+            shown.contains("web page (\"OpenCode | Not Found\")"),
+            "{shown}"
+        );
+        assert!(shown.contains("base URL"), "{shown}");
+        assert!(!shown.contains("<!DOCTYPE"), "{shown}");
+        assert!(web_page_guidance("<html><body>no title</body></html>")
+            .unwrap()
+            .contains("web page instead"));
+        assert_eq!(web_page_guidance("{\"error\":\"not found\"}"), None);
+        assert_eq!(web_page_guidance("model not found"), None);
     }
 
     /// OpenCode's newer free-usage refusal and an expired key both come back

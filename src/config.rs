@@ -1045,6 +1045,12 @@ pub fn provider_base_url_override(cfg: &Config, provider_id: &str) -> Option<Str
     }
     cfg.provider_base_urls.get(provider_id).and_then(|u| {
         let u = u.trim().trim_end_matches('/').to_string();
+        // OpenCode picks Zen or Go per model on its own hosts; a saved
+        // opencode.ai address only pinned every model to it (a typed
+        // `opencode.ai/go/v1` 404'd them all). Only a proxy or mirror counts.
+        if provider_id == "opencode" && crate::providers::opencode_host_split_applies(&u) {
+            return None;
+        }
         (!u.is_empty()).then_some(u)
     })
 }

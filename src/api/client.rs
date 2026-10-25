@@ -815,6 +815,16 @@ impl ApiClient {
             routed.style = opencode_style_for_model(model);
             let (_, base) = crate::providers::opencode_request_route(model, &self.base_url);
             routed.base_url = base.trim_end_matches('/').to_string();
+            if is_opencode_gemini_model(&self.provider_id, model)
+                && crate::providers::opencode_host_split_applies(&self.base_url)
+            {
+                routed.base_url = if crate::providers::is_opencode_go_base(&routed.base_url) {
+                    crate::providers::OPENCODE_GO_GOOGLE_BASE_URL
+                } else {
+                    crate::providers::OPENCODE_ZEN_GOOGLE_BASE_URL
+                }
+                .to_string();
+            }
             // Go takes API keys only. Signed in to the Console (which covers
             // Zen), an OPENCODE_API_KEY in the environment carries Go.
             if routed.oauth.is_some() && crate::providers::is_opencode_go_base(&routed.base_url) {
@@ -1303,7 +1313,11 @@ OpenCode Go takes an API key, not the OpenCode Console sign-in                  
             return self.create_droid_cli(req).await;
         }
         if is_opencode_gemini_model(&self.provider_id, &req.model) {
-            return self.create_opencode_gemini(req).await;
+            // Routed like every other model: Zen or Go, and Google's route.
+            return self
+                .routed_for_model(&req.model)
+                .create_opencode_gemini(req)
+                .await;
         }
         let routed = self.routed_for_model(&req.model);
         if routed.style != self.style || routed.base_url != self.base_url {
@@ -1497,7 +1511,9 @@ OpenCode Go takes an API key, not the OpenCode Console sign-in                  
             return self.create_droid_cli_stream(req, on_event, cancel).await;
         }
         if is_opencode_gemini_model(&self.provider_id, &req.model) {
+            // Routed like every other model: Zen or Go, and Google's route.
             return self
+                .routed_for_model(&req.model)
                 .create_opencode_gemini_stream(req, on_event, cancel)
                 .await;
         }
@@ -3524,6 +3540,45 @@ mod tests {
         assert_eq!(
             zen.routed_for_model("claude-sonnet-5").style,
             ApiStyle::AnthropicMessages
+        );
+    }
+
+    /// Ways an OpenCode Gemini request reached a dead path (an HTML 404):
+    /// Gemini skipped routing and used the configured base verbatim, Go's
+    /// Gemini was forced to Zen, and `/zen/go/v1` has no Gemini route. Also:
+    /// a custom (non-opencode.ai) base is still used as given.
+    #[test]
+    fn opencode_gemini_takes_googles_route_on_zen_and_go() {
+        use crate::providers::{OPENCODE_GO_GOOGLE_BASE_URL, OPENCODE_ZEN_GOOGLE_BASE_URL};
+        let go = ApiClient::for_provider(crate::providers::OPENCODE_GO_BASE_URL, "k", "opencode")
+            .unwrap();
+        assert_eq!(
+            go.routed_for_model("gemini-4-argon").base_url,
+            OPENCODE_GO_GOOGLE_BASE_URL
+        );
+        assert_eq!(
+            go.routed_for_model("gemini-3.6-flash").base_url,
+            OPENCODE_ZEN_GOOGLE_BASE_URL
+        );
+        assert_eq!(
+            go.routed_for_model("claude-sonnet-5").base_url,
+            crate::providers::OPENCODE_ZEN_BASE_URL
+        );
+        let typed = ApiClient::for_provider("https://opencode.ai/go/v1", "k", "opencode").unwrap();
+        assert_eq!(
+            typed.routed_for_model("gemini-4-argon").base_url,
+            OPENCODE_GO_GOOGLE_BASE_URL
+        );
+        let zen = ApiClient::for_provider(crate::providers::OPENCODE_ZEN_BASE_URL, "k", "opencode")
+            .unwrap();
+        assert_eq!(
+            zen.routed_for_model("gemini-4-argon").base_url,
+            OPENCODE_ZEN_GOOGLE_BASE_URL
+        );
+        let proxy = ApiClient::for_provider("https://proxy.example/v1", "k", "opencode").unwrap();
+        assert_eq!(
+            proxy.routed_for_model("gemini-4-argon").base_url,
+            "https://proxy.example/v1"
         );
     }
 

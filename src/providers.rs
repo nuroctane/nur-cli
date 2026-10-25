@@ -222,6 +222,11 @@ pub const KIMI_CODE_BASE_URL: &str = "https://api.kimi.com/coding/v1";
 pub const OPENCODE_ZEN_BASE_URL: &str = "https://opencode.ai/zen/v1";
 /// OpenCode Go shares OpenCode credentials but has its own inference endpoint.
 pub const OPENCODE_GO_BASE_URL: &str = "https://opencode.ai/zen/go/v1";
+/// OpenCode's Gemini models speak Google's protocol on per-protocol routes;
+/// the `/zen/go/v1` route has no Gemini path at all (404), so Go's Gemini
+/// (`gemini-4-argon`) is reachable only here (observed 2026-10-25).
+pub const OPENCODE_ZEN_GOOGLE_BASE_URL: &str = "https://opencode.ai/inference/google/v1beta";
+pub const OPENCODE_GO_GOOGLE_BASE_URL: &str = "https://opencode.ai/inference/go/google/v1beta";
 /// Command Code Provider API — one gateway, 70+ models (Kimi, DeepSeek, GLM,
 /// Qwen, MiniMax, Claude, GPT, Gemini, Grok). OpenAI Chat Completions at
 /// `/chat/completions` for open/frontier models, Anthropic Messages at
@@ -662,11 +667,15 @@ pub fn opencode_host_split_applies(base: &str) -> bool {
     b.is_empty() || b.contains("opencode.ai")
 }
 
-/// True when `base` targets the OpenCode Go endpoint, whether the URL keeps
-/// the trailing `/v1` (`https://opencode.ai/zen/go/v1`) or stops at `/zen/go`.
+/// True when `base` targets the OpenCode Go endpoint: `/zen/go/v1` (with or
+/// without `/v1`), the per-protocol `/inference/go/…` routes, or any other
+/// `/go/` path on an opencode.ai host (a hand-typed `opencode.ai/go/v1` still
+/// means Go).
 pub fn is_opencode_go_base(base: &str) -> bool {
     let b = base.trim().trim_end_matches('/').to_ascii_lowercase();
-    b.contains("/zen/go/") || b.ends_with("/zen/go")
+    b.contains("/zen/go/")
+        || b.ends_with("/zen/go")
+        || (b.contains("opencode.ai") && (b.contains("/go/") || b.ends_with("/go")))
 }
 
 /// Per-request OpenCode host for `model`, honouring an already-selected Go
@@ -684,14 +693,17 @@ pub fn opencode_request_route(model: &str, current_base: &str) -> (String, Strin
     if is_opencode_go_model(model) {
         return (bare, OPENCODE_GO_BASE_URL.to_string());
     }
-    let on_go = custom.to_ascii_lowercase().contains("/zen/go/");
-    if on_go {
+    if is_opencode_go_base(custom) {
         let ml = bare.to_ascii_lowercase();
-        let zen_only = ml.contains("claude")
-            || ml.contains("sonnet")
-            || ml.contains("opus")
-            || ml.contains("haiku")
-            || ml.contains("gemini");
+        // Go carries a few Claude and Gemini ids of its own (models.dev,
+        // 2026-10-25); every other one is Zen-only.
+        let on_go_too = ml.starts_with("claude-haiku-5") || ml.starts_with("gemini-4-argon");
+        let zen_only = !on_go_too
+            && (ml.contains("claude")
+                || ml.contains("sonnet")
+                || ml.contains("opus")
+                || ml.contains("haiku")
+                || ml.contains("gemini"));
         if zen_only {
             return (bare, OPENCODE_ZEN_BASE_URL.to_string());
         }

@@ -6,7 +6,8 @@ system prompt, message order) as well as on what it did.
 
 A reply is {"text": "..."}, {"tool_calls": [{"name", "arguments"}]} (a string
 "arguments" is sent verbatim, so malformed JSON can be scripted), or
-{"status": 500, "error": "..."} for an HTTP failure. A reply with
+{"status": 500, "error": "..."} for an HTTP failure ({"status": 404, "html": "..."}
+answers with a web page instead). A reply with
 "drop": "before_response" resets the connection without answering, and
 "drop": "mid_stream" streams its text then resets: both are transport failures,
 not HTTP errors. "stream_delay": S streams the text one line every S seconds,
@@ -263,6 +264,15 @@ def make_handler(state, mcp=None):
             drop = reply.get("drop")
             if drop == "before_response":
                 self._reset()
+                return
+            if "status" in reply and "html" in reply:
+                # A website answering instead of an API (a wrong base URL).
+                page = reply["html"].encode()
+                self.send_response(reply["status"])
+                self.send_header("content-type", "text/html; charset=utf-8")
+                self.send_header("content-length", str(len(page)))
+                self.end_headers()
+                self.wfile.write(page)
                 return
             if "status" in reply:
                 # Scripted HTTP failure: {"status": 500, "error": "..."}.

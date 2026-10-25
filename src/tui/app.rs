@@ -8795,7 +8795,11 @@ impl App {
         }
         // Left at (or cleared to) the catalog default → no override; otherwise
         // record the custom endpoint so it survives restarts and client builds.
-        if url.is_empty() || url == provider.base_url.trim_end_matches('/') {
+        // OpenCode routes Zen and Go per model on its own hosts, so an
+        // opencode.ai address is not an override (only a proxy or mirror is).
+        let opencode_host =
+            provider_id == "opencode" && crate::providers::opencode_host_split_applies(&url);
+        if url.is_empty() || url == provider.base_url.trim_end_matches('/') || opencode_host {
             self.cfg.provider_base_urls.remove(&provider_id);
         } else {
             self.cfg
