@@ -1,2 +1,0 @@
-- [Clipster live reference](https://clipster.framer.website/)
-- [Clipster template listing](https://www.framer.com/community/marketplace/templates/clipster/)

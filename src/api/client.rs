@@ -815,6 +815,19 @@ impl ApiClient {
             routed.style = opencode_style_for_model(model);
             let (_, base) = crate::providers::opencode_request_route(model, &self.base_url);
             routed.base_url = base.trim_end_matches('/').to_string();
+            // Go takes API keys only. Signed in to the Console (which covers
+            // Zen), an OPENCODE_API_KEY in the environment carries Go.
+            if routed.oauth.is_some() && crate::providers::is_opencode_go_base(&routed.base_url) {
+                if let Some(key) = std::env::var("OPENCODE_API_KEY")
+                    .ok()
+                    .map(|k| k.trim().to_string())
+                    .filter(|k| !k.is_empty())
+                {
+                    routed.api_key = key;
+                    routed.oauth = None;
+                    routed.refresh_oauth = false;
+                }
+            }
         }
         if self.provider_id == "commandcode" {
             // Same host for every model — only the request shape flips.
@@ -937,8 +950,13 @@ impl ApiClient {
         req = match self.style {
             ApiStyle::AnthropicMessages => {
                 req = req.header("anthropic-version", "2023-06-01");
-                if self.provider_id == "opencode" {
-                    // Zen's Claude endpoint (`/messages`) reads the key from
+                if self.provider_id == "opencode" && oauth.is_some() {
+                    // A Console sign-in is a bearer token on every route,
+                    // `/messages` included (OpenCode's CLI sends it as the
+                    // Anthropic `authToken`).
+                    req = req.bearer_auth(&api_key);
+                } else if self.provider_id == "opencode" {
+                    // Zen's Claude endpoint (`/messages`) reads an API key from
                     // `x-api-key` only, Anthropic style; a Bearer key there is
                     // "Missing API key" (observed 2026-10-25), which also hid
                     // the real answer for an expired key.
@@ -1204,6 +1222,40 @@ impl ApiClient {
         }
     }
 
+    fn explain_route_error(&self, model: &str, err: NurError) -> NurError {
+        let err = self.explain_opencode_go_auth(model, err);
+        self.explain_protocol_400(model, err)
+    }
+
+    /// OpenCode Go takes API keys only (its integration declares no OAuth
+    /// method); a Console sign-in covers Zen. A refusal on a Go route while
+    /// signed in that way says where the key comes from.
+    fn explain_opencode_go_auth(&self, model: &str, err: NurError) -> NurError {
+        let NurError::Api {
+            status,
+            ref message,
+        } = err
+        else {
+            return err;
+        };
+        let routed = self.routed_for_model(model);
+        if !matches!(status, 401 | 403)
+            || self.provider_id != "opencode"
+            || routed.oauth.is_none()
+            || !crate::providers::is_opencode_go_base(&routed.base_url)
+        {
+            return err;
+        }
+        NurError::Api {
+            status,
+            message: format!(
+                "{message}
+
+OpenCode Go takes an API key, not the OpenCode Console sign-in                  (that one covers Zen). Create a Go key in OpenCode Console (Settings, your                  account name, Create; not the Keys tab), then set OPENCODE_API_KEY to use Go                  beside the sign-in, or save it with `nur auth login --provider opencode --key                  <key>` to use the key for both."
+            ),
+        }
+    }
+
     /// When a route rejects the wire format (`400 Model does not support this
     /// protocol`), the bare provider message does not say which shape nur
     /// picked or how to change it. Name both.
@@ -1240,7 +1292,7 @@ impl ApiClient {
         let model = req.model.clone();
         self.create_response_inner(req)
             .await
-            .map_err(|e| self.explain_protocol_400(&model, e))
+            .map_err(|e| self.explain_route_error(&model, e))
     }
 
     async fn create_response_inner(&self, req: &ResponseRequest) -> Result<ApiResponse> {
@@ -1429,7 +1481,7 @@ impl ApiClient {
         let model = req.model.clone();
         self.create_response_stream_inner(req, on_event, cancel)
             .await
-            .map_err(|e| self.explain_protocol_400(&model, e))
+            .map_err(|e| self.explain_route_error(&model, e))
     }
 
     async fn create_response_stream_inner(

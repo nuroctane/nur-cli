@@ -394,7 +394,7 @@ These are on-demand workflows, not background services.
 - `cad` / `cad-viewer` / `dxf` / `gcode` / `urdf` / `srdf` / `sdf` - STEP-first CAD, fabrication, robot descriptions, and visual review from Text-to-CAD
 - `mobile-harness` - Android, iOS, and cloud-phone control through the capability-gated `mobilerun-core` facade
 - `apple-design` - Apple-style interface design
-- And 1,000+ more (1,587 `SKILL.md` files ship in this repo)...
+- And 1,000+ more: the intent index knows 1,711 skills. About 120 are nur's own and live in this repo; the rest install from their upstreams at pinned commits...
 
 **Browse skills:**
 
@@ -431,6 +431,26 @@ sgrep) by full commit SHA. Skill packs are cloned at their pinned commit with
 `git` (never via `npx skills add`, which resolves a mutable ref) and the
 checkout's `HEAD` is verified against the pin before any SKILL.md is copied.
 Nothing resolves `latest` at install time.
+
+### Vendored skills in the repository
+
+Third-party skill trees are not committed. `skills/upstream-lock.json` pins
+each one (repository, commit, source path, sha256 per file, and the name and
+description the intent index reads) and `skills/.gitignore`, generated from
+the lock, keeps the files out of Git. A maintainer rebuilds the local mirror
+from the pins, and every file must match its recorded hash before it is
+written:
+
+```bash
+python scripts/sync_upstream_skills.py --restore
+```
+
+Two kinds of locked file stay tracked: packs nur ships itself
+(`skills/bundled.json`) and files nur builds from reviewed sources (an entry's
+`built` list, such as gstack's offline diagram renderer). After a refresh,
+`--record-meta` re-records names and descriptions and regenerates the ignore
+file; `scripts/check_skill_snapshot.py` fails when a pinned file is committed,
+the ignore file is stale, or a present mirror file has drifted from its pin.
 
 `nur ecosystem install <name>` shows the plan (source, pin, target directory)
 and does nothing without `--yes`. Known names: `penecho`, `sgrep`, `dogwood`,

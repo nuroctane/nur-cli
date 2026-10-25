@@ -1712,7 +1712,7 @@ pub const PROVIDERS: &[Provider] = &[
         default_model: "claude-sonnet-5",
         env_key: "OPENCODE_API_KEY",
         style: CC,
-        note: "coding-model gateway · opencode auth login",
+        note: "coding-model gateway · OpenCode Console sign-in or API key",
         key_optional: false,
         browser_auth: true,
     },
@@ -2331,6 +2331,9 @@ pub fn client_identity(provider_id: &str) -> Option<&'static str> {
             "the Gemini CLI / Antigravity (User-Agent `google-api-nodejs-client`, `X-Goog-Api-Client`, `Client-Metadata`)",
         ),
         "xai" => Some("the Grok CLI (`X-XAI-Token-Auth: xai-grok-cli`, User-Agent `xai-grok-workspace`)"),
+        "opencode" => Some(
+            "the OpenCode CLI (OpenCode Console sign-in as client `opencode-cli`; requests keep nur's own User-Agent)",
+        ),
         "github-copilot" => Some(
             "VS Code Copilot Chat (`Editor-Version`, `Copilot-Integration-Id`, User-Agent `GitHubCopilotChat`)",
         ),

@@ -41,7 +41,7 @@ regression checks, and remaining vendor-specific limitations.
 | **GitHub Copilot** | `COPILOT_GITHUB_TOKEN` (fine-grained PAT with Copilot Requests) | `gh auth login` (subscription token) |
 | **Cursor** | `CURSOR_API_KEY` (optional) | `cursor-agent login` → nur chat via Agent CLI (no key required) |
 | **Factory Droid** | `FACTORY_API_KEY` (optional) | `droid` sign-in → nur chat via `droid exec` (no key required; `NUR_DROID_BIN` points at a launcher outside `PATH`) |
-| **OpenCode** | `OPENCODE_API_KEY` | `opencode auth login` (imports `~/.local/share/opencode/auth.json` → `opencode` / `opencode-go`) |
+| **OpenCode** | `OPENCODE_API_KEY` (covers Zen and Go) | OpenCode Console sign-in (`nur auth login --provider opencode --browser`, a device code in the browser; covers Zen only). `nur auth import --from opencode` copies an OpenCode CLI credential instead |
 | **Cline** | `CLINE_API_KEY` (app.cline.bot → Settings → API Keys) | `cline auth cline` (imports `~/.cline/data/settings/providers.json`; nur also refreshes the account token itself) |
 | **DeepSeek** | `DEEPSEEK_API_KEY` | DeepSeek Harness (`$DSH_HOME/.credentials.yaml`); no official OAuth |
 | **Z.AI / ZCode (GLM)** | `ZAI_API_KEY` | `zcode login` / in-app `/login zai-coding-plan`; nur imports `~/.zcode/v2/credentials.json` (decrypted locally) and `~/.zcode/v2/config.json` |
@@ -136,7 +136,7 @@ these providers:
 | **GitHub Models** | GitHub login via `gh` (`models` scope) | GitHub CLI session | `models.github.ai/inference` |
 | **GitHub Copilot** | GitHub login via `gh` | GitHub CLI session | `api.githubcopilot.com` |
 | **Cursor** | Cursor login via `cursor-agent` | `$CURSOR_AGENT_HOME` or `~/.cursor` / OS keychain | Chat runs through `cursor-agent -p` (nur tool harness by default); optional `CURSOR_API_KEY` |
-| **OpenCode** | `opencode auth login` | `~/.local/share/opencode/auth.json` | Zen/Go gateway key (`opencode` / `opencode-go` entries) |
+| **OpenCode** | OpenCode Console device sign-in (as OpenCode's CLI does it: client `opencode-cli`, refreshed at the Console) | nur's own store; `nur auth import --from opencode` reads `~/.local/share/opencode/auth.json` | Zen with the Console token as a bearer on every route. OpenCode Go takes API keys only: set `OPENCODE_API_KEY` to use Go beside the sign-in, or save the key with `--key` to use it for both |
 | **Command Code** | First-party studio sign-in (same flow as `cmd login`: browser + loopback callback; no vendor binary needed) | `~/.commandcode/auth.json` (`$COMMANDCODE_HOME`) + `COMMAND_CODE_API_KEY` / `CMD_API_KEY` | `api.commandcode.ai/provider/v1` (same host as an API key; Claude models auto-route to `/messages`) |
 | **Cline** | Cline account sign-in via the vendor CLI (`cline auth cline`, loopback callback on 48801-48811) | `~/.cline/data/settings/providers.json` (`$CLINE_DATA_DIR`) + `CLINE_API_KEY` | `api.cline.bot/api/v1` (same host for both; account tokens carry the `workos:` scheme prefix) |
 | **Meta / Muse Code** | `muse login` (or first-run `muse`) | `$MUSE_CONFIG_DIR` or `~/.config/muse/auth.json` | `api.meta.ai/v1` (same host as an API key) |
@@ -256,7 +256,7 @@ which identity before opening the browser, and the table is the contract:
 | `anthropic` browser sign-in | Anthropic Messages API with the Claude Code client identity | Claude subscription |
 | `openai` browser sign-in | Responses API with the Codex client identity and ChatGPT account headers | ChatGPT subscription |
 | `google` browser sign-in | Gemini Cloud Code endpoint with the Gemini CLI client metadata | Gemini Code Assist |
-| `opencode` / `opencode-go` | OpenCode Zen with an `x-opencode-session` session-affinity header | per token (Zen) or Go subscription |
+| `opencode` / `opencode-go` | OpenCode Zen with an `x-opencode-session` session-affinity header; a Console sign-in authenticates as the OpenCode CLI's client (`opencode-cli`) while requests keep nur's own User-Agent | per token (Zen) or Go subscription |
 
 Every other route sends nur's own requests with your API key. The
 session-affinity header pins a session to the same Zen upstream so prompt-cache

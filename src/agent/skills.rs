@@ -2320,17 +2320,39 @@ body
 
     #[test]
     fn startup_router_activation_is_distinct_from_its_workflows() {
+        // The router is first-party; its four workflows are vendored (not in
+        // Git), so they are written here with their upstream frontmatter.
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("skills");
-        let skills: Vec<_> = [
-            "startup-skill",
-            "startup-design",
-            "startup-competitors",
-            "startup-positioning",
-            "startup-pitch",
-        ]
-        .iter()
-        .map(|name| parse_skill(&root.join(name).join("SKILL.md")).unwrap())
-        .collect();
+        let dir = std::env::temp_dir().join(format!("nur-startup-{}", uuid::Uuid::new_v4()));
+        let mut skills = vec![parse_skill(&root.join("startup-skill").join("SKILL.md")).unwrap()];
+        for (name, description) in [
+            (
+                "startup-design",
+                "Design, validate, and plan a startup from scratch. Covers market research, competitive analysis, business model, brand identity, product definition, financial projections, and validation experiments. Trigger when the user has a startup idea to explore, wants to validate a business concept, needs a business plan or lean canvas, asks for market sizing or competitive landscape, wants brand positioning or go-to-market strategy, or says anything like \"I have an idea for...\" or \"is this idea worth pursuing\". Also handles resuming from a previous checkpoint.",
+            ),
+            (
+                "startup-competitors",
+                "Deep competitive intelligence for any market. Analyzes competitors' products, pricing, customer sentiment, GTM strategy, and growth signals using real web data. Produces battle cards, pricing landscape, and feature matrix. Use when the user wants to understand their competitive landscape, analyze competitors, compare products in a market, or research who they're competing against. Triggers for \"who are my competitors\", \"competitive analysis\", \"competitor research\", \"battle cards\", \"pricing comparison\", \"competitor pricing\", \"market players\", \"competitive intelligence\", \"competitive landscape\", \"who else is in this space\", \"competitive moat\", or any request to profile, compare, or map competitors in a category. Works standalone — no prior startup-design session needed.",
+            ),
+            (
+                "startup-positioning",
+                "Market positioning strategy using the April Dunford framework, enriched with JTBD discovery, Moore positioning statement, and Neumeier's Onliness Test. Produces a complete positioning document, positioning statement, competitive alternatives map, and market category analysis. Use when the user wants to define or refine their market positioning, find their unique position, differentiate from competitors, craft a positioning statement, choose a market category, or figure out \"how should we position this product.\" Triggers for \"positioning\", \"how to position\", \"market position\", \"differentiation strategy\", \"positioning statement\", \"competitive positioning\", \"category strategy\", \"where do we fit in the market\", \"how are we different\", \"unique value proposition\", or any request to define, sharpen, or rethink positioning. Works standalone — no prior startup-design or startup-competitors session needed, but leverages their output if available.",
+            ),
+            (
+                "startup-pitch",
+                "Build investor-ready pitch scripts in multiple formats (10-min, 5-min, 2-min, 1-min elevator, investor email). Produces pitch narratives, Q&A preparation, pitch scoring rubric, and optional investor roleplay practice. Use when the user wants to create a pitch, prepare for investor meetings, craft a startup pitch, write a fundraising narrative, or practice their pitch. Triggers for \"pitch deck\", \"investor pitch\", \"pitch my startup\", \"fundraising deck\", \"seed deck\", \"how to pitch\", \"investor meeting\", \"demo day\", \"prepare pitch\", \"pitch script\", \"elevator pitch for investors\", \"pitch practice\", \"practice my pitch\", \"investor roleplay\", or any request to present a startup to investors, accelerators, or partners. Works standalone — no prior startup-design session needed, but leverages its output if available.",
+            ),
+        ] {
+            let path = dir.join(name).join("SKILL.md");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(
+                &path,
+                format!("---\nname: {name}\ndescription: {description}\n---\n"),
+            )
+            .unwrap();
+            skills.push(parse_skill(&path).unwrap());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
         for phrase in ["use startup-skill", "use startup skill", "/startup-skill"] {
             assert_eq!(
                 detect_skill_activation(phrase, &skills).unwrap().0.name,

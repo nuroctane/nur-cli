@@ -20,6 +20,11 @@ loop ends instead of hanging; the runner then fails on the request count.
 With an MCP spec it also serves a Streamable HTTP MCP server (the Enclave
 stand-in) on the same port; see FakeMcp.
 
+Under /console it plays OpenCode Console's device sign-in: a code, one
+"authorization_pending" poll, then tokens (console-access-N; the first one
+expires in 60s so a client refreshes it), refresh_token grants, plus /api/orgs
+and /api/user for a bearer that holds one of those tokens.
+
 Usage: python fake_provider.py <script.json> <requests.jsonl> <port-file> [<mcp.json> <mcp.jsonl>]
 """
 
@@ -34,6 +39,9 @@ import socketserver
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 EXHAUSTED = "[fake provider: script exhausted]"
+
+CONSOLE = {"polls": 0, "issued": 0}
+CONSOLE_LOCK = threading.Lock()
 
 
 class LoopbackHTTPServer(ThreadingHTTPServer):
@@ -193,7 +201,42 @@ def make_handler(state, mcp=None):
         def log_message(self, *_):
             pass
 
+        def _console(self, path, body):
+            route = path[len("/console"):]
+            with CONSOLE_LOCK:
+                if route == "/auth/device/code":
+                    if body.get("client_id") != "opencode-cli":
+                        return self._json(400, {"error": "invalid_client"})
+                    return self._json(200, {"device_code": "dev-1", "user_code": "ABCD-1234",
+                                            "verification_uri_complete": "device?code=ABCD-1234",
+                                            "expires_in": 120, "interval": 1})
+                if route == "/auth/device/token":
+                    grant = body.get("grant_type", "")
+                    if grant.endswith("device_code"):
+                        CONSOLE["polls"] += 1
+                        if CONSOLE["polls"] == 1:
+                            return self._json(400, {"error": "authorization_pending"})
+                    elif grant != "refresh_token" or not str(body.get("refresh_token", "")).startswith("console-refresh-"):
+                        return self._json(400, {"error": "invalid_grant"})
+                    CONSOLE["issued"] += 1
+                    n = CONSOLE["issued"]
+                    return self._json(200, {"access_token": f"console-access-{n}", "refresh_token": f"console-refresh-{n}",
+                                            # The sign-in's token is near expiry, so the
+                                            # first turn must refresh it at the Console.
+                                            "expires_in": 60 if n == 1 else 3600, "org_id": None})
+                token = self.headers.get("authorization", "")
+                if not token.startswith("Bearer console-access-"):
+                    return self._json(401, {"_tag": "Unauthorized"})
+                if route == "/api/orgs":
+                    return self._json(200, [{"id": "org-b", "name": "Zeta"}, {"id": "org-a", "name": "Acme"}])
+                if route == "/api/user":
+                    return self._json(200, {"id": "user-1", "email": "e2e@example.test"})
+            self._json(404, {"error": f"unexpected console path {path}"})
+
         def do_GET(self):
+            path = self.path.rstrip("/")
+            if path.startswith("/console/"):
+                return self._console(path, {})
             # /v1/models probes: answer with the one scripted model.
             self._json(200, {"object": "list", "data": [{"id": "e2e-model", "object": "model"}]})
 
@@ -201,6 +244,8 @@ def make_handler(state, mcp=None):
             length = int(self.headers.get("content-length", "0"))
             body = json.loads(self.rfile.read(length) or b"{}")
             path = self.path.rstrip("/")
+            if path.startswith("/console/"):
+                return self._console(path, body)
             if mcp and path == mcp.path:
                 mcp.handle(self, body)
                 return

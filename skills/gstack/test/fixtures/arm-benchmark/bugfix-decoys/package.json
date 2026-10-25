@@ -1,7 +1,0 @@
-{
-  "name": "receipt-lib",
-  "private": true,
-  "scripts": {
-    "test": "node run-tests.js"
-  }
-}

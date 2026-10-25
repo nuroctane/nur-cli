@@ -612,7 +612,6 @@ pub mod factory {
 
 pub mod opencode {
     use super::*;
-    use std::io::BufRead;
     use std::path::PathBuf;
 
     /// OpenCode stores credentials at `$XDG_DATA_HOME/opencode/auth.json`
@@ -775,133 +774,280 @@ pub mod opencode {
         Ok(None)
     }
 
-    fn opencode_bin() -> Option<PathBuf> {
-        let command = which_cli("opencode");
-        #[cfg(windows)]
-        let command =
-            command.or_else(|| which_cli("opencode.cmd").or_else(|| which_cli("opencode.exe")));
-        command
+    /// OpenCode Console, where the device sign-in runs. OpenCode's own CLI
+    /// accepts another Console server; `NUR_OPENCODE_CONSOLE_URL` does the
+    /// same here (https, or http to a loopback host).
+    pub const CONSOLE: &str = "https://opencode.ai/console";
+    /// The client id OpenCode's CLI signs in with; the Console knows no other.
+    const CLIENT_ID: &str = "opencode-cli";
+    /// `issuer` of a Console sign-in, which refreshes at the Console. Imported
+    /// OpenCode credentials carry `opencode` and are re-read instead.
+    pub const CONSOLE_ISSUER: &str = "opencode-console";
+
+    fn console() -> Result<String> {
+        let Ok(raw) = std::env::var("NUR_OPENCODE_CONSOLE_URL") else {
+            return Ok(CONSOLE.to_string());
+        };
+        let url = reqwest::Url::parse(raw.trim())
+            .map_err(|e| NurError::Other(format!("NUR_OPENCODE_CONSOLE_URL: {e}")))?;
+        let loopback = matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"));
+        if url.scheme() != "https" && !(url.scheme() == "http" && loopback) {
+            return Err(NurError::Other(
+                "NUR_OPENCODE_CONSOLE_URL must be https (or http to a loopback host)".into(),
+            ));
+        }
+        Ok(url.as_str().trim_end_matches('/').to_string())
     }
 
-    /// `opencode auth login` (interactive provider picker / OAuth).
-    pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
-        if let Ok(Some(t)) = import_opencode_cli() {
-            send(
-                tx,
-                BrowserLoginProgress::Status("using existing OpenCode auth.json session".into()),
-            );
-            return Ok(t);
+    #[derive(Deserialize)]
+    struct Device {
+        device_code: String,
+        user_code: String,
+        verification_uri_complete: String,
+        #[serde(default)]
+        expires_in: u64,
+        #[serde(default)]
+        interval: u64,
+    }
+
+    #[derive(Deserialize, Default)]
+    struct Token {
+        access_token: Option<String>,
+        refresh_token: Option<String>,
+        expires_in: Option<u64>,
+        org_id: Option<String>,
+        error: Option<String>,
+    }
+
+    #[derive(Deserialize)]
+    struct Org {
+        id: String,
+        name: String,
+    }
+
+    /// The workspace a sign-in uses: the one the Console chose, else the
+    /// first by name, as OpenCode's CLI picks it.
+    fn pick_org(orgs: Vec<Org>, chosen: Option<&str>) -> Result<Option<Org>> {
+        if let Some(id) = chosen {
+            return orgs
+                .into_iter()
+                .find(|org| org.id == id)
+                .map(Some)
+                .ok_or_else(|| NurError::Other(format!("OpenCode organization not found: {id}")));
         }
-        let bin = opencode_bin().ok_or_else(|| {
-            NurError::Other(
-                "opencode not found on PATH. Install OpenCode (https://opencode.ai), then retry \
-                 or paste an OPENCODE_API_KEY via /login."
-                    .into(),
-            )
-        })?;
+        let mut orgs = orgs;
+        orgs.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
+        Ok(orgs.into_iter().next())
+    }
+
+    fn tokens(
+        server: &str,
+        token: Token,
+        org: Option<(String, String)>,
+        email: Option<String>,
+    ) -> Result<OAuthTokens> {
+        let access = token
+            .access_token
+            .filter(|t| !t.trim().is_empty())
+            .ok_or_else(|| NurError::Other("OpenCode Console returned no access token".into()))?;
+        let (org_id, org_name) = org.unzip();
+        Ok(OAuthTokens {
+            access_token: access,
+            refresh_token: token.refresh_token,
+            expires_at: expires_in_to_at(token.expires_in),
+            meta: Some(OauthMeta {
+                issuer: CONSOLE_ISSUER.into(),
+                client_id: CLIENT_ID.into(),
+                extra: serde_json::json!({
+                    "credential_kind": "oauth",
+                    "server": server,
+                    "org_id": org_id,
+                    "org_name": org_name,
+                    "email": email,
+                }),
+            }),
+        })
+    }
+
+    fn console_error(what: &str, status: u16, body: &str) -> NurError {
+        if status == 429 {
+            return NurError::Other(format!(
+                "OpenCode Console is rate limiting sign-ins ({what}, HTTP 429). Wait a minute and \
+                 retry, or paste an OpenCode API key in /login."
+            ));
+        }
+        NurError::Other(format!(
+            "OpenCode Console {what} failed (HTTP {status}: {})",
+            oauth_error_summary(body)
+        ))
+    }
+
+    /// Sign in to OpenCode Console with its device flow (what `opencode auth
+    /// login` does for the `opencode` provider): open the verification page,
+    /// poll for the token, then read the workspace. The access token is the
+    /// credential for Zen; OpenCode Go takes API keys only.
+    pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
+        let server = console()?;
         send(
             tx,
-            BrowserLoginProgress::Status("launching `opencode auth login`…".into()),
+            BrowserLoginProgress::Status("requesting an OpenCode Console sign-in code…".into()),
         );
-        let mut child = Command::new(&bin)
-            .args(["auth", "login"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| {
-                NurError::Other(format!(
-                    "failed to launch opencode ({e}). Run `opencode auth login` in a terminal, \
-                     or paste OPENCODE_API_KEY."
-                ))
-            })?;
-        if let Some(err) = child.stderr.take() {
-            let tx = tx.clone();
-            thread::spawn(move || {
-                for line in std::io::BufReader::new(err)
-                    .lines()
-                    .map_while(|line| line.ok())
-                {
-                    let snippet: String = line.chars().take(160).collect();
-                    if !snippet.trim().is_empty() {
-                        send(&tx, BrowserLoginProgress::Status(snippet));
-                    }
-                }
-            });
+        let client = http()?;
+        let res = client
+            .post(format!("{server}/auth/device/code"))
+            .json(&serde_json::json!({"client_id": CLIENT_ID, "supports_org_scope": true}))
+            .send()
+            .map_err(|e| NurError::Other(format!("OpenCode Console sign-in failed: {e}")))?;
+        let status = res.status().as_u16();
+        let body = res.text().unwrap_or_default();
+        if !(200..300).contains(&status) {
+            return Err(console_error("sign-in code", status, &body));
         }
-        if let Some(out) = child.stdout.take() {
-            let tx = tx.clone();
-            thread::spawn(move || {
-                for line in std::io::BufReader::new(out)
-                    .lines()
-                    .map_while(|line| line.ok())
-                {
-                    for word in line.split_whitespace() {
-                        let url = word
-                            .trim_matches(|c: char| c == ')' || c == '(' || c == '"' || c == '\'');
-                        if url.starts_with("https://") {
-                            send(&tx, BrowserLoginProgress::OpenUrl(url.to_string()));
-                            let _ = open_browser(url);
-                            break;
-                        }
-                    }
-                }
+        let device: Device = serde_json::from_str(&body)
+            .map_err(|e| NurError::Other(format!("OpenCode Console sign-in code: {e}")))?;
+        let verify = reqwest::Url::parse(&format!("{server}/"))
+            .and_then(|base| base.join(&device.verification_uri_complete))
+            .ok()
+            .filter(|url| matches!(url.scheme(), "https" | "http"))
+            .ok_or_else(|| NurError::Other("OpenCode Console sent an invalid sign-in page".into()))?
+            .to_string();
+        send(
+            tx,
+            BrowserLoginProgress::DeviceCode {
+                verification_url: verify.clone(),
+                user_code: device.user_code.clone(),
+            },
+        );
+        let _ = open_browser(&verify);
+
+        let deadline = std::time::Instant::now()
+            + Duration::from_secs(if device.expires_in > 0 {
+                device.expires_in
+            } else {
+                600
             });
-        }
-        let started = std::time::Instant::now();
-        // `opencode auth login`'s provider picker is interactive-only (its own
-        // issue tracker asks for a non-interactive flag; there is none yet), so
-        // with stdin at EOF the child usually exits without authenticating.
-        // We still spawn: some versions print the auth URL before the picker,
-        // and the watcher above opens it. The deadline + message below are the
-        // real path for everyone else.
-        const OPENCODE_LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
-        loop {
-            if cancel.is_cancelled() {
-                let _ = child.kill();
-                return Err(NurError::Other("login cancelled".into()));
+        let mut poll = super::super::DevicePoll::new(device.interval.max(3));
+        let token = loop {
+            poll.wait(cancel, deadline)?;
+            let Ok(res) = client
+                .post(format!("{server}/auth/device/token"))
+                .json(&serde_json::json!({
+                    "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                    "device_code": device.device_code,
+                    "client_id": CLIENT_ID,
+                }))
+                .send()
+            else {
+                continue;
+            };
+            let status = res.status().as_u16();
+            let body = res.text().unwrap_or_default();
+            let token: Token = serde_json::from_str(&body).unwrap_or_default();
+            if token.access_token.is_some() {
+                break token;
             }
-            if started.elapsed() > OPENCODE_LOGIN_TIMEOUT {
-                let _ = child.kill();
-                return Err(NurError::Other(
-                    "opencode auth login did not finish. Its provider picker is interactive \
-                     and cannot run inside nur's login screen: run `opencode auth login` in a \
-                     separate terminal and select OpenCode, then retry /login (nur imports the \
-                     session) — or paste OPENCODE_API_KEY."
-                        .into(),
-                ));
-            }
-            match child.try_wait() {
-                Ok(Some(status)) if status.success() => break,
-                Ok(Some(status)) => {
+            match token.error.as_deref() {
+                Some("authorization_pending") => continue,
+                Some("slow_down") => poll.slow_down(),
+                Some(other) => {
                     return Err(NurError::Other(format!(
-                        "opencode auth login failed (exit {status}). Its provider picker is \
-                         interactive: run `opencode auth login` in a separate terminal and \
-                         select OpenCode, then retry /login — or paste OPENCODE_API_KEY."
-                    )));
+                        "OpenCode Console sign-in failed: {other}"
+                    )))
                 }
-                Ok(None) => thread::sleep(Duration::from_millis(200)),
-                Err(e) => return Err(NurError::Other(e.to_string())),
+                None if status == 429 => poll.slow_down(),
+                None => return Err(console_error("sign-in", status, &body)),
             }
-        }
-        import_opencode_cli()?.ok_or_else(|| {
-            NurError::Other(
-                "opencode auth login finished, but nur found no `opencode` / `opencode-go` key in \
-                 ~/.local/share/opencode/auth.json. Run `opencode auth login` in a terminal and \
-                 select the OpenCode (Zen/Go) provider, then retry /login — or set \
-                 OPENCODE_API_KEY."
-                    .into(),
-            )
-        })
+        };
+
+        send(
+            tx,
+            BrowserLoginProgress::Status("signed in - reading your OpenCode workspace…".into()),
+        );
+        let access = token.access_token.clone().unwrap_or_default();
+        let get = |path: &str| -> Result<serde_json::Value> {
+            let res = client
+                .get(format!("{server}{path}"))
+                .bearer_auth(&access)
+                .send()
+                .map_err(|e| NurError::Other(format!("OpenCode Console {path}: {e}")))?;
+            let status = res.status().as_u16();
+            let body = res.text().unwrap_or_default();
+            if !(200..300).contains(&status) {
+                return Err(console_error(path, status, &body));
+            }
+            serde_json::from_str(&body)
+                .map_err(|e| NurError::Other(format!("OpenCode Console {path}: {e}")))
+        };
+        let orgs: Vec<Org> = serde_json::from_value(get("/api/orgs")?)
+            .map_err(|e| NurError::Other(format!("OpenCode Console /api/orgs: {e}")))?;
+        let org = pick_org(orgs, token.org_id.as_deref())?.map(|org| (org.id, org.name));
+        let email = get("/api/user").ok().and_then(|user| {
+            user.get("email")
+                .and_then(|e| e.as_str())
+                .map(str::to_string)
+        });
+        tokens(&server, token, org, email)
     }
 
-    pub fn refresh(_auth: &Auth, _refresh: &str) -> Result<OAuthTokens> {
-        import_opencode_cli()?.ok_or_else(|| {
-            NurError::Other(
-                "OpenCode session missing. Run `opencode auth login`, or set OPENCODE_API_KEY."
+    /// Whether a saved session is a Console sign-in (as opposed to an
+    /// imported OpenCode credential).
+    pub fn is_console_session(auth: &Auth) -> bool {
+        auth.oauth_meta
+            .as_ref()
+            .is_some_and(|meta| meta.issuer == CONSOLE_ISSUER)
+    }
+
+    pub fn refresh(auth: &Auth, refresh: &str) -> Result<OAuthTokens> {
+        if !is_console_session(auth) {
+            // An imported OpenCode credential renews in OpenCode; read it again.
+            return import_opencode_cli()?.ok_or_else(|| {
+                NurError::Other(
+                    "OpenCode session missing. Sign in with /login (OpenCode Console), or set \
+                     OPENCODE_API_KEY."
+                        .into(),
+                )
+            });
+        }
+        let extra = auth
+            .oauth_meta
+            .as_ref()
+            .map(|meta| meta.extra.clone())
+            .unwrap_or_default();
+        let server = extra
+            .get("server")
+            .and_then(|s| s.as_str())
+            .map(str::to_string)
+            .map_or_else(console, Ok)?;
+        let res = http()?
+            .post(format!("{server}/auth/device/token"))
+            .json(&serde_json::json!({
+                "grant_type": "refresh_token",
+                "refresh_token": refresh,
+                "client_id": CLIENT_ID,
+            }))
+            .send()
+            .map_err(|e| NurError::Other(format!("OpenCode Console refresh failed: {e}")))?;
+        let status = res.status().as_u16();
+        let body = res.text().unwrap_or_default();
+        let token: Token = serde_json::from_str(&body).unwrap_or_default();
+        if token.error.as_deref() == Some("invalid_grant") {
+            return Err(NurError::Other(
+                "OpenCode Console signed this session out. Sign in again with /login (or `nur \
+                 auth login --provider opencode --browser`)."
                     .into(),
-            )
-        })
+            ));
+        }
+        if !(200..300).contains(&status) {
+            return Err(console_error("refresh", status, &body));
+        }
+        let str_of = |key: &str| extra.get(key).and_then(|v| v.as_str()).map(str::to_string);
+        let org = match (token.org_id.clone(), str_of("org_id")) {
+            (Some(id), Some(old)) if id == old => Some((id, str_of("org_name").unwrap_or(old))),
+            (Some(id), _) => Some((id.clone(), id)),
+            (None, Some(old)) => Some((old.clone(), str_of("org_name").unwrap_or(old))),
+            (None, None) => None,
+        };
+        tokens(&server, token, org, str_of("email"))
     }
     #[cfg(test)]
     mod tests {

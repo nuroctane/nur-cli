@@ -18,6 +18,11 @@ fn validate_browser_url(url: &str) -> Result<&str> {
 /// Best-effort open of `url` in the platform default browser.
 pub fn open_browser(url: &str) -> Result<()> {
     let url = validate_browser_url(url)?;
+    // `NUR_NO_BROWSER=1` (SSH sessions, tests): the sign-in still prints the
+    // URL and code; nothing is launched.
+    if std::env::var("NUR_NO_BROWSER").is_ok_and(|v| v == "1") {
+        return Ok(());
+    }
     #[cfg(target_os = "windows")]
     {
         // Avoid `cmd /C start`: OAuth URLs contain `&`, which cmd interprets

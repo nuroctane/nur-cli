@@ -1,2 +1,0 @@
-- [Verseo live reference](https://verseo.framer.website/)
-- [Verseo template listing](https://www.framer.com/community/marketplace/templates/verseo/)

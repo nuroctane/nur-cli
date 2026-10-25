@@ -101,7 +101,7 @@ class MaintenanceTests(unittest.TestCase):
                 path = root / folder
                 path.mkdir()
                 (path / "SKILL.md").write_text(f"---\nname: shared\ndescription: {description}\n---\nBody")
-            entries = generate.generate([root])["skills"]
+            entries = generate.generate([root], locked={})["skills"]
             self.assertEqual(len(entries), 1)
             self.assertEqual(entries[0]["description"], "First guide")
             self.assertEqual(entries[0]["aliases"], ["a"])
@@ -117,6 +117,8 @@ class MaintenanceTests(unittest.TestCase):
             source.write_text("upstream guide\n")
             manifest = {"skills":{"demo":{"files":{"README.md":sync.digest(source)},"executables":[]}}}
             (root / "skills/upstream-lock.json").write_text(json.dumps(manifest))
+            # A shipped pack stays tracked, so its staged objects are checked.
+            (root / "skills/bundled.json").write_text(json.dumps({"packs": [{"source": "skills/demo"}]}))
             subprocess.run(["git", "-C", str(root), "add", "."], check=True, capture_output=True)
             with patch.object(check, "ROOT", root):
                 self.assertEqual(check.main(), 0)
@@ -126,6 +128,76 @@ class MaintenanceTests(unittest.TestCase):
                                 "skills/demo/README.md"], check=True)
                 self.assertEqual(check.main(), 1)
             self.assertEqual(source.read_text(), "upstream guide\n")
+
+    def test_vendored_trees_stay_out_of_git_and_match_their_pins(self):
+        """Failure cases: a pinned file committed to Git, a stale .gitignore,
+        a SKILL.md with no recorded name/description, and a mirror file that
+        drifted from its pin. A clean checkout without the mirror passes."""
+        with patch.dict(sys.modules, {"sync_upstream_skills": sync}):
+            check = load("check_skill_snapshot")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            skill = root / "skills/demo/SKILL.md"
+            skill.parent.mkdir(parents=True)
+            skill.write_text("---\nname: demo\ndescription: A demo guide\n---\nBody\n")
+            manifest = {"skills": {"demo": {"files": {"SKILL.md": sync.digest(skill)}, "executables": [],
+                                            "meta": {"SKILL.md": {"name": "demo", "description": "A demo guide"}}}}}
+            (root / "skills/upstream-lock.json").write_text(json.dumps(manifest))
+            (root / "skills/.gitignore").write_text(sync.gitignore_text(manifest, root / "skills"))
+            git = lambda *args: subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
+            with patch.object(check, "ROOT", root):
+                git("add", "skills/upstream-lock.json", "skills/.gitignore")
+                self.assertEqual(check.main(), 0, "mirror present and pinned")
+                git("add", "-f", "skills/demo/SKILL.md")
+                self.assertEqual(check.main(), 1, "a pinned file in Git")
+                git("rm", "-q", "--cached", "skills/demo/SKILL.md")
+                skill.write_text("drifted\n")
+                self.assertEqual(check.main(), 1, "mirror drifted from its pin")
+                skill.unlink()
+                self.assertEqual(check.main(), 0, "clean checkout without the mirror")
+                (root / "skills/.gitignore").write_text("")
+                self.assertEqual(check.main(), 1, "stale .gitignore")
+                (root / "skills/.gitignore").write_text(sync.gitignore_text(manifest, root / "skills"))
+                del manifest["skills"]["demo"]["meta"]
+                (root / "skills/upstream-lock.json").write_text(json.dumps(manifest))
+                self.assertEqual(check.main(), 1, "no recorded name/description")
+
+    def test_restore_rebuilds_the_mirror_only_from_matching_pins(self):
+        """The mirror comes back byte for byte from the pinned commit, a file
+        the pin does not reproduce is refused rather than written, and the
+        index reads names from the lock, not the files."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            upstream = root / "upstream"
+            (upstream / "pack/demo").mkdir(parents=True)
+            (upstream / "pack/demo/SKILL.md").write_text("---\nname: demo\ndescription: Pinned guide\n---\n")
+            (upstream / "pack/demo/notes.md").write_text("pinned notes\n")
+            ident = ["-c", "user.email=e2e@example.test", "-c", "user.name=e2e"]
+            git = lambda *args: subprocess.run(["git", "-C", str(upstream), *args], check=True,
+                                               capture_output=True, text=True)
+            git("init", "-q")
+            git(*ident, "add", ".")
+            git(*ident, "commit", "-q", "-m", "pin")
+            commit = git("rev-parse", "HEAD").stdout.strip()
+            skills = root / "repo/skills"
+            skills.mkdir(parents=True)
+            files = {name: sync.digest(upstream / "pack/demo" / name) for name in ("SKILL.md", "notes.md")}
+            entry = {"repository": upstream.as_uri(), "commit": commit, "source_path": "pack/demo",
+                     "files": files, "executables": [],
+                     "meta": {"SKILL.md": {"name": "demo", "description": "Pinned guide"}}}
+            (skills / "upstream-lock.json").write_text(json.dumps({"skills": {"demo": entry}}))
+            with patch.object(sync, "REPO", root / "repo"), patch.object(sync, "SKILLS", skills):
+                self.assertEqual(sync.restore(), 0)
+                self.assertEqual((skills / "demo/notes.md").read_text(), "pinned notes\n")
+                entry["files"]["notes.md"] = "0" * 64
+                (skills / "upstream-lock.json").write_text(json.dumps({"skills": {"demo": entry}}))
+                (skills / "demo/notes.md").unlink()
+                self.assertEqual(sync.restore(), 1)
+                self.assertFalse((skills / "demo/notes.md").exists())
+            entries = generate.generate([skills], locked={"demo": entry})["skills"]
+            self.assertEqual([e["name"] for e in entries], ["demo"])
+            self.assertEqual(entries[0]["description"], "Pinned guide")
 
     def test_resource_hashes_survive_windows_checkout_line_endings(self):
         self.assertEqual(sync.content_digest(b"first\r\nsecond\r\n"),
@@ -207,8 +279,8 @@ class MaintenanceTests(unittest.TestCase):
             skill = root / "craft"
             skill.mkdir()
             (skill / "SKILL.md").write_text("---\nname: craft-ui-skills\ndescription: >-\n  Interface craft\n  and composition\n---\nBody")
-            first = generate.generate([root])
-            self.assertEqual(first, generate.generate([root]))
+            first = generate.generate([root], locked={})
+            self.assertEqual(first, generate.generate([root], locked={}))
             entry = first["skills"][0]
             self.assertEqual(entry["aliases"], ["craft"])
             self.assertIn("/craft", entry["triggers"])

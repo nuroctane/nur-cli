@@ -1,0 +1,25 @@
+{
+  "description": "NUR_PROVIDER names a provider with no saved sign-in while another provider's is saved: the error names the provider that needs one and how to sign in, keeps the saved one, and never suggests `nur auth logout` (which would delete it).",
+  "prompt": "Say hi.",
+  "env": {
+    "NUR_PROVIDER": "openai"
+  },
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n"
+  },
+  "setup_commands": [
+    ["auth", "login", "--provider", "commandcode", "--key", "user_e2e-saved-key"]
+  ],
+  "script": [],
+  "expect": {
+    "exit_code": 3,
+    "requests": 0,
+    "stderr_contains": [
+      "nur auth login --provider openai",
+      "commandcode"
+    ],
+    "stderr_lacks": [
+      "auth logout"
+    ]
+  }
+}

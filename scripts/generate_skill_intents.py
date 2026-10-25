@@ -14,6 +14,7 @@ Usage:
   # or from repo root: python -m scripts.generate_skill_intents
 """
 import argparse, pathlib, json, re
+from skill_meta import skill_meta, skill_md_resources
 
 skills_root = pathlib.Path.home() / ".nur" / "skills"
 agents_skills_root = pathlib.Path.home() / ".agents" / "skills"
@@ -22,39 +23,6 @@ output = repo_root / "src" / "agent" / "skill_intents.json"
 EXTRA_ALIASES = json.loads((repo_root / "scripts/skill-trigger-aliases.json").read_text(encoding="utf-8"))
 
 STOP = set(["a","an","the","and","or","to","of","for","in","on","at","by","with","from","this","that","these","those","is","are","was","were","be","been","being","have","has","had","do","does","did","will","would","can","could","should","may","might","must","use","using","used","when","where","what","which","who","how","why","into","over","under","about","after","before","your","you","their","them","its","it","as","if","then","than","also","just","only","not","no","yes","any","all","each","other","more","most","some","such","via","per","between","through","during","without","within","skill","skills","agent","agents","help","please","like","make","need","needs","want","wants","get","set","run","work","works","working"])
-
-def parse_frontmatter_scalar(fm, key):
-    """Plain, quoted, or YAML folded (`>-` / `|`) scalars. Bare `>-` is missing."""
-    lines = fm.splitlines()
-    prefix = f"{key}:"
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        if not line.startswith(prefix):
-            i += 1
-            continue
-        rest = line[len(prefix):].strip()
-        if rest in (">", ">-", ">+", "|", "|-", "|+"):
-            i += 1
-            parts = []
-            while i < len(lines):
-                l = lines[i]
-                if l.startswith(" ") or l.startswith("\t"):
-                    t = l.strip()
-                    if t:
-                        parts.append(t)
-                    i += 1
-                elif not l.strip():
-                    i += 1
-                else:
-                    break
-            joined = " ".join(parts)
-            return joined or ""
-        s = rest.strip().strip('"').strip("'").strip()
-        if s in (">-", "|", ">", "|-"):
-            return ""
-        return s
-    return ""
 
 def gen_triggers(name, desc):
     triggers = set()
@@ -306,42 +274,46 @@ def gen_triggers(name, desc):
             filtered.insert(0, c)
     return filtered
 
-def generate(roots):
-  skills = []
-  for src in roots:
+def lock_entries():
+    """Vendored skills are not in Git; the upstream lock carries their name
+    and description, so the index is the same with or without the files."""
+    lock = repo_root / "skills" / "upstream-lock.json"
+    if not lock.exists():
+        return {}
+    return json.loads(lock.read_text(encoding="utf-8")).get("skills", {})
+
+
+def generate(roots, locked=None):
+  locked = lock_entries() if locked is None else locked
+  candidates = []
+  from_lock = set()
+  for key, entry in locked.items():
+    for resource in skill_md_resources(entry):
+      meta = entry.get("meta", {}).get(resource)
+      if meta is None:
+        raise SystemExit(f"skills/{key}/{resource}: no name/description in upstream-lock.json; run scripts/sync_upstream_skills.py --record-meta")
+      md = repo_root / "skills" / key / resource
+      from_lock.add(md.as_posix().casefold())
+      candidates.append((0, md, meta["name"], meta["description"]))
+  for group, src in enumerate(roots):
     if not src.exists():
         continue
-    # Path ordering differs between Windows and Unix. Keep duplicate-name
-    # precedence identical on every platform, including mixed-case folders.
-    for md in sorted(src.rglob("SKILL.md"), key=lambda path: (tuple(part.casefold() for part in path.parts), path.as_posix())):
-        if "references" in md.parts:
+    for md in src.rglob("SKILL.md"):
+        if "references" in md.parts or md.as_posix().casefold() in from_lock:
             continue
         try:
             text = md.read_text(encoding="utf-8", errors="ignore")
         except:
             continue
+        name, desc = skill_meta(text, md.parent.name)
+        candidates.append((group, md, name, desc))
+  # Roots in order (the repository first, its vendored skills included); within
+  # one, path ordering differs between Windows and Unix, so keep duplicate-name
+  # precedence identical on every platform, including mixed-case folders.
+  candidates.sort(key=lambda c: (c[0], tuple(part.casefold() for part in c[1].parts), c[1].as_posix()))
+  skills = []
+  for _, md, name, desc in candidates:
         folder = md.parent.name
-        name = folder
-        desc = ""
-        if text.startswith("---"):
-            end = text.find("---", 3)
-            if end != -1:
-                fm = text[3:end]
-                n = parse_frontmatter_scalar(fm, "name")
-                if n:
-                    name = n
-                desc = parse_frontmatter_scalar(fm, "description")
-                if not desc:
-                    body = text[end+3:].strip()
-                    for line in body.splitlines():
-                        if line.strip():
-                            desc = line.strip().lstrip("#").strip()[:200]
-                            break
-        else:
-            for line in text.splitlines():
-                if line.strip():
-                    desc = line.strip().lstrip("#").strip()[:200]
-                    break
         if any(s["name"] == name for s in skills):
             continue
         triggers = gen_triggers(name, desc)

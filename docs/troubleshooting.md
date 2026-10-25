@@ -334,13 +334,24 @@ No clock cuts off a response that is still arriving. Set
 
 #### `This API key has expired` (OpenCode)
 
-OpenCode Console keys expire, and signing in again (`opencode auth login`) does
-not renew a key it already holds. Create a new key in OpenCode Console, then
-save it with `/login` or:
+OpenCode invalidated stored keys, and signing in again does not renew a key a
+client already holds. Either sign in to OpenCode Console instead of using a key
+(Zen only; `/login`, OpenCode, browser, or):
+
+```bash
+nur auth login --provider opencode --browser
+```
+
+or create a new key and save it (Zen and Go). OpenCode Go keys are made in the
+Console under Settings, your account name, Create; the Keys tab makes `oc_sk_`
+workspace keys, which Go does not accept.
 
 ```bash
 nur auth login --provider opencode --key <new key>
 ```
+
+Signed in to the Console and want Go too: set `OPENCODE_API_KEY` to the Go key;
+Go requests use it and Zen keeps the sign-in.
 
 `/model` still lists OpenCode's models while the key is expired (the catalogs
 are public), so an empty picker is not this. Free models answer

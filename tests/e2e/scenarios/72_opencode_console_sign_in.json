@@ -1,0 +1,49 @@
+{
+  "description": "`nur auth login --provider opencode --browser` runs OpenCode Console's device sign-in (client opencode-cli, one pending poll, then tokens). The sign-in's token is near expiry, so the turn refreshes it at the Console first, then sends the new token as a Bearer on Zen's Claude route (/messages), with no x-api-key.",
+  "prompt": "Say hi.",
+  "env": {
+    "NUR_OPENCODE_CONSOLE_URL": "http://127.0.0.1:{port}/console",
+    "OPENCODE_BASE_URL": "http://127.0.0.1:{port}/v1"
+  },
+  "setup_commands": [
+    [
+      "auth",
+      "login",
+      "--provider",
+      "opencode",
+      "--browser",
+      "--yes",
+      "--model",
+      "claude-sonnet-5"
+    ]
+  ],
+  "script": [
+    {
+      "text": "hi"
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 1,
+    "protocol": "messages",
+    "stdout_contains": [
+      "hi"
+    ],
+    "headers": {
+      "present": [
+        "authorization"
+      ],
+      "absent": [
+        "x-api-key"
+      ]
+    },
+    "request_contains": [
+      {
+        "request": 1,
+        "contains": [
+          "\"authorization\": \"Bearer console-access-2\""
+        ]
+      }
+    ]
+  }
+}

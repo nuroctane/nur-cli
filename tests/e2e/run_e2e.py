@@ -166,6 +166,7 @@ def isolated_env(home, port, warm_skills=True):
             "USERPROFILE": str(home),
             "NUR_SKIP_BOOTSTRAP": "1",
             "NUR_SKIP_AUTO_UPDATE": "1",
+            "NUR_NO_BROWSER": "1",
             "NUR_DISABLE_UPDATES": "1",
             "NUR_PRICING_OFF": "1",
             "NUR_MODELS_DEV_OFF": "1",
@@ -324,6 +325,9 @@ def check(scenario, result, workspace, requests, mcp_requests=()):
     for needle in expect.get("stderr_contains", []):
         if needle not in result.stderr:
             failures.append(f"stderr lacks {needle!r}")
+    for needle in expect.get("stderr_lacks", []):
+        if needle in result.stderr:
+            failures.append(f"stderr contains {needle!r}")
     for rule in expect.get("stdout_count", []):
         seen = result.stdout.count(rule["needle"])
         if "max" in rule and seen > rule["max"]:

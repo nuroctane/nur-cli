@@ -87,6 +87,17 @@ pub enum NurError {
     #[error("not authenticated: set NUR_API_KEY or the provider's own key variable, run `nur auth login`, or copy a vendor CLI sign-in with `nur auth import --from <codex|claude|...>`")]
     NotAuthenticated,
 
+    /// The active provider has no credential while another provider's sign-in
+    /// is saved. That one is kept; the message says how to add this one.
+    #[error(
+        "no saved sign-in for '{provider}' (the saved one is for '{saved}' and stays). Sign in with `nur auth login --provider {provider}` or /login, or set {env_key}"
+    )]
+    NoSignInFor {
+        provider: String,
+        saved: String,
+        env_key: String,
+    },
+
     #[error("API error ({}): {}", api_status_label(*status), api_message(*status, message))]
     Api { status: u16, message: String },
 
@@ -149,7 +160,7 @@ impl NurError {
     /// The exit code this failure maps to (see [`exit`]).
     pub fn exit_code(&self) -> i32 {
         match self {
-            NurError::NotAuthenticated => exit::AUTH,
+            NurError::NotAuthenticated | NurError::NoSignInFor { .. } => exit::AUTH,
             NurError::Api {
                 status: 401 | 403, ..
             } => exit::AUTH,

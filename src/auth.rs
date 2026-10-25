@@ -488,10 +488,16 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
         }
         if mismatched {
             if let Ok(Some(auth)) = load_auth() {
-                return Err(NurError::Other(format!(
-                    "saved credentials are for provider '{}' but active provider is '{}'. Run /login (or nur auth logout) and sign in again.",
-                    auth.provider, exp
-                )));
+                // Never point at `nur auth logout`: it deletes the saved
+                // provider's sign-in, which is not the one missing.
+                return Err(NurError::NoSignInFor {
+                    provider: exp.to_string(),
+                    saved: auth.provider,
+                    env_key: crate::providers::by_id(exp)
+                        .map(|p| p.env_key)
+                        .unwrap_or("NUR_API_KEY")
+                        .to_string(),
+                });
             }
         }
         return Err(NurError::NotAuthenticated);
