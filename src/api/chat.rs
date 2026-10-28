@@ -273,40 +273,59 @@ pub fn build_body_opts(
     if provider_id == "openrouter" {
         apply_openrouter_options(&mut body);
     }
-    if provider_id == "kimi" && req.reasoning.is_some() {
-        body["thinking"] = json!({ "type": "enabled" });
+    apply_chat_effort(&mut body, provider_id, &req.model, req.reasoning.as_ref().and_then(|r| r.effort.as_deref()));
+    body
+}
+
+/// Route the unified effort rung to this Chat Completions route's native field.
+///
+/// The loop already clamped `effort` onto the route's ladder via
+/// `nearest_effort`; this only picks the field name/shape (or omits it where
+/// the route has no control). `ultracode` never reaches the wire — the loop
+/// clamps it to the route's strongest rung first.
+fn apply_chat_effort(body: &mut Value, provider_id: &str, model: &str, effort: Option<&str>) {
+    let Some(effort) = effort.filter(|e| !e.is_empty()) else {
+        return;
+    };
+    if effort == "ultracode" {
+        return;
     }
-    if provider_id == "morph" {
-        // Morph documents two effort fields: its DeepSeek snapshots read the
-        // top-level `reasoning_effort`, the other fast models `reasoning`.
-        // The loop has already clamped the rung onto the model's ladder.
-        if let Some(effort) = req
-            .reasoning
-            .as_ref()
-            .and_then(|r| r.effort.as_deref())
-            .filter(|e| !e.is_empty())
-        {
-            if crate::providers::is_morph_deepseek(&req.model) {
-                body["reasoning_effort"] = json!(effort);
-            } else {
+    // Gemini OpenAI-compat host: unverified for thinking fields (§8.3) — omit
+    // there. The native Cloud Code path sends `thinkingLevel` instead.
+    if matches!(provider_id, "google" | "antigravity" | "google-oauth") {
+        return;
+    }
+    match provider_id {
+        "openrouter" => {
+            // Unified `reasoning.effort`; `none` semantics vary by underlying
+            // model, so omit (OpenRouter default) instead of sending it.
+            if effort != "none" {
                 body["reasoning"] = json!({ "effort": effort });
             }
         }
-    }
-    if provider_id == "paperinstruments" {
-        // Ultramarine's reasoning is mandatory and set through the top-level
-        // Chat Completions field; the loop has already clamped the rung onto
-        // the route's low/high/max ladder. Omitted, the API runs at `max`.
-        if let Some(effort) = req
-            .reasoning
-            .as_ref()
-            .and_then(|r| r.effort.as_deref())
-            .filter(|e| !e.is_empty())
-        {
-            body["reasoning_effort"] = json!(effort);
+        "groq" if !crate::providers::model_supports_groq_gpt_oss(model) => {
+            // Groq Qwen binary toggle: `none` → `none`, anything else → `default`.
+            body["reasoning_effort"] = json!(if effort == "none" { "none" } else { "default" });
+        }
+        "kimi" | "moonshot" if !crate::providers::is_kimi_k3(model) => {
+            // K2-era ids only: legacy `thinking` toggle.
+            body["thinking"] = json!({ "type": "enabled" });
+        }
+        "morph" if !crate::providers::is_morph_deepseek(model) => {
+            // Morph's other fast models read `reasoning.effort`.
+            body["reasoning"] = json!({ "effort": effort });
+        }
+        _ => {
+            // Default Chat Completions shape: top-level `reasoning_effort`.
+            // Covers openai, xai-key, groq GPT-OSS, mistral, together,
+            // fireworks, cohere, kimi K3, zhipu, deepseek, qwen, morph
+            // DeepSeek snapshots, paperinstruments, vllm, and unknown routes
+            // (whose rung table already defaults to OpenAI-shaped).
+            if crate::providers::supports_effort(provider_id, model) {
+                body["reasoning_effort"] = json!(effort);
+            }
         }
     }
-    body
 }
 
 /// Explicit OpenRouter controls. Dashboard defaults remain unchanged unless a

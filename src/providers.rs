@@ -755,6 +755,30 @@ pub const EFFORT_NOUS: &[&str] = &["low", "high", "max"];
 const EFFORT_MORPH_DEEPSEEK: &[&str] = &["low", "high", "xhigh", "max"];
 /// Morph's other fast models document `reasoning.effort` low/medium/high.
 const EFFORT_MORPH: &[&str] = &["low", "medium", "high"];
+/// GPT-OSS family (Groq, Together, Cerebras): three-rung scale.
+const EFFORT_GPT_OSS: &[&str] = &["low", "medium", "high"];
+/// Binary-toggle routes: off, or on at their single "on" rung. Groq Qwen
+/// translates the on-rung to `default` at the wire boundary (`apply_chat_effort`);
+/// the table keeps ladder rungs so `nearest_effort` clamping still works.
+const EFFORT_BINARY_HIGH: &[&str] = &["none", "high"];
+/// Fireworks Chat Completions: full scale plus `none` to disable.
+const EFFORT_FIREWORKS: &[&str] = &["none", "low", "medium", "high", "max"];
+/// Cohere compatibility API: exactly `none` and `high` (`low`/`medium` rejected).
+const EFFORT_COHERE: &[&str] = &["none", "high"];
+/// Kimi K3 family: `low, high, max` (default `max`); thinking cannot be disabled.
+/// K2-era ids keep the legacy `thinking` toggle (see `apply_chat_effort`).
+const EFFORT_KIMI_K3: &[&str] = &["low", "high", "max"];
+/// DeepSeek Chat Completions `reasoning_effort`: the server maps
+/// `minimal`/`low`→`low`, `medium`/`high`/`xhigh`→`high`, `max`/`ultra`→`max`,
+/// so nur only ever sends a real rung.
+const EFFORT_DEEPSEEK_CHAT: &[&str] = &["low", "high", "max"];
+/// OpenRouter unified `reasoning.effort`: `low`/`medium`/`high` (it translates
+/// effort↔budget per underlying model; `none` means omit — see `apply_chat_effort`).
+const EFFORT_OPENROUTER: &[&str] = &["low", "medium", "high"];
+/// Gemini native `thinkingLevel` (Cloud Code path only): LOW/MEDIUM/HIGH.
+/// `MINIMAL` is deliberately absent — several Gemini models reject it, and the
+/// nearest-rung rule folds `minimal` up to `low`. `none` floors to `low`.
+const EFFORT_GEMINI: &[&str] = &["low", "medium", "high"];
 
 /// Is `model` one of Morph's DeepSeek snapshots (`morph-dsv4…`)?
 pub fn is_morph_deepseek(model: &str) -> bool {
@@ -764,6 +788,57 @@ pub fn is_morph_deepseek(model: &str) -> bool {
         .rsplit('/')
         .next()
         .is_some_and(|bare| bare.starts_with("morph-dsv") || bare.contains("deepseek"))
+}
+
+/// Bare model id (vendor prefix stripped) for family checks.
+fn bare_model_id(model: &str) -> String {
+    model
+        .trim()
+        .to_ascii_lowercase()
+        .rsplit('/')
+        .next()
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Groq GPT-OSS ids take the three-rung `reasoning_effort` scale; other Groq
+/// reasoning models (Qwen) are a binary toggle (`none`/`default` on the wire).
+pub fn model_supports_groq_gpt_oss(model: &str) -> bool {
+    let bare = bare_model_id(model);
+    bare.contains("gpt-oss") || bare.contains("gpt_oss")
+}
+
+/// Mistral reasoning models (current Small/Medium/Large, zai-glm via Mistral).
+/// Non-reasoning Mistral models reject the effort field entirely.
+pub fn model_supports_mistral_reasoning(model: &str) -> bool {
+    let bare = bare_model_id(model);
+    bare.contains("mistral-small")
+        || bare.contains("mistral-medium")
+        || bare.contains("mistral-large")
+        || bare.contains("magistral")
+        || bare.contains("glm")
+        || bare.contains("zai")
+}
+
+/// Together GPT-OSS ids take the three-rung scale.
+pub fn is_together_gpt_oss(model: &str) -> bool {
+    bare_model_id(model).contains("gpt-oss")
+}
+
+/// Together DeepSeek V4 Pro: only `high`/`max` accepted server-side.
+pub fn is_together_deepseek_pro(model: &str) -> bool {
+    let bare = bare_model_id(model);
+    bare.contains("deepseek") && (bare.contains("v4") || bare.contains("pro"))
+}
+
+/// Kimi K3 family: `reasoning_effort` low/high/max. K2-era ids keep the legacy
+/// `thinking` toggle.
+pub fn is_kimi_k3(model: &str) -> bool {
+    let bare = bare_model_id(model);
+    if bare.contains("k2") {
+        return false;
+    }
+    bare.contains("k3") || bare.contains("kimi")
 }
 /// Perplexity Agent API `reasoning.effort` (one enum for every hosted model).
 const EFFORT_PERPLEXITY: &[&str] = &["minimal", "low", "medium", "high", "xhigh", "max"];
@@ -785,9 +860,14 @@ const EFFORT_CLAUDE_OPUS_4_5: &[&str] = &["low", "medium", "high"];
 /// field rather than send a value the endpoint will reject.
 pub fn effort_levels(provider_id: &str, model: &str) -> &'static [&'static str] {
     match provider_id {
-        // Gemini budgets thinking in tokens, and MiniMax's Anthropic-compatible
-        // route has no effort control: nothing goes on the wire.
-        "google" | "antigravity" | "google-oauth" | "minimax" => &[],
+        // MiniMax's Anthropic-compatible route has no effort control, and Meta's
+        // Model API has no verified reasoning-effort control: nothing goes on
+        // the wire. Local runtimes (except vLLM) likewise omit it.
+        // Gemini's native Cloud Code path takes `thinkingLevel` (see
+        // `gemini_thinking_level`); its OpenAI-compat host is unverified, so
+        // the Chat adapter omits the field there (see `apply_chat_effort`).
+        "minimax" | "meta" | "ollama" | "llamacpp" | "lmstudio" => &[],
+        "google" | "antigravity" | "google-oauth" => EFFORT_GEMINI,
         "anthropic" => claude_effort_levels(model),
         "xai" => {
             let model = model.to_ascii_lowercase();
@@ -807,6 +887,22 @@ pub fn effort_levels(provider_id: &str, model: &str) -> &'static [&'static str] 
         "morph" if is_morph_deepseek(model) => EFFORT_MORPH_DEEPSEEK,
         "morph" => EFFORT_MORPH,
         "perplexity" => EFFORT_PERPLEXITY,
+        "openrouter" => EFFORT_OPENROUTER,
+        "groq" if model_supports_groq_gpt_oss(model) => EFFORT_GPT_OSS,
+        "groq" => EFFORT_BINARY_HIGH,
+        "mistral" if model_supports_mistral_reasoning(model) => EFFORT_BINARY_HIGH,
+        "mistral" => &[],
+        "together" if is_together_gpt_oss(model) => EFFORT_GPT_OSS,
+        "together" if is_together_deepseek_pro(model) => EFFORT_NOUS,
+        "together" => EFFORT_GPT_OSS,
+        "fireworks" => EFFORT_FIREWORKS,
+        "cohere" => EFFORT_COHERE,
+        "kimi" | "moonshot" if is_kimi_k3(model) => EFFORT_KIMI_K3,
+        "kimi" | "moonshot" => EFFORT_LOW_HIGH,
+        "zhipu" => EFFORT_KIMI_K3,
+        "deepseek" => EFFORT_DEEPSEEK_CHAT,
+        "qwen" => EFFORT_BINARY_HIGH,
+        "vllm" => EFFORT_OPENAI,
         _ => EFFORT_OPENAI,
     }
 }
@@ -3023,12 +3119,7 @@ mod tests {
 
         // No effort control at all: omit the field rather than send one the
         // endpoint will reject.
-        for (id, model) in [
-            ("google", "gemini-3.1-pro-preview"),
-            ("antigravity", "gemini-3.1-pro"),
-            ("google-oauth", "gemini-3.1-pro"),
-            ("minimax", "MiniMax-M2.7"),
-        ] {
+        for (id, model) in [("minimax", "MiniMax-M2.7"), ("meta", "muse-spark-1.3")] {
             assert!(
                 effort_levels(id, model).is_empty(),
                 "{id} should have no rungs"
@@ -3076,6 +3167,16 @@ mod tests {
             ("nous", "ox-alpha", "max"),
             ("anthropic", "claude-opus-5", "max"),
             ("anthropic", "claude-opus-4-5", "high"),
+            // New Chat Completions tables (PR19): strongest rung per route.
+            ("groq", "openai/gpt-oss-120b", "high"),
+            ("mistral", "mistral-large-latest", "high"),
+            ("together", "openai/gpt-oss-120b", "high"),
+            ("fireworks", "accounts/fireworks/models/llama-v3p3-70b-instruct", "max"),
+            ("cohere", "command-a-03-2025", "high"),
+            ("kimi", "kimi-k3", "max"),
+            ("deepseek", "deepseek-chat", "max"),
+            ("openrouter", "openai/gpt-5.5", "high"),
+            ("zhipu", "glm-5.3", "max"),
         ] {
             for want in ["max", "ultracode"] {
                 assert_eq!(
@@ -3093,6 +3194,97 @@ mod tests {
                 provider.id
             );
         }
+    }
+
+    /// New Chat Completions tables (PR19): each route exposes its native
+    /// ladder, binary toggles keep `none` + their on-rung, and never-reason
+    /// / unverified routes stay empty so the field is omitted.
+    #[test]
+    fn chat_completion_routes_carry_their_native_ladder() {
+        // GPT-OSS routes (Groq, Together): three-rung scale.
+        for (provider, model) in [
+            ("groq", "openai/gpt-oss-120b"),
+            ("together", "openai/gpt-oss-120b"),
+        ] {
+            assert_eq!(
+                effort_levels(provider, model),
+                ["low", "medium", "high"],
+                "{provider} {model}"
+            );
+        }
+        // Groq Qwen binary toggle: off, or on.
+        assert_eq!(effort_levels("groq", "qwen/qwen3-32b"), ["none", "high"]);
+        assert_eq!(
+            nearest_effort("groq", "qwen/qwen3-32b", "medium").as_deref(),
+            Some("high")
+        );
+        assert_eq!(
+            nearest_effort("groq", "qwen/qwen3-32b", "none").as_deref(),
+            Some("none")
+        );
+        // Mistral: reasoning models toggle, others omit the field.
+        assert_eq!(
+            effort_levels("mistral", "mistral-large-latest"),
+            ["none", "high"]
+        );
+        assert_eq!(
+            nearest_effort("mistral", "mistral-large-latest", "medium").as_deref(),
+            Some("high")
+        );
+        assert!(effort_levels("mistral", "codestral-latest").is_empty());
+        assert_eq!(nearest_effort("mistral", "codestral-latest", "high"), None);
+        // Together DeepSeek V4 Pro: only high/max.
+        assert_eq!(
+            effort_levels("together", "deepseek-ai/DeepSeek-V4-Pro"),
+            ["low", "high", "max"]
+        );
+        assert_eq!(
+            nearest_effort("together", "deepseek-ai/DeepSeek-V4-Pro", "medium").as_deref(),
+            Some("high")
+        );
+        // Fireworks / Cohere / DeepSeek / Kimi / Zhipu / Qwen / OpenRouter.
+        assert_eq!(
+            effort_levels("fireworks", "accounts/fireworks/models/llama-v3p3-70b-instruct"),
+            ["none", "low", "medium", "high", "max"]
+        );
+        assert_eq!(effort_levels("cohere", "command-a-03-2025"), ["none", "high"]);
+        assert_eq!(
+            nearest_effort("cohere", "command-a-03-2025", "medium").as_deref(),
+            Some("high")
+        );
+        assert_eq!(effort_levels("deepseek", "deepseek-chat"), ["low", "high", "max"]);
+        assert_eq!(
+            nearest_effort("deepseek", "deepseek-chat", "medium").as_deref(),
+            Some("high")
+        );
+        assert_eq!(effort_levels("kimi", "kimi-k3"), ["low", "high", "max"]);
+        assert_eq!(effort_levels("kimi", "kimi-k2"), ["low", "high"]);
+        assert_eq!(effort_levels("zhipu", "glm-5.3"), ["low", "high", "max"]);
+        assert_eq!(effort_levels("qwen", "qwen-max"), ["none", "high"]);
+        assert_eq!(
+            effort_levels("openrouter", "openai/gpt-5.5"),
+            ["low", "medium", "high"]
+        );
+        // Gemini native path takes low/medium/high (MINIMAL folds up to low).
+        assert_eq!(
+            effort_levels("antigravity", "gemini-3.1-pro"),
+            ["low", "medium", "high"]
+        );
+        assert_eq!(
+            nearest_effort("antigravity", "gemini-3.1-pro", "minimal").as_deref(),
+            Some("low")
+        );
+        // Local engines without support stay empty (except vLLM = OpenAI-shaped).
+        for id in ["ollama", "llamacpp", "lmstudio", "minimax", "meta"] {
+            assert!(
+                effort_levels(id, "any-model").is_empty(),
+                "{id} should have no rungs"
+            );
+        }
+        assert_eq!(
+            effort_levels("vllm", "local-model"),
+            ["minimal", "low", "medium", "high", "xhigh"]
+        );
     }
 
     /// The names people actually type map onto ladder rungs everywhere effort

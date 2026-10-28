@@ -102,11 +102,37 @@ pub fn build_body(req: &ResponseRequest, project: &str, model: &str) -> Value {
         request["generationConfig"]["maxOutputTokens"] = json!(limit);
     }
 
+    // Native thinking control (Cloud Code path only — the OpenAI-compat Gemini
+    // host is unverified for thinking fields, so nothing is sent there).
+    // Maps nur's ladder to `thinkingLevel`: minimal→MINIMAL, low→LOW,
+    // medium→MEDIUM, high/xhigh/max→HIGH. Omitted for no-control models and
+    // for `none`/empty; `ultracode` never reaches the wire (loop clamps first).
+    if let Some(level) = gemini_thinking_level(
+        req.reasoning.as_ref().and_then(|r| r.effort.as_deref()),
+    ) {
+        request["generationConfig"]["thinkingConfig"] = json!({ "thinkingLevel": level });
+    }
+
     json!({
         "project": project,
         "model": model,
         "request": request,
     })
+}
+
+/// Map nur's unified effort rung to Gemini's native `thinkingLevel`.
+///
+/// Returns `None` (omit the field: provider default) for empty/`none` and for
+/// names nur does not recognize — the Cloud Code route has no per-model rung
+/// table, so unknown values are left to the provider rather than guessed.
+fn gemini_thinking_level(effort: Option<&str>) -> Option<&'static str> {
+    match effort.filter(|e| !e.is_empty())? {
+        "minimal" => Some("MINIMAL"),
+        "low" => Some("LOW"),
+        "medium" => Some("MEDIUM"),
+        "high" | "xhigh" | "max" => Some("HIGH"),
+        _ => None,
+    }
 }
 
 /// The Responses `type` discriminator of one input item, if it has one.

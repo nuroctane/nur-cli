@@ -234,6 +234,65 @@ fn remove_optional_output_limit(body: &mut serde_json::Value) {
     }
 }
 
+/// Does this body carry any reasoning-effort field on the Chat Completions
+/// shape (`reasoning_effort`, `reasoning.effort`, or Kimi's `thinking`)?
+fn body_has_chat_effort(body: &serde_json::Value) -> bool {
+    body.get("reasoning_effort").is_some()
+        || body.pointer("/reasoning/effort").is_some()
+        || body.get("thinking").is_some()
+}
+
+/// Strip every Chat Completions effort field for the once-only retry after a
+/// 400 that names the effort value (aggregators route by model id and the
+/// model behind it is not known in advance). Never downgrades silently — the
+/// caller records which value was dropped.
+fn remove_chat_effort(body: &mut serde_json::Value) {
+    if let Some(object) = body.as_object_mut() {
+        object.remove("reasoning_effort");
+        object.remove("thinking");
+        if let Some(reasoning) = object.get_mut("reasoning") {
+            if let Some(obj) = reasoning.as_object_mut() {
+                obj.remove("effort");
+                if obj.is_empty() {
+                    object.remove("reasoning");
+                }
+            } else {
+                object.remove("reasoning");
+            }
+        }
+    }
+}
+
+/// True when a 400 names the effort parameter: the route rejected the value,
+/// not the request. Matched narrowly so unrelated 400s fail fast as before.
+fn rejects_effort_parameter(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    [
+        "reasoning_effort",
+        "reasoning.effort",
+        "reasoning effort",
+        "thinkinglevel",
+        "thinking_config",
+        "thinkingconfig",
+        "thinking",
+        "effort",
+    ]
+    .iter()
+    .any(|field| message.contains(field))
+        && [
+            "unsupported",
+            "not supported",
+            "unknown parameter",
+            "unknown field",
+            "unrecognized",
+            "not permitted",
+            "invalid",
+            "not allowed",
+        ]
+        .iter()
+        .any(|needle| message.contains(needle))
+}
+
 fn oauth_blocking<T: Send>(operation: impl FnOnce() -> T + Send) -> T {
     match tokio::runtime::Handle::try_current() {
         Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
@@ -512,13 +571,17 @@ impl ApiClient {
 
     /// Does a request for `model` on this route carry a reasoning-effort field?
     /// Responses sends `reasoning.effort` and Anthropic's own API sends
-    /// `output_config.effort` (see `anthropic_body`); Chat Completions and
-    /// Cloud Code requests carry none.
+    /// `output_config.effort` (see `anthropic_body`); Chat Completions routes
+    /// carry their native field via `apply_chat_effort` where the route has
+    /// a rung table (see `supports_effort`). Gemini Cloud Code carries
+    /// `thinkingConfig.thinkingLevel` on the same rung table.
     pub fn sends_effort(&self, model: &str) -> bool {
         match self.routed_for_model(model).style {
             ApiStyle::Responses => true,
             ApiStyle::AnthropicMessages => self.provider_id == "anthropic",
-            ApiStyle::ChatCompletions | ApiStyle::GeminiCloudCode => false,
+            ApiStyle::ChatCompletions | ApiStyle::GeminiCloudCode => {
+                crate::providers::supports_effort(&self.provider_id, model)
+            }
         }
     }
 
@@ -1925,6 +1988,7 @@ OpenCode Go takes an API key, not the OpenCode Console sign-in                  
         let mut body = super::chat::build_body_opts(req, false, &self.provider_id, drop_media);
         let mut attempt = 0u32;
         let mut oauth_refreshed = false;
+        let mut effort_retried = false;
         let idempotency_key = self.idempotency_key();
         let attempt_id = idempotency_key
             .clone()
@@ -2016,6 +2080,31 @@ OpenCode Go takes an API key, not the OpenCode Console sign-in                  
                     body = super::chat::build_body_opts(req, false, &self.provider_id, true);
                     continue;
                 }
+                // Model behind this route rejected the effort value (aggregators
+                // route by model id; the model behind it is not known in
+                // advance): retry once with the field omitted (provider
+                // default). Never silently downgrades - the status note names
+                // the dropped value.
+                if !effort_retried
+                    && status.as_u16() == 400
+                    && body_has_chat_effort(&body)
+                    && rejects_effort_parameter(&message)
+                {
+                    effort_retried = true;
+                    self.record_attempt(
+                        req,
+                        &attempt_id,
+                        attempt,
+                        "rejected",
+                        Some(status.as_u16()),
+                        Some(&format!(
+                            "route rejected reasoning effort; retrying with provider default: {message}"
+                        )),
+                        None,
+                    );
+                    remove_chat_effort(&mut body);
+                    continue;
+                }
                 if retryable && attempt < 4 {
                     tokio::time::sleep(std::time::Duration::from_millis(
                         400 * (1 << (attempt - 1)),
@@ -2065,6 +2154,8 @@ OpenCode Go takes an API key, not the OpenCode Console sign-in                  
         // out to be text-only. Nothing has streamed yet at this point, so the
         // retry cannot duplicate output.
         let mut attempt = 0u32;
+        let mut effort_retried = false;
+        let mut drop_effort = false;
         let idempotency_key = self.idempotency_key();
         let attempt_id = idempotency_key
             .clone()
@@ -2075,6 +2166,9 @@ OpenCode Go takes an API key, not the OpenCode Console sign-in                  
             let mut body = super::chat::build_body_opts(req, true, &self.provider_id, drop_media);
             if drop_output_limit {
                 remove_optional_output_limit(&mut body);
+            }
+            if drop_effort {
+                remove_chat_effort(&mut body);
             }
             let res = self
                 .send_with_oauth_retry(|| {
@@ -2143,6 +2237,26 @@ OpenCode Go takes an API key, not the OpenCode Console sign-in                  
                 if has_media && !drop_media && super::chat::is_media_unsupported_error(&message) {
                     mark_text_only(&self.provider_id, &self.base_url, &req.model);
                     drop_media = true;
+                    continue;
+                }
+                if !effort_retried
+                    && status.as_u16() == 400
+                    && body_has_chat_effort(&body)
+                    && rejects_effort_parameter(&message)
+                {
+                    effort_retried = true;
+                    drop_effort = true;
+                    self.record_attempt(
+                        req,
+                        &attempt_id,
+                        attempt,
+                        "rejected",
+                        Some(status.as_u16()),
+                        Some(&format!(
+                            "route rejected reasoning effort; retrying with provider default: {message}"
+                        )),
+                        None,
+                    );
                     continue;
                 }
                 // Streaming chat completions is the path OpenCode actually uses,
@@ -4134,9 +4248,10 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
         );
     }
 
-    /// Only two wire formats carry effort: Responses (`reasoning.effort`) and
-    /// Anthropic's own Messages API (`output_config.effort`). Per-model routing
-    /// decides which format a model uses.
+    /// Responses (`reasoning.effort`), Anthropic's own Messages API
+    /// (`output_config.effort`), and Chat Completions routes with a rung
+    /// table (`reasoning_effort` / `reasoning.effort`) all carry effort.
+    /// Per-model routing decides which format a model uses.
     #[test]
     fn effort_is_sent_only_on_routes_that_carry_it() {
         let client = |provider: &str, style: ApiStyle| {
@@ -4163,17 +4278,18 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
                 "openrouter",
                 ApiStyle::ChatCompletions,
                 "openai/gpt-5.5",
-                false,
+                true,
             ),
-            ("vllm", ApiStyle::ChatCompletions, "local-model", false),
+            ("vllm", ApiStyle::ChatCompletions, "local-model", true),
             // xAI: an API key speaks Chat Completions, a browser login Responses.
-            ("xai", ApiStyle::ChatCompletions, "grok-4.7", false),
+            // Both carry effort now (key route via `reasoning_effort`).
+            ("xai", ApiStyle::ChatCompletions, "grok-4.7", true),
             ("xai", ApiStyle::Responses, "grok-4.7", true),
             (
                 "antigravity",
                 ApiStyle::GeminiCloudCode,
                 "gemini-3.1-pro",
-                false,
+                true,
             ),
             ("opencode", ApiStyle::ChatCompletions, "gpt-5.5", true),
             (
@@ -4182,7 +4298,7 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
                 "claude-sonnet-5",
                 false,
             ),
-            ("opencode", ApiStyle::ChatCompletions, "kimi-k2", false),
+            ("opencode", ApiStyle::ChatCompletions, "kimi-k2", true),
         ] {
             assert_eq!(
                 client(provider, style).sends_effort(model),

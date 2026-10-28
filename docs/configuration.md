@@ -217,9 +217,10 @@ midnight with a pink spine. `/theme` switching keeps the override.
 `/effort <level>` (saved to this file) or `--effort` for one run.
 
 Providers do not share one ladder, so nur keeps the level you chose and sends
-each route the nearest rung it accepts. Only two wire formats carry an effort
-field: the Responses API (`reasoning.effort`) and Anthropic's own Messages API
-(`output_config.effort`). Bare `/effort` shows what the active route receives:
+each route the nearest rung it accepts, on that route's native field: Responses
+`reasoning.effort`, Anthropic `output_config.effort`, the Chat Completions
+vendor's own field, or Gemini's `thinkingLevel`. Bare `/effort` shows what the
+active route receives:
 
 | Route | Receives |
 |-------|----------|
@@ -229,8 +230,22 @@ field: the Responses API (`reasoning.effort`) and Anthropic's own Messages API
 | Anthropic (`output_config.effort`) | By model: Fable, Opus 4.7+ and Sonnet 5 take `low` … `max`; Opus/Sonnet 4.6 and Mythos Preview take all but `xhigh`; Opus 4.5 takes `low` … `high`; Haiku and older models get none |
 | Paper Instruments (Ultramarine) | Top-level `reasoning_effort`: `low`, `high`, `max` |
 | Morph | DeepSeek snapshots (`morph-dsv4…`): top-level `reasoning_effort` `low`, `high`, `xhigh`, `max`; GLM and Kimi models: `reasoning.effort` `low`, `medium`, `high` |
-| Chat Completions routes (OpenRouter, Groq, Nous Portal, xAI API keys, local servers, …) | No effort field, so nothing is sent |
-| Gemini, MiniMax | No effort control, so nothing is sent |
+| OpenRouter | `reasoning.effort` `low`, `medium`, `high` (`none` is omitted: provider default) |
+| Groq | GPT-OSS models: `reasoning_effort` `low`, `medium`, `high`; other reasoning models: a `none`/`default` toggle |
+| Mistral | Reasoning models (Magistral, Small/Medium/Large): `none`/`high`; others get nothing |
+| Together | GPT-OSS and most models: `low`, `medium`, `high`; DeepSeek V4 Pro: `high`/`max` |
+| Fireworks | `none`, `low`, `medium`, `high`, `max` |
+| Cohere | `none` or `high` |
+| Kimi / Moonshot | K3 family: `reasoning_effort` `low`, `high`, `max`; K2-era ids keep the `thinking` toggle |
+| DeepSeek, zhipu | `reasoning_effort` `low`, `high`, `max` |
+| Qwen | A `none`/`high` toggle |
+| Gemini (Cloud Code) | `thinkingLevel`: `minimal`→MINIMAL, `low`→LOW, `medium`→MEDIUM, `high` and above →HIGH |
+| vLLM and other OpenAI-compatible routes | `reasoning_effort` `minimal` … `xhigh` |
+| MiniMax, Meta, Ollama, llama.cpp, LM Studio | No effort control, so nothing is sent |
+
+A 400 that names the effort field (aggregators route by model id, so the model
+behind the route is not known in advance) retried once with the field omitted;
+the status line names the value that was dropped.
 
 The level is saved either way and applies again on a route that takes one.
 `ultracode` also turns on parallel subagent orchestration, which works on every
