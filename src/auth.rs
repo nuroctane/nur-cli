@@ -938,6 +938,23 @@ pub fn t3_fallback_allowed(provider_id: &str) -> bool {
         .any(|family_id| policy.blocked_t3.contains(*family_id))
 }
 
+/// Whether the user explicitly signed out of this provider (`/logout` or
+/// `nur auth logout`) and no fresh credential has been saved since. Unlike
+/// [`t3_fallback_allowed`] this ignores `[auth] import_fallback`: it answers
+/// "did the user ask us to forget this account", which is what a login flow
+/// needs before reusing a vendor CLI session - after a sign-out, that session
+/// is usually exactly the credential that was just rotated away.
+pub fn provider_signout_pending(provider_id: &str) -> bool {
+    let id = provider_id.trim();
+    if id.is_empty() {
+        return false;
+    }
+    let policy = read_credential_policy();
+    credential_family_ids(id)
+        .iter()
+        .any(|family_id| policy.blocked_t3.contains(*family_id))
+}
+
 /// Re-enable normal T3 discovery after a deliberate save or import.
 pub fn allow_t3_fallback(provider_id: &str) -> Result<()> {
     let id = provider_id.trim();
@@ -1947,6 +1964,11 @@ pub fn logout(revoke: bool) -> Result<()> {
         .filter(|provider| !provider.is_empty())
     {
         forget_provider_unlocked(provider);
+        // Match the TUI's /logout (delete_provider_credentials): rotation-pool
+        // keys are this account's credentials too, and recording the sign-out
+        // stops the next login from silently reusing a vendor CLI session.
+        let _ = clear_pool_keys(provider);
+        block_t3_fallback(provider)?;
     }
     crate::oauth::omp_bridge::invalidate_omp_token_cache();
     Ok(())
@@ -2883,6 +2905,56 @@ mod tests {
         snapshot = old;
         assert!(ensure_fresh_oauth(&mut snapshot).is_err());
         assert!(load_auth().unwrap().is_none());
+    }
+
+    /// Ways a CLI `nur auth logout` used to leave the account half-cleared:
+    /// the rotation pool kept its keys, and nothing recorded the sign-out, so
+    /// the next login's vendor-CLI shortcut resurrected the same
+    /// (force-rotated) credential.
+    #[test]
+    fn cli_logout_clears_pool_keys_and_marks_signout() {
+        const CHILD: &str = "NUR_AUTH_LOGOUT_POOL_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let root =
+                std::env::temp_dir().join(format!("nur-auth-logout-pool-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&root).unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "auth::tests::cli_logout_clears_pool_keys_and_marks_signout",
+                ])
+                .env(CHILD, "1")
+                .env("NUR_HOME", &root)
+                .output()
+                .unwrap();
+            std::fs::remove_dir_all(&root).unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let auth = Auth {
+            api_key: "sk-commandcode-dead-key".into(),
+            source: "login".into(),
+            auth_method: AuthMethod::ApiKey,
+            provider: "commandcode".into(),
+            refresh_token: None,
+            expires_at: None,
+            oauth_meta: None,
+        };
+        save_auth(&auth).unwrap();
+        add_pool_key("commandcode", "sk-commandcode-pool-key").unwrap();
+        assert!(!load_pool_keys("commandcode").is_empty());
+        assert!(!provider_signout_pending("commandcode"));
+        logout(false).unwrap();
+        assert!(load_pool_keys("commandcode").is_empty());
+        assert!(provider_signout_pending("commandcode"));
+        // A deliberate fresh save lifts the block again.
+        choose_provider_key("commandcode", "sk-commandcode-fresh-key").unwrap();
+        assert!(!provider_signout_pending("commandcode"));
     }
 
     #[test]

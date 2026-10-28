@@ -282,10 +282,15 @@ That is why `/login` does not sign you out: signing out is `/logout`'s job, and
 only yours to ask for.
 
 `/logout` signs you out of the **active provider**: it clears that provider's
-active credential *and* its saved per-provider copies, so "cleared" does not
-leave a working key behind. Other providers' saved keys are untouched. Further
-turns are blocked until you `/login` again (environment-variable keys still
-apply on the next launch).
+active credential, its saved per-provider copies and its rotation-pool keys, so
+"cleared" does not leave a working key behind. Other providers' saved keys are
+untouched. The sign-out is remembered: the next `/login` for that provider runs
+a real sign-in instead of silently reusing a vendor CLI session on disk
+(`~/.commandcode/auth.json`, `~/.claude`, …) - which matters when the provider
+force-rotated your credential and the on-disk copy is the dead one. A
+successful sign-in, a pasted key or an explicit `nur auth import --from <cli>`
+lifts that again. Further turns are blocked until you `/login` again
+(environment-variable keys still apply on the next launch).
 
 No key on launch → the login modal opens automatically.
 
@@ -428,8 +433,10 @@ nur auth logout
 nur auth logout --revoke   # local delete + best-effort revoke notes (az/aws/gcloud)
 ```
 
-Removes the stored key from `~/.nur/auth.json`. Same effect as TUI `/logout`
-for the key file. `--revoke`
+Clears the active credential, the provider's saved per-provider copies and its
+rotation-pool keys, and records the sign-out so the next login runs a real
+sign-in instead of reusing a vendor CLI session on disk. Same effect as TUI
+`/logout`. `--revoke`
 does not call undocumented token revoke APIs for every vendor; for Azure/AWS/Google
 it points you at `az logout` / `aws sso logout` / `gcloud auth revoke`.
 

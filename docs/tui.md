@@ -386,7 +386,7 @@ The note is appended to your persistent memory file and recalled automatically i
 | `/doctor` | Inline health check: version · auth · ecosystem · shell · budgets |
 | `/help` | Show keys + commands reference |
 | `/login` | Multi-provider sign-in (see below) |
-| `/logout` | Sign out of the active provider (clears its credential and saved copies; other providers keep theirs) |
+| `/logout` | Sign out of the active provider (clears its credential, saved copies and rotation-pool keys; the next `/login` signs in fresh instead of reusing a vendor CLI session; other providers keep theirs) |
 | `/goal` | Standing session goal (see below) |
 | `/bro` | Chill mode: plain words, no jargon, no preamble — toggle (see below) |
 | `/adhd` | Sticky ADHD-friendly output (toggle) |

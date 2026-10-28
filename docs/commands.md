@@ -510,7 +510,7 @@ Type these inside the `nur` TUI. Aliases are shown in the same row.
 | `/sessions` · `/resume` | Browse & open past nur sessions (`/resume <id>` also works). Press **`c`** to switch to the takeover window |
 | `/takeover` · `/hijack` | Cross-agent session migration. Opens the takeover window (same chrome as `/sessions`) listing migratable **Claude Code · Codex · Cursor · Grok Build** sessions from **all** workspaces (**`Tab`** narrows to here); **↵** imports one and resumes it natively. Press **`c`** to switch back to sessions. `/takeover ls [agent]` lists them; `/takeover <agent> [id\|latest]` imports directly |
 | `/login` | Provider + API key or browser sign-in |
-| `/logout` | Sign out of the active provider — clears its credential and its saved per-provider copies. `/login` never clears anything. |
+| `/logout` | Sign out of the active provider - clears its credential, saved per-provider copies and rotation-pool keys, and the next `/login` signs in fresh instead of reusing a vendor CLI session. `/login` never clears anything. |
 | `/model` · `/models` | Show and switch models for the active provider. OpenCode rows show a friendly alias where the wire id is cryptic (e.g. `x-preview-f-free · Ox Alpha Free`), and the filter matches aliases too — typing `ox` finds it. |
 | `/plugins` · `/plugin` | Browse / install / enable marketplace plugins |
 | `/akarso` | Akarso social posting: `/akarso` (auth), `accounts`, `posts`; publishing/scheduling runs through the `akarso` tool with approval |

@@ -19,7 +19,9 @@
 //! - **MiniMax CLI**: `mmx auth login --api-key` (no OAuth). Import a stored
 //!   key when the CLI left one on disk.
 
-use super::flows::{BrowserLoginProgress, OAuthTokens, ProgressTx};
+use super::flows::{
+    fresh_sign_in_note, may_reuse_cli_session, BrowserLoginProgress, OAuthTokens, ProgressTx,
+};
 use super::{open_browser, CancelFlag};
 use crate::auth::OauthMeta;
 use crate::error::{NurError, Result};
@@ -397,12 +399,16 @@ pub mod muse {
     }
 
     pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
-        if let Ok(Some(t)) = import_muse_cli() {
-            send(
-                tx,
-                BrowserLoginProgress::Status("using existing Muse Code session".into()),
-            );
-            return Ok(t);
+        if may_reuse_cli_session("meta") {
+            if let Ok(Some(t)) = import_muse_cli() {
+                send(
+                    tx,
+                    BrowserLoginProgress::Status("using existing Muse Code session".into()),
+                );
+                return Ok(t);
+            }
+        } else {
+            fresh_sign_in_note(tx, "the saved Muse Code session");
         }
         let bin = muse_bin().ok_or_else(|| {
             NurError::Other(
@@ -559,14 +565,18 @@ pub mod deepseek {
     }
 
     pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
-        if let Ok(Some(t)) = import_dsh_cli() {
-            send(
-                tx,
-                BrowserLoginProgress::Status(
-                    "using existing DeepSeek Harness credentials.yaml".into(),
-                ),
-            );
-            return Ok(t);
+        if may_reuse_cli_session("deepseek") {
+            if let Ok(Some(t)) = import_dsh_cli() {
+                send(
+                    tx,
+                    BrowserLoginProgress::Status(
+                        "using existing DeepSeek Harness credentials.yaml".into(),
+                    ),
+                );
+                return Ok(t);
+            }
+        } else {
+            fresh_sign_in_note(tx, "the saved DeepSeek Harness credentials.yaml");
         }
         // Official DeepSeek auth is an API key, entered in Settings → Models of
         // `dsh web` and stored in $DSH_HOME/.credentials.yaml. There is no
@@ -958,12 +968,16 @@ pub mod zhipu {
     }
 
     pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
-        if let Ok(Some(t)) = import_zcode_cli() {
-            send(
-                tx,
-                BrowserLoginProgress::Status("using existing ZCode session".into()),
-            );
-            return Ok(t);
+        if may_reuse_cli_session("zhipu") {
+            if let Ok(Some(t)) = import_zcode_cli() {
+                send(
+                    tx,
+                    BrowserLoginProgress::Status("using existing ZCode session".into()),
+                );
+                return Ok(t);
+            }
+        } else {
+            fresh_sign_in_note(tx, "the saved ZCode session");
         }
         let before = import_zcode_cli().ok().flatten().map(|t| t.access_token);
         // Official CLI login when a real `zcode` CLI exists.

@@ -46,6 +46,26 @@ fn send(tx: &ProgressTx, ev: BrowserLoginProgress) {
     let _ = tx.send(ev);
 }
 
+/// Whether a login may skip its own sign-in dance by reusing the vendor CLI
+/// session already on disk. False after an explicit `/logout` or
+/// `nur auth logout`: that session is usually exactly the credential the
+/// provider just rotated away, and re-importing it pins the user in a 401
+/// loop where /login "succeeds" without ever signing in. The next successful
+/// sign-in lifts the block (`allow_t3_fallback` on save).
+pub(super) fn may_reuse_cli_session(provider_id: &str) -> bool {
+    !crate::auth::provider_signout_pending(provider_id)
+}
+
+/// Progress note for the one case the reuse shortcut is skipped.
+pub(super) fn fresh_sign_in_note(tx: &ProgressTx, session: &str) {
+    send(
+        tx,
+        BrowserLoginProgress::Status(format!(
+            "signed out earlier - starting a fresh sign-in instead of reusing {session}"
+        )),
+    );
+}
+
 fn oauth_error_summary(body: &str) -> String {
     let value = serde_json::from_str::<serde_json::Value>(body).ok();
     let detail = value.as_ref().and_then(|value| {
@@ -388,12 +408,16 @@ pub mod cursor {
 
     /// Sign in through the official Cursor Agent CLI (`cursor-agent login`).
     pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
-        if let Ok(Some(t)) = import_cursor_cli() {
-            send(
-                tx,
-                BrowserLoginProgress::Status("using existing Cursor Agent session".into()),
-            );
-            return Ok(t);
+        if may_reuse_cli_session("cursor") {
+            if let Ok(Some(t)) = import_cursor_cli() {
+                send(
+                    tx,
+                    BrowserLoginProgress::Status("using existing Cursor Agent session".into()),
+                );
+                return Ok(t);
+            }
+        } else {
+            fresh_sign_in_note(tx, "the saved Cursor Agent session");
         }
 
         let bin = cursor_agent_bin().ok_or_else(|| {
@@ -588,6 +612,18 @@ pub mod factory {
     /// `droid` has no headless login verb - its sign-in lives in the
     /// interactive TUI - so importing the finished session is the whole flow.
     pub fn login(tx: &ProgressTx, _cancel: &CancelFlag) -> Result<OAuthTokens> {
+        // droid's store is the only session source: after a sign-out,
+        // importing it again would resurrect the credential the user just
+        // dropped. The fresh session has to be made in `droid` itself, then
+        // imported on purpose.
+        if !may_reuse_cli_session("factory") {
+            return Err(NurError::Other(
+                "signed out of Factory earlier, so the existing droid sign-in is not reused. \
+                 Run `droid` and finish its sign-in, then `nur auth import --from droid` - \
+                 or paste a FACTORY_API_KEY."
+                    .into(),
+            ));
+        }
         if let Ok(Some(tokens)) = import_factory_cli() {
             send(
                 tx,
@@ -1714,12 +1750,16 @@ pub mod cline {
 
     pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
         // Already signed in through the Cline CLI? One import, no prompt.
-        if let Ok(Some(t)) = import_cline_cli() {
-            send(
-                tx,
-                BrowserLoginProgress::Status("using existing Cline session".into()),
-            );
-            return Ok(t);
+        if may_reuse_cli_session("cline") {
+            if let Ok(Some(t)) = import_cline_cli() {
+                send(
+                    tx,
+                    BrowserLoginProgress::Status("using existing Cline session".into()),
+                );
+                return Ok(t);
+            }
+        } else {
+            fresh_sign_in_note(tx, "the saved Cline session");
         }
 
         let bin = cline_bin().ok_or_else(|| {
@@ -3057,34 +3097,38 @@ pub mod nous {
         // marker) must fall through to the device flow — importing it anyway
         // pinned /login into a loop: 401 on use, refresh says "run /login",
         // and /login re-imported the same dead file forever.
-        match import_hermes_cli() {
-            Ok(Some(t)) if !t.access_token.is_empty() || t.refresh_token.is_some() => {
-                let dead = t.meta.as_ref().is_some_and(|m| {
-                    m.extra
-                        .get("hermes_error")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false)
-                }) || expired_jwt(&t.access_token)
-                    || crate::auth::oauth_expired(t.expires_at);
-                if !dead {
-                    send(
+        if may_reuse_cli_session("nous") {
+            match import_hermes_cli() {
+                Ok(Some(t)) if !t.access_token.is_empty() || t.refresh_token.is_some() => {
+                    let dead = t.meta.as_ref().is_some_and(|m| {
+                        m.extra
+                            .get("hermes_error")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false)
+                    }) || expired_jwt(&t.access_token)
+                        || crate::auth::oauth_expired(t.expires_at);
+                    if !dead {
+                        send(
                         tx,
                         BrowserLoginProgress::Status(
                             "imported Nous Portal session from Hermes Agent (~/.hermes/auth.json)"
                                 .into(),
                         ),
                     );
-                    return Ok(t);
-                }
-                send(
+                        return Ok(t);
+                    }
+                    send(
                     tx,
                     BrowserLoginProgress::Status(
                         "Hermes Nous session is expired or quarantined — starting the Portal device login instead…"
                             .into(),
                     ),
                 );
+                }
+                _ => {}
             }
-            _ => {}
+        } else {
+            fresh_sign_in_note(tx, "the saved Hermes session");
         }
 
         send(
@@ -3337,15 +3381,21 @@ pub mod commandcode {
     }
 
     pub fn login(tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
-        // A `cmd login` on this machine already issued a usable key.
-        if let Ok(Some(t)) = import_commandcode_cli() {
-            send(
-                tx,
-                BrowserLoginProgress::Status(
-                    "using existing Command Code CLI session (~/.commandcode/auth.json)".into(),
-                ),
-            );
-            return Ok(t);
+        // A `cmd login` on this machine already issued a usable key - unless
+        // the user just signed out, in which case that file usually holds the
+        // force-rotated key they are trying to replace.
+        if may_reuse_cli_session("commandcode") {
+            if let Ok(Some(t)) = import_commandcode_cli() {
+                send(
+                    tx,
+                    BrowserLoginProgress::Status(
+                        "using existing Command Code CLI session (~/.commandcode/auth.json)".into(),
+                    ),
+                );
+                return Ok(t);
+            }
+        } else {
+            fresh_sign_in_note(tx, "the saved Command Code CLI session");
         }
 
         let listener = TcpListener::bind(("127.0.0.1", 0))
