@@ -2545,8 +2545,9 @@ impl App {
             .map(|p| p.name)
             .unwrap_or(provider.as_str());
         let levels = crate::providers::effort_levels(&provider, &model);
-        // Chat Completions and Cloud Code requests carry no effort field, so
-        // naming a rung there would claim something that never goes out.
+        // Routes without an effort control carry nothing, so naming a rung
+        // there would claim something that never goes out. sends_effort knows
+        // which Chat Completions / Cloud Code routes take one.
         let wire = if !self.client.sends_effort(&model) {
             let saved = if current == "ultracode" {
                 "ultracode still fans out work that splits to parallel subagents"

@@ -448,9 +448,9 @@ def commands_during_indexing(binary):
 
 
 def effort_persists(binary):
-    """`/effort` takes an alias and saves the rung, says truthfully that a Chat
-    Completions route (vLLM here) sends no effort field, and the saved level is
-    what the next launch starts on."""
+    """`/effort` takes an alias and saves the rung, says truthfully what a Chat
+    Completions route (vLLM here) receives, and the saved level is what the
+    next launch starts on."""
     scenario = 'effort-persists'
     work = OUT / f'{scenario}-{time.time_ns()}'
     work.mkdir(parents=True)
@@ -469,16 +469,16 @@ def effort_persists(binary):
         term.until('F6 inspect', timeout=5)
         term.type_text('/effort extra')
         term.write('\r')
-        term.until('reasoning effort → xhigh · vLLM (local) takes no effort field', timeout=15)
+        term.until('reasoning effort → xhigh · vLLM (local) receives xhigh', timeout=15)
         assert 'reasoning_effort = "xhigh"' in config.read_text(encoding='utf-8'), 'effort was not saved'
         term.type_text('/effort ultra')
         term.write('\r')
-        term.until('ultracode · vLLM (local) takes no effort field', timeout=10)
+        term.until('ultracode · vLLM (local) receives xhigh', timeout=10)
         term.close()
         relaunch = Terminal(binary, workspace, env)
         terms.append(relaunch)
         relaunch.until('※ultracode', timeout=5)
-        print(f'PASS {scenario}: alias saved, no-effort route reported, level survives restart', flush=True)
+        print(f'PASS {scenario}: alias saved, route receives nearest rung, level survives restart', flush=True)
         return {'scenario':scenario,'passed':True}
     finally:
         for index, term in enumerate(terms):
